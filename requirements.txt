@@ -1,0 +1,21 @@
+# PyTorch and related deep learning libraries (GPU Supported Functionality)
+torch --index-url https://download.pytorch.org/whl/cu121
+torchvision --index-url https://download.pytorch.org/whl/cu121
+torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Flask for API handling
+Flask
+requests
+
+# GUI-related dependencies (Qt for GUI components)
+Qt.py
+qtpy
+OdenGraphQt
+PyQt5
+
+# Computer Vision & OCR dependencies
+numpy                  # Numerical operations
+opencv-python          # Computer vision processing
+pytesseract            # OCR engine
+easyocr                # Deep-learning-based OCR
+Pillow                 # Image processing
