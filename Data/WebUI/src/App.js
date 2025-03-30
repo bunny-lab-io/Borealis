@@ -12,7 +12,12 @@ import {
     createTheme,
     Accordion,
     AccordionSummary,
-    AccordionDetails
+    AccordionDetails,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogContentText,
+    DialogActions
 } from "@mui/material";
 
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
@@ -45,20 +50,16 @@ const CustomNode = ({ data }) => {
             boxShadow: "0 0 10px rgba(0,0,0,0.2)",
             position: "relative"
         }}>
-            {/* Input handle on the left */}
             <Handle
                 type="target"
                 position={Position.Left}
                 style={{ background: "#58a6ff", width: 10, height: 10 }}
             />
-
-            {/* Output handle on the right */}
             <Handle
                 type="source"
                 position={Position.Right}
                 style={{ background: "#58a6ff", width: 10, height: 10 }}
             />
-
             <div style={{
                 background: "#232323",
                 padding: "6px 10px",
@@ -200,9 +201,18 @@ export default function App() {
     const [aboutAnchorEl, setAboutAnchorEl] = useState(null);
     const [nodes, setNodes] = useState([]);
     const [edges, setEdges] = useState([]);
+    const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
 
     const handleAboutMenuOpen = (event) => setAboutAnchorEl(event.currentTarget);
     const handleAboutMenuClose = () => setAboutAnchorEl(null);
+
+    const handleOpenCloseDialog = () => setConfirmCloseOpen(true);
+    const handleCloseDialog = () => setConfirmCloseOpen(false);
+    const handleConfirmCloseWorkflow = () => {
+        setNodes([]);
+        setEdges([]);
+        setConfirmCloseOpen(false);
+    };
 
     const handleAddTestNode = () => {
         const id = `test-node-${Date.now()}`;
@@ -264,7 +274,13 @@ export default function App() {
                             <AccordionDetails sx={{ p: 0 }}>
                                 <Button fullWidth sx={sidebarBtnStyle}>SAVE WORKFLOW</Button>
                                 <Button fullWidth sx={sidebarBtnStyle}>OPEN WORKFLOW</Button>
-                                <Button fullWidth sx={sidebarBtnStyle}>CLOSE WORKFLOW</Button>
+                                <Button
+                                    fullWidth
+                                    sx={sidebarBtnStyle}
+                                    onClick={handleOpenCloseDialog}
+                                >
+                                    CLOSE WORKFLOW
+                                </Button>
                             </AccordionDetails>
                         </Accordion>
 
@@ -310,6 +326,28 @@ export default function App() {
                     <b>Nodes</b>: <span id="nodeCount">0</span> | <b>Update Rate</b>: 500ms
                 </Box>
             </Box>
+
+            {/* Confirmation Dialog */}
+            <Dialog
+                open={confirmCloseOpen}
+                onClose={handleCloseDialog}
+                PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff" } }}
+            >
+                <DialogTitle>Close Workflow?</DialogTitle>
+                <DialogContent>
+                    <DialogContentText sx={{ color: "#ccc" }}>
+                        Are you sure you want to reset the workflow? All nodes will be removed.
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={handleCloseDialog} sx={{ color: "#58a6ff" }}>
+                        Cancel
+                    </Button>
+                    <Button onClick={handleConfirmCloseWorkflow} sx={{ color: "#ff4f4f" }}>
+                        Close Workflow
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </ThemeProvider>
     );
 }
