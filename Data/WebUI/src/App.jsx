@@ -17,7 +17,8 @@ import {
     DialogTitle,
     DialogContent,
     DialogContentText,
-    DialogActions
+    DialogActions,
+    Divider
 } from "@mui/material";
 
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
@@ -29,59 +30,34 @@ import ReactFlow, {
     applyNodeChanges,
     applyEdgeChanges,
     ReactFlowProvider,
-    useReactFlow,
-    Handle,
-    Position
+    useReactFlow
 } from "reactflow";
 import "reactflow/dist/style.css";
 import "./Borealis.css";
 
-// ✅ Custom styled node with handles
-const CustomNode = ({ data }) => {
-    return (
-        <div style={{
-            background: "#2c2c2c",
-            border: "1px solid #3a3a3a",
-            borderRadius: "6px",
-            color: "#ccc",
-            fontSize: "12px",
-            minWidth: "160px",
-            maxWidth: "260px",
-            boxShadow: `
-                0 0 5px rgba(88, 166, 255, 0.1),
-                0 0 10px rgba(88, 166, 255, 0.1)
-            `,
-            position: "relative",
-            transition: "box-shadow 0.3s ease-in-out"
-        }}>
-            <Handle
-                type="target"
-                position={Position.Left}
-                style={{ background: "#58a6ff", width: 10, height: 10 }}
-            />
-            <Handle
-                type="source"
-                position={Position.Right}
-                style={{ background: "#58a6ff", width: 10, height: 10 }}
-            />
-            <div style={{
-                background: "#232323",
-                padding: "6px 10px",
-                borderTopLeftRadius: "6px",
-                borderTopRightRadius: "6px",
-                fontWeight: "bold",
-                fontSize: "13px"
-            }}>
-                {data.label || "Custom Node"}
-            </div>
-            <div style={{ padding: "10px" }}>
-                {data.content || "Placeholder"}
-            </div>
-        </div>
-    );
-};
+const nodeContext = require.context("./nodes", true, /\.jsx$/);
+const nodeTypes = {};
+const categorizedNodes = {};
 
-function FlowEditor({ nodes, edges, setNodes, setEdges }) {
+nodeContext.keys().forEach((path) => {
+    const mod = nodeContext(path);
+    if (!mod.default) return;
+    const { type, label, component } = mod.default;
+    if (!type || !component) return;
+
+    const pathParts = path.replace("./", "").split("/");
+    if (pathParts.length < 2) return;
+    const category = pathParts[0];
+
+    if (!categorizedNodes[category]) {
+        categorizedNodes[category] = [];
+    }
+    categorizedNodes[category].push({ type, label });
+
+    nodeTypes[type] = component;
+});
+
+function FlowEditor({ nodes, edges, setNodes, setEdges, nodeTypes }) {
     const reactFlowWrapper = useRef(null);
     const { project } = useReactFlow();
 
@@ -98,13 +74,18 @@ function FlowEditor({ nodes, edges, setNodes, setEdges }) {
             });
 
             const id = `node-${Date.now()}`;
+
+            const nodeMeta = Object.values(categorizedNodes)
+                .flat()
+                .find((n) => n.type === type);
+
             const newNode = {
                 id,
-                type: "custom",
+                type,
                 position,
                 data: {
-                    label: "Custom Node",
-                    content: "Placeholder"
+                    label: nodeMeta?.label || type,
+                    content: nodeMeta?.label || "Node"
                 }
             };
 
@@ -160,7 +141,7 @@ function FlowEditor({ nodes, edges, setNodes, setEdges }) {
                 proOptions={{ hideAttribution: true }}
                 nodes={nodes}
                 edges={edges}
-                nodeTypes={{ custom: CustomNode }}
+                nodeTypes={nodeTypes}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
@@ -300,14 +281,7 @@ export default function App() {
 
             <Box display="flex" flexDirection="column" height="calc(100vh - 64px)">
                 <Box display="flex" flexGrow={1} minHeight={0}>
-                    <Box
-                        sx={{
-                            width: 240,
-                            bgcolor: "#121212",
-                            borderRight: "1px solid #333",
-                            overflowY: "auto"
-                        }}
-                    >
+                    <Box sx={{ width: 240, bgcolor: "#121212", borderRight: "1px solid #333", overflowY: "auto" }}>
                         <Accordion defaultExpanded square disableGutters sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}>
                             <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={accordionHeaderStyle}>
                                 <Typography align="left" sx={{ fontSize: "0.9rem", color: "#0475c2" }}><b>Workflows</b></Typography>
@@ -319,22 +293,49 @@ export default function App() {
                             </AccordionDetails>
                         </Accordion>
 
-                        <Accordion square disableGutters sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}>
+                        <Accordion defaultExpanded square disableGutters sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}>
                             <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={accordionHeaderStyle}>
                                 <Typography align="left" sx={{ fontSize: "0.9rem", color: "#0475c2" }}><b>Nodes</b></Typography>
                             </AccordionSummary>
                             <AccordionDetails sx={{ p: 0 }}>
-                                <Button
-                                    fullWidth
-                                    sx={sidebarBtnStyle}
-                                    draggable
-                                    onDragStart={(event) => {
-                                        event.dataTransfer.setData("application/reactflow", "testNode");
-                                        event.dataTransfer.effectAllowed = "move";
-                                    }}
-                                >
-                                    TEST NODE
-                                </Button>
+                                {Object.entries(categorizedNodes).map(([category, items]) => (
+                                    <Box key={category} sx={{ mb: 2 }}>
+                                        <Divider
+                                            sx={{
+                                                bgcolor: "#2c2c2c",
+                                                mb: 1,
+                                                px: 1,
+                                                py: 0.5,
+                                                display: "flex",
+                                                justifyContent: "center"
+                                            }}
+                                        >
+                                            <Typography
+                                                variant="caption"
+                                                sx={{
+                                                    color: "#888",
+                                                    fontSize: "0.75rem"
+                                                }}
+                                            >
+                                                {category}
+                                            </Typography>
+                                        </Divider>
+                                        {items.map(({ type, label }) => (
+                                            <Button
+                                                key={`${category}-${type}`}
+                                                fullWidth
+                                                sx={sidebarBtnStyle}
+                                                draggable
+                                                onDragStart={(event) => {
+                                                    event.dataTransfer.setData("application/reactflow", type);
+                                                    event.dataTransfer.effectAllowed = "move";
+                                                }}
+                                            >
+                                                {label}
+                                            </Button>
+                                        ))}
+                                    </Box>
+                                ))}
                             </AccordionDetails>
                         </Accordion>
                     </Box>
@@ -346,6 +347,7 @@ export default function App() {
                                 edges={edges}
                                 setNodes={setNodes}
                                 setEdges={setEdges}
+                                nodeTypes={nodeTypes}
                             />
                         </ReactFlowProvider>
                     </Box>
