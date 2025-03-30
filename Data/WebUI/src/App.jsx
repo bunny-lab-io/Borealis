@@ -21,6 +21,8 @@ import {
     Divider
 } from "@mui/material";
 
+import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
+import Tooltip from "@mui/material/Tooltip";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
@@ -52,8 +54,7 @@ nodeContext.keys().forEach((path) => {
     if (!categorizedNodes[category]) {
         categorizedNodes[category] = [];
     }
-    categorizedNodes[category].push({ type, label });
-
+    categorizedNodes[category].push(mod.default); // includes type, label, component, defaultContent
     nodeTypes[type] = component;
 });
 
@@ -85,7 +86,7 @@ function FlowEditor({ nodes, edges, setNodes, setEdges, nodeTypes }) {
                 position,
                 data: {
                     label: nodeMeta?.label || type,
-                    content: nodeMeta?.label || "Node"
+                    content: nodeMeta?.defaultContent
                 }
             };
 
@@ -286,7 +287,7 @@ export default function App() {
                             <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={accordionHeaderStyle}>
                                 <Typography align="left" sx={{ fontSize: "0.9rem", color: "#0475c2" }}><b>Workflows</b></Typography>
                             </AccordionSummary>
-                            <AccordionDetails sx={{ p: 0 }}>
+                            <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
                                 <Button fullWidth sx={sidebarBtnStyle} onClick={handleSaveWorkflow}>SAVE WORKFLOW</Button>
                                 <Button fullWidth sx={sidebarBtnStyle} onClick={handleOpenWorkflow}>OPEN WORKFLOW</Button>
                                 <Button fullWidth sx={sidebarBtnStyle} onClick={handleOpenCloseDialog}>CLOSE WORKFLOW</Button>
@@ -299,16 +300,17 @@ export default function App() {
                             </AccordionSummary>
                             <AccordionDetails sx={{ p: 0 }}>
                                 {Object.entries(categorizedNodes).map(([category, items]) => (
-                                    <Box key={category} sx={{ mb: 2 }}>
+                                    <Box key={category} sx={{ mb: 0, bgcolor: "#232323" }}>
                                         <Divider
                                             sx={{
-                                                bgcolor: "#2c2c2c",
-                                                mb: 1,
-                                                px: 1,
-                                                py: 0.5,
+                                                bgcolor: "transparent",
+                                                px: 2,
+                                                py: 0.75,
                                                 display: "flex",
-                                                justifyContent: "center"
+                                                justifyContent: "center",
+                                                borderColor: "#333"
                                             }}
+                                            variant="fullWidth"
                                         >
                                             <Typography
                                                 variant="caption"
@@ -321,18 +323,20 @@ export default function App() {
                                             </Typography>
                                         </Divider>
                                         {items.map(({ type, label }) => (
-                                            <Button
-                                                key={`${category}-${type}`}
-                                                fullWidth
-                                                sx={sidebarBtnStyle}
-                                                draggable
-                                                onDragStart={(event) => {
-                                                    event.dataTransfer.setData("application/reactflow", type);
-                                                    event.dataTransfer.effectAllowed = "move";
-                                                }}
-                                            >
-                                                {label}
-                                            </Button>
+                                            <Tooltip key={`${category}-${type}`} title="Drag & Drop into Editor" placement="right">
+                                                <Button
+                                                    fullWidth
+                                                    sx={sidebarBtnStyle}
+                                                    draggable
+                                                    onDragStart={(event) => {
+                                                        event.dataTransfer.setData("application/reactflow", type);
+                                                        event.dataTransfer.effectAllowed = "move";
+                                                    }}
+                                                    startIcon={<DragIndicatorIcon sx={{ color: "#666" }} />}
+                                                >
+                                                    {label}
+                                                </Button>
+                                            </Tooltip>
                                         ))}
                                     </Box>
                                 ))}
@@ -400,7 +404,11 @@ const sidebarBtnStyle = {
     backgroundColor: "#232323",
     justifyContent: "flex-start",
     pl: 2,
-    fontSize: "0.9rem"
+    fontSize: "0.9rem",
+    textTransform: "none",
+    "&:hover": {
+        backgroundColor: "#2a2a2a"
+    }
 };
 
 const accordionHeaderStyle = {

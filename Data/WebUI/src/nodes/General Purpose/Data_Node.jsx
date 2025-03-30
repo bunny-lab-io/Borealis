@@ -52,7 +52,7 @@ const dataNode = ({ data }) => {
                 {data.label || "Data Node"}
             </div>
             <div style={{ padding: "10px" }}>
-                {data.content || "Data Node"}
+                {data.content || "Placeholder Data Content"}
             </div>
         </div>
     );
@@ -61,5 +61,6 @@ const dataNode = ({ data }) => {
 export default {
     type: "dataNode", // Must match the type used in nodeTypes
     label: "Data Node",
+    defaultContent: "Placeholder Node",
     component: dataNode
 };

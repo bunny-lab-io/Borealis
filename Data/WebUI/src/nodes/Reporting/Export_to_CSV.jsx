@@ -52,7 +52,7 @@ const ExportToCSVNode = ({ data }) => {
                 {data.label || "Export to CSV"}
             </div>
             <div style={{ padding: "10px" }}>
-                {data.content || "Export to CSV"}
+                {data.content || "Placeholder CSV Content"}
             </div>
         </div>
     );
@@ -61,5 +61,6 @@ const ExportToCSVNode = ({ data }) => {
 export default {
     type: "ExportToCSVNode", // Must match the type used in nodeTypes
     label: "Export to CSV",
+    defaultContent: "Placeholder Node",
     component: ExportToCSVNode
 };

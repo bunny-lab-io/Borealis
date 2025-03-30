@@ -52,7 +52,7 @@ const flyffNode = ({ data }) => {
                 {data.label || "Flyff Node"}
             </div>
             <div style={{ padding: "10px" }}>
-                {data.content || "Flyff Node"}
+                {data.content || "Placeholder Flyff Content"}
             </div>
         </div>
     );
@@ -61,5 +61,6 @@ const flyffNode = ({ data }) => {
 export default {
     type: "flyffNode", // Must match the type used in nodeTypes
     label: "Flyff Node",
+    defaultContent: "Placeholder Node",
     component: flyffNode
 };

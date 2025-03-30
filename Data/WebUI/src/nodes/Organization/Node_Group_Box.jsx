@@ -52,7 +52,7 @@ const nodeGroupBox = ({ data }) => {
                 {data.label || "Node Group Box"}
             </div>
             <div style={{ padding: "10px" }}>
-                {data.content || "Node Group Box"}
+                {data.content || "Placeholder Group Box Content"}
             </div>
         </div>
     );
@@ -61,5 +61,6 @@ const nodeGroupBox = ({ data }) => {
 export default {
     type: "nodeGroupBox", // Must match the type used in nodeTypes
     label: "Node Group Box",
+    defaultContent: "Placeholder Node",
     component: nodeGroupBox
 };
