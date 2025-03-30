@@ -47,8 +47,12 @@ const CustomNode = ({ data }) => {
             fontSize: "12px",
             minWidth: "160px",
             maxWidth: "260px",
-            boxShadow: "0 0 10px rgba(0,0,0,0.2)",
-            position: "relative"
+            boxShadow: `
+                0 0 5px rgba(88, 166, 255, 0.1),
+                0 0 10px rgba(88, 166, 255, 0.1)
+            `,
+            position: "relative",
+            transition: "box-shadow 0.3s ease-in-out"
         }}>
             <Handle
                 type="target"
