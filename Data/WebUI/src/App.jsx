@@ -281,7 +281,7 @@ export default function App() {
 
             <Box display="flex" flexDirection="column" height="calc(100vh - 64px)">
                 <Box display="flex" flexGrow={1} minHeight={0}>
-                    <Box sx={{ width: 240, bgcolor: "#121212", borderRight: "1px solid #333", overflowY: "auto" }}>
+                    <Box sx={{ width: 320, bgcolor: "#121212", borderRight: "1px solid #333", overflowY: "auto" }}>
                         <Accordion defaultExpanded square disableGutters sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}>
                             <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={accordionHeaderStyle}>
                                 <Typography align="left" sx={{ fontSize: "0.9rem", color: "#0475c2" }}><b>Workflows</b></Typography>
