@@ -77,7 +77,6 @@ const CustomNode = ({ data }) => {
     );
 };
 
-// FlowEditor with drag-and-drop and updated behavior
 function FlowEditor({ nodes, edges, setNodes, setEdges }) {
     const reactFlowWrapper = useRef(null);
     const { project } = useReactFlow();
@@ -202,10 +201,10 @@ export default function App() {
     const [nodes, setNodes] = useState([]);
     const [edges, setEdges] = useState([]);
     const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
+    const fileInputRef = useRef(null);
 
     const handleAboutMenuOpen = (event) => setAboutAnchorEl(event.currentTarget);
     const handleAboutMenuClose = () => setAboutAnchorEl(null);
-
     const handleOpenCloseDialog = () => setConfirmCloseOpen(true);
     const handleCloseDialog = () => setConfirmCloseOpen(false);
     const handleConfirmCloseWorkflow = () => {
@@ -214,21 +213,59 @@ export default function App() {
         setConfirmCloseOpen(false);
     };
 
-    const handleAddTestNode = () => {
-        const id = `test-node-${Date.now()}`;
-        const newNode = {
-            id,
-            type: "custom",
-            data: {
-                label: "Custom Node",
-                content: "Placeholder"
-            },
-            position: {
-                x: 250 + Math.random() * 300,
-                y: 150 + Math.random() * 200
+    const handleSaveWorkflow = async () => {
+        const data = JSON.stringify({ nodes, edges }, null, 2);
+        const blob = new Blob([data], { type: "application/json" });
+
+        if (window.showSaveFilePicker) {
+            try {
+                const fileHandle = await window.showSaveFilePicker({
+                    suggestedName: "workflow.json",
+                    types: [{
+                        description: "Workflow JSON File",
+                        accept: { "application/json": [".json"] }
+                    }]
+                });
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+            } catch (error) {
+                console.error("Save cancelled or failed:", error);
             }
-        };
-        setNodes((nds) => [...nds, newNode]);
+        } else {
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = "workflow.json";
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            URL.revokeObjectURL(a.href);
+            document.body.removeChild(a);
+        }
+    };
+
+    const handleOpenWorkflow = async () => {
+        if (window.showOpenFilePicker) {
+            try {
+                const [fileHandle] = await window.showOpenFilePicker({
+                    types: [{
+                        description: "Workflow JSON File",
+                        accept: { "application/json": [".json"] }
+                    }]
+                });
+                const file = await fileHandle.getFile();
+                const text = await file.text();
+                const { nodes: loadedNodes, edges: loadedEdges } = JSON.parse(text);
+                const confirm = window.confirm("Opening a workflow will overwrite your current one. Continue?");
+                if (!confirm) return;
+                setNodes(loadedNodes);
+                setEdges(loadedEdges);
+            } catch (error) {
+                console.error("Open cancelled or failed:", error);
+            }
+        } else {
+            fileInputRef.current?.click();
+        }
     };
 
     return (
@@ -272,15 +309,9 @@ export default function App() {
                                 <Typography align="left" sx={{ fontSize: "0.9rem", color: "#0475c2" }}><b>Workflows</b></Typography>
                             </AccordionSummary>
                             <AccordionDetails sx={{ p: 0 }}>
-                                <Button fullWidth sx={sidebarBtnStyle}>SAVE WORKFLOW</Button>
-                                <Button fullWidth sx={sidebarBtnStyle}>OPEN WORKFLOW</Button>
-                                <Button
-                                    fullWidth
-                                    sx={sidebarBtnStyle}
-                                    onClick={handleOpenCloseDialog}
-                                >
-                                    CLOSE WORKFLOW
-                                </Button>
+                                <Button fullWidth sx={sidebarBtnStyle} onClick={handleSaveWorkflow}>SAVE WORKFLOW</Button>
+                                <Button fullWidth sx={sidebarBtnStyle} onClick={handleOpenWorkflow}>OPEN WORKFLOW</Button>
+                                <Button fullWidth sx={sidebarBtnStyle} onClick={handleOpenCloseDialog}>CLOSE WORKFLOW</Button>
                             </AccordionDetails>
                         </Accordion>
 
@@ -316,23 +347,12 @@ export default function App() {
                     </Box>
                 </Box>
 
-                <Box component="footer" sx={{
-                    bgcolor: "#1e1e1e",
-                    color: "white",
-                    px: 2,
-                    py: 1,
-                    textAlign: "left"
-                }}>
+                <Box component="footer" sx={{ bgcolor: "#1e1e1e", color: "white", px: 2, py: 1, textAlign: "left" }}>
                     <b>Nodes</b>: <span id="nodeCount">0</span> | <b>Update Rate</b>: 500ms
                 </Box>
             </Box>
 
-            {/* Confirmation Dialog */}
-            <Dialog
-                open={confirmCloseOpen}
-                onClose={handleCloseDialog}
-                PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff" } }}
-            >
+            <Dialog open={confirmCloseOpen} onClose={handleCloseDialog} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
                 <DialogTitle>Close Workflow?</DialogTitle>
                 <DialogContent>
                     <DialogContentText sx={{ color: "#ccc" }}>
@@ -340,14 +360,31 @@ export default function App() {
                     </DialogContentText>
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={handleCloseDialog} sx={{ color: "#58a6ff" }}>
-                        Cancel
-                    </Button>
-                    <Button onClick={handleConfirmCloseWorkflow} sx={{ color: "#ff4f4f" }}>
-                        Close Workflow
-                    </Button>
+                    <Button onClick={handleCloseDialog} sx={{ color: "#58a6ff" }}>Cancel</Button>
+                    <Button onClick={handleConfirmCloseWorkflow} sx={{ color: "#ff4f4f" }}>Close Workflow</Button>
                 </DialogActions>
             </Dialog>
+
+            <input
+                type="file"
+                accept=".json,application/json"
+                style={{ display: "none" }}
+                ref={fileInputRef}
+                onChange={async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    try {
+                        const text = await file.text();
+                        const { nodes: loadedNodes, edges: loadedEdges } = JSON.parse(text);
+                        const confirm = window.confirm("Opening a workflow will overwrite your current one. Continue?");
+                        if (!confirm) return;
+                        setNodes(loadedNodes);
+                        setEdges(loadedEdges);
+                    } catch (err) {
+                        console.error("Failed to read file:", err);
+                    }
+                }}
+            />
         </ThemeProvider>
     );
 }
