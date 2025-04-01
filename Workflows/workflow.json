@@ -1,0 +1,86 @@
+{
+  "nodes": [
+    {
+      "id": "node-1743545354663",
+      "type": "dataNode",
+      "position": {
+        "x": 177.26666259765625,
+        "y": 122.66666666666667
+      },
+      "data": {
+        "label": "Data Node",
+        "content": "Placeholder Node"
+      },
+      "width": 160,
+      "height": 63
+    },
+    {
+      "id": "node-1743545357071",
+      "type": "dataNode",
+      "position": {
+        "x": 506.59999593098956,
+        "y": 232
+      },
+      "data": {
+        "label": "Data Node",
+        "content": "Placeholder Node"
+      },
+      "width": 160,
+      "height": 63,
+      "selected": true,
+      "positionAbsolute": {
+        "x": 506.59999593098956,
+        "y": 232
+      },
+      "dragging": false
+    },
+    {
+      "id": "node-1743545361694",
+      "type": "ExportToCSVNode",
+      "position": {
+        "x": 187.2666625976562,
+        "y": 316.66666666666663
+      },
+      "data": {
+        "label": "Export to CSV",
+        "content": "Placeholder Node"
+      },
+      "width": 160,
+      "height": 63,
+      "selected": false,
+      "positionAbsolute": {
+        "x": 187.2666625976562,
+        "y": 316.66666666666663
+      },
+      "dragging": false
+    }
+  ],
+  "edges": [
+    {
+      "source": "node-1743545354663",
+      "sourceHandle": null,
+      "target": "node-1743545357071",
+      "targetHandle": null,
+      "type": "smoothstep",
+      "animated": true,
+      "style": {
+        "strokeDasharray": "6 3",
+        "stroke": "#58a6ff"
+      },
+      "id": "reactflow__edge-node-1743545354663-node-1743545357071"
+    },
+    {
+      "source": "node-1743545354663",
+      "sourceHandle": null,
+      "target": "node-1743545361694",
+      "targetHandle": null,
+      "type": "smoothstep",
+      "animated": true,
+      "style": {
+        "strokeDasharray": "6 3",
+        "stroke": "#58a6ff"
+      },
+      "id": "reactflow__edge-node-1743545354663-node-1743545361694"
+    }
+  ]
+}

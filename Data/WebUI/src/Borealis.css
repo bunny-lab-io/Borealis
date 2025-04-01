@@ -5,6 +5,7 @@
     height: 100vh;
 }
 
+
 /* Blue Gradient Overlay */
 .flow-editor-container::before {
     content: "";
@@ -22,9 +23,42 @@
     z-index: -1; /* Ensures it stays behind the React Flow elements */
 }
 
+
 /* Emphasize Drag & Drop Node Functionality */
 .sidebar-button:hover {
     background-color: #2a2a2a !important;
     box-shadow: 0 0 5px rgba(88, 166, 255, 0.3);
     cursor: grab;
+}
+
+
+/* Borealis Node Styling */
+.borealis-node {
+    background: #2c2c2c;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    color: #ccc;
+    font-size: 12px;
+    min-width: 160px;
+    max-width: 260px;
+    position: relative;
+    box-shadow: 0 0 5px rgba(88, 166, 255, 0.15), 0 0 10px rgba(88, 166, 255, 0.15);
+    transition: box-shadow 0.3s ease-in-out;
+}
+.borealis-node-header {
+    background: #232323;
+    padding: 6px 10px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    font-weight: bold;
+    font-size: 10px;
+}
+.borealis-node-content {
+    padding: 10px;
+    font-size: 9px;
+}
+.borealis-handle {
+    background: #58a6ff;
+    width: 10px;
+    height: 10px;
 }

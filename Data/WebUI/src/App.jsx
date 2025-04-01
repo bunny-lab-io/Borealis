@@ -322,8 +322,17 @@ export default function App() {
                                                 {category}
                                             </Typography>
                                         </Divider>
-                                        {items.map(({ type, label }) => (
-                                            <Tooltip key={`${category}-${type}`} title="Drag & Drop into Editor" placement="right">
+                                        {items.map(({ type, label, description }) => (
+                                            <Tooltip
+                                                key={`${category}-${type}`}
+                                                title={
+                                                    <span style={{ whiteSpace: "pre-line", wordWrap: "break-word", maxWidth: 220 }}>
+                                                        {description || "Drag & Drop into Editor"}
+                                                    </span>
+                                                }
+                                                placement="right"
+                                                arrow
+                                            >
                                                 <Button
                                                     fullWidth
                                                     sx={sidebarBtnStyle}
