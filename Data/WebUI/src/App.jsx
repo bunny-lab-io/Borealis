@@ -54,6 +54,11 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import "./Borealis.css";
 
+// Global Node Update Timer Variable
+if (!window.BorealisUpdateRate) {
+    window.BorealisUpdateRate = 100; // Default Update Rate: 100ms
+}
+
 const nodeContext = require.context("./nodes", true, /\.jsx$/);
 const nodeTypes = {};
 const categorizedNodes = {};
@@ -413,8 +418,42 @@ export default function App() {
                     </Box>
                 </Box>
 
-                <Box component="footer" sx={{ bgcolor: "#1e1e1e", color: "white", px: 2, py: 1, textAlign: "left" }}>
-                    <b>Nodes</b>: <span id="nodeCount">0</span> | <b>Update Rate</b>: 500ms
+                <Box component="footer" sx={{ bgcolor: "#1e1e1e", color: "white", px: 2, py: 1, display: "flex", alignItems: "center", gap: 2 }}>
+                    <b>Nodes</b>: <span id="nodeCount">0</span>
+                    <Divider orientation="vertical" flexItem sx={{ borderColor: "#444" }} />
+                    <b>Update Rate (ms):</b>
+                    <input
+                        id="updateRateInput"
+                        type="number"
+                        min="50"
+                        step="50"
+                        defaultValue={window.BorealisUpdateRate}
+                        style={{
+                            width: "80px",
+                            background: "#121212",
+                            color: "#fff",
+                            border: "1px solid #444",
+                            borderRadius: "3px",
+                            padding: "3px",
+                            fontSize: "0.8rem"
+                        }}
+                    />
+                    <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={() => {
+                            const val = parseInt(document.getElementById("updateRateInput")?.value);
+                            if (!isNaN(val) && val >= 50) {
+                                window.BorealisUpdateRate = val;
+                                console.log("Global update rate set to", val + "ms");
+                            } else {
+                                alert("Please enter a valid number (minimum 50)");
+                            }
+                        }}
+                        sx={{ color: "#58a6ff", borderColor: "#58a6ff", fontSize: "0.75rem", textTransform: "none", px: 1.5 }}
+                    >
+                        Update Rate
+                    </Button>
                 </Box>
             </Box>
 
