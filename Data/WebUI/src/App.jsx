@@ -1,4 +1,7 @@
+// Core React Imports
 import React, { useState, useEffect, useCallback, useRef } from "react";
+
+// Material UI - Components
 import {
     AppBar,
     Toolbar,
@@ -18,31 +21,25 @@ import {
     DialogContent,
     DialogContentText,
     DialogActions,
-    Divider
+    Divider,
+    Tooltip
 } from "@mui/material";
 
-import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
-import Tooltip from "@mui/material/Tooltip";
-import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+// Material UI - Icons
+import {
+    DragIndicator as DragIndicatorIcon,
+    KeyboardArrowDown as KeyboardArrowDownIcon,
+    ExpandMore as ExpandMoreIcon,
+    Save as SaveIcon,
+    FileOpen as FileOpenIcon,
+    DeleteForever as DeleteForeverIcon,
+    InfoOutlined as InfoOutlinedIcon,
+    Polyline as PolylineIcon,
+    MergeType as MergeTypeIcon,
+    People as PeopleIcon
+} from "@mui/icons-material";
 
-// Icons for Sidebar Workflow Buttons
-import SaveIcon from "@mui/icons-material/Save";
-import FileOpenIcon from "@mui/icons-material/FileOpen";
-import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
-
-// Info Icon for About Menu
-import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
-
-// Node Icon (Left-Side of Each Node in Sidebar Menu)
-import PolylineIcon from "@mui/icons-material/Polyline";
-
-// Gitea Project Icon
-import MergeTypeIcon from "@mui/icons-material/MergeType";
-
-// Credits Icon
-import PeopleIcon from "@mui/icons-material/People";
-
+// React Flow
 import ReactFlow, {
     Background,
     addEdge,
@@ -51,12 +48,14 @@ import ReactFlow, {
     ReactFlowProvider,
     useReactFlow
 } from "reactflow";
+
+// Styles
 import "reactflow/dist/style.css";
 import "./Borealis.css";
 
 // Global Node Update Timer Variable
 if (!window.BorealisUpdateRate) {
-    window.BorealisUpdateRate = 100; // Default Update Rate: 100ms
+    window.BorealisUpdateRate = 200; // Default Update Rate: 100ms
 }
 
 const nodeContext = require.context("./nodes", true, /\.jsx$/);

@@ -176,7 +176,7 @@ const DataNode = ({ id, data }) => {
 
 export default {
     type: "DataNode", // REQUIRED: unique identifier for the node type
-    label: "Data Node",
+    label: "String / Number Data",
     description: `
 Foundational Data Node
 
@@ -185,6 +185,6 @@ Foundational Data Node
 - Pushes value to downstream nodes every X ms
 - Uses BorealisValueBus to communicate with other nodes
 `.trim(),
-    content: "Store Strings, Ints, and Floats",
+    content: "Store a String or Number",
     component: DataNode
 };

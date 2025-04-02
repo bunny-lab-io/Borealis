@@ -110,7 +110,7 @@ Run-Step "Install Python Dependencies into Virtual Python Environment" {
 }
 
 # ---------------------- Build React App ----------------------
-Run-Step "Install NPM into ReactJS App" {
+Run-Step "ReactJS App: Install NPM" {
     $packageJsonPath = Join-Path $webUIDestination "package.json"
     if (Test-Path $packageJsonPath) {
         Push-Location $webUIDestination
@@ -120,20 +120,26 @@ Run-Step "Install NPM into ReactJS App" {
     }
 }
 
-Run-Step "Install React Flow into ReactJS App" {
+Run-Step "ReactJS App: Install React Resizable" {
+    Push-Location $webUIDestination
+    npm install react-resizable --no-fund --audit=false | Out-Null
+    Pop-Location
+}
+
+Run-Step "ReactJS App: Install React Flow" {
     Push-Location $webUIDestination
     npm install reactflow --no-fund --audit=false | Out-Null
     Pop-Location
 }
 
-Run-Step "Install Material UI Libraries into ReactJS App" {
+Run-Step "ReactJS App: Install Material UI Libraries" {
     Push-Location $webUIDestination
     $env:npm_config_loglevel = "silent"  # Force NPM to be completely silent
     npm install --silent @mui/material @mui/icons-material @emotion/react @emotion/styled --no-fund --audit=false 2>&1 | Out-Null
     Pop-Location
 }
 
-Run-Step "Build ReactJS App" {
+Run-Step "ReactJS App: Building App" {
     Push-Location $webUIDestination
     #npm run build | Out-Null
     npm run build
