@@ -135,7 +135,8 @@ Run-Step "Install Material UI Libraries into ReactJS App" {
 
 Run-Step "Build ReactJS App" {
     Push-Location $webUIDestination
-    npm run build | Out-Null
+    #npm run build | Out-Null
+    npm run build
     Pop-Location
 }
 

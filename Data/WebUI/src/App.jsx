@@ -26,6 +26,23 @@ import Tooltip from "@mui/material/Tooltip";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
+// Icons for Sidebar Workflow Buttons
+import SaveIcon from "@mui/icons-material/Save";
+import FileOpenIcon from "@mui/icons-material/FileOpen";
+import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
+
+// Info Icon for About Menu
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+
+// Node Icon (Left-Side of Each Node in Sidebar Menu)
+import PolylineIcon from "@mui/icons-material/Polyline";
+
+// Gitea Project Icon
+import MergeTypeIcon from "@mui/icons-material/MergeType";
+
+// Credits Icon
+import PeopleIcon from "@mui/icons-material/People";
+
 import ReactFlow, {
     Background,
     addEdge,
@@ -86,7 +103,7 @@ function FlowEditor({ nodes, edges, setNodes, setEdges, nodeTypes }) {
                 position,
                 data: {
                     label: nodeMeta?.label || type,
-                    content: nodeMeta?.defaultContent
+                    content: nodeMeta?.content
                 }
             };
 
@@ -187,6 +204,7 @@ export default function App() {
     const [nodes, setNodes] = useState([]);
     const [edges, setEdges] = useState([]);
     const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
+    const [creditsDialogOpen, setCreditsDialogOpen] = useState(false);
     const fileInputRef = useRef(null);
 
     const handleAboutMenuOpen = (event) => setAboutAnchorEl(event.currentTarget);
@@ -266,16 +284,34 @@ export default function App() {
                         color="inherit"
                         onClick={handleAboutMenuOpen}
                         endIcon={<KeyboardArrowDownIcon />}
+                        startIcon={<InfoOutlinedIcon />}
                     >
                         About
                     </Button>
+
                     <Menu
                         anchorEl={aboutAnchorEl}
                         open={Boolean(aboutAnchorEl)}
                         onClose={handleAboutMenuClose}
                     >
-                        <MenuItem onClick={handleAboutMenuClose}>Gitea Project</MenuItem>
-                        <MenuItem onClick={handleAboutMenuClose}>Credits</MenuItem>
+                        <MenuItem
+                            onClick={() => {
+                                handleAboutMenuClose();
+                                window.open("https://git.bunny-lab.io/Borealis", "_blank");
+                            }}
+                        >
+                            <MergeTypeIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
+                            Gitea Project
+                        </MenuItem>
+                        <MenuItem
+                            onClick={() => {
+                                handleAboutMenuClose();
+                                setCreditsDialogOpen(true);
+                            }}
+                        >
+                            <PeopleIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
+                            Credits
+                        </MenuItem>
                     </Menu>
                 </Toolbar>
             </AppBar>
@@ -288,9 +324,15 @@ export default function App() {
                                 <Typography align="left" sx={{ fontSize: "0.9rem", color: "#0475c2" }}><b>Workflows</b></Typography>
                             </AccordionSummary>
                             <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-                                <Button fullWidth sx={sidebarBtnStyle} onClick={handleSaveWorkflow}>SAVE WORKFLOW</Button>
-                                <Button fullWidth sx={sidebarBtnStyle} onClick={handleOpenWorkflow}>OPEN WORKFLOW</Button>
-                                <Button fullWidth sx={sidebarBtnStyle} onClick={handleOpenCloseDialog}>CLOSE WORKFLOW</Button>
+                                <Button fullWidth startIcon={<SaveIcon />} sx={sidebarBtnStyle} onClick={handleSaveWorkflow}>
+                                    SAVE WORKFLOW
+                                </Button>
+                                <Button fullWidth startIcon={<FileOpenIcon />} sx={sidebarBtnStyle} onClick={handleOpenWorkflow}>
+                                    OPEN WORKFLOW
+                                </Button>
+                                <Button fullWidth startIcon={<DeleteForeverIcon />} sx={sidebarBtnStyle} onClick={handleOpenCloseDialog}>
+                                    CLOSE WORKFLOW
+                                </Button>
                             </AccordionDetails>
                         </Accordion>
 
@@ -335,15 +377,20 @@ export default function App() {
                                             >
                                                 <Button
                                                     fullWidth
-                                                    sx={sidebarBtnStyle}
+                                                    sx={{
+                                                        ...sidebarBtnStyle,
+                                                        justifyContent: "space-between", // ensures spacing between left icon/label and right icon
+                                                        pr: 1 // optional: tighter padding on right
+                                                    }}
                                                     draggable
                                                     onDragStart={(event) => {
                                                         event.dataTransfer.setData("application/reactflow", type);
                                                         event.dataTransfer.effectAllowed = "move";
                                                     }}
-                                                    startIcon={<DragIndicatorIcon sx={{ color: "#666" }} />}
+                                                    startIcon={<DragIndicatorIcon sx={{ color: "#666", fontSize: 18 }} />}
                                                 >
-                                                    {label}
+                                                    <Box component="span" sx={{ flexGrow: 1, textAlign: "left" }}>{label}</Box>
+                                                    <PolylineIcon sx={{ color: "#58a6ff", fontSize: 18, ml: 1 }} />
                                                 </Button>
                                             </Tooltip>
                                         ))}
@@ -381,6 +428,24 @@ export default function App() {
                 <DialogActions>
                     <Button onClick={handleCloseDialog} sx={{ color: "#58a6ff" }}>Cancel</Button>
                     <Button onClick={handleConfirmCloseWorkflow} sx={{ color: "#ff4f4f" }}>Close Workflow</Button>
+                </DialogActions>
+            </Dialog>
+
+            <Dialog
+                open={creditsDialogOpen}
+                onClose={() => setCreditsDialogOpen(false)}
+                PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+            >
+                <DialogTitle>Borealis Workflow Automation Tool</DialogTitle>
+                <DialogContent>
+                    <DialogContentText sx={{ color: "#ccc" }}>
+                        Designed by Nicole Rappe @ Bunny Lab
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setCreditsDialogOpen(false)} sx={{ color: "#58a6ff" }}>
+                        Close
+                    </Button>
                 </DialogActions>
             </Dialog>
 

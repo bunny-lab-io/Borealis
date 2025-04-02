@@ -45,12 +45,12 @@ const ExportToCSVNode = ({ data }) => {
             <Handle type="target" position={Position.Left} className="borealis-handle" />
 
             <div className="borealis-node-header">
-                {data.label || "Export to CSV"}
+                {data.label}
             </div>
 
             <div className="borealis-node-content">
                 <div style={{ marginBottom: "8px" }}>
-                    {data.content || "Export Input Data to CSV File"}
+                    {data.content}
                 </div>
 
                 <label style={{ fontSize: "9px", display: "block", marginTop: "6px" }}>
@@ -138,6 +138,6 @@ Inputs:
 Outputs:
 - None (writes directly to disk in future)
 `.trim(),
-    defaultContent: "Export Input Data to CSV File",
+    content: "Export Input Data to CSV File",
     component: ExportToCSVNode
 };
