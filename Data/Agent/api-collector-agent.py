@@ -12,6 +12,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import ImageGrab
 
 # ---------------- Configuration ----------------
+# SERVER_URL = "https://borealis.bunny-lab.io" # Production URL Example
 SERVER_URL = "http://localhost:5000"
 CHECKIN_ENDPOINT = f"{SERVER_URL}/api/agent/checkin"
 CONFIG_ENDPOINT = f"{SERVER_URL}/api/agent/config"
