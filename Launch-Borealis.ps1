@@ -54,15 +54,12 @@ $dataDestination  = "$venvFolder\Borealis"
 $customUIPath     = "$dataSource\WebUI"
 $webUIDestination = "$venvFolder\web-interface"
 
-# ---------------------- Create Python Virtual Environment ----------------------
-Run-Step "Create Virtual Python Environment" {
+# ---------------------- Create Python Virtual Environment & Prepare Borealis Files ----------------------
+Run-Step "Create Borealis Virtual Python Environment" {
     if (!(Test-Path "$venvFolder\Scripts\Activate")) {
         python -m venv $venvFolder | Out-Null
     }
-}
-
-# ---------------------- Copy Server Data ----------------------
-Run-Step "Copy Borealis Server Data into Virtual Python Environment" {
+    # ---------------------- Copy Server Data ----------------------
     if (Test-Path $dataSource) {
         if (Test-Path $dataDestination) {
             Remove-Item -Recurse -Force $dataDestination | Out-Null
@@ -72,31 +69,24 @@ Run-Step "Copy Borealis Server Data into Virtual Python Environment" {
     } else {
         Write-Host "`r$($symbols.Info) Warning: Data folder not found, skipping copy." -ForegroundColor Yellow
     }
-}
 
-# ---------------------- React UI Deployment ----------------------
-Run-Step "Create a new ReactJS App in $webUIDestination" {
+    # ---------------------- React UI Deployment ----------------------
     if (-not (Test-Path $webUIDestination)) {
         npx create-react-app $webUIDestination | Out-Null
     }
-}
 
-Run-Step "Overwrite ReactJS App Files with Borealis ReactJS Files" {
     if (Test-Path $customUIPath) {
         Copy-Item -Path "$customUIPath\*" -Destination $webUIDestination -Recurse -Force
     } else {
         Write-Host "`r$($symbols.Info) No custom UI found, using default React app." -ForegroundColor Yellow
     }
-}
 
-Run-Step "Remove Existing ReactJS Build Folder (If Exists)" {
+    # Remove Pre-Existing ReactJS Build Folder (If one Exists)
     if (Test-Path "$webUIDestination\build") {
         Remove-Item -Path "$webUIDestination\build" -Recurse -Force
     }
-}
 
-# ---------------------- Activate Python Virtual Environment ----------------------
-Run-Step "Activate Virtual Python Environment" {
+    # ---------------------- Activate Python Virtual Environment ----------------------
     . "$venvFolder\Scripts\Activate"
 }
 
@@ -110,39 +100,32 @@ Run-Step "Install Python Dependencies into Virtual Python Environment" {
 }
 
 # ---------------------- Build React App ----------------------
-Run-Step "ReactJS App: Install NPM" {
+Run-Step "ReactJS Web Frontend: Install Necessary NPM Packages" {
     $packageJsonPath = Join-Path $webUIDestination "package.json"
     if (Test-Path $packageJsonPath) {
         Push-Location $webUIDestination
         $env:npm_config_loglevel = "silent"
+
+        # Install NPM
         npm install --silent --no-fund --audit=false 2>&1 | Out-Null
+
+        # Install React Resizable
+        npm install --silent react-resizable --no-fund --audit=false | Out-Null
+
+        # Install React Flow
+        npm install --silent reactflow --no-fund --audit=false | Out-Null
+
+        # Install Material UI Libraries
+        npm install --silent @mui/material @mui/icons-material @emotion/react @emotion/styled --no-fund --audit=false 2>&1 | Out-Null
+
         Pop-Location
     }
 }
 
-Run-Step "ReactJS App: Install React Resizable" {
+Run-Step "ReactJS Web Frontend: Build App" {
     Push-Location $webUIDestination
-    npm install react-resizable --no-fund --audit=false | Out-Null
-    Pop-Location
-}
-
-Run-Step "ReactJS App: Install React Flow" {
-    Push-Location $webUIDestination
-    npm install reactflow --no-fund --audit=false | Out-Null
-    Pop-Location
-}
-
-Run-Step "ReactJS App: Install Material UI Libraries" {
-    Push-Location $webUIDestination
-    $env:npm_config_loglevel = "silent"  # Force NPM to be completely silent
-    npm install --silent @mui/material @mui/icons-material @emotion/react @emotion/styled --no-fund --audit=false 2>&1 | Out-Null
-    Pop-Location
-}
-
-Run-Step "ReactJS App: Building App" {
-    Push-Location $webUIDestination
-    #npm run build | Out-Null
-    npm run build
+    #npm run build | Out-Null # Suppress Compilation Output
+    npm run build # Enabled during Development
     Pop-Location
 }
 
@@ -150,7 +133,6 @@ Run-Step "ReactJS App: Building App" {
 Push-Location $venvFolder
 Write-Host "`nLaunching Borealis..." -ForegroundColor Green
 Write-Host "===================================================================================="
-Write-Host "$($symbols.Running) Starting the Python Flask server..." -NoNewline
+Write-Host "$($symbols.Running) Starting Python Flask Server..." -NoNewline
 python "Borealis\server.py"
-Write-Host "`r$($symbols.Success) Borealis Launched Successfully!"
 Pop-Location

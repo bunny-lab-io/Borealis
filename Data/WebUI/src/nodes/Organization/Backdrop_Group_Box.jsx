@@ -32,7 +32,8 @@ const BackdropGroupBoxNode = ({ id, data }) => {
         }
     }, [isEditing]);
 
-    const handleTitleClick = () => {
+    const handleTitleClick = (e) => {
+        e.stopPropagation();
         setIsEditing(true);
     };
 
@@ -47,22 +48,32 @@ const BackdropGroupBoxNode = ({ id, data }) => {
     };
 
     return (
-        <div style={{ pointerEvents: "auto", zIndex: -1 }}> {/* Prevent blocking other nodes */}
+        <div style={{ pointerEvents: "auto" }}>
             <ResizableBox
                 width={200}
                 height={120}
                 minConstraints={[120, 80]}
                 maxConstraints={[600, 600]}
                 resizeHandles={["se"]}
+                className="borealis-node"
+                handle={(h) => (
+                    <span
+                        className={`react-resizable-handle react-resizable-handle-${h}`}
+                        style={{ pointerEvents: "auto" }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                    />
+                )}
+                onClick={(e) => e.stopPropagation()}
                 style={{
                     backgroundColor: "rgba(44, 44, 44, 0.5)",
                     border: "1px solid #3a3a3a",
                     borderRadius: "4px",
                     boxShadow: "0 0 5px rgba(88, 166, 255, 0.15)",
                     overflow: "hidden",
-                    position: "relative"
+                    position: "relative",
+                    zIndex: 0
                 }}
-                onClick={(e) => e.stopPropagation()} // prevent drag on resize
             >
                 <div
                     onClick={handleTitleClick}
@@ -82,6 +93,8 @@ const BackdropGroupBoxNode = ({ id, data }) => {
                             value={title}
                             onChange={handleTitleChange}
                             onBlur={handleBlur}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
                             style={{
                                 fontSize: "10px",
                                 padding: "2px",

@@ -451,7 +451,7 @@ export default function App() {
                         }}
                         sx={{ color: "#58a6ff", borderColor: "#58a6ff", fontSize: "0.75rem", textTransform: "none", px: 1.5 }}
                     >
-                        Update Rate
+                        Apply Rate
                     </Button>
                 </Box>
             </Box>
