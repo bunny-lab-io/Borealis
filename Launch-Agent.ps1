@@ -81,6 +81,5 @@ Run-Step "Install Python Dependencies for Collector Agent" {
 Push-Location $venvFolder
 Write-Host "`nLaunching Borealis API Collector Agent..." -ForegroundColor Green
 Write-Host "===================================================================================="
-Write-Host "$($symbols.Running) Starting Agent..." -NoNewline
 python "Agent\api-collector-agent.py"
 Pop-Location

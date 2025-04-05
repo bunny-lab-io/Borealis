@@ -70,17 +70,6 @@ const APINode = ({ id, data }) => {
         });
     };
 
-    const resetAgent = () => {
-        if (!selectedAgent) return;
-        fetch("/api/agent/reset", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agent_id: selectedAgent })
-        }).then(() => {
-            setSelectedAgent("");
-        });
-    };
-
     const toggleOverlay = () => {
         const newVisibility = !overlayVisible;
         setOverlayVisible(newVisibility);
@@ -148,13 +137,7 @@ const APINode = ({ id, data }) => {
                         style={{ flex: 1, fontSize: "9px" }}
                         onClick={provisionAgent}
                     >
-                        Provision
-                    </button>
-                    <button
-                        style={{ flex: 1, fontSize: "9px" }}
-                        onClick={resetAgent}
-                    >
-                        Reset Agent
+                        (Re)Provision
                     </button>
                     <button
                         style={{ flex: 1, fontSize: "9px" }}

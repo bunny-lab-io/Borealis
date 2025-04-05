@@ -19,5 +19,3 @@ opencv-python          # Computer vision processing
 pytesseract            # OCR engine
 easyocr                # Deep-learning-based OCR
 Pillow                 # Image processing
-
-# API Collector Agent Dependencies
