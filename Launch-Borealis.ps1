@@ -1,8 +1,20 @@
-# Start_Windows - WebServer.ps1
-# Run this script with:
-#   Set-ExecutionPolicy Unrestricted -Scope Process; .\Start_Windows -WebServer.ps1
+<# 
+    Deploy-Borealis.ps1
+    ----------------------
+    This script deploys the Borealis Workflow Automation Tool with two modules:
+      - Server (Web Dashboard)
+      - Agent (Client / Data Collector)
 
-# ---------------------- Initialization & Visuals ----------------------
+    It begins by presenting a menu to the user. Based on the selection (1 or 2), the corresponding module is launched.
+
+    Usage:
+      Set-ExecutionPolicy Unrestricted -Scope Process; .\Deploy-Borealis.ps1
+#>
+
+# ---------------------- Common Initialization & Visuals ----------------------
+Clear-Host
+
+# Define common symbols for displaying progress and status
 $symbols = @{
     Success = [char]0x2705
     Running = [char]0x23F3
@@ -10,14 +22,16 @@ $symbols = @{
     Info    = [char]0x2139
 }
 
+# Function to write progress steps with a given status symbol
 function Write-ProgressStep {
     param (
         [string]$Message,
-        [string]$Status = $symbols["Info"]  # Ensure proper lookup
+        [string]$Status = $symbols["Info"]
     )
     Write-Host "`r$Status $Message... " -NoNewline
 }
 
+# Function to run a step and check for errors
 function Run-Step {
     param (
         [string]$Message,
@@ -27,7 +41,7 @@ function Run-Step {
     try {
         & $Script
         if ($LASTEXITCODE -eq 0 -or $?) {
-            Write-Host "`r$($symbols.Success) $Message                        "  # Fix symbol lookup
+            Write-Host "`r$($symbols.Success) $Message                        "
         } else {
             throw "Non-zero exit code"
         }
@@ -37,102 +51,166 @@ function Run-Step {
     }
 }
 
-Clear-Host
-Write-Host "Deploying Borealis - Workflow Automation Tool..." -ForegroundColor Green
+# ---------------------- Menu Prompt & User Input ----------------------
+Write-Host "Deploying Borealis - Workflow Automation Tool..." -ForegroundColor Blue
 Write-Host "===================================================================================="
+Write-Host "Please choose which module you want to launch / (re)deploy:"
+Write-Host "- Server (Web Dashboard) [1]"
+Write-Host "- Agent (Local/Remote Client) [2]"
 
-# ---------------------- Node.js Check ----------------------
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Host "`r$($symbols.Fail) Node.js is not installed. Please install Node.js and try again." -ForegroundColor Red
-    exit 1
-}
+$choice = Read-Host "Enter 1 or 2"
 
-# ---------------------- Path Definitions ----------------------
-$venvFolder       = "Borealis-Workflow-Automation-Tool"
-$dataSource       = "Data"
-$dataDestination  = "$venvFolder\Borealis"
-$customUIPath     = "$dataSource\WebUI"
-$webUIDestination = "$venvFolder\web-interface"
+switch ($choice) {
 
-# ---------------------- Create Python Virtual Environment & Prepare Borealis Files ----------------------
-Run-Step "Create Borealis Virtual Python Environment" {
-    if (!(Test-Path "$venvFolder\Scripts\Activate")) {
-        python -m venv $venvFolder | Out-Null
-    }
-    # ---------------------- Copy Server Data ----------------------
-    if (Test-Path $dataSource) {
-        if (Test-Path $dataDestination) {
-            Remove-Item -Recurse -Force $dataDestination | Out-Null
+    # ---------------------- Server Module ----------------------
+    "1" {
+        Clear-Host
+        Write-Host "Deploying Borealis - Workflow Automation Tool..." -ForegroundColor Green
+        Write-Host "===================================================================================="
+
+        # ---------------------- Server: Environment & Dependency Checks ----------------------
+        # Check if Node.js is installed
+        if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+            Write-Host "`r$($symbols.Fail) Node.js is not installed. Please install Node.js and try again." -ForegroundColor Red
+            exit 1
         }
-        New-Item -Path $dataDestination -ItemType Directory -Force | Out-Null
-        Copy-Item -Path "$dataSource\*" -Destination $dataDestination -Recurse
-    } else {
-        Write-Host "`r$($symbols.Info) Warning: Data folder not found, skipping copy." -ForegroundColor Yellow
-    }
+        
+        # ---------------------- Server: Path Definitions ----------------------
+        $venvFolder       = "Server"
+        $dataSource       = "Data"
+        $dataDestination  = "$venvFolder\Borealis"
+        $customUIPath     = "$dataSource\WebUI"
+        $webUIDestination = "$venvFolder\web-interface"
 
-    # ---------------------- React UI Deployment ----------------------
-    if (-not (Test-Path $webUIDestination)) {
-        npx create-react-app $webUIDestination | Out-Null
-    }
+        # ---------------------- Server: Create Python Virtual Environment & Prepare Files ----------------------
+        Run-Step "Create Borealis Virtual Python Environment" {
+            # Create virtual environment if it does not exist
+            if (!(Test-Path "$venvFolder\Scripts\Activate")) {
+                python -m venv $venvFolder | Out-Null
+            }
+            # Copy server data if the Data folder exists
+            if (Test-Path $dataSource) {
+                if (Test-Path $dataDestination) {
+                    Remove-Item -Recurse -Force $dataDestination | Out-Null
+                }
+                New-Item -Path $dataDestination -ItemType Directory -Force | Out-Null
+                Copy-Item -Path "$dataSource\*" -Destination $dataDestination -Recurse
+            } else {
+                Write-Host "`r$($symbols.Info) Warning: Data folder not found, skipping copy." -ForegroundColor Yellow
+            }
+            # React UI Deployment: Create default React app if no deployment folder exists
+            if (-not (Test-Path $webUIDestination)) {
+                npx create-react-app $webUIDestination | Out-Null
+            }
+            # Copy custom UI if it exists
+            if (Test-Path $customUIPath) {
+                Copy-Item -Path "$customUIPath\*" -Destination $webUIDestination -Recurse -Force
+            } else {
+                Write-Host "`r$($symbols.Info) No custom UI found, using default React app." -ForegroundColor Yellow
+            }
+            # Remove any existing React build folder
+            if (Test-Path "$webUIDestination\build") {
+                Remove-Item -Path "$webUIDestination\build" -Recurse -Force
+            }
+            # Activate the Python virtual environment
+            . "$venvFolder\Scripts\Activate"
+        }
 
-    if (Test-Path $customUIPath) {
-        Copy-Item -Path "$customUIPath\*" -Destination $webUIDestination -Recurse -Force
-    } else {
-        Write-Host "`r$($symbols.Info) No custom UI found, using default React app." -ForegroundColor Yellow
-    }
+        # ---------------------- Server: Install Python Dependencies ----------------------
+        Run-Step "Install Python Dependencies into Virtual Python Environment" {
+            if (Test-Path "requirements.txt") {
+                pip install -q -r requirements.txt 2>&1 | Out-Null
+            } else {
+                Write-Host "`r$($symbols.Info) No requirements.txt found, skipping Python packages." -ForegroundColor Yellow
+            }
+        }
 
-    # Remove Pre-Existing ReactJS Build Folder (If one Exists)
-    if (Test-Path "$webUIDestination\build") {
-        Remove-Item -Path "$webUIDestination\build" -Recurse -Force
-    }
+        # ---------------------- Server: Build React App ----------------------
+        Run-Step "ReactJS Web Frontend: Install Necessary NPM Packages" {
+            $packageJsonPath = Join-Path $webUIDestination "package.json"
+            if (Test-Path $packageJsonPath) {
+                Push-Location $webUIDestination
+                $env:npm_config_loglevel = "silent"
 
-    # ---------------------- Activate Python Virtual Environment ----------------------
-    . "$venvFolder\Scripts\Activate"
-}
+                # Install required NPM packages
+                npm install --silent --no-fund --audit=false 2>&1 | Out-Null
+                npm install --silent react-resizable --no-fund --audit=false | Out-Null
+                npm install --silent reactflow --no-fund --audit=false | Out-Null
+                npm install --silent @mui/material @mui/icons-material @emotion/react @emotion/styled --no-fund --audit=false 2>&1 | Out-Null
 
-# ---------------------- Install Python Dependencies ----------------------
-Run-Step "Install Python Dependencies into Virtual Python Environment" {
-    if (Test-Path "requirements.txt") {
-        pip install -q -r requirements.txt 2>&1 | Out-Null
-    } else {
-        Write-Host "`r$($symbols.Info) No requirements.txt found, skipping Python packages." -ForegroundColor Yellow
-    }
-}
+                Pop-Location
+            }
+        }
 
-# ---------------------- Build React App ----------------------
-Run-Step "ReactJS Web Frontend: Install Necessary NPM Packages" {
-    $packageJsonPath = Join-Path $webUIDestination "package.json"
-    if (Test-Path $packageJsonPath) {
-        Push-Location $webUIDestination
-        $env:npm_config_loglevel = "silent"
+        Run-Step "ReactJS Web Frontend: Build App" {
+            Push-Location $webUIDestination
+            # Build the React app (output is visible for development)
+            npm run build
+            Pop-Location
+        }
 
-        # Install NPM
-        npm install --silent --no-fund --audit=false 2>&1 | Out-Null
-
-        # Install React Resizable
-        npm install --silent react-resizable --no-fund --audit=false | Out-Null
-
-        # Install React Flow
-        npm install --silent reactflow --no-fund --audit=false | Out-Null
-
-        # Install Material UI Libraries
-        npm install --silent @mui/material @mui/icons-material @emotion/react @emotion/styled --no-fund --audit=false 2>&1 | Out-Null
-
+        # ---------------------- Server: Launch Flask Server ----------------------
+        Push-Location $venvFolder
+        Write-Host "`nLaunching Borealis..." -ForegroundColor Green
+        Write-Host "===================================================================================="
+        Write-Host "$($symbols.Running) Starting Python Flask Server..." -NoNewline
+        python "Borealis\server.py"
         Pop-Location
     }
-}
 
-Run-Step "ReactJS Web Frontend: Build App" {
-    Push-Location $webUIDestination
-    #npm run build | Out-Null # Suppress Compilation Output
-    npm run build # Enabled during Development
-    Pop-Location
-}
+    # ---------------------- Agent Module ----------------------
+    "2" {
+        Clear-Host
+        Write-Host "Deploying Borealis Agent..." -ForegroundColor Green
+        Write-Host "===================================================================================="
 
-# ---------------------- Launch Flask Server ----------------------
-Push-Location $venvFolder
-Write-Host "`nLaunching Borealis..." -ForegroundColor Green
-Write-Host "===================================================================================="
-Write-Host "$($symbols.Running) Starting Python Flask Server..." -NoNewline
-python "Borealis\server.py"
-Pop-Location
+        # ---------------------- Agent: Path Definitions ----------------------
+        $venvFolder               = "Agent"
+        $agentSourcePath          = "Data\Agent\borealis-agent.py"
+        $agentRequirements        = "Data\Agent\requirements.txt"
+        $agentDestinationFolder   = "$venvFolder\Agent"
+        $agentDestinationFile     = "$agentDestinationFolder\borealis-agent.py"
+
+        # ---------------------- Agent: Create Python Virtual Environment & Copy Agent Script ----------------------
+        Run-Step "Create Virtual Python Environment for Agent" {
+            # Create virtual environment for the agent
+            if (!(Test-Path "$venvFolder\Scripts\Activate")) {
+                python -m venv $venvFolder | Out-Null
+            }
+            # Copy the agent script if it exists
+            if (Test-Path $agentSourcePath) {
+                if (Test-Path $agentDestinationFolder) {
+                    Remove-Item -Recurse -Force $agentDestinationFolder | Out-Null
+                }
+                New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
+                Copy-Item -Path $agentSourcePath -Destination $agentDestinationFile -Force
+            } else {
+                Write-Host "`r$($symbols.Info) Warning: Agent script not found at '$agentSourcePath', skipping copy." -ForegroundColor Yellow
+            }
+            # Activate the virtual environment
+            . "$venvFolder\Scripts\Activate"
+        }
+
+        # ---------------------- Agent: Install Python Dependencies ----------------------
+        Run-Step "Install Python Dependencies for Agent" {
+            if (Test-Path $agentRequirements) {
+                pip install -q -r $agentRequirements 2>&1 | Out-Null
+            } else {
+                Write-Host "`r$($symbols.Info) Agent-specific requirements.txt not found at '$agentRequirements', skipping Python packages." -ForegroundColor Yellow
+            }
+        }
+
+        # ---------------------- Agent: Launch Agent Script ----------------------
+        Push-Location $venvFolder
+        Write-Host "`nLaunching Borealis Agent..." -ForegroundColor Green
+        Write-Host "===================================================================================="
+        python "Agent\borealis-agent.py"
+        Pop-Location
+    }
+
+    # ---------------------- Default (Invalid Selection) ----------------------
+    default {
+        Write-Host "Invalid selection. Exiting..." -ForegroundColor Yellow
+        exit 1
+    }
+}
