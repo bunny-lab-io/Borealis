@@ -1,41 +1,38 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { Handle, Position, useReactFlow } from "reactflow";
+import { io } from "socket.io-client";
+
+const socket = io();
 
 const APINode = ({ id, data }) => {
     const { setNodes } = useReactFlow();
     const [agents, setAgents] = useState([]);
     const [selectedAgent, setSelectedAgent] = useState(data.agent_id || "");
     const [selectedType, setSelectedType] = useState(data.data_type || "screenshot");
-    const [imageData, setImageData] = useState("");
     const [intervalMs, setIntervalMs] = useState(data.interval || 1000);
     const [paused, setPaused] = useState(false);
     const [overlayVisible, setOverlayVisible] = useState(true);
+    const [imageData, setImageData] = useState("");
 
-    // Refresh agents every 5s
     useEffect(() => {
-        const fetchAgents = () => fetch("/api/agents").then(res => res.json()).then(setAgents);
-        fetchAgents();
-        const interval = setInterval(fetchAgents, 5000);
+        fetch("/api/agents").then(res => res.json()).then(setAgents);
+        const interval = setInterval(() => {
+            fetch("/api/agents").then(res => res.json()).then(setAgents);
+        }, 5000);
         return () => clearInterval(interval);
     }, []);
 
-    // Pull image if agent provisioned
     useEffect(() => {
-        if (!selectedAgent || paused) return;
-        const interval = setInterval(() => {
-            fetch(`/api/agent/image?agent_id=${selectedAgent}`)
-                .then(res => res.json())
-                .then(json => {
-                    if (json.image_base64) {
-                        setImageData(json.image_base64);
-                        window.BorealisValueBus = window.BorealisValueBus || {};
-                        window.BorealisValueBus[id] = json.image_base64;
-                    }
-                })
-                .catch(() => { });
-        }, intervalMs);
-        return () => clearInterval(interval);
-    }, [selectedAgent, id, paused, intervalMs]);
+        socket.on('new_screenshot', (data) => {
+            if (data.agent_id === selectedAgent) {
+                setImageData(data.image_base64);
+                window.BorealisValueBus = window.BorealisValueBus || {};
+                window.BorealisValueBus[id] = data.image_base64;
+            }
+        });
+
+        return () => socket.off('new_screenshot');
+    }, [selectedAgent, id]);
 
     const provisionAgent = () => {
         if (!selectedAgent) return;
@@ -53,16 +50,12 @@ const APINode = ({ id, data }) => {
                 task: selectedType
             })
         }).then(() => {
+            socket.emit('request_config', { agent_id: selectedAgent });
             setNodes(nds =>
                 nds.map(n => n.id === id
                     ? {
                         ...n,
-                        data: {
-                            ...n.data,
-                            agent_id: selectedAgent,
-                            data_type: selectedType,
-                            interval: intervalMs
-                        }
+                        data: { agent_id: selectedAgent, data_type: selectedType, interval: intervalMs }
                     }
                     : n
                 )
@@ -73,13 +66,7 @@ const APINode = ({ id, data }) => {
     const toggleOverlay = () => {
         const newVisibility = !overlayVisible;
         setOverlayVisible(newVisibility);
-        if (selectedAgent) {
-            fetch("/api/agent/overlay_visibility", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ agent_id: selectedAgent, visible: newVisibility })
-            });
-        }
+        provisionAgent();
     };
 
     return (
@@ -154,7 +141,7 @@ const APINode = ({ id, data }) => {
 export default {
     type: "API_Data_Collector",
     label: "API Data Collector",
-    description: "Connects to a remote agent via API and collects data such as screenshots, OCR results, and more.",
-    content: "Publishes agent-collected data into the workflow ValueBus.",
+    description: "Real-time provisioning and image collection via WebSocket.",
+    content: "Publishes real-time agent-collected data into the workflow.",
     component: APINode
 };

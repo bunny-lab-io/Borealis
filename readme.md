@@ -53,3 +53,42 @@ The launch script will:
 ## 🧠 How It Works
 
 Borealis workflows run on **live data propagation**. Each node checks for incoming values (via edges) and processes them on a recurring timer (default: 200ms). This allows for highly reactive, composable logic graphs.
+
+## ⚡Reverse Proxy Configuration
+If you want to run Borealis behind a reverse proxy (e.g., Traefik), you can set up the following dynamic configuration:
+```yml
+http:
+  routers:
+    borealis:
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+      service: borealis
+      rule: "Host(`borealis.bunny-lab.io`) && PathPrefix(`/`)"
+      middlewares:
+        - cors-headers
+
+  middlewares:
+    cors-headers:
+      headers:
+        accessControlAllowOriginList:
+          - "*"
+        accessControlAllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        accessControlAllowHeaders:
+          - Content-Type
+          - Upgrade
+          - Connection
+        accessControlMaxAge: 100
+        addVaryHeader: true
+
+  services:
+    borealis:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.3.254:5000"
+        passHostHeader: true
+```
