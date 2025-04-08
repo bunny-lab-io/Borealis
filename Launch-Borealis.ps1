@@ -65,7 +65,7 @@ switch ($choice) {
     # ---------------------- Server Module ----------------------
     "1" {
         Clear-Host
-        Write-Host "Deploying Borealis - Workflow Automation Tool..." -ForegroundColor Green
+        Write-Host "Deploying Borealis - Workflow Automation Tool..." -ForegroundColor Blue
         Write-Host "===================================================================================="
 
         # ---------------------- Server: Environment & Dependency Checks ----------------------
@@ -161,7 +161,7 @@ switch ($choice) {
     # ---------------------- Agent Module ----------------------
     "2" {
         Clear-Host
-        Write-Host "Deploying Borealis Agent..." -ForegroundColor Green
+        Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
         Write-Host "===================================================================================="
 
         # ---------------------- Agent: Path Definitions ----------------------
@@ -202,7 +202,7 @@ switch ($choice) {
 
         # ---------------------- Agent: Launch Agent Script ----------------------
         Push-Location $venvFolder
-        Write-Host "`nLaunching Borealis Agent..." -ForegroundColor Green
+        Write-Host "`nLaunching Borealis Agent..." -ForegroundColor Blue
         Write-Host "===================================================================================="
         python "Agent\borealis-agent.py"
         Pop-Location

@@ -11,7 +11,7 @@ if not os.path.exists(build_folder):
     print("WARNING: web-interface build folder not found. Please build your React app.")
 
 app = Flask(__name__, static_folder=build_folder, static_url_path="/")
-socketio = SocketIO(app, cors_allowed_origins="*")  # Allow cross-origin WebSocket connections
+socketio = SocketIO(app, cors_allowed_origins="*", transports=['websocket'])
 
 @app.route("/")
 def serve_index():

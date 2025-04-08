@@ -3,9 +3,11 @@ torch --index-url https://download.pytorch.org/whl/cu121
 torchvision --index-url https://download.pytorch.org/whl/cu121
 torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# Flask for API Hhandling
+# Flask for API / WebSockets Handling
 Flask
 requests
+flask_socketio
+eventlet
 
 # GUI-related dependencies (Qt for GUI components)
 Qt.py
