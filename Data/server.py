@@ -62,33 +62,120 @@ def provision_agent():
     return jsonify({"status": "provisioned"})
 
 
-# ---------------------------------------------
-# Raw Image Feed Viewer for Screenshot Agents
-# ---------------------------------------------
+# ----------------------------------------------
+# Canvas Image Feed Viewer for Screenshot Agents
+# ----------------------------------------------
 @app.route("/api/agent/<agent_id>/screenshot")
 def screenshot_viewer(agent_id):
     if agent_configurations.get(agent_id, {}).get("task") != "screenshot":
         return "<h1>Agent not provisioned as Screenshot Collector</h1>", 400
 
-    html = f"""
+    return f"""
+    <!DOCTYPE html>
     <html>
     <head>
-        <title>Borealis - {agent_id} Screenshot</title>
-        <script>
-            setInterval(function() {{
-                var img = document.getElementById('feed');
-                img.src = '/api/agent/{agent_id}/screenshot/raw?rnd=' + Math.random();
-            }}, 1000);
-        </script>
+        <title>Borealis Live View - {agent_id}</title>
+        <style>
+            body {{
+                margin: 0;
+                background-color: #000;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                height: 100vh;
+            }}
+            canvas {{
+                border: 1px solid #444;
+                max-width: 90vw;
+                max-height: 90vh;
+                width: auto;
+                height: auto;
+                background-color: #111;
+            }}
+        </style>
     </head>
-    <body style='background-color: black;'>
-        <img id='feed' src='/api/agent/{agent_id}/screenshot/raw' style='max-width:100%; height:auto;' />
+    <body>
+        <canvas id="viewerCanvas"></canvas>
+
+        <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+        <script>
+            const agentId = "{agent_id}";
+            const socket = io(window.location.origin, {{ transports: ["websocket"] }});
+            const canvas = document.getElementById("viewerCanvas");
+            const ctx = canvas.getContext("2d");
+
+            console.log("[Viewer] Canvas initialized for agent:", agentId);
+
+            socket.on("connect", () => {{
+                console.log("[WebSocket] Connected to Borealis server at", window.location.origin);
+            }});
+
+            socket.on("disconnect", () => {{
+                console.warn("[WebSocket] Disconnected from Borealis server");
+            }});
+
+            socket.on("new_screenshot", (data) => {{
+                console.log("[WebSocket] Received screenshot event");
+
+                if (!data || typeof data !== "object") {{
+                    console.error("[Viewer] Screenshot event was not an object:", data);
+                    return;
+                }}
+
+                if (data.agent_id !== agentId) {{
+                    console.log("[Viewer] Ignored screenshot from different agent:", data.agent_id);
+                    return;
+                }}
+
+                const base64 = data.image_base64;
+                console.log("[Viewer] Base64 length:", base64?.length || 0);
+
+                if (!base64 || base64.length < 100) {{
+                    console.warn("[Viewer] Empty or too short base64 string.");
+                    return;
+                }}
+
+                // Peek at base64 to determine MIME type
+                let mimeType = "image/png";
+                try {{
+                    const header = atob(base64.substring(0, 32));
+                    if (header.charCodeAt(0) === 0xFF && header.charCodeAt(1) === 0xD8) {{
+                        mimeType = "image/jpeg";
+                    }}
+                }} catch (e) {{
+                    console.warn("[Viewer] Failed to decode base64 header", e);
+                }}
+
+                const img = new Image();
+                img.onload = () => {{
+                    console.log("[Viewer] Image loaded successfully:", img.width + "x" + img.height);
+
+                    console.log("[Viewer] Canvas size before:", canvas.width + "x" + canvas.height);
+
+                    if (canvas.width !== img.width || canvas.height !== img.height) {{
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        console.log("[Viewer] Canvas resized to match image");
+                    }}
+
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0);
+
+                    console.log("[Viewer] Image drawn on canvas");
+                }};
+                img.onerror = (err) => {{
+                    console.error("[Viewer] Failed to load image from base64. Possibly corrupted data?", err);
+                }};
+                img.src = "data:" + mimeType + ";base64," + base64;
+            }});
+        </script>
     </body>
     </html>
     """
-    return html
 
-@app.route("/api/agent/<agent_id>/screenshot/raw")
+
+
+@app.route("/api/agent/<agent_id>/screenshot/raw") # Fallback Non-Live Screenshot Preview Code for Legacy Purposes
 def screenshot_raw(agent_id):
     entry = latest_images.get(agent_id)
     if not entry:
@@ -132,7 +219,6 @@ def receive_screenshot(data):
             "image_base64": image,
             "timestamp": time.time()
         }
-        print(f"[DEBUG] Screenshot received from agent {agent_id}")
         emit("new_screenshot", {"agent_id": agent_id, "image_base64": image}, broadcast=True)
 
 @socketio.on('disconnect')
@@ -143,4 +229,7 @@ def on_disconnect():
 # Server Start
 # ---------------------------------------------
 if __name__ == "__main__":
+    import eventlet
+    import eventlet.wsgi
     socketio.run(app, host="0.0.0.0", port=5000, debug=False)
+

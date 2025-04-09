@@ -39,14 +39,14 @@ def connect():
 
 @sio.event
 def disconnect():
-    print("[WS DISCONNECTED] Lost connection to Borealis server.")
+    print("[WebSocket] Lost connection to Borealis server.")
 
 @sio.on('agent_config')
 def on_agent_config(config):
     global current_interval, overlay_visible, LAST_CONFIG
 
     if config != LAST_CONFIG:
-        print("[PROVISIONING] Received new configuration from Borealis.")
+        print("[PROVISIONED] Received new configuration from Borealis.")
         x = config.get("x", 100)
         y = config.get("y", 100)
         w = config.get("w", 300)
