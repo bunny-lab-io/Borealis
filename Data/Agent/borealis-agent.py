@@ -11,7 +11,8 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import ImageGrab
 
 # ---------------- Configuration ----------------
-SERVER_URL = "http://localhost:5000"  # WebSocket-enabled server URL
+#SERVER_URL = "http://localhost:5000"  # WebSocket-enabled Internal URL
+SERVER_URL = "https://borealis.bunny-lab.io"  # WebSocket-enabled Public URL"
 
 HOSTNAME = socket.gethostname().lower()
 RANDOM_SUFFIX = uuid.uuid4().hex[:8]
@@ -32,7 +33,7 @@ sio = socketio.Client()
 # ---------------- WebSocket Handlers ----------------
 @sio.event
 def connect():
-    print(f"[WS CONNECTED] Agent ID: {AGENT_ID} connected to Borealis.")
+    print(f"[WebSocket] Agent ID: {AGENT_ID} connected to Borealis.")
     sio.emit('connect_agent', {"agent_id": AGENT_ID, "hostname": HOSTNAME})
     sio.emit('request_config', {"agent_id": AGENT_ID})
 
@@ -123,7 +124,6 @@ class ScreenshotRegion(QtWidgets.QWidget):
 
 # ---------------- Screenshot Capture ----------------
 def capture_loop():
-    print("[INFO] Screenshot capture loop started")
     config_ready.wait()
 
     while region_widget is None:
@@ -172,7 +172,7 @@ if __name__ == "__main__":
     app_instance = QtWidgets.QApplication(sys.argv)
     region_launcher = RegionLauncher()
 
-    sio.connect(SERVER_URL)
+    sio.connect(SERVER_URL, transports=['websocket'])
 
     threading.Thread(target=capture_loop, daemon=True).start()
 

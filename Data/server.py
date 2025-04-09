@@ -1,7 +1,8 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_socketio import SocketIO, emit
 import time
 import os
+import base64
 
 # ---------------------------------------------
 # React Frontend Hosting Configuration
@@ -11,7 +12,7 @@ if not os.path.exists(build_folder):
     print("WARNING: web-interface build folder not found. Please build your React app.")
 
 app = Flask(__name__, static_folder=build_folder, static_url_path="/")
-socketio = SocketIO(app, cors_allowed_origins="*", transports=['websocket'])
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 @app.route("/")
 def serve_index():
@@ -28,26 +29,15 @@ def serve_react_app(path):
     return send_from_directory(build_folder, "index.html")
 
 # ---------------------------------------------
-# Borealis Agent Management (Hybrid: API + WebSockets)
+# Borealis Agent API Endpoints
 # ---------------------------------------------
 registered_agents = {}
 agent_configurations = {}
 latest_images = {}
 
-# API Endpoints (kept for provisioning and status)
-@app.route("/api/agent/checkin", methods=["POST"])
-def agent_checkin():
-    data = request.json
-    agent_id = data.get("agent_id")
-    hostname = data.get("hostname", "unknown")
-
-    registered_agents[agent_id] = {
-        "agent_id": agent_id,
-        "hostname": hostname,
-        "last_seen": time.time(),
-        "status": "orphaned" if agent_id not in agent_configurations else "provisioned"
-    }
-    return jsonify({"status": "ok"})
+@app.route("/api/agents")
+def get_agents():
+    return jsonify(registered_agents)
 
 @app.route("/api/agent/provision", methods=["POST"])
 def provision_agent():
@@ -65,56 +55,89 @@ def provision_agent():
     agent_configurations[agent_id] = config
     if agent_id in registered_agents:
         registered_agents[agent_id]["status"] = "provisioned"
+
+    # NEW: Emit config update back to the agent via WebSocket
+    socketio.emit("agent_config", config)
+
     return jsonify({"status": "provisioned"})
 
-@app.route("/api/agents")
-def get_agents():
-    return jsonify(registered_agents)
 
-# WebSocket Handlers
+# ---------------------------------------------
+# Raw Image Feed Viewer for Screenshot Agents
+# ---------------------------------------------
+@app.route("/api/agent/<agent_id>/screenshot")
+def screenshot_viewer(agent_id):
+    if agent_configurations.get(agent_id, {}).get("task") != "screenshot":
+        return "<h1>Agent not provisioned as Screenshot Collector</h1>", 400
+
+    html = f"""
+    <html>
+    <head>
+        <title>Borealis - {agent_id} Screenshot</title>
+        <script>
+            setInterval(function() {{
+                var img = document.getElementById('feed');
+                img.src = '/api/agent/{agent_id}/screenshot/raw?rnd=' + Math.random();
+            }}, 1000);
+        </script>
+    </head>
+    <body style='background-color: black;'>
+        <img id='feed' src='/api/agent/{agent_id}/screenshot/raw' style='max-width:100%; height:auto;' />
+    </body>
+    </html>
+    """
+    return html
+
+@app.route("/api/agent/<agent_id>/screenshot/raw")
+def screenshot_raw(agent_id):
+    entry = latest_images.get(agent_id)
+    if not entry:
+        return "", 204
+    try:
+        raw_img = base64.b64decode(entry["image_base64"])
+        return Response(raw_img, mimetype="image/png")
+    except Exception:
+        return "", 204
+
+# ---------------------------------------------
+# WebSocket Events
+# ---------------------------------------------
 @socketio.on('connect_agent')
-def handle_agent_connect(data):
-    agent_id = data.get('agent_id')
-    hostname = data.get('hostname', 'unknown')
+def connect_agent(data):
+    agent_id = data.get("agent_id")
+    hostname = data.get("hostname", "unknown")
+    print(f"Agent connected: {agent_id}")
 
     registered_agents[agent_id] = {
         "agent_id": agent_id,
         "hostname": hostname,
         "last_seen": time.time(),
-        "status": "connected"
+        "status": "orphaned" if agent_id not in agent_configurations else "provisioned"
     }
 
-    print(f"Agent connected: {agent_id}")
-    emit('agent_connected', {'status': 'connected'})
+@socketio.on('request_config')
+def send_agent_config(data):
+    agent_id = data.get("agent_id")
+    config = agent_configurations.get(agent_id)
+    if config:
+        emit('agent_config', config)
 
 @socketio.on('screenshot')
-def handle_screenshot(data):
-    agent_id = data.get('agent_id')
-    image_base64 = data.get('image_base64')
+def receive_screenshot(data):
+    agent_id = data.get("agent_id")
+    image = data.get("image_base64")
 
-    if agent_id and image_base64:
+    if agent_id and image:
         latest_images[agent_id] = {
-            'image_base64': image_base64,
-            'timestamp': time.time()
+            "image_base64": image,
+            "timestamp": time.time()
         }
+        print(f"[DEBUG] Screenshot received from agent {agent_id}")
+        emit("new_screenshot", {"agent_id": agent_id, "image_base64": image}, broadcast=True)
 
-        # Real-time broadcast to connected dashboards
-        emit('new_screenshot', {
-            'agent_id': agent_id,
-            'image_base64': image_base64
-        }, broadcast=True)
-
-        emit('screenshot_received', {'status': 'ok'})
-        print(f"Screenshot received from agent: {agent_id}")
-    else:
-        emit('error', {'message': 'Invalid screenshot data'})
-
-@socketio.on('request_config')
-def handle_request_config(data):
-    agent_id = data.get('agent_id')
-    config = agent_configurations.get(agent_id, {})
-
-    emit('agent_config', config)
+@socketio.on('disconnect')
+def on_disconnect():
+    print("[WS] Agent disconnected")
 
 # ---------------------------------------------
 # Server Start

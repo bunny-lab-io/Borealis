@@ -137,7 +137,7 @@ switch ($choice) {
                 npm install --silent react-resizable --no-fund --audit=false | Out-Null
                 npm install --silent reactflow --no-fund --audit=false | Out-Null
                 npm install --silent @mui/material @mui/icons-material @emotion/react @emotion/styled --no-fund --audit=false 2>&1 | Out-Null
-
+                npm install  --silent socket.io-client --no-fund --audit=false | Out-Null
                 Pop-Location
             }
         }
@@ -153,7 +153,7 @@ switch ($choice) {
         Push-Location $venvFolder
         Write-Host "`nLaunching Borealis..." -ForegroundColor Green
         Write-Host "===================================================================================="
-        Write-Host "$($symbols.Running) Starting Python Flask Server..." -NoNewline
+        Write-Host "$($symbols.Running) Python Flask Server Started..."
         python "Borealis\server.py"
         Pop-Location
     }

@@ -1,3 +1,10 @@
+# API / WebSocket Handling
 requests
+python-socketio
+websocket-client
+
+# GUI-related dependencies (Qt for GUI components)
 PyQt5
+
+# Computer Vision & OCR Dependencies
 Pillow

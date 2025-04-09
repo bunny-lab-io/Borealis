@@ -2,9 +2,11 @@ import React, { useEffect, useState, useRef } from "react";
 import { Handle, Position, useReactFlow } from "reactflow";
 import { io } from "socket.io-client";
 
-const socket = io();
+const socket = io(window.location.origin, {
+    transports: ["websocket"]
+});
 
-const APINode = ({ id, data }) => {
+const BorealisAgentNode = ({ id, data }) => {
     const { setNodes } = useReactFlow();
     const [agents, setAgents] = useState([]);
     const [selectedAgent, setSelectedAgent] = useState(data.agent_id || "");
@@ -13,6 +15,7 @@ const APINode = ({ id, data }) => {
     const [paused, setPaused] = useState(false);
     const [overlayVisible, setOverlayVisible] = useState(true);
     const [imageData, setImageData] = useState("");
+    const imageRef = useRef("");
 
     useEffect(() => {
         fetch("/api/agents").then(res => res.json()).then(setAgents);
@@ -24,15 +27,39 @@ const APINode = ({ id, data }) => {
 
     useEffect(() => {
         socket.on('new_screenshot', (data) => {
+            console.log("[DEBUG] Screenshot received", data);
             if (data.agent_id === selectedAgent) {
                 setImageData(data.image_base64);
-                window.BorealisValueBus = window.BorealisValueBus || {};
-                window.BorealisValueBus[id] = data.image_base64;
+                imageRef.current = data.image_base64;
             }
         });
 
         return () => socket.off('new_screenshot');
-    }, [selectedAgent, id]);
+    }, [selectedAgent]);
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (!paused && imageRef.current) {
+                window.BorealisValueBus = window.BorealisValueBus || {};
+                window.BorealisValueBus[id] = imageRef.current;
+
+                setNodes(nds => {
+                    const updated = [...nds];
+                    const node = updated.find(n => n.id === id);
+                    if (node) {
+                        node.data = {
+                            ...node.data,
+                            value: imageRef.current
+                        };
+                    }
+                    return updated;
+                });
+
+            }
+        }, window.BorealisUpdateRate || 100);
+
+        return () => clearInterval(interval);
+    }, [id, paused, setNodes]);
 
     const provisionAgent = () => {
         if (!selectedAgent) return;
@@ -49,18 +76,11 @@ const APINode = ({ id, data }) => {
                 visible: overlayVisible,
                 task: selectedType
             })
-        }).then(() => {
-            socket.emit('request_config', { agent_id: selectedAgent });
-            setNodes(nds =>
-                nds.map(n => n.id === id
-                    ? {
-                        ...n,
-                        data: { agent_id: selectedAgent, data_type: selectedType, interval: intervalMs }
-                    }
-                    : n
-                )
-            );
-        });
+        })
+            .then(res => res.json())
+            .then(() => {
+                console.log("[DEBUG] Agent provisioned");
+            });
     };
 
     const toggleOverlay = () => {
@@ -72,7 +92,7 @@ const APINode = ({ id, data }) => {
     return (
         <div className="borealis-node">
             <Handle type="source" position={Position.Right} className="borealis-handle" />
-            <div className="borealis-node-header">API Data Collector</div>
+            <div className="borealis-node-header">Borealis Agent</div>
             <div className="borealis-node-content">
                 <label style={{ fontSize: "10px" }}>Agent:</label>
                 <select
@@ -139,9 +159,9 @@ const APINode = ({ id, data }) => {
 };
 
 export default {
-    type: "API_Data_Collector",
-    label: "API Data Collector",
-    description: "Real-time provisioning and image collection via WebSocket.",
-    content: "Publishes real-time agent-collected data into the workflow.",
-    component: APINode
+    type: "Borealis_Agent",
+    label: "Borealis Agent",
+    description: "Connects to and controls a Borealis Agent via WebSocket in real-time.",
+    content: "Provisions a Borealis Agent and streams collected data into the workflow graph.",
+    component: BorealisAgentNode
 };
