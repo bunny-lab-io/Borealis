@@ -58,7 +58,7 @@ if (!window.BorealisUpdateRate) {
     window.BorealisUpdateRate = 200; // Default Update Rate: 100ms
 }
 
-const nodeContext = require.context("./nodes", true, /\.jsx$/);
+const nodeContext = require.context("./nodes", true, /\.jsx$/); // Dynamically import all node components from the nodes directory
 const nodeTypes = {};
 const categorizedNodes = {};
 
@@ -82,6 +82,7 @@ nodeContext.keys().forEach((path) => {
 function FlowEditor({ nodes, edges, setNodes, setEdges, nodeTypes }) {
     const reactFlowWrapper = useRef(null);
     const { project } = useReactFlow();
+    const [contextMenu, setContextMenu] = useState(null); // Node Right-Click Context Menu
 
     const onDrop = useCallback(
         (event) => {
@@ -150,6 +151,34 @@ function FlowEditor({ nodes, edges, setNodes, setEdges, nodeTypes }) {
         [setEdges]
     );
 
+    const handleRightClick = (event, node) => {
+        event.preventDefault();
+        setContextMenu({
+            mouseX: event.clientX + 2,
+            mouseY: event.clientY - 6,
+            nodeId: node.id
+        });
+    };
+
+    const handleDisconnect = () => {
+        if (contextMenu?.nodeId) {
+            setEdges((eds) =>
+                eds.filter((e) => e.source !== contextMenu.nodeId && e.target !== contextMenu.nodeId)
+            );
+        }
+        setContextMenu(null);
+    };
+
+    const handleRemoveNode = () => {
+        if (contextMenu?.nodeId) {
+            setNodes((nds) => nds.filter((n) => n.id !== contextMenu.nodeId));
+            setEdges((eds) =>
+                eds.filter((e) => e.source !== contextMenu.nodeId && e.target !== contextMenu.nodeId)
+            );
+        }
+        setContextMenu(null);
+    };
+
     useEffect(() => {
         const nodeCountEl = document.getElementById("nodeCount");
         if (nodeCountEl) {
@@ -169,6 +198,7 @@ function FlowEditor({ nodes, edges, setNodes, setEdges, nodeTypes }) {
                 onConnect={onConnect}
                 onDrop={onDrop}
                 onDragOver={onDragOver}
+                onNodeContextMenu={handleRightClick}
                 defaultViewport={{ x: 0, y: 0, zoom: 1.5 }}
                 edgeOptions={{
                     type: "smoothstep",
@@ -186,9 +216,32 @@ function FlowEditor({ nodes, edges, setNodes, setEdges, nodeTypes }) {
                     color="rgba(255, 255, 255, 0.2)"
                 />
             </ReactFlow>
+
+            {/* Right-Click Node Menu */}
+            <Menu
+                open={Boolean(contextMenu)}
+                onClose={() => setContextMenu(null)}
+                anchorReference="anchorPosition"
+                anchorPosition={
+                    contextMenu !== null
+                        ? { top: contextMenu.mouseY, left: contextMenu.mouseX }
+                        : undefined
+                }
+                PaperProps={{
+                    sx: {
+                        bgcolor: "#1e1e1e",
+                        color: "#fff",
+                        fontSize: "13px"
+                    }
+                }}
+            >
+                <MenuItem onClick={handleDisconnect}>Disconnect All Edges</MenuItem>
+                <MenuItem onClick={handleRemoveNode}>Remove Node</MenuItem>
+            </Menu>
         </div>
     );
 }
+
 
 const darkTheme = createTheme({
     palette: {
