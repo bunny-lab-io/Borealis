@@ -65,7 +65,7 @@ def provision_agent():
 # ----------------------------------------------
 # Canvas Image Feed Viewer for Screenshot Agents
 # ----------------------------------------------
-@app.route("/api/agent/<agent_id>/screenshot")
+@app.route("/api/agent/<agent_id>/screenshot/live")
 def screenshot_viewer(agent_id):
     if agent_configurations.get(agent_id, {}).get("task") != "screenshot":
         return "<h1>Agent not provisioned as Screenshot Collector</h1>", 400
@@ -172,8 +172,6 @@ def screenshot_viewer(agent_id):
     </body>
     </html>
     """
-
-
 
 @app.route("/api/agent/<agent_id>/screenshot/raw") # Fallback Non-Live Screenshot Preview Code for Legacy Purposes
 def screenshot_raw(agent_id):

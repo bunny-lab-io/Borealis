@@ -176,7 +176,7 @@ const DataNode = ({ id, data }) => {
 
 export default {
     type: "DataNode", // REQUIRED: unique identifier for the node type
-    label: "String / Number Data",
+    label: "String / Number",
     description: `
 Foundational Data Node
 

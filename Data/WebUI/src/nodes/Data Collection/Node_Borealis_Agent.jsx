@@ -27,7 +27,6 @@ const BorealisAgentNode = ({ id, data }) => {
 
     useEffect(() => {
         socket.on('new_screenshot', (data) => {
-            console.log("[DEBUG] Screenshot received", data);
             if (data.agent_id === selectedAgent) {
                 setImageData(data.image_base64);
                 imageRef.current = data.image_base64;
@@ -54,7 +53,6 @@ const BorealisAgentNode = ({ id, data }) => {
                     }
                     return updated;
                 });
-
             }
         }, window.BorealisUpdateRate || 100);
 
@@ -101,11 +99,16 @@ const BorealisAgentNode = ({ id, data }) => {
                     style={{ width: "100%", fontSize: "9px", marginBottom: "6px" }}
                 >
                     <option value="">-- Select --</option>
-                    {Object.entries(agents).map(([id, info]) => (
-                        <option key={id} value={id} disabled={info.status === "provisioned"}>
-                            {id} {info.status === "provisioned" ? "(Adopted)" : ""}
-                        </option>
-                    ))}
+                    {Object.entries(agents).map(([id, info]) => {
+                        const statusLabel = info.status === "provisioned"
+                            ? "(Provisioned)"
+                            : "(Not Provisioned)";
+                        return (
+                            <option key={id} value={id}>
+                                {id} {statusLabel}
+                            </option>
+                        );
+                    })}
                 </select>
 
                 <label style={{ fontSize: "10px" }}>Data Type:</label>
