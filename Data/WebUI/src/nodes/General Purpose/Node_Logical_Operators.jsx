@@ -73,7 +73,7 @@ const ComparisonNode = ({ id, data }) => {
                 "Less Than or Equal (<=)": a <= b
             };
 
-            const result = resultMap[operator] ? 1 : 0;
+            const result = resultMap[operator] ? "1" : "0";
 
             valueRef.current = result;
             setRenderValue(result);
