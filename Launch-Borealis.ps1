@@ -8,7 +8,7 @@
     It begins by presenting a menu to the user. Based on the selection (1 or 2), the corresponding module is launched.
 
     Usage:
-      Set-ExecutionPolicy Unrestricted -Scope Process; .\Deploy-Borealis.ps1
+      Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
 #>
 
 # ---------------------- Common Initialization & Visuals ----------------------
