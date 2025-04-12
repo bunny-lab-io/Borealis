@@ -235,9 +235,16 @@ function FlowEditor({ nodes, edges, setNodes, setEdges, nodeTypes }) {
                     }
                 }}
             >
-                <MenuItem onClick={handleDisconnect}>Disconnect All Edges</MenuItem>
-                <MenuItem onClick={handleRemoveNode}>Remove Node</MenuItem>
+                <MenuItem onClick={handleDisconnect}>
+                    <PolylineIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
+                    Disconnect All Edges
+                </MenuItem>
+                <MenuItem onClick={handleRemoveNode}>
+                    <DeleteForeverIcon sx={{ fontSize: 18, color: "#ff4f4f", mr: 1 }} />
+                    Remove Node
+                </MenuItem>
             </Menu>
+
         </div>
     );
 }
