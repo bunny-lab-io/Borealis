@@ -4,6 +4,10 @@ import time
 import os
 import base64
 
+# Borealis Python API Endpoints
+# These are Python files that run code to process data given to them via the API
+from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
+
 # ---------------------------------------------
 # React Frontend Hosting Configuration
 # ---------------------------------------------
@@ -27,6 +31,31 @@ def serve_react_app(path):
     if os.path.exists(full_path):
         return send_from_directory(build_folder, path)
     return send_from_directory(build_folder, "index.html")
+
+# ---------------------------------------------
+# Borealis Python API Endpoints
+# ---------------------------------------------
+# Process image data into OCR text output.
+@app.route("/api/ocr", methods=["POST"])
+def ocr_endpoint():
+    payload = request.get_json()
+    image_b64 = payload.get("image_base64")
+    engine = payload.get("engine", "tesseract").lower().strip()
+    backend = payload.get("backend", "cpu").lower().strip()
+
+    # Normalize engine aliases
+    if engine in ["tesseractocr", "tesseract"]:
+        engine = "tesseract"
+    elif engine == "easyocr":
+        engine = "easyocr"
+    else:
+        return jsonify({"error": f"OCR engine '{engine}' not recognized."}), 400
+
+    try:
+        lines = run_ocr_on_base64(image_b64, engine=engine, backend=backend)
+        return jsonify({"lines": lines})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ---------------------------------------------
 # Borealis Agent API Endpoints

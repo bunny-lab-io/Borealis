@@ -150,12 +150,15 @@ switch ($choice) {
         }
 
         # ---------------------- Server: Launch Flask Server ----------------------
-        Push-Location $venvFolder
-        Write-Host "`nLaunching Borealis..." -ForegroundColor Green
-        Write-Host "===================================================================================="
-        Write-Host "$($symbols.Running) Python Flask Server Started..."
-        python "Borealis\server.py"
-        Pop-Location
+        Run-Step "Borealis: Launch Flask Server" {
+            Push-Location $venvFolder
+            Write-Host "`nLaunching Borealis..." -ForegroundColor Green
+            Write-Host "===================================================================================="
+            Write-Host "$($symbols.Running) Python Flask Server Started..."
+            Write-Host "$($symbols.Running) Preloading OCR Engines... Please be patient..."
+            python "Borealis\server.py"
+            Pop-Location
+        }
     }
 
     # ---------------------- Agent Module ----------------------
