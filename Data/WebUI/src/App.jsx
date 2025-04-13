@@ -569,15 +569,15 @@ export default function App() {
                     overflow: "hidden"
                 }}
             >
-                <AppBar position="static" sx={{ bgcolor: "#092c44" }}>
+                <AppBar position="static" sx={{ bgcolor: "#16191d" }}>
                     <Toolbar sx={{ minHeight: "36px" }}>
                         {/* Logo */}
                         <Box
                             component="img"
-                            src="/Borealis_Logo_Transparent.png"
+                            src="/Borealis_Logo_Full.png"
                             alt="Borealis Logo"
                             sx={{
-                                height: "36px",
+                                height: "52px",
                                 marginRight: "8px"
                             }}
                         />
@@ -586,7 +586,7 @@ export default function App() {
                             variant="h6"
                             sx={{ flexGrow: 1, fontSize: "1rem" }}
                         >
-                            Borealis - Workflow Automation Tool
+                            
                         </Typography>
 
                         <Button
