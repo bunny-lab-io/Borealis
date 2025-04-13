@@ -571,12 +571,24 @@ export default function App() {
             >
                 <AppBar position="static" sx={{ bgcolor: "#092c44" }}>
                     <Toolbar sx={{ minHeight: "36px" }}>
+                        {/* Logo */}
+                        <Box
+                            component="img"
+                            src="/Borealis_Logo_Transparent.png"
+                            alt="Borealis Logo"
+                            sx={{
+                                height: "36px",
+                                marginRight: "8px"
+                            }}
+                        />
+                        
                         <Typography
                             variant="h6"
                             sx={{ flexGrow: 1, fontSize: "1rem" }}
                         >
                             Borealis - Workflow Automation Tool
                         </Typography>
+
                         <Button
                             color="inherit"
                             onClick={handleAboutMenuOpen}
@@ -586,6 +598,7 @@ export default function App() {
                         >
                             About
                         </Button>
+
                         <Menu
                             anchorEl={aboutAnchorEl}
                             open={Boolean(aboutAnchorEl)}
@@ -627,6 +640,7 @@ export default function App() {
                         </Menu>
                     </Toolbar>
                 </AppBar>
+
 
                 <Box
                     sx={{
