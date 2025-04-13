@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { Handle, Position, useReactFlow } from "reactflow";
 
+if (!window.BorealisValueBus) window.BorealisValueBus = {};
+if (!window.BorealisUpdateRate) window.BorealisUpdateRate = 100;
+
 const ImageViewerNode = ({ id, data }) => {
     const { getEdges } = useReactFlow();
     const [imageBase64, setImageBase64] = useState("");
     const [selectedType, setSelectedType] = useState("base64");
 
-    // Watch upstream value
+    // Monitor upstream input and propagate to ValueBus
     useEffect(() => {
         const interval = setInterval(() => {
             const edges = getEdges();
@@ -17,11 +20,47 @@ const ImageViewerNode = ({ id, data }) => {
                 const value = valueBus[sourceId];
                 if (typeof value === "string") {
                     setImageBase64(value);
+                    window.BorealisValueBus[id] = value;
                 }
+            } else {
+                setImageBase64("");
+                window.BorealisValueBus[id] = "";
             }
-        }, 1000);
+        }, window.BorealisUpdateRate || 100);
+
         return () => clearInterval(interval);
     }, [id, getEdges]);
+
+    const handleDownload = async () => {
+        if (!imageBase64) return;
+        const blob = await (await fetch(`data:image/png;base64,${imageBase64}`)).blob();
+
+        if (window.showSaveFilePicker) {
+            try {
+                const fileHandle = await window.showSaveFilePicker({
+                    suggestedName: "image.png",
+                    types: [{
+                        description: "PNG Image",
+                        accept: { "image/png": [".png"] }
+                    }]
+                });
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+            } catch (e) {
+                console.warn("Save cancelled:", e);
+            }
+        } else {
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = "image.png";
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            URL.revokeObjectURL(a.href);
+            document.body.removeChild(a);
+        }
+    };
 
     return (
         <div className="borealis-node">
@@ -38,15 +77,39 @@ const ImageViewerNode = ({ id, data }) => {
                 </select>
 
                 {imageBase64 ? (
-                    <img
-                        src={`data:image/png;base64,${imageBase64}`}
-                        alt="Live"
-                        style={{ width: "100%", border: "1px solid #333", marginTop: "6px" }}
-                    />
+                    <>
+                        <img
+                            src={`data:image/png;base64,${imageBase64}`}
+                            alt="Live"
+                            style={{
+                                width: "100%",
+                                border: "1px solid #333",
+                                marginTop: "6px",
+                                marginBottom: "6px"
+                            }}
+                        />
+                        <button
+                            onClick={handleDownload}
+                            style={{
+                                width: "100%",
+                                fontSize: "9px",
+                                padding: "4px",
+                                background: "#1e1e1e",
+                                color: "#ccc",
+                                border: "1px solid #444",
+                                borderRadius: "2px"
+                            }}
+                        >
+                            Export to PNG
+                        </button>
+                    </>
                 ) : (
-                    <div style={{ fontSize: "9px", color: "#888" }}>Waiting for image...</div>
+                    <div style={{ fontSize: "9px", color: "#888", marginTop: "6px" }}>
+                        Waiting for image...
+                    </div>
                 )}
             </div>
+            <Handle type="source" position={Position.Right} className="borealis-handle" />
         </div>
     );
 };
@@ -54,7 +117,14 @@ const ImageViewerNode = ({ id, data }) => {
 export default {
     type: "Image_Viewer",
     label: "Image Viewer",
-    description: "Displays base64 image pulled from ValueBus of upstream node.",
-    content: "Visual preview of base64 image",
+    description: `
+Displays base64 image and exports it
+
+- Accepts upstream base64 image
+- Shows preview
+- Provides "Export to PNG" button
+- Outputs the same base64 to downstream
+`.trim(),
+    content: "Visual preview of base64 image with optional PNG export.",
     component: ImageViewerNode
 };
