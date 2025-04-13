@@ -5,7 +5,6 @@
     height: 100vh;
 }
 
-
 /* Blue Gradient Overlay */
 .flow-editor-container::before {
     content: "";
@@ -14,15 +13,16 @@
     left: 0;
     width: 100%;
     height: 100%;
-    pointer-events: none; /* Ensures grid and nodes remain fully interactive */
-    background: linear-gradient( to bottom, rgba(9, 44, 68, 0.9) 0%, /* Deep blue at the top */
-    rgba(30, 30, 30, 0) 45%, /* Fade out towards center */
-    rgba(30, 30, 30, 0) 75%, /* No gradient in the middle */
-    rgba(9, 44, 68, 0.7) 100% /* Deep blue at the bottom */
+    pointer-events: none;
+    background: linear-gradient(
+        to bottom,
+        rgba(9, 44, 68, 0.9) 0%,
+        rgba(30, 30, 30, 0) 45%,
+        rgba(30, 30, 30, 0) 75%,
+        rgba(9, 44, 68, 0.7) 100%
     );
-    z-index: -1; /* Ensures it stays behind the React Flow elements */
+    z-index: -1;
 }
-
 
 /* Emphasize Drag & Drop Node Functionality */
 .sidebar-button:hover {
@@ -30,7 +30,6 @@
     box-shadow: 0 0 5px rgba(88, 166, 255, 0.3);
     cursor: grab;
 }
-
 
 /* Borealis Node Styling */
 .borealis-node {
@@ -42,7 +41,8 @@
     min-width: 160px;
     max-width: 260px;
     position: relative;
-    box-shadow: 0 0 5px rgba(88, 166, 255, 0.15), 0 0 10px rgba(88, 166, 255, 0.15);
+    box-shadow: 0 0 5px rgba(88, 166, 255, 0.15),
+                0 0 10px rgba(88, 166, 255, 0.15);
     transition: box-shadow 0.3s ease-in-out;
 }
 .borealis-node-header {
@@ -65,7 +65,9 @@
 }
 
 /* Global dark form inputs */
-input, select, button {
+input,
+select,
+button {
     background-color: #2a2a2a;
     color: #ccc;
     border: 1px solid #444;
@@ -77,3 +79,17 @@ label {
     color: #aaa;
     font-size: 10px;
 }
+
+/* Multi-Tab Bar Adjustments */
+.MuiTabs-root {
+    min-height: 32px !important;
+}
+
+.MuiTab-root {
+    min-height: 32px !important;
+    padding: 6px 12px !important;
+    color: #58a6ff !important;
+    text-transform: none !important;
+}
+
+/* We rely on the TabIndicatorProps to show the underline highlight for active tabs. */
