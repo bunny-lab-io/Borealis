@@ -42,13 +42,13 @@ install_core_dependencies() {
     case "$DISTRO_ID" in
         ubuntu|debian)
             sudo apt update -qq
-            sudo apt install -y python3 python3-venv python3-pip nodejs npm git curl
+            sudo apt install -y python3 python3-venv python3-pip nodejs npm git curl tesseract-ocr
             ;;
         rhel|centos|fedora|rocky)
-            sudo dnf install -y python3 python3-pip nodejs npm git curl
+            sudo dnf install -y python3 python3-pip nodejs npm git curl tesseract
             ;;
         arch)
-            sudo pacman -Sy --noconfirm python python-venv python-pip nodejs npm git curl
+            sudo pacman -Sy --noconfirm python python-venv python-pip nodejs npm git curl tesseract
             ;;
         *)
             echo -e "${RED}${CROSSMARK} Unsupported Linux distribution: ${DISTRO_ID}${RESET}"

@@ -5,21 +5,28 @@ import torch
 import pytesseract
 import easyocr
 import numpy as np
+import platform
 from PIL import Image
 
 # ---------------------------------------------------------------------
-# Configure internal Tesseract path
+# Configure cross-platform Tesseract path
 # ---------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TESSERACT_FOLDER = os.path.join(BASE_DIR, "Tesseract-OCR")
-TESSERACT_EXE = os.path.join(TESSERACT_FOLDER, "tesseract.exe")
-TESSDATA_DIR = os.path.join(TESSERACT_FOLDER, "tessdata")
+SYSTEM = platform.system()
 
-if not os.path.isfile(TESSERACT_EXE):
-    raise EnvironmentError("Missing tesseract.exe in /Tesseract-OCR. Ensure the full folder is copied.")
+if SYSTEM == "Windows":
+    TESSERACT_FOLDER = os.path.join(BASE_DIR, "Tesseract-OCR")
+    TESSERACT_EXE = os.path.join(TESSERACT_FOLDER, "tesseract.exe")
+    TESSDATA_DIR = os.path.join(TESSERACT_FOLDER, "tessdata")
 
-pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE
-os.environ["TESSDATA_PREFIX"] = TESSDATA_DIR
+    if not os.path.isfile(TESSERACT_EXE):
+        raise EnvironmentError("Missing tesseract.exe in /Tesseract-OCR. Ensure the full folder is copied.")
+
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE
+    os.environ["TESSDATA_PREFIX"] = TESSDATA_DIR
+else:
+    # Assume Linux/macOS with system-installed Tesseract
+    pytesseract.pytesseract.tesseract_cmd = "tesseract"
 
 # ---------------------------------------------------------------------
 # EasyOCR Global Instances
@@ -54,7 +61,7 @@ def run_ocr_on_base64(image_b64: str, engine: str = "tesseract", backend: str = 
         try:
             text = pytesseract.image_to_string(image, config="--psm 6 --oem 1")
         except pytesseract.TesseractNotFoundError:
-            raise RuntimeError("Tesseract binary not found in internal folder.")
+            raise RuntimeError("Tesseract binary not found or not available on this platform.")
     elif engine == "easyocr":
         initialize_ocr_engines()
         reader = easyocr_reader_gpu if backend == "gpu" else easyocr_reader_cpu
