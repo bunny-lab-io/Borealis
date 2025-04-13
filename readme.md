@@ -35,8 +35,8 @@ Powered by a Flask backend and a React Flow frontend, Borealis is perfect for an
 
 ```bash
 # Windows
-Set-ExecutionPolicy Unrestricted -Scope Process
-.\Launch-Borealis.ps1
+Set-ExecutionPolicy Unrestricted -Scope Process; .\Prerequisites-Installer-(RunAsAdmin).ps1
+Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
 
 # Linux / macOS
 bash Launch-Borealis.sh
