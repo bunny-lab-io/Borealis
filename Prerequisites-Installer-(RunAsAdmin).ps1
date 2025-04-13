@@ -9,7 +9,7 @@
     Must be run from an Administrator PowerShell session.
 
     Usage:
-    Set-ExecutionPolicy Unrestricted -Scope Process; .\Python-NodeJS-Installer.ps1
+    Set-ExecutionPolicy Unrestricted -Scope Process; .\Prerequisites-Installer-(RunAsAdmin).ps1
 #>
 
 $ErrorActionPreference = "Stop"

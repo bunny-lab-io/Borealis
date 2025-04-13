@@ -11,8 +11,8 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import ImageGrab
 
 # ---------------- Configuration ----------------
-#SERVER_URL = "http://localhost:5000"  # WebSocket-enabled Internal URL
-SERVER_URL = "https://borealis.bunny-lab.io"  # WebSocket-enabled Public URL"
+SERVER_URL = "http://localhost:5000"  # WebSocket-enabled Internal URL
+#SERVER_URL = "https://borealis.bunny-lab.io"  # WebSocket-enabled Public URL"
 
 HOSTNAME = socket.gethostname().lower()
 RANDOM_SUFFIX = uuid.uuid4().hex[:8]
