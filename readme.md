@@ -1,4 +1,4 @@
-# 🌌 Borealis - Workflow Automation via Visual Node Graphs
+![Borealis Logo](https://git.bunny-lab.io/Borealis/Borealis/raw/branch/main/Data/WebUI/public/Borealis_Logo_Full.png)
 
 **Borealis** is a cross-platform **visual automation platform** that lets you design and execute workflows using drag-and-drop "nodes" in an interactive graph. Think of it like building a flowchart that actually **runs** — in real-time.
 
