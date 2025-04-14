@@ -33,21 +33,25 @@ Powered by a Flask backend and a React Flow frontend, Borealis is perfect for an
 
 ## ⚡ Getting Started
 
-```bash
-# Windows
+### Windows:
+```powershell
+# Windows - Install Python and NodeJS
 Set-ExecutionPolicy Unrestricted -Scope Process; .\Prerequisites-Installer-(RunAsAdmin).ps1
-Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
 
+# Windows - Launch Borealis Server and/or Agent
+Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
+```
+### Linux:
+```sh
 # Linux / macOS
 bash Launch-Borealis.sh
 ```
 
-The launch script will:
-- 🐍 Create a virtual Python environment
-- 📦 Install all required Python + JS dependencies
-- ⚛️ Build the React app
-- 🌐 Launch the Flask web server
-
+**The launch script will**:
+- :snake: Create a virtual Python environment
+- :package: Install all required Python + JS dependencies
+- :atom: Build the React app
+- :globe_with_meridians: Launch the Flask web server
 ---
 
 ## 🧠 How It Works
