@@ -5,7 +5,6 @@ import os
 import base64
 
 # Borealis Python API Endpoints
-# These are Python files that run code to process data given to them via the API
 from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
 
 # ---------------------------------------------
