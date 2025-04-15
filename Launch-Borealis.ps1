@@ -87,10 +87,12 @@ switch ($choice) {
         # ---------------------- Server: Create Python Virtual Environment & Prepare Files ----------------------
         Run-Step "Create Borealis Virtual Python Environment" {
             # Create virtual environment if it does not exist
+            Write-Host "Create virtual environment if it does not exist"
             if (!(Test-Path "$venvFolder\Scripts\Activate")) {
                 python -m venv $venvFolder | Out-Null
             }
             # Copy server data if the Data folder exists
+            Write-Host "Copy server data if the Data folder exists"
             if (Test-Path $dataSource) {
                 if (Test-Path $dataDestination) {
                     Remove-Item -Recurse -Force $dataDestination | Out-Null
@@ -101,20 +103,24 @@ switch ($choice) {
                 Write-Host "`r$($symbols.Info) Warning: Data folder not found, skipping copy." -ForegroundColor Yellow
             }
             # React UI Deployment: Create default React app if no deployment folder exists
+            Write-Host "React UI Deployment: Create default React app if no deployment folder exists"
             if (-not (Test-Path $webUIDestination)) {
                 npx create-react-app $webUIDestination | Out-Null
             }
             # Copy custom UI if it exists
+            Write-Host "Copy custom UI if it exists"
             if (Test-Path $customUIPath) {
                 Copy-Item -Path "$customUIPath\*" -Destination $webUIDestination -Recurse -Force
             } else {
                 Write-Host "`r$($symbols.Info) No custom UI found, using default React app." -ForegroundColor Yellow
             }
             # Remove any existing React build folders
+            Write-Host "Remove any existing React build folders"
             if (Test-Path "$webUIDestination\build") {
                 Remove-Item -Path "$webUIDestination\build" -Recurse -Force
             }
             # Activate the Python virtual environment
+            Write-Host "Activate the Python virtual environment"
             . "$venvFolder\Scripts\Activate"
         }
 
