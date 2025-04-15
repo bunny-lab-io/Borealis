@@ -2,7 +2,12 @@
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+
+// Global Styles
 import './index.css';
+import "normalize.css/normalize.css";
+import './Borealis.css'; // Global Theming for All of Borealis
+
 import App from './App.jsx';
 import reportWebVitals from './reportWebVitals';
 

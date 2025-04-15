@@ -15,7 +15,6 @@ import {
 } from "@mui/icons-material";
 
 import "reactflow/dist/style.css";
-import "./Borealis.css";
 
 /**
  * Single flow editor component.

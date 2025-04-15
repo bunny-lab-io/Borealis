@@ -3,7 +3,6 @@ import React, { useState, useRef } from "react";
 import { Handle, Position } from "reactflow";
 import Keyboard from "react-simple-keyboard";
 import "react-simple-keyboard/build/css/index.css";
-import "../../Borealis.css";
 
 if (!window.BorealisValueBus) window.BorealisValueBus = {};
 if (!window.BorealisUpdateRate) window.BorealisUpdateRate = 100;

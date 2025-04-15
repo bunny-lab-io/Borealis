@@ -42,7 +42,6 @@ import React, {
   
   // Styles
   import "reactflow/dist/style.css";
-  import "./Borealis.css";
   
   // Import our new components
   import FlowTabs from "./Flow_Tabs";
