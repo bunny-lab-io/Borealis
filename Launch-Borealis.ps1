@@ -137,7 +137,9 @@ switch ($choice) {
                 npm install --silent react-resizable --no-fund --audit=false | Out-Null
                 npm install --silent reactflow --no-fund --audit=false | Out-Null
                 npm install --silent @mui/material @mui/icons-material @emotion/react @emotion/styled --no-fund --audit=false 2>&1 | Out-Null
-                npm install  --silent socket.io-client --no-fund --audit=false | Out-Null
+                npm install --silent socket.io-client --no-fund --audit=false | Out-Null
+                npm install --silent react-simple-keyboard --no-fund --audit=false | Out-Null
+
                 Pop-Location
             }
         }

@@ -93,3 +93,47 @@ label {
 }
 
 /* We rely on the TabIndicatorProps to show the underline highlight for active tabs. */
+
+/* keyboard-dark-theme.css */
+
+/* react-simple-keyboard dark theming */
+.hg-theme-dark {
+    background-color: #1e1e1e;
+    border: 1px solid #444;
+}
+
+.hg-button {
+    background: #2c2c2c;
+    color: #ccc;
+    border: 1px solid #444;
+    font-size: 11px;
+}
+
+.hg-button:hover {
+    background: #58a6ff;
+    color: #000;
+    border-color: #58a6ff;
+}
+
+.borealis-keyboard .hg-button.hg-standardBtn {
+    border-radius: 3px;
+}
+
+/* Force rows to appear horizontally */
+.simple-keyboard-main .hg-row {
+    display: flex !important;
+    flex-flow: row wrap;
+    justify-content: center;
+  }
+
+/* Slight spacing around each key (optional) */
+.simple-keyboard-main .hg-row .hg-button {
+    margin: 3px !important;
+  }
+  
+  /* Keep the entire keyboard from shrinking or going vertical */
+  .simple-keyboard-main {
+    display: inline-block !important;
+    width: auto !important;
+    max-width: 1000px; /* or whatever max width you like */
+  }

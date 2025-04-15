@@ -12,22 +12,45 @@ if (!window.BorealisUpdateRate) {
 
 const BWThresholdNode = ({ id, data }) => {
     const edges = useStore((state) => state.edges);
-    const [threshold, setThreshold] = useState(() => parseInt(data?.value, 10) || 128);
+
+    // Attempt to parse threshold from data.value (if present),
+    // otherwise default to 128.
+    const initial = parseInt(data?.value, 10);
+    const [threshold, setThreshold] = useState(
+        isNaN(initial) ? 128 : initial
+    );
+
     const [renderValue, setRenderValue] = useState("");
     const valueRef = useRef("");
     const lastUpstreamRef = useRef("");
 
+    // If the node is reimported and data.value changes externally,
+    // update the threshold accordingly.
+    useEffect(() => {
+        const newVal = parseInt(data?.value, 10);
+        if (!isNaN(newVal)) {
+            setThreshold(newVal);
+        }
+    }, [data?.value]);
+
     const handleThresholdInput = (e) => {
         let val = parseInt(e.target.value, 10);
-        if (isNaN(val)) val = 128;
+        if (isNaN(val)) {
+            val = 128;
+        }
         val = Math.max(0, Math.min(255, val));
+
+        // Keep the Node's data.value updated
+        data.value = val;
 
         setThreshold(val);
         window.BorealisValueBus[id] = val;
     };
 
     const applyThreshold = async (base64Data, cutoff) => {
-        if (!base64Data || typeof base64Data !== "string") return "";
+        if (!base64Data || typeof base64Data !== "string") {
+            return "";
+        }
 
         return new Promise((resolve) => {
             const img = new Image();
@@ -56,7 +79,7 @@ const BWThresholdNode = ({ id, data }) => {
             };
 
             img.onerror = () => resolve(base64Data);
-            img.src = `data:image/png;base64,${base64Data}`;
+            img.src = "data:image/png;base64," + base64Data;
         });
     };
 
@@ -105,10 +128,14 @@ const BWThresholdNode = ({ id, data }) => {
     // Reapply when threshold changes (even if image didn't)
     useEffect(() => {
         const inputEdge = edges.find(e => e.target === id);
-        if (!inputEdge?.source) return;
+        if (!inputEdge?.source) {
+            return;
+        }
 
         const upstreamValue = window.BorealisValueBus[inputEdge.source] ?? "";
-        if (!upstreamValue) return;
+        if (!upstreamValue) {
+            return;
+        }
 
         applyThreshold(upstreamValue, threshold).then((result) => {
             valueRef.current = result;
