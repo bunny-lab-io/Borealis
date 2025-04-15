@@ -1,4 +1,4 @@
-# 🌌 Borealis - Workflow Automation via Visual Node Graphs
+![Borealis Logo](https://git.bunny-lab.io/Borealis/Borealis/raw/branch/main/Data/WebUI/public/Borealis_Logo_Full.png)
 
 **Borealis** is a cross-platform **visual automation platform** that lets you design and execute workflows using drag-and-drop "nodes" in an interactive graph. Think of it like building a flowchart that actually **runs** — in real-time.
 
@@ -33,21 +33,28 @@ Powered by a Flask backend and a React Flow frontend, Borealis is perfect for an
 
 ## ⚡ Getting Started
 
-```bash
-# Windows
+### Windows:
+```powershell
+# Windows - Install Python and NodeJS
+# You need to open a powershell window as an administrator, change the directory to Borealis's extracted ZIP, then run the command below:
 Set-ExecutionPolicy Unrestricted -Scope Process; .\Prerequisites-Installer-(RunAsAdmin).ps1
-Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
 
+# Windows - Launch Borealis Server and/or Agent
+# To Launch borealis itself, you can just right-click the "Launch-Borealis.ps1" file and select "Run with Powershell", or alternatively, run the command seen below, either in the same powershell session as the first command, or in its own non-administrative session.
+Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
+```
+### Linux:
+-# Detailed explanations of how to get things working in Linux is not given at this time, but its mostly automated during the deployment, and only requires a single script to be ran.
+```sh
 # Linux / macOS
 bash Launch-Borealis.sh
 ```
 
-The launch script will:
-- 🐍 Create a virtual Python environment
-- 📦 Install all required Python + JS dependencies
-- ⚛️ Build the React app
-- 🌐 Launch the Flask web server
-
+**The launch script will**:
+- :snake: Create a virtual Python environment
+- :package: Install all required Python + JS dependencies
+- :atom: Build the React app
+- :globe_with_meridians: Launch the Flask web server
 ---
 
 ## 🧠 How It Works
