@@ -110,7 +110,7 @@ switch ($choice) {
             } else {
                 Write-Host "`r$($symbols.Info) No custom UI found, using default React app." -ForegroundColor Yellow
             }
-            # Remove any existing React build folder
+            # Remove any existing React build folders
             if (Test-Path "$webUIDestination\build") {
                 Remove-Item -Path "$webUIDestination\build" -Recurse -Force
             }
@@ -134,14 +134,8 @@ switch ($choice) {
                 Push-Location $webUIDestination
                 $env:npm_config_loglevel = "silent"
 
-                # Install required NPM packages
+                # Configure packages to install using <ProjectRoot>/Data/WebUI/package.json
                 npm install --silent --no-fund --audit=false 2>&1 | Out-Null
-                npm install --silent react-resizable --no-fund --audit=false | Out-Null
-                npm install --silent reactflow --no-fund --audit=false | Out-Null
-                npm install --silent @mui/material @mui/icons-material @emotion/react @emotion/styled --no-fund --audit=false 2>&1 | Out-Null
-                npm install --silent socket.io-client --no-fund --audit=false | Out-Null
-                npm install --silent react-simple-keyboard --no-fund --audit=false | Out-Null
-                npm install --silent normalize.css --no-fund --audit=false | Out-Null
 
                 Pop-Location
             }
