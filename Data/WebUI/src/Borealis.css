@@ -1,3 +1,7 @@
+/* ======================================= */
+/* FLOW EDITOR                             */
+/* ======================================= */
+
 /* FlowEditor background container */
 .flow-editor-container {
     position: relative;
@@ -24,12 +28,20 @@
     z-index: -1;
 }
 
+/* ======================================= */
+/* NODE SIDEBAR                            */
+/* ======================================= */
+
 /* Emphasize Drag & Drop Node Functionality */
 .sidebar-button:hover {
     background-color: #2a2a2a !important;
     box-shadow: 0 0 5px rgba(88, 166, 255, 0.3);
     cursor: grab;
 }
+
+/* ======================================= */
+/* NODES                                   */
+/* ======================================= */
 
 /* Borealis Node Styling */
 .borealis-node {
@@ -80,6 +92,10 @@ label {
     font-size: 10px;
 }
 
+/* ======================================= */
+/* FLOW TABS                               */
+/* ======================================= */
+
 /* Multi-Tab Bar Adjustments */
 .MuiTabs-root {
     min-height: 32px !important;
@@ -92,7 +108,16 @@ label {
     text-transform: none !important;
 }
 
+/* Highlight tab on hover if it's not active */
+.MuiTab-root:hover:not(.Mui-selected) {
+    background-color: #2C2C2C !important;
+}
+
 /* We rely on the TabIndicatorProps to show the underline highlight for active tabs. */
+
+/* ======================================= */
+/* REACT-SIMPLE-KEYBOARD                   */
+/* ======================================= */
 
 /* keyboard-dark-theme.css */
 
