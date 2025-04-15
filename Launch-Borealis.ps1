@@ -1,3 +1,5 @@
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Launch-Borealis.ps1
+
 <# 
     Deploy-Borealis.ps1
     ----------------------

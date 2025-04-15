@@ -1,3 +1,5 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Image Processing/Node_Image_Viewer.jsx
+
 import React, { useEffect, useState } from "react";
 import { Handle, Position, useReactFlow } from "reactflow";
 

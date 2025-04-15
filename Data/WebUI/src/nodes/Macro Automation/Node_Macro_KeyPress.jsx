@@ -1,3 +1,4 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Macro Automation/Node_Macro_KeyPress.jsx
 import React, { useState, useRef } from "react";
 import { Handle, Position } from "reactflow";
 import Keyboard from "react-simple-keyboard";

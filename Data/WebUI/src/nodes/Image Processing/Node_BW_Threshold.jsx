@@ -1,3 +1,5 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Image Processing/Node_BW_Threshold.jsx
+
 import React, { useEffect, useRef, useState } from "react";
 import { Handle, Position, useStore } from "reactflow";
 

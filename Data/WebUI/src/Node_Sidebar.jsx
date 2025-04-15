@@ -1,4 +1,4 @@
-// Node_Sidebar.jsx
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Node_Sidebar.jsx
 
 import React from "react";
 import {

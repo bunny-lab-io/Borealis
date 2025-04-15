@@ -1,3 +1,5 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Image Processing/Node_Adjust_Contrast.jsx
+
 import React, { useEffect, useState, useRef } from "react";
 import { Handle, Position, useStore } from "reactflow";
 

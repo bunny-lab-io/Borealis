@@ -1,3 +1,5 @@
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/server.py
+
 from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_socketio import SocketIO, emit
 import time

@@ -1,3 +1,5 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/General Purpose/Node_Data.jsx
+
 /**
  * ============================================
  * Borealis - Standard Live Data Node Template

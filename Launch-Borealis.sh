@@ -1,3 +1,5 @@
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Launch-Borealis.sh
+
 #!/usr/bin/env bash
 # --------------------------------------------------------------------
 # Deploy Borealis - Workflow Automation Tool

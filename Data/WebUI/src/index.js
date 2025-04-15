@@ -1,3 +1,5 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/index.js
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';

@@ -1,3 +1,5 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: Node_Borealis_Agent.jsx
+
 import React, { useEffect, useState, useRef } from "react";
 import { Handle, Position, useReactFlow } from "reactflow";
 import { io } from "socket.io-client";

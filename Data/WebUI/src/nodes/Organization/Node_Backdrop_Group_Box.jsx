@@ -1,3 +1,5 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Organization/Node_Backdrop_Group_Box.jsx
+
 /**
  * ===========================================
  * Borealis - Backdrop Group Box Node
@@ -6,7 +8,7 @@
  * COMPONENT ROLE:
  * This node functions as a backdrop or grouping box.
  * It's resizable and can be renamed by clicking its title.
- * It doesn't connect to other nodes or pass data—it's purely visual.
+ * It doesn't connect to other nodes or pass dataï¿½it's purely visual.
  *
  * BEHAVIOR:
  * - Allows renaming via single-click on the header text.

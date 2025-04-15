@@ -1,3 +1,5 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: Node_Alert_Sound.jsx
+
 /**
  * ==================================================
  * Borealis - Alert Sound Node (with Base64 Restore)

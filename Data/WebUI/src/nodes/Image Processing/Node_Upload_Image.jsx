@@ -1,3 +1,5 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Image Processing/Node_Upload_Image.jsx
+
 /**
  * ==================================================
  * Borealis - Image Upload Node (Raw Base64 Output)
