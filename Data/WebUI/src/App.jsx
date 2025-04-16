@@ -48,6 +48,15 @@ import React, {
   } from "./Dialogs";
   import StatusBar from "./Status_Bar";
   
+  // Websocket Functionality
+  import { io } from "socket.io-client";
+  
+  if (!window.BorealisSocket) {
+    window.BorealisSocket = io(window.location.origin, {
+      transports: ["websocket"]
+    });
+  }
+
   // Global Node Update Timer Variable
   if (!window.BorealisUpdateRate) {
     window.BorealisUpdateRate = 200;

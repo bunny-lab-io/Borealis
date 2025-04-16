@@ -102,7 +102,7 @@ switch ($choice) {
             }
             # React UI Deployment: Create default React app if no deployment folder exists
             if (-not (Test-Path $webUIDestination)) {
-                npx --yes create-react-app "$webUIDestination" --verbose | Out-Null
+                npx --yes create-react-app "$webUIDestination" | Out-Null
             }
             # Copy custom UI if it exists
             if (Test-Path $customUIPath) {

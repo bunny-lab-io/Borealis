@@ -35,7 +35,7 @@ export default function NodeSidebar({
   return (
     <div
       style={{
-        width: 320,
+        width: 300, //Width of the Node Sidebar
         backgroundColor: "#121212",
         borderRight: "1px solid #333",
         overflowY: "auto"

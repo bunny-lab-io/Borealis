@@ -73,38 +73,36 @@ def get_agents():
 def provision_agent():
     data = request.json
     agent_id = data.get("agent_id")
-    config = {
-        "task": data.get("task", "screenshot"),
-        "x": data.get("x", 100),
-        "y": data.get("y", 100),
-        "w": data.get("w", 300),
-        "h": data.get("h", 200),
-        "interval": data.get("interval", 1000),
-        "visible": data.get("visible", True)
-    }
+    roles = data.get("roles", [])  # <- MODULAR ROLES ARRAY
+
+    if not agent_id or not isinstance(roles, list):
+        return jsonify({"error": "Missing agent_id or roles[] in provision payload."}), 400
+
+    # Save configuration
+    config = {"roles": roles}
     agent_configurations[agent_id] = config
+
+    # Update status if agent already registered
     if agent_id in registered_agents:
         registered_agents[agent_id]["status"] = "provisioned"
 
-    # NEW: Emit config update back to the agent via WebSocket
+    # Emit config to the agent
     socketio.emit("agent_config", config)
 
-    return jsonify({"status": "provisioned"})
+    return jsonify({"status": "provisioned", "roles": roles})
+
 
 
 # ----------------------------------------------
 # Canvas Image Feed Viewer for Screenshot Agents
 # ----------------------------------------------
-@app.route("/api/agent/<agent_id>/screenshot/live")
-def screenshot_viewer(agent_id):
-    if agent_configurations.get(agent_id, {}).get("task") != "screenshot":
-        return "<h1>Agent not provisioned as Screenshot Collector</h1>", 400
-
+@app.route("/api/agent/<agent_id>/node/<node_id>/screenshot/live")
+def screenshot_node_viewer(agent_id, node_id):
     return f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Borealis Live View - {agent_id}</title>
+        <title>Borealis Live View - {agent_id}:{node_id}</title>
         <style>
             body {{
                 margin: 0;
@@ -118,105 +116,66 @@ def screenshot_viewer(agent_id):
                 border: 1px solid #444;
                 max-width: 90vw;
                 max-height: 90vh;
-                width: auto;
-                height: auto;
                 background-color: #111;
             }}
         </style>
     </head>
     <body>
         <canvas id="viewerCanvas"></canvas>
-
         <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
         <script>
             const agentId = "{agent_id}";
-            const socket = io(window.location.origin, {{ transports: ["websocket"] }});
+            const nodeId = "{node_id}";
             const canvas = document.getElementById("viewerCanvas");
             const ctx = canvas.getContext("2d");
+            const socket = io(window.location.origin, {{ transports: ["websocket"] }});
 
-            console.log("[Viewer] Canvas initialized for agent:", agentId);
-
-            socket.on("connect", () => {{
-                console.log("[WebSocket] Connected to Borealis server at", window.location.origin);
-            }});
-
-            socket.on("disconnect", () => {{
-                console.warn("[WebSocket] Disconnected from Borealis server");
-            }});
-
-            socket.on("new_screenshot", (data) => {{
-                console.log("[WebSocket] Received screenshot event");
-
-                if (!data || typeof data !== "object") {{
-                    console.error("[Viewer] Screenshot event was not an object:", data);
-                    return;
-                }}
-
-                if (data.agent_id !== agentId) {{
-                    console.log("[Viewer] Ignored screenshot from different agent:", data.agent_id);
-                    return;
-                }}
-
+            socket.on("agent_screenshot_task", (data) => {{
+                if (data.agent_id !== agentId || data.node_id !== nodeId) return;
                 const base64 = data.image_base64;
-                console.log("[Viewer] Base64 length:", base64?.length || 0);
-
-                if (!base64 || base64.length < 100) {{
-                    console.warn("[Viewer] Empty or too short base64 string.");
-                    return;
-                }}
-
-                // Peek at base64 to determine MIME type
-                let mimeType = "image/png";
-                try {{
-                    const header = atob(base64.substring(0, 32));
-                    if (header.charCodeAt(0) === 0xFF && header.charCodeAt(1) === 0xD8) {{
-                        mimeType = "image/jpeg";
-                    }}
-                }} catch (e) {{
-                    console.warn("[Viewer] Failed to decode base64 header", e);
-                }}
+                if (!base64 || base64.length < 100) return;
 
                 const img = new Image();
                 img.onload = () => {{
-                    console.log("[Viewer] Image loaded successfully:", img.width + "x" + img.height);
-
-                    console.log("[Viewer] Canvas size before:", canvas.width + "x" + canvas.height);
-
                     if (canvas.width !== img.width || canvas.height !== img.height) {{
                         canvas.width = img.width;
                         canvas.height = img.height;
-                        console.log("[Viewer] Canvas resized to match image");
                     }}
-
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                     ctx.drawImage(img, 0, 0);
-
-                    console.log("[Viewer] Image drawn on canvas");
                 }};
-                img.onerror = (err) => {{
-                    console.error("[Viewer] Failed to load image from base64. Possibly corrupted data?", err);
-                }};
-                img.src = "data:" + mimeType + ";base64," + base64;
+                img.src = "data:image/png;base64," + base64;
             }});
         </script>
     </body>
     </html>
     """
 
-@app.route("/api/agent/<agent_id>/screenshot/raw") # Fallback Non-Live Screenshot Preview Code for Legacy Purposes
-def screenshot_raw(agent_id):
-    entry = latest_images.get(agent_id)
-    if not entry:
-        return "", 204
-    try:
-        raw_img = base64.b64decode(entry["image_base64"])
-        return Response(raw_img, mimetype="image/png")
-    except Exception:
-        return "", 204
-
 # ---------------------------------------------
 # WebSocket Events
 # ---------------------------------------------
+@socketio.on("agent_screenshot_task")
+def receive_screenshot_task(data):
+    agent_id = data.get("agent_id")
+    node_id = data.get("node_id")
+    image = data.get("image_base64")
+
+    if not agent_id or not node_id or not image:
+        print("[WS] Screenshot task missing fields.")
+        return
+
+    # Optional: Store for debugging
+    latest_images[f"{agent_id}:{node_id}"] = {
+        "image_base64": image,
+        "timestamp": time.time()
+    }
+
+    emit("agent_screenshot_task", {
+        "agent_id": agent_id,
+        "node_id": node_id,
+        "image_base64": image
+    }, broadcast=True)
+
 @socketio.on('connect_agent')
 def connect_agent(data):
     agent_id = data.get("agent_id")
