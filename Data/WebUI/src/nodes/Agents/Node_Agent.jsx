@@ -146,7 +146,7 @@ export default {
 Main Agent Node
 
 - Selects an available agent
-- Connect instruction nodes below to assign tasks (roles)
+- Connect role nodes below to assign tasks to the agent
 - Roles include screenshots, keyboard macros, etc.
 `.trim(),
     content: "Select and provision a Borealis Agent with task roles",
