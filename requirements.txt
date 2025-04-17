@@ -12,7 +12,6 @@ eventlet
 # GUI-related dependencies (Qt for GUI components)
 Qt.py
 qtpy
-OdenGraphQt
 PyQt5
 
 # Computer Vision & OCR Dependencies

@@ -2,6 +2,7 @@
 
 import os
 import io
+import sys
 import base64
 import torch
 import pytesseract
@@ -13,16 +14,25 @@ from PIL import Image
 # ---------------------------------------------------------------------
 # Configure cross-platform Tesseract path
 # ---------------------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SYSTEM = platform.system()
 
+def get_tesseract_folder():
+    if getattr(sys, 'frozen', False):
+        # PyInstaller EXE
+        base_path = sys._MEIPASS
+        return os.path.join(base_path, "Borealis", "Python_API_Endpoints", "Tesseract-OCR")
+    else:
+        # Normal Python environment
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(base_dir, "Tesseract-OCR")
+
 if SYSTEM == "Windows":
-    TESSERACT_FOLDER = os.path.join(BASE_DIR, "Tesseract-OCR")
+    TESSERACT_FOLDER = get_tesseract_folder()
     TESSERACT_EXE = os.path.join(TESSERACT_FOLDER, "tesseract.exe")
     TESSDATA_DIR = os.path.join(TESSERACT_FOLDER, "tessdata")
 
     if not os.path.isfile(TESSERACT_EXE):
-        raise EnvironmentError("Missing tesseract.exe in /Tesseract-OCR. Ensure the full folder is copied.")
+        raise EnvironmentError(f"Missing tesseract.exe at expected path: {TESSERACT_EXE}")
 
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE
     os.environ["TESSDATA_PREFIX"] = TESSDATA_DIR

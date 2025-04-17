@@ -163,7 +163,7 @@ def run_screenshot_loop(node_id, cfg):
     if node_id not in region_launchers:
         launcher = RegionLauncher(node_id)
         region_launchers[node_id] = launcher
-        launcher.trigger.emit(x, y, w, h)
+        QtCore.QTimer.singleShot(0, lambda: launcher.trigger.emit(x, y, w, h))
 
     widget = overlay_widgets.get(node_id)
     if widget:

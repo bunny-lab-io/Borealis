@@ -177,14 +177,14 @@ switch ($choice) {
         Run-Step "Create Virtual Python Environment for Agent" {
             # Create virtual environment for the agent
             if (!(Test-Path "$venvFolder\Scripts\Activate")) {
-                python -m venv $venvFolder | Out-Null
+                python -m venv $venvFolder
             }
             # Copy the agent script if it exists
             if (Test-Path $agentSourcePath) {
                 if (Test-Path $agentDestinationFolder) {
-                    Remove-Item -Recurse -Force $agentDestinationFolder | Out-Null
+                    Remove-Item -Recurse -Force $agentDestinationFolder
                 }
-                New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
+                New-Item -Path $agentDestinationFolder -ItemType Directory -Force
                 Copy-Item -Path $agentSourcePath -Destination $agentDestinationFile -Force
             } else {
                 Write-Host "`r$($symbols.Info) Warning: Agent script not found at '$agentSourcePath', skipping copy." -ForegroundColor Yellow
@@ -196,7 +196,7 @@ switch ($choice) {
         # ---------------------- Agent: Install Python Dependencies ----------------------
         Run-Step "Install Python Dependencies for Agent" {
             if (Test-Path $agentRequirements) {
-                pip install -q -r $agentRequirements 2>&1 | Out-Null
+                pip install -q -r $agentRequirements 2>&1
             } else {
                 Write-Host "`r$($symbols.Info) Agent-specific requirements.txt not found at '$agentRequirements', skipping Python packages." -ForegroundColor Yellow
             }
