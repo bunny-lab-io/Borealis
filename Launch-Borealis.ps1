@@ -81,7 +81,7 @@ switch ($choice) {
         $venvFolder       = "Server"
         $dataSource       = "Data"
         $dataDestination  = "$venvFolder\Borealis"
-        $customUIPath     = "$dataSource\WebUI"
+        $customUIPath     = "$dataSource\Server\WebUI"
         $webUIDestination = "$venvFolder\web-interface"
 
         # ---------------------- Server: Create Python Virtual Environment & Prepare Files ----------------------
@@ -90,13 +90,17 @@ switch ($choice) {
             if (!(Test-Path "$venvFolder\Scripts\Activate")) {
                 python -m venv $venvFolder | Out-Null
             }
-            # Copy server data if the Data folder exists
-            if (Test-Path $dataSource) {
-                if (Test-Path $dataDestination) {
+            # Copy Borealis Server Data
+            if (Test-Path $dataSource) { # If /Data Exists
+                if (Test-Path $dataDestination) { # If /Server/Borealis Exists
                     Remove-Item -Recurse -Force $dataDestination | Out-Null
                 }
                 New-Item -Path $dataDestination -ItemType Directory -Force | Out-Null
-                Copy-Item -Path "$dataSource\*" -Destination $dataDestination -Recurse
+                Copy-Item -Path "$dataSource\Server\Python_API_Endpoints" -Destination $dataDestination -Recurse
+                Copy-Item -Path "$dataSource\Server\Sounds" -Destination $dataDestination -Recurse
+                Copy-Item -Path "$dataSource\Server\Workflows" -Destination $dataDestination -Recurse
+                Copy-Item -Path "$dataSource\Server\server.py" -Destination $dataDestination -Recurse
+
             } else {
                 Write-Host "`r$($symbols.Info) Warning: Data folder not found, skipping copy." -ForegroundColor Yellow
             }
@@ -120,8 +124,8 @@ switch ($choice) {
 
         # ---------------------- Server: Install Python Dependencies ----------------------
         Run-Step "Install Python Dependencies into Virtual Python Environment" {
-            if (Test-Path "requirements.txt") {
-                pip install -q -r requirements.txt 2>&1 | Out-Null
+            if (Test-Path "$dataSource\Server\requirements.txt") {
+                pip install -q -r "$dataSource\Server\requirements.txt" 2>&1 | Out-Null
             } else {
                 Write-Host "`r$($symbols.Info) No requirements.txt found, skipping Python packages." -ForegroundColor Yellow
             }
@@ -170,7 +174,7 @@ switch ($choice) {
         $venvFolder               = "Agent"
         $agentSourcePath          = "Data\Agent\borealis-agent.py"
         $agentRequirements        = "Data\Agent\requirements.txt"
-        $agentDestinationFolder   = "$venvFolder\Agent"
+        $agentDestinationFolder   = "$venvFolder\Borealis"
         $agentDestinationFile     = "$agentDestinationFolder\borealis-agent.py"
 
         # ---------------------- Agent: Create Python Virtual Environment & Copy Agent Script ----------------------
@@ -206,7 +210,7 @@ switch ($choice) {
         Push-Location $venvFolder
         Write-Host "`nLaunching Borealis Agent..." -ForegroundColor Blue
         Write-Host "===================================================================================="
-        python "Agent\borealis-agent.py"
+        python "Borealis\borealis-agent.py"
         Pop-Location
     }
 
