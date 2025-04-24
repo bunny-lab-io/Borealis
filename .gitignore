@@ -1,10 +1,19 @@
-.vs/
+# Python Byte-compiled / Optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Compiled Release Files
+Borealis-Agent.exe
+Borealis-Server.exe
+
+# Pyinstaller Files
+/Data/Agent/Packaging_Data/
+/Data/Server/Packaging_Data/
+
+# Development Folders
 /Server/
 /Agent/
-/Pyinstaller_Temp/
-/dist/
-Borealis-Agent.exe
-/Data/Agent/Packaging_Data/
-Borealis-Server.exe
-/Data/Server/Packaging_Data/
-borealis_directory_structure.txt
+
+# Misc Files/Folders
+.vs/s

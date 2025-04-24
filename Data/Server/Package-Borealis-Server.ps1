@@ -1,4 +1,4 @@
-#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Package-Borealis-Server.ps1
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Server/Package-Borealis-Server.ps1
 
 # ------------------- CONFIGURATION -------------------
 $venvDir = "Pyinstaller_Virtual_Environment"

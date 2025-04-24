@@ -152,7 +152,7 @@ switch ($choice) {
         <#
             Step: Build React App
         #>
-        Run-Step "ReactJS Web Frontend: Build App" {
+        Run-Step "ReactJS Web Frontend: " {
             Push-Location $webUIDestination
             & $npmCmd run build
             Pop-Location
