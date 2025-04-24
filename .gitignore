@@ -2,5 +2,8 @@
 /Server/
 /Agent/
 /Pyinstaller_Temp/
-Borealis-Server.spec
 /dist/
+Borealis-Agent.exe
+/Data/Agent/Packaging_Data/
+Borealis-Server.exe
+/Data/Server/Packaging_Data/
