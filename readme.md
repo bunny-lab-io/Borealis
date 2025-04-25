@@ -37,10 +37,6 @@ Powered by a Flask backend and a React Flow frontend, Borealis is perfect for an
 
 ### Windows:
 ```powershell
-# Windows - Install Python and NodeJS
-# You need to open a powershell window as an administrator, change the directory to Borealis's extracted ZIP, then run the command below:
-Set-ExecutionPolicy Unrestricted -Scope Process; .\Prerequisites-Installer-(RunAsAdmin).ps1
-
 # Windows - Launch Borealis Server and/or Agent
 # To Launch borealis itself, you can just right-click the "Launch-Borealis.ps1" file and select "Run with Powershell", or alternatively, run the command seen below, either in the same powershell session as the first command, or in its own non-administrative session.
 Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
@@ -54,7 +50,7 @@ bash Launch-Borealis.sh
 
 **The launch script will**:
 - :snake: Create a virtual Python environment
-- :package: Install all required Python + JS dependencies
+- :package: Install all required Python + JS dependencies (Bundled in Windows / Installed in Linux)
 - :atom: Build the React app
 - :globe_with_meridians: Launch the Flask web server
 ---
