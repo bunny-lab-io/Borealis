@@ -1,4 +1,4 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/readme.md
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: `<ProjectRoot>/readme.md`
 
 ![Borealis Logo](https://git.bunny-lab.io/Borealis/Borealis/raw/branch/main/Data/WebUI/public/Borealis_Logo_Full.png)
 
