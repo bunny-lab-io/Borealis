@@ -132,8 +132,8 @@ switch ($choice) {
             Step: Install Python Dependencies
         #>
         Run-Step "Install Python Dependencies into Virtual Python Environment" {
-            if (Test-Path "$dataSource\Server\requirements.txt") {
-                & $venvPython -m pip install -q -r "$dataSource\Server\requirements.txt" | Out-Null
+            if (Test-Path "$dataSource\Server\server-requirements.txt") {
+                & $venvPython -m pip install -q -r "$dataSource\Server\server-requirements.txt" | Out-Null
             }
         }
 
@@ -189,7 +189,7 @@ switch ($choice) {
 
         $venvFolder             = "Agent"
         $agentSourcePath        = "Data\Agent\borealis-agent.py"
-        $agentRequirements      = "Data\Agent\requirements.txt"
+        $agentRequirements      = "Data\Agent\agent-requirements.txt"
         $agentDestinationFolder = "$venvFolder\Borealis"
         $agentDestinationFile   = "$venvFolder\Borealis\borealis-agent.py"
         $venvPython             = Join-Path $venvFolder 'Scripts\python.exe'
