@@ -9,7 +9,7 @@ $specPath         = "$packagingDir"
 $agentScript      = "borealis-agent.py"
 $outputName       = "Borealis-Agent"
 $finalExeName     = "$outputName.exe"
-$requirementsPath = "requirements.txt"
+$requirementsPath = "agent-requirements.txt"
 $iconPath         = "..\Borealis.ico"
 
 # figure out where everything lives
