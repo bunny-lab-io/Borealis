@@ -192,7 +192,10 @@ switch ($choice) {
         $agentRequirements      = "Data\Agent\agent-requirements.txt"
         $agentDestinationFolder = "$venvFolder\Borealis"
         $agentDestinationFile   = "$venvFolder\Borealis\borealis-agent.py"
-        $venvPython             = Join-Path $venvFolder 'Scripts\python.exe'
+
+        # build the absolute path to python.exe inside the venv
+        $venvPython = Join-Path $scriptDir $venvFolder
+        $venvPython = Join-Path $venvPython 'Scripts\python.exe'
 
         <#
             Step: Create Virtual Environment & Copy Agent Script
@@ -221,11 +224,13 @@ switch ($choice) {
         <#
             Step: Launch Agent
         #>
-        Push-Location $venvFolder
-        Write-Host "`nLaunching Borealis Agent..." -ForegroundColor Blue
-        Write-Host "===================================================================================="
-        & $venvPython "Borealis\borealis-agent.py"
-        Pop-Location
+        Run-Step "Launch Borealis Agent" {
+            Write-Host "`nLaunching Borealis Agent..." -ForegroundColor Blue
+            Write-Host "===================================================================================="
+            # call python with the absolute interpreter path and the absolute script path
+            $agentScript = Join-Path $scriptDir $agentDestinationFile
+            & $venvPython $agentScript
+        }
     }
 
     default {
