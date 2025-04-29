@@ -416,8 +416,9 @@ import React, {
                       display: tab.id === activeTabId ? "block" : "none"
                     }}
                   >
-                    <ReactFlowProvider>
+                    <ReactFlowProvider id={tab.id}>
                       <FlowEditor
+                        flowId={tab.id} //Used to Fix Grid Issues Across Multiple Flow Tabs
                         nodes={tab.nodes}
                         edges={tab.edges}
                         setNodes={(val) => handleSetNodes(val, tab.id)}

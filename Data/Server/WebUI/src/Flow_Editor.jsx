@@ -23,6 +23,7 @@ import { SketchPicker } from "react-color";
 import "reactflow/dist/style.css";
 
 export default function FlowEditor({
+  flowId, //Used to Fix Grid Issues Across Multiple Flow Tabs
   nodes,
   edges,
   setNodes,
@@ -239,7 +240,7 @@ export default function FlowEditor({
         }}
         proOptions={{ hideAttribution: true }}
       >
-        <Background variant="lines" gap={65} size={1} color="rgba(255,255,255,0.2)" />
+        <Background id={flowId} variant="lines" gap={65} size={1} color="rgba(255,255,255,0.2)" />
       </ReactFlow>
 
       <Menu
