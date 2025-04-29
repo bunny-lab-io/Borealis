@@ -12,6 +12,7 @@
     "@emotion/react": "11.14.0",
     "@emotion/styled": "11.14.0",
     "react-resizable": "3.0.5",
+    "react-color": "2.19.3",
     "reactflow": "11.11.4",
     "socket.io-client": "4.8.1",
     "react-simple-keyboard": "3.8.62",
