@@ -133,6 +133,7 @@ def stop_all_roles():
     running_roles.clear()
     running_threads.clear()
 
+
 def start_role_thread(role_cfg):
     role = role_cfg.get("role")
     node_id = role_cfg.get("node_id")
@@ -194,5 +195,13 @@ def run_screenshot_loop(node_id, cfg):
 # ---------------- Main ----------------
 if __name__ == "__main__":
     app_instance = QtWidgets.QApplication(sys.argv)
-    sio.connect(SERVER_URL, transports=["websocket"])
+    retry_interval = 5  # seconds between connection attempts
+    while True:
+        try:
+            print(f"[WebSocket] Connecting to {SERVER_URL}...")
+            sio.connect(SERVER_URL, transports=["websocket"]())
+            break
+        except Exception as e:
+            print(f"[WebSocket] Borealis Server is Not Running - Retrying in {retry_interval} seconds...")
+            time.sleep(retry_interval)
     sys.exit(app_instance.exec_())

@@ -97,7 +97,7 @@ launch_server() {
     source "${venvFolder}/bin/activate"
 
     run_step "Install Python Dependencies" bash -c "
-        pip install -q -r '${dataSource}/server-requirements.txt'
+        pip install --disable-pip-version-check -q -r '${dataSource}/server-requirements.txt'
     "
 
     run_step "Install React Dependencies" bash -c "
@@ -143,7 +143,7 @@ launch_agent() {
     source "${venvFolder}/bin/activate"
 
     run_step "Install Python Dependencies for Agent" bash -c "
-        pip install -q -r '${agentRequirements}'
+        pip install --disable-pip-version-check -q -r '${agentRequirements}'
     "
 
     echo -e "\n${GREEN}Launching Borealis Agent...${RESET}"

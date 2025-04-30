@@ -133,7 +133,7 @@ switch ($choice) {
         #>
         Run-Step "Install Python Dependencies into Virtual Python Environment" {
             if (Test-Path "$dataSource\Server\server-requirements.txt") {
-                & $venvPython -m pip install -q -r "$dataSource\Server\server-requirements.txt" | Out-Null
+                & $venvPython -m pip install --disable-pip-version-check -q -r "$dataSource\Server\server-requirements.txt" | Out-Null
             }
         }
 
@@ -217,21 +217,16 @@ switch ($choice) {
         #>
         Run-Step "Install Python Dependencies for Agent" {
             if (Test-Path $agentRequirements) {
-                & $venvPython -m pip install -q -r $agentRequirements | Out-Null
+                & $venvPython -m pip install --disable-pip-version-check -q -r $agentRequirements | Out-Null
             }
         }
 
-        <#
-            Step: Launch Agent
-        #>
-        Run-Step "Launch Borealis Agent" {
             Write-Host "`nLaunching Borealis Agent..." -ForegroundColor Blue
             Write-Host "===================================================================================="
             # call python with the absolute interpreter path and the absolute script path
             $agentScript = Join-Path $scriptDir $agentDestinationFile
-            & $venvPython $agentScript
+            & $venvPython -W ignore::SyntaxWarning $agentScript
         }
-    }
 
     default {
         Write-Host "Invalid selection. Exiting..." -ForegroundColor Yellow
