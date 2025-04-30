@@ -9,7 +9,7 @@ Borealis-Server.exe
 
 # Pyinstaller Files
 /Data/Agent/Packaging_Data/
-/Data/Server/Packaging_Data/
+/Data/Server/Packaging_Server/
 
 # Development Folders
 /Server/

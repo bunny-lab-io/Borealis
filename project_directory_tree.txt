@@ -1,4 +1,6 @@
-﻿Folder Structure:
+﻿#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/project_directory_tree.txt
+
+Folder Structure:
 ├── Dependencies
 ├── Launch-Borealis.ps1
 ├── Launch-Borealis.sh

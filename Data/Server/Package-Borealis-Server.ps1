@@ -1,75 +1,88 @@
 #////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Server/Package-Borealis-Server.ps1
 
-# ------------------- CONFIGURATION -------------------
-$venvDir = "Pyinstaller_Virtual_Environment"
-$serverScript = "Server\Borealis\server.py"
-$outputName = "Borealis-Server"
-$distExePath = "dist\$outputName.exe"
-$buildDir = "Pyinstaller_Server_Build"
-$specFile = "$outputName.spec"
+# ------------- Configuration -------------
+# (all paths are made absolute via Join-Path and $scriptDir)
+$scriptDir        = Split-Path $MyInvocation.MyCommand.Definition -Parent
+$projectRoot      = Resolve-Path (Join-Path $scriptDir "..\..")        # go up two levels to <ProjectRoot>\Borealis
+$packagingDir     = Join-Path $scriptDir "Packaging_Server"
+$venvDir          = Join-Path $packagingDir "Pyinstaller_Virtual_Environment"
+$distDir          = Join-Path $packagingDir "dist"
+$buildDir         = Join-Path $packagingDir "build"
+$specPath         = $packagingDir
 
-$reactBuild = "Server\web-interface\build"
-$tesseractDir = "Server\Borealis\Python_API_Endpoints\Tesseract-OCR"
+$serverScript     = Join-Path $scriptDir "server.py"
+$outputName       = "Borealis-Server"
+$finalExeName     = "$outputName.exe"
+$requirementsPath = Join-Path $scriptDir "server-requirements.txt"
+$iconPath         = Join-Path $scriptDir "Borealis.ico"
 
-# ------------------- ENV SETUP -------------------
-Write-Host "`n[INFO] Preparing virtual environment and dependencies..." -ForegroundColor Cyan
+# Static assets to bundle:
+#   - the compiled React build under Server/web-interface/build
+$staticBuildSrc   = Join-Path $projectRoot "Server\web-interface\build"
+$staticBuildDst   = "web-interface/build"
+#   - Tesseract-OCR folder must be nested under 'Borealis/Python_API_Endpoints/Tesseract-OCR'
+$ocrSrc           = Join-Path $scriptDir "Python_API_Endpoints\Tesseract-OCR"
+$ocrDst           = "Borealis/Python_API_Endpoints/Tesseract-OCR"
+$soundsSrc        = Join-Path $scriptDir "Sounds"
+$soundsDst        = "Sounds"
 
-$activateScript = "$venvDir\Scripts\Activate.ps1"
+# Embedded Python shipped under Dependencies\Python\python.exe
+$embeddedPython   = Join-Path $projectRoot "Dependencies\Python\python.exe"
 
-if (-Not (Test-Path $activateScript)) {
+# ------------- Prepare packaging folder -------------
+if (-Not (Test-Path $packagingDir)) {
+    New-Item -ItemType Directory -Path $packagingDir | Out-Null
+}
+
+# 1) Create or upgrade virtual environment
+if (-Not (Test-Path (Join-Path $venvDir "Scripts\python.exe"))) {
     Write-Host "[SETUP] Creating virtual environment at $venvDir"
-    python -m venv $venvDir
+    & $embeddedPython -m venv --upgrade-deps $venvDir
 }
 
-# ------------------- ACTIVATE -------------------
-Write-Host "[INFO] Activating virtual environment..."
-. $activateScript
+# helper to invoke venv's python
+$venvPy = Join-Path $venvDir "Scripts\python.exe"
 
-# ------------------- INSTALL DEPENDENCIES -------------------
-Write-Host "[INFO] Installing project dependencies into virtual environment..."
-pip install --upgrade pip > $null
-pip install -r requirements.txt
+# 2) Bootstrap & upgrade pip
+Write-Host "[INFO] Bootstrapping pip"
+& $venvPy -m ensurepip --upgrade
+& $venvPy -m pip install --upgrade pip
 
-# ------------------- INSTALL PYINSTALLER -------------------
-Write-Host "[INFO] Installing PyInstaller..."
-pip install pyinstaller > $null
+# 3) Install server dependencies
+Write-Host "[INFO] Installing server dependencies"
+& $venvPy -m pip install -r $requirementsPath
+#    Ensure dnspython is available for Eventlet's greendns support
+& $venvPy -m pip install dnspython
 
-# Resolve PyInstaller path
-$pyInstallerPath = "$venvDir\Scripts\pyinstaller.exe"
+# 4) Install PyInstaller
+Write-Host "[INFO] Installing PyInstaller"
+& $venvPy -m pip install pyinstaller
 
-if (-Not (Test-Path $pyInstallerPath)) {
-    Write-Host "[ERROR] PyInstaller not found even after install. Aborting." -ForegroundColor Red
-    exit 1
-}
+# 5) Clean previous artifacts
+Write-Host "[INFO] Cleaning previous artifacts"
+Remove-Item -Recurse -Force $distDir, $buildDir, "$specPath\$outputName.spec" -ErrorAction SilentlyContinue
 
-# ------------------- CLEANUP OLD BUILD -------------------
-Write-Host "[INFO] Cleaning previous build artifacts..." -ForegroundColor Gray
-Remove-Item -Recurse -Force "dist", "build", $specFile -ErrorAction SilentlyContinue
+# 6) Run PyInstaller, bundling server code and assets
+#     Collect all Eventlet and DNS submodules to avoid missing dynamic imports
+Write-Host "[INFO] Running PyInstaller"
+& $venvPy -m PyInstaller `
+    --onefile `
+    --name $outputName `
+    --icon $iconPath `
+    --collect-submodules eventlet `
+    --collect-submodules dns `
+    --distpath $distDir `
+    --workpath $buildDir `
+    --specpath $specPath `
+    --add-data "$staticBuildSrc;$staticBuildDst" `
+    --add-data "$ocrSrc;$ocrDst" `
+    --add-data "$soundsSrc;$soundsDst" `
+    $serverScript
 
-# ------------------- BUILD PYINSTALLER CMD -------------------
-$reactStaticAssets = "$reactBuild;web-interface/build"
-$tesseractAssets = "$tesseractDir;Borealis/Python_API_Endpoints/Tesseract-OCR"
-
-$cmdArgs = @(
-    "--onefile",
-    "--noconfirm",
-    "--name", "$outputName",
-    "--add-data", "`"$reactStaticAssets`"",
-    "--add-data", "`"$tesseractAssets`"",
-    "--hidden-import=eventlet",
-    "--clean",
-    "`"$serverScript`""
-)
-
-$arguments = $cmdArgs -join " "
-
-Write-Host "`n[INFO] Running PyInstaller with Start-Process..." -ForegroundColor Yellow
-Start-Process -FilePath $pyInstallerPath -ArgumentList $arguments -Wait -NoNewWindow
-
-# ------------------- DONE -------------------
-if (Test-Path $distExePath) {
-    Write-Host "`n[SUCCESS] Packaging complete!"
-    Write-Host "         Output: $distExePath" -ForegroundColor Green
+# 7) Copy the final EXE back to Data/Server
+if (Test-Path (Join-Path $distDir $finalExeName)) {
+    Copy-Item (Join-Path $distDir $finalExeName) (Join-Path $scriptDir $finalExeName) -Force
+    Write-Host "[SUCCESS] Server packaged at $finalExeName"
 } else {
-    Write-Host "`n[FAILURE] Packaging failed." -ForegroundColor Red
+    Write-Host "[FAILURE] Packaging failed." -ForegroundColor Red
 }
