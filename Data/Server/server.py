@@ -27,7 +27,10 @@ socketio = SocketIO(
     app,
     cors_allowed_origins="*",
     async_mode="eventlet",
-    engineio_options={'max_http_buffer_size': 100_000_000}
+    engineio_options={
+        'max_http_buffer_size':       100_000_000,
+        'max_websocket_message_size': 100_000_000
+    }
 )
 
 @app.route("/")

@@ -2,6 +2,7 @@
 requests
 python-socketio
 websocket-client
+eventlet
 
 # GUI-related dependencies (Qt for GUI components)
 PyQt5
