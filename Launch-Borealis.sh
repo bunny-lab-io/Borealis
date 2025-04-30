@@ -1,13 +1,6 @@
 #////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Launch-Borealis.sh
 
 #!/usr/bin/env bash
-# --------------------------------------------------------------------
-# Deploy Borealis - Workflow Automation Tool
-#
-# Menu-driven launcher for:
-#   [1] Borealis Web Dashboard (Server)
-#   [2] Borealis Client Agent (Agent)
-# --------------------------------------------------------------------
 
 GREEN="\033[0;32m"
 YELLOW="\033[1;33m"
@@ -60,17 +53,18 @@ install_core_dependencies() {
 }
 
 launch_server() {
-    echo -e "${GREEN}Deploying Borealis - Workflow Automation Tool...${RESET}"
+    echo -e "${GREEN}Deploying Borealis - Server Dashboard...${RESET}"
     echo "===================================================================================="
 
     detect_distro
     run_step "Install System Dependencies" install_core_dependencies
 
-    venvFolder="Borealis-Workflow-Automation-Tool"
-    dataSource="Data"
+    venvFolder="Server"
+    dataSource="Data/Server"
     dataDestination="${venvFolder}/Borealis"
     customUIPath="${dataSource}/WebUI"
     webUIDestination="${venvFolder}/web-interface"
+    venvPython="${venvFolder}/bin/python3"
 
     run_step "Create Virtual Python Environment" bash -c "
         if [ ! -f '${venvFolder}/bin/activate' ]; then
@@ -78,77 +72,49 @@ launch_server() {
         fi
     "
 
-    run_step "Copy Borealis Server Data into Virtual Python Environment" bash -c "
-        if [ -d \"$dataSource\" ]; then
-            rm -rf \"$dataDestination\"
-            mkdir -p \"$dataDestination\"
-            cp -r \"$dataSource/\"* \"$dataDestination\"
-        else
-            echo -e \"\r${INFO} Warning: Data folder not found, skipping copy.${RESET}\"
-        fi
-        true
+    run_step "Copy Python Server Components" bash -c "
+        rm -rf '${dataDestination}' && mkdir -p '${dataDestination}'
+        cp -r '${dataSource}/Python_API_Endpoints' '${dataDestination}/'
+        cp -r '${dataSource}/Sounds' '${dataDestination}/'
+        cp -r '${dataSource}/Workflows' '${dataDestination}/'
+        cp '${dataSource}/server.py' '${dataDestination}/'
     "
 
-    run_step "Create a new ReactJS App in ${webUIDestination}" bash -c "
-        if [ ! -d \"$webUIDestination\" ]; then
-            CI=true npx create-react-app \"$webUIDestination\" --silent --use-npm --loglevel=error
+    run_step "Create ReactJS App if Missing" bash -c "
+        if [ ! -d '${webUIDestination}' ]; then
+            npx create-react-app '${webUIDestination}' --use-npm --silent
         fi
     "
 
-    run_step "Overwrite React App with Custom Files" bash -c "
-        if [ -d \"$customUIPath\" ]; then
-            cp -r \"$customUIPath/\"* \"$webUIDestination\"
-        else
-            echo -e \"\r${INFO} No custom UI found, using default React app.${RESET}\"
+    run_step "Overwrite WebUI with Custom Files" bash -c "
+        if [ -d '${customUIPath}' ]; then
+            cp -r '${customUIPath}/'* '${webUIDestination}/'
         fi
-        true
     "
 
-    run_step "Remove Existing React Build (if any)" bash -c "
-        if [ -d \"$webUIDestination/build\" ]; then
-            rm -rf \"$webUIDestination/build\"
-        fi
-        true
-    "
+    run_step "Clean Old React Builds" bash -c "rm -rf '${webUIDestination}/build'"
 
     source "${venvFolder}/bin/activate"
 
-    run_step "Install Python Dependencies into Virtual Python Environment" bash -c "
-        if [ -f \"requirements.txt\" ]; then
-            pip install -q -r requirements.txt
-        else
-            echo -e \"\r${INFO} No requirements.txt found, skipping Python packages.${RESET}\"
-        fi
-        true
+    run_step "Install Python Dependencies" bash -c "
+        pip install -q -r '${dataSource}/server-requirements.txt'
     "
 
-    run_step "Install React App Dependencies" bash -c "
-        if [ -f \"$webUIDestination/package.json\" ]; then
-            cd \"$webUIDestination\"
-            npm install --silent --no-fund --audit=false --loglevel=error
-            cd -
-        fi
-    "
-
-    run_step "Install React Flow and UI Libraries" bash -c "
-        cd \"$webUIDestination\"
-        npm install reactflow --silent --no-fund --audit=false --loglevel=error
-        npm install --silent @mui/material @mui/icons-material @emotion/react @emotion/styled --no-fund --audit=false --loglevel=error
+    run_step "Install React Dependencies" bash -c "
+        cd '${webUIDestination}'
+        npm install --silent --no-fund --audit=false
         cd -
     "
 
     run_step "Build React App" bash -c "
-        cd \"$webUIDestination\"
-        npm run build --silent --loglevel=error
+        cd '${webUIDestination}'
+        npm run build --silent
         cd -
     "
 
-    cd "${venvFolder}"
-    echo -e "\n${GREEN}Launching Borealis...${RESET}"
+    echo -e "\n${GREEN}Launching Borealis Flask Server...${RESET}"
     echo "===================================================================================="
-    echo -ne "${HOURGLASS} Starting Flask server... "
-    python3 Borealis/server.py
-    echo -e "\r${CHECKMARK} Borealis Launched Successfully!"
+    python3 "${dataDestination}/server.py"
 }
 
 launch_agent() {
@@ -160,8 +126,8 @@ launch_agent() {
 
     venvFolder="Agent"
     agentSourcePath="Data/Agent/borealis-agent.py"
-    agentRequirements="Data/Agent/requirements.txt"
-    agentDestinationFolder="${venvFolder}/Agent"
+    agentRequirements="Data/Agent/agent-requirements.txt"
+    agentDestinationFolder="${venvFolder}/Borealis"
     agentDestinationFile="${agentDestinationFolder}/borealis-agent.py"
 
     run_step "Create Virtual Python Environment for Agent" bash -c "
@@ -169,25 +135,15 @@ launch_agent() {
             python3 -m venv '${venvFolder}'
         fi
 
-        if [ -f '${agentSourcePath}' ]; then
-            rm -rf '${agentDestinationFolder}'
-            mkdir -p '${agentDestinationFolder}'
-            cp '${agentSourcePath}' '${agentDestinationFile}'
-        else
-            echo -e '\r${INFO} Warning: Agent script not found at ${agentSourcePath}, skipping copy.${RESET}'
-        fi
-        true
+        rm -rf '${agentDestinationFolder}'
+        mkdir -p '${agentDestinationFolder}'
+        cp '${agentSourcePath}' '${agentDestinationFile}'
     "
 
     source "${venvFolder}/bin/activate"
 
     run_step "Install Python Dependencies for Agent" bash -c "
-        if [ -f '${agentRequirements}' ]; then
-            pip install -q -r '${agentRequirements}'
-        else
-            echo -e '\r${INFO} Agent-specific requirements.txt not found at ${agentRequirements}, skipping Python packages.${RESET}'
-        fi
-        true
+        pip install -q -r '${agentRequirements}'
     "
 
     echo -e "\n${GREEN}Launching Borealis Agent...${RESET}"
