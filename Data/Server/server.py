@@ -1,7 +1,12 @@
 #////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/server.py
 
+import eventlet
+# Monkey-patch stdlib for cooperative sockets
+eventlet.monkey_patch()
+
 from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_socketio import SocketIO, emit
+
 import time
 import os
 import base64
@@ -17,14 +22,21 @@ if not os.path.exists(build_folder):
     print("WARNING: web-interface build folder not found. Please build your React app.")
 
 app = Flask(__name__, static_folder=build_folder, static_url_path="/")
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+# Use Eventlet, switch async mode, and raise HTTP buffer size to ~100 MB
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="eventlet",
+    engineio_options={'max_http_buffer_size': 100_000_000}
+)
 
 @app.route("/")
 def serve_index():
     index_path = os.path.join(build_folder, "index.html")
     if os.path.exists(index_path):
         return send_from_directory(build_folder, "index.html")
-    return "<h1>Borealis React App Code Not Found</h1><p>Please re-deploy Borealis Workflow Automation Tool</p>", 404
+    return ("<h1>Borealis React App Code Not Found</h1>"
+            "<p>Please re-deploy Borealis Workflow Automation Tool</p>"), 404
 
 @app.route("/<path:path>")
 def serve_react_app(path):
@@ -90,7 +102,6 @@ def provision_agent():
     socketio.emit("agent_config", config)
 
     return jsonify({"status": "provisioned", "roles": roles})
-
 
 
 # ----------------------------------------------
@@ -216,7 +227,6 @@ def on_disconnect():
 # Server Start
 # ---------------------------------------------
 if __name__ == "__main__":
-    import eventlet
     import eventlet.wsgi
-    socketio.run(app, host="0.0.0.0", port=5000, debug=False)
-
+    listener = eventlet.listen(('0.0.0.0', 5000))
+    eventlet.wsgi.server(listener, app)
