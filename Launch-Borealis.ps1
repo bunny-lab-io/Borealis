@@ -200,7 +200,7 @@ switch ($choice) {
         <#
             Step: Create Virtual Environment & Copy Agent Script
         #>
-        Run-Step "Create Virtual Python Environment for Agent" {
+        Run-Step "Create Virtual Python Environment" {
             if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
                 & $pythonExe -m venv $venvFolder
             }
@@ -215,7 +215,7 @@ switch ($choice) {
         <#
             Step: Install Agent Dependencies
         #>
-        Run-Step "Install Python Dependencies for Agent" {
+        Run-Step "Install Python Dependencies" {
             if (Test-Path $agentRequirements) {
                 & $venvPython -m pip install --disable-pip-version-check -q -r $agentRequirements | Out-Null
             }

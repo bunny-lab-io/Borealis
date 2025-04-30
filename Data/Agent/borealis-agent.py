@@ -28,7 +28,8 @@ running_roles = {}
 running_threads = {}
 
 # ---------------- Socket Setup ----------------
-sio = socketio.Client()
+# Enable automatic reconnection with retries in background
+sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=5)
 
 @sio.event
 def connect():
@@ -157,7 +158,7 @@ def run_screenshot_loop(node_id, cfg):
     interval = cfg.get("interval", 1000)
     visible = cfg.get("visible", True)
     x = cfg.get("x", 100)
-    y = cfg.get("y", 100)
+    y =	cfg.get("y", 100)
     w = cfg.get("w", 300)
     h = cfg.get("h", 200)
 
@@ -196,12 +197,16 @@ def run_screenshot_loop(node_id, cfg):
 if __name__ == "__main__":
     app_instance = QtWidgets.QApplication(sys.argv)
     retry_interval = 5  # seconds between connection attempts
-    while True:
-        try:
-            print(f"[WebSocket] Connecting to {SERVER_URL}...")
-            sio.connect(SERVER_URL, transports=["websocket"]())
-            break
-        except Exception as e:
-            print(f"[WebSocket] Borealis Server is Not Running - Retrying in {retry_interval} seconds...")
-            time.sleep(retry_interval)
+
+    def connect_loop():
+        while True:
+            try:
+                print(f"[WebSocket] Connecting to {SERVER_URL}...")
+                sio.connect(SERVER_URL, transports=["websocket"], wait=False)
+                break
+            except Exception:
+                print(f"[WebSocket] Borealis Server is Not Running - Retrying in {retry_interval} seconds...")
+                time.sleep(retry_interval)
+
+    threading.Thread(target=connect_loop, daemon=True).start()
     sys.exit(app_instance.exec_())
