@@ -1,0 +1,40 @@
+{
+    "name": "borealis",
+    "version": "0.1.0",
+    "description": "Borealis Desktop",
+    "author": "Nicole Rappe",
+    "main": "main.js",
+    "scripts": {
+      "dev": "electron .",
+      "dist": "electron-builder"
+    },
+    "dependencies": {
+      "electron": "26.0.0"
+    },
+    "devDependencies": {
+      "electron-builder": "26.0.12"
+    },
+    "build": {
+      "appId": "io.bunny-lab.borealis",
+      "directories": {
+        "buildResources": "assets",
+        "output": "dist_electron"
+      },
+      "files": [
+        "Server/**",
+        "renderer/**",
+        "main.js"
+      ],
+      "extraResources": [
+        {
+          "from": "Server/",
+          "to": "Server",
+          "filter": ["**/*"]
+        }
+      ],
+      "win": { "target": "nsis" },
+      "mac": { "target": "dmg" },
+      "linux": { "target": "AppImage" }
+    }
+  }
+  

@@ -3,11 +3,13 @@
 <#
     Deploy-Borealis.ps1
     ----------------------
-    This script deploys the Borealis Workflow Automation Tool with two modules:
+    This script deploys the Borealis Workflow Automation Tool with three modules:
       - Server (Web Dashboard)
       - Agent (Client / Data Collector)
+      - Desktop App (Electron)
 
-    It begins by presenting a menu to the user. Based on the selection (1 or 2), the corresponding module is launched.
+    It begins by presenting a menu to the user. Based on the selection (1, 2, or 3),
+    the corresponding module is launched or deployed.
 
     Usage:
       Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
@@ -18,9 +20,6 @@ Clear-Host
 
 <#
     Section: Progress Symbols & Helpers
-    ------------------------------------
-    Define symbols for UI feedback and helper functions to run steps with consistent
-    progress/status output and error handling.
 #>
 $symbols = @{
     Success = [char]0x2705
@@ -57,12 +56,6 @@ function Run-Step {
 }
 
 # ---------------------- Bundle Executables Setup ----------------------
-<#
-    Section: Locate Bundled Runtimes
-    --------------------------------
-    Identify the directory of this script, then ensure our bundled Python and NodeJS
-    executables are present. Add them to PATH for later use.
-#>
 $scriptDir  = Split-Path $MyInvocation.MyCommand.Path -Parent
 $depsRoot   = Join-Path $scriptDir 'Dependencies'
 $pythonExe  = Join-Path $depsRoot 'Python\python.exe'
@@ -80,20 +73,21 @@ foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
 $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), (Split-Path $nodeExe), $env:PATH
 
 # ---------------------- Menu Prompt & User Input ----------------------
-Write-Host "Deploying Borealis - Workflow Automation Tool..." -ForegroundColor Blue
+Write-Host "Borealis - Workflow Automation Tool" -ForegroundColor Blue
 Write-Host "===================================================================================="
-Write-Host "Please choose which module you want to launch / (re)deploy:"
+Write-Host "Please choose which function you want to launch / (re)deploy:"
 Write-Host "- Server (Web Dashboard) [1]"
 Write-Host "- Agent (Local/Remote Client) [2]"
+Write-Host "- Desktop App (Electron) ((Run Step 1 Beforehand)) [3]"
 
-$choice = Read-Host "Enter 1 or 2"
+$choice = Read-Host "Enter 1, 2, or 3"
 
 switch ($choice) {
 
     "1" {
-        # ---------------------- Server Deployment Setup ----------------------
+        # Server Deployment (Web Dashboard)
         Clear-Host
-        Write-Host "Deploying Borealis - Workflow Automation Tool..." -ForegroundColor Blue
+        Write-Host "Deploying Borealis - Web Dashboard..." -ForegroundColor Blue
         Write-Host "===================================================================================="
 
         $venvFolder       = "Server"
@@ -103,9 +97,7 @@ switch ($choice) {
         $webUIDestination = "$venvFolder\web-interface"
         $venvPython       = Join-Path $venvFolder 'Scripts\python.exe'
 
-        <#
-            Step: Create Virtual Environment & Copy Server Assets
-        #>
+        # Create Virtual Environment & Copy Server Assets
         Run-Step "Create Borealis Virtual Python Environment" {
             if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
                 & $pythonExe -m venv $venvFolder | Out-Null
@@ -128,19 +120,15 @@ switch ($choice) {
             . "$venvFolder\Scripts\Activate"
         }
 
-        <#
-            Step: Install Python Dependencies
-        #>
+        # Install Python Dependencies
         Run-Step "Install Python Dependencies into Virtual Python Environment" {
             if (Test-Path "$dataSource\Server\server-requirements.txt") {
                 & $venvPython -m pip install --disable-pip-version-check -q -r "$dataSource\Server\server-requirements.txt" | Out-Null
             }
         }
 
-        <#
-            Step: NPM Install
-        #>
-        Run-Step "ReactJS Web Frontend: Install Necessary NPM Packages" {
+        # NPM Install for WebUI
+        Run-Step "ReactJS Web Frontend: Install NPM Packages" {
             if (Test-Path "$webUIDestination\package.json") {
                 Push-Location $webUIDestination
                 $env:npm_config_loglevel = "silent"
@@ -149,24 +137,16 @@ switch ($choice) {
             }
         }
 
-        <#
-            Step: Build React App
-        #>
-        Run-Step "ReactJS Web Frontend: " {
+        # Build React App
+        Run-Step "ReactJS Web Frontend: Build" {
             Push-Location $webUIDestination
             & $npmCmd run build
             Pop-Location
         }
 
-        <#
-            Step: Launch Flask Server
-            --------------------------
-            Change into the Server folder so server.py’s relative paths to web-interface/build
-            resolve correctly, then invoke Python on the server script.
-        #>
+        # Launch Flask Server
         Run-Step "Borealis: Launch Flask Server" {
             Push-Location (Join-Path $scriptDir 'Server')
-
             $py        = Join-Path $scriptDir 'Server\Scripts\python.exe'
             $server_py = Join-Path $scriptDir 'Server\Borealis\server.py'
 
@@ -176,13 +156,12 @@ switch ($choice) {
             Write-Host "$($symbols.Running) Preloading OCR Engines... Please be patient..."
 
             & $py $server_py
-
             Pop-Location
         }
     }
 
     "2" {
-        # ---------------------- Agent Deployment Setup ----------------------
+        # Agent Deployment (Client / Data Collector)
         Clear-Host
         Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
         Write-Host "===================================================================================="
@@ -192,14 +171,8 @@ switch ($choice) {
         $agentRequirements      = "Data\Agent\agent-requirements.txt"
         $agentDestinationFolder = "$venvFolder\Borealis"
         $agentDestinationFile   = "$venvFolder\Borealis\borealis-agent.py"
+        $venvPython = Join-Path $scriptDir $venvFolder | Join-Path -ChildPath 'Scripts\python.exe'
 
-        # build the absolute path to python.exe inside the venv
-        $venvPython = Join-Path $scriptDir $venvFolder
-        $venvPython = Join-Path $venvPython 'Scripts\python.exe'
-
-        <#
-            Step: Create Virtual Environment & Copy Agent Script
-        #>
         Run-Step "Create Virtual Python Environment" {
             if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
                 & $pythonExe -m venv $venvFolder
@@ -212,21 +185,76 @@ switch ($choice) {
             . "$venvFolder\Scripts\Activate"
         }
 
-        <#
-            Step: Install Agent Dependencies
-        #>
         Run-Step "Install Python Dependencies" {
             if (Test-Path $agentRequirements) {
                 & $venvPython -m pip install --disable-pip-version-check -q -r $agentRequirements | Out-Null
             }
         }
 
-            Write-Host "`nLaunching Borealis Agent..." -ForegroundColor Blue
-            Write-Host "===================================================================================="
-            # call python with the absolute interpreter path and the absolute script path
-            $agentScript = Join-Path $scriptDir $agentDestinationFile
-            & $venvPython -W ignore::SyntaxWarning $agentScript
+        Write-Host "`nLaunching Borealis Agent..." -ForegroundColor Blue
+        Write-Host "===================================================================================="
+        & $venvPython -W ignore::SyntaxWarning $agentDestinationFile
+    }
+
+    "3" {
+        # Desktop App Deployment (Electron)
+        Clear-Host
+        Write-Host "Deploying Borealis Desktop App..." -ForegroundColor Cyan
+        Write-Host "===================================================================================="
+
+        $electronSource      = "Data\Electron"
+        $electronDestination = "ElectronApp"
+        $scriptDir           = Split-Path $MyInvocation.MyCommand.Path -Parent
+
+        # 1) Prepare ElectronApp folder
+        Run-Step "Prepare ElectronApp folder" {
+            if (Test-Path $electronDestination) {
+                Remove-Item $electronDestination -Recurse -Force
+            }
+            New-Item -Path $electronDestination -ItemType Directory | Out-Null
+
+            # Copy deployed Flask server
+            $deployedServer = Join-Path $scriptDir 'Server\Borealis'
+            if (-not (Test-Path $deployedServer)) {
+                throw "Server\Borealis not found - please run choice 1 first."
+            }
+            Copy-Item $deployedServer "$electronDestination\Server" -Recurse
+
+            # Copy Electron scaffold files
+            Copy-Item "$electronSource\package.json" "$electronDestination" -Force
+            Copy-Item "$electronSource\main.js"        "$electronDestination" -Force
+
+            # Copy CRA build into renderer
+            $staticBuild = Join-Path $scriptDir 'Server\web-interface\build'
+            if (-not (Test-Path $staticBuild)) {
+                throw "React build not found - run choice 1 to build WebUI first."
+            }
+            Copy-Item "$staticBuild\*" "$electronDestination\renderer" -Recurse -Force
         }
+
+        # 2) Install Electron & Builder
+        Run-Step "ElectronApp: Install Node dependencies" {
+            Push-Location $electronDestination
+            $env:NODE_ENV = ''
+            $env:npm_config_production = ''
+            & $npmCmd install --silent --no-fund --audit=false
+            Pop-Location
+        }
+
+        # 3) Package desktop app
+        Run-Step "ElectronApp: Package with electron-builder" {
+            Push-Location $electronDestination
+            & $npmCmd run dist
+            Pop-Location
+        }
+
+        # 4) Launch in dev mode
+        Run-Step "ElectronApp: Launch in dev mode" {
+            Push-Location $electronDestination
+            & $npmCmd run dev
+            Pop-Location
+        }
+    }
 
     default {
         Write-Host "Invalid selection. Exiting..." -ForegroundColor Yellow
