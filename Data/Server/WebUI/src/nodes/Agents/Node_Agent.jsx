@@ -104,7 +104,7 @@ const BorealisAgentNode = ({ id, data }) => {
                 >
                     <option value="">-- Select --</option>
                     {Object.entries(agents).map(([id, info]) => {
-                        const label = info.status === "provisioned" ? "(Provisioned)" : "(Idle)";
+                        const label = info.status === "provisioned" ? "(Provisioned)" : "(Not Provisioned)";
                         return (
                             <option key={id} value={id}>
                                 {id} {label}
@@ -123,16 +123,8 @@ const BorealisAgentNode = ({ id, data }) => {
                 <hr style={{ margin: "6px 0", borderColor: "#444" }} />
 
                 <div style={{ fontSize: "8px", color: "#aaa" }}>
-                    Connect <strong>Instruction Nodes</strong> below to define roles.
-                    Each instruction node will send back its results (like screenshots) and act as a separate data output.
-                </div>
-
-                <div style={{ fontSize: "8px", color: "#aaa", marginTop: "4px" }}>
-                    <strong>Supported Roles:</strong>
-                    <ul style={{ paddingLeft: "14px", marginTop: "2px", marginBottom: "0" }}>
-                        <li><code>screenshot</code>: Capture a region with interval and overlay</li>
-                        {/* Future roles will be listed here */}
-                    </ul>
+                    Connect <strong>Agent Role Nodes</strong> below to define roles for this agent.
+                    Each connected <strong>Agent Role Node</strong> will send back its collected data (like screenshots) through the role node itself and act as a separate data output.
                 </div>
             </div>
         </div>

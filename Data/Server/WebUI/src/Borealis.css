@@ -82,7 +82,7 @@
 input,
 select,
 button {
-    background-color: #2a2a2a;
+    background-color: #1d1d1d;
     color: #ccc;
     border: 1px solid #444;
     font-size: 12px;
@@ -91,7 +91,7 @@ button {
 /* Label / Dark Text styling */
 label {
     color: #aaa;
-    font-size: 10px;
+    font-size: 9px;
 }
 
 /* ======================================= */
