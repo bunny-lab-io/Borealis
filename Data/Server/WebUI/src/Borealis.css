@@ -94,6 +94,21 @@ label {
     font-size: 9px;
 }
 
+/* Node Header - Shows drag handle cursor */
+.borealis-node-header {
+    cursor: grab;
+}
+
+/* Optional: when actively dragging */
+.borealis-node-header:active {
+    cursor: grabbing;
+}
+
+/* Node Body - Just pointer, not draggable */
+.borealis-node-content {
+    cursor: default;
+}
+
 /* ======================================= */
 /* FLOW TABS                               */
 /* ======================================= */

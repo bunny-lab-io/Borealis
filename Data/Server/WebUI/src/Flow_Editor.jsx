@@ -65,7 +65,16 @@ export default function FlowEditor({
       const position = project({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
       const id = "node-" + Date.now();
       const nodeMeta = Object.values(categorizedNodes).flat().find((n) => n.type === type);
-      const newNode = { id, type, position, data: { label: nodeMeta?.label || type, content: nodeMeta?.content } };
+      const newNode = {
+        id,
+        type,
+        position,
+        data: {
+          label: nodeMeta?.label || type,
+          content: nodeMeta?.content
+        },
+        dragHandle: '.borealis-node-header'  // <-- Add this line
+      };      
       setNodes((nds) => [...nds, newNode]);
     },
     [project, setNodes, categorizedNodes]
