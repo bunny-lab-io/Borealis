@@ -133,10 +133,11 @@ switch ($choice) {
             Pop-Location
         }
 
-        # Build with Vite
-        Run-Step "Vite Web Frontend: Build" {
+        # ---------------------- Dev-mode Vite (HMR) ----------------------
+        Run-Step "Vite Web Frontend: Start Dev Server" {
             Push-Location $webUIDestination
-            & $npmCmd run build --silent
+            # Launch Vite in watch/HMR mode in a new process
+            Start-Process -NoNewWindow -FilePath $npmCmd -ArgumentList @("run", "dev")
             Pop-Location
         }
 

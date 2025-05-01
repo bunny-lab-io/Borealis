@@ -223,7 +223,7 @@ const AlertSoundNode = ({ id, data }) => {
 
             <div className="borealis-node-content">
                 <div style={{ marginBottom: "8px", fontSize: "9px", color: "#ccc" }}>
-                    Play a sound when input equals "1"
+                    Play a sound alert when input is "1"
                 </div>
 
                 <label style={{ fontSize: "9px", display: "block", marginBottom: "4px" }}>
