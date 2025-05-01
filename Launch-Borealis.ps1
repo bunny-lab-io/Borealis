@@ -18,6 +18,17 @@
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
 
+# ASCII Art Banner
+@'
+____                       _ _     
+| __ )  ___  _ __ ___  __ _| (_)___ 
+|  _ \ / _ \| '__/ _ \/ _` | | / __|
+| |_) | (_) | | |  __/ (_| | | \__ \
+|____/ \___/|_|  \___|\__,_|_|_|___/
+
+'@ | Write-Host
+
+
 $symbols = @{
     Success = [char]0x2705
     Running = [char]0x23F3
@@ -70,14 +81,15 @@ foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
 $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), (Split-Path $nodeExe), $env:PATH
 
 # ---------------------- Menu Prompt & User Input ----------------------
-Write-Host "Borealis - Workflow Automation Tool" -ForegroundColor Blue
+Write-Host "Workflow Automation Tool" -ForegroundColor Blue
 Write-Host "===================================================================================="
+Write-Host " "
 Write-Host "Please choose which function you want to launch / (re)deploy:"
 Write-Host "- Server (Web Dashboard) [1]"
 Write-Host "- Agent (Local/Remote Client) [2]"
-Write-Host "- Desktop App (Electron) ((Run Step 1 Beforehand)) [3]"
+#Write-Host "- Desktop App (Electron) ((Run Step 1 Beforehand)) [3]"
 
-$choice = Read-Host "Enter 1, 2, or 3"
+$choice = Read-Host "Enter 1 or 2"
 
 switch ($choice) {
 
