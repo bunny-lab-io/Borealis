@@ -1,9 +1,17 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Status_Bar.jsx
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Box, Button, Divider } from "@mui/material";
 
 export default function StatusBar() {
+  const [apiStatus, setApiStatus] = useState("checking");
+
+  useEffect(() => {
+    fetch("/health")
+      .then((res) => (res.ok ? setApiStatus("online") : setApiStatus("offline")))
+      .catch(() => setApiStatus("offline"));
+  }, []);
+
   const applyRate = () => {
     const val = parseInt(
       document.getElementById("updateRateInput")?.value
@@ -26,46 +34,60 @@ export default function StatusBar() {
         py: 1,
         display: "flex",
         alignItems: "center",
-        gap: 2
+        justifyContent: "space-between"
       }}
     >
-      <b>Nodes</b>: <span id="nodeCount">0</span>
-      <Divider
-        orientation="vertical"
-        flexItem
-        sx={{ borderColor: "#444" }}
-      />
-      <b>Update Rate (ms):</b>
-      <input
-        id="updateRateInput"
-        type="number"
-        min="50"
-        step="50"
-        defaultValue={window.BorealisUpdateRate}
-        style={{
-          width: "80px",
-          background: "#121212",
-          color: "#fff",
-          border: "1px solid #444",
-          borderRadius: "3px",
-          padding: "3px",
-          fontSize: "0.8rem"
-        }}
-      />
-      <Button
-        variant="outlined"
-        size="small"
-        onClick={applyRate}
-        sx={{
-          color: "#58a6ff",
-          borderColor: "#58a6ff",
-          fontSize: "0.75rem",
-          textTransform: "none",
-          px: 1.5
-        }}
-      >
-        Apply Rate
-      </Button>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+        <b>Nodes</b>: <span id="nodeCount">0</span>
+        <Divider orientation="vertical" flexItem sx={{ borderColor: "#444" }} />
+        <b>Update Rate (ms):</b>
+        <input
+          id="updateRateInput"
+          type="number"
+          min="50"
+          step="50"
+          defaultValue={window.BorealisUpdateRate}
+          style={{
+            width: "80px",
+            background: "#121212",
+            color: "#fff",
+            border: "1px solid #444",
+            borderRadius: "3px",
+            padding: "3px",
+            fontSize: "0.8rem"
+          }}
+        />
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={applyRate}
+          sx={{
+            color: "#58a6ff",
+            borderColor: "#58a6ff",
+            fontSize: "0.75rem",
+            textTransform: "none",
+            px: 1.5
+          }}
+        >
+          Apply Rate
+        </Button>
+      </Box>
+
+      <Box sx={{ fontSize: "1.0rem", display: "flex", alignItems: "center", gap: 1 }}>
+        <strong style={{ color: "#58a6ff" }}>API Server</strong>:
+        <a
+          href="http://localhost:5000/health"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            color: apiStatus === "online" ? "#00d18c" : "#ff4f4f",
+            textDecoration: "none",
+            fontWeight: "bold"
+          }}
+        >
+          {apiStatus === "checking" ? "..." : apiStatus.charAt(0).toUpperCase() + apiStatus.slice(1)}
+        </a>
+      </Box>
     </Box>
   );
 }
