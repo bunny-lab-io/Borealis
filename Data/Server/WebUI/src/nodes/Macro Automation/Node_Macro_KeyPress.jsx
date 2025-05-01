@@ -70,9 +70,10 @@ const KeyPressNode = ({ id, data }) => {
         <div
           style={{
             position: "absolute",
-            top: "12px",
-            right: "6px",
+            top: "50%",
+            right: "8px",
             width: "10px",
+            transform: "translateY(-50%)",
             height: "10px",
             borderRadius: "50%",
             backgroundColor: "#333",

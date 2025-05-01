@@ -1,7 +1,7 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Flow_Tabs.jsx
 
 import React from "react";
-import { Box, Tabs, Tab } from "@mui/material";
+import { Box, Tabs, Tab, Tooltip } from "@mui/material";
 import { Add as AddIcon } from "@mui/icons-material";
 
 /**
@@ -82,16 +82,18 @@ export default function FlowTabs({
           />
         ))}
         {/* The "plus" tab has a special value */}
-        <Tab
-          icon={<AddIcon />}
-          value="__addtab__"
-          sx={{
-            minHeight: "36px",
-            height: "36px",
-            color: "#58a6ff",
-            textTransform: "none"
-          }}
-        />
+        <Tooltip title="Create a New Concurrent Tab" arrow>
+          <Tab
+            icon={<AddIcon />}
+            value="__addtab__"
+            sx={{
+              minHeight: "36px",
+              height: "36px",
+              color: "#58a6ff",
+              textTransform: "none"
+            }}
+          />
+        </Tooltip>
       </Tabs>
     </Box>
   );

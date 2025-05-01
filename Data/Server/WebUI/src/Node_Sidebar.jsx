@@ -8,7 +8,8 @@ import {
   Button,
   Tooltip,
   Typography,
-  IconButton
+  IconButton,
+  Box
 } from "@mui/material";
 import {
   ExpandMore as ExpandMoreIcon,
@@ -71,15 +72,21 @@ export default function NodeSidebar({
                 </Typography>
               </AccordionSummary>
               <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-                <Button fullWidth startIcon={<SaveIcon />} onClick={handleExportFlow} sx={buttonStyle}>
-                  Export Current Flow
-                </Button>
-                <Button fullWidth startIcon={<FileOpenIcon />} onClick={handleImportFlow} sx={buttonStyle}>
-                  Import Flow
-                </Button>
-                <Button fullWidth startIcon={<DeleteForeverIcon />} onClick={handleOpenCloseAllDialog} sx={buttonStyle}>
-                  Close All Flows
-                </Button>
+                <Tooltip title="Export Current Tab to a JSON File" placement="right" arrow>
+                  <Button fullWidth startIcon={<SaveIcon />} onClick={handleExportFlow} sx={buttonStyle}>
+                    Export Current Flow
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Import JSON File into New Flow Tab" placement="right" arrow>
+                  <Button fullWidth startIcon={<FileOpenIcon />} onClick={handleImportFlow} sx={buttonStyle}>
+                    Import Flow
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Destroy all Flow Tabs Immediately" placement="right" arrow>
+                  <Button fullWidth startIcon={<DeleteForeverIcon />} onClick={handleOpenCloseAllDialog} sx={buttonStyle}>
+                    Close All Flows
+                  </Button>
+                </Tooltip>
               </AccordionDetails>
             </Accordion>
 
@@ -176,17 +183,30 @@ export default function NodeSidebar({
       </div>
 
       {/* Bottom toggle button */}
-      <div style={{ padding: "6px", borderTop: "1px solid #333", display: "flex", justifyContent: "center" }}>
-        <Tooltip title={collapsed ? "Expand Sidebar" : "Collapse Sidebar"} placement="right">
-          <IconButton
-            onClick={() => setCollapsed(!collapsed)}
-            size="small"
-            sx={{ color: "#888" }}
-          >
-            {collapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
-          </IconButton>
-        </Tooltip>
-      </div>
+      <Tooltip title={collapsed ? "Expand Sidebar" : "Collapse Sidebar"} placement="left">
+        <Box
+          onClick={() => setCollapsed(!collapsed)}
+          sx={{
+            height: "36px",
+            borderTop: "1px solid #333",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#888",
+            backgroundColor: "#121212",
+            transition: "background-color 0.2s ease",
+            "&:hover": {
+              backgroundColor: "#1e1e1e"
+            },
+            "&:active": {
+              backgroundColor: "#2a2a2a"
+            }
+          }}
+        >
+          {collapsed ? <ChevronLeftIcon /> : <ChevronRightIcon />}
+        </Box>
+      </Tooltip>
     </div>
   );
 }

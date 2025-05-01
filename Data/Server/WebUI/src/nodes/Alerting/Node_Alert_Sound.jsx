@@ -211,8 +211,9 @@ const AlertSoundNode = ({ id, data }) => {
                 {data?.label || "Alert Sound"}
                 <div style={{
                     position: "absolute",
-                    top: "12px", // Adjusted from 6px to 12px for better centering
-                    right: "6px",
+                    top: "50%",
+                    right: "8px",
+                    transform: "translateY(-50%)",
                     width: "10px",
                     height: "10px",
                     borderRadius: "50%",

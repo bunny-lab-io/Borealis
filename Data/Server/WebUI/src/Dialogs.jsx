@@ -33,10 +33,23 @@ export function CloseAllDialog({ open, onClose, onConfirm }) {
 export function CreditsDialog({ open, onClose }) {
   return (
     <Dialog open={open} onClose={onClose} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Borealis Workflow Automation Tool</DialogTitle>
-      <DialogContent>
+      <DialogContent sx={{ textAlign: "center", pt: 3 }}>
+        <img
+          src="/Borealis_Logo.png"
+          alt="Borealis Logo"
+          style={{ width: "120px", marginBottom: "12px" }}
+        />
+        <DialogTitle sx={{ p: 0, mb: 1 }}>Borealis Workflow Automation Tool</DialogTitle>
         <DialogContentText sx={{ color: "#ccc" }}>
-          Designed by Nicole Rappe @ Bunny Lab
+          Designed by Nicole Rappe @{" "}
+          <a
+            href="https://bunny-lab.io"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "#58a6ff", textDecoration: "none" }}
+          >
+            Bunny Lab
+          </a>
         </DialogContentText>
       </DialogContent>
       <DialogActions>

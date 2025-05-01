@@ -234,9 +234,7 @@ const numberInputStyle = {
 export default {
     type: "OCR_Text_Extraction",
     label: "OCR Text Extraction",
-    description: `
-Extract text from upstream image using backend OCR engine via API.
-Includes rate limiting and sensitivity detection for smart processing.`,
+    description: `Extract text from upstream image using backend OCR engine via API.  Includes rate limiting and sensitivity detection for smart processing.`,
     content: "Extract Multi-Line Text from Upstream Image Node",
     component: OCRNode
 };
