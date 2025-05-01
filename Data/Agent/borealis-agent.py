@@ -126,6 +126,18 @@ class RegionLauncher(QtCore.QObject):
         overlay_widgets[self.node_id] = widget
         widget.show()
 
+# ---------------- GUI Thread Helpers ----------------
+def gui_create_launcher(node_id, x, y, w, h):
+    launcher = RegionLauncher(node_id)
+    region_launchers[node_id] = launcher
+    launcher.handle(x, y, w, h)
+
+def gui_update_widget(node_id, x, y, w, h, visible):
+    widget = overlay_widgets.get(node_id)
+    if widget:
+        widget.setGeometry(x, y, w, h)
+        widget.setVisible(visible)
+
 # ---------------- Role Management ----------------
 def stop_all_roles():
     for node_id, thread in running_threads.items():
@@ -133,7 +145,6 @@ def stop_all_roles():
             print(f"[Role] Terminating previous task: {node_id}")
     running_roles.clear()
     running_threads.clear()
-
 
 def start_role_thread(role_cfg):
     role = role_cfg.get("role")
@@ -158,25 +169,21 @@ def run_screenshot_loop(node_id, cfg):
     interval = cfg.get("interval", 1000)
     visible = cfg.get("visible", True)
     x = cfg.get("x", 100)
-    y =	cfg.get("y", 100)
+    y = cfg.get("y", 100)
     w = cfg.get("w", 300)
     h = cfg.get("h", 200)
 
+    # Schedule launcher creation in GUI thread
     if node_id not in region_launchers:
-        launcher = RegionLauncher(node_id)
-        region_launchers[node_id] = launcher
-        QtCore.QTimer.singleShot(0, lambda: launcher.trigger.emit(x, y, w, h))
-
-    widget = overlay_widgets.get(node_id)
-    if widget:
-        widget.setGeometry(x, y, w, h)
-        widget.setVisible(visible)
+        QtCore.QTimer.singleShot(0, lambda nid=node_id, xx=x, yy=y, ww=w, hh=h: gui_create_launcher(nid, xx, yy, ww, hh))
 
     while True:
         try:
+            # Use current widget geometry if available (after user moves/resizes)
             if node_id in overlay_widgets:
                 widget = overlay_widgets[node_id]
                 x, y, w, h = widget.get_geometry()
+
             print(f"[Capture] Screenshot task {node_id} at ({x},{y},{w},{h})")
             img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
             buffer = BytesIO()
@@ -188,6 +195,12 @@ def run_screenshot_loop(node_id, cfg):
                 "node_id": node_id,
                 "image_base64": encoded
             })
+
+            # Schedule any visibility or geometry updates in GUI thread
+            QtCore.QTimer.singleShot(
+                0,
+                lambda nid=node_id, xx=x, yy=y, ww=w, hh=h, vis=visible: gui_update_widget(nid, xx, yy, ww, hh, vis)
+            )
         except Exception as e:
             print(f"[ERROR] Screenshot task {node_id} failed: {e}")
 

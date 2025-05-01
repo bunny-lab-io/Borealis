@@ -62,28 +62,28 @@ import React, {
     window.BorealisUpdateRate = 200;
   }
   
-  // Dynamically load all node components
-  const nodeContext = require.context("./nodes", true, /\.jsx$/);
+  // Dynamically load all node components via Vite
+  const modules = import.meta.glob('./nodes/**/*.jsx', { eager: true });
   const nodeTypes = {};
   const categorizedNodes = {};
-  
-  nodeContext.keys().forEach((path) => {
-    const mod = nodeContext(path);
-    if (!mod.default) return;
-    const { type, label, component } = mod.default;
+
+  Object.entries(modules).forEach(([path, mod]) => {
+    const comp = mod.default;
+    if (!comp) return;
+    const { type, component } = comp;
     if (!type || !component) return;
-  
-    const pathParts = path.replace("./", "").split("/");
-    if (pathParts.length < 2) return;
-    const category = pathParts[0];
-  
+
+    // derive category folder name from path: "./nodes/<Category>/File.jsx"
+    const parts = path.replace('./nodes/', '').split('/');
+    const category = parts[0];
+
     if (!categorizedNodes[category]) {
       categorizedNodes[category] = [];
     }
-    categorizedNodes[category].push(mod.default);
+    categorizedNodes[category].push(comp);
     nodeTypes[type] = component;
   });
-  
+
   const darkTheme = createTheme({
     palette: {
       mode: "dark",

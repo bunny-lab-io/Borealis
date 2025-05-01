@@ -3,21 +3,27 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "react-scripts build",
-    "start": "react-scripts start"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@mui/material": "7.0.2",
-    "@mui/icons-material": "7.0.2",
     "@emotion/react": "11.14.0",
     "@emotion/styled": "11.14.0",
-    "react-resizable": "3.0.5",
-    "react-color": "2.19.3",
-    "reactflow": "11.11.4",
-    "socket.io-client": "4.8.1",
-    "react-simple-keyboard": "3.8.62",
+    "@mui/icons-material": "7.0.2",
+    "@mui/material": "7.0.2",
     "normalize.css": "8.0.1",
-    "react-scripts": "5.0.1"
+    "react": "19.1.0",
+    "react-color": "2.19.3",
+    "react-dom": "19.1.0",
+    "react-resizable": "3.0.5",
+    "reactflow": "11.11.4",
+    "react-simple-keyboard": "3.8.62",
+    "socket.io-client": "4.8.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "vite": "^5.0.0"
   },
   "browserslist": {
     "production": [

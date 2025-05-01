@@ -18,9 +18,6 @@
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
 
-<#
-    Section: Progress Symbols & Helpers
-#>
 $symbols = @{
     Success = [char]0x2705
     Running = [char]0x23F3
@@ -38,7 +35,7 @@ function Write-ProgressStep {
 
 function Run-Step {
     param (
-        [string]    $Message,
+        [string]     $Message,
         [scriptblock]$Script
     )
     Write-ProgressStep -Message $Message -Status "$($symbols.Running)"
@@ -107,16 +104,8 @@ switch ($choice) {
                 New-Item -Path $dataDestination -ItemType Directory -Force | Out-Null
                 Copy-Item "$dataSource\Server\Python_API_Endpoints" $dataDestination -Recurse
                 Copy-Item "$dataSource\Server\Sounds"                 $dataDestination -Recurse
-                Copy-Item "$dataSource\Server\Workflows"              $dataDestination -Recurse
                 Copy-Item "$dataSource\Server\server.py"              $dataDestination
             }
-            if (-not (Test-Path $webUIDestination)) {
-                & $npxCmd --yes create-react-app $webUIDestination | Out-Null
-            }
-            if (Test-Path $customUIPath) {
-                Copy-Item "$customUIPath\*" $webUIDestination -Recurse -Force
-            }
-            Remove-Item "$webUIDestination\build" -Recurse -Force -ErrorAction SilentlyContinue
             . "$venvFolder\Scripts\Activate"
         }
 
@@ -127,20 +116,27 @@ switch ($choice) {
             }
         }
 
-        # NPM Install for WebUI
-        Run-Step "ReactJS Web Frontend: Install NPM Packages" {
-            if (Test-Path "$webUIDestination\package.json") {
-                Push-Location $webUIDestination
-                $env:npm_config_loglevel = "silent"
-                & $npmCmd install --silent --no-fund --audit=false | Out-Null
-                Pop-Location
+        # Copy Vite WebUI assets (no CRA)
+        Run-Step "Setup Vite WebUI assets" {
+            if (Test-Path $webUIDestination) {
+                Remove-Item $webUIDestination -Recurse -Force -ErrorAction SilentlyContinue
             }
+            New-Item -Path $webUIDestination -ItemType Directory -Force | Out-Null
+            Copy-Item "$customUIPath\*" $webUIDestination -Recurse -Force
         }
 
-        # Build React App
-        Run-Step "ReactJS Web Frontend: Build" {
+        # NPM Install for WebUI
+        Run-Step "Vite Web Frontend: Install NPM Packages" {
             Push-Location $webUIDestination
-            & $npmCmd run build
+            $env:npm_config_loglevel = "silent"
+            & $npmCmd install --silent --no-fund --audit=false | Out-Null
+            Pop-Location
+        }
+
+        # Build with Vite
+        Run-Step "Vite Web Frontend: Build" {
+            Push-Location $webUIDestination
+            & $npmCmd run build --silent
             Pop-Location
         }
 
@@ -165,7 +161,7 @@ switch ($choice) {
         Clear-Host
         Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
         Write-Host "===================================================================================="
-
+        
         $venvFolder             = "Agent"
         $agentSourcePath        = "Data\Agent\borealis-agent.py"
         $agentRequirements      = "Data\Agent\agent-requirements.txt"
@@ -201,7 +197,7 @@ switch ($choice) {
         Clear-Host
         Write-Host "Deploying Borealis Desktop App..." -ForegroundColor Cyan
         Write-Host "===================================================================================="
-
+        
         $electronSource      = "Data\Electron"
         $electronDestination = "ElectronApp"
         $scriptDir           = Split-Path $MyInvocation.MyCommand.Path -Parent
@@ -224,10 +220,10 @@ switch ($choice) {
             Copy-Item "$electronSource\package.json" "$electronDestination" -Force
             Copy-Item "$electronSource\main.js"        "$electronDestination" -Force
 
-            # Copy CRA build into renderer
+            # Copy built WebUI into renderer
             $staticBuild = Join-Path $scriptDir 'Server\web-interface\build'
             if (-not (Test-Path $staticBuild)) {
-                throw "React build not found - run choice 1 to build WebUI first."
+                throw "WebUI build not found - run choice 1 to build WebUI first."
             }
             Copy-Item "$staticBuild\*" "$electronDestination\renderer" -Recurse -Force
         }
