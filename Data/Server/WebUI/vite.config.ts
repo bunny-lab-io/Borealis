@@ -7,6 +7,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     open: true,
+    host: true, // <-- allows LAN access and shows LAN IP
     proxy: {
       '/api': 'http://localhost:5000',
       '/socket.io': {
