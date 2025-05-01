@@ -204,7 +204,7 @@ export default function NodeSidebar({
             }
           }}
         >
-          {collapsed ? <ChevronLeftIcon /> : <ChevronRightIcon />}
+          {collapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
         </Box>
       </Tooltip>
     </div>
