@@ -161,8 +161,7 @@ switch ($choice) {
 
             Write-Host "`nLaunching Borealis..." -ForegroundColor Green
             Write-Host "===================================================================================="
-            Write-Host "$($symbols.Running) Python Flask Server Started..."
-            Write-Host "$($symbols.Running) Preloading OCR Engines... Please be patient..."
+            Write-Host "$($symbols.Running) Python Flask API Server Started..."
 
             & $py $server_py
             Pop-Location
