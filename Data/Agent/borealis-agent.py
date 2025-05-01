@@ -9,12 +9,44 @@ import socketio
 from io import BytesIO
 import socket
 import os
+import json
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import ImageGrab
 
 # ---------------- Configuration ----------------
-SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:5000")
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "agent_settings.json")
+DEFAULT_SERVER_URL = "http://localhost:5000"
+
+def load_config():
+    """
+    Load agent_settings.json or prompt the user for SERVER_URL.
+    Returns a config dictionary with at least {"SERVER_URL": ...}
+    """
+    config = {}
+
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                config = json.load(f)
+                if isinstance(config, dict) and "SERVER_URL" in config:
+                    return config
+        except Exception as e:
+            print(f"[WARN] Failed to parse agent_settings.json: {e}")
+
+    try:
+        user_input = input(f"Enter Borealis Server URL [{DEFAULT_SERVER_URL}]: ").strip()
+        config["SERVER_URL"] = user_input if user_input else DEFAULT_SERVER_URL
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        print(f"[ERROR] Prompt failed: {e}")
+        config["SERVER_URL"] = DEFAULT_SERVER_URL
+
+    return config
+
+config = load_config()
+SERVER_URL = config["SERVER_URL"]
 
 HOSTNAME = socket.gethostname().lower()
 RANDOM_SUFFIX = uuid.uuid4().hex[:8]
