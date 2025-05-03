@@ -107,8 +107,10 @@ async def stop_all_roles():
     role_tasks.clear()
     for node_id, widget in overlay_widgets.items():
         print(f"[DEBUG] Closing overlay widget: {node_id}")
-        try: widget.close()
-        except Exception as e: print(f"[WARN] Error closing widget: {e}")
+        try:
+            widget.close()
+        except Exception as e:
+            print(f"[WARN] Error closing widget: {e}")
     overlay_widgets.clear()
 
 @sio.event
@@ -144,8 +146,10 @@ async def on_agent_config(cfg):
         CONFIG.data['regions'].pop(rid, None)
         w = overlay_widgets.pop(rid, None)
         if w:
-            try: w.close()
-            except: pass
+            try:
+                w.close()
+            except:
+                pass
     if removed:
         CONFIG._write()
 
@@ -161,111 +165,156 @@ async def on_agent_config(cfg):
             role_tasks[nid] = task
 
 # ---------------- Overlay Widget ----------------
+overlay_green_thickness = 4
+overlay_gray_thickness = 2
+handle_size = overlay_green_thickness * 2
+extra_top_padding = overlay_green_thickness * 2 + 4  # give space above the top-center green bar
+
 class ScreenshotRegion(QtWidgets.QWidget):
     def __init__(self, node_id, x=100, y=100, w=300, h=200, alias=None):
         super().__init__()
         self.node_id = node_id
         self.alias = alias
-        self.setGeometry(x, y, w, h)
+        self.setGeometry(x - handle_size, y - handle_size - extra_top_padding, w + handle_size*2, h + handle_size*2 + extra_top_padding)
         self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        self.resize_dir = None
         self.drag_offset = None
-        self.resizing = False
-        self.resize_handle_size = 12
-        self.setVisible(True)
-        self.label = QtWidgets.QLabel(self)
-        label_text = alias if alias else node_id[:8]
-        self.label.setText(label_text)
-        self.label.setStyleSheet("color: lime; background: transparent; font-size: 10px;")
-        self.label.move(8, 4)
+        self._start_geom = None
+        self._start_pos = None
         self.setMouseTracking(True)
 
     def paintEvent(self, event):
         p = QtGui.QPainter(self)
         p.setRenderHint(QtGui.QPainter.Antialiasing)
-        p.setBrush(QtCore.Qt.transparent)
-        p.setPen(QtGui.QPen(QtGui.QColor(0, 255, 0), 2))
-        p.drawRect(self.rect())
-        hr = self.resize_handle_size
-        hrect = QtCore.QRect(self.width() - hr, self.height() - hr, hr, hr)
-        p.fillRect(hrect, QtGui.QColor(0, 255, 0))
+        w = self.width()
+        h = self.height()
 
-    def mousePressEvent(self, e):
-        if e.button() == QtCore.Qt.LeftButton:
-            x, y = e.pos().x(), e.pos().y()
-            if x > self.width() - self.resize_handle_size and y > self.height() - self.resize_handle_size:
-                self.resizing = True
-            else:
-                self.drag_offset = e.globalPos() - self.frameGeometry().topLeft()
+        # draw gray capture box
+        p.setPen(QtGui.QPen(QtGui.QColor(60,60,60), overlay_gray_thickness))
+        p.drawRect(handle_size, handle_size + extra_top_padding, w-handle_size*2, h-handle_size*2 - extra_top_padding)
 
-    def mouseMoveEvent(self, e):
-        if self.resizing:
-            nw = max(e.pos().x(), 100)
-            nh = max(e.pos().y(), 80)
-            self.resize(nw, nh)
-        elif e.buttons() & QtCore.Qt.LeftButton and self.drag_offset:
-            self.move(e.globalPos() - self.drag_offset)
+        p.setPen(QtCore.Qt.NoPen)
+        p.setBrush(QtGui.QBrush(QtGui.QColor(0,255,0)))
+        edge = overlay_green_thickness*3
 
-    def mouseReleaseEvent(self, e):
-        self.resizing = False
-        self.drag_offset = None
-        x, y, w, h = self.get_geometry()
-        CONFIG.data['regions'][self.node_id] = {'x': x, 'y': y, 'w': w, 'h': h}
-        CONFIG._write()
-        asyncio.create_task(sio.emit('agent_screenshot_task', {
-            'agent_id': AGENT_ID,
-            'node_id': self.node_id,
-            'image_base64': "",
-            'x': x, 'y': y, 'w': w, 'h': h
-        }))
+        # corner handles
+        p.drawRect(0,extra_top_padding,edge,overlay_green_thickness)
+        p.drawRect(0,extra_top_padding,overlay_green_thickness,edge)
+        p.drawRect(w-edge,extra_top_padding,edge,overlay_green_thickness)
+        p.drawRect(w-overlay_green_thickness,extra_top_padding,overlay_green_thickness,edge)
+        p.drawRect(0,h-overlay_green_thickness,edge,overlay_green_thickness)
+        p.drawRect(0,h-edge,overlay_green_thickness,edge)
+        p.drawRect(w-edge,h-overlay_green_thickness,edge,overlay_green_thickness)
+        p.drawRect(w-overlay_green_thickness,h-edge,overlay_green_thickness,edge)
+
+        # side handles
+        long = overlay_green_thickness*6
+        p.drawRect((w-long)//2,extra_top_padding,long,overlay_green_thickness)
+        p.drawRect((w-long)//2,h-overlay_green_thickness,long,overlay_green_thickness)
+        p.drawRect(0,(h+extra_top_padding-long)//2,overlay_green_thickness,long)
+        p.drawRect(w-overlay_green_thickness,(h+extra_top_padding-long)//2,overlay_green_thickness,long)
+
+        # draw grabber bar (same size as top-center bar, but above it)
+        bar_width = overlay_green_thickness * 6
+        bar_height = overlay_green_thickness
+        bar_x = (w - bar_width) // 2
+        bar_y = 6  # 6–8 px down from top
+
+        p.setBrush(QtGui.QColor(0,191,255))  # Borealis Blue
+        p.drawRect(bar_x, bar_y - bar_height - 2, bar_width, bar_height)  # 2px padding above green bar
+
 
     def get_geometry(self):
         g = self.geometry()
-        return (g.x(), g.y(), g.width(), g.height())
+        return (g.x() + handle_size, g.y() + handle_size + extra_top_padding, g.width() - handle_size*2, g.height() - handle_size*2 - extra_top_padding)
+
+    def mousePressEvent(self,e):
+        if e.button()==QtCore.Qt.LeftButton:
+            pos=e.pos()
+            bar_width = overlay_green_thickness * 6
+            bar_height = overlay_green_thickness
+            bar_x = (self.width() - bar_width) // 2
+            bar_y = 2
+            bar_rect = QtCore.QRect(bar_x, bar_y, bar_width, bar_height)
+
+            if bar_rect.contains(pos):
+                self.drag_offset = e.globalPos() - self.frameGeometry().topLeft()
+                return
+
+            x1,y1,self_w,self_h = self.geometry().getRect()
+            m=handle_size
+            dirs = []
+            if pos.x()<=m: dirs.append('left')
+            if pos.x()>=self.width()-m: dirs.append('right')
+            if pos.y()<=m+extra_top_padding: dirs.append('top')
+            if pos.y()>=self.height()-m: dirs.append('bottom')
+            if dirs:
+                self.resize_dir = '_'.join(dirs)
+                self._start_geom = self.geometry()
+                self._start_pos = e.globalPos()
+            else:
+                self.drag_offset = e.globalPos()-self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self,e):
+        if self.resize_dir and self._start_geom and self._start_pos:
+            dx = e.globalX() - self._start_pos.x()
+            dy = e.globalY() - self._start_pos.y()
+            geom = QtCore.QRect(self._start_geom)
+            if 'left' in self.resize_dir:
+                new_x = geom.x() + dx
+                new_w = geom.width() - dx
+                geom.setX(new_x)
+                geom.setWidth(new_w)
+            if 'right' in self.resize_dir:
+                geom.setWidth(self._start_geom.width() + dx)
+            if 'top' in self.resize_dir:
+                new_y = geom.y() + dy
+                new_h = geom.height() - dy
+                geom.setY(new_y)
+                geom.setHeight(new_h)
+            if 'bottom' in self.resize_dir:
+                geom.setHeight(self._start_geom.height() + dy)
+            self.setGeometry(geom)
+        elif self.drag_offset and e.buttons() & QtCore.Qt.LeftButton:
+            self.move(e.globalPos()-self.drag_offset)
+
+    def mouseReleaseEvent(self,e):
+        self.drag_offset=None
+        self.resize_dir=None
+        self._start_geom=None
+        self._start_pos=None
+        x,y,w,h=self.get_geometry()
+        CONFIG.data['regions'][self.node_id]={'x':x,'y':y,'w':w,'h':h}
+        CONFIG._write()
+        asyncio.create_task(sio.emit('agent_screenshot_task',{ 'agent_id':AGENT_ID,'node_id':self.node_id,'image_base64':'','x':x,'y':y,'w':w,'h':h}))
 
 # ---------------- Screenshot Task ----------------
 async def screenshot_task(cfg):
-    nid = cfg.get('node_id')
-    alias = cfg.get('alias', '')
+    nid=cfg.get('node_id')
+    alias=cfg.get('alias','')
     print(f"[DEBUG] Running screenshot_task for {nid}")
-    r = CONFIG.data['regions'].get(nid)
+    r=CONFIG.data['regions'].get(nid)
     if r:
-        region = (r['x'], r['y'], r['w'], r['h'])
+        region=(r['x'],r['y'],r['w'],r['h'])
     else:
-        region = (cfg.get('x', 100), cfg.get('y', 100), cfg.get('w', 300), cfg.get('h', 200))
-        CONFIG.data['regions'][nid] = {'x': region[0], 'y': region[1], 'w': region[2], 'h': region[3]}
+        region=(cfg.get('x',100),cfg.get('y',100),cfg.get('w',300),cfg.get('h',200))
+        CONFIG.data['regions'][nid]={'x':region[0],'y':region[1],'w':region[2],'h':region[3]}
         CONFIG._write()
-
     if nid not in overlay_widgets:
-        widget = ScreenshotRegion(nid, *region, alias=alias)
-        overlay_widgets[nid] = widget
-        widget.show()
-
-    await sio.emit('agent_screenshot_task', {
-        'agent_id': AGENT_ID,
-        'node_id': nid,
-        'image_base64': "",
-        'x': region[0], 'y': region[1], 'w': region[2], 'h': region[3]
-    })
-
-    interval = cfg.get('interval', 1000) / 1000.0
-    loop = asyncio.get_event_loop()
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG.data.get('max_task_workers', 8))
-
+        widget=ScreenshotRegion(nid,*region,alias=alias)
+        overlay_widgets[nid]=widget; widget.show()
+    await sio.emit('agent_screenshot_task',{'agent_id':AGENT_ID,'node_id':nid,'image_base64':'','x':region[0],'y':region[1],'w':region[2],'h':region[3]})
+    interval=cfg.get('interval',1000)/1000.0
+    loop=asyncio.get_event_loop()
+    executor=concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG.data.get('max_task_workers',8))
     try:
         while True:
-            x, y, w, h = overlay_widgets[nid].get_geometry()
-            grab = partial(ImageGrab.grab, bbox=(x, y, x + w, y + h))
-            img = await loop.run_in_executor(executor, grab)
-            buf = BytesIO()
-            img.save(buf, format='PNG')
-            encoded = base64.b64encode(buf.getvalue()).decode('utf-8')
-            await sio.emit('agent_screenshot_task', {
-                'agent_id': AGENT_ID,
-                'node_id': nid,
-                'image_base64': encoded,
-                'x': x, 'y': y, 'w': w, 'h': h
-            })
+            x,y,w,h=overlay_widgets[nid].get_geometry()
+            grab=partial(ImageGrab.grab,bbox=(x,y,x+w,y+h))
+            img=await loop.run_in_executor(executor,grab)
+            buf=BytesIO(); img.save(buf,format='PNG'); encoded=base64.b64encode(buf.getvalue()).decode('utf-8')
+            await sio.emit('agent_screenshot_task',{'agent_id':AGENT_ID,'node_id':nid,'image_base64':encoded,'x':x,'y':y,'w':w,'h':h})
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
         print(f"[TASK] Screenshot role {nid} cancelled.")
@@ -277,28 +326,25 @@ async def screenshot_task(cfg):
 async def config_watcher():
     print("[DEBUG] Starting config watcher")
     while True:
-        CONFIG.watch()
-        await asyncio.sleep(CONFIG.data.get('config_file_watcher_interval', 2))
+        CONFIG.watch(); await asyncio.sleep(CONFIG.data.get('config_file_watcher_interval',2))
 
 # ---------------- Persistent Idle Task ----------------
 async def idle_task():
     print("[Agent] Entering idle state. Awaiting instructions...")
     try:
         while True:
-            await asyncio.sleep(60)
-            print("[DEBUG] Idle task still alive.")
+            await asyncio.sleep(60); print("[DEBUG] Idle task still alive.")
     except asyncio.CancelledError:
         print("[FATAL] Idle task was cancelled!")
     except Exception as e:
-        print(f"[FATAL] Idle task crashed: {e}")
-        traceback.print_exc()
+        print(f"[FATAL] Idle task crashed: {e}"); traceback.print_exc()
 
 # ---------------- Dummy Qt Widget to Prevent Exit ----------------
 class PersistentWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("KeepAlive")
-        self.setGeometry(-1000, -1000, 1, 1)
+        self.setGeometry(-1000,-1000,1,1)
         self.setAttribute(QtCore.Qt.WA_DontShowOnScreen)
         self.hide()
 
@@ -306,34 +352,27 @@ class PersistentWindow(QtWidgets.QWidget):
 # MAIN & EVENT LOOP
 # //////////////////////////////////////////////////////////////////////////
 async def connect_loop():
-    retry = 5
+    retry=5
     while True:
         try:
-            url = CONFIG.data.get('borealis_server_url', "http://localhost:5000")
+            url=CONFIG.data.get('borealis_server_url',"http://localhost:5000")
             print(f"[WebSocket] Connecting to {url}...")
-            await sio.connect(url, transports=['websocket'])
+            await sio.connect(url,transports=['websocket'])
             break
         except Exception as e:
             print(f"[WebSocket] Server unavailable: {e}. Retrying in {retry}s...")
             await asyncio.sleep(retry)
 
-if __name__ == '__main__':
-    print("[DEBUG] Starting QApplication and QEventLoop")
-    app = QtWidgets.QApplication(sys.argv)
-    loop = QEventLoop(app)
-    asyncio.set_event_loop(loop)
-
-    dummy_window = PersistentWindow()
-    dummy_window.show()
+if __name__=='__main__':
+    app=QtWidgets.QApplication(sys.argv)
+    loop=QEventLoop(app); asyncio.set_event_loop(loop)
+    dummy_window=PersistentWindow(); dummy_window.show()
     print("[DEBUG] Dummy window shown to prevent Qt exit")
-
     try:
-        with loop:
-            print("[DEBUG] Scheduling tasks into event loop")
-            background_tasks.append(loop.create_task(config_watcher()))
-            background_tasks.append(loop.create_task(connect_loop()))
-            background_tasks.append(loop.create_task(idle_task()))
-            loop.run_forever()
+        background_tasks.append(loop.create_task(config_watcher()))
+        background_tasks.append(loop.create_task(connect_loop()))
+        background_tasks.append(loop.create_task(idle_task()))
+        loop.run_forever()
     except Exception as e:
         print(f"[FATAL] Event loop crashed: {e}")
         traceback.print_exc()
