@@ -8,6 +8,12 @@ export default defineConfig({
   server: {
     open: true,
     host: true, // <-- allows LAN access and shows LAN IP
+    strictPort: true, // <-- Ensures that the port number never changes (Good for Reverse Proxies)
+    allowedHosts: [
+      'localhost',
+      '127.0.0.1',
+      'borealis.bunny-lab.io'
+    ],
     proxy: {
       '/api': 'http://localhost:5000',
       '/socket.io': {
