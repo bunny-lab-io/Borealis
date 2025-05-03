@@ -51,31 +51,34 @@ const ScreenshotInstructionNode = ({ id, data }) => {
     if (!socket) return;
 
     const handleScreenshot = (payload) => {
-      if (payload?.node_id !== id || !payload.image_base64) return;
+        if (payload?.node_id !== id) return;
 
-      base64Ref.current = payload.image_base64;
-      setImageBase64(payload.image_base64);
-      window.BorealisValueBus[id] = payload.image_base64;
+        // image update (optional)
+        if (payload.image_base64) {
+        base64Ref.current = payload.image_base64;
+        setImageBase64(payload.image_base64);
+        window.BorealisValueBus[id] = payload.image_base64;
+        }
 
-      // If geometry changed from agent side, sync into UI
-      const { x, y, w, h } = payload;
-      if (x !== undefined && y !== undefined && w !== undefined && h !== undefined) {
+        // geometry update
+        const { x, y, w, h } = payload;
+        if (x !== undefined && y !== undefined && w !== undefined && h !== undefined) {
         const newRegion = { x, y, w, h };
         const prev = regionRef.current;
         const changed = Object.entries(newRegion).some(([k, v]) => prev[k] !== v);
 
         if (changed) {
-          regionRef.current = newRegion;
-          setRegion(newRegion);
-          setNodes(nds =>
+            regionRef.current = newRegion;
+            setRegion(newRegion);
+            setNodes(nds =>
             nds.map(n =>
-              n.id === id ? { ...n, data: { ...n.data, ...newRegion } } : n
+                n.id === id ? { ...n, data: { ...n.data, ...newRegion } } : n
             )
-          );
+            );
         }
-      }
+        }
     };
-
+      
     socket.on("agent_screenshot_task", handleScreenshot);
     return () => socket.off("agent_screenshot_task", handleScreenshot);
   }, [id, setNodes]);

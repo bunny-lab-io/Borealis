@@ -209,11 +209,9 @@ class ScreenshotRegion(QtWidgets.QWidget):
     def mouseReleaseEvent(self, e):
         self.resizing = False
         self.drag_offset = None
-        # Persist geometry on release
         x, y, w, h = self.get_geometry()
         CONFIG.data['regions'][self.node_id] = {'x': x, 'y': y, 'w': w, 'h': h}
         CONFIG._write()
-        # Send geometry immediately upstream
         asyncio.create_task(sio.emit('agent_screenshot_task', {
             'agent_id': AGENT_ID,
             'node_id': self.node_id,

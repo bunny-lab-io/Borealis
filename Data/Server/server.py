@@ -154,22 +154,20 @@ def screenshot_node_viewer(agent_id, node_id):
 def receive_screenshot_task(data):
     agent_id = data.get("agent_id")
     node_id = data.get("node_id")
-    image = data.get("image_base64")
-
-    if not agent_id or not node_id or not image:
-        print("[WS] Screenshot task missing fields.")
+    image = data.get("image_base64", "")
+    
+    if not agent_id or not node_id:
+        print("[WS] Screenshot task missing agent_id or node_id.")
         return
 
-    latest_images[f"{agent_id}:{node_id}"] = {
-        "image_base64": image,
-        "timestamp": time.time()
-    }
+    if image:
+        latest_images[f"{agent_id}:{node_id}"] = {
+            "image_base64": image,
+            "timestamp": time.time()
+        }
 
-    emit("agent_screenshot_task", {
-        "agent_id": agent_id,
-        "node_id": node_id,
-        "image_base64": image
-    }, broadcast=True)
+    # Emit the full payload, including geometry (even if image is empty)
+    emit("agent_screenshot_task", data, broadcast=True)
 
 @socketio.on("connect_agent")
 def connect_agent(data):
