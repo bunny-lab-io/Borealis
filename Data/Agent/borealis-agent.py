@@ -21,9 +21,11 @@ from PIL import ImageGrab
 # //////////////////////////////////////////////////////////////////////////
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "agent_settings.json")
 DEFAULT_CONFIG = {
-    "SERVER_URL": "http://localhost:5000",
-    "max_workers": 8,
-    "config_watch_interval": 2
+    "borealis_server_url": "http://localhost:5000",
+    "max_task_workers": 8,
+    "config_file_watcher_interval": 2,
+    "agent_id": "",
+    "regions": {}
 }
 
 class ConfigManager:
@@ -34,16 +36,20 @@ class ConfigManager:
         self.load()
 
     def load(self):
+        # load or initialize
         if not os.path.exists(self.path):
             self.data = DEFAULT_CONFIG.copy()
             self._write()
         else:
             try:
                 with open(self.path, 'r') as f:
-                    self.data = json.load(f)
+                    loaded = json.load(f)
+                # merge defaults
+                self.data = {**DEFAULT_CONFIG, **loaded}
             except Exception as e:
                 print(f"[WARN] Failed to parse config: {e}")
                 self.data = DEFAULT_CONFIG.copy()
+        # track mtime
         try:
             self._last_mtime = os.path.getmtime(self.path)
         except Exception:
@@ -68,42 +74,81 @@ class ConfigManager:
         return False
 
 CONFIG = ConfigManager(CONFIG_PATH)
+# Purge saved regions on startup (fresh run)
+CONFIG.data['regions'] = {}
+CONFIG._write()
 # //////////////////////////////////////////////////////////////////////////
 # END CORE SECTION: CONFIG MANAGER
 # //////////////////////////////////////////////////////////////////////////
 
+# Assign or persist agent_id
+host = socket.gethostname().lower()
+stored_id = CONFIG.data.get('agent_id')
+if stored_id:
+    AGENT_ID = stored_id
+else:
+    AGENT_ID = f"{host}-agent-{uuid.uuid4().hex[:8]}"
+    CONFIG.data['agent_id'] = AGENT_ID
+    CONFIG._write()
+
 # //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: WEBSOCKET SETUP & HANDLERS (do not modify unless absolutely necessary)
 # //////////////////////////////////////////////////////////////////////////
-AGENT_ID = f"{socket.gethostname().lower()}-agent-{uuid.uuid4().hex[:8]}"
 
 sio = socketio.AsyncClient(reconnection=True, reconnection_attempts=0, reconnection_delay=5)
 role_tasks = {}
+overlay_widgets = {}
 
 @sio.event
 async def connect():
-    print(f"[WebSocket] Agent ID: {AGENT_ID} connected to Borealis.")
+    print(f"[WebSocket] Connected to Agent ID: {AGENT_ID}.")
     await sio.emit('connect_agent', {"agent_id": AGENT_ID})
     await sio.emit('request_config', {"agent_id": AGENT_ID})
 
 @sio.event
 async def disconnect():
-    print("[WebSocket] Lost connection to Borealis server.")
-
-@sio.on('agent_config')
-async def on_agent_config(cfg):
-    print("[PROVISIONED] Received new configuration from Borealis.")
-    # cancel existing role tasks
+    print("[WebSocket] Disconnected from Borealis server.")
+    # reset tasks and overlays
     for task in list(role_tasks.values()):
         task.cancel()
     role_tasks.clear()
-    # start new tasks
+    for widget in list(overlay_widgets.values()):
+        try: widget.close()
+        except: pass
+    overlay_widgets.clear()
+    # purge regions on intentional disconnect
+    CONFIG.data['regions'].clear()
+    CONFIG._write()
+    # reload settings
+    CONFIG.load()
+
+@sio.on('agent_config')
+async def on_agent_config(cfg):
+    print(f"[CONNECTED] Received config with {len(cfg.get('roles',[]))} roles.")
+    # determine removed roles
+    new_ids = {r.get('node_id') for r in cfg.get('roles', []) if r.get('node_id')}
+    old_ids = set(role_tasks.keys())
+    removed = old_ids - new_ids
+    for rid in removed:
+        # remove region config
+        if rid in CONFIG.data['regions']:
+            CONFIG.data['regions'].pop(rid, None)
+        # close overlay
+        w = overlay_widgets.pop(rid, None)
+        if w:
+            try: w.close()
+            except: pass
+    if removed:
+        CONFIG._write()
+    # cancel existing and start new
+    for task in list(role_tasks.values()):
+        task.cancel()
+    role_tasks.clear()
     for role_cfg in cfg.get('roles', []):
-        role = role_cfg.get('role')
-        node_id = role_cfg.get('node_id')
-        if role == 'screenshot' and node_id:
-            task = asyncio.create_task(screenshot_task(role_cfg))
-            role_tasks[node_id] = task
+        if role_cfg.get('role') == 'screenshot':
+            nid = role_cfg.get('node_id')
+            t = asyncio.create_task(screenshot_task(role_cfg))
+            role_tasks[nid] = t
 # //////////////////////////////////////////////////////////////////////////
 # END CORE SECTION: WEBSOCKET SETUP & HANDLERS
 # //////////////////////////////////////////////////////////////////////////
@@ -114,123 +159,103 @@ class ScreenshotRegion(QtWidgets.QWidget):
         super().__init__()
         self.node_id = node_id
         self.setGeometry(x, y, w, h)
-        self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(QtCore.Qt.FramelessWindowHint|QtCore.Qt.WindowStaysOnTopHint)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.drag_offset = None
         self.resizing = False
         self.resize_handle_size = 12
         self.setVisible(True)
-
         self.label = QtWidgets.QLabel(self)
         self.label.setText(f"{node_id[:8]}")
         self.label.setStyleSheet("color: lime; background: transparent; font-size: 10px;")
-        self.label.move(8, 4)
+        self.label.move(8,4)
         self.setMouseTracking(True)
 
     def paintEvent(self, event):
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        painter.setBrush(QtCore.Qt.transparent)
-        painter.setPen(QtGui.QPen(QtGui.QColor(0, 255, 0), 2))
-        painter.drawRect(self.rect())
-        handle = QtCore.QRect(self.width() - self.resize_handle_size,
-                              self.height() - self.resize_handle_size,
-                              self.resize_handle_size, self.resize_handle_size)
-        painter.fillRect(handle, QtGui.QColor(0, 255, 0))
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        p.setBrush(QtCore.Qt.transparent)
+        p.setPen(QtGui.QPen(QtGui.QColor(0,255,0),2))
+        p.drawRect(self.rect())
+        hr = self.resize_handle_size
+        hrect = QtCore.QRect(self.width()-hr, self.height()-hr, hr, hr)
+        p.fillRect(hrect, QtGui.QColor(0,255,0))
 
-    def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
-            px, py = event.pos().x(), event.pos().y()
-            if px > self.width() - self.resize_handle_size and \
-               py > self.height() - self.resize_handle_size:
-                self.resizing = True
+    def mousePressEvent(self, e):
+        if e.button()==QtCore.Qt.LeftButton:
+            x,y = e.pos().x(), e.pos().y()
+            if x>self.width()-self.resize_handle_size and y>self.height()-self.resize_handle_size:
+                self.resizing=True
             else:
-                self.drag_offset = event.globalPos() - self.frameGeometry().topLeft()
+                self.drag_offset = e.globalPos() - self.frameGeometry().topLeft()
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, e):
         if self.resizing:
-            nw = max(event.pos().x(), 100)
-            nh = max(event.pos().y(), 80)
-            self.resize(nw, nh)
-        elif event.buttons() & QtCore.Qt.LeftButton and self.drag_offset:
-            self.move(event.globalPos() - self.drag_offset)
+            nw = max(e.pos().x(),100)
+            nh = max(e.pos().y(),80)
+            self.resize(nw,nh)
+        elif e.buttons()&QtCore.Qt.LeftButton and self.drag_offset:
+            self.move(e.globalPos()-self.drag_offset)
 
-    def mouseReleaseEvent(self, event):
-        self.resizing = False
-        self.drag_offset = None
+    def mouseReleaseEvent(self,e):
+        self.resizing=False; self.drag_offset=None
 
     def get_geometry(self):
-        geo = self.geometry()
-        return geo.x(), geo.y(), geo.width(), geo.height()
-
-# ---------------- Helper Functions ----------------
-app = None
-overlay_widgets = {}
-
-def create_overlay(node_id, region):
-    if node_id in overlay_widgets:
-        return
-    x, y, w, h = region
-    widget = ScreenshotRegion(node_id, x, y, w, h)
-    overlay_widgets[node_id] = widget
-    widget.show()
-
-def get_overlay_geometry(node_id):
-    widget = overlay_widgets.get(node_id)
-    if widget:
-        return widget.get_geometry()
-    return (0, 0, 0, 0)
+        g=self.geometry(); return (g.x(),g.y(),g.width(),g.height())
 
 # ---------------- Screenshot Task ----------------
 async def screenshot_task(cfg):
-    interval = cfg.get('interval', 1000) / 1000.0
-    node_id = cfg.get('node_id')
-    region = (cfg.get('x', 100), cfg.get('y', 100), cfg.get('w', 300), cfg.get('h', 200))
-    create_overlay(node_id, region)
+    nid = cfg.get('node_id');
+    # initial region from config or payload
+    r = CONFIG.data['regions'].get(nid)
+    region = (r['x'],r['y'],r['w'],r['h']) if r else (cfg.get('x',100),cfg.get('y',100),cfg.get('w',300),cfg.get('h',200))
+    if nid not in overlay_widgets:
+        widget = ScreenshotRegion(nid,*region)
+        overlay_widgets[nid] = widget; widget.show()
+    interval = cfg.get('interval',1000)/1000.0
     loop = asyncio.get_event_loop()
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG.data.get('max_workers', 8))
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG.data.get('max_task_workers',DEFAULT_CONFIG['max_task_workers']))
     try:
         while True:
-            x, y, w, h = get_overlay_geometry(node_id)
-            grab = partial(ImageGrab.grab, bbox=(x, y, x + w, y + h))
-            img = await loop.run_in_executor(executor, grab)
-            buf = BytesIO()
-            img.save(buf, format='PNG')
+            x,y,w,h = overlay_widgets[nid].get_geometry()
+            # persist if changed
+            prev = CONFIG.data['regions'].get(nid)
+            if prev!={'x':x,'y':y,'w':w,'h':h}:
+                CONFIG.data['regions'][nid]={'x':x,'y':y,'w':w,'h':h}
+                CONFIG._write()
+            grab = partial(ImageGrab.grab,bbox=(x,y,x+w,y+h))
+            img = await loop.run_in_executor(executor,grab)
+            buf = BytesIO(); img.save(buf,format='PNG')
             encoded = base64.b64encode(buf.getvalue()).decode('utf-8')
-            await sio.emit('agent_screenshot_task', {
-                'agent_id': AGENT_ID,
-                'node_id': node_id,
-                'image_base64': encoded
-            })
+            await sio.emit('agent_screenshot_task',{'agent_id':AGENT_ID,'node_id':nid,'image_base64':encoded})
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
         return
     except Exception as e:
-        print(f"[ERROR] Screenshot task {node_id} failed: {e}")
+        print(f"[ERROR] Screenshot task {nid} failed: {e}")
 
 # ---------------- Config Watcher ----------------
 async def config_watcher():
     while True:
-        if CONFIG.watch():
-            # settings updated, e.g., executor pool size will apply on next task run
-            pass
-        await asyncio.sleep(CONFIG.data.get('config_watch_interval', 2))
+        if CONFIG.watch(): pass
+        await asyncio.sleep(CONFIG.data.get('config_file_watcher_interval',DEFAULT_CONFIG['config_file_watcher_interval']))
 
 # //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: MAIN & EVENT LOOP (do not modify unless you know what you’re doing)
 # //////////////////////////////////////////////////////////////////////////
 async def connect_loop():
-    retry = 5
+    retry=5
     while True:
         try:
-            print(f"[WebSocket] Connecting to {CONFIG.data['SERVER_URL']}...")
-            await sio.connect(CONFIG.data['SERVER_URL'], transports=['websocket'])
+            url=CONFIG.data.get('borealis_server_url',DEFAULT_CONFIG['borealis_server_url'])
+            print(f"[WebSocket] Connecting to {url}...")
+            await sio.connect(url,transports=['websocket'])
             break
-        except Exception:
-            print(f"[WebSocket] Server not available, retrying in {retry}s...")
+        except:
+            print(f"[WebSocket] Server unavailable, retrying in {retry}s...")
             await asyncio.sleep(retry)
 
-if __name__ == '__main__':
+if __name__=='__main__':
     app = QtWidgets.QApplication(sys.argv)
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)

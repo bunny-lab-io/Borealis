@@ -1,146 +1,171 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Agent/Node_Agent.jsx
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 
 const BorealisAgentNode = ({ id, data }) => {
-    const { getNodes, getEdges, setNodes } = useReactFlow();
-    const [agents, setAgents] = useState([]);
-    const [selectedAgent, setSelectedAgent] = useState(data.agent_id || "");
+  const { getNodes, setNodes } = useReactFlow();
+  const edges = useStore((state) => state.edges);
+  const [agents, setAgents] = useState({});
+  const [selectedAgent, setSelectedAgent] = useState(data.agent_id || "");
+  const [isConnected, setIsConnected] = useState(false);
 
-    // -------------------------------
-    // Load agent list from backend
-    // -------------------------------
-    useEffect(() => {
-        fetch("/api/agents")
-            .then(res => res.json())
-            .then(setAgents);
+  // Build a normalized list [{id, status}, ...]
+  const agentList = useMemo(() => {
+    if (Array.isArray(agents)) {
+      return agents.map((a) => ({ id: a.id, status: a.status }));
+    } else if (agents && typeof agents === "object") {
+      return Object.entries(agents).map(([aid, info]) => ({ id: aid, status: info.status }));
+    }
+    return [];
+  }, [agents]);
 
-        const interval = setInterval(() => {
-            fetch("/api/agents")
-                .then(res => res.json())
-                .then(setAgents);
-        }, 5000);
-
-        return () => clearInterval(interval);
-    }, []);
-
-    // -------------------------------
-    // Helper: Get all provisioner role nodes connected to bottom port
-    // -------------------------------
-    const getAttachedProvisioners = () => {
-        const allNodes = getNodes();
-        const allEdges = getEdges();
-        const attached = [];
-
-        for (const edge of allEdges) {
-            if (edge.source === id && edge.sourceHandle === "provisioner") {
-                const roleNode = allNodes.find(n => n.id === edge.target);
-                if (roleNode && typeof window.__BorealisInstructionNodes?.[roleNode.id] === "function") {
-                    attached.push(window.__BorealisInstructionNodes[roleNode.id]());
-                }
-            }
-        }
-
-        return attached;
+  // Fetch agents from backend
+  useEffect(() => {
+    const fetchAgents = () => {
+      fetch("/api/agents")
+        .then((res) => res.json())
+        .then(setAgents)
+        .catch(() => {});
     };
+    fetchAgents();
+    const interval = setInterval(fetchAgents, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
-    // -------------------------------
-    // Provision Agent with all Roles
-    // -------------------------------
-    const handleProvision = () => {
-        if (!selectedAgent) return;
-
-        const provisionRoles = getAttachedProvisioners();
-        if (!provisionRoles.length) {
-            console.warn("No provisioner nodes connected to agent.");
-            return;
-        }
-
-        const configPayload = {
-            agent_id: selectedAgent,
-            roles: provisionRoles
-        };
-
-        fetch("/api/agent/provision", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(configPayload)
-        })
-            .then(res => res.json())
-            .then(() => {
-                console.log(`[Provision] Agent ${selectedAgent} updated with ${provisionRoles.length} roles.`);
-            });
-    };
-
-    return (
-        <div className="borealis-node">
-            {/* This bottom port is used for bi-directional provisioning & feedback */}
-            <Handle
-                type="source"
-                position={Position.Bottom}
-                id="provisioner"
-                className="borealis-handle"
-                style={{ top: "100%", background: "#58a6ff" }}
-            />
-
-            <div className="borealis-node-header">Borealis Agent</div>
-            <div className="borealis-node-content" style={{ fontSize: "9px" }}>
-                <label>Agent:</label>
-                <select
-                    value={selectedAgent}
-                    onChange={(e) => {
-                        const newId = e.target.value;
-                        setSelectedAgent(newId);
-                        setNodes(nds =>
-                            nds.map(n =>
-                                n.id === id
-                                    ? { ...n, data: { ...n.data, agent_id: newId } }
-                                    : n
-                            )
-                        );
-                    }}
-                    style={{ width: "100%", marginBottom: "6px", fontSize: "9px" }}
-                >
-                    <option value="">-- Select --</option>
-                    {Object.entries(agents).map(([id, info]) => {
-                        const label = info.status === "provisioned" ? "(Provisioned)" : "(Not Provisioned)";
-                        return (
-                            <option key={id} value={id}>
-                                {id} {label}
-                            </option>
-                        );
-                    })}
-                </select>
-
-                <button
-                    onClick={handleProvision}
-                    style={{ width: "100%", fontSize: "9px", padding: "4px", marginTop: "4px" }}
-                >
-                    Provision Agent
-                </button>
-
-                <hr style={{ margin: "6px 0", borderColor: "#444" }} />
-
-                <div style={{ fontSize: "8px", color: "#aaa" }}>
-                    Connect <strong>Agent Role Nodes</strong> below to define roles for this agent.
-                    Each connected <strong>Agent Role Node</strong> will send back its collected data (like screenshots) through the role node itself and act as a separate data output.
-                </div>
-            </div>
-        </div>
+  // Persist selectedAgent and reset connection on change
+  useEffect(() => {
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === id ? { ...n, data: { ...n.data, agent_id: selectedAgent } } : n
+      )
     );
+    setIsConnected(false);
+  }, [selectedAgent]);
+
+  // Compute attached role node IDs for this agent node
+  const attachedRoleIds = useMemo(
+    () =>
+      edges
+        .filter((e) => e.source === id && e.sourceHandle === "provisioner")
+        .map((e) => e.target),
+    [edges, id]
+  );
+
+  // Build role payloads using the instruction registry
+  const getAttachedRoles = useCallback(() => {
+    const allNodes = getNodes();
+    return attachedRoleIds
+      .map((nid) => {
+        const fn = window.__BorealisInstructionNodes?.[nid];
+        return typeof fn === "function" ? fn() : null;
+      })
+      .filter((r) => r);
+  }, [attachedRoleIds, getNodes]);
+
+  // Connect: send roles to server
+  const handleConnect = useCallback(() => {
+    if (!selectedAgent) return;
+    const roles = getAttachedRoles();
+    fetch("/api/agent/provision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: selectedAgent, roles }),
+    })
+      .then(() => setIsConnected(true))
+      .catch(() => {});
+  }, [selectedAgent, getAttachedRoles]);
+
+  // Disconnect: clear roles on server
+  const handleDisconnect = useCallback(() => {
+    if (!selectedAgent) return;
+    fetch("/api/agent/provision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: selectedAgent, roles: [] }),
+    })
+      .then(() => setIsConnected(false))
+      .catch(() => {});
+  }, [selectedAgent]);
+
+  // Hot-update roles when attachedRoleIds change
+  useEffect(() => {
+    if (isConnected) {
+      const roles = getAttachedRoles();
+      fetch("/api/agent/provision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: selectedAgent, roles }),
+      }).catch(() => {});
+    }
+  }, [attachedRoleIds]);
+
+  return (
+    <div className="borealis-node">
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="provisioner"
+        className="borealis-handle"
+        style={{ top: "100%", background: "#58a6ff" }}
+      />
+
+      <div className="borealis-node-header">Borealis Agent</div>
+      <div className="borealis-node-content" style={{ fontSize: "9px" }}>
+        <label>Agent:</label>
+        <select
+          value={selectedAgent}
+          onChange={(e) => setSelectedAgent(e.target.value)}
+          style={{ width: "100%", marginBottom: "6px", fontSize: "9px" }}
+        >
+          <option value="">-- Select --</option>
+          {agentList.map(({ id: aid, status }) => {
+            const labelText = status === "provisioned" ? "(Connected)" : "(Ready to Connect)";
+            return (
+              <option key={aid} value={aid}>
+                {aid} {labelText}
+              </option>
+            );
+          })}
+        </select>
+
+        {isConnected ? (
+          <button
+            onClick={handleDisconnect}
+            style={{ width: "100%", fontSize: "9px", padding: "4px", marginTop: "4px" }}
+          >
+            Disconnect from Agent
+          </button>
+        ) : (
+          <button
+            onClick={handleConnect}
+            style={{ width: "100%", fontSize: "9px", padding: "4px", marginTop: "4px" }}
+            disabled={!selectedAgent}
+          >
+            Connect to Agent
+          </button>
+        )}
+
+        <hr style={{ margin: "6px 0", borderColor: "#444" }} />
+
+        <div style={{ fontSize: "8px", color: "#aaa" }}>
+          Attach <strong>Agent Role Nodes</strong> to define roles for this agent. Roles will be provisioned automatically.
+        </div>
+      </div>
+    </div>
+  );
 };
 
 export default {
-    type: "Borealis_Agent",
-    label: "Borealis Agent",
-    description: `
+  type: "Borealis_Agent",
+  label: "Borealis Agent",
+  description: `
 Main Agent Node
 
 - Selects an available agent
-- Connect role nodes below to assign tasks to the agent
-- Roles include screenshots, keyboard macros, etc.
+- Connect/disconnects via button
+- Auto-updates roles when attached roles change
 `.trim(),
-    content: "Select and provision a Borealis Agent with task roles",
-    component: BorealisAgentNode
+  content: "Select and manage an Agent with dynamic roles",
+  component: BorealisAgentNode,
 };
