@@ -11,26 +11,17 @@ const RegexReplaceNode = ({ id, data }) => {
 
     const [pattern, setPattern] = useState(data?.pattern || "");
     const [replacement, setReplacement] = useState(data?.replacement || "");
+    const [flags, setFlags] = useState(data?.flags || "g");
+    const [enabled, setEnabled] = useState(data?.enabled ?? true);
     const [result, setResult] = useState("");
+    const [original, setOriginal] = useState("");
 
     const valueRef = useRef("");
 
-    const handlePatternChange = (e) => {
-        const val = e.target.value;
-        setPattern(val);
-        setNodes((nds) =>
-            nds.map((n) =>
-                n.id === id ? { ...n, data: { ...n.data, pattern: val } } : n
-            )
-        );
-    };
-
-    const handleReplacementChange = (e) => {
-        const val = e.target.value;
-        setReplacement(val);
-        setNodes((nds) =>
-            nds.map((n) =>
-                n.id === id ? { ...n, data: { ...n.data, replacement: val } } : n
+    const updateNodeData = (key, val) => {
+        setNodes(nds =>
+            nds.map(n =>
+                n.id === id ? { ...n, data: { ...n.data, [key]: val } } : n
             )
         );
     };
@@ -44,11 +35,23 @@ const RegexReplaceNode = ({ id, data }) => {
             const inputValue = inputEdge
                 ? window.BorealisValueBus[inputEdge.source] || ""
                 : "";
+
+            setOriginal(inputValue);
+
             let newVal = inputValue;
 
             try {
-                const regex = new RegExp(pattern, 'g');
-                newVal = inputValue.replace(regex, replacement);
+                if (enabled && pattern) {
+                    const regex = new RegExp(pattern, flags);
+                    let safeReplacement = replacement.trim();
+                    if (
+                        safeReplacement.startsWith('"') &&
+                        safeReplacement.endsWith('"')
+                    ) {
+                        safeReplacement = safeReplacement.slice(1, -1);
+                    }
+                    newVal = inputValue.replace(regex, safeReplacement);
+                }
             } catch (err) {
                 newVal = `[Error] ${err.message}`;
             }
@@ -60,18 +63,14 @@ const RegexReplaceNode = ({ id, data }) => {
             }
         };
 
-        const startInterval = () => {
-            intervalId = setInterval(runNodeLogic, currentRate);
-        };
-
-        startInterval();
+        intervalId = setInterval(runNodeLogic, currentRate);
 
         const monitor = setInterval(() => {
             const newRate = window.BorealisUpdateRate;
             if (newRate !== currentRate) {
                 clearInterval(intervalId);
+                intervalId = setInterval(runNodeLogic, newRate);
                 currentRate = newRate;
-                startInterval();
             }
         }, 300);
 
@@ -79,7 +78,7 @@ const RegexReplaceNode = ({ id, data }) => {
             clearInterval(intervalId);
             clearInterval(monitor);
         };
-    }, [id, edges, pattern, replacement]);
+    }, [id, edges, pattern, replacement, flags, enabled]);
 
     return (
         <div className="borealis-node">
@@ -92,64 +91,71 @@ const RegexReplaceNode = ({ id, data }) => {
                     Perform regex replacement on upstream string
                 </div>
 
-                <label style={{ display: "block", marginBottom: "2px" }}>
-                    Regular Expression:
-                </label>
+                <label>Regex Pattern:</label>
                 <input
                     type="text"
                     value={pattern}
-                    onChange={handlePatternChange}
-                    placeholder="e.g. \\d+"
-                    style={{
-                        width: "100%",
-                        fontSize: "9px",
-                        background: "#1e1e1e",
-                        color: "#ccc",
-                        border: "1px solid #444",
-                        borderRadius: "2px",
-                        padding: "3px",
-                        marginBottom: "6px"
+                    onChange={(e) => {
+                        setPattern(e.target.value);
+                        updateNodeData("pattern", e.target.value);
                     }}
+                    placeholder="e.g. \\d+"
+                    style={inputStyle}
                 />
 
-                <label style={{ display: "block", marginBottom: "2px" }}>
-                    Replacement:
-                </label>
+                <label>Replacement:</label>
                 <input
                     type="text"
                     value={replacement}
-                    onChange={handleReplacementChange}
-                    placeholder="e.g. '#'
-                    "
-                    style={{
-                        width: "100%",
-                        fontSize: "9px",
-                        background: "#1e1e1e",
-                        color: "#ccc",
-                        border: "1px solid #444",
-                        borderRadius: "2px",
-                        padding: "3px",
-                        marginBottom: "6px"
+                    onChange={(e) => {
+                        setReplacement(e.target.value);
+                        updateNodeData("replacement", e.target.value);
                     }}
+                    placeholder="e.g. $1"
+                    style={inputStyle}
                 />
 
-                <label style={{ display: "block", marginBottom: "2px" }}>
-                    Output:
-                </label>
+                <label>Regex Flags:</label>
+                <input
+                    type="text"
+                    value={flags}
+                    onChange={(e) => {
+                        setFlags(e.target.value);
+                        updateNodeData("flags", e.target.value);
+                    }}
+                    placeholder="e.g. gi"
+                    style={inputStyle}
+                />
+
+                <div style={{ margin: "6px 0" }}>
+                    <label>
+                        <input
+                            type="checkbox"
+                            checked={enabled}
+                            onChange={(e) => {
+                                setEnabled(e.target.checked);
+                                updateNodeData("enabled", e.target.checked);
+                            }}
+                            style={{ marginRight: "6px" }}
+                        />
+                        Enable Replacement
+                    </label>
+                </div>
+
+                <label>Original Input:</label>
+                <textarea
+                    readOnly
+                    value={original}
+                    rows={2}
+                    style={textAreaStyle}
+                />
+
+                <label>Output:</label>
                 <textarea
                     readOnly
                     value={result}
-                    rows={3}
-                    style={{
-                        width: "100%",
-                        fontSize: "9px",
-                        background: "#2a2a2a",
-                        color: "#ccc",
-                        border: "1px solid #444",
-                        borderRadius: "2px",
-                        padding: "3px",
-                        resize: "vertical"
-                    }}
+                    rows={2}
+                    style={textAreaStyle}
                 />
             </div>
 
@@ -158,15 +164,37 @@ const RegexReplaceNode = ({ id, data }) => {
     );
 };
 
+const inputStyle = {
+    width: "100%",
+    fontSize: "9px",
+    background: "#1e1e1e",
+    color: "#ccc",
+    border: "1px solid #444",
+    borderRadius: "2px",
+    padding: "3px",
+    marginBottom: "6px"
+};
+
+const textAreaStyle = {
+    width: "100%",
+    fontSize: "9px",
+    background: "#2a2a2a",
+    color: "#ccc",
+    border: "1px solid #444",
+    borderRadius: "2px",
+    padding: "3px",
+    resize: "vertical",
+    marginBottom: "6px"
+};
+
 export default {
     type: "RegexReplace",
     label: "Regex Replacer",
     description: `
-Perform a user-specified regular expression replacement on an input string.
-
-- User enters a regex pattern
-- User enters a replacement string
-- Outputs the transformed string to downstream nodes
+Enhanced Regex Replacer:
+- Add regex flags (g, i, m, etc)
+- Live preview of input vs output
+- Optional enable toggle for replacement logic
 `.trim(),
     content: "Perform regex replacement on upstream string",
     component: RegexReplaceNode
