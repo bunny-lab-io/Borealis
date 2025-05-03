@@ -22,19 +22,39 @@ const OCRNode = ({ id, data }) => {
     const { setNodes } = useReactFlow();
 
     const [ocrOutput, setOcrOutput] = useState("");
-    const [engine, setEngine] = useState("None");
-    const [backend, setBackend] = useState("CPU");
-    const [dataType, setDataType] = useState("Mixed");
-
-    const [customRateEnabled, setCustomRateEnabled] = useState(true);
-    const [customRateMs, setCustomRateMs] = useState(1000);
-
-    const [changeThreshold, setChangeThreshold] = useState(0);
+    const [engine, setEngine] = useState(data?.engine || "None");
+    const [backend, setBackend] = useState(data?.backend || "CPU");
+    const [dataType, setDataType] = useState(data?.dataType || "Mixed");
+    const [customRateEnabled, setCustomRateEnabled] = useState(data?.customRateEnabled ?? true);
+    const [customRateMs, setCustomRateMs] = useState(data?.customRateMs || 1000);
+    const [changeThreshold, setChangeThreshold] = useState(data?.changeThreshold || 0);
 
     const valueRef = useRef("");
     const lastUsed = useRef({ engine: "", backend: "", dataType: "" });
     const lastProcessedAt = useRef(0);
     const lastImageHash = useRef(0);
+
+    // Sync updated settings back into node.data for persistence
+    useEffect(() => {
+        setNodes((nodes) =>
+            nodes.map((n) =>
+                n.id === id
+                    ? {
+                          ...n,
+                          data: {
+                              ...n.data,
+                              engine,
+                              backend,
+                              dataType,
+                              customRateEnabled,
+                              customRateMs,
+                              changeThreshold
+                          }
+                      }
+                    : n
+            )
+        );
+    }, [engine, backend, dataType, customRateEnabled, customRateMs, changeThreshold]);
 
     const sendToOCRAPI = async (base64) => {
         const cleanBase64 = base64.replace(/^data:image\/[a-zA-Z]+;base64,/, "");
@@ -91,7 +111,6 @@ const OCRNode = ({ id, data }) => {
 
             const imageChanged = hashDelta > hashThreshold;
 
-            // Only reprocess if config changed, or image changed AND time passed
             if (!configChanged && (!imageChanged || (now - lastProcessedAt.current < effectiveRate))) return;
 
             lastUsed.current = { engine, backend, dataType };
