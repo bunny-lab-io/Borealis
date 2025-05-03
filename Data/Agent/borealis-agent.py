@@ -1,5 +1,4 @@
 #////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Agent/borealis-agent.py
-
 import sys
 import uuid
 import socket
@@ -163,9 +162,10 @@ async def on_agent_config(cfg):
 
 # ---------------- Overlay Widget ----------------
 class ScreenshotRegion(QtWidgets.QWidget):
-    def __init__(self, node_id, x=100, y=100, w=300, h=200):
+    def __init__(self, node_id, x=100, y=100, w=300, h=200, alias=None):
         super().__init__()
         self.node_id = node_id
+        self.alias = alias
         self.setGeometry(x, y, w, h)
         self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
@@ -174,7 +174,8 @@ class ScreenshotRegion(QtWidgets.QWidget):
         self.resize_handle_size = 12
         self.setVisible(True)
         self.label = QtWidgets.QLabel(self)
-        self.label.setText(f"{node_id[:8]}")
+        label_text = alias if alias else node_id[:8]
+        self.label.setText(label_text)
         self.label.setStyleSheet("color: lime; background: transparent; font-size: 10px;")
         self.label.move(8, 4)
         self.setMouseTracking(True)
@@ -208,6 +209,17 @@ class ScreenshotRegion(QtWidgets.QWidget):
     def mouseReleaseEvent(self, e):
         self.resizing = False
         self.drag_offset = None
+        # Persist geometry on release
+        x, y, w, h = self.get_geometry()
+        CONFIG.data['regions'][self.node_id] = {'x': x, 'y': y, 'w': w, 'h': h}
+        CONFIG._write()
+        # Send geometry immediately upstream
+        asyncio.create_task(sio.emit('agent_screenshot_task', {
+            'agent_id': AGENT_ID,
+            'node_id': self.node_id,
+            'image_base64': "",
+            'x': x, 'y': y, 'w': w, 'h': h
+        }))
 
     def get_geometry(self):
         g = self.geometry()
@@ -216,6 +228,7 @@ class ScreenshotRegion(QtWidgets.QWidget):
 # ---------------- Screenshot Task ----------------
 async def screenshot_task(cfg):
     nid = cfg.get('node_id')
+    alias = cfg.get('alias', '')
     print(f"[DEBUG] Running screenshot_task for {nid}")
     r = CONFIG.data['regions'].get(nid)
     if r:
@@ -226,7 +239,7 @@ async def screenshot_task(cfg):
         CONFIG._write()
 
     if nid not in overlay_widgets:
-        widget = ScreenshotRegion(nid, *region)
+        widget = ScreenshotRegion(nid, *region, alias=alias)
         overlay_widgets[nid] = widget
         widget.show()
 
@@ -244,10 +257,6 @@ async def screenshot_task(cfg):
     try:
         while True:
             x, y, w, h = overlay_widgets[nid].get_geometry()
-            new_geom = {'x': x, 'y': y, 'w': w, 'h': h}
-            if CONFIG.data['regions'].get(nid) != new_geom:
-                CONFIG.data['regions'][nid] = new_geom
-                CONFIG._write()
             grab = partial(ImageGrab.grab, bbox=(x, y, x + w, y + h))
             img = await loop.run_in_executor(executor, grab)
             buf = BytesIO()
@@ -316,7 +325,6 @@ if __name__ == '__main__':
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
 
-    # Dummy window to keep PyQt event loop alive
     dummy_window = PersistentWindow()
     dummy_window.show()
     print("[DEBUG] Dummy window shown to prevent Qt exit")

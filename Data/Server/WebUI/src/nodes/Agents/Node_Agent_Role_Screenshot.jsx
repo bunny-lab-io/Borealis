@@ -1,5 +1,3 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Agent/Node_Agent_Role_Screenshot.jsx
-
 import React, { useEffect, useRef, useState } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 import ShareIcon from "@mui/icons-material/Share";
