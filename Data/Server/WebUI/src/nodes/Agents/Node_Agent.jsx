@@ -1,6 +1,6 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Agent/Node_Agent.jsx
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 
 const BorealisAgentNode = ({ id, data }) => {
@@ -9,18 +9,20 @@ const BorealisAgentNode = ({ id, data }) => {
   const [agents, setAgents] = useState({});
   const [selectedAgent, setSelectedAgent] = useState(data.agent_id || "");
   const [isConnected, setIsConnected] = useState(false);
+  const prevRolesRef = useRef([]);
 
-  // Build a normalized list [{id, status}, ...]
   const agentList = useMemo(() => {
-    if (Array.isArray(agents)) {
-      return agents.map((a) => ({ id: a.id, status: a.status }));
-    } else if (agents && typeof agents === "object") {
-      return Object.entries(agents).map(([aid, info]) => ({ id: aid, status: info.status }));
-    }
-    return [];
+    if (!agents || typeof agents !== "object") return [];
+    return Object.entries(agents)
+      .map(([aid, info]) => ({
+        id: aid,
+        status: info?.status || "offline",
+        last_seen: info?.last_seen || 0
+      }))
+      .filter(({ status }) => status !== "offline")
+      .sort((a, b) => b.last_seen - a.last_seen);
   }, [agents]);
 
-  // Fetch agents from backend
   useEffect(() => {
     const fetchAgents = () => {
       fetch("/api/agents")
@@ -29,11 +31,10 @@ const BorealisAgentNode = ({ id, data }) => {
         .catch(() => {});
     };
     fetchAgents();
-    const interval = setInterval(fetchAgents, 5000);
+    const interval = setInterval(fetchAgents, 4000);
     return () => clearInterval(interval);
   }, []);
 
-  // Persist selectedAgent and reset connection on change
   useEffect(() => {
     setNodes((nds) =>
       nds.map((n) =>
@@ -43,7 +44,6 @@ const BorealisAgentNode = ({ id, data }) => {
     setIsConnected(false);
   }, [selectedAgent]);
 
-  // Compute attached role node IDs for this agent node
   const attachedRoleIds = useMemo(
     () =>
       edges
@@ -52,7 +52,6 @@ const BorealisAgentNode = ({ id, data }) => {
     [edges, id]
   );
 
-  // Build role payloads using the instruction registry
   const getAttachedRoles = useCallback(() => {
     const allNodes = getNodes();
     return attachedRoleIds
@@ -63,42 +62,54 @@ const BorealisAgentNode = ({ id, data }) => {
       .filter((r) => r);
   }, [attachedRoleIds, getNodes]);
 
-  // Connect: send roles to server
-  const handleConnect = useCallback(() => {
-    if (!selectedAgent) return;
-    const roles = getAttachedRoles();
+  const provisionRoles = useCallback((roles) => {
+    if (!selectedAgent || roles.length === 0) return;
     fetch("/api/agent/provision", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent_id: selectedAgent, roles }),
+      body: JSON.stringify({ agent_id: selectedAgent, roles })
     })
-      .then(() => setIsConnected(true))
+      .then(() => {
+        setIsConnected(true);
+        prevRolesRef.current = roles;
+      })
       .catch(() => {});
-  }, [selectedAgent, getAttachedRoles]);
+  }, [selectedAgent]);
 
-  // Disconnect: clear roles on server
+  const handleConnect = useCallback(() => {
+    const roles = getAttachedRoles();
+    provisionRoles(roles);
+  }, [getAttachedRoles, provisionRoles]);
+
   const handleDisconnect = useCallback(() => {
     if (!selectedAgent) return;
     fetch("/api/agent/provision", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent_id: selectedAgent, roles: [] }),
+      body: JSON.stringify({ agent_id: selectedAgent, roles: [] })
     })
-      .then(() => setIsConnected(false))
+      .then(() => {
+        setIsConnected(false);
+        prevRolesRef.current = [];
+      })
       .catch(() => {});
   }, [selectedAgent]);
 
-  // Hot-update roles when attachedRoleIds change
   useEffect(() => {
-    if (isConnected) {
-      const roles = getAttachedRoles();
-      fetch("/api/agent/provision", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: selectedAgent, roles }),
-      }).catch(() => {});
+    const newRoles = getAttachedRoles();
+    const prevSerialized = JSON.stringify(prevRolesRef.current || []);
+    const newSerialized = JSON.stringify(newRoles);
+    if (isConnected && newSerialized !== prevSerialized) {
+      provisionRoles(newRoles);
     }
-  }, [attachedRoleIds]);
+  }, [attachedRoleIds, isConnected]);
+
+  const selectedAgentStatus = useMemo(() => {
+    if (!selectedAgent) return "Unassigned";
+    const agent = agents[selectedAgent];
+    if (!agent) return "Reconnecting...";
+    return agent.status === "provisioned" ? "Connected" : "Available";
+  }, [agents, selectedAgent]);
 
   return (
     <div className="borealis-node">
@@ -119,14 +130,11 @@ const BorealisAgentNode = ({ id, data }) => {
           style={{ width: "100%", marginBottom: "6px", fontSize: "9px" }}
         >
           <option value="">-- Select --</option>
-          {agentList.map(({ id: aid, status }) => {
-            const labelText = status === "provisioned" ? "(Connected)" : "(Ready to Connect)";
-            return (
-              <option key={aid} value={aid}>
-                {aid} {labelText}
-              </option>
-            );
-          })}
+          {agentList.map(({ id: aid, status }) => (
+            <option key={aid} value={aid}>
+              {aid} ({status})
+            </option>
+          ))}
         </select>
 
         {isConnected ? (
@@ -149,7 +157,9 @@ const BorealisAgentNode = ({ id, data }) => {
         <hr style={{ margin: "6px 0", borderColor: "#444" }} />
 
         <div style={{ fontSize: "8px", color: "#aaa" }}>
-          Attach <strong>Agent Role Nodes</strong> to define roles for this agent. Roles will be provisioned automatically.
+          Status: <strong>{selectedAgentStatus}</strong>
+          <br />
+          Attach <strong>Agent Role Nodes</strong> to define live behavior.
         </div>
       </div>
     </div>
