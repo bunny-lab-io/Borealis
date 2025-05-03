@@ -74,7 +74,7 @@ export default function StatusBar() {
       </Box>
 
       <Box sx={{ fontSize: "1.0rem", display: "flex", alignItems: "center", gap: 1 }}>
-        <strong style={{ color: "#58a6ff" }}>API Server</strong>:
+        <strong style={{ color: "#58a6ff" }}>Backend API Server</strong>:
         <a
           href="http://localhost:5000/health"
           target="_blank"

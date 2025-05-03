@@ -11,6 +11,7 @@ const BorealisAgentNode = ({ id, data }) => {
   const [isConnected, setIsConnected] = useState(false);
   const prevRolesRef = useRef([]);
 
+  // ---------------- Agent List & Sorting ----------------
   const agentList = useMemo(() => {
     if (!agents || typeof agents !== "object") return [];
     return Object.entries(agents)
@@ -23,6 +24,7 @@ const BorealisAgentNode = ({ id, data }) => {
       .sort((a, b) => b.last_seen - a.last_seen);
   }, [agents]);
 
+  // ---------------- Periodic Agent Fetching ----------------
   useEffect(() => {
     const fetchAgents = () => {
       fetch("/api/agents")
@@ -35,6 +37,7 @@ const BorealisAgentNode = ({ id, data }) => {
     return () => clearInterval(interval);
   }, []);
 
+  // ---------------- Node Data Sync ----------------
   useEffect(() => {
     setNodes((nds) =>
       nds.map((n) =>
@@ -44,6 +47,7 @@ const BorealisAgentNode = ({ id, data }) => {
     setIsConnected(false);
   }, [selectedAgent]);
 
+  // ---------------- Attached Role Collection ----------------
   const attachedRoleIds = useMemo(
     () =>
       edges
@@ -62,8 +66,9 @@ const BorealisAgentNode = ({ id, data }) => {
       .filter((r) => r);
   }, [attachedRoleIds, getNodes]);
 
+  // ---------------- Provision Role Logic ----------------
   const provisionRoles = useCallback((roles) => {
-    if (!selectedAgent || roles.length === 0) return;
+    if (!selectedAgent) return; // Allow empty roles but require agent
     fetch("/api/agent/provision", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -78,7 +83,7 @@ const BorealisAgentNode = ({ id, data }) => {
 
   const handleConnect = useCallback(() => {
     const roles = getAttachedRoles();
-    provisionRoles(roles);
+    provisionRoles(roles); // Always call even with empty roles
   }, [getAttachedRoles, provisionRoles]);
 
   const handleDisconnect = useCallback(() => {
@@ -95,6 +100,7 @@ const BorealisAgentNode = ({ id, data }) => {
       .catch(() => {});
   }, [selectedAgent]);
 
+  // ---------------- Auto-Provision When Roles Change ----------------
   useEffect(() => {
     const newRoles = getAttachedRoles();
     const prevSerialized = JSON.stringify(prevRolesRef.current || []);
@@ -102,8 +108,9 @@ const BorealisAgentNode = ({ id, data }) => {
     if (isConnected && newSerialized !== prevSerialized) {
       provisionRoles(newRoles);
     }
-  }, [attachedRoleIds, isConnected]);
+  }, [attachedRoleIds, isConnected, getAttachedRoles, provisionRoles]);
 
+  // ---------------- Status Label ----------------
   const selectedAgentStatus = useMemo(() => {
     if (!selectedAgent) return "Unassigned";
     const agent = agents[selectedAgent];
@@ -111,6 +118,7 @@ const BorealisAgentNode = ({ id, data }) => {
     return agent.status === "provisioned" ? "Connected" : "Available";
   }, [agents, selectedAgent]);
 
+  // ---------------- Render ----------------
   return (
     <div className="borealis-node">
       <Handle
