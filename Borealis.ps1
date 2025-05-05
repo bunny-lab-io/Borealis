@@ -100,7 +100,9 @@ Write-Host "Please choose which function you want to launch:"
 Write-Host " 1) Borealis Server" -ForegroundColor DarkGray
 Write-Host " 2) Borealis Agent" -ForegroundColor DarkGray
 Write-Host " 3) Build Electron App " -NoNewline -ForegroundColor DarkGray
-Write-Host "[Unfinished / Experimental]" -ForegroundColor Red
+Write-Host "[Experimental]" -ForegroundColor Red
+Write-Host " 4) Package Self-Contained EXE of Server or Agent " -NoNewline -ForegroundColor DarkGray
+Write-Host "[Experimental]" -ForegroundColor Red
 Write-Host "Type a number and press " -NoNewLine
 Write-Host "<ENTER>" -ForegroundColor DarkCyan
 $choice = Read-Host
@@ -307,8 +309,35 @@ switch ($choice) {
         }
     }
 
+    "4" {
+        # Prompt the User for Which System to Package using Pyinstaller
+        Write-Host "Choose which module to package into a self-contained EXE file:" -ForegroundColor DarkYellow
+        Write-Host " 1) Server" -ForegroundColor DarkGray
+        Write-Host " 2) Agent" -ForegroundColor DarkGray
+        $exePackageChoice = Read-Host "Enter choice [1/2]"
+
+        switch ($exePackageChoice) {
+            "1" { 
+                $serverScriptDir = Join-Path -Path $PSScriptRoot -ChildPath "Data\Server"
+                Set-Location -Path $serverScriptDir
+                & (Join-Path -Path $serverScriptDir -ChildPath "Package-Borealis-Server.ps1") 
+            }
+        
+            "2" { 
+                $agentScriptDir = Join-Path -Path $PSScriptRoot -ChildPath "Data\Agent"
+                Set-Location -Path $agentScriptDir
+                & (Join-Path -Path $agentScriptDir -ChildPath "Package_Borealis-Agent.ps1") 
+            }
+        
+            default {
+                Write-Host "Invalid Choice. Exiting..." -ForegroundColor Red
+                exit 1
+            }
+        }        
+    }
+
     default {
-        Write-Host "Invalid selection. Exiting..." -ForegroundColor Yellow
+        Write-Host "Invalid selection. Exiting..." -ForegroundColor Red
         exit 1
     }
 }
