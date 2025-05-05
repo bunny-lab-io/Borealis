@@ -89,9 +89,9 @@ Write-Host "Workflow Automation Tool" -ForegroundColor Blue
 Write-Host "===================================================================================="
 Write-Host " "
 Write-Host "Please choose which function you want to launch / (re)deploy:"
-Write-Host "1) Borealis Server"
-Write-Host "2) Borealis Agent"
-Write-Host "3) Build Electron App"
+Write-Host " 1) Borealis Server"
+Write-Host " 2) Borealis Agent"
+Write-Host " 3) Build Electron App [Unfinished / Experimental]"
 
 $choice = Read-Host "Type a number and press [ENTER]"
 switch ($choice) {
@@ -101,7 +101,7 @@ switch ($choice) {
         Write-Host "Configure Borealis Server Mode:" -ForegroundColor Yellow
         Write-Host " 1) Build & Launch > [Static] Production Flask Server @ http://localhost:5000"
         Write-Host " 2) Launch [Skip Build] > [Static] Production Flask Server @ http://localhost:5000"
-        Write-Host " 3) Launch [Skip Build] > [Hotload-Enabled] Vite Dev Server @ http://localhost:5173"
+        Write-Host " 3) Launch > [Hotload-Enabled] Vite Dev Server @ http://localhost:5173"
         $modeChoice = Read-Host "Enter choice [1/2/3]"
 
         switch ($modeChoice) {
