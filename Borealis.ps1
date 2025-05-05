@@ -1,4 +1,4 @@
-#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Launch-Borealis.ps1
+﻿#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Launch-Borealis.ps1
 
 <#
     Deploy-Borealis.ps1
@@ -15,19 +15,29 @@
       Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
 #>
 
+# ---------------------- ASCII Art Terminal Required Changes ----------------------
+# Set the .NET Console output encoding to UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+# Change the Windows OEM code page to 65001 (UTF-8)
+chcp.com 65001 > $null
+
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
 
 # ASCII Art Banner
 @'
-____                       _ _     
-| __ )  ___  _ __ ___  __ _| (_)___ 
-|  _ \ / _ \| '__/ _ \/ _` | | / __|
-| |_) | (_) | | |  __/ (_| | | \__ \
-|____/ \___/|_|  \___|\__,_|_|_|___/
 
-'@ | Write-Host
-
+███████████                                        ████   ███         
+░░███░░░░░███                                      ░░███  ░░░          
+ ░███    ░███  ██████  ████████   ██████   ██████   ░███  ████   █████ 
+ ░██████████  ███░░███░░███░░███ ███░░███ ░░░░░███  ░███ ░░███  ███░░  
+ ░███░░░░░███░███ ░███ ░███ ░░░ ░███████   ███████  ░███  ░███ ░░█████ 
+ ░███    ░███░███ ░███ ░███     ░███░░░   ███░░███  ░███  ░███  ░░░░███
+ ███████████ ░░██████  █████    ░░██████ ░░████████ █████ █████ ██████ 
+░░░░░░░░░░░   ░░░░░░  ░░░░░      ░░░░░░   ░░░░░░░░ ░░░░░ ░░░░░ ░░░░░░  
+'@ | Write-Host -ForegroundColor DarkCyan
+Write-Host "Drag-&-Drop Automation Orchestration | Macros | Data Collection & Analysis" -ForegroundColor DarkGray
 
 $symbols = @{
     Success = [char]0x2705
@@ -85,20 +95,19 @@ foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
 $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), (Split-Path $nodeExe), $env:PATH
 
 # ---------------------- Menu Prompt & User Input ----------------------
-Write-Host "Workflow Automation Tool" -ForegroundColor Blue
-Write-Host "===================================================================================="
 Write-Host " "
-Write-Host "Please choose which function you want to launch / (re)deploy:"
-Write-Host " 1) Borealis Server"
-Write-Host " 2) Borealis Agent"
-Write-Host " 3) Build Electron App [Unfinished / Experimental]"
-
-$choice = Read-Host "Type a number and press [ENTER]"
+Write-Host "Please choose which function you want to launch:"
+Write-Host " 1) Borealis Server" -ForegroundColor DarkGray
+Write-Host " 2) Borealis Agent" -ForegroundColor DarkGray
+Write-Host " 3) Build Electron App [Unfinished / Experimental]" -ForegroundColor DarkGray
+Write-Host " "
+Write-Host "Type a number and press [ENTER]" -ForegroundColor DarkGray
+$choice = Read-Host
 switch ($choice) {
 
     "1" {
         Write-Host " "
-        Write-Host "Configure Borealis Server Mode:" -ForegroundColor Yellow
+        Write-Host "Configure Borealis Server Mode:" -ForegroundColor DarkYellow
         Write-Host " 1) Build & Launch > [Static] Production Flask Server @ http://localhost:5000"
         Write-Host " 2) Launch [Skip Build] > [Static] Production Flask Server @ http://localhost:5000"
         Write-Host " 3) Launch > [Hotload-Enabled] Vite Dev Server @ http://localhost:5173"
