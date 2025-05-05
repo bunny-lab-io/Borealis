@@ -63,6 +63,10 @@ function Run-Step {
     }
 }
 
+# ---------------------- Server Deployment / Operation Mode Variables ----------------------
+# Define the default operation mode: production  | developer
+[string]$borealis_operation_mode = 'production'
+
 # ---------------------- Bundle Executables Setup ----------------------
 $scriptDir  = Split-Path $MyInvocation.MyCommand.Path -Parent
 $depsRoot   = Join-Path $scriptDir 'Dependencies'
@@ -85,19 +89,40 @@ Write-Host "Workflow Automation Tool" -ForegroundColor Blue
 Write-Host "===================================================================================="
 Write-Host " "
 Write-Host "Please choose which function you want to launch / (re)deploy:"
-Write-Host "- Server (Web Dashboard) [1]"
-Write-Host "- Agent (Local/Remote Client) [2]"
-#Write-Host "- Desktop App (Electron) ((Run Step 1 Beforehand)) [3]"
+Write-Host "1) Borealis Server"
+Write-Host "2) Borealis Agent"
+Write-Host "3) Build Electron App"
 
-$choice = Read-Host "Enter 1 or 2"
-
+$choice = Read-Host "Type a number and press [ENTER]"
 switch ($choice) {
 
     "1" {
-        # Server Deployment (Web Dashboard)
-        Clear-Host
-        Write-Host "Deploying Borealis - Web Dashboard..." -ForegroundColor Blue
-        Write-Host "===================================================================================="
+        Write-Host " "
+        Write-Host "Configure Borealis Server Mode:" -ForegroundColor Yellow
+        Write-Host " 1) Build & Launch > [Static] Production Flask Server @ http://localhost:5000"
+        Write-Host " 2) Launch [Skip Build] > [Static] Production Flask Server @ http://localhost:5000"
+        Write-Host " 3) Launch [Skip Build] > [Hotload-Enabled] Vite Dev Server @ http://localhost:5173"
+        $modeChoice = Read-Host "Enter choice [1/2/3]"
+
+        switch ($modeChoice) {
+            "1" { $borealis_operation_mode = "production" }
+            "2" {
+                Run-Step "Borealis: Launch Flask Server" {
+                    Push-Location (Join-Path $scriptDir "Server")
+                    & (Join-Path $scriptDir "Server\Scripts\python.exe") (Join-Path $scriptDir "Server\Borealis\server.py")
+                    Pop-Location
+                }
+                Exit 0
+            }
+            "3" { $borealis_operation_mode = "developer"  }
+            default {
+                Write-Host "Invalid mode choice: $modeChoice" -ForegroundColor Red
+                Exit 1
+            }
+        }
+
+        # ───── Now run your deploy logic ─────
+        Write-Host "Deploying Borealis Server in '$borealis_operation_mode' mode" -ForegroundColor Blue
 
         $venvFolder       = "Server"
         $dataSource       = "Data"
@@ -108,9 +133,8 @@ switch ($choice) {
 
         # Create Virtual Environment & Copy Server Assets
         Run-Step "Create Borealis Virtual Python Environment" {
-            if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
-                & $pythonExe -m venv $venvFolder | Out-Null
-            }
+            # Leverage Bundled Python Dependency to Construct Virtual Python Environment
+            if (-not (Test-Path "$venvFolder\Scripts\Activate")) { & $pythonExe -m venv $venvFolder | Out-Null }
             if (Test-Path $dataSource) {
                 Remove-Item $dataDestination -Recurse -Force -ErrorAction SilentlyContinue
                 New-Item -Path $dataDestination -ItemType Directory -Force | Out-Null
@@ -128,12 +152,14 @@ switch ($choice) {
             }
         }
 
-        # Copy Vite WebUI assets (no CRA)
-        Run-Step "Setup Vite WebUI assets" {
+        # Copy Vite WebUI Assets
+        Run-Step "Copy Borealis WebUI Files into: $webUIDestination" {
             if (Test-Path $webUIDestination) {
-                Remove-Item $webUIDestination -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item "$webUIDestination\public\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item "$webUIDestination\src\*"    -Recurse -Force -ErrorAction SilentlyContinue
+            } else {
+                New-Item -Path $webUIDestination -ItemType Directory -Force | Out-Null
             }
-            New-Item -Path $webUIDestination -ItemType Directory -Force | Out-Null
             Copy-Item "$customUIPath\*" $webUIDestination -Recurse -Force
         }
 
@@ -145,19 +171,19 @@ switch ($choice) {
             Pop-Location
         }
 
-        # ---------------------- Dev-mode Vite (HMR) ----------------------
-        Run-Step "Vite Web Frontend: Start Dev Server" {
+        # Vite Operation Mode Control (build vs dev)
+        Run-Step "Vite Web Frontend: Start ($borealis_operation_mode)" {
             Push-Location $webUIDestination
-            # Launch Vite in watch/HMR mode in a new process
-            Start-Process -NoNewWindow -FilePath $npmCmd -ArgumentList @("run", "dev")
+            if ($borealis_operation_mode -eq "developer") { $viteSubCommand = "dev" } else { $viteSubCommand = "build" }
+            Start-Process -NoNewWindow -FilePath $npmCmd -ArgumentList @("run",$viteSubCommand)
             Pop-Location
         }
 
         # Launch Flask Server
         Run-Step "Borealis: Launch Flask Server" {
-            Push-Location (Join-Path $scriptDir 'Server')
-            $py        = Join-Path $scriptDir 'Server\Scripts\python.exe'
-            $server_py = Join-Path $scriptDir 'Server\Borealis\server.py'
+            Push-Location (Join-Path $scriptDir "Server")
+            $py        = Join-Path $scriptDir "Server\Scripts\python.exe"
+            $server_py = Join-Path $scriptDir "Server\Borealis\server.py"
 
             Write-Host "`nLaunching Borealis..." -ForegroundColor Green
             Write-Host "===================================================================================="
@@ -166,13 +192,13 @@ switch ($choice) {
             & $py $server_py
             Pop-Location
         }
+        break
     }
 
     "2" {
         # Agent Deployment (Client / Data Collector)
-        Clear-Host
+        Write-Host " "
         Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
-        Write-Host "===================================================================================="
         
         $venvFolder             = "Agent"
         $agentSourcePath        = "Data\Agent\borealis-agent.py"

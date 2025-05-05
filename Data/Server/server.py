@@ -4,10 +4,11 @@ import eventlet
 # Monkey-patch stdlib for cooperative sockets
 eventlet.monkey_patch()
 
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, send_from_directory
 from flask_socketio import SocketIO, emit
 
 import time
+import os # To Read Production ReactJS Server Folder
 
 # Borealis Python API Endpoints
 from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
@@ -15,7 +16,12 @@ from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
 # ---------------------------------------------
 # Flask + WebSocket Server Configuration
 # ---------------------------------------------
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    static_folder=os.path.join(os.path.dirname(__file__), '../web-interface/build'),
+    static_url_path=''
+)
+
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
@@ -25,6 +31,20 @@ socketio = SocketIO(
         'max_websocket_message_size': 100_000_000
     }
 )
+
+# ---------------------------------------------
+# Serve ReactJS Production Vite Build from dist/
+# ---------------------------------------------
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_dist(path):
+    full_path = os.path.join(app.static_folder, path)
+    if path and os.path.isfile(full_path):
+        return send_from_directory(app.static_folder, path)
+    else:
+        # SPA entry point
+        return send_from_directory(app.static_folder, 'index.html')
+
 
 # ---------------------------------------------
 # Health Check Endpoint
@@ -203,7 +223,7 @@ def receive_screenshot(data):
 
 @socketio.on("disconnect")
 def on_disconnect():
-    print("[WS] Agent disconnected")
+    print("[WebSocket] Connection Disconnected")
 
 # ---------------------------------------------
 # Server Launch
