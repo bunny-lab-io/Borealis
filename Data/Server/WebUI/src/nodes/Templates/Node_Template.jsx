@@ -26,16 +26,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 
-// Ensure the global shared bus exists for inter-node communication
-if (!window.BorealisValueBus) {
-  window.BorealisValueBus = {};
-}
-
-// Ensure a default global update rate (ms) for polling loops
-if (!window.BorealisUpdateRate) {
-  window.BorealisUpdateRate = 100;
-}
-
 /**
  * TemplateNode Component
  * ----------------------

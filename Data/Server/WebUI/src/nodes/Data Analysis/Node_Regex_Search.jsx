@@ -1,5 +1,4 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Data Analysis/Node_Regex_Search.jsx
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Data Manipulation/Node_Regex_Search.jsx
 import React, { useEffect, useState, useRef } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 
