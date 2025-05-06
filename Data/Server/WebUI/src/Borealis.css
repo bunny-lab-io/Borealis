@@ -30,6 +30,24 @@
     z-index: -1;
 }
 
+/* helper lines for snapping */
+.helper-line {
+    position: absolute;
+    background: #0074ff;
+    z-index: 10;
+    pointer-events: none;
+  }
+  
+  .helper-line-vertical {
+    width: 1px;
+    height: 100%;
+  }
+  
+  .helper-line-horizontal {
+    height: 1px;
+    width: 100%;
+  }
+
 /* ======================================= */
 /* NODE SIDEBAR                            */
 /* ======================================= */
