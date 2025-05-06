@@ -1,0 +1,245 @@
+{
+  "nodes": [
+    {
+      "id": "node-1746533376881",
+      "type": "Borealis_Agent",
+      "position": {
+        "x": 34,
+        "y": 32
+      },
+      "data": {
+        "label": "Borealis Agent",
+        "content": "Select and manage an Agent with dynamic roles",
+        "agent_id": ""
+      },
+      "dragHandle": ".borealis-node-header",
+      "positionAbsolute": {
+        "x": 34,
+        "y": 32
+      },
+      "width": 205,
+      "height": 146,
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "node-1746533390931",
+      "type": "Agent_Role_Screenshot",
+      "position": {
+        "x": 282.6666666666667,
+        "y": 32
+      },
+      "data": {
+        "label": "Agent Role: Screenshot",
+        "content": "Capture screenshot region via agent"
+      },
+      "dragHandle": ".borealis-node-header",
+      "width": 260,
+      "height": 189,
+      "selected": false,
+      "positionAbsolute": {
+        "x": 282.6666666666667,
+        "y": 32
+      },
+      "dragging": false
+    },
+    {
+      "id": "node-1746533411884",
+      "type": "BWThresholdNode",
+      "position": {
+        "x": 582.0000000000001,
+        "y": 32
+      },
+      "data": {
+        "label": "BW Threshold",
+        "content": "Applies black & white threshold to base64 image input."
+      },
+      "dragHandle": ".borealis-node-header",
+      "width": 160,
+      "height": 96,
+      "selected": false,
+      "positionAbsolute": {
+        "x": 582.0000000000001,
+        "y": 32
+      },
+      "dragging": false
+    },
+    {
+      "id": "node-1746533422746",
+      "type": "Image_Viewer",
+      "position": {
+        "x": 783.3333333333334,
+        "y": 32
+      },
+      "data": {
+        "label": "Image Viewer",
+        "content": "Visual preview of base64 image with zoom overlay."
+      },
+      "dragHandle": ".borealis-node-header",
+      "width": 160,
+      "height": 69,
+      "selected": false,
+      "positionAbsolute": {
+        "x": 783.3333333333334,
+        "y": 32
+      },
+      "dragging": false
+    },
+    {
+      "id": "node-1746533459979",
+      "type": "OCR_Text_Extraction",
+      "position": {
+        "x": 34,
+        "y": 304
+      },
+      "data": {
+        "label": "OCR Text Extraction",
+        "content": "Extract Multi-Line Text from Upstream Image Node",
+        "engine": "EasyOCR",
+        "backend": "GPU",
+        "dataType": "Mixed",
+        "customRateEnabled": true,
+        "customRateMs": 1000,
+        "changeThreshold": 0
+      },
+      "dragHandle": ".borealis-node-header",
+      "positionAbsolute": {
+        "x": 34,
+        "y": 304
+      },
+      "width": 231,
+      "height": 382,
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "node-1746533500680",
+      "type": "Node_TextArray_Display",
+      "position": {
+        "x": 310.6666666666667,
+        "y": 304
+      },
+      "data": {
+        "label": "Display Multi-Line Array",
+        "content": "Display upstream multi-line text arrays.",
+        "lines": [
+          "[ERROR] No base64 image data provided."
+        ],
+        "width": "298px",
+        "height": "384px"
+      },
+      "dragHandle": ".borealis-node-header",
+      "width": 260,
+      "height": 384,
+      "positionAbsolute": {
+        "x": 310.6666666666667,
+        "y": 304
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "node-1746533556355",
+      "type": "ArrayIndexExtractor",
+      "position": {
+        "x": 618,
+        "y": 304
+      },
+      "data": {
+        "label": "Array Index Extractor",
+        "content": "Output a Specific Array Index's Value",
+        "lineNumber": 1
+      },
+      "dragHandle": ".borealis-node-header",
+      "width": 176,
+      "height": 144,
+      "selected": false,
+      "positionAbsolute": {
+        "x": 618,
+        "y": 304
+      },
+      "dragging": false
+    }
+  ],
+  "edges": [
+    {
+      "source": "node-1746533376881",
+      "sourceHandle": "provisioner",
+      "target": "node-1746533390931",
+      "targetHandle": null,
+      "type": "smoothstep",
+      "animated": true,
+      "style": {
+        "strokeDasharray": "6 3",
+        "stroke": "#58a6ff"
+      },
+      "id": "reactflow__edge-node-1746533376881provisioner-node-1746533390931"
+    },
+    {
+      "source": "node-1746533390931",
+      "sourceHandle": null,
+      "target": "node-1746533411884",
+      "targetHandle": null,
+      "type": "straight",
+      "animated": true,
+      "style": {
+        "strokeDasharray": "6 3",
+        "stroke": "#58a6ff"
+      },
+      "id": "reactflow__edge-node-1746533390931-node-1746533411884"
+    },
+    {
+      "source": "node-1746533411884",
+      "sourceHandle": null,
+      "target": "node-1746533422746",
+      "targetHandle": null,
+      "type": "straight",
+      "animated": true,
+      "style": {
+        "strokeDasharray": "6 3",
+        "stroke": "#58a6ff"
+      },
+      "id": "reactflow__edge-node-1746533411884-node-1746533422746"
+    },
+    {
+      "source": "node-1746533422746",
+      "sourceHandle": null,
+      "target": "node-1746533459979",
+      "targetHandle": null,
+      "type": "smoothstep",
+      "animated": true,
+      "style": {
+        "strokeDasharray": "6 3",
+        "stroke": "#7ed321"
+      },
+      "id": "reactflow__edge-node-1746533422746-node-1746533459979"
+    },
+    {
+      "source": "node-1746533459979",
+      "sourceHandle": null,
+      "target": "node-1746533500680",
+      "targetHandle": null,
+      "type": "bezier",
+      "animated": true,
+      "style": {
+        "strokeDasharray": "6 3",
+        "stroke": "#58a6ff"
+      },
+      "id": "reactflow__edge-node-1746533459979-node-1746533500680"
+    },
+    {
+      "source": "node-1746533500680",
+      "sourceHandle": null,
+      "target": "node-1746533556355",
+      "targetHandle": null,
+      "type": "step",
+      "animated": true,
+      "style": {
+        "strokeDasharray": "6 3",
+        "stroke": "#58a6ff"
+      },
+      "id": "reactflow__edge-node-1746533500680-node-1746533556355"
+    }
+  ],
+  "tab_name": "Flow 1"
+}
