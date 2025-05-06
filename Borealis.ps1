@@ -8,7 +8,7 @@
       - Agent (Client / Data Collector)
       - Desktop App (Electron)
 
-    It begins by presenting a menu to the user. Based on the selection (1, 2, or 3),
+    It begins by presenting a menu to the user. Based on the selection,
     the corresponding module is launched or deployed.
 
     Usage:

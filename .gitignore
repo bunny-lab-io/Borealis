@@ -15,7 +15,6 @@ Borealis-Server.exe
 /Server/
 /Agent/
 /ElectronApp/
-/Workflows/
 
 # Misc Files/Folders
 .vs/s
