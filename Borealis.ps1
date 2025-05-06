@@ -1,7 +1,7 @@
 ﻿#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Launch-Borealis.ps1
 
 <#
-    Deploy-Borealis.ps1
+    Borealis.ps1
     ----------------------
     This script deploys the Borealis Workflow Automation Tool with three modules:
       - Server (Web Dashboard)
@@ -12,7 +12,7 @@
     the corresponding module is launched or deployed.
 
     Usage:
-      Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
+      Set-ExecutionPolicy Unrestricted -Scope Process; .\Borealis.ps1
 #>
 
 # ---------------------- ASCII Art Terminal Required Changes ----------------------
