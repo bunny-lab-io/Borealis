@@ -57,7 +57,8 @@ export default function FlowEditor({
   const edgeStyles = {
     step: "step",
     curved: "bezier",
-    straight: "straight"
+    straight: "straight",
+    smoothstep: "smoothstep"
   };
 
   const animationStyles = {
@@ -416,6 +417,7 @@ export default function FlowEditor({
             <MenuItem onClick={() => changeEdgeType("step")}>Step</MenuItem>
             <MenuItem onClick={() => changeEdgeType("curved")}>Curved</MenuItem>
             <MenuItem onClick={() => changeEdgeType("straight")}>Straight</MenuItem>
+            <MenuItem onClick={() => changeEdgeType("smoothstep")}>Smoothstep</MenuItem>
           </MenuList>
         </MenuItem>
         <MenuItem>
