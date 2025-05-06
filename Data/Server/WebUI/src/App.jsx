@@ -57,12 +57,10 @@ if (!window.BorealisSocket) {
   });
 }
 
-// Global Node Update Timer Variable
 if (!window.BorealisUpdateRate) {
   window.BorealisUpdateRate = 200;
 }
 
-// Dynamically load all node components via Vite
 const modules = import.meta.glob('./nodes/**/*.jsx', { eager: true });
 const nodeTypes = {};
 const categorizedNodes = {};
@@ -72,11 +70,8 @@ Object.entries(modules).forEach(([path, mod]) => {
   if (!comp) return;
   const { type, component } = comp;
   if (!type || !component) return;
-
-  // derive category folder name from path: "./nodes/<Category>/File.jsx"
   const parts = path.replace('./nodes/', '').split('/');
   const category = parts[0];
-
   if (!categorizedNodes[category]) {
     categorizedNodes[category] = [];
   }
@@ -112,6 +107,7 @@ const darkTheme = createTheme({
   }
 });
 
+const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
 export default function App() {
   const [tabs, setTabs] = useState([
@@ -133,6 +129,29 @@ export default function App() {
   const [tabMenuAnchor, setTabMenuAnchor] = useState(null);
   const [tabMenuTabId, setTabMenuTabId] = useState(null);
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed.tabs) && parsed.activeTabId) {
+          setTabs(parsed.tabs);
+          setActiveTabId(parsed.activeTabId);
+        }
+      } catch (err) {
+        console.warn("Failed to parse saved state:", err);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      const data = JSON.stringify({ tabs, activeTabId });
+      localStorage.setItem(LOCAL_STORAGE_KEY, data);
+    }, 1000);
+    return () => clearTimeout(timeout);
+  }, [tabs, activeTabId]);
 
   const handleSetNodes = useCallback(
     (callbackOrArray, tId) => {
@@ -232,10 +251,8 @@ export default function App() {
     setTabs((old) => {
       const idx = old.findIndex((t) => t.id === tabMenuTabId);
       if (idx === -1) return old;
-
       const newList = [...old];
       newList.splice(idx, 1);
-
       if (tabMenuTabId === activeTabId && newList.length > 0) {
         setActiveTabId(newList[0].id);
       } else if (newList.length === 0) {
@@ -270,7 +287,6 @@ export default function App() {
   const handleExportFlow = async () => {
     const activeTab = tabs.find((x) => x.id === activeTabId);
     if (!activeTab) return;
-
     const data = JSON.stringify(
       {
         nodes: activeTab.nodes,
@@ -283,7 +299,6 @@ export default function App() {
     const blob = new Blob([data], { type: "application/json" });
     const sanitizedTabName = activeTab.tab_name.replace(/\s+/g, "_").toLowerCase();
     const suggestedFilename = sanitizedTabName + "_workflow.json";
-
     if (window.showSaveFilePicker) {
       try {
         const fileHandle = await window.showSaveFilePicker({
@@ -295,7 +310,6 @@ export default function App() {
             }
           ]
         });
-
         const writable = await fileHandle.createWritable();
         await writable.write(blob);
         await writable.close();
@@ -328,7 +342,6 @@ export default function App() {
         const file = await fileHandle.getFile();
         const text = await file.text();
         const json = JSON.parse(text);
-
         const newId = "flow_" + (tabs.length + 1);
         setTabs((prev) => [
           ...prev,
@@ -354,7 +367,6 @@ export default function App() {
     try {
       const text = await file.text();
       const json = JSON.parse(text);
-
       const newId = "flow_" + (tabs.length + 1);
       setTabs((prev) => [
         ...prev,
@@ -374,7 +386,6 @@ export default function App() {
   return (
     <ThemeProvider theme={darkTheme}>
       <CssBaseline />
-
       <Box sx={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <AppBar position="static" sx={{ bgcolor: "#16191d" }}>
           <Toolbar sx={{ minHeight: "36px" }}>
@@ -399,7 +410,6 @@ export default function App() {
             </Menu>
           </Toolbar>
         </AppBar>
-
         <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
           <NodeSidebar
             categorizedNodes={categorizedNodes}
@@ -409,7 +419,6 @@ export default function App() {
             fileInputRef={fileInputRef}
             onFileInputChange={handleFileInputChange}
           />
-
           <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
             <FlowTabs
               tabs={tabs}
@@ -418,7 +427,6 @@ export default function App() {
               onAddTab={createNewTab}
               onTabRightClick={handleTabRightClick}
             />
-
             <Box sx={{ flexGrow: 1, position: "relative" }}>
               {tabs.map((tab) => (
                 <Box
@@ -434,7 +442,7 @@ export default function App() {
                 >
                   <ReactFlowProvider id={tab.id}>
                     <FlowEditor
-                      flowId={tab.id} //Used to Fix Grid Issues Across Multiple Flow Tabs
+                      flowId={tab.id}
                       nodes={tab.nodes}
                       edges={tab.edges}
                       setNodes={(val) => handleSetNodes(val, tab.id)}
@@ -448,10 +456,8 @@ export default function App() {
             </Box>
           </Box>
         </Box>
-
         <StatusBar />
       </Box>
-
       <CloseAllDialog
         open={confirmCloseOpen}
         onClose={handleCloseDialog}
