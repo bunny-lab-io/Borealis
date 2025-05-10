@@ -4,8 +4,10 @@ import eventlet
 # Monkey-patch stdlib for cooperative sockets
 eventlet.monkey_patch()
 
-from flask import Flask, request, jsonify, Response, send_from_directory
+import requests
+from flask import Flask, request, jsonify, Response, send_from_directory, make_response
 from flask_socketio import SocketIO, emit
+from flask_cors import CORS
 
 import time
 import os # To Read Production ReactJS Server Folder
@@ -21,6 +23,9 @@ app = Flask(
     static_folder=os.path.join(os.path.dirname(__file__), '../web-interface/build'),
     static_url_path=''
 )
+
+# Enable CORS on All Routes
+CORS(app)
 
 socketio = SocketIO(
     app,
@@ -107,6 +112,32 @@ def provision_agent():
 
     socketio.emit("agent_config", config)
     return jsonify({"status": "provisioned", "roles": roles})
+
+# ---------------------------------------------
+# Borealis External API Proxy Endpoint
+# ---------------------------------------------
+@app.route("/api/proxy", methods=["GET", "POST", "OPTIONS"])
+def proxy():
+    target = request.args.get("url")
+    if not target:
+        return {"error": "Missing ?url="}, 400
+
+    # Forward method, headers, body
+    upstream = requests.request(
+        method  = request.method,
+        url     = target,
+        headers = {k:v for k,v in request.headers if k.lower() != "host"},
+        data    = request.get_data(),
+        timeout = 10
+    )
+
+    excluded = ["content-encoding","content-length","transfer-encoding","connection"]
+    headers  = [(k,v) for k,v in upstream.raw.headers.items() if k.lower() not in excluded]
+
+    resp = make_response(upstream.content, upstream.status_code)
+    for k,v in headers:
+        resp.headers[k] = v
+    return resp
 
 # ---------------------------------------------
 # Live Screenshot Viewer for Debugging

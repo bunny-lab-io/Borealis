@@ -13,6 +13,7 @@
     "@mui/icons-material": "7.0.2",
     "@mui/material": "7.0.2",
     "normalize.css": "8.0.1",
+    "prismjs": "1.30.0",
     "react": "19.1.0",
     "react-color": "2.19.3",
     "react-dom": "19.1.0",
