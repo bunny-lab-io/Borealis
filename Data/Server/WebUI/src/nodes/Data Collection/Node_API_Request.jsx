@@ -1,17 +1,17 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Data Collection/Node_API_Request.jsx
 
 import React, { useState, useEffect, useRef } from "react";
-import { Handle, Position, useReactFlow } from "reactflow";
+import { Handle, Position, useReactFlow, useStore } from "reactflow";
 
 const APIRequestNode = ({ id, data }) => {
   const { setNodes } = useReactFlow();
+  const edges = useStore((state) => state.edges);
+
   if (!window.BorealisValueBus) window.BorealisValueBus = {};
 
-  // Stored URL (actual fetch target)
   const [url, setUrl] = useState(data?.url || "http://localhost:5000/health");
-  // Editable URL text
   const [editUrl, setEditUrl] = useState(data?.url || "http://localhost:5000/health");
-  const [useProxy, setUseProxy] = useState(data?.useProxy || true);
+  const [useProxy, setUseProxy] = useState(data?.useProxy ?? true);
   const [body, setBody] = useState(data?.body || "");
   const [intervalSec, setIntervalSec] = useState(data?.intervalSec ?? 10);
   const [error, setError] = useState(null);
@@ -24,11 +24,7 @@ const APIRequestNode = ({ id, data }) => {
     const flag = e.target.checked;
     setUseProxy(flag);
     setNodes((nds) =>
-      nds.map((n) =>
-        n.id === id
-          ? { ...n, data: { ...n.data, useProxy: flag } }
-          : n
-      )
+      nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, useProxy: flag } } : n))
     );
   };
 
@@ -48,26 +44,20 @@ const APIRequestNode = ({ id, data }) => {
     );
   };
 
-  // ... other handlers unchanged ...
   const handleBodyChange = (e) => {
     const newBody = e.target.value;
     setBody(newBody);
     setNodes((nds) =>
-      nds.map((n) =>
-        n.id === id
-          ? { ...n, data: { ...n.data, body: newBody } }
-          : n
-      )
+      nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, body: newBody } } : n))
     );
   };
+
   const handleIntervalChange = (e) => {
     const sec = parseInt(e.target.value, 10) || 1;
     setIntervalSec(sec);
     setNodes((nds) =>
       nds.map((n) =>
-        n.id === id
-          ? { ...n, data: { ...n.data, intervalSec: sec } }
-          : n
+        n.id === id ? { ...n, data: { ...n.data, intervalSec: sec } } : n
       )
     );
   };
@@ -78,32 +68,38 @@ const APIRequestNode = ({ id, data }) => {
     const runNodeLogic = async () => {
       try {
         setError(null);
-        let target = url;
-        if (useProxy) {
-          target = `/api/proxy?url=${encodeURIComponent(url)}`;
+
+        const inputEdge = edges.find((e) => e.target === id);
+        const upstreamUrl = inputEdge ? window.BorealisValueBus[inputEdge.source] : null;
+        if (upstreamUrl && upstreamUrl !== editUrl) {
+          setEditUrl(upstreamUrl);
         }
+
+        const resolvedUrl = upstreamUrl || url;
+        let target = useProxy ? `/api/proxy?url=${encodeURIComponent(resolvedUrl)}` : resolvedUrl;
+
         const options = {};
         if (body.trim()) {
           options.method = "POST";
           options.headers = { "Content-Type": "application/json" };
           options.body = body;
         }
+
         const res = await fetch(target, options);
         setStatusCode(res.status);
         setStatusText(res.statusText);
+
         if (!res.ok) {
-          // clear on error
           resultRef.current = null;
           window.BorealisValueBus[id] = undefined;
           setNodes((nds) =>
             nds.map((n) =>
-              n.id === id
-                ? { ...n, data: { ...n.data, result: undefined } }
-                : n
+              n.id === id ? { ...n, data: { ...n.data, result: undefined } } : n
             )
           );
           throw new Error(`HTTP ${res.status}`);
         }
+
         const json = await res.json();
         const pretty = JSON.stringify(json, null, 2);
         if (!cancelled && resultRef.current !== pretty) {
@@ -111,9 +107,7 @@ const APIRequestNode = ({ id, data }) => {
           window.BorealisValueBus[id] = json;
           setNodes((nds) =>
             nds.map((n) =>
-              n.id === id
-                ? { ...n, data: { ...n.data, result: pretty } }
-                : n
+              n.id === id ? { ...n, data: { ...n.data, result: pretty } } : n
             )
           );
         }
@@ -130,25 +124,50 @@ const APIRequestNode = ({ id, data }) => {
       cancelled = true;
       clearInterval(iv);
     };
-  }, [url, body, intervalSec, useProxy, id, setNodes]);
+  }, [url, body, intervalSec, useProxy, id, setNodes, edges]);
+
+  const inputEdge = edges.find((e) => e.target === id);
+  const hasUpstream = Boolean(inputEdge && inputEdge.source);
 
   return (
     <div className="borealis-node">
+      <Handle type="target" position={Position.Left} className="borealis-handle" />
+
       <div className="borealis-node-header">API Request</div>
       <div className="borealis-node-content">
-        {/* URL input */}
         <label style={{ fontSize: "9px", display: "block", marginBottom: "4px" }}>Request URL:</label>
         <input
           type="text"
           value={editUrl}
           onChange={handleUrlInputChange}
-          style={{ fontSize: "9px", padding: "4px", width: "100%", background: "#1e1e1e", color: "#ccc", border: "1px solid #444", borderRadius: "2px" }}
+          disabled={hasUpstream}
+          style={{
+            fontSize: "9px",
+            padding: "4px",
+            width: "100%",
+            background: hasUpstream ? "#2a2a2a" : "#1e1e1e",
+            color: "#ccc",
+            border: "1px solid #444",
+            borderRadius: "2px"
+          }}
         />
-        <button onClick={handleUpdateUrl} style={{ fontSize: "9px", marginTop: "6px", padding: "2px 6px", background: "#333", color: "#ccc", border: "1px solid #444", borderRadius: "2px", cursor: "pointer" }}>
+        <button
+          onClick={handleUpdateUrl}
+          disabled={hasUpstream}
+          style={{
+            fontSize: "9px",
+            marginTop: "6px",
+            padding: "2px 6px",
+            background: "#333",
+            color: "#ccc",
+            border: "1px solid #444",
+            borderRadius: "2px",
+            cursor: hasUpstream ? "not-allowed" : "pointer"
+          }}
+        >
           Update URL
         </button>
 
-        {/* Proxy toggle */}
         <div style={{ marginTop: "6px" }}>
           <input
             id={`${id}-proxy-toggle`}
@@ -165,20 +184,52 @@ const APIRequestNode = ({ id, data }) => {
           </label>
         </div>
 
-        {/* body & interval unchanged... */}
         <label style={{ fontSize: "9px", display: "block", margin: "8px 0 4px" }}>Request Body:</label>
-        <textarea value={body} onChange={handleBodyChange} rows={4} style={{ fontSize: "9px", padding: "4px", width: "100%", background: "#1e1e1e", color: "#ccc", border: "1px solid #444", borderRadius: "2px", resize: "vertical" }} />
-        <label style={{ fontSize: "9px", display: "block", margin: "8px 0 4px" }}>Polling Interval (sec):</label>
-        <input type="number" min="1" value={intervalSec} onChange={handleIntervalChange} style={{ fontSize: "9px", padding: "4px", width: "100%", background: "#1e1e1e", color: "#ccc", border: "1px solid #444", borderRadius: "2px" }} />
+        <textarea
+          value={body}
+          onChange={handleBodyChange}
+          rows={4}
+          style={{
+            fontSize: "9px",
+            padding: "4px",
+            width: "100%",
+            background: "#1e1e1e",
+            color: "#ccc",
+            border: "1px solid #444",
+            borderRadius: "2px",
+            resize: "vertical"
+          }}
+        />
 
-        {/* indicators unchanged... */}
+        <label style={{ fontSize: "9px", display: "block", margin: "8px 0 4px" }}>Polling Interval (sec):</label>
+        <input
+          type="number"
+          min="1"
+          value={intervalSec}
+          onChange={handleIntervalChange}
+          style={{
+            fontSize: "9px",
+            padding: "4px",
+            width: "100%",
+            background: "#1e1e1e",
+            color: "#ccc",
+            border: "1px solid #444",
+            borderRadius: "2px"
+          }}
+        />
+
         {statusCode !== null && statusCode >= 200 && statusCode < 300 && (
-          <div style={{ color: "#6f6", fontSize: "8px", marginTop: "6px" }}>Status: {statusCode} {statusText}</div>
+          <div style={{ color: "#6f6", fontSize: "8px", marginTop: "6px" }}>
+            Status: {statusCode} {statusText}
+          </div>
         )}
         {error && (
-          <div style={{ color: "#f66", fontSize: "8px", marginTop: "6px" }}>Error: {error}</div>
+          <div style={{ color: "#f66", fontSize: "8px", marginTop: "6px" }}>
+            Error: {error}
+          </div>
         )}
       </div>
+
       <Handle type="source" position={Position.Right} className="borealis-handle" />
     </div>
   );
