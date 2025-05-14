@@ -3,7 +3,7 @@ import React from "react";
 import { Box, Typography, IconButton } from "@mui/material";
 import { Settings as SettingsIcon } from "@mui/icons-material";
 
-export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen }) {
+export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, title }) {
   return (
     <>
       {/* Top-right gear icon */}
@@ -77,7 +77,7 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen }) 
         onClick={(e) => e.stopPropagation()}
       >
         <Typography variant="h6" sx={{ mb: 2, color: "#0475c2" }}>
-          Node Configuration Panel
+          {title || "Node Configuration Panel"}
         </Typography>
         <p style={{ fontSize: "0.85rem", color: "#aaa" }}>
           This sidebar will be used to configure nodes in the future.

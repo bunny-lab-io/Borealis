@@ -41,6 +41,8 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
+import { IconButton } from "@mui/material";
+import { Settings as SettingsIcon } from "@mui/icons-material";
 
 // Global Shared Bus for Node Data Propagation
 if (!window.BorealisValueBus) {
@@ -141,9 +143,28 @@ const DataNode = ({ id, data }) => {
         <div className="borealis-node">
             <Handle type="target" position={Position.Left} className="borealis-handle" />
 
-            <div className="borealis-node-header">
-                {data?.label || "Data Node"}
+            <div className="borealis-node-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>{data?.label || "Data Node"}</span>
+                <IconButton
+                size="small"
+                  onClick={() =>
+                    window.BorealisOpenDrawer &&
+                    window.BorealisOpenDrawer(data?.label || "Unknown Node")
+                }
+                sx={{
+                    padding: "0px",
+                    marginRight: "-3px",
+                    color: "#58a6ff",
+                    fontSize: "14px", // affects inner icon when no size prop
+                    width: "20px",
+                    height: "20px",
+                    minWidth: "20px"
+                }}
+                >
+                <SettingsIcon sx={{ fontSize: "16px" }} />
+                </IconButton>
             </div>
+
 
             <div className="borealis-node-content">
                 {/* Description visible in node body */}

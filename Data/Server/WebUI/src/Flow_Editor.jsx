@@ -52,6 +52,18 @@ export default function FlowEditor({
 }) {
   // Node Configuration Sidebar State
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedNodeLabel, setSelectedNodeLabel] = useState(null);
+
+  useEffect(() => {
+    window.BorealisOpenDrawer = (label) => {
+      setSelectedNodeLabel(label);
+      setDrawerOpen(true);
+    };
+    return () => {
+      delete window.BorealisOpenDrawer;
+    };
+  }, []);
+
 
   const wrapperRef = useRef(null);
   const { project } = useReactFlow();
@@ -356,7 +368,11 @@ export default function FlowEditor({
   ref={wrapperRef}
   style={{ position: "relative" }}
 >
-<NodeConfigurationSidebar drawerOpen={drawerOpen} setDrawerOpen={setDrawerOpen} />
+<NodeConfigurationSidebar
+  drawerOpen={drawerOpen}
+  setDrawerOpen={setDrawerOpen}
+  title={selectedNodeLabel}
+/>
 
       <ReactFlow
         nodes={nodes}
