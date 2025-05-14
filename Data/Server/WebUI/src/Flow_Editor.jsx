@@ -1,5 +1,8 @@
 // //////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Flow_Editor.jsx
 
+// Import Node Configuration Sidebar
+import NodeConfigurationSidebar from "./Node_Configuration_Sidebar";
+
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import ReactFlow, {
   Background,
@@ -47,6 +50,9 @@ export default function FlowEditor({
   nodeTypes,
   categorizedNodes
 }) {
+  // Node Configuration Sidebar State
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
   const wrapperRef = useRef(null);
   const { project } = useReactFlow();
 
@@ -60,7 +66,6 @@ export default function FlowEditor({
   const [labelOpacity, setLabelOpacity] = useState(0.8);
   const [tempColor, setTempColor] = useState({ hex: "#58a6ff" });
   const [pickerPos, setPickerPos] = useState({ x: 0, y: 0 });
-  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // helper-line state
   // guides: array of { xFlow, xPx } or { yFlow, yPx } for stationary nodes
@@ -351,86 +356,7 @@ export default function FlowEditor({
   ref={wrapperRef}
   style={{ position: "relative" }}
 >
-  {/* Top-right gear icon */}
-  <IconButton
-    onClick={() => setDrawerOpen(true)}
-    size="small"
-    sx={{
-      position: "absolute",
-      top: 8,
-      right: 8,
-      zIndex: 1500,
-      bgcolor: "#2a2a2a",
-      color: "#58a6ff",
-      border: "1px solid #444",
-      "&:hover": { bgcolor: "#3a3a3a" }
-    }}
-  >
-    <SettingsIcon fontSize="small" />
-  </IconButton>
-
-{/* Dim overlay when drawer is open */}
-{drawerOpen && (
-  <Box
-    onClick={() => setDrawerOpen(false)}
-    sx={{
-      position: "absolute",
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: "rgba(0,0,0,0.4)",
-      zIndex: 10
-    }}
-  />
-)}
-
-{/* Right-Side Node Configuration Panel */}
-      <Box
-        onClick={() => setDrawerOpen(false)}
-        sx={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: "rgba(0, 0, 0, 0.3)",
-          opacity: drawerOpen ? 1 : 0,
-          pointerEvents: drawerOpen ? "auto" : "none",
-          transition: "opacity 0.6s ease",
-          zIndex: 10
-        }}
-      />
-
-      {/* Animated right drawer panel */}
-      <Box
-        sx={{
-          position: "absolute",
-          top: 0,
-          right: 0,
-          bottom: 0,
-          width: 400, // Width of the Node Configuration Sidebar
-          bgcolor: "#121212", // Matches NodeSidebar base color
-          color: "#ccc",
-          borderLeft: "1px solid #333",
-          padding: 2,
-          zIndex: 11,
-          overflowY: "auto",
-          transform: drawerOpen ? "translateX(0)" : "translateX(100%)",
-          transition: "transform 0.3s ease"
-        }}
-        onClick={(e) => e.stopPropagation()} // Prevent closing when clicking inside drawer
-      >
-        <Typography variant="h6" sx={{ mb: 2, color: "#0475c2" }}>
-          Node Configuration Panel
-        </Typography>
-        <p style={{ fontSize: "0.85rem", color: "#aaa" }}>
-          This sidebar will be used to configure nodes in the future.  
-        </p>
-        <p style={{ fontSize: "0.85rem", color: "#aaa" }}> 
-          The idea is that this area will allow for more node configuration controls to by dynamically-populated by the nodes to allow more complex node documentation and configuration.
-        </p>
-      </Box>
+<NodeConfigurationSidebar drawerOpen={drawerOpen} setDrawerOpen={setDrawerOpen} />
 
       <ReactFlow
         nodes={nodes}
