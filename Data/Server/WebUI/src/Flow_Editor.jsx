@@ -43,17 +43,19 @@ export default function FlowEditor({
 }) {
   // Node Configuration Sidebar State
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedNodeLabel, setSelectedNodeLabel] = useState(null);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
 
   useEffect(() => {
-    window.BorealisOpenDrawer = (label) => {
-      setSelectedNodeLabel(label);
+    window.BorealisOpenDrawer = (id) => {
+      setSelectedNodeId(id);
       setDrawerOpen(true);
     };
     return () => {
       delete window.BorealisOpenDrawer;
     };
-  }, [nodes]);
+  }, []);
+
+  const selectedNode = nodes.find((n) => n.id === selectedNodeId);
 
   const wrapperRef = useRef(null);
   const { project } = useReactFlow();
@@ -352,7 +354,6 @@ export default function FlowEditor({
     if (nodeCountEl) nodeCountEl.innerText = nodes.length;
   }, [nodes]);
 
-    const selectedNode = nodes.find((n) => n.data?.label === selectedNodeLabel);
     const nodeDef = selectedNode
       ? Object.values(categorizedNodes).flat().find((def) => def.type === selectedNode.type)
       : null;
@@ -367,11 +368,12 @@ export default function FlowEditor({
       <NodeConfigurationSidebar
         drawerOpen={drawerOpen}
         setDrawerOpen={setDrawerOpen}
-        title={selectedNode?.data?.label || ""}
+        title={selectedNode ? selectedNode.data?.label || selectedNode.id : ""}
         nodeData={
           selectedNode && nodeDef
             ? {
-                ...nodeDef,
+                config: nodeDef.config,
+                usage_documentation: nodeDef.usage_documentation,
                 ...selectedNode.data,
                 nodeId: selectedNode.id
               }

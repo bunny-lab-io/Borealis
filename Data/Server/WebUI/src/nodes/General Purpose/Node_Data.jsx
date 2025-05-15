@@ -66,7 +66,7 @@ const DataNode = ({ id, data }) => {
           size="small"
           onClick={() =>
             window.BorealisOpenDrawer &&
-            window.BorealisOpenDrawer(data?.label || "Unknown Node", { ...data, nodeId: id })
+            window.BorealisOpenDrawer(id, { ...data, nodeId: id })
           }
           sx={{ padding: 0, marginRight: "-3px", color: "#58a6ff", width: "20px", height: "20px" }}
         >
@@ -88,19 +88,14 @@ export default {
     { key: "value", label: "Value", type: "text" }
   ],
   usage_documentation: `
-### DataNode Usage
+### Description:
+This node acts as a basic live data emitter. When connected to an upstream node, it inherits its value, otherwise it accepts user-defined input of either a number or a string.
 
-This node acts as a live data emitter. When connected to an upstream source, it inherits its value. Otherwise, it accepts user-defined input.
+**Acceptable Inputs**:
+- **Static Value** (*Number or String*)
 
-- **Use Cases**:
-  - Static constants
-  - Pass-through conduit
-  - Manual value input
-
-- **Behavior**:
-  - Automatically updates on interval
-  - Emits data through BorealisValueBus
-
-Ensure no input edge if manual input is required.
+**Behavior**:
+- **Pass-through Conduit** (*If Upstream Node is Connected*) > Value cannot be manually changed while connected to an upstream node.
+- Uses global Borealis "**Update Rate**" for updating value if connected to an upstream node.
   `.trim()
 };
