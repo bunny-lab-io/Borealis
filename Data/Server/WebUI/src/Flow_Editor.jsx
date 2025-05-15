@@ -17,22 +17,13 @@ import {
   MenuItem, 
   MenuList, 
   Slider, 
-  Box,
-  Drawer,
-  IconButton,
-  Typography
+  Box
 } from "@mui/material";
 
 import {
   Polyline as PolylineIcon,
   DeleteForever as DeleteForeverIcon,
-  DoubleArrow as DoubleArrowIcon,
-  LinearScale as LinearScaleIcon,
-  Timeline as TimelineIcon,
-  FormatColorFill as FormatColorFillIcon,
-  ArrowRight as ArrowRightIcon,
-  Edit as EditIcon,
-  Settings as SettingsIcon
+  Edit as EditIcon
 } from "@mui/icons-material";
 
 import { 

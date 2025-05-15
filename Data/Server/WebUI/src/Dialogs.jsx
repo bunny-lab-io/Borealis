@@ -1,6 +1,5 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Dialogs.jsx
 
-import React from "react";
 import {
   Dialog,
   DialogTitle,
