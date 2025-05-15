@@ -53,8 +53,7 @@ export default function FlowEditor({
     return () => {
       delete window.BorealisOpenDrawer;
     };
-  }, []);
-
+  }, [nodes]);
 
   const wrapperRef = useRef(null);
   const { project } = useReactFlow();
@@ -353,17 +352,25 @@ export default function FlowEditor({
     if (nodeCountEl) nodeCountEl.innerText = nodes.length;
   }, [nodes]);
 
+  const selectedNode = nodes.find((n) => n.data?.label === selectedNodeLabel);
+  const nodeTypeMeta = selectedNode
+    ? Object.values(categorizedNodes).flat().find((def) => def.type === selectedNode.type)
+    : null;
+
   return (
     <div
   className="flow-editor-container"
   ref={wrapperRef}
   style={{ position: "relative" }}
 >
-<NodeConfigurationSidebar
-  drawerOpen={drawerOpen}
-  setDrawerOpen={setDrawerOpen}
-  title={selectedNodeLabel}
-/>
+
+      <NodeConfigurationSidebar
+        drawerOpen={drawerOpen}
+        setDrawerOpen={setDrawerOpen}
+        title={selectedNodeLabel}
+        nodeData={nodeTypeMeta}
+      />
+
 
       <ReactFlow
         nodes={nodes}
