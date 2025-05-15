@@ -352,23 +352,31 @@ export default function FlowEditor({
     if (nodeCountEl) nodeCountEl.innerText = nodes.length;
   }, [nodes]);
 
-  const selectedNode = nodes.find((n) => n.data?.label === selectedNodeLabel);
-  const nodeTypeMeta = selectedNode
-    ? Object.values(categorizedNodes).flat().find((def) => def.type === selectedNode.type)
-    : null;
+    const selectedNode = nodes.find((n) => n.data?.label === selectedNodeLabel);
+    const nodeDef = selectedNode
+      ? Object.values(categorizedNodes).flat().find((def) => def.type === selectedNode.type)
+      : null;
 
-  return (
-    <div
-  className="flow-editor-container"
-  ref={wrapperRef}
-  style={{ position: "relative" }}
->
+    return (
+      <div
+    className="flow-editor-container"
+    ref={wrapperRef}
+    style={{ position: "relative" }}
+  >
 
       <NodeConfigurationSidebar
         drawerOpen={drawerOpen}
         setDrawerOpen={setDrawerOpen}
-        title={selectedNodeLabel}
-        nodeData={nodeTypeMeta}
+        title={selectedNode?.data?.label || ""}
+        nodeData={
+          selectedNode && nodeDef
+            ? {
+                ...nodeDef,
+                ...selectedNode.data,
+                nodeId: selectedNode.id
+              }
+            : null
+        }
       />
 
 

@@ -1,13 +1,17 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Node_Configuration_Sidebar.jsx
 import { Box, Typography, Tabs, Tab, TextField } from "@mui/material";
 import React, { useState } from "react";
+import { useReactFlow } from "reactflow";
 
 export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, title, nodeData }) {
   const [activeTab, setActiveTab] = useState(0);
+  const { setNodes } = useReactFlow();
   const handleTabChange = (_, newValue) => setActiveTab(newValue);
 
   const renderConfigFields = () => {
     const config = nodeData?.config || [];
+    const nodeId = nodeData?.nodeId;
+
     return config.map((field, index) => (
       <Box key={index} sx={{ mb: 2 }}>
         <Typography variant="body2" sx={{ color: "#ccc", mb: 0.5 }}>
@@ -18,6 +22,18 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
           size="small"
           fullWidth
           value={nodeData?.[field.key] || ""}
+          onChange={(e) => {
+            const newValue = e.target.value;
+            if (!nodeId) return;
+            setNodes((nds) =>
+              nds.map((n) =>
+                n.id === nodeId
+                  ? { ...n, data: { ...n.data, [field.key]: newValue } }
+                  : n
+              )
+            );
+            window.BorealisValueBus[nodeId] = newValue;
+          }}
           InputProps={{
             sx: {
               backgroundColor: "#1e1e1e",
@@ -90,7 +106,7 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
           {activeTab === 0 && renderConfigFields()}
           {activeTab === 1 && (
             <Typography sx={{ whiteSpace: "pre-wrap", fontSize: "0.85rem", color: "#aaa" }}>
-              {nodeData?.usage_documentation || "No documentation provided for this node."}
+              {nodeData?.usage_documentation || "No usage documentation provided for this node."}
             </Typography>
           )}
         </Box>

@@ -1,6 +1,5 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/General Purpose/Node_Data.jsx
-
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 import { IconButton } from "@mui/material";
 import { Settings as SettingsIcon } from "@mui/icons-material";
@@ -11,20 +10,12 @@ if (!window.BorealisUpdateRate) window.BorealisUpdateRate = 100;
 const DataNode = ({ id, data }) => {
   const { setNodes } = useReactFlow();
   const edges = useStore((state) => state.edges);
-  const [renderValue, setRenderValue] = useState(data?.value || "");
-  const valueRef = useRef(renderValue);
+  const valueRef = useRef(data?.value || "");
 
-  const handleManualInput = (e) => {
-    const newValue = e.target.value;
-    valueRef.current = newValue;
-    setRenderValue(newValue);
-    window.BorealisValueBus[id] = newValue;
-    setNodes((nds) =>
-      nds.map((n) =>
-        n.id === id ? { ...n, data: { ...n.data, value: newValue } } : n
-      )
-    );
-  };
+  useEffect(() => {
+    valueRef.current = data?.value || "";
+    window.BorealisValueBus[id] = valueRef.current;
+  }, [data?.value, id]);
 
   useEffect(() => {
     let currentRate = window.BorealisUpdateRate || 100;
@@ -38,7 +29,6 @@ const DataNode = ({ id, data }) => {
         const upstreamValue = window.BorealisValueBus[inputEdge.source] ?? "";
         if (upstreamValue !== valueRef.current) {
           valueRef.current = upstreamValue;
-          setRenderValue(upstreamValue);
           window.BorealisValueBus[id] = upstreamValue;
           setNodes((nds) =>
             nds.map((n) =>
@@ -67,9 +57,6 @@ const DataNode = ({ id, data }) => {
     };
   }, [id, setNodes, edges]);
 
-  const inputEdge = edges.find((e) => e?.target === id);
-  const hasInput = Boolean(inputEdge);
-
   return (
     <div className="borealis-node">
       <Handle type="target" position={Position.Left} className="borealis-handle" />
@@ -79,31 +66,12 @@ const DataNode = ({ id, data }) => {
           size="small"
           onClick={() =>
             window.BorealisOpenDrawer &&
-            window.BorealisOpenDrawer(data?.label || "Unknown Node", data)
+            window.BorealisOpenDrawer(data?.label || "Unknown Node", { ...data, nodeId: id })
           }
           sx={{ padding: 0, marginRight: "-3px", color: "#58a6ff", width: "20px", height: "20px" }}
         >
           <SettingsIcon sx={{ fontSize: "16px" }} />
         </IconButton>
-      </div>
-      <div className="borealis-node-content">
-        <div style={{ marginBottom: "8px", fontSize: "9px", color: "#ccc" }}>{data?.content}</div>
-        <label style={{ fontSize: "9px", display: "block", marginBottom: "4px" }}>Value:</label>
-        <input
-          type="text"
-          value={renderValue}
-          onChange={handleManualInput}
-          disabled={hasInput}
-          style={{
-            fontSize: "9px",
-            padding: "4px",
-            background: hasInput ? "#2a2a2a" : "#1e1e1e",
-            color: "#ccc",
-            border: "1px solid #444",
-            borderRadius: "2px",
-            width: "100%"
-          }}
-        />
       </div>
       <Handle type="source" position={Position.Right} className="borealis-handle" />
     </div>
@@ -117,7 +85,7 @@ export default {
   content: "Store a String or Number",
   component: DataNode,
   config: [
-    { key: "value", label: "Initial Value", type: "text" }
+    { key: "value", label: "Value", type: "text" }
   ],
   usage_documentation: `
 ### DataNode Usage
