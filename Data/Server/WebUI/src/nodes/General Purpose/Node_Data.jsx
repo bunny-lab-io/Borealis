@@ -1,5 +1,5 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/General Purpose/Node_Data.jsx
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 import { IconButton } from "@mui/material";
 import { Settings as SettingsIcon } from "@mui/icons-material";
@@ -10,10 +10,12 @@ if (!window.BorealisUpdateRate) window.BorealisUpdateRate = 100;
 const DataNode = ({ id, data }) => {
   const { setNodes } = useReactFlow();
   const edges = useStore((state) => state.edges);
-  const valueRef = useRef(data?.value || "");
+  const [renderValue, setRenderValue] = useState(data?.value || "");
+  const valueRef = useRef(renderValue);
 
   useEffect(() => {
     valueRef.current = data?.value || "";
+    setRenderValue(valueRef.current);
     window.BorealisValueBus[id] = valueRef.current;
   }, [data?.value, id]);
 
@@ -29,6 +31,7 @@ const DataNode = ({ id, data }) => {
         const upstreamValue = window.BorealisValueBus[inputEdge.source] ?? "";
         if (upstreamValue !== valueRef.current) {
           valueRef.current = upstreamValue;
+          setRenderValue(upstreamValue);
           window.BorealisValueBus[id] = upstreamValue;
           setNodes((nds) =>
             nds.map((n) =>
@@ -60,19 +63,22 @@ const DataNode = ({ id, data }) => {
   return (
     <div className="borealis-node">
       <Handle type="target" position={Position.Left} className="borealis-handle" />
+
       <div className="borealis-node-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>{data?.label || "Data Node"}</span>
         <IconButton
           size="small"
-          onClick={() =>
-            window.BorealisOpenDrawer &&
-            window.BorealisOpenDrawer(id, { ...data, nodeId: id })
-          }
-          sx={{ padding: 0, marginRight: "-3px", color: "#58a6ff", width: "20px", height: "20px" }}
+          onClick={() => window.BorealisOpenDrawer && window.BorealisOpenDrawer(id, { ...data, nodeId: id })}
+          sx={{ color: "#888", padding: 0, marginLeft: "auto" }}
         >
-          <SettingsIcon sx={{ fontSize: "16px" }} />
+          <SettingsIcon sx={{ fontSize: 16 }} />
         </IconButton>
       </div>
+
+      <div className="borealis-node-content" style={{ fontSize: "9px", color: "#ccc", marginTop: 4 }}>
+        Value: {renderValue}
+      </div>
+
       <Handle type="source" position={Position.Right} className="borealis-handle" />
     </div>
   );
