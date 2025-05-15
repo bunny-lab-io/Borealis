@@ -2,6 +2,7 @@
 import { Box, Typography, Tabs, Tab, TextField } from "@mui/material";
 import React, { useState } from "react";
 import { useReactFlow } from "reactflow";
+import ReactMarkdown from "react-markdown"; // Used for Node Usage Documentation
 
 export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, title, nodeData }) {
   const [activeTab, setActiveTab] = useState(0);
@@ -95,7 +96,12 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
             variant="fullWidth"
             textColor="inherit"
             TabIndicatorProps={{ style: { backgroundColor: "#58a6ff" } }}
-            sx={{ borderTop: "1px solid #333", borderBottom: "1px solid #333", minHeight: "36px", height: "36px" }}
+            sx={{
+              borderTop: "1px solid #333",
+              borderBottom: "1px solid #333",
+              minHeight: "36px",
+              height: "36px"
+            }}
           >
             <Tab label="Config" sx={{ color: "#ccc", minHeight: "36px", height: "36px", textTransform: "none" }} />
             <Tab label="Usage Docs" sx={{ color: "#ccc", minHeight: "36px", height: "36px", textTransform: "none" }} />
@@ -105,9 +111,25 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
         <Box sx={{ padding: 2 }}>
           {activeTab === 0 && renderConfigFields()}
           {activeTab === 1 && (
-            <Typography sx={{ whiteSpace: "pre-wrap", fontSize: "0.85rem", color: "#aaa" }}>
-              {nodeData?.usage_documentation || "No usage documentation provided for this node."}
-            </Typography>
+            <Box sx={{ fontSize: "0.85rem", color: "#aaa" }}>
+              <ReactMarkdown
+                children={nodeData?.usage_documentation || "No usage documentation provided for this node."}
+                components={{
+                  h3: ({ node, ...props }) => (
+                    <Typography variant="h6" sx={{ color: "#58a6ff", mb: 1 }} {...props} />
+                  ),
+                  p: ({ node, ...props }) => (
+                    <Typography paragraph sx={{ mb: 1.5 }} {...props} />
+                  ),
+                  ul: ({ node, ...props }) => (
+                    <ul style={{ marginBottom: "1em", paddingLeft: "1.2em" }} {...props} />
+                  ),
+                  li: ({ node, ...props }) => (
+                    <li style={{ marginBottom: "0.5em" }} {...props} />
+                  )
+                }}
+              />
+            </Box>
           )}
         </Box>
       </Box>
