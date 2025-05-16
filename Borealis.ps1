@@ -22,51 +22,6 @@
 # Change the Windows OEM code page to 65001 (UTF-8)
 chcp.com 65001 > $null
 
-# ---------------------- Version Check ----------------------
-$localVersionFile = Join-Path $scriptDir "Data\version.txt"
-$remoteVersionUrl = "https://git.bunny-lab.io/Borealis/Borealis/raw/branch/main/Data/version.txt"
-
-$localVersion = "0.000"
-$remoteVersion = "ERROR"
-
-# Get local version
-if (Test-Path $localVersionFile) {
-    try {
-        $localVersion = (Get-Content $localVersionFile -Raw).Trim()
-    } catch {
-        Write-Host "Failed to read local version file." -ForegroundColor Red
-    }
-} else {
-    Write-Host "Local version file not found at: $localVersionFile" -ForegroundColor Yellow
-}
-
-# Get remote version
-try {
-    $remoteVersion = (Invoke-WebRequest -Uri $remoteVersionUrl -UseBasicParsing -TimeoutSec 5).Content.Trim()
-} catch {
-    Write-Host "Failed to fetch remote version. Check URL or network connection." -ForegroundColor Red
-}
-
-# Show diagnostics
-Write-Host "Local:  [$localVersion]"
-Write-Host "Remote: [$remoteVersion]"
-Write-Host "Equal?  " + ($remoteVersion -eq $localVersion)
-Write-Host "Length Local:  $($localVersion.Length)"
-Write-Host "Length Remote: $($remoteVersion.Length)"
-
-# Determine display
-if ($remoteVersion -ne $localVersion -and $remoteVersion -ne "ERROR") {
-    $versionColor = "Green"
-    $versionDisplay = "New Version: $remoteVersion"
-} elseif ($remoteVersion -eq "ERROR") {
-    $versionColor = "Red"
-    $versionDisplay = "Version Check Failed"
-} else {
-    $versionColor = "DarkGray"
-    $versionDisplay = "Up-to-Date"
-}
-
-
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
 
@@ -148,7 +103,7 @@ Write-Host " 3) Build Electron App " -NoNewline -ForegroundColor DarkGray
 Write-Host "[Experimental]" -ForegroundColor Red
 Write-Host " 4) Package Self-Contained EXE of Server or Agent " -NoNewline -ForegroundColor DarkGray
 Write-Host "[Experimental]" -ForegroundColor Red
-Write-Host " 5) Update Borealis ($versionDisplay)" -ForegroundColor $versionColor
+Write-Host " 5) Update Borealis" -ForegroundColor DarkGray
 Write-Host "Type a number and press " -NoNewLine
 Write-Host "<ENTER>" -ForegroundColor DarkCyan
 $choice = Read-Host
@@ -388,51 +343,57 @@ switch ($choice) {
     }
 
     "5" {
-        if ($remoteVersion -eq $localVersion) {
-            Write-Host "Borealis is already up-to-date." -ForegroundColor Gray
-            Exit 0
-        }
-
-        Write-Host "Updating Borealis to version $remoteVersion..." -ForegroundColor Cyan
+        Write-Host " "
+        Write-Host "Updating Borealis..." -ForegroundColor Green
 
         # Prepare paths
         $updateZip = Join-Path $scriptDir "Update_Staging\main.zip"
         $updateDir = Join-Path $scriptDir "Update_Staging\borealis"
 
         # Delete old directories/files
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
+        Run-Step "Updating: Clean Up Folders to Prepare for Update" {
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
             (Join-Path $scriptDir "Data"), `
             (Join-Path $scriptDir "Server\web-interface\src"), `
             (Join-Path $scriptDir "Server\web-interface\build"), `
             (Join-Path $scriptDir "Server\web-interface\public"), `
-            (Join-Path $scriptDir "Update_Staging") # Clear out Previous Update Staging Folder
+            (Join-Path $scriptDir "Server\Borealis")
 
-        # Backup launchers
-        Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.ps1") "Launch-Borealis.ps1.bak"
-        Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.sh")  "Launch-Borealis.sh.bak"
-
-        # Ensure staging folder exists
-        $stagingPath = Join-Path $scriptDir "Update_Staging"
-        if (-not (Test-Path $stagingPath)) {
-            New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null
+            # Backup launchers
+            #Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.ps1") "Launch-Borealis.ps1.bak"
+            #Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.sh")  "Launch-Borealis.sh.bak"
         }
 
-        $updateZip = Join-Path $stagingPath "main.zip"
-        $updateDir = Join-Path $stagingPath "borealis"
+        Run-Step "Updating: Creating Update Staging Folder" {
+            # Ensure staging folder exists
+            $stagingPath = Join-Path $scriptDir "Update_Staging"
+            if (-not (Test-Path $stagingPath)) {
+                New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null
+            }
 
-        # Now download safely
-        Invoke-WebRequest -Uri "https://git.bunny-lab.io/Borealis/Borealis/archive/main.zip" -OutFile $updateZip
+            $updateZip = Join-Path $stagingPath "main.zip"
+            $updateDir = Join-Path $stagingPath "borealis"
+        }
 
+        Run-Step "Updating: Download Update from https://git.bunny-lab.io/Borealis/Borealis/archive/main.zip" {
+            Invoke-WebRequest -Uri "https://git.bunny-lab.io/Borealis/Borealis/archive/main.zip" -OutFile $updateZip
+        }
 
-        # Download & Extract Update
-        Invoke-WebRequest -Uri "https://git.bunny-lab.io/Borealis/Borealis/archive/main.zip" -OutFile $updateZip
-        Expand-Archive -Path $updateZip -DestinationPath (Join-Path $scriptDir "Update_Staging") -Force
+        Run-Step "Updating: Extract Update Files" {
+            Expand-Archive -Path $updateZip -DestinationPath (Join-Path $scriptDir "Update_Staging") -Force
+        }
 
-        # Copy update contents into project root
-        Copy-Item "$updateDir\*" $scriptDir -Recurse -Force
+        Run-Step "Updating: Copy Update Files into Production Borealis Root Folder" {
+            Copy-Item "$updateDir\*" $scriptDir -Recurse -Force
+        }
 
-        Write-Host "`nUpdate Complete! Please restart the Borealis Launch Script." -ForegroundColor Green
-        Read-Host "Press any key to close the launcher script..."
+        Run-Step "Updating: Clean Up Update Staging Folder" {
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $scriptDir "Update_Staging")
+        }
+        
+        Write-Host "`nUpdate Complete! Please Re-Launch the Borealis Script." -ForegroundColor Green
+        Read-Host "Press any key to re-launch Borealis..."
+        & (Join-Path $scriptDir "Borealis.ps1")
         Exit 0
     }
 }
