@@ -443,7 +443,7 @@ switch ($choice) {
             (Join-Path $scriptDir "Server\web-interface\public"), `
             (Join-Path $scriptDir "Server\Borealis")
 
-            # Backup launchers
+            # Backup Launcher Scripts
             #Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.ps1") "Launch-Borealis.ps1.bak"
             #Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.sh")  "Launch-Borealis.sh.bak"
         }
