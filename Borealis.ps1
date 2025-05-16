@@ -410,7 +410,6 @@ switch ($choice) {
         # Backup launchers
         Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.ps1") "Launch-Borealis.ps1.bak"
         Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.sh")  "Launch-Borealis.sh.bak"
-        Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "readme.md")           "readme.md.bak"
 
         # Ensure staging folder exists
         $stagingPath = Join-Path $scriptDir "Update_Staging"
