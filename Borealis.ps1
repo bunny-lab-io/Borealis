@@ -15,6 +15,23 @@
       Set-ExecutionPolicy Unrestricted -Scope Process; .\Borealis.ps1
 #>
 
+Clear-Host
+
+# ASCII Art Banner
+@'
+
+███████████                                        ████   ███         
+░░███░░░░░███                                      ░░███  ░░░          
+ ░███    ░███  ██████  ████████   ██████   ██████   ░███  ████   █████ 
+ ░██████████  ███░░███░░███░░███ ███░░███ ░░░░░███  ░███ ░░███  ███░░  
+ ░███░░░░░███░███ ░███ ░███ ░░░ ░███████   ███████  ░███  ░███ ░░█████ 
+ ░███    ░███░███ ░███ ░███     ░███░░░   ███░░███  ░███  ░███  ░░░░███
+ ███████████ ░░██████  █████    ░░██████ ░░████████ █████ █████ ██████ 
+░░░░░░░░░░░   ░░░░░░  ░░░░░      ░░░░░░   ░░░░░░░░ ░░░░░ ░░░░░ ░░░░░░  
+'@ | Write-Host -ForegroundColor DarkCyan
+Write-Host "Drag-&-Drop Automation Orchestration | Macros | Data Collection & Analysis" -ForegroundColor DarkGray
+Write-Host " "
+Write-Host "Ensuring Dependencies Exist..." -ForegroundColor DarkCyan
 # ---------------------- ASCII Art Terminal Required Changes ----------------------
 # Set the .NET Console output encoding to UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -74,7 +91,7 @@ $nodeInstallDir = Join-Path $depsRoot "NodeJS"
 $node7zPath     = Join-Path $depsRoot "node-v23.11.0-win-x64.7z"
 
 # ---------------------- Ensure NodeJS is Present (Bundled via 7-Zip) ----------------------
-Run-Step "Dependencies: Download NodeJS and Bundle into Borealis" {
+Run-Step "Dependency: NodeJS" {
     if (-not (Test-Path $nodeExe)) {
         # Download archive if not present
         if (-not (Test-Path $node7zPath)) {
@@ -86,7 +103,6 @@ Run-Step "Dependencies: Download NodeJS and Bundle into Borealis" {
             throw "7-Zip CLI not found at: $sevenZipExe"
         }
 
-        Write-Host "Extracting Node.js to $nodeInstallDir..."
         & $sevenZipExe x $node7zPath "-o$nodeInstallDir" -y | Out-Null
 
         # The extracted contents might live under a subfolder; flatten if needed
@@ -102,7 +118,7 @@ Run-Step "Dependencies: Download NodeJS and Bundle into Borealis" {
 }
 
 # ---------------------- Ensure Python is Present (via Installer Extraction) ----------------------
-Run-Step "Dependencies: Download Python and Bundle into Borealis" {
+Run-Step "Dependency: Python" {
     $pythonInstallDir = Join-Path $scriptDir "Dependencies\Python"
     $pythonExe = Join-Path $pythonInstallDir "python.exe"
 
@@ -144,15 +160,12 @@ Run-Step "Dependencies: Download Python and Bundle into Borealis" {
         if (-not (Test-Path $pythonExe)) {
             throw "Python executable not found after MSI extraction."
         }
-
-        Write-Host "Python successfully bundled to: $pythonExe"
     } else {
-        Write-Host "Python already present at $pythonExe"
     }
 }
 
 # ---------------------- Ensure Tesseract OCR is Present (Extract from SFX EXE) ----------------------
-Run-Step "Dependencies: Download Tesseract OCR Installer and Extract" {
+Run-Step "Dependency: Tesseract-OCR" {
     $tessExeUrl     = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
     $tessExePath    = Join-Path $depsRoot "tesseract-installer.exe"
     $tessInstallDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
@@ -182,7 +195,7 @@ Run-Step "Dependencies: Download Tesseract OCR Installer and Extract" {
 }
 
 # ---------------------- Download Tesseract English Language Trained Data ----------------------
-Run-Step "Dependencies: Download Tesseract English Language Trained Data" {
+Run-Step "Dependency: Tesseract-OCR - Trained Model Data" {
     $langDataDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR\tessdata"
     $engPath     = Join-Path $langDataDir "eng.traineddata"
     $osdPath     = Join-Path $langDataDir "osd.traineddata"
