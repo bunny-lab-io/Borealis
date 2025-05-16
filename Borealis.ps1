@@ -22,23 +22,7 @@
 # Change the Windows OEM code page to 65001 (UTF-8)
 chcp.com 65001 > $null
 
-# ---------------------- Common Initialization & Visuals ----------------------
-Clear-Host
-
-# ASCII Art Banner
-@'
-
-███████████                                        ████   ███         
-░░███░░░░░███                                      ░░███  ░░░          
- ░███    ░███  ██████  ████████   ██████   ██████   ░███  ████   █████ 
- ░██████████  ███░░███░░███░░███ ███░░███ ░░░░░███  ░███ ░░███  ███░░  
- ░███░░░░░███░███ ░███ ░███ ░░░ ░███████   ███████  ░███  ░███ ░░█████ 
- ░███    ░███░███ ░███ ░███     ░███░░░   ███░░███  ░███  ░███  ░░░░███
- ███████████ ░░██████  █████    ░░██████ ░░████████ █████ █████ ██████ 
-░░░░░░░░░░░   ░░░░░░  ░░░░░      ░░░░░░   ░░░░░░░░ ░░░░░ ░░░░░ ░░░░░░  
-'@ | Write-Host -ForegroundColor DarkCyan
-Write-Host "Drag-&-Drop Automation Orchestration | Macros | Data Collection & Analysis" -ForegroundColor DarkGray
-
+# ---------------------- Add Common Functions Used Throughout Script ----------------------
 $symbols = @{
     Success = [char]0x2705
     Running = [char]0x23F3
@@ -82,8 +66,57 @@ $scriptDir  = Split-Path $MyInvocation.MyCommand.Path -Parent
 $depsRoot   = Join-Path $scriptDir 'Dependencies'
 $pythonExe  = Join-Path $depsRoot 'Python\python.exe'
 $nodeExe    = Join-Path $depsRoot 'NodeJS\node.exe'
+$sevenZipExe    = Join-Path $depsRoot "7zip\7z.exe"
 $npmCmd     = Join-Path (Split-Path $nodeExe) 'npm.cmd'
 $npxCmd     = Join-Path (Split-Path $nodeExe) 'npx.cmd'
+$node7zUrl      = "https://nodejs.org/dist/v23.11.0/node-v23.11.0-win-x64.7z"
+$nodeInstallDir = Join-Path $depsRoot "NodeJS"
+$node7zPath     = Join-Path $depsRoot "node-v23.11.0-win-x64.7z"
+
+# ---------------------- Ensure NodeJS is Present (Bundled via 7-Zip) ----------------------
+Run-Step "Dependencies: Download NodeJS and Bundle into Borealis" {
+    if (-not (Test-Path $nodeExe)) {
+        # Download archive if not present
+        if (-not (Test-Path $node7zPath)) {
+            Invoke-WebRequest -Uri $node7zUrl -OutFile $node7zPath
+        }
+
+        # Extract using bundled 7z
+        if (-not (Test-Path $sevenZipExe)) {
+            throw "7-Zip CLI not found at: $sevenZipExe"
+        }
+
+        Write-Host "Extracting Node.js to $nodeInstallDir..."
+        & $sevenZipExe x $node7zPath "-o$nodeInstallDir" -y | Out-Null
+
+        # The extracted contents might live under a subfolder; flatten if needed
+        $extracted = Get-ChildItem $nodeInstallDir | Where-Object { $_.PSIsContainer } | Select-Object -First 1
+        if ($extracted) {
+            Get-ChildItem $extracted.FullName | Move-Item -Destination $nodeInstallDir -Force
+            Remove-Item $extracted.FullName -Recurse -Force
+        }
+
+        # Clean Up 7z File After Extraction
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $node7zPath
+    }
+}
+
+# ---------------------- Common Initialization & Visuals ----------------------
+Clear-Host
+
+# ASCII Art Banner
+@'
+
+███████████                                        ████   ███         
+░░███░░░░░███                                      ░░███  ░░░          
+ ░███    ░███  ██████  ████████   ██████   ██████   ░███  ████   █████ 
+ ░██████████  ███░░███░░███░░███ ███░░███ ░░░░░███  ░███ ░░███  ███░░  
+ ░███░░░░░███░███ ░███ ░███ ░░░ ░███████   ███████  ░███  ░███ ░░█████ 
+ ░███    ░███░███ ░███ ░███     ░███░░░   ███░░███  ░███  ░███  ░░░░███
+ ███████████ ░░██████  █████    ░░██████ ░░████████ █████ █████ ██████ 
+░░░░░░░░░░░   ░░░░░░  ░░░░░      ░░░░░░   ░░░░░░░░ ░░░░░ ░░░░░ ░░░░░░  
+'@ | Write-Host -ForegroundColor DarkCyan
+Write-Host "Drag-&-Drop Automation Orchestration | Macros | Data Collection & Analysis" -ForegroundColor DarkGray
 
 foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
     if (-not (Test-Path $tool)) {

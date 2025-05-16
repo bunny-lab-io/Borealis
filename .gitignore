@@ -19,3 +19,6 @@ Borealis-Server.exe
 # Misc Files/Folders
 .vs/s
 /Update_Staging/
+
+# On-the-Fly Downloaded Dependencies
+/Dependencies/NodeJS/
