@@ -181,7 +181,6 @@ Run-Step "Dependency: Tesseract-OCR" {
             throw "7-Zip CLI not found at: $sevenZipExe"
         }
 
-        Write-Host "Extracting Tesseract installer to: $tessInstallDir"
         if (Test-Path $tessInstallDir) {
             Remove-Item $tessInstallDir -Recurse -Force -ErrorAction SilentlyContinue
         }
