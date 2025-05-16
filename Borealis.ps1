@@ -490,8 +490,21 @@ switch ($choice) {
         # Prepare paths
         $updateZip = Join-Path $scriptDir "Update_Staging\main.zip"
         $updateDir = Join-Path $scriptDir "Update_Staging\borealis"
+        $preservePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
+        $preserveBackupPath = Join-Path $scriptDir "Update_Staging\Tesseract-OCR"
 
-        # Delete old directories/files
+        Run-Step "Updating: Move Tesseract-OCR Folder Somewhere Safe to Restore Later" {
+            if (Test-Path $preservePath) {
+                # Ensure staging folder exists
+                $stagingPath = Join-Path $scriptDir "Update_Staging"
+                if (-not (Test-Path $stagingPath)) {
+                    New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null
+                }
+
+                Move-Item -Path $preservePath -Destination $preserveBackupPath -Force
+            }
+        }
+
         Run-Step "Updating: Clean Up Folders to Prepare for Update" {
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
             (Join-Path $scriptDir "Data"), `
@@ -499,14 +512,9 @@ switch ($choice) {
             (Join-Path $scriptDir "Server\web-interface\build"), `
             (Join-Path $scriptDir "Server\web-interface\public"), `
             (Join-Path $scriptDir "Server\Borealis")
-
-            # Backup Launcher Scripts
-            #Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.ps1") "Launch-Borealis.ps1.bak"
-            #Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.sh")  "Launch-Borealis.sh.bak"
         }
 
         Run-Step "Updating: Create Update Staging Folder" {
-            # Ensure staging folder exists
             $stagingPath = Join-Path $scriptDir "Update_Staging"
             if (-not (Test-Path $stagingPath)) {
                 New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null
@@ -528,10 +536,22 @@ switch ($choice) {
             Copy-Item "$updateDir\*" $scriptDir -Recurse -Force
         }
 
+        Run-Step "Updating: Restore Tesseract-OCR Folder" {
+            $restorePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints"
+            if (Test-Path $preserveBackupPath) {
+                # Ensure destination path exists
+                if (-not (Test-Path $restorePath)) {
+                    New-Item -ItemType Directory -Force -Path $restorePath | Out-Null
+                }
+
+                Move-Item -Path $preserveBackupPath -Destination $restorePath -Force
+            }
+        }
+
         Run-Step "Updating: Clean Up Update Staging Folder" {
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $scriptDir "Update_Staging")
         }
-        
+
         Write-Host "`nUpdate Complete! Please Re-Launch the Borealis Script." -ForegroundColor Green
         Read-Host "Press any key to re-launch Borealis..."
         & (Join-Path $scriptDir "Borealis.ps1")
