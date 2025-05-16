@@ -103,7 +103,8 @@ Write-Host " 3) Build Electron App " -NoNewline -ForegroundColor DarkGray
 Write-Host "[Experimental]" -ForegroundColor Red
 Write-Host " 4) Package Self-Contained EXE of Server or Agent " -NoNewline -ForegroundColor DarkGray
 Write-Host "[Experimental]" -ForegroundColor Red
-Write-Host " 5) Update Borealis" -ForegroundColor DarkGray
+Write-Host " 5) Update Borealis" -NoNewLine -ForegroundColor DarkGray
+Write-Host "[Requires Re-Build]" -ForegroundColor Red
 Write-Host "Type a number and press " -NoNewLine
 Write-Host "<ENTER>" -ForegroundColor DarkCyan
 $choice = Read-Host
@@ -364,7 +365,7 @@ switch ($choice) {
             #Rename-Item -ErrorAction SilentlyContinue (Join-Path $scriptDir "Launch-Borealis.sh")  "Launch-Borealis.sh.bak"
         }
 
-        Run-Step "Updating: Creating Update Staging Folder" {
+        Run-Step "Updating: Create Update Staging Folder" {
             # Ensure staging folder exists
             $stagingPath = Join-Path $scriptDir "Update_Staging"
             if (-not (Test-Path $stagingPath)) {
