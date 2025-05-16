@@ -401,7 +401,7 @@ export default function App() {
               About
             </Button>
             <Menu anchorEl={aboutAnchorEl} open={Boolean(aboutAnchorEl)} onClose={handleAboutMenuClose}>
-              <MenuItem onClick={() => { handleAboutMenuClose(); window.open("https://git.bunny-lab.io/Borealis", "_blank"); }}>
+              <MenuItem onClick={() => { handleAboutMenuClose(); window.open("https://git.bunny-lab.io/bunny-lab/Borealis", "_blank"); }}>
                 <MergeTypeIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} /> Gitea Project
               </MenuItem>
               <MenuItem onClick={openCreditsDialog}>
