@@ -151,6 +151,51 @@ Run-Step "Dependencies: Download Python and Bundle into Borealis" {
     }
 }
 
+# ---------------------- Ensure Tesseract OCR is Present (Extract from SFX EXE) ----------------------
+Run-Step "Dependencies: Download Tesseract OCR Installer and Extract" {
+    $tessExeUrl     = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
+    $tessExePath    = Join-Path $depsRoot "tesseract-installer.exe"
+    $tessInstallDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
+
+    if (-not (Test-Path (Join-Path $tessInstallDir "tesseract.exe"))) {
+        # Download the installer if it doesn't exist
+        if (-not (Test-Path $tessExePath)) {
+            Invoke-WebRequest -Uri $tessExeUrl -OutFile $tessExePath
+        }
+
+        # Extract using 7-Zip
+        if (-not (Test-Path $sevenZipExe)) {
+            throw "7-Zip CLI not found at: $sevenZipExe"
+        }
+
+        Write-Host "Extracting Tesseract installer to: $tessInstallDir"
+        if (Test-Path $tessInstallDir) {
+            Remove-Item $tessInstallDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        New-Item -ItemType Directory -Path $tessInstallDir | Out-Null
+
+        & $sevenZipExe x $tessExePath "-o$tessInstallDir" -y | Out-Null
+
+        # Optional cleanup
+        Remove-Item $tessExePath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ---------------------- Download Tesseract English Language Trained Data ----------------------
+Run-Step "Dependencies: Download Tesseract English Language Trained Data" {
+    $langDataDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR\tessdata"
+    $engPath     = Join-Path $langDataDir "eng.traineddata"
+    $osdPath     = Join-Path $langDataDir "osd.traineddata"
+
+    if (-not (Test-Path $engPath)) {
+        Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata" -OutFile $engPath
+    }
+
+    if (-not (Test-Path $osdPath)) {
+        Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/osd.traineddata" -OutFile $osdPath
+    }
+}
+
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
 

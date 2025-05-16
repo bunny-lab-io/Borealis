@@ -24,3 +24,4 @@ Borealis-Server.exe
 # On-the-Fly Downloaded Dependencies
 /Dependencies/NodeJS/
 /Dependencies/Python/
+/Data/Server/Python_API_Endpoints/Tesseract-OCR/
