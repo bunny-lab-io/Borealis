@@ -36,16 +36,12 @@ Powered by a Flask backend and a React Flow frontend, Borealis is perfect for an
 ## ⚡ Getting Started
 
 ### Windows:
-```powershell
-# Windows - Launch Borealis Server and/or Agent
-# To Launch borealis itself, you can just right-click the "Launch-Borealis.ps1" file and select "Run with Powershell", or alternatively, run the command seen below, either in the same powershell session as the first command, or in its own non-administrative session.
-Set-ExecutionPolicy Unrestricted -Scope Process; .\Launch-Borealis.ps1
-```
+To Launch borealis itself, you can just right-click the "`Borealis.ps1`" file and select "`Run with Powershell`".  You may be warned about Execution Policy restrictions.  Just say "Y" to continue or "A" if you dont want to be warned about running untrusted scripts in the future.
+
 ### Linux:
--# Detailed explanations of how to get things working in Linux is not given at this time, but its mostly automated during the deployment, and only requires a single script to be ran.
 ```sh
 # Linux / macOS
-bash Launch-Borealis.sh
+bash Borealis.sh
 ```
 
 **The launch script will**:
@@ -94,6 +90,6 @@ http:
     borealis:
       loadBalancer:
         servers:
-          - url: "http://192.168.3.254:5000"
+          - url: "http://192.168.3.254:5173"
         passHostHeader: true
 ```
