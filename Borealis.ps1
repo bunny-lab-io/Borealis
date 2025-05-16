@@ -103,7 +103,7 @@ Write-Host " 3) Build Electron App " -NoNewline -ForegroundColor DarkGray
 Write-Host "[Experimental]" -ForegroundColor Red
 Write-Host " 4) Package Self-Contained EXE of Server or Agent " -NoNewline -ForegroundColor DarkGray
 Write-Host "[Experimental]" -ForegroundColor Red
-Write-Host " 5) Update Borealis" -NoNewLine -ForegroundColor DarkGray
+Write-Host " 5) Update Borealis " -NoNewLine -ForegroundColor DarkGray
 Write-Host "[Requires Re-Build]" -ForegroundColor Red
 Write-Host "Type a number and press " -NoNewLine
 Write-Host "<ENTER>" -ForegroundColor DarkCyan
