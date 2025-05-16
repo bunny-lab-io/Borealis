@@ -22,3 +22,4 @@ Borealis-Server.exe
 
 # On-the-Fly Downloaded Dependencies
 /Dependencies/NodeJS/
+/Dependencies/Python/

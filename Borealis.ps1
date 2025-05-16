@@ -101,6 +101,56 @@ Run-Step "Dependencies: Download NodeJS and Bundle into Borealis" {
     }
 }
 
+# ---------------------- Ensure Python is Present (via Installer Extraction) ----------------------
+Run-Step "Dependencies: Download Python and Bundle into Borealis" {
+    $pythonInstallDir = Join-Path $scriptDir "Dependencies\Python"
+    $pythonExe = Join-Path $pythonInstallDir "python.exe"
+
+    $pythonMsiBaseUrl = "https://www.python.org/ftp/python/3.13.3/amd64/"
+    $pythonMsiFiles = @(
+        "core.msi",
+        "exe.msi",
+        "lib.msi",
+        "pip.msi",
+        "dev.msi"
+    )
+
+    if (-not (Test-Path $pythonExe)) {
+        if (-not (Test-Path $pythonInstallDir)) {
+            New-Item -ItemType Directory -Path $pythonInstallDir | Out-Null
+        }
+
+        foreach ($file in $pythonMsiFiles) {
+            $url = "$pythonMsiBaseUrl$file"
+            $localPath = Join-Path $scriptDir "Dependencies\$file"
+
+            # Download if missing
+            if (-not (Test-Path $localPath)) {
+                Invoke-WebRequest -Uri $url -OutFile $localPath
+            }
+
+            # Extract MSI into install directory
+            Start-Process -Wait -NoNewWindow -FilePath "msiexec.exe" `
+                -ArgumentList "/a `"$localPath`" /qn TARGETDIR=`"$pythonInstallDir`""
+        }
+
+        # Clean up downloaded MSIs
+        foreach ($file in $pythonMsiFiles) {
+            $localPath = Join-Path $scriptDir "Dependencies\$file"
+            Remove-Item $localPath -Force -ErrorAction SilentlyContinue
+        }
+
+        # Validate success
+        if (-not (Test-Path $pythonExe)) {
+            throw "Python executable not found after MSI extraction."
+        }
+
+        Write-Host "Python successfully bundled to: $pythonExe"
+    } else {
+        Write-Host "Python already present at $pythonExe"
+    }
+}
+
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
 
