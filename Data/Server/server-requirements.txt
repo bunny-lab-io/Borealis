@@ -22,8 +22,8 @@ opencv-python          # Computer vision processing
 pytesseract            # OCR engine
 easyocr                # Deep-learning-based OCR
 Pillow                 # Image processing (Windows)
-mss                    # Fast cross-platform screen capture
+###mss                    # Fast cross-platform screen capture
 
 # WebRTC Video Libraries
-aiortc                 # Python library for WebRTC in async environments
-av                     # Required by aiortc for video/audio codecs
+###aiortc                 # Python library for WebRTC in async environments
+###av                     # Required by aiortc for video/audio codecs

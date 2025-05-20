@@ -208,6 +208,21 @@ Run-Step "Dependency: Tesseract-OCR - Trained Model Data" {
     }
 }
 
+# ---------------------- Ensure Coturn TURN Server Binaries are Downloaded ----------------------
+Run-Step "Dependency: Coturn WebRTC TURN Server" {
+    $coturnDir = "Dependencies\Coturn_TURN_Server"
+    $coturnExe = "$coturnDir\coturn.exe"
+    $confPath  = "Data\Server\WebRTC\WebRTC_TURNServer.conf"
+    If (!(Test-Path $coturnDir)) { New-Item -ItemType Directory -Force -Path $coturnDir }
+    If (!(Test-Path $coturnExe)) {
+        Write-Host "Downloading Coturn TURN server binary..."
+        # Use latest or a fixed version, e.g., from GitHub or your own mirror:
+        # Replace with a real direct URL to a Windows build.
+        $url = "https://github.com/coturn/coturn/releases/download/4.5.3/turnserver.exe"
+        Invoke-WebRequest -Uri $url -OutFile $coturnExe
+    }
+    Write-Host "Coturn TURN Server is ready."
+}
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
 
