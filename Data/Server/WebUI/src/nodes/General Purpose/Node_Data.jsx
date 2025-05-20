@@ -66,13 +66,6 @@ const DataNode = ({ id, data }) => {
 
       <div className="borealis-node-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>{data?.label || "Data Node"}</span>
-        <IconButton
-          size="small"
-          onClick={() => window.BorealisOpenDrawer && window.BorealisOpenDrawer(id, { ...data, nodeId: id })}
-          sx={{ color: "#888", padding: 0, marginLeft: "auto" }}
-        >
-          <SettingsIcon sx={{ fontSize: 16 }} />
-        </IconButton>
       </div>
 
       <div className="borealis-node-content" style={{ fontSize: "9px", color: "#ccc", marginTop: 4 }}>
