@@ -267,6 +267,8 @@ export default function FlowEditor({
               }
             : null
         }
+        setNodes={setNodes}
+        selectedNode={selectedNode}
       />
 
       {/* Edge Properties Sidebar */}

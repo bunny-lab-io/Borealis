@@ -1,13 +1,20 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Node_Configuration_Sidebar.jsx
-import { Box, Typography, Tabs, Tab, TextField, MenuItem } from "@mui/material";
+import { Box, Typography, Tabs, Tab, TextField, MenuItem, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, Button } from "@mui/material";
 import React, { useState } from "react";
 import { useReactFlow } from "reactflow";
 import ReactMarkdown from "react-markdown"; // Used for Node Usage Documentation
+import EditIcon from "@mui/icons-material/Edit";
 
-export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, title, nodeData }) {
+export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, title, nodeData, setNodes, selectedNode }) {
   const [activeTab, setActiveTab] = useState(0);
-  const { setNodes } = useReactFlow();
+  const contextSetNodes = useReactFlow().setNodes;
+  // Use setNodes from props if provided, else fallback to context (for backward compatibility)
+  const effectiveSetNodes = setNodes || contextSetNodes;
   const handleTabChange = (_, newValue) => setActiveTab(newValue);
+
+  // Rename dialog state
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState(title || "");
 
   const renderConfigFields = () => {
     const config = nodeData?.config || [];
@@ -31,7 +38,7 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
               onChange={(e) => {
                 const newValue = e.target.value;
                 if (!nodeId) return;
-                setNodes((nds) =>
+                effectiveSetNodes((nds) =>
                   nds.map((n) =>
                     n.id === nodeId
                       ? { ...n, data: { ...n.data, [field.key]: newValue } }
@@ -101,7 +108,7 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
               onChange={(e) => {
                 const newValue = e.target.value;
                 if (!nodeId) return;
-                setNodes((nds) =>
+                effectiveSetNodes((nds) =>
                   nds.map((n) =>
                     n.id === nodeId
                       ? { ...n, data: { ...n.data, [field.key]: newValue } }
@@ -164,9 +171,22 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
       >
         <Box sx={{ backgroundColor: "#232323", borderBottom: "1px solid #333" }}>
           <Box sx={{ padding: "12px 16px" }}>
-            <Typography variant="h7" sx={{ color: "#0475c2", fontWeight: "bold" }}>
-              {"Edit " + (title || "Node")}
-            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <Typography variant="h7" sx={{ color: "#0475c2", fontWeight: "bold" }}>
+                {"Edit " + (title || "Node")}
+              </Typography>
+              <IconButton
+                size="small"
+                aria-label="Rename Node"
+                onClick={() => {
+                  setRenameValue(title || "");
+                  setRenameOpen(true);
+                }}
+                sx={{ ml: 1, color: "#58a6ff" }}
+              >
+                <EditIcon fontSize="small" />
+              </IconButton>
+            </Box>
           </Box>
           <Tabs
             value={activeTab}
@@ -230,6 +250,61 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
           )}
         </Box>
       </Box>
+
+      {/* Rename Node Dialog */}
+      <Dialog
+        open={renameOpen}
+        onClose={() => setRenameOpen(false)}
+        PaperProps={{ sx: { bgcolor: "#232323" } }}
+      >
+        <DialogTitle>Rename Node</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            variant="outlined"
+            label="Node Title"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            sx={{
+              mt: 1,
+              bgcolor: "#1e1e1e",
+              "& .MuiOutlinedInput-root": {
+                color: "#ccc",
+                backgroundColor: "#1e1e1e",
+                "& fieldset": { borderColor: "#444" }
+              },
+              label: { color: "#aaa" }
+            }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button sx={{ color: "#aaa" }} onClick={() => setRenameOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            sx={{ color: "#58a6ff" }}
+            onClick={() => {
+              // Use selectedNode (passed as prop) or nodeData?.nodeId as fallback
+              const nodeId = selectedNode?.id || nodeData?.nodeId;
+              if (!nodeId) {
+                setRenameOpen(false);
+                return;
+              }
+              effectiveSetNodes((nds) =>
+                nds.map((n) =>
+                  n.id === nodeId
+                    ? { ...n, data: { ...n.data, label: renameValue } }
+                    : n
+                )
+              );
+              setRenameOpen(false);
+            }}
+          >
+            Save
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }
