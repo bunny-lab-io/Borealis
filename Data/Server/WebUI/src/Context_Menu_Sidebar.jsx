@@ -10,7 +10,7 @@ const SIDEBAR_WIDTH = 400;
 const DEFAULT_EDGE_STYLE = {
   type: "bezier",
   animated: true,
-  style: { strokeDasharray: "6 3", stroke: "#58a6ff", strokeWidth: 2 },
+  style: { strokeDasharray: "6 3", stroke: "#58a6ff", strokeWidth: 1 },
   label: "",
   labelStyle: { fill: "#fff", fontWeight: "bold" },
   labelBgStyle: { fill: "#2c2c2c", fillOpacity: 0.85, rx: 16, ry: 16 },
