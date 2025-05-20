@@ -10,4 +10,10 @@ PyQt5
 qasync
 
 # Computer Vision & OCR Dependencies
-Pillow
+opencv-python          # Computer vision processing
+Pillow                 # Image processing (Windows)
+mss                    # Fast cross-platform screen capture
+
+# WebRTC Video Libraries
+aiortc                 # Python library for WebRTC in async environments
+av                     # Required by aiortc for video/audio codecs
