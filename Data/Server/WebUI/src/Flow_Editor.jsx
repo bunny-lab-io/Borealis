@@ -199,17 +199,26 @@ export default function FlowEditor({
     });
     const id = "node-" + Date.now();
     const nodeMeta = Object.values(categorizedNodes).flat().find((n) => n.type === type);
+    // Seed config defaults:
+    const configDefaults = {};
+    (nodeMeta?.config || []).forEach(cfg => {
+      if (cfg.defaultValue !== undefined) {
+        configDefaults[cfg.key] = cfg.defaultValue;
+      }
+    });
     const newNode = {
       id,
       type,
       position,
       data: {
         label: nodeMeta?.label || type,
-        content: nodeMeta?.content
+        content: nodeMeta?.content,
+        ...configDefaults
       },
       dragHandle: ".borealis-node-header"
     };
     setNodes((nds) => [...nds, newNode]);
+
   }, [project, setNodes, categorizedNodes]);
 
   const onDragOver = useCallback((event) => {
