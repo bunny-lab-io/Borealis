@@ -1,9 +1,9 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: Node_OCR_Text_Extraction.jsx
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Image Processing/Node_OCR_Text_Extraction.jsx
 
 import React, { useEffect, useState, useRef } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 
-// Base64 comparison using hash (lightweight)
+// Lightweight hash for image change detection
 const getHashScore = (str = "") => {
     let hash = 0;
     for (let i = 0; i < str.length; i += 101) {
@@ -22,43 +22,22 @@ const OCRNode = ({ id, data }) => {
     const { setNodes } = useReactFlow();
 
     const [ocrOutput, setOcrOutput] = useState("");
-    const [engine, setEngine] = useState(data?.engine || "None");
-    const [backend, setBackend] = useState(data?.backend || "CPU");
-    const [dataType, setDataType] = useState(data?.dataType || "Mixed");
-    const [customRateEnabled, setCustomRateEnabled] = useState(data?.customRateEnabled ?? true);
-    const [customRateMs, setCustomRateMs] = useState(data?.customRateMs || 1000);
-    const [changeThreshold, setChangeThreshold] = useState(data?.changeThreshold || 0);
-
     const valueRef = useRef("");
     const lastUsed = useRef({ engine: "", backend: "", dataType: "" });
     const lastProcessedAt = useRef(0);
     const lastImageHash = useRef(0);
 
-    // Sync updated settings back into node.data for persistence
-    useEffect(() => {
-        setNodes((nodes) =>
-            nodes.map((n) =>
-                n.id === id
-                    ? {
-                          ...n,
-                          data: {
-                              ...n.data,
-                              engine,
-                              backend,
-                              dataType,
-                              customRateEnabled,
-                              customRateMs,
-                              changeThreshold
-                          }
-                      }
-                    : n
-            )
-        );
-    }, [engine, backend, dataType, customRateEnabled, customRateMs, changeThreshold]);
+    // Always get config from props (sidebar sets these in node.data)
+    const engine = data?.engine || "None";
+    const backend = data?.backend || "CPU";
+    const dataType = data?.dataType || "Mixed";
+    const customRateEnabled = data?.customRateEnabled ?? true;
+    const customRateMs = data?.customRateMs || 1000;
+    const changeThreshold = data?.changeThreshold || 0;
 
+    // OCR API Call
     const sendToOCRAPI = async (base64) => {
         const cleanBase64 = base64.replace(/^data:image\/[a-zA-Z]+;base64,/, "");
-
         try {
             const response = await fetch("/api/ocr", {
                 method: "POST",
@@ -74,6 +53,7 @@ const OCRNode = ({ id, data }) => {
         }
     };
 
+    // Filter lines based on user type
     const filterLines = (lines) => {
         if (dataType === "Numerical") {
             return lines.map(line => line.replace(/[^\d.%\s]/g, '').replace(/\s+/g, ' ').trim()).filter(Boolean);
@@ -149,57 +129,6 @@ const OCRNode = ({ id, data }) => {
                 <div style={{ fontSize: "9px", marginBottom: "8px", color: "#ccc" }}>
                     Extract Multi-Line Text from Upstream Image Node
                 </div>
-
-                <label style={labelStyle}>OCR Engine:</label>
-                <select value={engine} onChange={(e) => setEngine(e.target.value)} style={dropdownStyle}>
-                    <option value="None">None</option>
-                    <option value="TesseractOCR">TesseractOCR</option>
-                    <option value="EasyOCR">EasyOCR</option>
-                </select>
-
-                <label style={labelStyle}>Compute:</label>
-                <select value={backend} onChange={(e) => setBackend(e.target.value)} style={dropdownStyle} disabled={engine === "None"}>
-                    <option value="CPU">CPU</option>
-                    <option value="GPU">GPU</option>
-                </select>
-
-                <label style={labelStyle}>Data Type:</label>
-                <select value={dataType} onChange={(e) => setDataType(e.target.value)} style={dropdownStyle}>
-                    <option value="Mixed">Mixed Data</option>
-                    <option value="Numerical">Numerical Data</option>
-                    <option value="String">String Data</option>
-                </select>
-
-                <label style={labelStyle}>Custom API Rate-Limit (ms):</label>
-                <div style={{ display: "flex", alignItems: "center", marginBottom: "8px" }}>
-                    <input
-                        type="checkbox"
-                        checked={customRateEnabled}
-                        onChange={(e) => setCustomRateEnabled(e.target.checked)}
-                        style={{ marginRight: "8px" }}
-                    />
-                    <input
-                        type="number"
-                        min="100"
-                        step="100"
-                        value={customRateMs}
-                        onChange={(e) => setCustomRateMs(Number(e.target.value))}
-                        disabled={!customRateEnabled}
-                        style={numberInputStyle}
-                    />
-                </div>
-
-                <label style={labelStyle}>Change Detection Sensitivity Threshold:</label>
-                <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="1"
-                    value={changeThreshold}
-                    onChange={(e) => setChangeThreshold(Number(e.target.value))}
-                    style={numberInputStyle}
-                />
-
                 <label style={labelStyle}>OCR Output:</label>
                 <textarea
                     readOnly
@@ -229,31 +158,81 @@ const labelStyle = {
     marginBottom: "2px"
 };
 
-const dropdownStyle = {
-    width: "100%",
-    fontSize: "9px",
-    padding: "4px",
-    background: "#1e1e1e",
-    color: "#ccc",
-    border: "1px solid #444",
-    borderRadius: "2px"
-};
-
-const numberInputStyle = {
-    width: "80px",
-    fontSize: "9px",
-    background: "#1e1e1e",
-    color: "#ccc",
-    border: "1px solid #444",
-    borderRadius: "2px",
-    padding: "2px 4px",
-    marginBottom: "8px"
-};
-
+// Node registration for Borealis (modern, sidebar-enabled)
 export default {
     type: "OCR_Text_Extraction",
     label: "OCR Text Extraction",
-    description: `Extract text from upstream image using backend OCR engine via API.  Includes rate limiting and sensitivity detection for smart processing.`,
+    description: `Extract text from upstream image using backend OCR engine via API. Includes rate limiting and sensitivity detection for smart processing.`,
     content: "Extract Multi-Line Text from Upstream Image Node",
-    component: OCRNode
+    component: OCRNode,
+    config: [
+        {
+            key: "engine",
+            label: "OCR Engine",
+            type: "select",
+            options: ["None", "TesseractOCR", "EasyOCR"],
+            defaultValue: "None"
+        },
+        {
+            key: "backend",
+            label: "Compute Backend",
+            type: "select",
+            options: ["CPU", "GPU"],
+            defaultValue: "CPU"
+        },
+        {
+            key: "dataType",
+            label: "Data Type Filter",
+            type: "select",
+            options: ["Mixed", "Numerical", "String"],
+            defaultValue: "Mixed"
+        },
+        {
+            key: "customRateEnabled",
+            label: "Custom API Rate Limit Enabled",
+            type: "select",
+            options: ["true", "false"],
+            defaultValue: "true"
+        },
+        {
+            key: "customRateMs",
+            label: "Custom API Rate Limit (ms)",
+            type: "text",
+            defaultValue: "1000"
+        },
+        {
+            key: "changeThreshold",
+            label: "Change Detection Sensitivity (0-100)",
+            type: "text",
+            defaultValue: "0"
+        }
+    ],
+    usage_documentation: `
+### OCR Text Extraction Node
+
+Extracts text (lines) from an **upstream image node** using a selectable backend OCR engine (Tesseract or EasyOCR). Designed for screenshots, scanned forms, and live image data pipelines.
+
+**Features:**
+- **Engine:** Select between None, TesseractOCR, or EasyOCR
+- **Backend:** Choose CPU or GPU (if supported)
+- **Data Type Filter:** Post-processes recognized lines for numerical-only or string-only content
+- **Custom API Rate Limit:** When enabled, you can set a custom polling rate for OCR requests (in ms)
+- **Change Detection Sensitivity:** Node will only re-OCR if the input image changes significantly (hash-based, 0 disables)
+
+**Outputs:**
+- Array of recognized lines, pushed to downstream nodes
+- Output is displayed in the node (read-only)
+
+**Usage:**
+- Connect an image node (base64 output) to this node's input
+- Configure OCR engine and options in the sidebar
+- Useful for extracting values from screen regions, live screenshots, PDF scans, etc.
+
+**Notes:**
+- Setting Engine to 'None' disables OCR
+- Use numerical/string filter for precise downstream parsing
+- Polling rate too fast may cause backend overload
+- Change threshold is a 0-100 scale (0 = always run, 100 = image must change completely)
+
+`.trim()
 };
