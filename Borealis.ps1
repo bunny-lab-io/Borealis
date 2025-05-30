@@ -524,8 +524,8 @@ switch ($choice) {
             $updateDir = Join-Path $stagingPath "borealis"
         }
 
-        Run-Step "Updating: Download Update from https://git.bunny-lab.io/Borealis/Borealis/archive/main.zip" {
-            Invoke-WebRequest -Uri "https://git.bunny-lab.io/Borealis/Borealis/archive/main.zip" -OutFile $updateZip
+        Run-Step "Updating: Download Update from https://git.bunny-lab.io/bunny-lab/Borealis/archive/main.zip" {
+            Invoke-WebRequest -Uri "https://git.bunny-lab.io/bunny-lab/Borealis/archive/main.zip" -OutFile $updateZip
         }
 
         Run-Step "Updating: Extract Update Files" {
