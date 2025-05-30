@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 
+// Modern Node: Borealis Agent (Sidebar Config Enabled)
 const BorealisAgentNode = ({ id, data }) => {
   const { getNodes, setNodes } = useReactFlow();
   const edges = useStore((state) => state.edges);
@@ -10,7 +11,7 @@ const BorealisAgentNode = ({ id, data }) => {
   const [isConnected, setIsConnected] = useState(false);
   const prevRolesRef = useRef([]);
 
-  // ---------------- Agent List & Sorting ----------------
+  // Agent List Sorted (Online First)
   const agentList = useMemo(() => {
     if (!agents || typeof agents !== "object") return [];
     return Object.entries(agents)
@@ -23,7 +24,7 @@ const BorealisAgentNode = ({ id, data }) => {
       .sort((a, b) => b.last_seen - a.last_seen);
   }, [agents]);
 
-  // ---------------- Periodic Agent Fetching ----------------
+  // Fetch Agents Periodically
   useEffect(() => {
     const fetchAgents = () => {
       fetch("/api/agents")
@@ -36,7 +37,7 @@ const BorealisAgentNode = ({ id, data }) => {
     return () => clearInterval(interval);
   }, []);
 
-  // ---------------- Node Data Sync ----------------
+  // Sync node data with sidebar changes
   useEffect(() => {
     setNodes((nds) =>
       nds.map((n) =>
@@ -44,9 +45,9 @@ const BorealisAgentNode = ({ id, data }) => {
       )
     );
     setIsConnected(false);
-  }, [selectedAgent]);
+  }, [selectedAgent, setNodes, id]);
 
-  // ---------------- Attached Role Collection ----------------
+  // Attached Roles logic
   const attachedRoleIds = useMemo(
     () =>
       edges
@@ -54,7 +55,6 @@ const BorealisAgentNode = ({ id, data }) => {
         .map((e) => e.target),
     [edges, id]
   );
-
   const getAttachedRoles = useCallback(() => {
     const allNodes = getNodes();
     return attachedRoleIds
@@ -65,9 +65,9 @@ const BorealisAgentNode = ({ id, data }) => {
       .filter((r) => r);
   }, [attachedRoleIds, getNodes]);
 
-  // ---------------- Provision Role Logic ----------------
+  // Provision Roles to Agent
   const provisionRoles = useCallback((roles) => {
-    if (!selectedAgent) return; // Allow empty roles but require agent
+    if (!selectedAgent) return;
     fetch("/api/agent/provision", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -79,12 +79,10 @@ const BorealisAgentNode = ({ id, data }) => {
       })
       .catch(() => {});
   }, [selectedAgent]);
-
   const handleConnect = useCallback(() => {
     const roles = getAttachedRoles();
-    provisionRoles(roles); // Always call even with empty roles
+    provisionRoles(roles);
   }, [getAttachedRoles, provisionRoles]);
-
   const handleDisconnect = useCallback(() => {
     if (!selectedAgent) return;
     fetch("/api/agent/provision", {
@@ -99,7 +97,7 @@ const BorealisAgentNode = ({ id, data }) => {
       .catch(() => {});
   }, [selectedAgent]);
 
-  // ---------------- Auto-Provision When Roles Change ----------------
+  // Auto-provision on role change
   useEffect(() => {
     const newRoles = getAttachedRoles();
     const prevSerialized = JSON.stringify(prevRolesRef.current || []);
@@ -109,7 +107,7 @@ const BorealisAgentNode = ({ id, data }) => {
     }
   }, [attachedRoleIds, isConnected, getAttachedRoles, provisionRoles]);
 
-  // ---------------- Status Label ----------------
+  // Status Label
   const selectedAgentStatus = useMemo(() => {
     if (!selectedAgent) return "Unassigned";
     const agent = agents[selectedAgent];
@@ -117,7 +115,7 @@ const BorealisAgentNode = ({ id, data }) => {
     return agent.status === "provisioned" ? "Connected" : "Available";
   }, [agents, selectedAgent]);
 
-  // ---------------- Render ----------------
+  // Render (Sidebar handles config)
   return (
     <div className="borealis-node">
       <Handle
@@ -173,16 +171,51 @@ const BorealisAgentNode = ({ id, data }) => {
   );
 };
 
+// Node Registration Object with sidebar config and docs
 export default {
   type: "Borealis_Agent",
   label: "Borealis Agent",
   description: `
-Main Agent Node
-
-- Selects an available agent
-- Connect/disconnects via button
-- Auto-updates roles when attached roles change
+Select and connect to a remote Borealis Agent.
+- Assign roles to agent dynamically by connecting "Agent Role" nodes.
+- Auto-provisions agent as role assignments change.
+- See live agent status and re-connect/disconnect easily.
 `.trim(),
   content: "Select and manage an Agent with dynamic roles",
   component: BorealisAgentNode,
+  config: [
+    {
+      key: "agent_id",
+      label: "Agent",
+      type: "text", // NOTE: UI populates via agent fetch, but config drives default for sidebar.
+      defaultValue: ""
+    }
+  ],
+  usage_documentation: `
+### Borealis Agent Node
+
+This node represents an available Borealis Agent (Python client) you can control from your workflow.
+
+#### Features
+- **Select** an agent from the list of online agents.
+- **Connect/Disconnect** from the agent at any time.
+- **Attach roles** (by connecting "Agent Role" nodes to this node's output handle) to assign behaviors dynamically.
+- **Live status** shows if the agent is available, connected, or offline.
+
+#### How to Use
+1. **Drag in a Borealis Agent node.**
+2. **Pick an agent** from the dropdown list (auto-populates from backend).
+3. **Click "Connect to Agent"** to provision it for the workflow.
+4. **Attach Agent Role Nodes** (e.g., Screenshot, Macro Keypress) to the "provisioner" output handle to define what the agent should do.
+5. Agent will automatically update its roles as you change connected Role Nodes.
+
+#### Output Handle
+- "provisioner" (bottom): Connect Agent Role nodes here.
+
+#### Good to Know
+- If an agent disconnects or goes offline, its status will show "Reconnecting..." until it returns.
+- Node config can be edited in the right sidebar.
+- **Roles update LIVE**: Any time you change attached roles, the agent gets updated instantly.
+
+`.trim()
 };
