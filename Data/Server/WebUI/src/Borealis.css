@@ -66,7 +66,11 @@
 
 /* Borealis Node Styling */
 .borealis-node {
-    background: #2c2c2c;
+    background: linear-gradient(
+        to bottom,
+        #2c2c2c 60%,
+        #232323 100%
+    );
     border: 1px solid #3a3a3a;
     border-radius: 4px;
     color: #ccc;
@@ -77,6 +81,22 @@
     box-shadow: 0 0 5px rgba(88, 166, 255, 0.15),
                 0 0 10px rgba(88, 166, 255, 0.15);
     transition: box-shadow 0.3s ease-in-out;
+}
+.borealis-node::before {
+    content: "";
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 3px;        /* Accent width */
+    height: 100%;
+    background: linear-gradient(
+        to bottom,
+        #58a6ff 0%,
+        #0475c2 100%
+    ); /* Or any accent color(s) you want */
+    border-top-left-radius: 4px;
+    border-bottom-left-radius: 4px;
 }
 .borealis-node-header {
     background: #232323;
