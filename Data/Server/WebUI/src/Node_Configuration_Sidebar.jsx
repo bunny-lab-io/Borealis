@@ -1,9 +1,24 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Node_Configuration_Sidebar.jsx
-import { Box, Typography, Tabs, Tab, TextField, MenuItem, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, Button } from "@mui/material";
+import { Box, Typography, Tabs, Tab, TextField, MenuItem, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, Button, Tooltip } from "@mui/material";
 import React, { useState } from "react";
 import { useReactFlow } from "reactflow";
 import ReactMarkdown from "react-markdown"; // Used for Node Usage Documentation
 import EditIcon from "@mui/icons-material/Edit";
+import PaletteIcon from "@mui/icons-material/Palette";
+import { SketchPicker } from "react-color";
+
+// ---- NEW: Brightness utility for gradient ----
+function darkenColor(hex, percent = 0.7) {
+  if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) return hex;
+  let r = parseInt(hex.slice(1, 3), 16);
+  let g = parseInt(hex.slice(3, 5), 16);
+  let b = parseInt(hex.slice(5, 7), 16);
+  r = Math.round(r * percent);
+  g = Math.round(g * percent);
+  b = Math.round(b * percent);
+  return `#${r.toString(16).padStart(2,"0")}${g.toString(16).padStart(2,"0")}${b.toString(16).padStart(2,"0")}`;
+}
+// --------------------------------------------
 
 export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, title, nodeData, setNodes, selectedNode }) {
   const [activeTab, setActiveTab] = useState(0);
@@ -15,6 +30,11 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
   // Rename dialog state
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(title || "");
+
+  // ---- NEW: Accent Color Picker ----
+  const [colorDialogOpen, setColorDialogOpen] = useState(false);
+  const accentColor = selectedNode?.data?.accentColor || "#58a6ff";
+  // ----------------------------------
 
   const renderConfigFields = () => {
     const config = nodeData?.config || [];
@@ -39,11 +59,21 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
                 const newValue = e.target.value;
                 if (!nodeId) return;
                 effectiveSetNodes((nds) =>
-                  nds.map((n) =>
-                    n.id === nodeId
-                      ? { ...n, data: { ...n.data, [field.key]: newValue } }
-                      : n
-                  )
+                  nds.map((n) => {
+                    if (n.id !== nodeId) return n;
+                    const accentColor = color.hex;
+                    const accentColorDark = darkenColor(accentColor, 0.7);
+                    return {
+                      ...n,
+                      data: { ...n.data, accentColor },
+                      style: {
+                        ...n.style,
+                        "--borealis-accent": accentColor,
+                        "--borealis-accent-dark": accentColorDark,
+                        "--borealis-title": accentColor,
+                      },
+                    };
+                  })
                 );
                 window.BorealisValueBus[nodeId] = newValue;
               }}
@@ -133,6 +163,27 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
     });
   };
 
+  // ---- NEW: Accent Color Button ----
+  const renderAccentColorButton = () => (
+    <Tooltip title="Override Node Header/Accent Color">
+      <IconButton
+        size="small"
+        aria-label="Override Node Color"
+        onClick={() => setColorDialogOpen(true)}
+        sx={{
+          ml: 1,
+          border: "1px solid #58a6ff",
+          background: accentColor,
+          color: "#222",
+          width: 28, height: 28, p: 0
+        }}
+      >
+        <PaletteIcon fontSize="small" />
+      </IconButton>
+    </Tooltip>
+  );
+  // ----------------------------------
+
   return (
     <>
       <Box
@@ -175,17 +226,22 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
               <Typography variant="h7" sx={{ color: "#0475c2", fontWeight: "bold" }}>
                 {"Edit " + (title || "Node")}
               </Typography>
-              <IconButton
-                size="small"
-                aria-label="Rename Node"
-                onClick={() => {
-                  setRenameValue(title || "");
-                  setRenameOpen(true);
-                }}
-                sx={{ ml: 1, color: "#58a6ff" }}
-              >
-                <EditIcon fontSize="small" />
-              </IconButton>
+              <Box sx={{ display: "flex", alignItems: "center" }}>
+                <IconButton
+                  size="small"
+                  aria-label="Rename Node"
+                  onClick={() => {
+                    setRenameValue(title || "");
+                    setRenameOpen(true);
+                  }}
+                  sx={{ ml: 1, color: "#58a6ff" }}
+                >
+                  <EditIcon fontSize="small" />
+                </IconButton>
+                {/* ---- NEW: Accent Color Picker button next to pencil ---- */}
+                {renderAccentColorButton()}
+                {/* ------------------------------------------------------ */}
+              </Box>
             </Box>
           </Box>
           <Tabs
@@ -305,6 +361,70 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* ---- NEW: Accent Color Picker Dialog ---- */}
+      <Dialog
+        open={colorDialogOpen}
+        onClose={() => setColorDialogOpen(false)}
+        PaperProps={{ sx: { bgcolor: "#232323" } }}
+      >
+        <DialogTitle>Pick Node Header/Accent Color</DialogTitle>
+        <DialogContent>
+          <SketchPicker
+            color={accentColor}
+            onChangeComplete={(color) => {
+              const nodeId = selectedNode?.id || nodeData?.nodeId;
+              if (!nodeId) return;
+              const accent = color.hex;
+              const accentDark = darkenColor(accent, 0.7);
+              effectiveSetNodes((nds) =>
+                nds.map((n) =>
+                  n.id === nodeId
+                    ? {
+                        ...n,
+                        data: { ...n.data, accentColor: accent },
+                        style: {
+                          ...n.style,
+                          "--borealis-accent": accent,
+                          "--borealis-accent-dark": accentDark,
+                          "--borealis-title": accent,
+                        },
+                      }
+                    : n
+                )
+              );
+            }}
+            disableAlpha
+            presetColors={[
+              "#58a6ff", "#0475c2", "#00d18c", "#ff4f4f", "#ff8c00",
+              "#6b21a8", "#0e7490", "#888", "#fff", "#000"
+            ]}
+          />
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="body2">
+              The node's header text and accent gradient will use your selected color.<br />
+              The accent gradient fades to a slightly darker version.
+            </Typography>
+            <Box sx={{ mt: 2, display: "flex", alignItems: "center" }}>
+              <span style={{
+                display: "inline-block",
+                width: 48,
+                height: 22,
+                borderRadius: 4,
+                border: "1px solid #888",
+                background: `linear-gradient(to bottom, ${accentColor} 0%, ${darkenColor(accentColor, 0.7)} 100%)`
+              }} />
+              <span style={{ marginLeft: 10, color: accentColor, fontWeight: "bold" }}>
+                {accentColor}
+              </span>
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setColorDialogOpen(false)} sx={{ color: "#aaa" }}>Close</Button>
+        </DialogActions>
+      </Dialog>
+      {/* ---- END ACCENT COLOR PICKER DIALOG ---- */}
     </>
   );
 }
