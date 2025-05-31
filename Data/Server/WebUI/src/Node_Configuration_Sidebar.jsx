@@ -59,21 +59,11 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
                 const newValue = e.target.value;
                 if (!nodeId) return;
                 effectiveSetNodes((nds) =>
-                  nds.map((n) => {
-                    if (n.id !== nodeId) return n;
-                    const accentColor = color.hex;
-                    const accentColorDark = darkenColor(accentColor, 0.7);
-                    return {
-                      ...n,
-                      data: { ...n.data, accentColor },
-                      style: {
-                        ...n.style,
-                        "--borealis-accent": accentColor,
-                        "--borealis-accent-dark": accentColorDark,
-                        "--borealis-title": accentColor,
-                      },
-                    };
-                  })
+                  nds.map((n) =>
+                    n.id === nodeId
+                      ? { ...n, data: { ...n.data, [field.key]: newValue } }
+                      : n
+                  )
                 );
                 window.BorealisValueBus[nodeId] = newValue;
               }}
