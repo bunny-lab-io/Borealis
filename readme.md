@@ -1,5 +1,3 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: `<ProjectRoot>/readme.md`
-
 ![Borealis Logo](https://git.bunny-lab.io/Bunny-Lab/Borealis/raw/branch/main/Data/Server/WebUI/public/Borealis_Logo_Full.png)
 
 # Borealis: Visual Automation For Everyone
