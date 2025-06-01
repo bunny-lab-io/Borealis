@@ -10,6 +10,7 @@ from functools import partial
 from io import BytesIO
 import base64
 import traceback
+import platform # OS Detection
 
 import socketio
 from qasync import QEventLoop
@@ -76,6 +77,25 @@ class ConfigManager:
 
 CONFIG = ConfigManager(CONFIG_PATH)
 CONFIG.load()
+
+# //////////////////////////////////////////////////////////////////////////
+# CORE SECTION: OPERATING SYSTEM DETECTION
+# //////////////////////////////////////////////////////////////////////////
+def detect_agent_os():
+    plat = platform.system().lower()
+    if plat.startswith('win'):
+        return 'windows'
+    elif plat.startswith('linux'):
+        return 'linux'
+    elif plat.startswith('darwin'):
+        return 'macos'
+    else:
+        return 'unknown'
+
+CONFIG.data['agent_operating_system'] = detect_agent_os()
+CONFIG._write()
+
+# //////////////////////////////////////////////////////////////////////////       
 
 def init_agent_id():
     if not CONFIG.data.get('agent_id'):
