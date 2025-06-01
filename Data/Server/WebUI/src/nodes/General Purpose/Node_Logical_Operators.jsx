@@ -20,7 +20,10 @@ const ComparisonNode = ({ id, data }) => {
     const runNodeLogic = () => {
       let inputType = data?.inputType || "Number";
       let operator = data?.operator || "Equal (==)";
+      let rangeStart = data?.rangeStart;
+      let rangeEnd = data?.rangeEnd;
 
+      // String mode disables all but equality ops
       if (inputType === "String" && !["Equal (==)", "Not Equal (!=)"].includes(operator)) {
         operator = "Equal (==)";
         setNodes(nds =>
@@ -44,16 +47,33 @@ const ComparisonNode = ({ id, data }) => {
       const a = extractValues(edgeInputsA);
       const b = extractValues(edgeInputsB);
 
-      const resultMap = {
-        "Equal (==)": a === b,
-        "Not Equal (!=)": a !== b,
-        "Greater Than (>)": a > b,
-        "Less Than (<)": a < b,
-        "Greater Than or Equal (>=)": a >= b,
-        "Less Than or Equal (<=)": a <= b
-      };
-
-      const result = resultMap[operator] ? "1" : "0";
+      let result = "0";
+      if (operator === "Within Range") {
+        // Only valid for Number mode
+        const aNum = parseFloat(a);
+        const startNum = parseFloat(rangeStart);
+        const endNum = parseFloat(rangeEnd);
+        if (
+          !isNaN(aNum) &&
+          !isNaN(startNum) &&
+          !isNaN(endNum) &&
+          startNum <= endNum
+        ) {
+          result = (aNum >= startNum && aNum <= endNum) ? "1" : "0";
+        } else {
+          result = "0";
+        }
+      } else {
+        const resultMap = {
+          "Equal (==)": a === b,
+          "Not Equal (!=)": a !== b,
+          "Greater Than (>)": a > b,
+          "Less Than (<)": a < b,
+          "Greater Than or Equal (>=)": a >= b,
+          "Less Than or Equal (<=)": a <= b
+        };
+        result = resultMap[operator] ? "1" : "0";
+      }
 
       valueRef.current = result;
       setRenderValue(result);
@@ -81,7 +101,7 @@ const ComparisonNode = ({ id, data }) => {
       clearInterval(intervalId);
       clearInterval(monitor);
     };
-  }, [id, edges, data?.inputType, data?.operator, setNodes]);
+  }, [id, edges, data?.inputType, data?.operator, data?.rangeStart, data?.rangeEnd, setNodes]);
 
   return (
     <div className="borealis-node">
@@ -106,8 +126,8 @@ const ComparisonNode = ({ id, data }) => {
 export default {
   type: "ComparisonNode",
   label: "Logic Comparison",
-  description: "Compare A vs B using logic operators",
-  content: "Compare A and B using Logic",
+  description: "Compare A vs B using logic operators, with range support.",
+  content: "Compare A and B using Logic, with new range operator.",
   component: ComparisonNode,
   config: [
     {
@@ -126,19 +146,33 @@ export default {
         "Greater Than (>)",
         "Less Than (<)",
         "Greater Than or Equal (>=)",
-        "Less Than or Equal (<=)"
+        "Less Than or Equal (<=)",
+        "Within Range"
       ]
+    },
+    // These two fields will show up in the sidebar config for ALL operator choices
+    // Sidebar UI will ignore/hide if operator != Within Range, but the config is always present
+    {
+      key: "rangeStart",
+      label: "Range Start",
+      type: "text"
+    },
+    {
+      key: "rangeEnd",
+      label: "Range End",
+      type: "text"
     }
   ],
   usage_documentation: `
 ### Logic Comparison Node
 
-This node compares two inputs (A and B) using the selected operator.
+This node compares two inputs (A and B) using the selected operator, including a numeric range.
 
 **Modes:**
 - **Number**: Sums all connected inputs and compares.
 - **String**: Concatenates all inputs for comparison.
   - Only **Equal (==)** and **Not Equal (!=)** are valid for strings.
+- **Within Range**: If operator is "Within Range", compares if input A is within [Range Start, Range End] (inclusive).
 
 **Output:**
 - Returns \`1\` if comparison is true.
@@ -150,5 +184,17 @@ This node compares two inputs (A and B) using the selected operator.
 - Input handles:
   - **A** = Top left
   - **B** = Middle left
+
+**"Within Range" Operator:**
+- Only works for **Number** input type.
+- Enter "Range Start" and "Range End" in the right sidebar.
+- The result is \`1\` if A >= Range Start AND A <= Range End (inclusive).
+- Result is \`0\` if out of range or values are invalid.
+
+**Example:**
+- Range Start: 33
+- Range End: 77
+- A: 44  -> 1 (true, in range)
+- A: 88  -> 0 (false, out of range)
 `.trim()
 };
