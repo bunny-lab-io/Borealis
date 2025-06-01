@@ -11,6 +11,7 @@ from io import BytesIO
 import base64
 import traceback
 import platform # OS Detection
+import importlib.util
 
 import socketio
 from qasync import QEventLoop
@@ -78,6 +79,21 @@ class ConfigManager:
 CONFIG = ConfigManager(CONFIG_PATH)
 CONFIG.load()
 
+def init_agent_id():
+    if not CONFIG.data.get('agent_id'):
+        CONFIG.data['agent_id'] = f"{socket.gethostname().lower()}-agent-{uuid.uuid4().hex[:8]}"
+        CONFIG._write()
+    return CONFIG.data['agent_id']
+
+AGENT_ID = init_agent_id()
+print(f"[DEBUG] Using AGENT_ID: {AGENT_ID}")
+
+def clear_regions_only():
+    CONFIG.data['regions'] = CONFIG.data.get('regions', {})
+    CONFIG._write()
+
+clear_regions_only()
+
 # //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: OPERATING SYSTEM DETECTION
 # //////////////////////////////////////////////////////////////////////////
@@ -96,22 +112,15 @@ CONFIG.data['agent_operating_system'] = detect_agent_os()
 CONFIG._write()
 
 # //////////////////////////////////////////////////////////////////////////       
+# CORE SECTION: MACRO AUTOMATION
+# //////////////////////////////////////////////////////////////////////////
+MACRO_ENGINE_PATH = os.path.join(os.path.dirname(__file__), "Python_API_Endpoints", "macro_engines.py")
+spec = importlib.util.spec_from_file_location("macro_engines", MACRO_ENGINE_PATH)
+macro_engines = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(macro_engines)
 
-def init_agent_id():
-    if not CONFIG.data.get('agent_id'):
-        CONFIG.data['agent_id'] = f"{socket.gethostname().lower()}-agent-{uuid.uuid4().hex[:8]}"
-        CONFIG._write()
-    return CONFIG.data['agent_id']
-
-AGENT_ID = init_agent_id()
-print(f"[DEBUG] Using AGENT_ID: {AGENT_ID}")
-
-def clear_regions_only():
-    CONFIG.data['regions'] = CONFIG.data.get('regions', {})
-    CONFIG._write()
-
-clear_regions_only()
-
+# //////////////////////////////////////////////////////////////////////////       
+# CORE SECTION: ASYNC TASK / WEBSOCKET
 # //////////////////////////////////////////////////////////////////////////
 
 sio = socketio.AsyncClient(reconnection=True, reconnection_attempts=0, reconnection_delay=5)
@@ -146,6 +155,10 @@ async def disconnect():
     CONFIG.data['regions'].clear()
     CONFIG._write()
 
+# //////////////////////////////////////////////////////////////////////////       
+# CORE SECTION: AGENT CONFIG MANAGEMENT / WINDOW MANAGEMENT
+# //////////////////////////////////////////////////////////////////////////
+
 @sio.on('agent_config')
 async def on_agent_config(cfg):
     print("[DEBUG] agent_config event received.")
@@ -154,6 +167,15 @@ async def on_agent_config(cfg):
         print("[CONFIG] Config Reset by Borealis Server Operator - Awaiting New Config...")
         await stop_all_roles()
         return
+
+@sio.on('list_agent_windows')
+async def handle_list_agent_windows(data):
+    # Called from the server/webui to fetch current open windows for dropdown
+    windows = macro_engines.list_windows()
+    await sio.emit('agent_window_list', {
+        'agent_id': AGENT_ID,
+        'windows': windows
+    })
 
     print(f"[CONFIG] Received New Agent Config with {len(roles)} Role(s).")
 
@@ -179,9 +201,14 @@ async def on_agent_config(cfg):
 
     for role_cfg in roles:
         nid = role_cfg.get('node_id')
-        if role_cfg.get('role') == 'screenshot':
+        role = role_cfg.get('role')
+        if role == 'screenshot':
             print(f"[DEBUG] Starting screenshot task for {nid}")
             task = asyncio.create_task(screenshot_task(role_cfg))
+            role_tasks[nid] = task
+        elif role == 'macro':
+            print(f"[DEBUG] Starting macro task for {nid}")
+            task = asyncio.create_task(macro_task(role_cfg))
             role_tasks[nid] = task
 
 # ---------------- Overlay Widget ----------------
@@ -340,6 +367,43 @@ async def screenshot_task(cfg):
         print(f"[TASK] Screenshot role {nid} cancelled.")
     except Exception as e:
         print(f"[ERROR] Screenshot task {nid} failed: {e}")
+        traceback.print_exc()
+
+# ---------------- Macro Task ----------------
+async def macro_task(cfg):
+    nid = cfg.get('node_id')
+    window_handle = cfg.get('window_handle')
+    mode = cfg.get('operation_mode', 'keypress')  # 'keypress' or 'typed_text'
+    key = cfg.get('key')
+    text = cfg.get('text')
+    interval_ms = int(cfg.get('interval_ms', 1000))
+    randomize = cfg.get('randomize_interval', False)
+    random_min = int(cfg.get('random_min', 750))
+    random_max = int(cfg.get('random_max', 950))
+    active = cfg.get('active', True)  # Whether macro is "started" or "paused"
+    print(f"[DEBUG] Macro task for node {nid} started on window {window_handle}")
+
+    import random
+    try:
+        while True:
+            if not active:
+                await asyncio.sleep(0.2)
+                continue
+            if mode == 'keypress' and key:
+                macro_engines.send_keypress_to_window(window_handle, key)
+            elif mode == 'typed_text' and text:
+                macro_engines.type_text_to_window(window_handle, text)
+            # Interval logic
+            if randomize:
+                ms = random.randint(random_min, random_max)
+            else:
+                ms = interval_ms
+            await asyncio.sleep(ms / 1000.0)
+    except asyncio.CancelledError:
+        print(f"[TASK] Macro role {nid} cancelled.")
+    except Exception as e:
+        print(f"[ERROR] Macro task {nid} failed: {e}")
+        import traceback
         traceback.print_exc()
 
 # ---------------- Config Watcher ----------------
