@@ -52,6 +52,11 @@ const MacroKeyPressNode = ({ id, data }) => {
   // For Trigger-Once logic
   const triggerActiveRef = useRef(false);
 
+  // ---- INPUT EDGE HANDLING: agent/trigger handles ----
+  // Find connections by handle ID
+  const agentEdge = edges.find((e) => e.target === id && e.targetHandle === "agent");
+  const triggerEdge = edges.find((e) => e.target === id && e.targetHandle === "trigger");
+
   // Fetch windows from agent using WebSocket
   useEffect(() => {
     let isMounted = true;
@@ -62,11 +67,9 @@ const MacroKeyPressNode = ({ id, data }) => {
       if (!window.BorealisSocket) return setWindowListStatus("No agent connection");
       // Find the upstream agent node, get its agent_id
       let agentId = null;
-      for (const e of edges) {
-        if (e.target === id && e.sourceHandle === "provisioner") {
-          const agentNode = window.BorealisFlowNodes?.find((n) => n.id === e.source);
-          agentId = agentNode?.data?.agent_id;
-        }
+      if (agentEdge && window.BorealisFlowNodes) {
+        const agentNode = window.BorealisFlowNodes.find((n) => n.id === agentEdge.source);
+        agentId = agentNode?.data?.agent_id;
       }
       if (!agentId) return setWindowListStatus("No agent connected");
       window.BorealisSocket.emit("list_agent_windows", { agent_id: agentId });
@@ -92,7 +95,7 @@ const MacroKeyPressNode = ({ id, data }) => {
       }
       clearInterval(interval);
     };
-  }, [id, edges]);
+  }, [id, edges, agentEdge]);
 
   // Macro state (simulate agent push)
   useEffect(() => {
@@ -138,10 +141,8 @@ const MacroKeyPressNode = ({ id, data }) => {
   // Input trigger/handle logic for trigger-based modes
   useEffect(() => {
     if (!["Trigger-Continuous", "Trigger-Once"].includes(operationMode)) return;
-    // Find first left input edge
-    const edge = edges.find((e) => e.target === id);
-    if (!edge) return;
-    const upstreamValue = window.BorealisValueBus[edge.source];
+    if (!triggerEdge) return;
+    const upstreamValue = window.BorealisValueBus[triggerEdge.source];
     if (operationMode === "Trigger-Continuous") {
       setRunning(upstreamValue === "1");
     } else if (operationMode === "Trigger-Once") {
@@ -154,7 +155,7 @@ const MacroKeyPressNode = ({ id, data }) => {
         triggerActiveRef.current = false;
       }
     }
-  }, [edges, id, operationMode]);
+  }, [edges, id, operationMode, triggerEdge]);
 
   // Handle Start/Stop button for manual modes
   const handleStartStop = () => {
@@ -184,8 +185,54 @@ const MacroKeyPressNode = ({ id, data }) => {
   // Node UI
   return (
     <div className="borealis-node" style={{ minWidth: 240, position: "relative" }}>
-      <Handle type="target" position={Position.Left} className="borealis-handle" />
-      <Handle type="source" position={Position.Right} className="borealis-handle" />
+      {/* --- INPUT LABELS & HANDLES --- */}
+      <div style={{
+        position: "absolute",
+        left: -60,
+        top: 18,
+        fontSize: "10px",
+        color: "#6ef9fb",
+        fontWeight: 600,
+        letterSpacing: 0.5,
+        pointerEvents: "none"
+      }}>
+        Agent
+      </div>
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="agent"
+        style={{
+          top: 25,
+          background: "#4ccfff",
+          border: "2px solid #1a3955"
+        }}
+        className="borealis-handle"
+      />
+      <div style={{
+        position: "absolute",
+        left: -66,
+        top: 61,
+        fontSize: "10px",
+        color: "#6ef9fb",
+        fontWeight: 600,
+        letterSpacing: 0.5,
+        pointerEvents: "none"
+      }}>
+        Trigger
+      </div>
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="trigger"
+        style={{
+          top: 68,
+          background: "#4ccfff",
+          border: "2px solid #1a3955"
+        }}
+        className="borealis-handle"
+      />
+      {/* NO output handle */}
 
       <div className="borealis-node-header" style={{ position: "relative" }}>
         Agent Role: Macro
