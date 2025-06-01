@@ -158,7 +158,6 @@ async def disconnect():
 # //////////////////////////////////////////////////////////////////////////       
 # CORE SECTION: AGENT CONFIG MANAGEMENT / WINDOW MANAGEMENT
 # //////////////////////////////////////////////////////////////////////////
-
 @sio.on('agent_config')
 async def on_agent_config(cfg):
     print("[DEBUG] agent_config event received.")
@@ -167,15 +166,6 @@ async def on_agent_config(cfg):
         print("[CONFIG] Config Reset by Borealis Server Operator - Awaiting New Config...")
         await stop_all_roles()
         return
-
-@sio.on('list_agent_windows')
-async def handle_list_agent_windows(data):
-    # Called from the server/webui to fetch current open windows for dropdown
-    windows = macro_engines.list_windows()
-    await sio.emit('agent_window_list', {
-        'agent_id': AGENT_ID,
-        'windows': windows
-    })
 
     print(f"[CONFIG] Received New Agent Config with {len(roles)} Role(s).")
 
@@ -210,6 +200,14 @@ async def handle_list_agent_windows(data):
             print(f"[DEBUG] Starting macro task for {nid}")
             task = asyncio.create_task(macro_task(role_cfg))
             role_tasks[nid] = task
+
+@sio.on('list_agent_windows')
+async def handle_list_agent_windows(data):
+    windows = macro_engines.list_windows()
+    await sio.emit('agent_window_list', {
+        'agent_id': AGENT_ID,
+        'windows': windows
+    })
 
 # ---------------- Overlay Widget ----------------
 overlay_green_thickness = 4

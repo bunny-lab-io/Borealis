@@ -376,6 +376,7 @@ switch ($choice) {
                 Remove-Item $agentDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
                 New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
                 Copy-Item $agentSourcePath $agentDestinationFile -Force
+                Copy-Item "Data\Agent\Python_API_Endpoints" $agentDestinationFolder -Recurse
             }
             . "$venvFolder\Scripts\Activate"
         }
