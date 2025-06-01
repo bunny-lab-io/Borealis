@@ -1,4 +1,4 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Agent Roles/Node_Agent_Role_Macro.jsx
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Automation/Node_Macro.jsx
 import React, { useState, useEffect, useRef } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 import Keyboard from "react-simple-keyboard";
@@ -410,12 +410,11 @@ const MacroKeyPressNode = ({ id, data }) => {
                 textAlign: "center"
               }}
             >
-              Full Keyboard
+              Click on the Desired Key
             </div>
             <Keyboard
               onKeyPress={onKeyPress}
               layoutName={layoutName}
-              theme="hg-theme-dark hg-layout-default"
               layout={{
                 default: [
                   "{escape} {f1} {f2} {f3} {f4} {f5} {f6} {f7} {f8} {f9} {f10} {f11} {f12}",
@@ -436,7 +435,7 @@ const MacroKeyPressNode = ({ id, data }) => {
               }}
               display={{
                 "{bksp}": "⌫",
-                "{escape}": "esc",
+                "{escape}": "ESC",
                 "{tab}": "tab",
                 "{lock}": "caps",
                 "{enter}": "enter",
@@ -455,6 +454,7 @@ const MacroKeyPressNode = ({ id, data }) => {
                 "{f11}": "F11",
                 "{f12}": "F12"
               }}
+              theme="simple-keyboard"
             />
             <div style={{ display: "flex", justifyContent: "center", marginTop: "8px" }}>
               <button onClick={() => setShowKeyboard(false)} style={buttonStyle}>
@@ -508,7 +508,7 @@ const keyboardContainer = {
   borderRadius: "6px",
   border: "1px solid #444",
   zIndex: 1001,
-  maxWidth: "650px"
+  maxWidth: "950px"
 };
 
 export default {

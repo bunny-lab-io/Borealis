@@ -175,46 +175,72 @@ label {
 /* REACT-SIMPLE-KEYBOARD                   */
 /* ======================================= */
 
-/* keyboard-dark-theme.css */
-
-/* react-simple-keyboard dark theming */
-.hg-theme-dark {
-    background-color: #1e1e1e;
-    border: 1px solid #444;
+/* Make the keyboard max width like the demo */
+.simple-keyboard {
+  max-width: 950px;
+  margin: 0 auto;
+  background: #181c23;
+  border-radius: 8px;
+  padding: 24px 24px 30px 24px;
+  box-shadow: 0 2px 24px 0 #000a;
 }
 
-.hg-button {
-    background: #2c2c2c;
-    color: #ccc;
-    border: 1px solid #444;
-    font-size: 11px;
+/* Set dark background and color for the keyboard and its keys */
+.simple-keyboard .hg-button {
+  background: #23262e;
+  color: #b0d0ff;
+  border: 1px solid #333;
+  font-size: 1.1em;
+  min-width: 48px;
+  min-height: 48px;
+  margin: 5px;
+  border-radius: 6px;
+  transition: background 0.1s, color 0.1s;
+  padding-top: 6px;
+  padding-left: 8px;
 }
 
-.hg-button:hover {
-    background: #58a6ff;
-    color: #000;
-    border-color: #58a6ff;
+.simple-keyboard .hg-button[data-skbtn="space"] {
+  min-width: 380px;
 }
 
-.borealis-keyboard .hg-button.hg-standardBtn {
-    border-radius: 3px;
+.simple-keyboard .hg-button[data-skbtn="tab"],
+.simple-keyboard .hg-button[data-skbtn="caps"],
+.simple-keyboard .hg-button[data-skbtn="shift"],
+.simple-keyboard .hg-button[data-skbtn="enter"],
+.simple-keyboard .hg-button[data-skbtn="bksp"] {
+  min-width: 82px;
 }
 
-/* Force rows to appear horizontally */
-.simple-keyboard-main .hg-row {
-    display: flex !important;
-    flex-flow: row wrap;
-    justify-content: center;
-  }
+.simple-keyboard .hg-button:hover {
+  background: #58a6ff;
+  color: #000;
+  border-color: #58a6ff;
+}
 
-/* Slight spacing around each key (optional) */
-.simple-keyboard-main .hg-row .hg-button {
-    margin: 3px !important;
-  }
-  
-  /* Keep the entire keyboard from shrinking or going vertical */
-  .simple-keyboard-main {
-    display: inline-block !important;
-    width: auto !important;
-    max-width: 1000px; /* or whatever max width you like */
-  }
+/* Make sure rows aren't squashed */
+.simple-keyboard .hg-row {
+  display: flex !important;
+  flex-flow: row wrap;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+/* Remove any unwanted shrink/stretch */
+.simple-keyboard .hg-button {
+  flex: 0 0 auto;
+}
+
+/* Optional: on-screen keyboard input field (if you ever show it) */
+input[type="text"].simple-keyboard-input {
+  width: 100%;
+  height: 48px;
+  padding: 10px 20px;
+  font-size: 20px;
+  border: none;
+  box-sizing: border-box;
+  background: #181818;
+  color: #f5f7fa;
+  border-radius: 6px;
+  margin-bottom: 20px;
+}
