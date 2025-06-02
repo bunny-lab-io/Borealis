@@ -1,7 +1,6 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Automation/Node_Macro.jsx
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Agent Roles/Node_Agent_Role_Macro.jsx
 import React, { useState, useEffect, useRef } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
-import Keyboard from "react-simple-keyboard";
 import "react-simple-keyboard/build/css/index.css";
 
 // Default update interval for window list refresh (in ms)
@@ -12,187 +11,34 @@ if (!window.BorealisUpdateRate) window.BorealisUpdateRate = 100;
 
 const DEFAULT_OPERATION_MODE = "Continuous";
 const OPERATION_MODES = [
+  "Run Once",
   "Continuous",
-  "Trigger-Continuous",
   "Trigger-Once",
-  "Run Once"
-];
-
-const MACRO_TYPES = [
-  { value: "keypress", label: "Single Keypress" },
-  { value: "typed_text", label: "Typed Text" }
+  "Trigger-Continuous"
 ];
 
 const MacroKeyPressNode = ({ id, data }) => {
-  const { setNodes } = useReactFlow();
+  const { setNodes, getNodes } = useReactFlow();
   const edges = useStore((state) => state.edges);
 
-  // State for agent window list dropdown
-  const [windowList, setWindowList] = useState([]);
-  const [selectedWindow, setSelectedWindow] = useState(data?.window_handle || "");
-  const [windowListStatus, setWindowListStatus] = useState("Loading...");
-
-  // State for keyboard/text settings
-  const [macroType, setMacroType] = useState(data?.macro_type || "keypress");
-  const [keyPressed, setKeyPressed] = useState(data?.key || "");
-  const [typedText, setTypedText] = useState(data?.text || "");
-  const [showKeyboard, setShowKeyboard] = useState(false);
-  const [layoutName, setLayoutName] = useState("default");
-
-  // Interval/randomization settings
-  const [intervalMs, setIntervalMs] = useState(data?.interval_ms || 1000);
-  const [randomize, setRandomize] = useState(!!data?.randomize_interval);
-  const [randomMin, setRandomMin] = useState(data?.random_min || 750);
-  const [randomMax, setRandomMax] = useState(data?.random_max || 950);
-
-  // Macro run/trigger state
-  const [operationMode, setOperationMode] = useState(data?.operation_mode || DEFAULT_OPERATION_MODE);
-  const [running, setRunning] = useState(data?.active ?? false);
-
-  // For Trigger-Once logic
-  const triggerActiveRef = useRef(false);
-
-  // ---- INPUT EDGE HANDLING: agent/trigger handles ----
-  // Find connections by handle ID
+  // Determine if agent is connected
   const agentEdge = edges.find((e) => e.target === id && e.targetHandle === "agent");
-  const triggerEdge = edges.find((e) => e.target === id && e.targetHandle === "trigger");
+  const agentNode = agentEdge && getNodes().find((n) => n.id === agentEdge.source);
+  const agentConnection = !!(agentNode && agentNode.data && agentNode.data.agent_id);
 
-  // Fetch windows from agent using WebSocket
-  useEffect(() => {
-    let isMounted = true;
-    let interval = null;
+  // Macro run/trigger state (sidebar sets this via config, but node UI just shows status)
+  const running = data?.active === true || data?.active === "true";
 
-    const fetchWindowList = () => {
-      setWindowListStatus("Loading...");
-      if (!window.BorealisSocket) return setWindowListStatus("No agent connection");
-      // Find the upstream agent node, get its agent_id
-      let agentId = null;
-      if (agentEdge && window.BorealisFlowNodes) {
-        const agentNode = window.BorealisFlowNodes.find((n) => n.id === agentEdge.source);
-        agentId = agentNode?.data?.agent_id;
-      }
-      if (!agentId) return setWindowListStatus("No agent connected");
-      window.BorealisSocket.emit("list_agent_windows", { agent_id: agentId });
-    };
-
-    // Listen for reply
-    function handleAgentWindowList(payload) {
-      if (!isMounted) return;
-      if (!payload || !payload.windows) return setWindowListStatus("No windows found");
-      setWindowList(payload.windows);
-      setWindowListStatus(payload.windows.length ? "" : "No windows found");
-    }
-    if (window.BorealisSocket) {
-      window.BorealisSocket.on("agent_window_list", handleAgentWindowList);
-    }
-    fetchWindowList();
-    interval = setInterval(fetchWindowList, WINDOW_LIST_REFRESH_MS);
-
-    return () => {
-      isMounted = false;
-      if (window.BorealisSocket) {
-        window.BorealisSocket.off("agent_window_list", handleAgentWindowList);
-      }
-      clearInterval(interval);
-    };
-  }, [id, edges, agentEdge]);
-
-  // Macro state (simulate agent push)
-  useEffect(() => {
-    setNodes((nds) =>
-      nds.map((n) =>
-        n.id === id
-          ? {
-              ...n,
-              data: {
-                ...n.data,
-                window_handle: selectedWindow,
-                macro_type: macroType,
-                key: keyPressed,
-                text: typedText,
-                interval_ms: intervalMs,
-                randomize_interval: randomize,
-                random_min: randomMin,
-                random_max: randomMax,
-                operation_mode: operationMode,
-                active: running
-              }
-            }
-          : n
-      )
-    );
-    // BorealisValueBus: Set running status as "1" or "0"
-    window.BorealisValueBus[id] = running ? "1" : "0";
-  }, [
-    id,
-    setNodes,
-    selectedWindow,
-    macroType,
-    keyPressed,
-    typedText,
-    intervalMs,
-    randomize,
-    randomMin,
-    randomMax,
-    operationMode,
-    running
-  ]);
-
-  // Input trigger/handle logic for trigger-based modes
-  useEffect(() => {
-    if (!["Trigger-Continuous", "Trigger-Once"].includes(operationMode)) return;
-    if (!triggerEdge) return;
-    const upstreamValue = window.BorealisValueBus[triggerEdge.source];
-    if (operationMode === "Trigger-Continuous") {
-      setRunning(upstreamValue === "1");
-    } else if (operationMode === "Trigger-Once") {
-      // Only fire once per rising edge
-      if (upstreamValue === "1" && !triggerActiveRef.current) {
-        setRunning(true);
-        triggerActiveRef.current = true;
-        setTimeout(() => setRunning(false), 10); // Simulate a quick one-shot macro
-      } else if (upstreamValue !== "1" && triggerActiveRef.current) {
-        triggerActiveRef.current = false;
-      }
-    }
-  }, [edges, id, operationMode, triggerEdge]);
-
-  // Handle Start/Stop button for manual modes
-  const handleStartStop = () => {
-    setRunning((v) => !v);
-  };
-
-  // Keyboard overlay logic
-  const onKeyPress = (button) => {
-    // SHIFT or CAPS toggling:
-    if (button === "{shift}" || button === "{lock}") {
-      setLayoutName((prev) => (prev === "default" ? "shift" : "default"));
-      return;
-    }
-    // Accept only standard keys (not function/meta keys)
-    const skipKeys = [
-      "{bksp}", "{space}", "{tab}", "{enter}", "{escape}",
-      "{f1}", "{f2}", "{f3}", "{f4}", "{f5}", "{f6}",
-      "{f7}", "{f8}", "{f9}", "{f10}", "{f11}", "{f12}",
-      "{shift}", "{lock}"
-    ];
-    if (!skipKeys.includes(button)) {
-      setKeyPressed(button);
-      setShowKeyboard(false);
-    }
-  };
-
-  // Node UI
+  // Node UI (no config fields, only status)
   return (
     <div className="borealis-node" style={{ minWidth: 240, position: "relative" }}>
       {/* --- INPUT LABELS & HANDLES --- */}
       <div style={{
         position: "absolute",
-        left: -60,
-        top: 18,
-        fontSize: "10px",
+        left: -30,
+        top: 26,
+        fontSize: "8px",
         color: "#6ef9fb",
-        fontWeight: 600,
         letterSpacing: 0.5,
         pointerEvents: "none"
       }}>
@@ -204,18 +50,15 @@ const MacroKeyPressNode = ({ id, data }) => {
         id="agent"
         style={{
           top: 25,
-          background: "#4ccfff",
-          border: "2px solid #1a3955"
         }}
         className="borealis-handle"
       />
       <div style={{
         position: "absolute",
-        left: -66,
-        top: 61,
-        fontSize: "10px",
+        left: -34,
+        top: 70,
+        fontSize: "8px",
         color: "#6ef9fb",
-        fontWeight: 600,
         letterSpacing: 0.5,
         pointerEvents: "none"
       }}>
@@ -227,12 +70,9 @@ const MacroKeyPressNode = ({ id, data }) => {
         id="trigger"
         style={{
           top: 68,
-          background: "#4ccfff",
-          border: "2px solid #1a3955"
         }}
         className="borealis-handle"
       />
-      {/* NO output handle */}
 
       <div className="borealis-node-header" style={{ position: "relative" }}>
         Agent Role: Macro
@@ -252,265 +92,15 @@ const MacroKeyPressNode = ({ id, data }) => {
       </div>
 
       <div className="borealis-node-content">
-        <div style={{ fontSize: "9px", color: "#ccc", marginBottom: "8px" }}>
-          Sends macro input to selected window via agent.
-        </div>
-        <label>Window:</label>
-        <select
-          value={selectedWindow}
-          onChange={(e) => setSelectedWindow(e.target.value)}
-          style={inputStyle}
-        >
-          <option value="">-- Choose --</option>
-          {windowList.map((win) => (
-            <option key={win.handle} value={win.handle}>
-              {win.title}
-            </option>
-          ))}
-        </select>
-        <div style={{ fontSize: "8px", color: "#ff8c00", marginBottom: 4 }}>
-          {windowListStatus}
-        </div>
-
-        {/* Macro Type */}
-        <label>Macro Type:</label>
-        <select
-          value={macroType}
-          onChange={(e) => setMacroType(e.target.value)}
-          style={inputStyle}
-        >
-          {MACRO_TYPES.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-
-        {/* Key or Text Selection */}
-        {macroType === "keypress" ? (
-          <>
-            <label>Key:</label>
-            <div style={{ display: "flex", gap: "6px", alignItems: "center", marginBottom: "6px" }}>
-              <button onClick={() => setShowKeyboard(true)} style={buttonStyle}>
-                Select Key
-              </button>
-              <input
-                type="text"
-                value={keyPressed}
-                disabled
-                readOnly
-                style={{
-                  ...inputStyle,
-                  width: "60px",
-                  backgroundColor: "#2a2a2a",
-                  color: "#aaa",
-                  cursor: "default"
-                }}
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            <label>Typed Text:</label>
-            <input
-              type="text"
-              value={typedText}
-              onChange={(e) => setTypedText(e.target.value)}
-              style={{ ...inputStyle, width: "100%" }}
-              maxLength={256}
-            />
-          </>
-        )}
-
-        {/* Interval */}
-        <label>Interval (ms):</label>
-        <input
-          type="number"
-          min="100"
-          step="50"
-          value={intervalMs}
-          onChange={(e) => setIntervalMs(Number(e.target.value))}
-          disabled={randomize}
-          style={{
-            ...inputStyle,
-            backgroundColor: randomize ? "#2a2a2a" : "#1e1e1e"
-          }}
-        />
-
-        {/* Randomize Interval */}
-        <label>
-          <input
-            type="checkbox"
-            checked={randomize}
-            onChange={(e) => setRandomize(e.target.checked)}
-            style={{ marginRight: "6px" }}
-          />
-          Randomize Interval
-        </label>
-        {randomize && (
-          <div style={{ display: "flex", gap: "4px", marginTop: "4px" }}>
-            <input
-              type="number"
-              min="100"
-              value={randomMin}
-              onChange={(e) => setRandomMin(Number(e.target.value))}
-              style={{ ...inputStyle, flex: 1 }}
-            />
-            <input
-              type="number"
-              min="100"
-              value={randomMax}
-              onChange={(e) => setRandomMax(Number(e.target.value))}
-              style={{ ...inputStyle, flex: 1 }}
-            />
-          </div>
-        )}
-
-        {/* Operation Mode */}
-        <label>Operation Mode:</label>
-        <select
-          value={operationMode}
-          onChange={(e) => setOperationMode(e.target.value)}
-          style={inputStyle}
-        >
-          {OPERATION_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {mode}
-            </option>
-          ))}
-        </select>
-
-        {/* Start/Stop Button */}
-        {operationMode === "Continuous" || operationMode === "Run Once" ? (
-          <button
-            onClick={handleStartStop}
-            style={{
-              ...buttonStyle,
-              marginTop: "8px",
-              width: "100%",
-              backgroundColor: running ? "#ff4f4f" : "#00d18c",
-              color: "#fff",
-              fontWeight: "bold"
-            }}
-          >
-            {running ? "Pause" : operationMode === "Run Once" ? "Run Once" : "Start"}
-          </button>
-        ) : null}
+        <strong>Status</strong>: {running ? "Running" : "Idle"}
+        <br />
+        <strong>Agent Connection</strong>: {agentConnection ? "Connected" : "Not Connected"}
       </div>
-
-      {/* Keyboard Overlay */}
-      {showKeyboard && (
-        <div style={keyboardOverlay}>
-          <div style={keyboardContainer}>
-            <div
-              style={{
-                fontSize: "11px",
-                color: "#ccc",
-                marginBottom: "6px",
-                textAlign: "center"
-              }}
-            >
-              Click on the Desired Key
-            </div>
-            <Keyboard
-              onKeyPress={onKeyPress}
-              layoutName={layoutName}
-              layout={{
-                default: [
-                  "{escape} {f1} {f2} {f3} {f4} {f5} {f6} {f7} {f8} {f9} {f10} {f11} {f12}",
-                  "` 1 2 3 4 5 6 7 8 9 0 - = {bksp}",
-                  "{tab} q w e r t y u i o p [ ] \\",
-                  "{lock} a s d f g h j k l ; ' {enter}",
-                  "{shift} z x c v b n m , . / {shift}",
-                  "{space}"
-                ],
-                shift: [
-                  "{escape} {f1} {f2} {f3} {f4} {f5} {f6} {f7} {f8} {f9} {f10} {f11} {f12}",
-                  "~ ! @ # $ % ^ & * ( ) _ + {bksp}",
-                  "{tab} Q W E R T Y U I O P { } |",
-                  "{lock} A S D F G H J K L : \" {enter}",
-                  "{shift} Z X C V B N M < > ? {shift}",
-                  "{space}"
-                ]
-              }}
-              display={{
-                "{bksp}": "⌫",
-                "{escape}": "ESC",
-                "{tab}": "tab",
-                "{lock}": "caps",
-                "{enter}": "enter",
-                "{shift}": "shift",
-                "{space}": "space",
-                "{f1}": "F1",
-                "{f2}": "F2",
-                "{f3}": "F3",
-                "{f4}": "F4",
-                "{f5}": "F5",
-                "{f6}": "F6",
-                "{f7}": "F7",
-                "{f8}": "F8",
-                "{f9}": "F9",
-                "{f10}": "F10",
-                "{f11}": "F11",
-                "{f12}": "F12"
-              }}
-              theme="simple-keyboard"
-            />
-            <div style={{ display: "flex", justifyContent: "center", marginTop: "8px" }}>
-              <button onClick={() => setShowKeyboard(false)} style={buttonStyle}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
 
 // ----- Node Catalog Export -----
-const inputStyle = {
-  width: "100%",
-  fontSize: "9px",
-  padding: "4px",
-  color: "#ccc",
-  border: "1px solid #444",
-  borderRadius: "2px",
-  marginBottom: "6px"
-};
-
-const buttonStyle = {
-  fontSize: "9px",
-  padding: "4px 8px",
-  backgroundColor: "#1e1e1e",
-  color: "#ccc",
-  border: "1px solid #444",
-  borderRadius: "2px",
-  cursor: "pointer"
-};
-
-const keyboardOverlay = {
-  position: "fixed",
-  top: 0,
-  left: 0,
-  width: "100vw",
-  height: "100vh",
-  zIndex: 1000,
-  backgroundColor: "rgba(0, 0, 0, 0.8)",
-  display: "flex",
-  justifyContent: "center",
-  alignItems: "center"
-};
-
-const keyboardContainer = {
-  backgroundColor: "#1e1e1e",
-  padding: "16px",
-  borderRadius: "6px",
-  border: "1px solid #444",
-  zIndex: 1001,
-  maxWidth: "950px"
-};
-
 export default {
   type: "Macro_KeyPress",
   label: "Agent Role: Macro",
@@ -530,7 +120,7 @@ Supports manual, continuous, trigger, and one-shot modes for automation and even
     { key: "random_min", label: "Random Min (ms)", type: "text" },
     { key: "random_max", label: "Random Max (ms)", type: "text" },
     { key: "operation_mode", label: "Operation Mode", type: "select", options: OPERATION_MODES },
-    { key: "active", label: "Active", type: "select", options: ["true", "false"] }
+    { key: "active", label: "Macro Enabled", type: "select", options: ["true", "false"] }
   ],
   usage_documentation: `
 ### Agent Role: Macro
