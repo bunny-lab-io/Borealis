@@ -236,11 +236,11 @@ class ScreenshotRegion(QtWidgets.QWidget):
         h = self.height()
 
         # draw gray capture box
-        p.setPen(QtGui.QPen(QtGui.QColor(60,60,60), overlay_gray_thickness))
+        p.setPen(QtGui.QPen(QtGui.QColor(130,130,130), overlay_gray_thickness))
         p.drawRect(handle_size, handle_size + extra_top_padding, w-handle_size*2, h-handle_size*2 - extra_top_padding)
 
         p.setPen(QtCore.Qt.NoPen)
-        p.setBrush(QtGui.QBrush(QtGui.QColor(0,255,0)))
+        p.setBrush(QtGui.QBrush(QtGui.QColor(0,191,255)))
         edge = overlay_green_thickness*3
 
         # corner handles
@@ -267,7 +267,7 @@ class ScreenshotRegion(QtWidgets.QWidget):
         bar_y = 6  # 6–8 px down from top
 
         p.setBrush(QtGui.QColor(0,191,255))  # Borealis Blue
-        p.drawRect(bar_x, bar_y - bar_height - 2, bar_width, bar_height)  # 2px padding above green bar
+        p.drawRect(bar_x, bar_y - bar_height - 10, bar_width, bar_height * 4)  # 2px padding above green bar
 
 
     def get_geometry(self):
