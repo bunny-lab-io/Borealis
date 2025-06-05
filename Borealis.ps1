@@ -14,7 +14,7 @@
     Usage:
       Set-ExecutionPolicy Unrestricted -Scope Process; .\Borealis.ps1
 #>
-
+$host.UI.RawUI.WindowTitle = "Borealis"
 Clear-Host
 
 # ASCII Art Banner
@@ -251,6 +251,7 @@ $choice = Read-Host
 switch ($choice) {
 
     "1" {
+        $host.UI.RawUI.WindowTitle = "Borealis Server"
         Write-Host " "
         Write-Host "Configure Borealis Server Mode:" -ForegroundColor DarkYellow
         Write-Host " 1) Build & Launch > " -NoNewLine -ForegroundColor DarkGray
@@ -357,6 +358,7 @@ switch ($choice) {
     }
 
     "2" {
+        $host.UI.RawUI.WindowTitle = "Borealis Agent"
         # Agent Deployment (Client / Data Collector)
         Write-Host " "
         Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
@@ -393,6 +395,7 @@ switch ($choice) {
     }
 
     "3" {
+        $host.UI.RawUI.WindowTitle = "Borealis Electron"
         # Desktop App Deployment (Electron)
         Clear-Host
         Write-Host "Deploying Borealis Desktop App..." -ForegroundColor Cyan
@@ -453,6 +456,7 @@ switch ($choice) {
     }
 
     "4" {
+        $host.UI.RawUI.WindowTitle = "Borealis Packager"
         # Prompt the User for Which System to Package using Pyinstaller
         Write-Host "Choose which module to package into a self-contained EXE file:" -ForegroundColor DarkYellow
         Write-Host " 1) Server" -ForegroundColor DarkGray
@@ -485,6 +489,7 @@ switch ($choice) {
     }
 
     "5" {
+        $host.UI.RawUI.WindowTitle = "Borealis Updater"
         Write-Host " "
         Write-Host "Updating Borealis..." -ForegroundColor Green
 
