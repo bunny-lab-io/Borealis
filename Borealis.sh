@@ -1,6 +1,29 @@
+#!/usr/bin/env bash
 #////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Borealis.sh
 
-#!/usr/bin/env bash
+clear
+
+# ---- ASCII ART BANNER ----
+BOREALIS_BLUE="\033[38;5;39m"
+DARK_GRAY="\033[1;30m"
+RESET="\033[0m"
+
+echo -e "${BOREALIS_BLUE}"
+cat << "EOF"
+███████████                                        ████   ███         
+░░███░░░░░███                                      ░░███  ░░░          
+ ░███    ░███  ██████  ████████   ██████   ██████   ░███  ████   █████ 
+ ░██████████  ███░░███░░███░░███ ███░░███ ░░░░░███  ░███ ░░███  ███░░  
+ ░███░░░░░███░███ ░███ ░███ ░░░ ░███████   ███████  ░███  ░███ ░░█████ 
+ ░███    ░███░███ ░███ ░███     ░███░░░   ███░░███  ░███  ░███  ░░░░███
+ ███████████ ░░██████  █████    ░░██████ ░░████████ █████ █████ ██████ 
+░░░░░░░░░░░   ░░░░░░  ░░░░░      ░░░░░░   ░░░░░░░░ ░░░░░ ░░░░░ ░░░░░░  
+EOF
+echo -e "${RESET}"
+
+echo -e "${DARK_GRAY}Drag-&-Drop Automation Orchestration | Macros | Data Collection & Analysis${RESET}"
+
+# ---- END ASCII ART BANNER ----
 
 # Color codes
 GREEN="\033[0;32m"
