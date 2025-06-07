@@ -256,44 +256,6 @@ const MacroKeyPressNode = ({ id, data }) => {
             : ""}
         </span>
       </div>
-
-      {/* Show available windows for debug (hidden from sidebar, but helpful for quick dropdown) */}
-      <div style={{ marginTop: 8, fontSize: "9px", color: "#58a6ff" }}>
-        <b>Windows:</b>{" "}
-        {windowList.length === 0
-          ? <span style={{ color: "#999" }}>No windows detected.</span>
-          : windowList.map((w) =>
-              <span
-                key={w.handle}
-                style={{
-                  background:
-                    String(w.handle) === String(data?.window_handle)
-                      ? "#333"
-                      : "transparent",
-                  borderRadius: 3,
-                  padding: "1px 4px",
-                  marginRight: 4,
-                  border:
-                    String(w.handle) === String(data?.window_handle)
-                      ? "1px solid #58a6ff"
-                      : "1px solid #222",
-                  cursor: "pointer"
-                }}
-                onClick={() =>
-                  setNodes(nds =>
-                    nds.map(n =>
-                      n.id === id
-                        ? { ...n, data: { ...n.data, window_handle: w.handle } }
-                        : n
-                    )
-                  )
-                }
-                title={w.title}
-              >
-                {w.title}
-              </span>
-            )}
-      </div>
     </div>
   );
 };
