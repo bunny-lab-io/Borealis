@@ -111,17 +111,17 @@ Supports manual, continuous, trigger, and one-shot modes for automation and even
   content: "Send Key Press or Typed Text to Window via Agent",
   component: MacroKeyPressNode,
   config: [
-    { key: "window_handle", label: "Target Window", type: "text" },
-    { key: "macro_type", label: "Macro Type", type: "select", options: ["keypress", "typed_text"] },
-    { key: "key", label: "Key", type: "text" },
-    { key: "text", label: "Typed Text", type: "text" },
-    { key: "interval_ms", label: "Interval (ms)", type: "text" },
-    { key: "randomize_interval", label: "Randomize Interval", type: "select", options: ["true", "false"] },
-    { key: "random_min", label: "Random Min (ms)", type: "text" },
-    { key: "random_max", label: "Random Max (ms)", type: "text" },
-    { key: "operation_mode", label: "Operation Mode", type: "select", options: OPERATION_MODES },
-    { key: "active", label: "Macro Enabled", type: "select", options: ["true", "false"] }
-  ],
+  { key: "window_handle", label: "Target Window", type: "text", defaultValue: "" },
+  { key: "macro_type", label: "Macro Type", type: "select", options: ["keypress", "typed_text"], defaultValue: "keypress" },
+  { key: "key", label: "Key", type: "text", defaultValue: "" },
+  { key: "text", label: "Typed Text", type: "text", defaultValue: "" },
+  { key: "interval_ms", label: "Interval (ms)", type: "text", defaultValue: "1000" },
+  { key: "randomize_interval", label: "Randomize Interval", type: "select", options: ["true", "false"], defaultValue: "false" },
+  { key: "random_min", label: "Random Min (ms)", type: "text", defaultValue: "750" },
+  { key: "random_max", label: "Random Max (ms)", type: "text", defaultValue: "950" },
+  { key: "operation_mode", label: "Operation Mode", type: "select", options: OPERATION_MODES, defaultValue: "Continuous" },
+  { key: "active", label: "Macro Enabled", type: "select", options: ["true", "false"], defaultValue: "false" }
+],
   usage_documentation: `
 ### Agent Role: Macro
 
