@@ -43,13 +43,27 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
     return config.map((field, index) => {
       const value = nodeData?.[field.key] || "";
 
-      return (
-        <Box key={index} sx={{ mb: 2 }}>
-          <Typography variant="body2" sx={{ color: "#ccc", mb: 0.5 }}>
-            {field.label || field.key}
-          </Typography>
+      // ---- DYNAMIC DROPDOWN SUPPORT ----
+      if (field.type === "select") {
+        let options = field.options || [];
 
-          {field.type === "select" ? (
+        // Handle dynamic options for things like Target Window
+        if (field.dynamicOptions && nodeData?.windowList && Array.isArray(nodeData.windowList)) {
+          options = nodeData.windowList
+            .map(win => ({
+              value: String(win.handle),
+              label: `${win.title} (${win.handle})`
+            }))
+            .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+        } else {
+          options = options.map(opt => ({ value: opt, label: opt }));
+        }
+
+        return (
+          <Box key={index} sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ color: "#ccc", mb: 0.5 }}>
+              {field.label || field.key}
+            </Typography>
             <TextField
               select
               fullWidth
@@ -112,42 +126,57 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
                 }
               }}
             >
-              {(field.options || []).map((opt, idx) => (
-                <MenuItem key={idx} value={opt}>
-                  {opt}
+              {options.length === 0 ? (
+                <MenuItem disabled value="">
+                  {field.label === "Target Window"
+                    ? "No windows detected"
+                    : "No options"}
                 </MenuItem>
-              ))}
+              ) : (
+                options.map((opt, idx) => (
+                  <MenuItem key={idx} value={opt.value}>
+                    {opt.label}
+                  </MenuItem>
+                ))
+              )}
             </TextField>
+          </Box>
+        );
+      }
+      // ---- END DYNAMIC DROPDOWN SUPPORT ----
 
-          ) : (
-            <TextField
-              variant="outlined"
-              size="small"
-              fullWidth
-              value={value}
-              onChange={(e) => {
-                const newValue = e.target.value;
-                if (!nodeId) return;
-                effectiveSetNodes((nds) =>
-                  nds.map((n) =>
-                    n.id === nodeId
-                      ? { ...n, data: { ...n.data, [field.key]: newValue } }
-                      : n
-                  )
-                );
-                window.BorealisValueBus[nodeId] = newValue;
-              }}
-              InputProps={{
-                sx: {
-                  backgroundColor: "#1e1e1e",
-                  color: "#ccc",
-                  "& fieldset": { borderColor: "#444" },
-                  "&:hover fieldset": { borderColor: "#666" },
-                  "&.Mui-focused fieldset": { borderColor: "#58a6ff" }
-                }
-              }}
-            />
-          )}
+      return (
+        <Box key={index} sx={{ mb: 2 }}>
+          <Typography variant="body2" sx={{ color: "#ccc", mb: 0.5 }}>
+            {field.label || field.key}
+          </Typography>
+          <TextField
+            variant="outlined"
+            size="small"
+            fullWidth
+            value={value}
+            onChange={(e) => {
+              const newValue = e.target.value;
+              if (!nodeId) return;
+              effectiveSetNodes((nds) =>
+                nds.map((n) =>
+                  n.id === nodeId
+                    ? { ...n, data: { ...n.data, [field.key]: newValue } }
+                    : n
+                )
+              );
+              window.BorealisValueBus[nodeId] = newValue;
+            }}
+            InputProps={{
+              sx: {
+                backgroundColor: "#1e1e1e",
+                color: "#ccc",
+                "& fieldset": { borderColor: "#444" },
+                "&:hover fieldset": { borderColor: "#666" },
+                "&.Mui-focused fieldset": { borderColor: "#58a6ff" }
+              }
+            }}
+          />
         </Box>
       );
     });

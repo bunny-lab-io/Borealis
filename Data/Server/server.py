@@ -256,6 +256,40 @@ def receive_screenshot(data):
 def on_disconnect():
     print("[WebSocket] Connection Disconnected")
 
+# Macro Websocket Handlers
+@socketio.on("macro_status")
+def receive_macro_status(data):
+    """
+    Receives macro status/errors from agent and relays to all clients
+    Expected payload: {
+        "agent_id": ...,
+        "node_id": ...,
+        "success": True/False,
+        "message": "...",
+        "timestamp": ...
+    }
+    """
+    print(f"[Macro Status] Agent {data.get('agent_id')} Node {data.get('node_id')} Success: {data.get('success')} Msg: {data.get('message')}")
+    emit("macro_status", data, broadcast=True)
+
+@socketio.on("list_agent_windows")
+def handle_list_agent_windows(data):
+    """
+    Forwards list_agent_windows event to all agents (or filter for a specific agent_id).
+    """
+    agent_id = data.get("agent_id")
+    # You can target a specific agent if you track rooms/sessions.
+    # For now, broadcast to all agents so the correct one can reply.
+    emit("list_agent_windows", data, broadcast=True)
+
+@socketio.on("agent_window_list")
+def handle_agent_window_list(data):
+    """
+    Relay the list of windows from the agent back to all connected clients.
+    """
+    emit("agent_window_list", data, broadcast=True)
+
+
 # ---------------------------------------------
 # Server Launch
 # ---------------------------------------------
