@@ -6,7 +6,8 @@
 Whether you want to automate data flows, control a computer, extract data from images, or connect to APIs and webhooks, Borealis turns these advanced tasks into a simple, visual drag-and-drop experience.
 
 ## Youtube Video Demonstration:
-[![Borealis Usage Demonstration](https://img.youtube.com/vi/6GLolR70CTo/hqdefault.jpg)](https://www.youtube.com/watch?v=6GLolR70CTo)
+You can click the image below to watch a youtube video demonstrating the deployment, launching, and basic example usage of Borealis.
+[![Borealis Usage Demonstration](Data/Repository_Resources/data_workflow_example_01.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
 
 ## 🚀 What Is Borealis?
 
