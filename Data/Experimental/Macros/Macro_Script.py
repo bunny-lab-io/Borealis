@@ -17,7 +17,7 @@ if not os.path.isfile(ahk_bin_path):
 # Initialize AHK instance with explicit executable_path
 ahk = AHK(executable_path=ahk_bin_path)
 
-window_title = '*TargetWindow - Notepad'  # Change this to your target window
+window_title = 'New Tab - Google Chrome'  # Change this to your target window
 
 # Find the window by its title
 target_window = ahk.find_window(title=window_title)
