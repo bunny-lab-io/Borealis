@@ -208,6 +208,43 @@ Run-Step "Dependency: Tesseract-OCR - Trained Model Data" {
     }
 }
 
+# ---------------------- Ensure AutoHotKey is Present (Bundled Portable ZIP) ----------------------
+Run-Step "Dependency: AutoHotKey" {
+    $ahkVersion    = "2.0.19"   # Update this field for new AHK releases (without the 'v' prefix)
+    $ahkVersionTag = "v$ahkVersion"
+    $ahkZipName    = "AutoHotkey_$ahkVersion.zip"
+    $ahkZipUrl     = "https://github.com/AutoHotkey/AutoHotkey/releases/download/$ahkVersionTag/$ahkZipName"
+    $ahkZipPath    = Join-Path $depsRoot $ahkZipName
+    $ahkInstallDir = Join-Path $depsRoot "AutoHotKey"
+    $ahkExePath    = Join-Path $ahkInstallDir "AutoHotkey64.exe"   # Adjust if needed
+
+    if (-not (Test-Path $ahkExePath)) {
+        # SECTION: Download Step
+        if (-not (Test-Path $ahkZipPath)) {
+            Invoke-WebRequest -Uri $ahkZipUrl -OutFile $ahkZipPath
+        }
+
+        # SECTION: Extraction Step
+        if (-not (Test-Path $sevenZipExe)) {
+            throw "7-Zip CLI not found at: $sevenZipExe"
+        }
+
+        if (Test-Path $ahkInstallDir) {
+            Remove-Item $ahkInstallDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        New-Item -ItemType Directory -Path $ahkInstallDir | Out-Null
+        & $sevenZipExe x $ahkZipPath "-o$ahkInstallDir" -y | Out-Null
+
+        # SECTION: Post-Processing / Cleanup
+        Remove-Item $ahkZipPath -Force -ErrorAction SilentlyContinue
+
+        # SECTION: Validation
+        if (-not (Test-Path $ahkExePath)) {
+            throw "AutoHotKey executable not found after extraction."
+        }
+    }
+}
+
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
 
@@ -245,6 +282,8 @@ Write-Host " 4) Package Self-Contained EXE of Server or Agent " -NoNewline -Fore
 Write-Host "[Experimental]" -ForegroundColor Red
 Write-Host " 5) Update Borealis " -NoNewLine -ForegroundColor DarkGray
 Write-Host "[Requires Re-Build]" -ForegroundColor Red
+Write-Host " 6) Perform Basic Macro Automation Testing " -NoNewline -ForegroundColor DarkGray
+Write-Host "[Experimental]" -ForegroundColor Red
 Write-Host "Type a number and press " -NoNewLine
 Write-Host "<ENTER>" -ForegroundColor DarkCyan
 $choice = Read-Host
