@@ -1,0 +1,4 @@
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Experimental/Macros/macro-requirements.txt
+
+# Macro Automation
+ahk # AutoHotKey

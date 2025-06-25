@@ -282,8 +282,8 @@ Write-Host " 4) Package Self-Contained EXE of Server or Agent " -NoNewline -Fore
 Write-Host "[Experimental]" -ForegroundColor Red
 Write-Host " 5) Update Borealis " -NoNewLine -ForegroundColor DarkGray
 Write-Host "[Requires Re-Build]" -ForegroundColor Red
-Write-Host " 6) Perform Basic Macro Automation Testing " -NoNewline -ForegroundColor DarkGray
-Write-Host "[Experimental]" -ForegroundColor Red
+Write-Host " 6) Perform AutoHotKey Automation Testing " -NoNewline -ForegroundColor DarkGray
+Write-Host "[Experimental - Dev Testing]" -ForegroundColor Red
 Write-Host "Type a number and press " -NoNewLine
 Write-Host "<ENTER>" -ForegroundColor DarkCyan
 $choice = Read-Host
@@ -601,5 +601,41 @@ switch ($choice) {
         Read-Host "Press any key to re-launch Borealis..."
         & (Join-Path $scriptDir "Borealis.ps1")
         Exit 0
+    }
+
+    "6" {
+        $host.UI.RawUI.WindowTitle = "AutoHotKey Automation Testing"
+        Write-Host " "
+        Write-Host "Lauching AutoHotKey Testing Script..." -ForegroundColor Blue
+        
+        $venvFolder             = "Macro_Testing"
+        $scriptSourcePath        = "Data\Experimental\Macros\Macro_Script.py"
+        $scriptRequirements      = "Data\Experimental\Macros\macro-requirements.txt"
+        $scriptDestinationFolder = "$venvFolder\Borealis"
+        $scriptDestinationFile   = "$venvFolder\Borealis\Macro_Script.py"
+        $venvPython = Join-Path $scriptDir $venvFolder | Join-Path -ChildPath 'Scripts\python.exe'
+
+        Run-Step "Create Virtual Python Environment" {
+            if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
+                & $pythonExe -m venv $venvFolder
+            }
+            if (Test-Path $scriptSourcePath) {
+                Remove-Item $scriptDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
+                New-Item -Path $scriptDestinationFolder -ItemType Directory -Force | Out-Null
+                Copy-Item $scriptSourcePath $scriptDestinationFile -Force
+                Copy-Item "Dependencies\AutoHotKey" $scriptDestinationFolder -Recurse
+            }
+            . "$venvFolder\Scripts\Activate"
+        }
+
+        Run-Step "Install Python Dependencies" {
+            if (Test-Path $scriptRequirements) {
+                & $venvPython -m pip install --disable-pip-version-check -q -r $scriptRequirements | Out-Null
+            }
+        }
+
+        Write-Host "`nLaunching Macro Testing Script..." -ForegroundColor Blue
+        Write-Host "===================================================================================="
+        & $venvPython -W ignore::SyntaxWarning $scriptDestinationFile
     }
 }
