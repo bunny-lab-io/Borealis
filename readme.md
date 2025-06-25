@@ -5,6 +5,9 @@
 **Borealis** is your all-in-one visual automation studio.
 Whether you want to automate data flows, control your computer, extract data from images, or connect to APIs and webhooks, Borealis turns these advanced tasks into a simple, visual drag-and-drop experience.
 
+## Youtube Video Demonstration:
+[![Borealis Usage Demonstration](https://img.youtube.com/vi/6GLolR70CTo/hqdefault.jpg)](https://www.youtube.com/watch?v=6GLolR70CTo)
+
 ## 🚀 What Is Borealis?
 
 Imagine building automations and powerful data workflows by *connecting blocks on a canvas* — and having them come to life in real time. Borealis is a cross-platform, live-editable automation tool that makes it possible to create, test, and run workflows with **zero coding required** (unless you want to).
