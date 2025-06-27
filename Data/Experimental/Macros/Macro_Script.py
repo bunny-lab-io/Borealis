@@ -1,4 +1,4 @@
-# ---------------------- Information Gathering ----------------------
+# ---------------------- Information Gathering -----------------------
 import os
 from ahk import AHK
 
