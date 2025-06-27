@@ -118,6 +118,24 @@ const MacroKeyPressNode = ({ id, data }) => {
     };
   }, [agent_id, agentConnection, setNodes, id]);
 
+  // Register this node for agent provisioning
+  window.__BorealisInstructionNodes = window.__BorealisInstructionNodes || {};
+  window.__BorealisInstructionNodes[id] = () => ({
+    node_id: id,
+    role: "macro",
+    window_handle: data?.window_handle || "",
+    macro_type: data?.macro_type || "keypress",
+    key: data?.key || "",
+    text: data?.text || "",
+    interval_ms: parseInt(data?.interval_ms || 1000, 10),
+    randomize_interval: data?.randomize_interval === true || data?.randomize_interval === "true",
+    random_min: parseInt(data?.random_min || 750, 10),
+    random_max: parseInt(data?.random_max || 950, 10),
+    operation_mode: data?.operation_mode || DEFAULT_OPERATION_MODE,
+    active: data?.active === true || data?.active === "true",
+    trigger: parseInt(data?.trigger || 0, 10)
+  });
+
   // UI: Start/Pause Button
   const handleToggleMacro = () => {
     setNodes(nds =>
@@ -263,12 +281,13 @@ const MacroKeyPressNode = ({ id, data }) => {
 // ----- Node Catalog Export -----
 export default {
   type: "Macro_KeyPress",
+  role: "macro",
   label: "Agent Role: Macro",
   description: `
 Send automated key presses or typed text to any open application window on the connected agent.
 Supports manual, continuous, trigger, and one-shot modes for automation and event-driven workflows.
 `,
-  content: "Send Key Press or Typed Text to Window via Agent",
+  content: "Send Key Press or Typed Text to Window via Agent (AutoHotKey)",
   component: MacroKeyPressNode,
   config: [
     { key: "window_handle", label: "Target Window", type: "select", dynamicOptions: true, defaultValue: "" },

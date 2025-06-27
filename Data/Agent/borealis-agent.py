@@ -204,7 +204,9 @@ async def on_agent_config(cfg):
 
 @sio.on('list_agent_windows')
 async def handle_list_agent_windows(data):
+    print("[DEBUG] list_agent_windows request received")
     windows = macro_engines.list_windows()
+    print(f"[DEBUG] Sending {len(windows)} windows back to server")
     await sio.emit('agent_window_list', {
         'agent_id': AGENT_ID,
         'windows': windows
@@ -393,6 +395,10 @@ async def macro_task(cfg):
         active = cfg.get('active', True)
         trigger = int(cfg.get('trigger', 0))  # For trigger modes; default 0 if not set
 
+        print(
+            f"[macro_task:{nid}] cfg: window={window_handle} type={macro_type} mode={operation_mode} key={key} text={text} interval={interval_ms}ms rand={randomize} active={active} trigger={trigger}"
+        )
+
         # Define helper for error reporting
         async def emit_macro_status(success, message=""):
             await sio.emit('macro_status', {
@@ -435,11 +441,15 @@ async def macro_task(cfg):
                 # Unknown mode: default to "Continuous"
                 send_macro = True
 
+            print(f"[macro_task:{nid}] send_macro={send_macro} mode={operation_mode} trigger={trigger} last_trigger={last_trigger_value}")
+
             if send_macro:
                 # Actually perform macro
                 if macro_type == 'keypress' and key:
+                    print(f"[macro_task:{nid}] Sending keypress '{key}' to {window_handle}")
                     result = macro_engines.send_keypress_to_window(window_handle, key)
                 elif macro_type == 'typed_text' and text:
+                    print(f"[macro_task:{nid}] Sending typed text to {window_handle}: {text}")
                     result = macro_engines.type_text_to_window(window_handle, text)
                 else:
                     await emit_macro_status(False, "Invalid macro type or missing key/text")
@@ -456,6 +466,7 @@ async def macro_task(cfg):
                     await emit_macro_status(True, f"Macro sent: {macro_type}")
                 else:
                     await emit_macro_status(False, err or "Unknown macro engine failure")
+                print(f"[macro_task:{nid}] result success={success} error={err}")
             else:
                 # No macro to send this cycle, just idle
                 await asyncio.sleep(0.05)
@@ -466,6 +477,7 @@ async def macro_task(cfg):
                     ms = random.randint(random_min, random_max)
                 else:
                     ms = interval_ms
+                print(f"[macro_task:{nid}] sleeping for {ms}ms")
                 await asyncio.sleep(ms / 1000.0)
             else:
                 await asyncio.sleep(0.1)  # No macro action: check again soon
