@@ -4,28 +4,28 @@ import platform
 
 print("[macro_engines] Initializing macro engine...")
 
+# Default to disabled macro engine
+AHK = None
+ahk = None
+
 if platform.system().lower().startswith("win"):
     print("[macro_engines] Detected Windows OS")
     try:
         from ahk import AHK
         print("[macro_engines] Imported ahk module")
     except Exception as e:
-        AHK = None
-        ahk = None
         print(f"[macro_engines] Failed to import ahk: {e}")
     else:
         _script_dir = os.path.dirname(os.path.abspath(__file__))
         _ahk_exe = os.path.join(_script_dir, "..", "AutoHotKey", "AutoHotkey64.exe")
         print(f"[macro_engines] Looking for AutoHotKey binary at: {_ahk_exe}")
-        ahk = AHK(executable_path=_ahk_exe) if os.path.isfile(_ahk_exe) else None
-        if ahk is None:
-            print(f"[macro_engines] AutoHotKey binary not found at: {_ahk_exe}")
-        else:
+        if os.path.isfile(_ahk_exe):
+            ahk = AHK(executable_path=_ahk_exe)
             print("[macro_engines] AutoHotKey initialized")
+        else:
+            print(f"[macro_engines] AutoHotKey binary not found at: {_ahk_exe}")
 else:
     print("[macro_engines] Non-Windows OS detected - macro engine disabled")
-    AHK = None
-    ahk = None
 
 def list_windows():
     """List all visible windows with titles."""
