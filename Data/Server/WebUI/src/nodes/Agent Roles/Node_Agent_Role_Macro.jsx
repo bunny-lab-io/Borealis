@@ -268,7 +268,7 @@ export default {
 Send automated key presses or typed text to any open application window on the connected agent.
 Supports manual, continuous, trigger, and one-shot modes for automation and event-driven workflows.
 `,
-  content: "Send Key Press or Typed Text to Window via Agent",
+  content: "Send Key Press or Typed Text to Window via Agent (AutoHotKey)",
   component: MacroKeyPressNode,
   config: [
     { key: "window_handle", label: "Target Window", type: "select", dynamicOptions: true, defaultValue: "" },

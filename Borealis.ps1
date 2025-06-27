@@ -418,6 +418,9 @@ switch ($choice) {
                 New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
                 Copy-Item $agentSourcePath $agentDestinationFile -Force
                 Copy-Item "Data\Agent\Python_API_Endpoints" $agentDestinationFolder -Recurse
+                if (Test-Path "Dependencies\AutoHotKey") {
+                    Copy-Item "Dependencies\AutoHotKey" $agentDestinationFolder -Recurse
+                }
             }
             . "$venvFolder\Scripts\Activate"
         }
