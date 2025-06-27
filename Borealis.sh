@@ -169,6 +169,10 @@ launch_agent() {
     run_step "Copy Agent Script" bash -c "
         mkdir -p '${agentDestinationFolder}'
         cp '${agentSourcePath}' '${agentDestinationFolder}/'
+        cp -r 'Data/Agent/Python_API_Endpoints' '${agentDestinationFolder}/'
+        if [ -d 'Dependencies/AutoHotKey' ]; then
+            cp -r 'Dependencies/AutoHotKey' '${agentDestinationFolder}/'
+        fi
     "
 
     echo -e "\n${GREEN}Launching Borealis Agent...${RESET}"

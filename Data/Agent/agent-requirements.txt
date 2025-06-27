@@ -20,4 +20,4 @@ Pillow                 # Image processing (Windows)
 ###av                     # Required by aiortc for video/audio codecs
 
 # Macro Automation
-pywinauto # Windows-based Macro Automation Library
+ahk # AutoHotKey
