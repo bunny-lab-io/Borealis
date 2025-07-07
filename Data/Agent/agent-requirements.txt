@@ -21,3 +21,7 @@ Pillow                 # Image processing (Windows)
 
 # Macro Automation
 pywinauto # Windows-based Macro Automation Library
+
+# Audio Streaming Dependencies
+sounddevice
+numpy
