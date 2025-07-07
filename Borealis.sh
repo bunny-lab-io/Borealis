@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Borealis.sh
+# Still Experimental - Additional Work Needs to be Done to Reach Parity with Windows Environments
 
 clear
 
