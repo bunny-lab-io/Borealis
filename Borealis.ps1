@@ -534,7 +534,7 @@ switch ($choice) {
 
         # Prepare paths
         $updateZip = Join-Path $scriptDir "Update_Staging\main.zip"
-        $updateDir = Join-Path $scriptDir "Update_Staging\borealis"
+        $updateDir = Join-Path $scriptDir "Update_Staging\Borealis-main"
         $preservePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
         $preserveBackupPath = Join-Path $scriptDir "Update_Staging\Tesseract-OCR"
 
@@ -566,11 +566,11 @@ switch ($choice) {
             }
 
             $updateZip = Join-Path $stagingPath "main.zip"
-            $updateDir = Join-Path $stagingPath "borealis"
+            $updateDir = Join-Path $stagingPath "Borealis-main"
         }
 
-        Run-Step "Updating: Download Update from https://git.bunny-lab.io/bunny-lab/Borealis/archive/main.zip" {
-            Invoke-WebRequest -Uri "https://git.bunny-lab.io/bunny-lab/Borealis/archive/main.zip" -OutFile $updateZip
+        Run-Step "Updating: Download Update from https://github.com/bunny-lab-io/Borealis/archive/refs/heads/main.zip" {
+            Invoke-WebRequest -Uri "https://github.com/bunny-lab-io/Borealis/archive/refs/heads/main.zip" -OutFile $updateZip
         }
 
         Run-Step "Updating: Extract Update Files" {
