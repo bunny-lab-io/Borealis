@@ -1,4 +1,4 @@
-![Borealis Logo](https://git.bunny-lab.io/Bunny-Lab/Borealis/raw/branch/main/Data/Server/WebUI/public/Borealis_Logo_Full.png)
+![Borealis Logo](https://github.com/bunny-lab-io/Borealis/blob/3c563af8b435825215a5f950f78a19018c8904c4/Data/Server/WebUI/public/Borealis_Logo_Full.png)
 
 # Borealis: Visual Automation For Everyone
 
