@@ -29,7 +29,7 @@ Clear-Host
  ███████████ ░░██████  █████    ░░██████ ░░████████ █████ █████ ██████ 
 ░░░░░░░░░░░   ░░░░░░  ░░░░░      ░░░░░░   ░░░░░░░░ ░░░░░ ░░░░░ ░░░░░░  
 '@ | Write-Host -ForegroundColor DarkCyan
-Write-Host "Drag-&-Drop Automation Orchestration | Macros | Data Collection & Analysis" -ForegroundColor DarkGray
+Write-Host "Automation Platform" -ForegroundColor DarkGray
 Write-Host " "
 Write-Host "Ensuring Dependencies Exist..." -ForegroundColor DarkCyan
 # ---------------------- ASCII Art Terminal Required Changes ----------------------
@@ -260,7 +260,7 @@ Clear-Host
  ███████████ ░░██████  █████    ░░██████ ░░████████ █████ █████ ██████ 
 ░░░░░░░░░░░   ░░░░░░  ░░░░░      ░░░░░░   ░░░░░░░░ ░░░░░ ░░░░░ ░░░░░░  
 '@ | Write-Host -ForegroundColor DarkCyan
-Write-Host "Drag-&-Drop Automation Orchestration | Macros | Data Collection & Analysis" -ForegroundColor DarkGray
+Write-Host "Automation Platform" -ForegroundColor DarkGray
 
 foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
     if (-not (Test-Path $tool)) {
