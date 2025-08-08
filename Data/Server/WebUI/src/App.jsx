@@ -27,6 +27,7 @@ import NavigationSidebar from "./Navigation_Sidebar";
 import WorkflowList from "./Workflow_List";
 import DeviceList from "./Device_List";
 import ScriptList from "./Script_List";
+import ScheduledJobsList from "./Scheduled_Jobs_List";
 
 import { io } from "socket.io-client";
 
@@ -139,6 +140,9 @@ export default function App() {
     switch (currentPage) {
       case "devices":
         return <DeviceList />;
+
+      case "jobs":
+        return <ScheduledJobsList />;
 
       case "workflows":
         return (
