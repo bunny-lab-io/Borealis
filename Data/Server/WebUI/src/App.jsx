@@ -291,6 +291,7 @@ export default function App() {
     { id: "flow_1", tab_name: "Flow 1", nodes: [], edges: [] }
   ]);
   const [activeTabId, setActiveTabId] = useState("flow_1");
+  const [currentPage, setCurrentPage] = useState("jobs");
 
   // navigation state
   const [currentPage, setCurrentPage] = useState("devices");
@@ -813,7 +814,6 @@ export default function App() {
             {renderMainContent()}
           </Box>
         </Box>
-
         <StatusBar />
       </Box>
 
