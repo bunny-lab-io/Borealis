@@ -10,9 +10,10 @@ from functools import partial
 from io import BytesIO
 import base64
 import traceback
-import random # Macro Randomization
-import platform # OS Detection
+import random  # Macro Randomization
+import platform  # OS Detection
 import importlib.util
+import time  # Heartbeat timestamps
 
 import socketio
 from qasync import QEventLoop
@@ -99,20 +100,62 @@ clear_regions_only()
 # CORE SECTION: OPERATING SYSTEM DETECTION
 # //////////////////////////////////////////////////////////////////////////
 def detect_agent_os():
-    plat = platform.system().lower()
-    if plat.startswith('win'):
-        return 'windows'
-    elif plat.startswith('linux'):
-        return 'linux'
-    elif plat.startswith('darwin'):
-        return 'macos'
-    else:
-        return 'unknown'
+    """
+    Detects the full, user-friendly operating system name and version.
+    Examples:
+      - "Windows 11"
+      - "Windows 10"
+      - "Fedora Workstation 42"
+      - "Ubuntu 22.04 LTS"
+      - "macOS Sonoma"
+    Falls back to a generic name if detection fails.
+    """
+    try:
+        plat = platform.system().lower()
+
+        if plat.startswith('win'):
+            # On Windows, platform.release() gives major version (e.g., "10", "11")
+            # platform.version() can also give build info, but isn't always user-friendly
+            return f"Windows {platform.release()}"
+
+        elif plat.startswith('linux'):
+            try:
+                import distro  # External package, better for Linux OS detection
+                name = distro.name(pretty=True)  # e.g., "Fedora Workstation 42"
+                if name:
+                    return name
+                else:
+                    # Fallback if pretty name not found
+                    return f"{platform.system()} {platform.release()}"
+            except ImportError:
+                # Fallback to basic info if distro not installed
+                return f"{platform.system()} {platform.release()}"
+
+        elif plat.startswith('darwin'):
+            # macOS — platform.mac_ver()[0] returns version number
+            version = platform.mac_ver()[0]
+            # Optional: map version numbers to marketing names
+            macos_names = {
+                "14": "Sonoma",
+                "13": "Ventura",
+                "12": "Monterey",
+                "11": "Big Sur",
+                "10.15": "Catalina"
+            }
+            pretty_name = macos_names.get(".".join(version.split(".")[:2]), "")
+            return f"macOS {pretty_name or version}"
+
+        else:
+            return f"Unknown OS ({platform.system()} {platform.release()})"
+
+    except Exception as e:
+        print(f"[WARN] OS detection failed: {e}")
+        return "Unknown"
 
 CONFIG.data['agent_operating_system'] = detect_agent_os()
 CONFIG._write()
 
-# //////////////////////////////////////////////////////////////////////////       
+# //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: MACRO AUTOMATION
 # //////////////////////////////////////////////////////////////////////////
 MACRO_ENGINE_PATH = os.path.join(os.path.dirname(__file__), "Python_API_Endpoints", "macro_engines.py")
@@ -120,7 +163,7 @@ spec = importlib.util.spec_from_file_location("macro_engines", MACRO_ENGINE_PATH
 macro_engines = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(macro_engines)
 
-# //////////////////////////////////////////////////////////////////////////       
+# //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: ASYNC TASK / WEBSOCKET
 # //////////////////////////////////////////////////////////////////////////
 
@@ -143,10 +186,41 @@ async def stop_all_roles():
             print(f"[WARN] Error closing widget: {e}")
     overlay_widgets.clear()
 
+# ---------------- Heartbeat ----------------
+async def send_heartbeat():
+    """
+    Periodically send agent heartbeat to the server so the Devices page can
+    show hostname, OS, and last_seen.
+    """
+    while True:
+        try:
+            payload = {
+                "agent_id": AGENT_ID,
+                "hostname": socket.gethostname(),
+                "agent_operating_system": CONFIG.data.get("agent_operating_system", detect_agent_os()),
+                "last_seen": int(time.time())
+            }
+            await sio.emit("agent_heartbeat", payload)
+        except Exception as e:
+            print(f"[WARN] heartbeat emit failed: {e}")
+        await asyncio.sleep(5)
+
 @sio.event
 async def connect():
     print(f"[WebSocket] Connected to Borealis Server with Agent ID: {AGENT_ID}")
     await sio.emit('connect_agent', {"agent_id": AGENT_ID})
+
+    # Send an immediate heartbeat so the UI can populate instantly.
+    try:
+        await sio.emit("agent_heartbeat", {
+            "agent_id": AGENT_ID,
+            "hostname": socket.gethostname(),
+            "agent_operating_system": CONFIG.data.get("agent_operating_system", detect_agent_os()),
+            "last_seen": int(time.time())
+        })
+    except Exception as e:
+        print(f"[WARN] initial heartbeat failed: {e}")
+
     await sio.emit('request_config', {"agent_id": AGENT_ID})
 
 @sio.event
@@ -156,7 +230,7 @@ async def disconnect():
     CONFIG.data['regions'].clear()
     CONFIG._write()
 
-# //////////////////////////////////////////////////////////////////////////       
+# //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: AGENT CONFIG MANAGEMENT / WINDOW MANAGEMENT
 # //////////////////////////////////////////////////////////////////////////
 @sio.on('agent_config')
@@ -265,7 +339,7 @@ class ScreenshotRegion(QtWidgets.QWidget):
         bar_width = overlay_green_thickness * 6
         bar_height = overlay_green_thickness
         bar_x = (w - bar_width) // 2
-        bar_y = 6  # 6–8 px down from top
+        bar_y = 6  # 6-8 px down from top
 
         p.setBrush(QtGui.QColor(0,191,255))  # Borealis Blue
         p.drawRect(bar_x, bar_y - bar_height - 10, bar_width, bar_height * 4)  # 2px padding above green bar
@@ -380,9 +454,8 @@ async def macro_task(cfg):
 
     while True:
         # Always re-fetch config (hot reload support)
-        # (In reality, you might want to deep-copy or re-provision on config update, but for MVP we refetch each tick)
         window_handle = cfg.get('window_handle')
-        macro_type = cfg.get('macro_type', 'keypress')  # Now matches UI config
+        macro_type = cfg.get('macro_type', 'keypress')
         operation_mode = cfg.get('operation_mode', 'Continuous')
         key = cfg.get('key')
         text = cfg.get('text')
@@ -391,9 +464,8 @@ async def macro_task(cfg):
         random_min = int(cfg.get('random_min', 750))
         random_max = int(cfg.get('random_max', 950))
         active = cfg.get('active', True)
-        trigger = int(cfg.get('trigger', 0))  # For trigger modes; default 0 if not set
+        trigger = int(cfg.get('trigger', 0))
 
-        # Define helper for error reporting
         async def emit_macro_status(success, message=""):
             await sio.emit('macro_status', {
                 "agent_id": AGENT_ID,
@@ -403,7 +475,6 @@ async def macro_task(cfg):
                 "timestamp": int(asyncio.get_event_loop().time() * 1000)
             })
 
-        # Stopped state (paused from UI)
         if not (active is True or str(active).lower() == "true"):
             await asyncio.sleep(0.2)
             continue
@@ -411,32 +482,22 @@ async def macro_task(cfg):
         try:
             send_macro = False
 
-            # Operation Mode Logic
             if operation_mode == "Run Once":
                 if not has_run_once:
                     send_macro = True
-                    has_run_once = True  # Only run once, then stop
+                    has_run_once = True
             elif operation_mode == "Continuous":
-                send_macro = True  # Always run every interval
+                send_macro = True
             elif operation_mode == "Trigger-Continuous":
-                # Only run while trigger is "1"
-                if trigger == 1:
-                    send_macro = True
-                else:
-                    send_macro = False
+                send_macro = (trigger == 1)
             elif operation_mode == "Trigger-Once":
-                # Run only on rising edge: 0->1
                 if last_trigger_value == 0 and trigger == 1:
                     send_macro = True
-                else:
-                    send_macro = False
                 last_trigger_value = trigger
             else:
-                # Unknown mode: default to "Continuous"
                 send_macro = True
 
             if send_macro:
-                # Actually perform macro
                 if macro_type == 'keypress' and key:
                     result = macro_engines.send_keypress_to_window(window_handle, key)
                 elif macro_type == 'typed_text' and text:
@@ -446,7 +507,6 @@ async def macro_task(cfg):
                     await asyncio.sleep(0.2)
                     continue
 
-                # Result may be True or (False, error)
                 if isinstance(result, tuple):
                     success, err = result
                 else:
@@ -457,10 +517,8 @@ async def macro_task(cfg):
                 else:
                     await emit_macro_status(False, err or "Unknown macro engine failure")
             else:
-                # No macro to send this cycle, just idle
                 await asyncio.sleep(0.05)
 
-            # Timing: only wait if we did send macro this tick
             if send_macro:
                 if randomize:
                     ms = random.randint(random_min, random_max)
@@ -468,7 +526,7 @@ async def macro_task(cfg):
                     ms = interval_ms
                 await asyncio.sleep(ms / 1000.0)
             else:
-                await asyncio.sleep(0.1)  # No macro action: check again soon
+                await asyncio.sleep(0.1)
 
         except asyncio.CancelledError:
             print(f"[TASK] Macro role {nid} cancelled.")
@@ -484,18 +542,21 @@ async def macro_task(cfg):
 async def config_watcher():
     print("[DEBUG] Starting config watcher")
     while True:
-        CONFIG.watch(); await asyncio.sleep(CONFIG.data.get('config_file_watcher_interval',2))
+        CONFIG.watch()
+        await asyncio.sleep(CONFIG.data.get('config_file_watcher_interval',2))
 
 # ---------------- Persistent Idle Task ----------------
 async def idle_task():
     print("[Agent] Entering idle state. Awaiting instructions...")
     try:
         while True:
-            await asyncio.sleep(60); print("[DEBUG] Idle task still alive.")
+            await asyncio.sleep(60)
+            print("[DEBUG] Idle task still alive.")
     except asyncio.CancelledError:
         print("[FATAL] Idle task was cancelled!")
     except Exception as e:
-        print(f"[FATAL] Idle task crashed: {e}"); traceback.print_exc()
+        print(f"[FATAL] Idle task crashed: {e}")
+        traceback.print_exc()
 
 # ---------------- Dummy Qt Widget to Prevent Exit ----------------
 class PersistentWindow(QtWidgets.QWidget):
@@ -530,6 +591,8 @@ if __name__=='__main__':
         background_tasks.append(loop.create_task(config_watcher()))
         background_tasks.append(loop.create_task(connect_loop()))
         background_tasks.append(loop.create_task(idle_task()))
+        # Start periodic heartbeats
+        background_tasks.append(loop.create_task(send_heartbeat()))
         loop.run_forever()
     except Exception as e:
         print(f"[FATAL] Event loop crashed: {e}")

@@ -115,32 +115,12 @@ def _extract_tab_name(obj: Dict) -> str:
 def load_workflows():
     """
     Scan <ProjectRoot>/Workflows for *.json files and return a table-friendly list.
-
-    Response:
-    {
-      "root": "<absolute path to Workflows>",
-      "workflows": [
-        {
-          "name": "FolderA > Sub > File.json",   # breadcrumb styled name for table display
-          "breadcrumb_prefix": "FolderA > Sub",  # prefix only, to allow UI styling
-          "file_name": "File.json",              # base filename
-          "rel_path": "FolderA/Sub/File.json",   # path relative to Workflows
-          "tab_name": "Optional Tab Name",       # best-effort read from JSON (may be "")
-          "description": "",                     # placeholder for future use
-          "category": "",                        # placeholder for future use
-          "last_edited": "YYYY-MM-DDTHH:MM:SS",  # local time ISO-like string
-          "last_edited_epoch": 1712345678.123    # numeric, for client-side sorting
-        },
-        ...
-      ]
-    }
     """
     # Resolve <ProjectRoot>/Workflows relative to this file at <ProjectRoot>/Data/server.py
     workflows_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Workflows"))
     results: List[Dict] = []
 
     if not os.path.isdir(workflows_root):
-        # Directory missing is not a hard error; return empty set and the resolved path for visibility.
         return jsonify({
             "root": workflows_root,
             "workflows": [],
@@ -153,19 +133,16 @@ def load_workflows():
                 continue
 
             full_path = os.path.join(root, fname)
-            rel_path = os.path.relpath(full_path, workflows_root)  # e.g. SuperStuff/Example.json
+            rel_path = os.path.relpath(full_path, workflows_root)
 
-            # Build breadcrumb-style display name: "SuperStuff > Example.json"
             parts = rel_path.split(os.sep)
             folder_parts = parts[:-1]
             breadcrumb_prefix = " > ".join(folder_parts) if folder_parts else ""
             display_name = f"{breadcrumb_prefix} > {fname}" if breadcrumb_prefix else fname
 
-            # Best-effort read of tab name (not required for now)
             obj = _safe_read_json(full_path)
             tab_name = _extract_tab_name(obj)
 
-            # File timestamps
             try:
                 mtime = os.path.getmtime(full_path)
             except Exception:
@@ -184,7 +161,6 @@ def load_workflows():
                 "last_edited_epoch": mtime
             })
 
-    # Sort newest-first by modification time
     results.sort(key=lambda x: x.get("last_edited_epoch", 0.0), reverse=True)
 
     return jsonify({
@@ -195,13 +171,18 @@ def load_workflows():
 # ---------------------------------------------
 # Borealis Agent API Endpoints
 # ---------------------------------------------
-# These endpoints handle agent registration, provisioning, and image streaming.
-registered_agents = {}
-agent_configurations = {}
-latest_images = {}
+# These endpoints handle agent registration, provisioning, image streaming, and heartbeats.
+# Shape expected by UI for each agent:
+# { "agent_id", "hostname", "agent_operating_system", "last_seen", "status" }
+registered_agents: Dict[str, Dict] = {}
+agent_configurations: Dict[str, Dict] = {}
+latest_images: Dict[str, Dict] = {}
 
 @app.route("/api/agents")
 def get_agents():
+    """
+    Return a dict keyed by agent_id with hostname, os, last_seen, status.
+    """
     return jsonify(registered_agents)
 
 @app.route("/api/agent/provision", methods=["POST"])
@@ -231,7 +212,6 @@ def proxy():
     if not target:
         return {"error": "Missing ?url="}, 400
 
-    # Forward method, headers, body
     upstream = requests.request(
         method  = request.method,
         url     = target,
@@ -251,7 +231,6 @@ def proxy():
 # ---------------------------------------------
 # Live Screenshot Viewer for Debugging
 # ---------------------------------------------
-# Serves an HTML canvas that shows real-time screenshots from a given agent+node.
 @app.route("/api/agent/<agent_id>/node/<node_id>/screenshot/live")
 def screenshot_node_viewer(agent_id, node_id):
     return f"""
@@ -326,25 +305,51 @@ def receive_screenshot_task(data):
             "timestamp": time.time()
         }
 
-    # Emit the full payload, including geometry (even if image is empty)
     emit("agent_screenshot_task", data, broadcast=True)
 
 @socketio.on("connect_agent")
 def connect_agent(data):
-    agent_id = data.get("agent_id")
-    hostname = data.get("hostname", "unknown")
+    """
+    Initial agent connect. Agent may only send agent_id here.
+    Hostname/OS are filled in by subsequent heartbeats.
+    """
+    agent_id = (data or {}).get("agent_id")
+    if not agent_id:
+        return
     print(f"Agent connected: {agent_id}")
 
-    registered_agents[agent_id] = {
-        "agent_id": agent_id,
-        "hostname": hostname,
-        "last_seen": time.time(),
-        "status": "orphaned" if agent_id not in agent_configurations else "provisioned"
-    }
+    rec = registered_agents.setdefault(agent_id, {})
+    rec["agent_id"] = agent_id
+    rec["hostname"] = rec.get("hostname", "unknown")
+    rec["agent_operating_system"] = rec.get("agent_operating_system", "-")
+    rec["last_seen"] = int(time.time())
+    rec["status"] = "provisioned" if agent_id in agent_configurations else "orphaned"
+
+@socketio.on("agent_heartbeat")
+def on_agent_heartbeat(data):
+    """
+    Heartbeat payload from agent:
+      { agent_id, hostname, agent_operating_system, last_seen }
+    Updates registry so Devices view can display OS/hostname and recency.
+    """
+    if not data:
+        return
+    agent_id = data.get("agent_id")
+    if not agent_id:
+        return
+
+    rec = registered_agents.setdefault(agent_id, {})
+    rec["agent_id"] = agent_id
+    if data.get("hostname"):
+        rec["hostname"] = data.get("hostname")
+    if data.get("agent_operating_system"):
+        rec["agent_operating_system"] = data.get("agent_operating_system")
+    rec["last_seen"] = int(data.get("last_seen") or time.time())
+    rec["status"] = "provisioned" if agent_id in agent_configurations else rec.get("status", "orphaned")
 
 @socketio.on("request_config")
 def send_agent_config(data):
-    agent_id = data.get("agent_id")
+    agent_id = (data or {}).get("agent_id")
     config = agent_configurations.get(agent_id)
     if config:
         emit("agent_config", config)
@@ -386,9 +391,6 @@ def handle_list_agent_windows(data):
     """
     Forwards list_agent_windows event to all agents (or filter for a specific agent_id).
     """
-    agent_id = data.get("agent_id")
-    # You can target a specific agent if you track rooms/sessions.
-    # For now, broadcast to all agents so the correct one can reply.
     emit("list_agent_windows", data, broadcast=True)
 
 @socketio.on("agent_window_list")
@@ -398,11 +400,9 @@ def handle_agent_window_list(data):
     """
     emit("agent_window_list", data, broadcast=True)
 
-
 # ---------------------------------------------
 # Server Launch
 # ---------------------------------------------
 if __name__ == "__main__":
-    import eventlet.wsgi
-    listener = eventlet.listen(('0.0.0.0', 5000))
-    eventlet.wsgi.server(listener, app)
+    # Use SocketIO runner so WebSocket transport works with eventlet.
+    socketio.run(app, host="0.0.0.0", port=5000)
