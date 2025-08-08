@@ -19,7 +19,11 @@ import {
   Button,
   CssBaseline,
   ThemeProvider,
-  createTheme
+  createTheme,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemText
 } from "@mui/material";
 
 // Material UI - Icons
@@ -119,6 +123,7 @@ export default function App() {
     }
   ]);
   const [activeTabId, setActiveTabId] = useState("flow_1");
+  const [currentPage, setCurrentPage] = useState("jobs");
 
   const [aboutAnchorEl, setAboutAnchorEl] = useState(null);
   const [creditsDialogOpen, setCreditsDialogOpen] = useState(false);
@@ -383,33 +388,9 @@ export default function App() {
     }
   };
 
-  return (
-    <ThemeProvider theme={darkTheme}>
-      <CssBaseline />
-      <Box sx={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <AppBar position="static" sx={{ bgcolor: "#16191d" }}>
-          <Toolbar sx={{ minHeight: "36px" }}>
-            <Box component="img" src="/Borealis_Logo_Full.png" alt="Borealis Logo" sx={{ height: "52px", marginRight: "8px" }} />
-            <Typography variant="h6" sx={{ flexGrow: 1, fontSize: "1rem" }}></Typography>
-            <Button
-              color="inherit"
-              onClick={handleAboutMenuOpen}
-              endIcon={<KeyboardArrowDownIcon />}
-              startIcon={<InfoOutlinedIcon />}
-              sx={{ height: "36px" }}
-            >
-              About
-            </Button>
-            <Menu anchorEl={aboutAnchorEl} open={Boolean(aboutAnchorEl)} onClose={handleAboutMenuClose}>
-              <MenuItem onClick={() => { handleAboutMenuClose(); window.open("https://git.bunny-lab.io/bunny-lab/Borealis", "_blank"); }}>
-                <MergeTypeIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} /> Gitea Project
-              </MenuItem>
-              <MenuItem onClick={openCreditsDialog}>
-                <PeopleIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} /> Credits
-              </MenuItem>
-            </Menu>
-          </Toolbar>
-        </AppBar>
+  const renderMainContent = () => {
+    if (currentPage === "workflow-editor") {
+      return (
         <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
           <NodeSidebar
             categorizedNodes={categorizedNodes}
@@ -454,6 +435,90 @@ export default function App() {
                 </Box>
               ))}
             </Box>
+          </Box>
+        </Box>
+      );
+    }
+    if (currentPage === "jobs") {
+      return (
+        <Box sx={{ p: 2 }}>
+          <Button variant="contained" onClick={() => setCurrentPage("workflow-editor")}>
+            New Workflow
+          </Button>
+        </Box>
+      );
+    }
+    return (
+      <Box sx={{ p: 2 }}>
+        <Typography>Select a section from navigation.</Typography>
+      </Box>
+    );
+  };
+
+  return (
+    <ThemeProvider theme={darkTheme}>
+      <CssBaseline />
+      <Box sx={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <AppBar position="static" sx={{ bgcolor: "#16191d" }}>
+          <Toolbar sx={{ minHeight: "36px" }}>
+            <Box component="img" src="/Borealis_Logo_Full.png" alt="Borealis Logo" sx={{ height: "52px", marginRight: "8px" }} />
+            <Typography variant="h6" sx={{ flexGrow: 1, fontSize: "1rem" }}></Typography>
+            <Button
+              color="inherit"
+              onClick={handleAboutMenuOpen}
+              endIcon={<KeyboardArrowDownIcon />}
+              startIcon={<InfoOutlinedIcon />}
+              sx={{ height: "36px" }}
+            >
+              About
+            </Button>
+            <Menu anchorEl={aboutAnchorEl} open={Boolean(aboutAnchorEl)} onClose={handleAboutMenuClose}>
+              <MenuItem onClick={() => { handleAboutMenuClose(); window.open("https://git.bunny-lab.io/bunny-lab/Borealis", "_blank"); }}>
+                <MergeTypeIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} /> Gitea Project
+              </MenuItem>
+              <MenuItem onClick={openCreditsDialog}>
+                <PeopleIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} /> Credits
+              </MenuItem>
+            </Menu>
+          </Toolbar>
+        </AppBar>
+        <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
+          <Box sx={{ width: 200, bgcolor: "#1e1e1e", borderRight: "1px solid #333", color: "#fff" }}>
+            <List>
+              <ListItem disablePadding>
+                <ListItemButton onClick={() => setCurrentPage("devices")}>
+                  <ListItemText primary="Devices" />
+                </ListItemButton>
+              </ListItem>
+              <ListItem>
+                <ListItemText primary="Filters & Groups" />
+              </ListItem>
+              <List component="div" disablePadding>
+                <ListItemButton sx={{ pl: 4 }} onClick={() => setCurrentPage("filters")}>
+                  <ListItemText primary="Filters" />
+                </ListItemButton>
+                <ListItemButton sx={{ pl: 4 }} onClick={() => setCurrentPage("groups")}>
+                  <ListItemText primary="Groups" />
+                </ListItemButton>
+              </List>
+              <ListItem>
+                <ListItemText primary="Automation" />
+              </ListItem>
+              <List component="div" disablePadding>
+                <ListItemButton sx={{ pl: 4 }} onClick={() => setCurrentPage("jobs")}>
+                  <ListItemText primary="Jobs" />
+                </ListItemButton>
+                <ListItemButton sx={{ pl: 4 }} onClick={() => setCurrentPage("workflows")}>
+                  <ListItemText primary="Workflows" />
+                </ListItemButton>
+                <ListItemButton sx={{ pl: 4 }} onClick={() => setCurrentPage("community")}>
+                  <ListItemText primary="Community Nodes" />
+                </ListItemButton>
+              </List>
+            </List>
+          </Box>
+          <Box sx={{ flexGrow: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            {renderMainContent()}
           </Box>
         </Box>
         <StatusBar />
