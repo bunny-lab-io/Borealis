@@ -1,6 +1,4 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Workflow_List.jsx
-
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Paper,
   Box,
@@ -15,10 +13,52 @@ import {
 } from "@mui/material";
 import { PlayCircle as PlayCircleIcon } from "@mui/icons-material";
 
+function formatDateTime(dateString) {
+  if (!dateString) return "";
+  const date = new Date(dateString);
+  if (isNaN(date)) return "";
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  let hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12 || 12;
+  return `${day}/${month}/${year} ${hours}:${minutes}${ampm}`;
+}
+
 export default function WorkflowList({ onOpenWorkflow }) {
   const [rows, setRows] = useState([]);
   const [orderBy, setOrderBy] = useState("name");
   const [order, setOrder] = useState("asc");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const resp = await fetch("/api/storage/load_workflows");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (!alive) return;
+
+        const mapped = (data.workflows || []).map(w => ({
+          ...w,
+          name: w.tab_name && w.tab_name.trim() ? w.tab_name.trim() : w.file_name,
+          description: "",
+          category: "",
+          lastEdited: w.last_edited,
+          lastEditedEpoch: w.last_edited_epoch
+        }));
+        setRows(mapped);
+      } catch (err) {
+        console.error("Failed to load workflows:", err);
+        setRows([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const handleSort = (col) => {
     if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
@@ -31,6 +71,11 @@ export default function WorkflowList({ onOpenWorkflow }) {
   const sorted = useMemo(() => {
     const dir = order === "asc" ? 1 : -1;
     return [...rows].sort((a, b) => {
+      if (orderBy === "lastEdited" || orderBy === "lastEditedEpoch") {
+        const A = Number(a.lastEditedEpoch || 0);
+        const B = Number(b.lastEditedEpoch || 0);
+        return (A - B) * dir;
+      }
       const A = a[orderBy] || "";
       const B = b[orderBy] || "";
       return String(A).localeCompare(String(B)) * dir;
@@ -39,7 +84,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
 
   const handleNewWorkflow = () => {
     if (onOpenWorkflow) {
-      onOpenWorkflow(); // trigger App.jsx to open editor
+      onOpenWorkflow();
     }
   };
 
@@ -47,6 +92,26 @@ export default function WorkflowList({ onOpenWorkflow }) {
     if (onOpenWorkflow) {
       onOpenWorkflow(workflow);
     }
+  };
+
+  const renderNameCell = (r) => {
+    const hasPrefix = r.breadcrumb_prefix && r.breadcrumb_prefix.length > 0;
+    const primary = r.tab_name && r.tab_name.trim().length > 0 ? r.tab_name.trim() : r.file_name;
+    return (
+      <Box component="span">
+        {hasPrefix && (
+          <Typography
+            component="span"
+            sx={{ color: "#6b6b6b", mr: 0.5 }}
+          >
+            {r.breadcrumb_prefix} {">"}{" "}
+          </Typography>
+        )}
+        <Typography component="span" sx={{ color: "#e6edf3" }}>
+          {primary}
+        </Typography>
+      </Box>
+    );
   };
 
   return (
@@ -124,10 +189,10 @@ export default function WorkflowList({ onOpenWorkflow }) {
               sx={{ cursor: "pointer" }}
               onClick={() => handleRowClick(r)}
             >
-              <TableCell>{r.name}</TableCell>
+              <TableCell>{renderNameCell(r)}</TableCell>
               <TableCell>{r.description}</TableCell>
               <TableCell>{r.category}</TableCell>
-              <TableCell>{r.lastEdited}</TableCell>
+              <TableCell>{formatDateTime(r.lastEdited)}</TableCell>
             </TableRow>
           ))}
           {sorted.length === 0 && (

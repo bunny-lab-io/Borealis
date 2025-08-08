@@ -10,7 +10,9 @@ from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 
 import time
-import os # To Read Production ReactJS Server Folder
+import os  # To Read Production ReactJS Server Folder
+import json  # For reading workflow JSON files
+from typing import List, Dict
 
 # Borealis Python API Endpoints
 from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
@@ -82,6 +84,113 @@ def ocr_endpoint():
         return jsonify({"lines": lines})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# ---------------------------------------------
+# Borealis Storage API Endpoints
+# ---------------------------------------------
+def _safe_read_json(path: str) -> Dict:
+    """
+    Try to read JSON safely. Returns {} on failure.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+def _extract_tab_name(obj: Dict) -> str:
+    """
+    Best-effort extraction of a workflow tab name from a JSON object.
+    Falls back to empty string when unknown.
+    """
+    if not isinstance(obj, dict):
+        return ""
+    for key in ["tabName", "tab_name", "name", "title"]:
+        val = obj.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+@app.route("/api/storage/load_workflows", methods=["GET"])
+def load_workflows():
+    """
+    Scan <ProjectRoot>/Workflows for *.json files and return a table-friendly list.
+
+    Response:
+    {
+      "root": "<absolute path to Workflows>",
+      "workflows": [
+        {
+          "name": "FolderA > Sub > File.json",   # breadcrumb styled name for table display
+          "breadcrumb_prefix": "FolderA > Sub",  # prefix only, to allow UI styling
+          "file_name": "File.json",              # base filename
+          "rel_path": "FolderA/Sub/File.json",   # path relative to Workflows
+          "tab_name": "Optional Tab Name",       # best-effort read from JSON (may be "")
+          "description": "",                     # placeholder for future use
+          "category": "",                        # placeholder for future use
+          "last_edited": "YYYY-MM-DDTHH:MM:SS",  # local time ISO-like string
+          "last_edited_epoch": 1712345678.123    # numeric, for client-side sorting
+        },
+        ...
+      ]
+    }
+    """
+    # Resolve <ProjectRoot>/Workflows relative to this file at <ProjectRoot>/Data/server.py
+    workflows_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Workflows"))
+    results: List[Dict] = []
+
+    if not os.path.isdir(workflows_root):
+        # Directory missing is not a hard error; return empty set and the resolved path for visibility.
+        return jsonify({
+            "root": workflows_root,
+            "workflows": [],
+            "warning": "Workflows directory not found."
+        }), 200
+
+    for root, dirs, files in os.walk(workflows_root):
+        for fname in files:
+            if not fname.lower().endswith(".json"):
+                continue
+
+            full_path = os.path.join(root, fname)
+            rel_path = os.path.relpath(full_path, workflows_root)  # e.g. SuperStuff/Example.json
+
+            # Build breadcrumb-style display name: "SuperStuff > Example.json"
+            parts = rel_path.split(os.sep)
+            folder_parts = parts[:-1]
+            breadcrumb_prefix = " > ".join(folder_parts) if folder_parts else ""
+            display_name = f"{breadcrumb_prefix} > {fname}" if breadcrumb_prefix else fname
+
+            # Best-effort read of tab name (not required for now)
+            obj = _safe_read_json(full_path)
+            tab_name = _extract_tab_name(obj)
+
+            # File timestamps
+            try:
+                mtime = os.path.getmtime(full_path)
+            except Exception:
+                mtime = 0.0
+            last_edited_str = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime))
+
+            results.append({
+                "name": display_name,
+                "breadcrumb_prefix": breadcrumb_prefix,
+                "file_name": fname,
+                "rel_path": rel_path.replace(os.sep, "/"),
+                "tab_name": tab_name,
+                "description": "",
+                "category": "",
+                "last_edited": last_edited_str,
+                "last_edited_epoch": mtime
+            })
+
+    # Sort newest-first by modification time
+    results.sort(key=lambda x: x.get("last_edited_epoch", 0.0), reverse=True)
+
+    return jsonify({
+        "root": workflows_root,
+        "workflows": results
+    })
 
 # ---------------------------------------------
 # Borealis Agent API Endpoints
