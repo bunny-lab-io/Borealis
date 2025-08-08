@@ -117,7 +117,9 @@ def load_workflows():
     Scan <ProjectRoot>/Workflows for *.json files and return a table-friendly list.
     """
     # Resolve <ProjectRoot>/Workflows relative to this file at <ProjectRoot>/Data/server.py
-    workflows_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Workflows"))
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
     results: List[Dict] = []
 
     if not os.path.isdir(workflows_root):
