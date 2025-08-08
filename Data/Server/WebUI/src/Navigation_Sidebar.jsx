@@ -24,7 +24,7 @@ import {
 export default function NavigationSidebar({ currentPage, onNavigate }) {
   const [expandedNav, setExpandedNav] = useState({
     devices: true,
-    filters: false,
+    filters: true,
     automation: true
   });
 
