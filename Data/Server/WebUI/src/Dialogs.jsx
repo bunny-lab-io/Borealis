@@ -101,7 +101,7 @@ export function DeleteDeviceDialog({ open, onCancel, onConfirm }) {
       <DialogTitle>Remove Device</DialogTitle>
       <DialogContent>
         <DialogContentText sx={{ color: "#ccc" }}>
-          Are you sure you want to remove this device?
+          Are you sure you want to remove this device?  If the agent is still running, it will automatically re-enroll the device.
         </DialogContentText>
       </DialogContent>
       <DialogActions>
