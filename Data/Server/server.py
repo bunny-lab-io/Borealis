@@ -187,6 +187,16 @@ def get_agents():
     """
     return jsonify(registered_agents)
 
+
+@app.route("/api/agent/<agent_id>", methods=["DELETE"])
+def delete_agent(agent_id: str):
+    """Remove an agent from the in-memory registry."""
+    if agent_id in registered_agents:
+        registered_agents.pop(agent_id, None)
+        agent_configurations.pop(agent_id, None)
+        return jsonify({"status": "removed"})
+    return jsonify({"error": "agent not found"}), 404
+
 @app.route("/api/agent/provision", methods=["POST"])
 def provision_agent():
     data = request.json

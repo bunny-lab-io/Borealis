@@ -95,6 +95,28 @@ export function RenameTabDialog({ open, value, onChange, onCancel, onSave }) {
   );
 }
 
+export function DeleteDeviceDialog({ open, onCancel, onConfirm }) {
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Remove Device</DialogTitle>
+      <DialogContent>
+        <DialogContentText sx={{ color: "#ccc" }}>
+          Are you sure you want to remove this device?
+        </DialogContentText>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button
+          onClick={onConfirm}
+          sx={{ bgcolor: "#ff4f4f", color: "#fff", "&:hover": { bgcolor: "#e04444" } }}
+        >
+          Remove
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 export function TabContextMenu({ anchor, onClose, onRename, onCloseTab }) {
   return (
     <Menu
