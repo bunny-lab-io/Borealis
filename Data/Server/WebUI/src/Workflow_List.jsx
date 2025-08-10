@@ -283,6 +283,8 @@ export default function WorkflowList({ onOpenWorkflow }) {
       </TreeItem>
     ));
 
+  const rootChildIds = tree[0]?.children?.map((c) => c.id) || [];
+
   return (
     <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
       <Box
@@ -315,10 +317,11 @@ export default function WorkflowList({ onOpenWorkflow }) {
         }}
       >
         <SimpleTreeView
+          key={rootChildIds.join(",")}
           sx={{ color: "#e6edf3" }}
           onNodeSelect={handleNodeSelect}
           apiRef={apiRef}
-          defaultExpanded={["root"]}
+          defaultExpanded={["root", ...rootChildIds]}
         >
           {renderItems(tree)}
         </SimpleTreeView>
