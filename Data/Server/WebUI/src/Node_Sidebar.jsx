@@ -21,6 +21,7 @@ import {
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon
 } from "@mui/icons-material";
+import { SaveWorkflowDialog } from "./Dialogs";
 
 export default function NodeSidebar({
   categorizedNodes,
@@ -29,10 +30,13 @@ export default function NodeSidebar({
   handleSaveFlow,
   handleOpenCloseAllDialog,
   fileInputRef,
-  onFileInputChange
+  onFileInputChange,
+  currentTabName
 }) {
   const [expandedCategory, setExpandedCategory] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveName, setSaveName] = useState("");
 
   const handleAccordionChange = (category) => (_, isExpanded) => {
     setExpandedCategory(isExpanded ? category : null);
@@ -79,7 +83,15 @@ export default function NodeSidebar({
                   </Button>
                 </Tooltip>
                 <Tooltip title="Save Current Flow to Workflows Folder" placement="right" arrow>
-                  <Button fullWidth startIcon={<SaveIcon />} onClick={handleSaveFlow} sx={buttonStyle}>
+                  <Button
+                    fullWidth
+                    startIcon={<SaveIcon />}
+                    onClick={() => {
+                      setSaveName(currentTabName || "workflow");
+                      setSaveOpen(true);
+                    }}
+                    sx={buttonStyle}
+                  >
                     Save Workflow
                   </Button>
                 </Tooltip>
@@ -213,6 +225,16 @@ export default function NodeSidebar({
           {collapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
         </Box>
       </Tooltip>
+      <SaveWorkflowDialog
+        open={saveOpen}
+        value={saveName}
+        onChange={setSaveName}
+        onCancel={() => setSaveOpen(false)}
+        onSave={() => {
+          setSaveOpen(false);
+          handleSaveFlow(saveName);
+        }}
+      />
     </div>
   );
 }

@@ -231,29 +231,33 @@ export default function App() {
     [setTabs]
   );
 
-  const handleSaveFlow = useCallback(async () => {
-    const tab = tabs.find((t) => t.id === activeTabId);
-    if (!tab) return;
-    const name = window.prompt("Enter workflow name", tab.tab_name || "workflow");
-    if (!name) return;
-    const payload = {
-      name,
-      workflow: {
-        tab_name: tab.tab_name,
-        nodes: tab.nodes,
-        edges: tab.edges
+  const handleSaveFlow = useCallback(
+    async (name) => {
+      const tab = tabs.find((t) => t.id === activeTabId);
+      if (!tab || !name) return;
+      const payload = {
+        path: tab.folderPath ? `${tab.folderPath}/${name}` : name,
+        workflow: {
+          tab_name: tab.tab_name,
+          nodes: tab.nodes,
+          edges: tab.edges
+        }
+      };
+      try {
+        await fetch("/api/storage/save_workflow", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        setTabs((prev) =>
+          prev.map((t) => (t.id === activeTabId ? { ...t, tab_name: name } : t))
+        );
+      } catch (err) {
+        console.error("Failed to save workflow:", err);
       }
-    };
-    try {
-      await fetch("/api/storage/save_workflow", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-    } catch (err) {
-      console.error("Failed to save workflow:", err);
-    }
-  }, [tabs, activeTabId]);
+    },
+    [tabs, activeTabId]
+  );
 
   const renderMainContent = () => {
     switch (currentPage) {
@@ -266,9 +270,13 @@ export default function App() {
       case "workflows":
         return (
           <WorkflowList
-            onOpenWorkflow={async (workflow) => {
+            onOpenWorkflow={async (workflow, folderPath, name) => {
               const newId = "flow_" + Date.now();
               if (workflow && workflow.rel_path) {
+                const folder = workflow.rel_path
+                  .split("/")
+                  .slice(0, -1)
+                  .join("/");
                 try {
                   const resp = await fetch(
                     `/api/storage/load_workflow?path=${encodeURIComponent(
@@ -283,17 +291,32 @@ export default function App() {
                       tab_name:
                         data.tab_name || workflow.name || workflow.file_name || "Workflow",
                       nodes: data.nodes || [],
-                      edges: data.edges || []
+                      edges: data.edges || [],
+                      folderPath: folder
                     }
                   ]);
                 } catch (err) {
                   console.error("Failed to load workflow:", err);
                   setTabs([
-                    { id: newId, tab_name: workflow?.name || "Workflow", nodes: [], edges: [] }
+                    {
+                      id: newId,
+                      tab_name: workflow?.name || "Workflow",
+                      nodes: [],
+                      edges: [],
+                      folderPath: folder
+                    }
                   ]);
                 }
               } else {
-                setTabs([{ id: newId, tab_name: `Flow`, nodes: [], edges: [] }]);
+                setTabs([
+                  {
+                    id: newId,
+                    tab_name: name || "Flow",
+                    nodes: [],
+                    edges: [],
+                    folderPath: folderPath || ""
+                  }
+                ]);
               }
               setActiveTabId(newId);
               setCurrentPage("workflow-editor");
@@ -316,6 +339,7 @@ export default function App() {
                 handleOpenCloseAllDialog={() => setConfirmCloseOpen(true)}
                 fileInputRef={fileInputRef}
                 onFileInputChange={onFileInputChange}
+                currentTabName={tabs.find((t) => t.id === activeTabId)?.tab_name}
               />
               <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
                 <FlowTabs

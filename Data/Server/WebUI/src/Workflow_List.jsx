@@ -1,26 +1,17 @@
 import React, { useState, useEffect, useCallback } from "react";
-import {
-  Paper,
-  Box,
-  Typography,
-  Button,
-  IconButton,
-  Menu,
-  MenuItem
-} from "@mui/material";
-import {
-  PlayCircle as PlayCircleIcon,
-  MoreVert as MoreVertIcon,
-  Folder as FolderIcon,
-  Description as DescriptionIcon,
-  CreateNewFolder as CreateNewFolderIcon
-} from "@mui/icons-material";
+import { Paper, Box, Typography, Menu, MenuItem } from "@mui/material";
+import { Folder as FolderIcon, Description as DescriptionIcon } from "@mui/icons-material";
 import {
   SimpleTreeView,
   TreeItem,
   useTreeViewApiRef
 } from "@mui/x-tree-view";
-import { RenameWorkflowDialog, RenameFolderDialog } from "./Dialogs";
+import {
+  RenameWorkflowDialog,
+  RenameFolderDialog,
+  NewWorkflowDialog,
+  ConfirmDeleteDialog
+} from "./Dialogs";
 
 function buildTree(workflows, folders) {
   const map = {};
@@ -88,11 +79,15 @@ function buildTree(workflows, folders) {
 export default function WorkflowList({ onOpenWorkflow }) {
   const [tree, setTree] = useState([]);
   const [nodeMap, setNodeMap] = useState({});
-  const [menuAnchor, setMenuAnchor] = useState(null);
+  const [contextMenu, setContextMenu] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameFolderOpen, setRenameFolderOpen] = useState(false);
+  const [folderDialogMode, setFolderDialogMode] = useState("rename");
+  const [newWorkflowOpen, setNewWorkflowOpen] = useState(false);
+  const [newWorkflowName, setNewWorkflowName] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const apiRef = useTreeViewApiRef();
   const [dragNode, setDragNode] = useState(null);
 
@@ -136,48 +131,55 @@ export default function WorkflowList({ onOpenWorkflow }) {
     loadTree();
   }, [loadTree]);
 
-  const openMenu = (e, node) => {
-    e.stopPropagation();
-    setMenuAnchor(e.currentTarget);
+  const handleContextMenu = (e, node) => {
+    e.preventDefault();
     setSelectedNode(node);
+    setContextMenu(
+      contextMenu === null
+        ? {
+            mouseX: e.clientX - 2,
+            mouseY: e.clientY - 4
+          }
+        : null
+    );
   };
 
-  const closeMenu = () => setMenuAnchor(null);
-
   const handleRename = () => {
-    closeMenu();
+    setContextMenu(null);
     if (!selectedNode) return;
     setRenameValue(selectedNode.label);
-    if (selectedNode.isFolder) setRenameFolderOpen(true);
-    else setRenameOpen(true);
+    if (selectedNode.isFolder) {
+      setFolderDialogMode("rename");
+      setRenameFolderOpen(true);
+    } else setRenameOpen(true);
   };
 
   const handleEdit = () => {
-    closeMenu();
+    setContextMenu(null);
     if (selectedNode && !selectedNode.isFolder && onOpenWorkflow) {
       onOpenWorkflow(selectedNode.workflow);
     }
   };
 
-  const handleDeleteWorkflow = async () => {
-    closeMenu();
+  const handleDelete = () => {
+    setContextMenu(null);
     if (!selectedNode) return;
-    try {
-      await fetch("/api/storage/delete_workflow", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: selectedNode.path })
-      });
-      loadTree();
-    } catch (err) {
-      console.error("Failed to delete workflow:", err);
-    }
+    setDeleteOpen(true);
   };
 
-  const handleCreateFolder = () => {
-    closeMenu();
+  const handleNewFolder = () => {
+    if (!selectedNode) return;
+    setContextMenu(null);
+    setFolderDialogMode("create");
     setRenameValue("");
     setRenameFolderOpen(true);
+  };
+
+  const handleNewWorkflow = () => {
+    if (!selectedNode) return;
+    setContextMenu(null);
+    setNewWorkflowName("");
+    setNewWorkflowOpen(true);
   };
 
   const saveRenameWorkflow = async () => {
@@ -197,7 +199,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
 
   const saveRenameFolder = async () => {
     try {
-      if (selectedNode && selectedNode.isFolder) {
+      if (folderDialogMode === "rename" && selectedNode) {
         await fetch("/api/storage/rename_folder", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -226,6 +228,29 @@ export default function WorkflowList({ onOpenWorkflow }) {
     }
   };
 
+  const confirmDelete = async () => {
+    if (!selectedNode) return;
+    try {
+      if (selectedNode.isFolder) {
+        await fetch("/api/storage/delete_folder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: selectedNode.path })
+        });
+      } else {
+        await fetch("/api/storage/delete_workflow", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: selectedNode.path })
+        });
+      }
+      loadTree();
+    } catch (err) {
+      console.error("Failed to delete:", err);
+    }
+    setDeleteOpen(false);
+  };
+
   const renderItems = (nodes) =>
     nodes.map((n) => (
       <TreeItem
@@ -243,6 +268,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
               e.preventDefault();
               handleDrop(n);
             }}
+            onContextMenu={(e) => handleContextMenu(e, n)}
           >
             {n.isFolder ? (
               <FolderIcon sx={{ mr: 1, color: "#0475c2" }} />
@@ -250,13 +276,6 @@ export default function WorkflowList({ onOpenWorkflow }) {
               <DescriptionIcon sx={{ mr: 1, color: "#0475c2" }} />
             )}
             <Typography sx={{ flexGrow: 1, color: "#e6edf3" }}>{n.label}</Typography>
-            <IconButton
-              size="small"
-              onClick={(e) => openMenu(e, n)}
-              sx={{ color: "#ccc" }}
-            >
-              <MoreVertIcon fontSize="small" />
-            </IconButton>
           </Box>
         }
       >
@@ -283,41 +302,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
             Manage workflow folders and files.
           </Typography>
         </Box>
-        <Box>
-          <Button
-            startIcon={<CreateNewFolderIcon />}
-            sx={{
-              mr: 1,
-              color: "#0475c2",
-              borderColor: "#0475c2",
-              textTransform: "none",
-              border: "1px solid #0475c2",
-              backgroundColor: "#1e1e1e",
-              "&:hover": { backgroundColor: "#1b1b1b" }
-            }}
-            onClick={() => {
-              setSelectedNode(null);
-              setRenameValue("");
-              setRenameFolderOpen(true);
-            }}
-          >
-            New Folder
-          </Button>
-          <Button
-            startIcon={<PlayCircleIcon />}
-            sx={{
-              color: "#0475c2",
-              borderColor: "#0475c2",
-              textTransform: "none",
-              border: "1px solid #0475c2",
-              backgroundColor: "#1e1e1e",
-              "&:hover": { backgroundColor: "#1b1b1b" }
-            }}
-            onClick={() => onOpenWorkflow && onOpenWorkflow()}
-          >
-            New Workflow
-          </Button>
-        </Box>
+        <Box />
       </Box>
       <Box
         sx={{ p: 2 }}
@@ -339,21 +324,30 @@ export default function WorkflowList({ onOpenWorkflow }) {
         </SimpleTreeView>
       </Box>
       <Menu
-        anchorEl={menuAnchor}
-        open={Boolean(menuAnchor)}
-        onClose={closeMenu}
+        open={contextMenu !== null}
+        onClose={() => setContextMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition=
+          {contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
         PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
       >
         {selectedNode?.isFolder && (
-          <MenuItem onClick={handleCreateFolder}>New Folder</MenuItem>
-        )}
-        {selectedNode && selectedNode.id !== "root" && (
-          <MenuItem onClick={handleRename}>Rename</MenuItem>
+          <>
+            <MenuItem onClick={handleNewWorkflow}>New Workflow</MenuItem>
+            <MenuItem onClick={handleNewFolder}>New Subfolder</MenuItem>
+            {selectedNode.id !== "root" && (
+              <MenuItem onClick={handleRename}>Rename</MenuItem>
+            )}
+            {selectedNode.id !== "root" && (
+              <MenuItem onClick={handleDelete}>Delete</MenuItem>
+            )}
+          </>
         )}
         {!selectedNode?.isFolder && (
           <>
             <MenuItem onClick={handleEdit}>Edit</MenuItem>
-            <MenuItem onClick={handleDeleteWorkflow}>Delete</MenuItem>
+            <MenuItem onClick={handleRename}>Rename</MenuItem>
+            <MenuItem onClick={handleDelete}>Delete</MenuItem>
           </>
         )}
       </Menu>
@@ -370,6 +364,24 @@ export default function WorkflowList({ onOpenWorkflow }) {
         onChange={setRenameValue}
         onCancel={() => setRenameFolderOpen(false)}
         onSave={saveRenameFolder}
+        title={folderDialogMode === "rename" ? "Rename Folder" : "New Folder"}
+        confirmText={folderDialogMode === "rename" ? "Save" : "Create"}
+      />
+      <NewWorkflowDialog
+        open={newWorkflowOpen}
+        value={newWorkflowName}
+        onChange={setNewWorkflowName}
+        onCancel={() => setNewWorkflowOpen(false)}
+        onCreate={() => {
+          setNewWorkflowOpen(false);
+          onOpenWorkflow && onOpenWorkflow(null, selectedNode.path, newWorkflowName);
+        }}
+      />
+      <ConfirmDeleteDialog
+        open={deleteOpen}
+        message="If you delete this, there is no undo button, are you sure you want to proceed?"
+        onCancel={() => setDeleteOpen(false)}
+        onConfirm={confirmDelete}
       />
     </Paper>
   );
