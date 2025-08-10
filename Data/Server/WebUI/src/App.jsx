@@ -28,6 +28,7 @@ import WorkflowList from "./Workflow_List";
 import DeviceList from "./Device_List";
 import ScriptList from "./Script_List";
 import ScheduledJobsList from "./Scheduled_Jobs_List";
+import Login from "./Login.jsx";
 
 import { io } from "socket.io-client";
 
@@ -86,6 +87,31 @@ export default function App() {
   const [tabMenuAnchor, setTabMenuAnchor] = useState(null);
   const [tabMenuTabId, setTabMenuTabId] = useState(null);
   const fileInputRef = useRef(null);
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    const session = localStorage.getItem("borealis_session");
+    if (session) {
+      try {
+        const data = JSON.parse(session);
+        if (Date.now() - data.timestamp < 3600 * 1000) {
+          setUser(data.username);
+        } else {
+          localStorage.removeItem("borealis_session");
+        }
+      } catch {
+        localStorage.removeItem("borealis_session");
+      }
+    }
+  }, []);
+
+  const handleLoginSuccess = (username) => {
+    setUser(username);
+    localStorage.setItem(
+      "borealis_session",
+      JSON.stringify({ username, timestamp: Date.now() })
+    );
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -386,6 +412,14 @@ export default function App() {
         );
     }
   };
+  if (!user) {
+    return (
+      <ThemeProvider theme={darkTheme}>
+        <CssBaseline />
+        <Login onLogin={handleLoginSuccess} />
+      </ThemeProvider>
+    );
+  }
 
   return (
     <ThemeProvider theme={darkTheme}>
