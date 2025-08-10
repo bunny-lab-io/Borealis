@@ -21,7 +21,7 @@ import {
   PeopleOutline as CommunityIcon
 } from "@mui/icons-material";
 
-export default function NavigationSidebar({ currentPage, onNavigate }) {
+function NavigationSidebar({ currentPage, onNavigate }) {
   const [expandedNav, setExpandedNav] = useState({
     devices: true,
     filters: true,
@@ -141,3 +141,5 @@ export default function NavigationSidebar({ currentPage, onNavigate }) {
     </Box>
   );
 }
+
+export default React.memo(NavigationSidebar);
