@@ -226,47 +226,50 @@ export default function App() {
 
       case "workflow-editor":
         return (
-          <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
-            <NodeSidebar
-              categorizedNodes={categorizedNodes}
-              handleExportFlow={() => {}}
-              handleImportFlow={() => {}}
-              handleOpenCloseAllDialog={() => {}}
-              fileInputRef={fileInputRef}
-              onFileInputChange={() => {}}
-            />
-            <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
+          <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
+            <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
+              <NodeSidebar
+                categorizedNodes={categorizedNodes}
+                handleExportFlow={() => {}}
+                handleImportFlow={() => {}}
+                handleOpenCloseAllDialog={() => {}}
+                fileInputRef={fileInputRef}
+                onFileInputChange={() => {}}
+              />
+              <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
                 <FlowTabs
                   tabs={tabs}
                   activeTabId={activeTabId}
                   onTabChange={setActiveTabId}
                   onAddTab={() => {}}
-                onTabRightClick={handleTabRightClick}
+                  onTabRightClick={handleTabRightClick}
                 />
-              <Box sx={{ flexGrow: 1, position: "relative" }}>
-                {tabs.map((tab) => (
-                  <Box
-                    key={tab.id}
-                    sx={{
-                      position: "absolute", top: 0, bottom: 0, left: 0, right: 0,
-                      display: tab.id === activeTabId ? "block" : "none"
-                    }}
-                  >
-                    <ReactFlowProvider id={tab.id}>
-                      <FlowEditor
-                        flowId={tab.id}
-                        nodes={tab.nodes}
-                        edges={tab.edges}
-                        setNodes={(val) => handleSetNodes(val, tab.id)}
-                        setEdges={(val) => handleSetEdges(val, tab.id)}
-                        nodeTypes={nodeTypes}
-                        categorizedNodes={categorizedNodes}
-                      />
-                    </ReactFlowProvider>
-                  </Box>
-                ))}
+                <Box sx={{ flexGrow: 1, position: "relative" }}>
+                  {tabs.map((tab) => (
+                    <Box
+                      key={tab.id}
+                      sx={{
+                        position: "absolute", top: 0, bottom: 0, left: 0, right: 0,
+                        display: tab.id === activeTabId ? "block" : "none"
+                      }}
+                    >
+                      <ReactFlowProvider id={tab.id}>
+                        <FlowEditor
+                          flowId={tab.id}
+                          nodes={tab.nodes}
+                          edges={tab.edges}
+                          setNodes={(val) => handleSetNodes(val, tab.id)}
+                          setEdges={(val) => handleSetEdges(val, tab.id)}
+                          nodeTypes={nodeTypes}
+                          categorizedNodes={categorizedNodes}
+                        />
+                      </ReactFlowProvider>
+                    </Box>
+                  ))}
+                </Box>
               </Box>
             </Box>
+            <StatusBar />
           </Box>
         );
 
@@ -312,7 +315,6 @@ export default function App() {
             {renderMainContent()}
           </Box>
         </Box>
-        <StatusBar />
       </Box>
       <CloseAllDialog open={confirmCloseOpen} onClose={() => setConfirmCloseOpen(false)} onConfirm={() => {}} />
       <CreditsDialog open={creditsDialogOpen} onClose={() => setCreditsDialogOpen(false)} />
