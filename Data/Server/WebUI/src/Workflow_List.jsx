@@ -20,7 +20,7 @@ import {
   TreeItem,
   useTreeViewApiRef
 } from "@mui/x-tree-view";
-import { useTreeViewDragAndDrop } from "@mui/x-tree-view/useTreeViewDragAndDrop";
+import { useTreeViewDragAndDrop } from "@mui/x-tree-view/TreeView/useTreeViewDragAndDrop";
 import { RenameWorkflowDialog, RenameFolderDialog } from "./Dialogs";
 
 function buildTree(workflows) {
