@@ -175,6 +175,86 @@ export default function App() {
     setRenameDialogOpen(false);
   };
 
+  const handleExportFlow = useCallback(() => {
+    const tab = tabs.find((t) => t.id === activeTabId);
+    if (!tab) return;
+    const payload = {
+      tab_name: tab.tab_name,
+      nodes: tab.nodes,
+      edges: tab.edges
+    };
+    const fileName = `${tab.tab_name || "workflow"}.json`;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [tabs, activeTabId]);
+
+  const handleImportFlow = useCallback(() => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = null;
+      fileInputRef.current.click();
+    }
+  }, []);
+
+  const onFileInputChange = useCallback(
+    (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result);
+          const newId = "flow_" + Date.now();
+          setTabs((prev) => [
+            ...prev,
+            {
+              id: newId,
+              tab_name:
+                data.tab_name || data.name || file.name.replace(/\.json$/i, ""),
+              nodes: data.nodes || [],
+              edges: data.edges || []
+            }
+          ]);
+          setActiveTabId(newId);
+          setCurrentPage("workflow-editor");
+        } catch (err) {
+          console.error("Failed to import workflow:", err);
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = "";
+    },
+    [setTabs]
+  );
+
+  const handleSaveFlow = useCallback(async () => {
+    const tab = tabs.find((t) => t.id === activeTabId);
+    if (!tab) return;
+    const name = window.prompt("Enter workflow name", tab.tab_name || "workflow");
+    if (!name) return;
+    const payload = {
+      name,
+      workflow: {
+        tab_name: tab.tab_name,
+        nodes: tab.nodes,
+        edges: tab.edges
+      }
+    };
+    try {
+      await fetch("/api/storage/save_workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+    } catch (err) {
+      console.error("Failed to save workflow:", err);
+    }
+  }, [tabs, activeTabId]);
+
   const renderMainContent = () => {
     switch (currentPage) {
       case "devices":
@@ -230,11 +310,12 @@ export default function App() {
             <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
               <NodeSidebar
                 categorizedNodes={categorizedNodes}
-                handleExportFlow={() => {}}
-                handleImportFlow={() => {}}
-                handleOpenCloseAllDialog={() => {}}
+                handleExportFlow={handleExportFlow}
+                handleImportFlow={handleImportFlow}
+                handleSaveFlow={handleSaveFlow}
+                handleOpenCloseAllDialog={() => setConfirmCloseOpen(true)}
                 fileInputRef={fileInputRef}
-                onFileInputChange={() => {}}
+                onFileInputChange={onFileInputChange}
               />
               <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
                 <FlowTabs

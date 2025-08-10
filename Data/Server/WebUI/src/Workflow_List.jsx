@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useCallback } from "react";
 import {
   Paper,
   Box,
@@ -9,9 +9,13 @@ import {
   TableCell,
   TableHead,
   TableRow,
-  TableSortLabel
+  TableSortLabel,
+  IconButton,
+  Menu,
+  MenuItem
 } from "@mui/material";
-import { PlayCircle as PlayCircleIcon } from "@mui/icons-material";
+import { PlayCircle as PlayCircleIcon, MoreVert as MoreVertIcon } from "@mui/icons-material";
+import { RenameWorkflowDialog } from "./Dialogs";
 
 function formatDateTime(dateString) {
   if (!dateString) return "";
@@ -31,34 +35,34 @@ export default function WorkflowList({ onOpenWorkflow }) {
   const [rows, setRows] = useState([]);
   const [orderBy, setOrderBy] = useState("name");
   const [order, setOrder] = useState("asc");
+  const [menuAnchor, setMenuAnchor] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+
+  const loadRows = useCallback(async () => {
+    try {
+      const resp = await fetch("/api/storage/load_workflows");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const mapped = (data.workflows || []).map((w) => ({
+        ...w,
+        name: w.tab_name && w.tab_name.trim() ? w.tab_name.trim() : w.file_name,
+        description: "",
+        category: "",
+        lastEdited: w.last_edited,
+        lastEditedEpoch: w.last_edited_epoch
+      }));
+      setRows(mapped);
+    } catch (err) {
+      console.error("Failed to load workflows:", err);
+      setRows([]);
+    }
+  }, []);
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const resp = await fetch("/api/storage/load_workflows");
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-        if (!alive) return;
-
-        const mapped = (data.workflows || []).map(w => ({
-          ...w,
-          name: w.tab_name && w.tab_name.trim() ? w.tab_name.trim() : w.file_name,
-          description: "",
-          category: "",
-          lastEdited: w.last_edited,
-          lastEditedEpoch: w.last_edited_epoch
-        }));
-        setRows(mapped);
-      } catch (err) {
-        console.error("Failed to load workflows:", err);
-        setRows([]);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    loadRows();
+  }, [loadRows]);
 
   const handleSort = (col) => {
     if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
@@ -92,6 +96,41 @@ export default function WorkflowList({ onOpenWorkflow }) {
     if (onOpenWorkflow) {
       onOpenWorkflow(workflow);
     }
+  };
+
+  const openMenu = (e, row) => {
+    e.stopPropagation();
+    setMenuAnchor(e.currentTarget);
+    setSelected(row);
+  };
+
+  const closeMenu = () => setMenuAnchor(null);
+
+  const startRename = () => {
+    closeMenu();
+    if (selected) {
+      const initial = selected.tab_name && selected.tab_name.trim().length > 0
+        ? selected.tab_name.trim()
+        : selected.file_name.replace(/\.json$/i, "");
+      setRenameValue(initial);
+      setRenameOpen(true);
+    }
+  };
+
+  const handleRenameSave = async () => {
+    if (!selected) return;
+    try {
+      await fetch("/api/storage/rename_workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: selected.rel_path, new_name: renameValue })
+      });
+      await loadRows();
+    } catch (err) {
+      console.error("Failed to rename workflow:", err);
+    }
+    setRenameOpen(false);
+    setSelected(null);
   };
 
   const renderNameCell = (r) => {
@@ -179,6 +218,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
                 Last Edited
               </TableSortLabel>
             </TableCell>
+            <TableCell />
           </TableRow>
         </TableHead>
         <TableBody>
@@ -193,17 +233,41 @@ export default function WorkflowList({ onOpenWorkflow }) {
               <TableCell>{r.description}</TableCell>
               <TableCell>{r.category}</TableCell>
               <TableCell>{formatDateTime(r.lastEdited)}</TableCell>
+              <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                <IconButton
+                  size="small"
+                  onClick={(e) => openMenu(e, r)}
+                  sx={{ color: "#ccc" }}
+                >
+                  <MoreVertIcon fontSize="small" />
+                </IconButton>
+              </TableCell>
             </TableRow>
           ))}
           {sorted.length === 0 && (
             <TableRow>
-              <TableCell colSpan={4} sx={{ color: "#888" }}>
+              <TableCell colSpan={5} sx={{ color: "#888" }}>
                 No workflows found.
               </TableCell>
             </TableRow>
           )}
         </TableBody>
       </Table>
+      <Menu
+        anchorEl={menuAnchor}
+        open={Boolean(menuAnchor)}
+        onClose={closeMenu}
+        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
+      >
+        <MenuItem onClick={startRename}>Rename</MenuItem>
+      </Menu>
+      <RenameWorkflowDialog
+        open={renameOpen}
+        value={renameValue}
+        onChange={setRenameValue}
+        onCancel={() => setRenameOpen(false)}
+        onSave={handleRenameSave}
+      />
     </Paper>
   );
 }
