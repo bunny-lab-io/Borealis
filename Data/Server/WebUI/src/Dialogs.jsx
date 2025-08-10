@@ -133,7 +133,7 @@ export function TabContextMenu({ anchor, onClose, onRename, onCloseTab }) {
       }}
     >
       <MenuItem onClick={onRename}>Rename</MenuItem>
-      <MenuItem onClick={onCloseTab}>Close</MenuItem>
+      <MenuItem onClick={onCloseTab}>Close Workflow</MenuItem>
     </Menu>
   );
 }
