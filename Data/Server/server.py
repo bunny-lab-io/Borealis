@@ -12,6 +12,7 @@ from flask_cors import CORS
 import time
 import os  # To Read Production ReactJS Server Folder
 import json  # For reading workflow JSON files
+import shutil  # For moving workflow files and folders
 from typing import List, Dict
 
 # Borealis Python API Endpoints
@@ -85,6 +86,84 @@ def ocr_endpoint():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# New storage management endpoints
+
+@app.route("/api/storage/move_workflow", methods=["POST"])
+def move_workflow():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    new_rel = (data.get("new_path") or "").strip()
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    old_abs = os.path.abspath(os.path.join(workflows_root, rel_path))
+    new_abs = os.path.abspath(os.path.join(workflows_root, new_rel))
+    if not old_abs.startswith(workflows_root) or not os.path.isfile(old_abs):
+        return jsonify({"error": "Workflow not found"}), 404
+    if not new_abs.startswith(workflows_root):
+        return jsonify({"error": "Invalid destination"}), 400
+    os.makedirs(os.path.dirname(new_abs), exist_ok=True)
+    try:
+        shutil.move(old_abs, new_abs)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/storage/delete_workflow", methods=["POST"])
+def delete_workflow():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    abs_path = os.path.abspath(os.path.join(workflows_root, rel_path))
+    if not abs_path.startswith(workflows_root) or not os.path.isfile(abs_path):
+        return jsonify({"error": "Workflow not found"}), 404
+    try:
+        os.remove(abs_path)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/storage/create_folder", methods=["POST"])
+def create_folder():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    abs_path = os.path.abspath(os.path.join(workflows_root, rel_path))
+    if not abs_path.startswith(workflows_root):
+        return jsonify({"error": "Invalid path"}), 400
+    try:
+        os.makedirs(abs_path, exist_ok=True)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/storage/rename_folder", methods=["POST"])
+def rename_folder():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    new_name = (data.get("new_name") or "").strip()
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    old_abs = os.path.abspath(os.path.join(workflows_root, rel_path))
+    if not old_abs.startswith(workflows_root) or not os.path.isdir(old_abs):
+        return jsonify({"error": "Folder not found"}), 404
+    if not new_name:
+        return jsonify({"error": "Invalid new_name"}), 400
+    new_abs = os.path.join(os.path.dirname(old_abs), new_name)
+    try:
+        os.rename(old_abs, new_abs)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ---------------------------------------------
 # Borealis Storage API Endpoints
 # ---------------------------------------------
@@ -121,6 +200,7 @@ def load_workflows():
         os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
     )
     results: List[Dict] = []
+    folders: List[str] = []
 
     if not os.path.isdir(workflows_root):
         return jsonify({
@@ -130,6 +210,9 @@ def load_workflows():
         }), 200
 
     for root, dirs, files in os.walk(workflows_root):
+        rel_root = os.path.relpath(root, workflows_root)
+        if rel_root != ".":
+            folders.append(rel_root.replace(os.sep, "/"))
         for fname in files:
             if not fname.lower().endswith(".json"):
                 continue
@@ -167,7 +250,8 @@ def load_workflows():
 
     return jsonify({
         "root": workflows_root,
-        "workflows": results
+        "workflows": results,
+        "folders": folders
     })
 
 

@@ -1,273 +1,377 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Paper,
   Box,
   Typography,
   Button,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
-  TableSortLabel,
   IconButton,
   Menu,
   MenuItem
 } from "@mui/material";
-import { PlayCircle as PlayCircleIcon, MoreVert as MoreVertIcon } from "@mui/icons-material";
-import { RenameWorkflowDialog } from "./Dialogs";
+import {
+  PlayCircle as PlayCircleIcon,
+  MoreVert as MoreVertIcon,
+  Folder as FolderIcon,
+  Description as DescriptionIcon,
+  CreateNewFolder as CreateNewFolderIcon
+} from "@mui/icons-material";
+import {
+  SimpleTreeView,
+  TreeItem,
+  useTreeViewApiRef
+} from "@mui/x-tree-view";
+import { RenameWorkflowDialog, RenameFolderDialog } from "./Dialogs";
 
-function formatDateTime(dateString) {
-  if (!dateString) return "";
-  const date = new Date(dateString);
-  if (isNaN(date)) return "";
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
-  let hours = date.getHours();
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  const ampm = hours >= 12 ? "PM" : "AM";
-  hours = hours % 12 || 12;
-  return `${day}/${month}/${year} ${hours}:${minutes}${ampm}`;
+function buildTree(workflows, folders) {
+  const map = {};
+  const rootNode = {
+    id: "root",
+    label: "Workflows",
+    path: "",
+    isFolder: true,
+    children: []
+  };
+  map[rootNode.id] = rootNode;
+
+  (folders || []).forEach((f) => {
+    const parts = (f || "").split("/");
+    let children = rootNode.children;
+    let parentPath = "";
+    parts.forEach((part) => {
+      const path = parentPath ? `${parentPath}/${part}` : part;
+      let node = children.find((n) => n.id === path);
+      if (!node) {
+        node = { id: path, label: part, path, isFolder: true, children: [] };
+        children.push(node);
+        map[path] = node;
+      }
+      children = node.children;
+      parentPath = path;
+    });
+  });
+
+  (workflows || []).forEach((w) => {
+    const parts = (w.rel_path || "").split("/");
+    let children = rootNode.children;
+    let parentPath = "";
+    parts.forEach((part, idx) => {
+      const path = parentPath ? `${parentPath}/${part}` : part;
+      const isFile = idx === parts.length - 1;
+      let node = children.find((n) => n.id === path);
+      if (!node) {
+        node = {
+          id: path,
+          label: isFile
+            ? w.tab_name && w.tab_name.trim().length > 0
+              ? w.tab_name.trim()
+              : w.file_name
+            : part,
+          path,
+          isFolder: !isFile,
+          fileName: w.file_name,
+          workflow: isFile ? w : null,
+          children: []
+        };
+        children.push(node);
+        map[path] = node;
+      }
+      if (!isFile) {
+        children = node.children;
+        parentPath = path;
+      }
+    });
+  });
+
+  return { root: [rootNode], map };
 }
 
 export default function WorkflowList({ onOpenWorkflow }) {
-  const [rows, setRows] = useState([]);
-  const [orderBy, setOrderBy] = useState("name");
-  const [order, setOrder] = useState("asc");
+  const [tree, setTree] = useState([]);
+  const [nodeMap, setNodeMap] = useState({});
   const [menuAnchor, setMenuAnchor] = useState(null);
-  const [selected, setSelected] = useState(null);
-  const [renameOpen, setRenameOpen] = useState(false);
+  const [selectedNode, setSelectedNode] = useState(null);
   const [renameValue, setRenameValue] = useState("");
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameFolderOpen, setRenameFolderOpen] = useState(false);
+  const apiRef = useTreeViewApiRef();
+  const [dragNode, setDragNode] = useState(null);
 
-  const loadRows = useCallback(async () => {
+  const handleDrop = async (target) => {
+    if (!dragNode || !target.isFolder) return;
+    // Prevent dropping into itself or its descendants
+    if (dragNode.path === target.path || target.path.startsWith(`${dragNode.path}/`)) {
+      setDragNode(null);
+      return;
+    }
+    const newPath = target.path ? `${target.path}/${dragNode.fileName}` : dragNode.fileName;
+    try {
+      await fetch("/api/storage/move_workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: dragNode.path, new_path: newPath })
+      });
+      loadTree();
+    } catch (err) {
+      console.error("Failed to move workflow:", err);
+    }
+    setDragNode(null);
+  };
+
+  const loadTree = useCallback(async () => {
     try {
       const resp = await fetch("/api/storage/load_workflows");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      const mapped = (data.workflows || []).map((w) => ({
-        ...w,
-        name: w.tab_name && w.tab_name.trim() ? w.tab_name.trim() : w.file_name,
-        description: "",
-        category: "",
-        lastEdited: w.last_edited,
-        lastEditedEpoch: w.last_edited_epoch
-      }));
-      setRows(mapped);
+      const { root, map } = buildTree(data.workflows || [], data.folders || []);
+      setTree(root);
+      setNodeMap(map);
     } catch (err) {
       console.error("Failed to load workflows:", err);
-      setRows([]);
+      setTree([]);
+      setNodeMap({});
     }
   }, []);
 
   useEffect(() => {
-    loadRows();
-  }, [loadRows]);
+    loadTree();
+  }, [loadTree]);
 
-  const handleSort = (col) => {
-    if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
-    else {
-      setOrderBy(col);
-      setOrder("asc");
-    }
-  };
-
-  const sorted = useMemo(() => {
-    const dir = order === "asc" ? 1 : -1;
-    return [...rows].sort((a, b) => {
-      if (orderBy === "lastEdited" || orderBy === "lastEditedEpoch") {
-        const A = Number(a.lastEditedEpoch || 0);
-        const B = Number(b.lastEditedEpoch || 0);
-        return (A - B) * dir;
-      }
-      const A = a[orderBy] || "";
-      const B = b[orderBy] || "";
-      return String(A).localeCompare(String(B)) * dir;
-    });
-  }, [rows, orderBy, order]);
-
-  const handleNewWorkflow = () => {
-    if (onOpenWorkflow) {
-      onOpenWorkflow();
-    }
-  };
-
-  const handleRowClick = (workflow) => {
-    if (onOpenWorkflow) {
-      onOpenWorkflow(workflow);
-    }
-  };
-
-  const openMenu = (e, row) => {
+  const openMenu = (e, node) => {
     e.stopPropagation();
     setMenuAnchor(e.currentTarget);
-    setSelected(row);
+    setSelectedNode(node);
   };
 
   const closeMenu = () => setMenuAnchor(null);
 
-  const startRename = () => {
+  const handleRename = () => {
     closeMenu();
-    if (selected) {
-      const initial = selected.tab_name && selected.tab_name.trim().length > 0
-        ? selected.tab_name.trim()
-        : selected.file_name.replace(/\.json$/i, "");
-      setRenameValue(initial);
-      setRenameOpen(true);
+    if (!selectedNode) return;
+    setRenameValue(selectedNode.label);
+    if (selectedNode.isFolder) setRenameFolderOpen(true);
+    else setRenameOpen(true);
+  };
+
+  const handleEdit = () => {
+    closeMenu();
+    if (selectedNode && !selectedNode.isFolder && onOpenWorkflow) {
+      onOpenWorkflow(selectedNode.workflow);
     }
   };
 
-  const handleRenameSave = async () => {
-    if (!selected) return;
+  const handleDeleteWorkflow = async () => {
+    closeMenu();
+    if (!selectedNode) return;
+    try {
+      await fetch("/api/storage/delete_workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: selectedNode.path })
+      });
+      loadTree();
+    } catch (err) {
+      console.error("Failed to delete workflow:", err);
+    }
+  };
+
+  const handleCreateFolder = () => {
+    closeMenu();
+    setRenameValue("");
+    setRenameFolderOpen(true);
+  };
+
+  const saveRenameWorkflow = async () => {
+    if (!selectedNode) return;
     try {
       await fetch("/api/storage/rename_workflow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: selected.rel_path, new_name: renameValue })
+        body: JSON.stringify({ path: selectedNode.path, new_name: renameValue })
       });
-      await loadRows();
+      loadTree();
     } catch (err) {
       console.error("Failed to rename workflow:", err);
     }
     setRenameOpen(false);
-    setSelected(null);
   };
 
-  const renderNameCell = (r) => {
-    const hasPrefix = r.breadcrumb_prefix && r.breadcrumb_prefix.length > 0;
-    const primary = r.tab_name && r.tab_name.trim().length > 0 ? r.tab_name.trim() : r.file_name;
-    return (
-      <Box component="span">
-        {hasPrefix && (
-          <Typography
-            component="span"
-            sx={{ color: "#6b6b6b", mr: 0.5 }}
-          >
-            {r.breadcrumb_prefix} {">"}{" "}
-          </Typography>
-        )}
-        <Typography component="span" sx={{ color: "#e6edf3" }}>
-          {primary}
-        </Typography>
-      </Box>
-    );
+  const saveRenameFolder = async () => {
+    try {
+      if (selectedNode && selectedNode.isFolder) {
+        await fetch("/api/storage/rename_folder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: selectedNode.path, new_name: renameValue })
+        });
+      } else {
+        const basePath = selectedNode ? selectedNode.path : "";
+        const newPath = basePath ? `${basePath}/${renameValue}` : renameValue;
+        await fetch("/api/storage/create_folder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: newPath })
+        });
+      }
+      loadTree();
+    } catch (err) {
+      console.error("Folder operation failed:", err);
+    }
+    setRenameFolderOpen(false);
   };
+
+  const handleNodeSelect = (event, itemId) => {
+    const node = nodeMap[itemId];
+    if (node && !node.isFolder && onOpenWorkflow) {
+      onOpenWorkflow(node.workflow);
+    }
+  };
+
+  const renderItems = (nodes) =>
+    nodes.map((n) => (
+      <TreeItem
+        key={n.id}
+        itemId={n.id}
+        label={
+          <Box
+            sx={{ display: "flex", alignItems: "center" }}
+            draggable={!n.isFolder}
+            onDragStart={() => !n.isFolder && setDragNode(n)}
+            onDragOver={(e) => {
+              if (dragNode && n.isFolder) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              handleDrop(n);
+            }}
+          >
+            {n.isFolder ? (
+              <FolderIcon sx={{ mr: 1, color: "#0475c2" }} />
+            ) : (
+              <DescriptionIcon sx={{ mr: 1, color: "#0475c2" }} />
+            )}
+            <Typography sx={{ flexGrow: 1, color: "#e6edf3" }}>{n.label}</Typography>
+            <IconButton
+              size="small"
+              onClick={(e) => openMenu(e, n)}
+              sx={{ color: "#ccc" }}
+            >
+              <MoreVertIcon fontSize="small" />
+            </IconButton>
+          </Box>
+        }
+      >
+        {n.children && n.children.length > 0 ? renderItems(n.children) : null}
+      </TreeItem>
+    ));
 
   return (
     <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
-      <Box sx={{ p: 2, pb: 1, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <Box
+        sx={{
+          p: 2,
+          pb: 1,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center"
+        }}
+      >
         <Box>
-          <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
+          <Typography variant="h6" sx={{ color: "#0475c2", mb: 0 }}>
             Workflows
           </Typography>
           <Typography variant="body2" sx={{ color: "#aaa" }}>
-            List of available workflows.
+            Manage workflow folders and files.
           </Typography>
         </Box>
-        <Button
-          startIcon={<PlayCircleIcon />}
-          sx={{
-            color: "#58a6ff",
-            borderColor: "#58a6ff",
-            textTransform: "none",
-            border: "1px solid #58a6ff",
-            backgroundColor: "#1e1e1e",
-            "&:hover": { backgroundColor: "#1b1b1b" }
-          }}
-          onClick={handleNewWorkflow}
-        >
-          New Workflow
-        </Button>
+        <Box>
+          <Button
+            startIcon={<CreateNewFolderIcon />}
+            sx={{
+              mr: 1,
+              color: "#0475c2",
+              borderColor: "#0475c2",
+              textTransform: "none",
+              border: "1px solid #0475c2",
+              backgroundColor: "#1e1e1e",
+              "&:hover": { backgroundColor: "#1b1b1b" }
+            }}
+            onClick={() => {
+              setSelectedNode(null);
+              setRenameValue("");
+              setRenameFolderOpen(true);
+            }}
+          >
+            New Folder
+          </Button>
+          <Button
+            startIcon={<PlayCircleIcon />}
+            sx={{
+              color: "#0475c2",
+              borderColor: "#0475c2",
+              textTransform: "none",
+              border: "1px solid #0475c2",
+              backgroundColor: "#1e1e1e",
+              "&:hover": { backgroundColor: "#1b1b1b" }
+            }}
+            onClick={() => onOpenWorkflow && onOpenWorkflow()}
+          >
+            New Workflow
+          </Button>
+        </Box>
       </Box>
-      <Table size="small" sx={{ minWidth: 680 }}>
-        <TableHead>
-          <TableRow>
-            <TableCell sortDirection={orderBy === "name" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "name"}
-                direction={orderBy === "name" ? order : "asc"}
-                onClick={() => handleSort("name")}
-              >
-                Name
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={orderBy === "description" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "description"}
-                direction={orderBy === "description" ? order : "asc"}
-                onClick={() => handleSort("description")}
-              >
-                Description
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={orderBy === "category" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "category"}
-                direction={orderBy === "category" ? order : "asc"}
-                onClick={() => handleSort("category")}
-              >
-                Category
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={orderBy === "lastEdited" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "lastEdited"}
-                direction={orderBy === "lastEdited" ? order : "asc"}
-                onClick={() => handleSort("lastEdited")}
-              >
-                Last Edited
-              </TableSortLabel>
-            </TableCell>
-            <TableCell />
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {sorted.map((r, i) => (
-            <TableRow
-              key={i}
-              hover
-              sx={{ cursor: "pointer" }}
-              onClick={() => handleRowClick(r)}
-            >
-              <TableCell>{renderNameCell(r)}</TableCell>
-              <TableCell>{r.description}</TableCell>
-              <TableCell>{r.category}</TableCell>
-              <TableCell>{formatDateTime(r.lastEdited)}</TableCell>
-              <TableCell align="right" onClick={(e) => e.stopPropagation()}>
-                <IconButton
-                  size="small"
-                  onClick={(e) => openMenu(e, r)}
-                  sx={{ color: "#ccc" }}
-                >
-                  <MoreVertIcon fontSize="small" />
-                </IconButton>
-              </TableCell>
-            </TableRow>
-          ))}
-          {sorted.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={5} sx={{ color: "#888" }}>
-                No workflows found.
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+      <Box
+        sx={{ p: 2 }}
+        onDragOver={(e) => {
+          if (dragNode) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          handleDrop({ path: "", isFolder: true });
+        }}
+      >
+        <SimpleTreeView
+          sx={{ color: "#e6edf3" }}
+          onNodeSelect={handleNodeSelect}
+          apiRef={apiRef}
+          defaultExpanded={["root"]}
+        >
+          {renderItems(tree)}
+        </SimpleTreeView>
+      </Box>
       <Menu
         anchorEl={menuAnchor}
         open={Boolean(menuAnchor)}
         onClose={closeMenu}
         PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
       >
-        <MenuItem onClick={startRename}>Rename</MenuItem>
+        {selectedNode?.isFolder && (
+          <MenuItem onClick={handleCreateFolder}>New Folder</MenuItem>
+        )}
+        {selectedNode && selectedNode.id !== "root" && (
+          <MenuItem onClick={handleRename}>Rename</MenuItem>
+        )}
+        {!selectedNode?.isFolder && (
+          <>
+            <MenuItem onClick={handleEdit}>Edit</MenuItem>
+            <MenuItem onClick={handleDeleteWorkflow}>Delete</MenuItem>
+          </>
+        )}
       </Menu>
       <RenameWorkflowDialog
         open={renameOpen}
         value={renameValue}
         onChange={setRenameValue}
         onCancel={() => setRenameOpen(false)}
-        onSave={handleRenameSave}
+        onSave={saveRenameWorkflow}
+      />
+      <RenameFolderDialog
+        open={renameFolderOpen}
+        value={renameValue}
+        onChange={setRenameValue}
+        onCancel={() => setRenameFolderOpen(false)}
+        onSave={saveRenameFolder}
       />
     </Paper>
   );
 }
+
