@@ -136,6 +136,45 @@ export default function App() {
   const handleAboutMenuClose = () => setAboutAnchorEl(null);
   const openCreditsDialog = () => { handleAboutMenuClose(); setCreditsDialogOpen(true); };
 
+  const handleTabRightClick = (evt, tabId) => {
+    evt.preventDefault();
+    setTabMenuAnchor({ x: evt.clientX, y: evt.clientY });
+    setTabMenuTabId(tabId);
+  };
+
+  const handleCloseTab = () => {
+    setTabs((prev) => {
+      const filtered = prev.filter((t) => t.id !== tabMenuTabId);
+      if (filtered.length === 0) {
+        const newTab = { id: "flow_1", tab_name: "Flow 1", nodes: [], edges: [] };
+        setActiveTabId(newTab.id);
+        return [newTab];
+      }
+      if (activeTabId === tabMenuTabId) {
+        setActiveTabId(filtered[0].id);
+      }
+      return filtered;
+    });
+    setTabMenuAnchor(null);
+  };
+
+  const handleRenameTab = () => {
+    const tab = tabs.find((t) => t.id === tabMenuTabId);
+    if (tab) {
+      setRenameTabId(tabMenuTabId);
+      setRenameValue(tab.tab_name);
+      setRenameDialogOpen(true);
+    }
+    setTabMenuAnchor(null);
+  };
+
+  const handleSaveRename = () => {
+    setTabs((prev) =>
+      prev.map((t) => (t.id === renameTabId ? { ...t, tab_name: renameValue } : t))
+    );
+    setRenameDialogOpen(false);
+  };
+
   const renderMainContent = () => {
     switch (currentPage) {
       case "devices":
@@ -147,29 +186,35 @@ export default function App() {
       case "workflows":
         return (
           <WorkflowList
-            onOpenWorkflow={(workflow) => {
-              // If workflow name exists in tabs, just switch to it
-              if (workflow?.name) {
-                const existing = tabs.find(
-                  (t) => t.tab_name.toLowerCase() === workflow.name.toLowerCase()
-                );
-                if (existing) {
-                  setActiveTabId(existing.id);
-                  setCurrentPage("workflow-editor");
-                  return;
+            onOpenWorkflow={async (workflow) => {
+              const newId = "flow_" + Date.now();
+              if (workflow && workflow.rel_path) {
+                try {
+                  const resp = await fetch(
+                    `/api/storage/load_workflow?path=${encodeURIComponent(
+                      workflow.rel_path
+                    )}`
+                  );
+                  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                  const data = await resp.json();
+                  setTabs([
+                    {
+                      id: newId,
+                      tab_name:
+                        data.tab_name || workflow.name || workflow.file_name || "Workflow",
+                      nodes: data.nodes || [],
+                      edges: data.edges || []
+                    }
+                  ]);
+                } catch (err) {
+                  console.error("Failed to load workflow:", err);
+                  setTabs([
+                    { id: newId, tab_name: workflow?.name || "Workflow", nodes: [], edges: [] }
+                  ]);
                 }
+              } else {
+                setTabs([{ id: newId, tab_name: `Flow`, nodes: [], edges: [] }]);
               }
-              // Otherwise, create a new workflow tab
-              const newId = "flow_" + (tabs.length + 1);
-              setTabs((prev) => [
-                ...prev,
-                {
-                  id: newId,
-                  tab_name: workflow?.name || `Flow ${tabs.length + 1}`,
-                  nodes: [],
-                  edges: []
-                }
-              ]);
               setActiveTabId(newId);
               setCurrentPage("workflow-editor");
             }}
@@ -191,13 +236,13 @@ export default function App() {
               onFileInputChange={() => {}}
             />
             <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
-              <FlowTabs
-                tabs={tabs}
-                activeTabId={activeTabId}
-                onTabChange={setActiveTabId}
-                onAddTab={() => {}}
-                onTabRightClick={() => {}}
-              />
+                <FlowTabs
+                  tabs={tabs}
+                  activeTabId={activeTabId}
+                  onTabChange={setActiveTabId}
+                  onAddTab={() => {}}
+                onTabRightClick={handleTabRightClick}
+                />
               <Box sx={{ flexGrow: 1, position: "relative" }}>
                 {tabs.map((tab) => (
                   <Box
@@ -276,13 +321,13 @@ export default function App() {
         value={renameValue}
         onChange={setRenameValue}
         onCancel={() => setRenameDialogOpen(false)}
-        onSave={() => {}}
+        onSave={handleSaveRename}
       />
       <TabContextMenu
         anchor={tabMenuAnchor}
         onClose={() => setTabMenuAnchor(null)}
-        onRename={() => {}}
-        onCloseTab={() => {}}
+        onRename={handleRenameTab}
+        onCloseTab={handleCloseTab}
       />
     </ThemeProvider>
   );
