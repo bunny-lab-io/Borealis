@@ -170,6 +170,22 @@ def load_workflows():
         "workflows": results
     })
 
+
+@app.route("/api/storage/load_workflow", methods=["GET"])
+def load_workflow():
+    """Load a single workflow JSON by its relative path."""
+    rel_path = request.args.get("path", "")
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    abs_path = os.path.abspath(os.path.join(workflows_root, rel_path))
+
+    if not abs_path.startswith(workflows_root) or not os.path.isfile(abs_path):
+        return jsonify({"error": "Workflow not found"}), 404
+
+    obj = _safe_read_json(abs_path)
+    return jsonify(obj)
+
 # ---------------------------------------------
 # Borealis Agent API Endpoints
 # ---------------------------------------------
