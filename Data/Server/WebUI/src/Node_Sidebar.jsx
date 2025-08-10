@@ -12,6 +12,7 @@ import {
 } from "@mui/material";
 import {
   ExpandMore as ExpandMoreIcon,
+  SaveAlt as SaveAltIcon,
   Save as SaveIcon,
   FileOpen as FileOpenIcon,
   DeleteForever as DeleteForeverIcon,
@@ -25,6 +26,7 @@ export default function NodeSidebar({
   categorizedNodes,
   handleExportFlow,
   handleImportFlow,
+  handleSaveFlow,
   handleOpenCloseAllDialog,
   fileInputRef,
   onFileInputChange
@@ -72,8 +74,13 @@ export default function NodeSidebar({
               </AccordionSummary>
               <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
                 <Tooltip title="Export Current Tab to a JSON File" placement="right" arrow>
-                  <Button fullWidth startIcon={<SaveIcon />} onClick={handleExportFlow} sx={buttonStyle}>
+                  <Button fullWidth startIcon={<SaveAltIcon />} onClick={handleExportFlow} sx={buttonStyle}>
                     Export Current Flow
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Save Current Flow to Workflows Folder" placement="right" arrow>
+                  <Button fullWidth startIcon={<SaveIcon />} onClick={handleSaveFlow} sx={buttonStyle}>
+                    Save Workflow
                   </Button>
                 </Tooltip>
                 <Tooltip title="Import JSON File into New Flow Tab" placement="right" arrow>

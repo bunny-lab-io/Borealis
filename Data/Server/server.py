@@ -186,6 +186,63 @@ def load_workflow():
     obj = _safe_read_json(abs_path)
     return jsonify(obj)
 
+
+@app.route("/api/storage/save_workflow", methods=["POST"])
+def save_workflow():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    workflow = data.get("workflow")
+    if not name or not isinstance(workflow, dict):
+        return jsonify({"error": "Invalid payload"}), 400
+
+    if not name.lower().endswith(".json"):
+        name += ".json"
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    os.makedirs(workflows_root, exist_ok=True)
+    safe_name = os.path.basename(name)
+    abs_path = os.path.join(workflows_root, safe_name)
+    try:
+        with open(abs_path, "w", encoding="utf-8") as fh:
+            json.dump(workflow, fh, indent=2)
+        return jsonify({"status": "ok", "file_name": safe_name})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/storage/rename_workflow", methods=["POST"])
+def rename_workflow():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    new_name = (data.get("new_name") or "").strip()
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    old_abs = os.path.abspath(os.path.join(workflows_root, rel_path))
+    if not old_abs.startswith(workflows_root) or not os.path.isfile(old_abs):
+        return jsonify({"error": "Workflow not found"}), 404
+    if not new_name:
+        return jsonify({"error": "Invalid new_name"}), 400
+    if not new_name.lower().endswith(".json"):
+        new_name += ".json"
+    new_abs = os.path.join(os.path.dirname(old_abs), os.path.basename(new_name))
+    base_name = os.path.splitext(os.path.basename(new_abs))[0]
+    try:
+        os.rename(old_abs, new_abs)
+        obj = _safe_read_json(new_abs)
+        for k in ["tabName", "tab_name", "name", "title"]:
+            if k in obj:
+                obj[k] = base_name
+        if "tab_name" not in obj:
+            obj["tab_name"] = base_name
+        with open(new_abs, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, indent=2)
+        rel_new = os.path.relpath(new_abs, workflows_root).replace(os.sep, "/")
+        return jsonify({"status": "ok", "rel_path": rel_new})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ---------------------------------------------
 # Borealis Agent API Endpoints
 # ---------------------------------------------
