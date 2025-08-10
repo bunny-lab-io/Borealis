@@ -18,9 +18,9 @@ import {
 import {
   SimpleTreeView,
   TreeItem,
-  useTreeViewApiRef
+  useTreeViewApiRef,
+  unstable_useTreeViewDragAndDrop as useTreeViewDragAndDrop
 } from "@mui/x-tree-view";
-import { useTreeViewDragAndDrop } from "@mui/x-tree-view/TreeView/useTreeViewDragAndDrop";
 import { RenameWorkflowDialog, RenameFolderDialog } from "./Dialogs";
 
 function buildTree(workflows) {
