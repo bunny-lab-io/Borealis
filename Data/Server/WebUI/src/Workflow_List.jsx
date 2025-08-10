@@ -321,7 +321,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
           sx={{ color: "#e6edf3" }}
           onNodeSelect={handleNodeSelect}
           apiRef={apiRef}
-          defaultExpanded={["root", ...rootChildIds]}
+          defaultExpandedItems={["root", ...rootChildIds]}
         >
           {renderItems(tree)}
         </SimpleTreeView>
