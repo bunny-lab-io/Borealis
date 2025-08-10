@@ -132,6 +132,39 @@ export function RenameWorkflowDialog({ open, value, onChange, onCancel, onSave }
   );
 }
 
+export function RenameFolderDialog({ open, value, onChange, onCancel, onSave }) {
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Folder Name</DialogTitle>
+      <DialogContent>
+        <TextField
+          autoFocus
+          margin="dense"
+          label="Folder Name"
+          fullWidth
+          variant="outlined"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "#2a2a2a",
+              color: "#ccc",
+              "& fieldset": { borderColor: "#444" },
+              "&:hover fieldset": { borderColor: "#666" }
+            },
+            label: { color: "#aaa" },
+            mt: 1
+          }}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 export function DeleteDeviceDialog({ open, onCancel, onConfirm }) {
   return (
     <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
