@@ -127,6 +127,22 @@ def delete_workflow():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/storage/delete_folder", methods=["POST"])
+def delete_folder():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    abs_path = os.path.abspath(os.path.join(workflows_root, rel_path))
+    if not abs_path.startswith(workflows_root) or not os.path.isdir(abs_path):
+        return jsonify({"error": "Folder not found"}), 404
+    try:
+        shutil.rmtree(abs_path)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/storage/create_folder", methods=["POST"])
 def create_folder():
     data = request.get_json(silent=True) or {}
@@ -274,23 +290,36 @@ def load_workflow():
 @app.route("/api/storage/save_workflow", methods=["POST"])
 def save_workflow():
     data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
     name = (data.get("name") or "").strip()
     workflow = data.get("workflow")
-    if not name or not isinstance(workflow, dict):
+    if not isinstance(workflow, dict):
         return jsonify({"error": "Invalid payload"}), 400
 
-    if not name.lower().endswith(".json"):
-        name += ".json"
     workflows_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
     )
     os.makedirs(workflows_root, exist_ok=True)
-    safe_name = os.path.basename(name)
-    abs_path = os.path.join(workflows_root, safe_name)
+
+    if rel_path:
+        if not rel_path.lower().endswith(".json"):
+            rel_path += ".json"
+        abs_path = os.path.abspath(os.path.join(workflows_root, rel_path))
+    else:
+        if not name:
+            return jsonify({"error": "Invalid payload"}), 400
+        if not name.lower().endswith(".json"):
+            name += ".json"
+        abs_path = os.path.abspath(os.path.join(workflows_root, os.path.basename(name)))
+
+    if not abs_path.startswith(workflows_root):
+        return jsonify({"error": "Invalid path"}), 400
+
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
     try:
         with open(abs_path, "w", encoding="utf-8") as fh:
             json.dump(workflow, fh, indent=2)
-        return jsonify({"status": "ok", "file_name": safe_name})
+        return jsonify({"status": "ok"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

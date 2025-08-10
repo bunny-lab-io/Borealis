@@ -132,10 +132,18 @@ export function RenameWorkflowDialog({ open, value, onChange, onCancel, onSave }
   );
 }
 
-export function RenameFolderDialog({ open, value, onChange, onCancel, onSave }) {
+export function RenameFolderDialog({
+  open,
+  value,
+  onChange,
+  onCancel,
+  onSave,
+  title = "Folder Name",
+  confirmText = "Save"
+}) {
   return (
     <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Folder Name</DialogTitle>
+      <DialogTitle>{title}</DialogTitle>
       <DialogContent>
         <TextField
           autoFocus
@@ -159,7 +167,88 @@ export function RenameFolderDialog({ open, value, onChange, onCancel, onSave }) 
       </DialogContent>
       <DialogActions>
         <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>{confirmText}</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+export function NewWorkflowDialog({ open, value, onChange, onCancel, onCreate }) {
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>New Workflow</DialogTitle>
+      <DialogContent>
+        <TextField
+          autoFocus
+          margin="dense"
+          label="Workflow Name"
+          fullWidth
+          variant="outlined"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "#2a2a2a",
+              color: "#ccc",
+              "& fieldset": { borderColor: "#444" },
+              "&:hover fieldset": { borderColor: "#666" }
+            },
+            label: { color: "#aaa" },
+            mt: 1
+          }}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button onClick={onCreate} sx={{ color: "#58a6ff" }}>Create</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+export function SaveWorkflowDialog({ open, value, onChange, onCancel, onSave }) {
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Save Workflow</DialogTitle>
+      <DialogContent>
+        <TextField
+          autoFocus
+          margin="dense"
+          label="Workflow Name"
+          fullWidth
+          variant="outlined"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "#2a2a2a",
+              color: "#ccc",
+              "& fieldset": { borderColor: "#444" },
+              "&:hover fieldset": { borderColor: "#666" }
+            },
+            label: { color: "#aaa" },
+            mt: 1
+          }}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
         <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+export function ConfirmDeleteDialog({ open, message, onCancel, onConfirm }) {
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Confirm Delete</DialogTitle>
+      <DialogContent>
+        <DialogContentText sx={{ color: "#ccc" }}>{message}</DialogContentText>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button onClick={onConfirm} sx={{ color: "#58a6ff" }}>Confirm</Button>
       </DialogActions>
     </Dialog>
   );
