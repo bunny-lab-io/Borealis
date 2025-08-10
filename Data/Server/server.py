@@ -243,6 +243,63 @@ def rename_workflow():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/api/storage/create_folder", methods=["POST"])
+def create_folder():
+    data = request.get_json(silent=True) or {}
+    folder_path = (data.get("path") or "").strip()
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    abs_folder = os.path.abspath(os.path.join(workflows_root, folder_path))
+    if not abs_folder.startswith(workflows_root):
+        return jsonify({"error": "Invalid path"}), 400
+    try:
+        os.makedirs(abs_folder, exist_ok=True)
+        rel_new = os.path.relpath(abs_folder, workflows_root).replace(os.sep, "/")
+        return jsonify({"status": "ok", "rel_path": rel_new})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/storage/list_folders", methods=["GET"])
+def list_folders():
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    folders = [""]
+    if os.path.isdir(workflows_root):
+        for root, dirs, _ in os.walk(workflows_root):
+            for d in dirs:
+                rel = os.path.relpath(os.path.join(root, d), workflows_root)
+                folders.append(rel.replace(os.sep, "/"))
+    folders = sorted(set(folders))
+    return jsonify({"folders": folders})
+
+
+@app.route("/api/storage/move_workflow", methods=["POST"])
+def move_workflow():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    dest_folder = (data.get("dest") or "").strip()
+    workflows_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
+    )
+    src_abs = os.path.abspath(os.path.join(workflows_root, rel_path))
+    dest_folder_abs = os.path.abspath(os.path.join(workflows_root, dest_folder))
+    if not src_abs.startswith(workflows_root) or not os.path.isfile(src_abs):
+        return jsonify({"error": "Workflow not found"}), 404
+    if not dest_folder_abs.startswith(workflows_root):
+        return jsonify({"error": "Invalid destination"}), 400
+    try:
+        os.makedirs(dest_folder_abs, exist_ok=True)
+        dest_abs = os.path.join(dest_folder_abs, os.path.basename(src_abs))
+        os.replace(src_abs, dest_abs)
+        rel_new = os.path.relpath(dest_abs, workflows_root).replace(os.sep, "/")
+        return jsonify({"status": "ok", "rel_path": rel_new})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ---------------------------------------------
 # Borealis Agent API Endpoints
 # ---------------------------------------------

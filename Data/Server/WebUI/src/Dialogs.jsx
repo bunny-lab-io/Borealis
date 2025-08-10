@@ -11,6 +11,10 @@ import {
   MenuItem,
   TextField
 } from "@mui/material";
+import TreeView from "@mui/lab/TreeView";
+import TreeItem from "@mui/lab/TreeItem";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 
 export function CloseAllDialog({ open, onClose, onConfirm }) {
   return (
@@ -127,6 +131,93 @@ export function RenameWorkflowDialog({ open, value, onChange, onCancel, onSave }
       <DialogActions>
         <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
         <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+export function CreateFolderDialog({ open, value, onChange, onCancel, onCreate }) {
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Create Folder</DialogTitle>
+      <DialogContent>
+        <DialogContentText sx={{ color: "#ccc", mb: 1 }}>
+          To create nested folders, use a structure such as "TopFolder/SubFolder/Subfolder".
+        </DialogContentText>
+        <TextField
+          autoFocus
+          margin="dense"
+          label="Folder Path"
+          fullWidth
+          variant="outlined"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "#2a2a2a",
+              color: "#ccc",
+              "& fieldset": { borderColor: "#444" },
+              "&:hover fieldset": { borderColor: "#666" }
+            },
+            label: { color: "#aaa" },
+            mt: 1
+          }}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button onClick={onCreate} sx={{ color: "#58a6ff" }}>Create</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function buildTree(folders) {
+  const root = {};
+  folders.forEach((p) => {
+    const parts = p.split("/").filter(Boolean);
+    let node = root;
+    parts.forEach((part) => {
+      if (!node[part]) node[part] = {};
+      node = node[part];
+    });
+  });
+  return root;
+}
+
+function renderTree(node, base = "") {
+  return Object.keys(node).map((name) => {
+    const current = base ? `${base}/${name}` : name;
+    return (
+      <TreeItem key={current} nodeId={current} label={name}>
+        {renderTree(node[name], current)}
+      </TreeItem>
+    );
+  });
+}
+
+export function MoveWorkflowDialog({ open, folders, value, onSelect, onCancel, onMove }) {
+  const tree = buildTree(folders);
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Move Workflow</DialogTitle>
+      <DialogContent sx={{ minWidth: 300 }}>
+        <TreeView
+          defaultExpandAll
+          selected={value || ""}
+          onNodeSelect={(e, nodeId) => onSelect(nodeId)}
+          defaultCollapseIcon={<ExpandMoreIcon />}
+          defaultExpandIcon={<ChevronRightIcon />}
+          sx={{ mt: 1 }}
+        >
+          <TreeItem nodeId="" label="Workflows">
+            {renderTree(tree)}
+          </TreeItem>
+        </TreeView>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button onClick={onMove} sx={{ bgcolor: "#ff4f4f", color: "#fff", "&:hover": { bgcolor: "#e04444" } }}>Move</Button>
       </DialogActions>
     </Dialog>
   );

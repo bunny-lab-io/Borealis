@@ -14,8 +14,8 @@ import {
   Menu,
   MenuItem
 } from "@mui/material";
-import { PlayCircle as PlayCircleIcon, MoreVert as MoreVertIcon } from "@mui/icons-material";
-import { RenameWorkflowDialog } from "./Dialogs";
+import { PlayCircle as PlayCircleIcon, MoreVert as MoreVertIcon, CreateNewFolder as CreateNewFolderIcon } from "@mui/icons-material";
+import { RenameWorkflowDialog, CreateFolderDialog, MoveWorkflowDialog } from "./Dialogs";
 
 function formatDateTime(dateString) {
   if (!dateString) return "";
@@ -39,6 +39,11 @@ export default function WorkflowList({ onOpenWorkflow }) {
   const [selected, setSelected] = useState(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createValue, setCreateValue] = useState("");
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [folders, setFolders] = useState([]);
+  const [selectedFolder, setSelectedFolder] = useState("");
 
   const loadRows = useCallback(async () => {
     try {
@@ -60,9 +65,22 @@ export default function WorkflowList({ onOpenWorkflow }) {
     }
   }, []);
 
+  const loadFolders = useCallback(async () => {
+    try {
+      const resp = await fetch("/api/storage/list_folders");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      setFolders(data.folders || []);
+    } catch (err) {
+      console.error("Failed to load folders:", err);
+      setFolders([]);
+    }
+  }, []);
+
   useEffect(() => {
     loadRows();
-  }, [loadRows]);
+    loadFolders();
+  }, [loadRows, loadFolders]);
 
   const handleSort = (col) => {
     if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
@@ -90,6 +108,26 @@ export default function WorkflowList({ onOpenWorkflow }) {
     if (onOpenWorkflow) {
       onOpenWorkflow();
     }
+  };
+
+  const handleCreateFolder = () => {
+    setCreateValue("");
+    setCreateOpen(true);
+  };
+
+  const handleCreateSave = async () => {
+    try {
+      await fetch("/api/storage/create_folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: createValue })
+      });
+      await loadFolders();
+    } catch (err) {
+      console.error("Failed to create folder:", err);
+    }
+    setCreateOpen(false);
+    setCreateValue("");
   };
 
   const handleRowClick = (workflow) => {
@@ -133,6 +171,29 @@ export default function WorkflowList({ onOpenWorkflow }) {
     setSelected(null);
   };
 
+  const startMove = () => {
+    closeMenu();
+    setSelectedFolder("");
+    setMoveOpen(true);
+  };
+
+  const handleMove = async () => {
+    if (!selected) return;
+    try {
+      await fetch("/api/storage/move_workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: selected.rel_path, dest: selectedFolder })
+      });
+      await loadRows();
+      await loadFolders();
+    } catch (err) {
+      console.error("Failed to move workflow:", err);
+    }
+    setMoveOpen(false);
+    setSelected(null);
+  };
+
   const renderNameCell = (r) => {
     const hasPrefix = r.breadcrumb_prefix && r.breadcrumb_prefix.length > 0;
     const primary = r.tab_name && r.tab_name.trim().length > 0 ? r.tab_name.trim() : r.file_name;
@@ -164,20 +225,36 @@ export default function WorkflowList({ onOpenWorkflow }) {
             List of available workflows.
           </Typography>
         </Box>
-        <Button
-          startIcon={<PlayCircleIcon />}
-          sx={{
-            color: "#58a6ff",
-            borderColor: "#58a6ff",
-            textTransform: "none",
-            border: "1px solid #58a6ff",
-            backgroundColor: "#1e1e1e",
-            "&:hover": { backgroundColor: "#1b1b1b" }
-          }}
-          onClick={handleNewWorkflow}
-        >
-          New Workflow
-        </Button>
+        <Box sx={{ display: "flex", gap: 1 }}>
+          <Button
+            startIcon={<CreateNewFolderIcon />}
+            sx={{
+              color: "#58a6ff",
+              borderColor: "#58a6ff",
+              textTransform: "none",
+              border: "1px solid #58a6ff",
+              backgroundColor: "#1e1e1e",
+              "&:hover": { backgroundColor: "#1b1b1b" }
+            }}
+            onClick={handleCreateFolder}
+          >
+            Create Folder
+          </Button>
+          <Button
+            startIcon={<PlayCircleIcon />}
+            sx={{
+              color: "#58a6ff",
+              borderColor: "#58a6ff",
+              textTransform: "none",
+              border: "1px solid #58a6ff",
+              backgroundColor: "#1e1e1e",
+              "&:hover": { backgroundColor: "#1b1b1b" }
+            }}
+            onClick={handleNewWorkflow}
+          >
+            New Workflow
+          </Button>
+        </Box>
       </Box>
       <Table size="small" sx={{ minWidth: 680 }}>
         <TableHead>
@@ -259,6 +336,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
         onClose={closeMenu}
         PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
       >
+        <MenuItem onClick={startMove}>Move Flow</MenuItem>
         <MenuItem onClick={startRename}>Rename</MenuItem>
       </Menu>
       <RenameWorkflowDialog
@@ -267,6 +345,21 @@ export default function WorkflowList({ onOpenWorkflow }) {
         onChange={setRenameValue}
         onCancel={() => setRenameOpen(false)}
         onSave={handleRenameSave}
+      />
+      <CreateFolderDialog
+        open={createOpen}
+        value={createValue}
+        onChange={setCreateValue}
+        onCancel={() => setCreateOpen(false)}
+        onCreate={handleCreateSave}
+      />
+      <MoveWorkflowDialog
+        open={moveOpen}
+        folders={folders}
+        value={selectedFolder}
+        onSelect={setSelectedFolder}
+        onCancel={() => setMoveOpen(false)}
+        onMove={handleMove}
       />
     </Paper>
   );
