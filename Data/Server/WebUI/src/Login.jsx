@@ -8,7 +8,7 @@ export default function Login({ onLogin }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch("/users.json")
+    fetch("/api/users")
       .then((res) => res.json())
       .then((data) => setUsers(data.users || []))
       .catch(() => setUsers([]));
@@ -30,7 +30,7 @@ export default function Login({ onLogin }) {
       return;
     }
     const hash = await sha512(password);
-    if (hash === user.password) {
+    if (hash.toLowerCase() === (user.password || "").toLowerCase()) {
       setError("");
       onLogin(username);
     } else {
