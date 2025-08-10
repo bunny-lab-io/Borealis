@@ -200,6 +200,7 @@ def load_workflows():
         os.path.join(os.path.dirname(__file__), "..", "..", "Workflows")
     )
     results: List[Dict] = []
+    folders: List[str] = []
 
     if not os.path.isdir(workflows_root):
         return jsonify({
@@ -209,6 +210,9 @@ def load_workflows():
         }), 200
 
     for root, dirs, files in os.walk(workflows_root):
+        rel_root = os.path.relpath(root, workflows_root)
+        if rel_root != ".":
+            folders.append(rel_root.replace(os.sep, "/"))
         for fname in files:
             if not fname.lower().endswith(".json"):
                 continue
@@ -246,7 +250,8 @@ def load_workflows():
 
     return jsonify({
         "root": workflows_root,
-        "workflows": results
+        "workflows": results,
+        "folders": folders
     })
 
 

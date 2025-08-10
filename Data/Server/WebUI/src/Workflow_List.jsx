@@ -22,12 +22,37 @@ import {
 } from "@mui/x-tree-view";
 import { RenameWorkflowDialog, RenameFolderDialog } from "./Dialogs";
 
-function buildTree(workflows) {
+function buildTree(workflows, folders) {
   const map = {};
-  const root = [];
+  const rootNode = {
+    id: "root",
+    label: "Workflows",
+    path: "",
+    isFolder: true,
+    children: []
+  };
+  map[rootNode.id] = rootNode;
+
+  (folders || []).forEach((f) => {
+    const parts = (f || "").split("/");
+    let children = rootNode.children;
+    let parentPath = "";
+    parts.forEach((part) => {
+      const path = parentPath ? `${parentPath}/${part}` : part;
+      let node = children.find((n) => n.id === path);
+      if (!node) {
+        node = { id: path, label: part, path, isFolder: true, children: [] };
+        children.push(node);
+        map[path] = node;
+      }
+      children = node.children;
+      parentPath = path;
+    });
+  });
+
   (workflows || []).forEach((w) => {
     const parts = (w.rel_path || "").split("/");
-    let children = root;
+    let children = rootNode.children;
     let parentPath = "";
     parts.forEach((part, idx) => {
       const path = parentPath ? `${parentPath}/${part}` : part;
@@ -56,7 +81,8 @@ function buildTree(workflows) {
       }
     });
   });
-  return { root, map };
+
+  return { root: [rootNode], map };
 }
 
 export default function WorkflowList({ onOpenWorkflow }) {
@@ -96,7 +122,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
       const resp = await fetch("/api/storage/load_workflows");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      const { root, map } = buildTree(data.workflows || []);
+      const { root, map } = buildTree(data.workflows || [], data.folders || []);
       setTree(root);
       setNodeMap(map);
     } catch (err) {
@@ -124,6 +150,13 @@ export default function WorkflowList({ onOpenWorkflow }) {
     setRenameValue(selectedNode.label);
     if (selectedNode.isFolder) setRenameFolderOpen(true);
     else setRenameOpen(true);
+  };
+
+  const handleEdit = () => {
+    closeMenu();
+    if (selectedNode && !selectedNode.isFolder && onOpenWorkflow) {
+      onOpenWorkflow(selectedNode.workflow);
+    }
   };
 
   const handleDeleteWorkflow = async () => {
@@ -212,9 +245,9 @@ export default function WorkflowList({ onOpenWorkflow }) {
             }}
           >
             {n.isFolder ? (
-              <FolderIcon sx={{ mr: 1, color: "#ffd54f" }} />
+              <FolderIcon sx={{ mr: 1, color: "#0475c2" }} />
             ) : (
-              <DescriptionIcon sx={{ mr: 1, color: "#90caf9" }} />
+              <DescriptionIcon sx={{ mr: 1, color: "#0475c2" }} />
             )}
             <Typography sx={{ flexGrow: 1, color: "#e6edf3" }}>{n.label}</Typography>
             <IconButton
@@ -243,7 +276,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
         }}
       >
         <Box>
-          <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
+          <Typography variant="h6" sx={{ color: "#0475c2", mb: 0 }}>
             Workflows
           </Typography>
           <Typography variant="body2" sx={{ color: "#aaa" }}>
@@ -255,10 +288,10 @@ export default function WorkflowList({ onOpenWorkflow }) {
             startIcon={<CreateNewFolderIcon />}
             sx={{
               mr: 1,
-              color: "#58a6ff",
-              borderColor: "#58a6ff",
+              color: "#0475c2",
+              borderColor: "#0475c2",
               textTransform: "none",
-              border: "1px solid #58a6ff",
+              border: "1px solid #0475c2",
               backgroundColor: "#1e1e1e",
               "&:hover": { backgroundColor: "#1b1b1b" }
             }}
@@ -273,10 +306,10 @@ export default function WorkflowList({ onOpenWorkflow }) {
           <Button
             startIcon={<PlayCircleIcon />}
             sx={{
-              color: "#58a6ff",
-              borderColor: "#58a6ff",
+              color: "#0475c2",
+              borderColor: "#0475c2",
               textTransform: "none",
-              border: "1px solid #58a6ff",
+              border: "1px solid #0475c2",
               backgroundColor: "#1e1e1e",
               "&:hover": { backgroundColor: "#1b1b1b" }
             }}
@@ -300,6 +333,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
           sx={{ color: "#e6edf3" }}
           onNodeSelect={handleNodeSelect}
           apiRef={apiRef}
+          defaultExpanded={["root"]}
         >
           {renderItems(tree)}
         </SimpleTreeView>
@@ -313,9 +347,14 @@ export default function WorkflowList({ onOpenWorkflow }) {
         {selectedNode?.isFolder && (
           <MenuItem onClick={handleCreateFolder}>New Folder</MenuItem>
         )}
-        <MenuItem onClick={handleRename}>Rename</MenuItem>
+        {selectedNode && selectedNode.id !== "root" && (
+          <MenuItem onClick={handleRename}>Rename</MenuItem>
+        )}
         {!selectedNode?.isFolder && (
-          <MenuItem onClick={handleDeleteWorkflow}>Delete</MenuItem>
+          <>
+            <MenuItem onClick={handleEdit}>Edit</MenuItem>
+            <MenuItem onClick={handleDeleteWorkflow}>Delete</MenuItem>
+          </>
         )}
       </Menu>
       <RenameWorkflowDialog
