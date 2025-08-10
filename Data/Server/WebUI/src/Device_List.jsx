@@ -10,8 +10,13 @@ import {
   TableCell,
   TableHead,
   TableRow,
-  TableSortLabel
+  TableSortLabel,
+  IconButton,
+  Menu,
+  MenuItem
 } from "@mui/material";
+import MoreVertIcon from "@mui/icons-material/MoreVert";
+import { DeleteDeviceDialog } from "./Dialogs.jsx";
 
 function timeSince(tsSec) {
   if (!tsSec) return "unknown";
@@ -34,13 +39,17 @@ export default function DeviceList() {
   const [rows, setRows] = useState([]);
   const [orderBy, setOrderBy] = useState("status");
   const [order, setOrder] = useState("desc");
+  const [menuAnchor, setMenuAnchor] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const fetchAgents = useCallback(async () => {
     try {
       const res = await fetch("/api/agents");
       const data = await res.json();
-      const arr = Object.values(data || {}).map((a) => ({
-        hostname: a.hostname || a.agent_id || "unknown",
+      const arr = Object.entries(data || {}).map(([id, a]) => ({
+        id,
+        hostname: a.hostname || id || "unknown",
         status: statusFromHeartbeat(a.last_seen),
         lastSeen: a.last_seen || 0,
         os: a.agent_operating_system || a.os || "-"
@@ -77,6 +86,30 @@ export default function DeviceList() {
   };
 
   const statusColor = (s) => (s === "Online" ? "#00d18c" : "#ff4f4f");
+
+  const openMenu = (e, row) => {
+    setMenuAnchor(e.currentTarget);
+    setSelected(row);
+  };
+
+  const closeMenu = () => setMenuAnchor(null);
+
+  const confirmDelete = () => {
+    closeMenu();
+    setConfirmOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!selected) return;
+    try {
+      await fetch(`/api/agent/${selected.id}`, { method: "DELETE" });
+    } catch (e) {
+      console.warn("Failed to remove agent", e);
+    }
+    setRows((r) => r.filter((x) => x.id !== selected.id));
+    setConfirmOpen(false);
+    setSelected(null);
+  };
 
   return (
     <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
@@ -127,11 +160,12 @@ export default function DeviceList() {
                 OS
               </TableSortLabel>
             </TableCell>
+            <TableCell />
           </TableRow>
         </TableHead>
         <TableBody>
           {sorted.map((r, i) => (
-            <TableRow key={i} hover>
+            <TableRow key={r.id || i} hover>
               <TableCell>
                 <span
                   style={{
@@ -149,17 +183,39 @@ export default function DeviceList() {
               <TableCell>{r.hostname}</TableCell>
               <TableCell>{timeSince(r.lastSeen)}</TableCell>
               <TableCell>{r.os}</TableCell>
+              <TableCell align="right">
+                <IconButton
+                  size="small"
+                  onClick={(e) => openMenu(e, r)}
+                  sx={{ color: "#ccc" }}
+                >
+                  <MoreVertIcon fontSize="small" />
+                </IconButton>
+              </TableCell>
             </TableRow>
           ))}
           {sorted.length === 0 && (
             <TableRow>
-              <TableCell colSpan={4} sx={{ color: "#888" }}>
+              <TableCell colSpan={5} sx={{ color: "#888" }}>
                 No agents connected.
               </TableCell>
             </TableRow>
           )}
         </TableBody>
       </Table>
+      <Menu
+        anchorEl={menuAnchor}
+        open={Boolean(menuAnchor)}
+        onClose={closeMenu}
+        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
+      >
+        <MenuItem onClick={confirmDelete}>Delete</MenuItem>
+      </Menu>
+      <DeleteDeviceDialog
+        open={confirmOpen}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={handleDelete}
+      />
     </Paper>
   );
 }
