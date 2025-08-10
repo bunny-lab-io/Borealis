@@ -20,9 +20,6 @@ import {
   TreeItem,
   useTreeViewApiRef
 } from "@mui/x-tree-view";
-import {
-  unstable_useTreeViewDragAndDrop as useTreeViewDragAndDrop
-} from "@mui/x-tree-view/internals";
 import { RenameWorkflowDialog, RenameFolderDialog } from "./Dialogs";
 
 function buildTree(workflows) {
@@ -71,26 +68,28 @@ export default function WorkflowList({ onOpenWorkflow }) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameFolderOpen, setRenameFolderOpen] = useState(false);
   const apiRef = useTreeViewApiRef();
+  const [dragNode, setDragNode] = useState(null);
 
-  useTreeViewDragAndDrop(apiRef, {
-    onItemDrop: async (params) => {
-      const source = nodeMap[params.dragItemId];
-      const target = nodeMap[params.dropTargetId];
-      if (source && target && !source.isFolder && target.isFolder) {
-        const newPath = `${target.path}/${source.fileName}`;
-        try {
-          await fetch("/api/storage/move_workflow", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: source.path, new_path: newPath })
-          });
-          loadTree();
-        } catch (err) {
-          console.error("Failed to move workflow:", err);
-        }
-      }
+  const handleDrop = async (target) => {
+    if (!dragNode || !target.isFolder) return;
+    // Prevent dropping into itself or its descendants
+    if (dragNode.path === target.path || target.path.startsWith(`${dragNode.path}/`)) {
+      setDragNode(null);
+      return;
     }
-  });
+    const newPath = target.path ? `${target.path}/${dragNode.fileName}` : dragNode.fileName;
+    try {
+      await fetch("/api/storage/move_workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: dragNode.path, new_path: newPath })
+      });
+      loadTree();
+    } catch (err) {
+      console.error("Failed to move workflow:", err);
+    }
+    setDragNode(null);
+  };
 
   const loadTree = useCallback(async () => {
     try {
@@ -200,7 +199,18 @@ export default function WorkflowList({ onOpenWorkflow }) {
         key={n.id}
         itemId={n.id}
         label={
-          <Box sx={{ display: "flex", alignItems: "center" }}>
+          <Box
+            sx={{ display: "flex", alignItems: "center" }}
+            draggable={!n.isFolder}
+            onDragStart={() => !n.isFolder && setDragNode(n)}
+            onDragOver={(e) => {
+              if (dragNode && n.isFolder) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              handleDrop(n);
+            }}
+          >
             {n.isFolder ? (
               <FolderIcon sx={{ mr: 1, color: "#ffd54f" }} />
             ) : (
@@ -276,7 +286,16 @@ export default function WorkflowList({ onOpenWorkflow }) {
           </Button>
         </Box>
       </Box>
-      <Box sx={{ p: 2 }}>
+      <Box
+        sx={{ p: 2 }}
+        onDragOver={(e) => {
+          if (dragNode) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          handleDrop({ path: "", isFolder: true });
+        }}
+      >
         <SimpleTreeView
           sx={{ color: "#e6edf3" }}
           onNodeSelect={handleNodeSelect}
