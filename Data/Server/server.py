@@ -62,6 +62,20 @@ def health():
     return jsonify({"status": "ok"})
 
 # ---------------------------------------------
+# User Authentication Endpoint
+# ---------------------------------------------
+@app.route("/api/users", methods=["GET"])
+def get_users():
+    users_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "users.json")
+    )
+    try:
+        with open(users_path, "r", encoding="utf-8") as fh:
+            return jsonify(json.load(fh))
+    except Exception:
+        return jsonify({"users": []})
+
+# ---------------------------------------------
 # Borealis Python API Endpoints
 # ---------------------------------------------
 # /api/ocr: Accepts a base64 image and OCR engine selection,
