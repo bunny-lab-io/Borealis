@@ -77,11 +77,6 @@ export default function NodeSidebar({
                 </Typography>
               </AccordionSummary>
               <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-                <Tooltip title="Export Current Tab to a JSON File" placement="right" arrow>
-                  <Button fullWidth startIcon={<SaveAltIcon />} onClick={handleExportFlow} sx={buttonStyle}>
-                    Export Current Flow
-                  </Button>
-                </Tooltip>
                 <Tooltip title="Save Current Flow to Workflows Folder" placement="right" arrow>
                   <Button
                     fullWidth
@@ -97,12 +92,12 @@ export default function NodeSidebar({
                 </Tooltip>
                 <Tooltip title="Import JSON File into New Flow Tab" placement="right" arrow>
                   <Button fullWidth startIcon={<FileOpenIcon />} onClick={handleImportFlow} sx={buttonStyle}>
-                    Import Flow
+                    Import Workflow (JSON)
                   </Button>
                 </Tooltip>
-                <Tooltip title="Destroy all Flow Tabs Immediately" placement="right" arrow>
-                  <Button fullWidth startIcon={<DeleteForeverIcon />} onClick={handleOpenCloseAllDialog} sx={buttonStyle}>
-                    Close All Flows
+                <Tooltip title="Export Current Tab to a JSON File" placement="right" arrow>
+                  <Button fullWidth startIcon={<SaveAltIcon />} onClick={handleExportFlow} sx={buttonStyle}>
+                    Export Workflow (JSON)
                   </Button>
                 </Tooltip>
               </AccordionDetails>

@@ -132,9 +132,9 @@ function NavigationSidebar({ currentPage, onNavigate }) {
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
             <NavItem icon={<JobsIcon fontSize="small" />} label="Scheduled Jobs" pageKey="jobs" />
-            <NavItem icon={<WorkflowsIcon fontSize="small" />} label="Workflows" pageKey="workflows" />
             <NavItem icon={<ScriptIcon fontSize="small" />} label="Scripts" pageKey="scripts" />
-            <NavItem icon={<CommunityIcon fontSize="small" />} label="Community Nodes" pageKey="community" />
+            <NavItem icon={<WorkflowsIcon fontSize="small" />} label="Workflows" pageKey="workflows" />
+            <NavItem icon={<CommunityIcon fontSize="small" />} label="Community Content" pageKey="community" />
           </AccordionDetails>
         </Accordion>
       </Box>

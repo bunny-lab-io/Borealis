@@ -299,7 +299,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
             Workflows
           </Typography>
           <Typography variant="body2" sx={{ color: "#aaa" }}>
-            Manage workflow folders and files.
+            Create, edit, and rearrange workflows within an organized folder structure.
           </Typography>
         </Box>
         <Box />
