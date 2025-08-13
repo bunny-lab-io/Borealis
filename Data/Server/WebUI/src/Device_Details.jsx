@@ -27,6 +27,14 @@ export default function DeviceDetails({ device, onBack }) {
   const [softwareSearch, setSoftwareSearch] = useState("");
   const [description, setDescription] = useState("");
 
+  const statusFromHeartbeat = (tsSec, offlineAfter = 15) => {
+    if (!tsSec) return "Offline";
+    const now = Date.now() / 1000;
+    return now - tsSec <= offlineAfter ? "Online" : "Offline";
+  };
+
+  const statusColor = (s) => (s === "Online" ? "#00d18c" : "#ff4f4f");
+
   useEffect(() => {
     if (!device || !device.hostname) return;
     const load = async () => {
@@ -373,6 +381,7 @@ export default function DeviceDetails({ device, onBack }) {
     { label: "Storage", content: renderStorage() },
     { label: "Network", content: renderNetwork() }
   ];
+  const status = statusFromHeartbeat(agent.last_seen || device?.lastSeen);
 
   return (
     <Paper sx={{ m: 2, p: 2, bgcolor: "#1e1e1e" }} elevation={2}>
@@ -382,7 +391,20 @@ export default function DeviceDetails({ device, onBack }) {
             Back
           </Button>
         )}
-        <Typography variant="h6" sx={{ color: "#58a6ff" }}>
+        <Typography
+          variant="h6"
+          sx={{ color: "#58a6ff", display: "flex", alignItems: "center" }}
+        >
+          <span
+            style={{
+              display: "inline-block",
+              width: 10,
+              height: 10,
+              borderRadius: 10,
+              background: statusColor(status),
+              marginRight: 8,
+            }}
+          />
           {agent.hostname || "Device Details"}
         </Typography>
       </Box>

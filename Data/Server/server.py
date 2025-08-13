@@ -640,11 +640,18 @@ def on_agent_heartbeat(data):
     agent_id = data.get("agent_id")
     if not agent_id:
         return
+    hostname = data.get("hostname")
+
+    if hostname:
+        for aid, info in list(registered_agents.items()):
+            if aid != agent_id and info.get("hostname") == hostname:
+                registered_agents.pop(aid, None)
+                agent_configurations.pop(aid, None)
 
     rec = registered_agents.setdefault(agent_id, {})
     rec["agent_id"] = agent_id
-    if data.get("hostname"):
-        rec["hostname"] = data.get("hostname")
+    if hostname:
+        rec["hostname"] = hostname
     if data.get("agent_operating_system"):
         rec["agent_operating_system"] = data.get("agent_operating_system")
     rec["last_seen"] = int(data.get("last_seen") or time.time())
