@@ -297,7 +297,7 @@ export default function WorkflowList({ onOpenWorkflow }) {
         }}
       >
         <Box>
-          <Typography variant="h6" sx={{ color: "#0475c2", mb: 0 }}>
+          <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
             Workflows
           </Typography>
           <Typography variant="body2" sx={{ color: "#aaa" }}>
