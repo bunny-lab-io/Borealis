@@ -391,7 +391,7 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS device_details (agent_id TEXT PRIMARY KEY, details TEXT)"
+        "CREATE TABLE IF NOT EXISTS device_details (hostname TEXT PRIMARY KEY, description TEXT, details TEXT)"
     )
     conn.commit()
     conn.close()
@@ -409,16 +409,24 @@ def get_agents():
 @app.route("/api/agent/details", methods=["POST"])
 def save_agent_details():
     data = request.get_json(silent=True) or {}
-    agent_id = data.get("agent_id")
+    hostname = data.get("hostname")
     details = data.get("details")
-    if not agent_id or not isinstance(details, dict):
+    if not hostname and isinstance(details, dict):
+        hostname = details.get("summary", {}).get("hostname")
+    if not hostname or not isinstance(details, dict):
         return jsonify({"error": "invalid payload"}), 400
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute(
-            "REPLACE INTO device_details (agent_id, details) VALUES (?, ?)",
-            (agent_id, json.dumps(details)),
+            "SELECT description FROM device_details WHERE hostname = ?",
+            (hostname,),
+        )
+        row = cur.fetchone()
+        description = row[0] if row else ""
+        cur.execute(
+            "REPLACE INTO device_details (hostname, description, details) VALUES (?, ?, ?)",
+            (hostname, description, json.dumps(details)),
         )
         conn.commit()
         conn.close()
@@ -427,24 +435,48 @@ def save_agent_details():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/agent/details/<agent_id>", methods=["GET"])
-def get_agent_details(agent_id: str):
+@app.route("/api/device/details/<hostname>", methods=["GET"])
+def get_device_details(hostname: str):
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute(
-            "SELECT details FROM device_details WHERE agent_id = ?", (agent_id,)
+            "SELECT details, description FROM device_details WHERE hostname = ?",
+            (hostname,),
         )
         row = cur.fetchone()
         conn.close()
         if row:
             try:
-                return jsonify(json.loads(row[0]))
+                details = json.loads(row[0])
             except Exception:
-                pass
+                details = {}
+            description = row[1] if len(row) > 1 else ""
+            if description:
+                details.setdefault("summary", {})["description"] = description
+            return jsonify(details)
     except Exception:
         pass
     return jsonify({})
+
+
+@app.route("/api/device/description/<hostname>", methods=["POST"])
+def set_device_description(hostname: str):
+    data = request.get_json(silent=True) or {}
+    description = (data.get("description") or "").strip()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO device_details(hostname, description, details) VALUES (?, ?, COALESCE((SELECT details FROM device_details WHERE hostname = ?), '{}')) "
+            "ON CONFLICT(hostname) DO UPDATE SET description=excluded.description",
+            (hostname, description, hostname),
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/agent/<agent_id>", methods=["DELETE"])

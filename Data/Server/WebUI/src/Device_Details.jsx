@@ -25,14 +25,15 @@ export default function DeviceDetails({ device, onBack }) {
   const [softwareOrderBy, setSoftwareOrderBy] = useState("name");
   const [softwareOrder, setSoftwareOrder] = useState("asc");
   const [softwareSearch, setSoftwareSearch] = useState("");
+  const [description, setDescription] = useState("");
 
   useEffect(() => {
-    if (!device || !device.id) return;
+    if (!device || !device.hostname) return;
     const load = async () => {
       try {
         const [agentsRes, detailsRes] = await Promise.all([
           fetch("/api/agents"),
-          fetch(`/api/agent/details/${device.id}`)
+          fetch(`/api/device/details/${device.hostname}`)
         ]);
         const agentsData = await agentsRes.json();
         if (agentsData && agentsData[device.id]) {
@@ -40,12 +41,48 @@ export default function DeviceDetails({ device, onBack }) {
         }
         const detailData = await detailsRes.json();
         setDetails(detailData || {});
+        setDescription(detailData?.summary?.description || "");
       } catch (e) {
         console.warn("Failed to load device info", e);
       }
     };
     load();
   }, [device]);
+
+  const saveDescription = async () => {
+    if (!details.summary?.hostname) return;
+    try {
+      await fetch(`/api/device/description/${details.summary.hostname}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description })
+      });
+      setDetails((d) => ({
+        ...d,
+        summary: { ...(d.summary || {}), description }
+      }));
+    } catch (e) {
+      console.warn("Failed to save description", e);
+    }
+  };
+
+  const formatDateTime = (str) => {
+    if (!str) return "unknown";
+    try {
+      const [datePart, timePart] = str.split(" ");
+      const [y, m, d] = datePart.split("-").map(Number);
+      let [hh, mm, ss] = timePart.split(":").map(Number);
+      const ampm = hh >= 12 ? "PM" : "AM";
+      hh = hh % 12 || 12;
+      return `${m.toString().padStart(2, "0")}/${d.toString().padStart(2, "0")}/${y} - ${hh}:${mm
+        .toString()
+        .padStart(2, "0")}${ampm}`;
+    } catch {
+      return str;
+    }
+  };
+
+  const formatMac = (mac) => (mac ? mac.replace(/-/g, ":").toUpperCase() : "unknown");
 
   const formatBytes = (val) => {
     if (val === undefined || val === null || val === "unknown") return "unknown";
@@ -84,19 +121,37 @@ export default function DeviceDetails({ device, onBack }) {
   const summary = details.summary || {};
   const summaryItems = [
     { label: "Device Name", value: summary.hostname || agent.hostname || device?.hostname || "unknown" },
-    { label: "Description", value: summary.description || "unknown" },
     { label: "Operating System", value: summary.operating_system || agent.agent_operating_system || "unknown" },
     { label: "Last User", value: summary.last_user || "unknown" },
     { label: "Internal IP", value: summary.internal_ip || "unknown" },
     { label: "External IP", value: summary.external_ip || "unknown" },
-    { label: "Last Reboot", value: summary.last_reboot || "unknown" },
-    { label: "Created", value: summary.created || "unknown" }
+    { label: "Last Reboot", value: summary.last_reboot ? formatDateTime(summary.last_reboot) : "unknown" },
+    { label: "Created", value: summary.created ? formatDateTime(summary.created) : "unknown" }
   ];
 
   const renderSummary = () => (
     <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
       <Table size="small">
         <TableBody>
+          <TableRow>
+            <TableCell sx={{ fontWeight: 500 }}>Description</TableCell>
+            <TableCell>
+              <TextField
+                size="small"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                onBlur={saveDescription}
+                placeholder="Enter description"
+                sx={{
+                  input: { color: "#fff" },
+                  "& .MuiOutlinedInput-root": {
+                    "& fieldset": { borderColor: "#555" },
+                    "&:hover fieldset": { borderColor: "#888" }
+                  }
+                }}
+              />
+            </TableCell>
+          </TableRow>
           {summaryItems.map((item) => (
             <TableRow key={item.label}>
               <TableCell sx={{ fontWeight: 500 }}>{item.label}</TableCell>
@@ -302,7 +357,7 @@ export default function DeviceDetails({ device, onBack }) {
               <TableRow key={`${n.adapter}-${i}`}>
                 <TableCell>{n.adapter}</TableCell>
                 <TableCell>{(n.ips || []).join(", ")}</TableCell>
-                <TableCell>{n.mac}</TableCell>
+                <TableCell>{formatMac(n.mac)}</TableCell>
               </TableRow>
             ))}
           </TableBody>

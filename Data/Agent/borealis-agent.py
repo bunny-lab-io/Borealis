@@ -237,27 +237,42 @@ def collect_summary():
     try:
         last_reboot = "unknown"
         if psutil:
-            last_reboot = time.strftime(
-                "%Y-%m-%d %H:%M:%S",
-                time.localtime(psutil.boot_time()),
-            )
-        else:
+            try:
+                last_reboot = time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(psutil.boot_time()),
+                )
+            except Exception:
+                last_reboot = "unknown"
+        if last_reboot == "unknown":
             plat = platform.system().lower()
             if plat == "windows":
-                ps_cmd = "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime"
-                out = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", ps_cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                raw = out.stdout.strip()
-                if raw:
-                    try:
+                try:
+                    out = subprocess.run(
+                        ["wmic", "os", "get", "lastbootuptime"],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    raw = "".join(out.stdout.splitlines()[1:]).strip()
+                    if raw:
                         boot = datetime.datetime.strptime(raw.split(".")[0], "%Y%m%d%H%M%S")
                         last_reboot = boot.strftime("%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        pass
+                except FileNotFoundError:
+                    ps_cmd = "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime"
+                    out = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command", ps_cmd],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    raw = out.stdout.strip()
+                    if raw:
+                        try:
+                            boot = datetime.datetime.strptime(raw.split(".")[0], "%Y%m%d%H%M%S")
+                            last_reboot = boot.strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pass
             else:
                 try:
                     out = subprocess.run(
@@ -453,32 +468,60 @@ def collect_storage():
                     "free": 100 - usage.percent,
                 })
         elif plat == "windows":
-            ps_cmd = (
-                "Get-PSDrive -PSProvider FileSystem | "
-                "Select-Object Name,Free,Used,Capacity,Root | ConvertTo-Json"
-            )
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_cmd],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            data = json.loads(out.stdout or "[]")
-            if isinstance(data, dict):
-                data = [data]
-            for d in data:
-                total = d.get("Capacity") or 0
-                used = d.get("Used") or 0
-                usage = (used / total * 100) if total else 0
-                free = 100 - usage
-                drive = d.get("Root") or f"{d.get('Name','')}:"
-                disks.append({
-                    "drive": drive,
-                    "disk_type": "Fixed Disk",
-                    "usage": usage,
-                    "total": total,
-                    "free": free,
-                })
+            try:
+                out = subprocess.run(
+                    ["wmic", "logicaldisk", "get", "DeviceID,Size,FreeSpace"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                lines = [l for l in out.stdout.splitlines() if l.strip()][1:]
+                for line in lines:
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        drive, free, size = parts[0], parts[1], parts[2]
+                        try:
+                            total = float(size)
+                            free_bytes = float(free)
+                            used = total - free_bytes
+                            usage = (used / total * 100) if total else 0
+                            free_pct = 100 - usage
+                            disks.append({
+                                "drive": drive,
+                                "disk_type": "Fixed Disk",
+                                "usage": usage,
+                                "total": total,
+                                "free": free_pct,
+                            })
+                        except Exception:
+                            pass
+            except FileNotFoundError:
+                ps_cmd = (
+                    "Get-PSDrive -PSProvider FileSystem | "
+                    "Select-Object Name,Free,Used,Capacity,Root | ConvertTo-Json"
+                )
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                data = json.loads(out.stdout or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for d in data:
+                    total = d.get("Capacity") or 0
+                    used = d.get("Used") or 0
+                    usage = (used / total * 100) if total else 0
+                    free = 100 - usage
+                    drive = d.get("Root") or f"{d.get('Name','')}:"
+                    disks.append({
+                        "drive": drive,
+                        "disk_type": "Fixed Disk",
+                        "usage": usage,
+                        "total": total,
+                        "free": free,
+                    })
         else:
             out = subprocess.run(
                 ["df", "-kP"], capture_output=True, text=True, timeout=60
@@ -562,8 +605,13 @@ async def send_agent_details():
                 "network": collect_network(),
             }
             url = CONFIG.data.get("borealis_server_url", "http://localhost:5000") + "/api/agent/details"
+            payload = {
+                "agent_id": AGENT_ID,
+                "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
+                "details": details,
+            }
             async with aiohttp.ClientSession() as session:
-                await session.post(url, json={"agent_id": AGENT_ID, "details": details}, timeout=10)
+                await session.post(url, json=payload, timeout=10)
         except Exception as e:
             print(f"[WARN] Failed to send agent details: {e}")
         await asyncio.sleep(300)
