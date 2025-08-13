@@ -172,18 +172,20 @@ export default function DeviceList({ onSelectDevice }) {
               sx={{ cursor: onSelectDevice ? "pointer" : "default" }}
             >
               <TableCell>
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: 10,
-                    height: 10,
-                    borderRadius: 10,
-                    background: statusColor(r.status),
-                    marginRight: 8,
-                    verticalAlign: "middle"
-                  }}
-                />
-                {r.status}
+                <Box sx={{ display: "flex", alignItems: "center" }}>
+                  <Box
+                    component="span"
+                    sx={{
+                      display: "inline-block",
+                      width: 10,
+                      height: 10,
+                      borderRadius: 10,
+                      bgcolor: statusColor(r.status),
+                      mr: 1,
+                    }}
+                  />
+                  {r.status}
+                </Box>
               </TableCell>
               <TableCell>{r.hostname}</TableCell>
               <TableCell>{timeSince(r.lastSeen)}</TableCell>

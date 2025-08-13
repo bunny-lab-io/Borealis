@@ -283,13 +283,33 @@ export default function DeviceDetails({ device, onBack }) {
   };
 
   const renderStorage = () => {
-    const rows = (details.storage || []).map((d) => ({
-      drive: d.drive,
-      disk_type: d.disk_type,
-      usage: d.usage !== undefined ? Number(d.usage) : undefined,
-      total: d.total !== undefined ? Number(d.total) : undefined,
-      free: d.free !== undefined ? Number(d.free) : undefined,
-    }));
+    const parseNum = (val) => {
+      if (val === undefined || val === null) return undefined;
+      const n = Number(String(val).replace(/[^0-9.]/g, ""));
+      return Number.isNaN(n) ? undefined : n;
+    };
+    const rows = (details.storage || []).map((d) => {
+      const total = parseNum(d.total);
+      const rawFree = parseNum(d.free);
+      const freePct = rawFree !== undefined
+        ? rawFree <= 100
+          ? rawFree
+          : total
+          ? (rawFree / total) * 100
+          : undefined
+        : undefined;
+      let usage = parseNum(d.usage);
+      if ((usage === undefined || Number.isNaN(usage)) && freePct !== undefined) {
+        usage = 100 - freePct;
+      }
+      return {
+        drive: d.drive,
+        disk_type: d.disk_type,
+        usage,
+        total,
+        free: freePct,
+      };
+    });
     if (!rows.length)
       return placeholderTable(["Drive Letter", "Disk Type", "Usage", "Total Size", "Free %"]);
     return (
