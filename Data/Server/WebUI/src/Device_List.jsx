@@ -165,12 +165,7 @@ export default function DeviceList({ onSelectDevice }) {
         </TableHead>
         <TableBody>
           {sorted.map((r, i) => (
-            <TableRow
-              key={r.id || i}
-              hover
-              onClick={() => onSelectDevice && onSelectDevice(r)}
-              sx={{ cursor: onSelectDevice ? "pointer" : "default" }}
-            >
+            <TableRow key={r.id || i} hover>
               <TableCell>
                 <Box sx={{ display: "flex", alignItems: "center" }}>
                   <Box
@@ -187,13 +182,21 @@ export default function DeviceList({ onSelectDevice }) {
                   {r.status}
                 </Box>
               </TableCell>
-              <TableCell>{r.hostname}</TableCell>
+              <TableCell
+                onClick={() => onSelectDevice && onSelectDevice(r)}
+                sx={{ cursor: onSelectDevice ? "pointer" : "default" }}
+              >
+                {r.hostname}
+              </TableCell>
               <TableCell>{timeSince(r.lastSeen)}</TableCell>
               <TableCell>{r.os}</TableCell>
               <TableCell align="right">
                 <IconButton
                   size="small"
-                  onClick={(e) => openMenu(e, r)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openMenu(e, r);
+                  }}
                   sx={{ color: "#ccc" }}
                 >
                   <MoreVertIcon fontSize="small" />

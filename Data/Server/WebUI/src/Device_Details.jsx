@@ -283,25 +283,40 @@ export default function DeviceDetails({ device, onBack }) {
   };
 
   const renderStorage = () => {
-    const parseNum = (val) => {
+    const toNum = (val) => {
       if (val === undefined || val === null) return undefined;
-      const n = Number(String(val).replace(/[^0-9.]/g, ""));
+      const n = Number(val);
       return Number.isNaN(n) ? undefined : n;
     };
+
     const rows = (details.storage || []).map((d) => {
-      const total = parseNum(d.total);
-      const rawFree = parseNum(d.free);
-      const freePct = rawFree !== undefined
-        ? rawFree <= 100
-          ? rawFree
-          : total
-          ? (rawFree / total) * 100
-          : undefined
-        : undefined;
-      let usage = parseNum(d.usage);
-      if ((usage === undefined || Number.isNaN(usage)) && freePct !== undefined) {
-        usage = 100 - freePct;
+      const total = toNum(d.total);
+      let usage = toNum(d.usage);
+      let freePct;
+
+      if (usage !== undefined) {
+        if (usage <= 1) usage *= 100;
+        freePct = 100 - usage;
+      } else {
+        const freeRaw = toNum(d.free);
+        if (freeRaw !== undefined) {
+          if (freeRaw > 1 && freeRaw > 100 && total) {
+            freePct = (freeRaw / total) * 100;
+          } else if (freeRaw <= 1) {
+            freePct = freeRaw * 100;
+          } else {
+            freePct = freeRaw;
+          }
+          usage = freePct !== undefined ? 100 - freePct : undefined;
+        } else {
+          const usedRaw = toNum(d.used);
+          if (usedRaw !== undefined && total) {
+            usage = (usedRaw / total) * 100;
+            freePct = 100 - usage;
+          }
+        }
       }
+
       return {
         drive: d.drive,
         disk_type: d.disk_type,
@@ -310,8 +325,10 @@ export default function DeviceDetails({ device, onBack }) {
         free: freePct,
       };
     });
+
     if (!rows.length)
       return placeholderTable(["Drive Letter", "Disk Type", "Usage", "Total Size", "Free %"]);
+
     return (
       <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
         <Table size="small">
