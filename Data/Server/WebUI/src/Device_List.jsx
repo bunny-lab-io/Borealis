@@ -35,7 +35,7 @@ function statusFromHeartbeat(tsSec, offlineAfter = 15) {
   return now - tsSec <= offlineAfter ? "Online" : "Offline";
 }
 
-export default function DeviceList() {
+export default function DeviceList({ onSelectDevice }) {
   const [rows, setRows] = useState([]);
   const [orderBy, setOrderBy] = useState("status");
   const [order, setOrder] = useState("desc");
@@ -165,7 +165,12 @@ export default function DeviceList() {
         </TableHead>
         <TableBody>
           {sorted.map((r, i) => (
-            <TableRow key={r.id || i} hover>
+            <TableRow
+              key={r.id || i}
+              hover
+              onClick={() => onSelectDevice && onSelectDevice(r)}
+              sx={{ cursor: onSelectDevice ? "pointer" : "default" }}
+            >
               <TableCell>
                 <span
                   style={{

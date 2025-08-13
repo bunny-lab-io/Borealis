@@ -26,3 +26,5 @@ Borealis-Server.exe
 /Dependencies/Python/
 /Dependencies/AutoHotKey/
 /Data/Server/Python_API_Endpoints/Tesseract-OCR/
+# Device database
+/Databases/
