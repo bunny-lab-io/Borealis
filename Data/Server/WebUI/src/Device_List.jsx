@@ -184,7 +184,13 @@ export default function DeviceList({ onSelectDevice }) {
               </TableCell>
               <TableCell
                 onClick={() => onSelectDevice && onSelectDevice(r)}
-                sx={{ cursor: onSelectDevice ? "pointer" : "default" }}
+                sx={{
+                  color: "#58a6ff",
+                  "&:hover": {
+                    cursor: onSelectDevice ? "pointer" : "default",
+                    textDecoration: onSelectDevice ? "underline" : "none",
+                  },
+                }}
               >
                 {r.hostname}
               </TableCell>

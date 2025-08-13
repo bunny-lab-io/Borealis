@@ -465,7 +465,8 @@ def collect_storage():
                     "disk_type": "Removable" if "removable" in part.opts.lower() else "Fixed Disk",
                     "usage": usage.percent,
                     "total": usage.total,
-                    "free": 100 - usage.percent,
+                    "free": usage.free,
+                    "used": usage.used,
                 })
         elif plat == "windows":
             try:
@@ -485,13 +486,13 @@ def collect_storage():
                             free_bytes = float(free)
                             used = total - free_bytes
                             usage = (used / total * 100) if total else 0
-                            free_pct = 100 - usage
                             disks.append({
                                 "drive": drive,
                                 "disk_type": "Fixed Disk",
                                 "usage": usage,
                                 "total": total,
-                                "free": free_pct,
+                                "free": free_bytes,
+                                "used": used,
                             })
                         except Exception:
                             pass
@@ -512,15 +513,16 @@ def collect_storage():
                 for d in data:
                     total = d.get("Capacity") or 0
                     used = d.get("Used") or 0
+                    free_bytes = d.get("Free") or max(total - used, 0)
                     usage = (used / total * 100) if total else 0
-                    free = 100 - usage
                     drive = d.get("Root") or f"{d.get('Name','')}:"
                     disks.append({
                         "drive": drive,
                         "disk_type": "Fixed Disk",
                         "usage": usage,
                         "total": total,
-                        "free": free,
+                        "free": free_bytes,
+                        "used": used,
                     })
         else:
             out = subprocess.run(
@@ -532,14 +534,15 @@ def collect_storage():
                 if len(parts) >= 6:
                     total = int(parts[1]) * 1024
                     used = int(parts[2]) * 1024
+                    free_bytes = int(parts[3]) * 1024
                     usage = float(parts[4].rstrip("%"))
-                    free = 100 - usage
                     disks.append({
                         "drive": parts[5],
                         "disk_type": "Fixed Disk",
                         "usage": usage,
                         "total": total,
-                        "free": free,
+                        "free": free_bytes,
+                        "used": used,
                     })
     except Exception as e:
         print(f"[WARN] collect_storage failed: {e}")
