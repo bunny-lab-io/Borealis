@@ -404,6 +404,7 @@ def collect_memory():
 
 def collect_storage():
     disks = []
+    plat = platform.system().lower()
     try:
         if psutil:
             for part in psutil.disk_partitions():
@@ -418,18 +419,100 @@ def collect_storage():
                     "total": usage.total,
                     "free": 100 - usage.percent,
                 })
+        elif plat == "windows":
+            ps_cmd = (
+                "Get-PSDrive -PSProvider FileSystem | "
+                "Select-Object Name,Free,Used,Capacity,Root | ConvertTo-Json"
+            )
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            data = json.loads(out.stdout or "[]")
+            if isinstance(data, dict):
+                data = [data]
+            for d in data:
+                total = d.get("Capacity") or 0
+                used = d.get("Used") or 0
+                usage = (used / total * 100) if total else 0
+                free = 100 - usage
+                drive = d.get("Root") or f"{d.get('Name','')}:"
+                disks.append({
+                    "drive": drive,
+                    "disk_type": "Fixed Disk",
+                    "usage": usage,
+                    "total": total,
+                    "free": free,
+                })
+        else:
+            out = subprocess.run(
+                ["df", "-kP"], capture_output=True, text=True, timeout=60
+            )
+            lines = out.stdout.strip().splitlines()[1:]
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 6:
+                    total = int(parts[1]) * 1024
+                    used = int(parts[2]) * 1024
+                    usage = float(parts[4].rstrip("%"))
+                    free = 100 - usage
+                    disks.append({
+                        "drive": parts[5],
+                        "disk_type": "Fixed Disk",
+                        "usage": usage,
+                        "total": total,
+                        "free": free,
+                    })
     except Exception as e:
         print(f"[WARN] collect_storage failed: {e}")
     return disks
 
 def collect_network():
     adapters = []
+    plat = platform.system().lower()
     try:
         if psutil:
             for name, addrs in psutil.net_if_addrs().items():
                 ips = [a.address for a in addrs if getattr(a, "family", None) == socket.AF_INET]
                 mac = next((a.address for a in addrs if getattr(a, "family", None) == getattr(psutil, "AF_LINK", object)), "unknown")
                 adapters.append({"adapter": name, "ips": ips, "mac": mac})
+        elif plat == "windows":
+            ps_cmd = (
+                "Get-NetIPConfiguration | "
+                "Select-Object InterfaceAlias,@{Name='IPv4';Expression={$_.IPv4Address.IPAddress}},"
+                "@{Name='MAC';Expression={$_.NetAdapter.MacAddress}} | ConvertTo-Json"
+            )
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            data = json.loads(out.stdout or "[]")
+            if isinstance(data, dict):
+                data = [data]
+            for a in data:
+                ip = a.get("IPv4")
+                adapters.append({
+                    "adapter": a.get("InterfaceAlias", "unknown"),
+                    "ips": [ip] if ip else [],
+                    "mac": a.get("MAC", "unknown"),
+                })
+        else:
+            out = subprocess.run(
+                ["ip", "-o", "-4", "addr", "show"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            for line in out.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 4:
+                    name = parts[1]
+                    ip = parts[3].split("/")[0]
+                    adapters.append({"adapter": name, "ips": [ip], "mac": "unknown"})
     except Exception as e:
         print(f"[WARN] collect_network failed: {e}")
     return adapters

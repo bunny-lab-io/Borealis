@@ -1,4 +1,4 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Device_Details.jsx
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Device_Details.js
 
 import React, { useState, useEffect } from "react";
 import {
@@ -12,7 +12,8 @@ import {
   TableRow,
   TableCell,
   TableBody,
-  Button
+  Button,
+  LinearProgress
 } from "@mui/material";
 
 export default function DeviceDetails({ device, onBack }) {
@@ -66,59 +67,65 @@ export default function DeviceDetails({ device, onBack }) {
   ];
 
   const renderSummary = () => (
-    <Table size="small">
-      <TableBody>
-        {summaryItems.map((item) => (
-          <TableRow key={item.label}>
-            <TableCell sx={{ fontWeight: 500 }}>{item.label}</TableCell>
-            <TableCell>{item.value}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+      <Table size="small">
+        <TableBody>
+          {summaryItems.map((item) => (
+            <TableRow key={item.label}>
+              <TableCell sx={{ fontWeight: 500 }}>{item.label}</TableCell>
+              <TableCell>{item.value}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </Box>
   );
 
   const placeholderTable = (headers) => (
-    <Table size="small">
-      <TableHead>
-        <TableRow>
-          {headers.map((h) => (
-            <TableCell key={h}>{h}</TableCell>
-          ))}
-        </TableRow>
-      </TableHead>
-      <TableBody>
-        <TableRow>
-          <TableCell colSpan={headers.length} sx={{ color: "#888" }}>
-            No data available.
-          </TableCell>
-        </TableRow>
-      </TableBody>
-    </Table>
+    <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            {headers.map((h) => (
+              <TableCell key={h}>{h}</TableCell>
+            ))}
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          <TableRow>
+            <TableCell colSpan={headers.length} sx={{ color: "#888" }}>
+              No data available.
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    </Box>
   );
 
   const renderSoftware = () => {
     const rows = details.software || [];
     if (!rows.length) return placeholderTable(["Software Name", "Version", "Action"]);
     return (
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Software Name</TableCell>
-            <TableCell>Version</TableCell>
-            <TableCell>Action</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {rows.map((s, i) => (
-            <TableRow key={`${s.name}-${i}`}>
-              <TableCell>{s.name}</TableCell>
-              <TableCell>{s.version}</TableCell>
-              <TableCell></TableCell>
+      <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Software Name</TableCell>
+              <TableCell>Version</TableCell>
+              <TableCell>Action</TableCell>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHead>
+          <TableBody>
+            {rows.map((s, i) => (
+              <TableRow key={`${s.name}-${i}`}>
+                <TableCell>{s.name}</TableCell>
+                <TableCell>{s.version}</TableCell>
+                <TableCell></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Box>
     );
   };
 
@@ -126,26 +133,28 @@ export default function DeviceDetails({ device, onBack }) {
     const rows = details.memory || [];
     if (!rows.length) return placeholderTable(["Slot", "Speed", "Serial Number", "Capacity"]);
     return (
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Slot</TableCell>
-            <TableCell>Speed</TableCell>
-            <TableCell>Serial Number</TableCell>
-            <TableCell>Capacity</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {rows.map((m, i) => (
-            <TableRow key={`${m.slot}-${i}`}>
-              <TableCell>{m.slot}</TableCell>
-              <TableCell>{m.speed}</TableCell>
-              <TableCell>{m.serial}</TableCell>
-              <TableCell>{formatBytes(m.capacity)}</TableCell>
+      <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Slot</TableCell>
+              <TableCell>Speed</TableCell>
+              <TableCell>Serial Number</TableCell>
+              <TableCell>Capacity</TableCell>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHead>
+          <TableBody>
+            {rows.map((m, i) => (
+              <TableRow key={`${m.slot}-${i}`}>
+                <TableCell>{m.slot}</TableCell>
+                <TableCell>{m.speed}</TableCell>
+                <TableCell>{m.serial}</TableCell>
+                <TableCell>{formatBytes(m.capacity)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Box>
     );
   };
 
@@ -154,36 +163,53 @@ export default function DeviceDetails({ device, onBack }) {
     if (!rows.length)
       return placeholderTable(["Drive Letter", "Disk Type", "Usage", "Total Size", "Free %"]);
     return (
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Drive Letter</TableCell>
-            <TableCell>Disk Type</TableCell>
-            <TableCell>Usage</TableCell>
-            <TableCell>Total Size</TableCell>
-            <TableCell>Free %</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {rows.map((d, i) => (
-            <TableRow key={`${d.drive}-${i}`}>
-              <TableCell>{d.drive}</TableCell>
-              <TableCell>{d.disk_type}</TableCell>
-              <TableCell>
-                {d.usage !== undefined && d.usage !== null && d.usage !== "unknown"
-                  ? `${d.usage.toFixed ? d.usage.toFixed(1) : d.usage}%`
-                  : "unknown"}
-              </TableCell>
-              <TableCell>{formatBytes(d.total)}</TableCell>
-              <TableCell>
-                {d.free !== undefined && d.free !== null && d.free !== "unknown"
-                  ? `${d.free.toFixed ? d.free.toFixed(1) : d.free}%`
-                  : "unknown"}
-              </TableCell>
+      <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Drive Letter</TableCell>
+              <TableCell>Disk Type</TableCell>
+              <TableCell>Usage</TableCell>
+              <TableCell>Total Size</TableCell>
+              <TableCell>Free %</TableCell>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHead>
+          <TableBody>
+            {rows.map((d, i) => (
+              <TableRow key={`${d.drive}-${i}`}>
+                <TableCell>{d.drive}</TableCell>
+                <TableCell>{d.disk_type}</TableCell>
+                <TableCell>
+                  <Box sx={{ display: "flex", alignItems: "center" }}>
+                    <Box sx={{ flexGrow: 1, mr: 1 }}>
+                      <LinearProgress
+                        variant="determinate"
+                        value={d.usage}
+                        sx={{
+                          height: 10,
+                          bgcolor: "#333",
+                          "& .MuiLinearProgress-bar": { bgcolor: "#58a6ff" }
+                        }}
+                      />
+                    </Box>
+                    <Typography variant="body2">
+                      {d.usage !== undefined && d.usage !== null && d.usage !== "unknown"
+                        ? `${d.usage.toFixed ? d.usage.toFixed(1) : d.usage}%`
+                        : "unknown"}
+                    </Typography>
+                  </Box>
+                </TableCell>
+                <TableCell>{formatBytes(d.total)}</TableCell>
+                <TableCell>
+                  {d.free !== undefined && d.free !== null && d.free !== "unknown"
+                    ? `${d.free.toFixed ? d.free.toFixed(1) : d.free}%`
+                    : "unknown"}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Box>
     );
   };
 
@@ -191,24 +217,26 @@ export default function DeviceDetails({ device, onBack }) {
     const rows = details.network || [];
     if (!rows.length) return placeholderTable(["Adapter", "IP Address", "MAC Address"]);
     return (
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Adapter</TableCell>
-            <TableCell>IP Address</TableCell>
-            <TableCell>MAC Address</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {rows.map((n, i) => (
-            <TableRow key={`${n.adapter}-${i}`}>
-              <TableCell>{n.adapter}</TableCell>
-              <TableCell>{(n.ips || []).join(", ")}</TableCell>
-              <TableCell>{n.mac}</TableCell>
+      <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Adapter</TableCell>
+              <TableCell>IP Address</TableCell>
+              <TableCell>MAC Address</TableCell>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHead>
+          <TableBody>
+            {rows.map((n, i) => (
+              <TableRow key={`${n.adapter}-${i}`}>
+                <TableCell>{n.adapter}</TableCell>
+                <TableCell>{(n.ips || []).join(", ")}</TableCell>
+                <TableCell>{n.mac}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Box>
     );
   };
 

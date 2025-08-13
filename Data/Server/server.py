@@ -14,6 +14,7 @@ import os  # To Read Production ReactJS Server Folder
 import json  # For reading workflow JSON files
 import shutil  # For moving workflow files and folders
 from typing import List, Dict
+import sqlite3
 
 # Borealis Python API Endpoints
 from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
@@ -379,7 +380,23 @@ def rename_workflow():
 registered_agents: Dict[str, Dict] = {}
 agent_configurations: Dict[str, Dict] = {}
 latest_images: Dict[str, Dict] = {}
-DEVICES_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "Devices"))
+
+# Device database initialization
+DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "Databases", "devices.db")
+)
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS device_details (agent_id TEXT PRIMARY KEY, details TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+init_db()
 
 @app.route("/api/agents")
 def get_agents():
@@ -396,11 +413,15 @@ def save_agent_details():
     details = data.get("details")
     if not agent_id or not isinstance(details, dict):
         return jsonify({"error": "invalid payload"}), 400
-    os.makedirs(DEVICES_ROOT, exist_ok=True)
-    path = os.path.join(DEVICES_ROOT, f"{agent_id}.json")
     try:
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(details, fh, indent=2)
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "REPLACE INTO device_details (agent_id, details) VALUES (?, ?)",
+            (agent_id, json.dumps(details)),
+        )
+        conn.commit()
+        conn.close()
         return jsonify({"status": "ok"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -408,13 +429,21 @@ def save_agent_details():
 
 @app.route("/api/agent/details/<agent_id>", methods=["GET"])
 def get_agent_details(agent_id: str):
-    path = os.path.join(DEVICES_ROOT, f"{agent_id}.json")
-    if os.path.isfile(path):
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                return jsonify(json.load(fh))
-        except Exception:
-            pass
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT details FROM device_details WHERE agent_id = ?", (agent_id,)
+        )
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            try:
+                return jsonify(json.loads(row[0]))
+            except Exception:
+                pass
+    except Exception:
+        pass
     return jsonify({})
 
 
