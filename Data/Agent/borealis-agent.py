@@ -14,6 +14,15 @@ import random  # Macro Randomization
 import platform  # OS Detection
 import importlib.util
 import time  # Heartbeat timestamps
+import subprocess
+import getpass
+
+import requests
+try:
+    import psutil
+except Exception:
+    psutil = None
+import aiohttp
 
 import socketio
 from qasync import QEventLoop
@@ -204,6 +213,244 @@ async def send_heartbeat():
         except Exception as e:
             print(f"[WARN] heartbeat emit failed: {e}")
         await asyncio.sleep(5)
+
+# ---------------- Detailed Agent Data ----------------
+
+def _get_internal_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "unknown"
+
+def collect_summary():
+    try:
+        last_user = getpass.getuser()
+    except Exception:
+        last_user = "unknown"
+    try:
+        last_reboot = "unknown"
+        if psutil:
+            last_reboot = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(psutil.boot_time()))
+    except Exception:
+        last_reboot = "unknown"
+
+    created = CONFIG.data.get("created")
+    if not created:
+        created = time.strftime("%Y-%m-%d %H:%M:%S")
+        CONFIG.data["created"] = created
+        CONFIG._write()
+
+    try:
+        external_ip = requests.get("https://api.ipify.org", timeout=5).text.strip()
+    except Exception:
+        external_ip = "unknown"
+
+    return {
+        "hostname": socket.gethostname(),
+        "operating_system": CONFIG.data.get("agent_operating_system", detect_agent_os()),
+        "last_user": last_user,
+        "internal_ip": _get_internal_ip(),
+        "external_ip": external_ip,
+        "last_reboot": last_reboot,
+        "created": created,
+    }
+
+def collect_software():
+    items = []
+    plat = platform.system().lower()
+    try:
+        if plat == "windows":
+            try:
+                out = subprocess.run(["wmic", "product", "get", "name,version"],
+                                     capture_output=True, text=True, timeout=60)
+                for line in out.stdout.splitlines():
+                    if line.strip() and not line.lower().startswith("name"):
+                        parts = line.strip().split("  ")
+                        name = parts[0].strip()
+                        version = parts[-1].strip() if len(parts) > 1 else ""
+                        if name:
+                            items.append({"name": name, "version": version})
+            except FileNotFoundError:
+                ps_cmd = (
+                    "Get-ItemProperty "
+                    "'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+                    "'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' "
+                    "| Where-Object { $_.DisplayName } "
+                    "| Select-Object DisplayName,DisplayVersion "
+                    "| ConvertTo-Json"
+                )
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                data = json.loads(out.stdout or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for pkg in data:
+                    name = pkg.get("DisplayName")
+                    if name:
+                        items.append({
+                            "name": name,
+                            "version": pkg.get("DisplayVersion", "")
+                        })
+        elif plat == "linux":
+            out = subprocess.run(["dpkg-query", "-W", "-f=${Package}\t${Version}\n"], capture_output=True, text=True)
+            for line in out.stdout.splitlines():
+                if "\t" in line:
+                    name, version = line.split("\t", 1)
+                    items.append({"name": name, "version": version})
+        else:
+            out = subprocess.run([sys.executable, "-m", "pip", "list", "--format", "json"], capture_output=True, text=True)
+            data = json.loads(out.stdout or "[]")
+            for pkg in data:
+                items.append({"name": pkg.get("name"), "version": pkg.get("version")})
+    except Exception as e:
+        print(f"[WARN] collect_software failed: {e}")
+    return items[:100]
+
+def collect_memory():
+    entries = []
+    plat = platform.system().lower()
+    try:
+        if plat == "windows":
+            try:
+                out = subprocess.run(
+                    ["wmic", "memorychip", "get", "BankLabel,Speed,SerialNumber,Capacity"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                lines = [l for l in out.stdout.splitlines() if l.strip() and "BankLabel" not in l]
+                for line in lines:
+                    parts = [p for p in line.split() if p]
+                    if len(parts) >= 4:
+                        entries.append({
+                            "slot": parts[0],
+                            "speed": parts[1],
+                            "serial": parts[2],
+                            "capacity": parts[3],
+                        })
+            except FileNotFoundError:
+                ps_cmd = (
+                    "Get-CimInstance Win32_PhysicalMemory | "
+                    "Select-Object BankLabel,Speed,SerialNumber,Capacity | ConvertTo-Json"
+                )
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                data = json.loads(out.stdout or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for stick in data:
+                    entries.append({
+                        "slot": stick.get("BankLabel", "unknown"),
+                        "speed": str(stick.get("Speed", "unknown")),
+                        "serial": stick.get("SerialNumber", "unknown"),
+                        "capacity": stick.get("Capacity", "unknown"),
+                    })
+        elif plat == "linux":
+            out = subprocess.run(["dmidecode", "-t", "17"], capture_output=True, text=True)
+            slot = speed = serial = capacity = None
+            for line in out.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("Locator:"):
+                    slot = line.split(":", 1)[1].strip()
+                elif line.startswith("Speed:"):
+                    speed = line.split(":", 1)[1].strip()
+                elif line.startswith("Serial Number:"):
+                    serial = line.split(":", 1)[1].strip()
+                elif line.startswith("Size:"):
+                    capacity = line.split(":", 1)[1].strip()
+                elif not line and slot:
+                    entries.append({
+                        "slot": slot,
+                        "speed": speed or "unknown",
+                        "serial": serial or "unknown",
+                        "capacity": capacity or "unknown",
+                    })
+                    slot = speed = serial = capacity = None
+            if slot:
+                entries.append({
+                    "slot": slot,
+                    "speed": speed or "unknown",
+                    "serial": serial or "unknown",
+                    "capacity": capacity or "unknown",
+                })
+    except Exception as e:
+        print(f"[WARN] collect_memory failed: {e}")
+
+    if not entries:
+        try:
+            if psutil:
+                vm = psutil.virtual_memory()
+                entries.append({
+                    "slot": "physical",
+                    "speed": "unknown",
+                    "serial": "unknown",
+                    "capacity": vm.total,
+                })
+        except Exception:
+            pass
+    return entries
+
+def collect_storage():
+    disks = []
+    try:
+        if psutil:
+            for part in psutil.disk_partitions():
+                try:
+                    usage = psutil.disk_usage(part.mountpoint)
+                except Exception:
+                    continue
+                disks.append({
+                    "drive": part.device,
+                    "disk_type": "Removable" if "removable" in part.opts.lower() else "Fixed Disk",
+                    "usage": usage.percent,
+                    "total": usage.total,
+                    "free": 100 - usage.percent,
+                })
+    except Exception as e:
+        print(f"[WARN] collect_storage failed: {e}")
+    return disks
+
+def collect_network():
+    adapters = []
+    try:
+        if psutil:
+            for name, addrs in psutil.net_if_addrs().items():
+                ips = [a.address for a in addrs if getattr(a, "family", None) == socket.AF_INET]
+                mac = next((a.address for a in addrs if getattr(a, "family", None) == getattr(psutil, "AF_LINK", object)), "unknown")
+                adapters.append({"adapter": name, "ips": ips, "mac": mac})
+    except Exception as e:
+        print(f"[WARN] collect_network failed: {e}")
+    return adapters
+
+async def send_agent_details():
+    """Collect detailed agent data and send to server periodically."""
+    while True:
+        try:
+            details = {
+                "summary": collect_summary(),
+                "software": collect_software(),
+                "memory": collect_memory(),
+                "storage": collect_storage(),
+                "network": collect_network(),
+            }
+            url = CONFIG.data.get("borealis_server_url", "http://localhost:5000") + "/api/agent/details"
+            async with aiohttp.ClientSession() as session:
+                await session.post(url, json={"agent_id": AGENT_ID, "details": details}, timeout=10)
+        except Exception as e:
+            print(f"[WARN] Failed to send agent details: {e}")
+        await asyncio.sleep(300)
 
 @sio.event
 async def connect():
@@ -593,6 +840,7 @@ if __name__=='__main__':
         background_tasks.append(loop.create_task(idle_task()))
         # Start periodic heartbeats
         background_tasks.append(loop.create_task(send_heartbeat()))
+        background_tasks.append(loop.create_task(send_agent_details()))
         loop.run_forever()
     except Exception as e:
         print(f"[FATAL] Event loop crashed: {e}")

@@ -379,6 +379,7 @@ def rename_workflow():
 registered_agents: Dict[str, Dict] = {}
 agent_configurations: Dict[str, Dict] = {}
 latest_images: Dict[str, Dict] = {}
+DEVICES_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "Devices"))
 
 @app.route("/api/agents")
 def get_agents():
@@ -386,6 +387,35 @@ def get_agents():
     Return a dict keyed by agent_id with hostname, os, last_seen, status.
     """
     return jsonify(registered_agents)
+
+
+@app.route("/api/agent/details", methods=["POST"])
+def save_agent_details():
+    data = request.get_json(silent=True) or {}
+    agent_id = data.get("agent_id")
+    details = data.get("details")
+    if not agent_id or not isinstance(details, dict):
+        return jsonify({"error": "invalid payload"}), 400
+    os.makedirs(DEVICES_ROOT, exist_ok=True)
+    path = os.path.join(DEVICES_ROOT, f"{agent_id}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(details, fh, indent=2)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/agent/details/<agent_id>", methods=["GET"])
+def get_agent_details(agent_id: str):
+    path = os.path.join(DEVICES_ROOT, f"{agent_id}.json")
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return jsonify(json.load(fh))
+        except Exception:
+            pass
+    return jsonify({})
 
 
 @app.route("/api/agent/<agent_id>", methods=["DELETE"])
