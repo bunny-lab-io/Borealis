@@ -285,7 +285,10 @@ export default function DeviceDetails({ device, onBack }) {
   const renderStorage = () => {
     const toNum = (val) => {
       if (val === undefined || val === null) return undefined;
-      const n = Number(val);
+      if (typeof val === "number") {
+        return Number.isNaN(val) ? undefined : val;
+      }
+      const n = parseFloat(String(val).replace(/[^0-9.]+/g, ""));
       return Number.isNaN(n) ? undefined : n;
     };
 
