@@ -16,6 +16,7 @@ import importlib.util
 import time  # Heartbeat timestamps
 import subprocess
 import getpass
+import datetime
 
 import requests
 try:
@@ -228,13 +229,45 @@ def _get_internal_ip():
 
 def collect_summary():
     try:
-        last_user = getpass.getuser()
+        username = getpass.getuser()
+        domain = os.environ.get("USERDOMAIN") or socket.gethostname()
+        last_user = f"{domain}\\{username}" if username else "unknown"
     except Exception:
         last_user = "unknown"
     try:
         last_reboot = "unknown"
         if psutil:
-            last_reboot = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(psutil.boot_time()))
+            last_reboot = time.strftime(
+                "%Y-%m-%d %H:%M:%S",
+                time.localtime(psutil.boot_time()),
+            )
+        else:
+            plat = platform.system().lower()
+            if plat == "windows":
+                ps_cmd = "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime"
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                raw = out.stdout.strip()
+                if raw:
+                    try:
+                        boot = datetime.datetime.strptime(raw.split(".")[0], "%Y%m%d%H%M%S")
+                        last_reboot = boot.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        pass
+            else:
+                try:
+                    out = subprocess.run(
+                        ["uptime", "-s"], capture_output=True, text=True, timeout=30
+                    )
+                    val = out.stdout.strip()
+                    if val:
+                        last_reboot = val
+                except Exception:
+                    pass
     except Exception:
         last_reboot = "unknown"
 

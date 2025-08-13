@@ -1,6 +1,6 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Device_Details.js
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   Paper,
   Box,
@@ -13,13 +13,18 @@ import {
   TableCell,
   TableBody,
   Button,
-  LinearProgress
+  LinearProgress,
+  TableSortLabel,
+  TextField
 } from "@mui/material";
 
 export default function DeviceDetails({ device, onBack }) {
   const [tab, setTab] = useState(0);
   const [agent, setAgent] = useState(device || {});
   const [details, setDetails] = useState({});
+  const [softwareOrderBy, setSoftwareOrderBy] = useState("name");
+  const [softwareOrder, setSoftwareOrder] = useState("asc");
+  const [softwareSearch, setSoftwareSearch] = useState("");
 
   useEffect(() => {
     if (!device || !device.id) return;
@@ -53,6 +58,28 @@ export default function DeviceDetails({ device, onBack }) {
     }
     return `${num.toFixed(1)} ${units[i]}`;
   };
+
+  const handleSoftwareSort = (col) => {
+    if (softwareOrderBy === col) {
+      setSoftwareOrder(softwareOrder === "asc" ? "desc" : "asc");
+    } else {
+      setSoftwareOrderBy(col);
+      setSoftwareOrder("asc");
+    }
+  };
+
+  const softwareRows = useMemo(() => {
+    const rows = details.software || [];
+    const filtered = rows.filter((s) =>
+      s.name.toLowerCase().includes(softwareSearch.toLowerCase())
+    );
+    const dir = softwareOrder === "asc" ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      const A = a[softwareOrderBy] || "";
+      const B = b[softwareOrderBy] || "";
+      return String(A).localeCompare(String(B)) * dir;
+    });
+  }, [details.software, softwareSearch, softwareOrderBy, softwareOrder]);
 
   const summary = details.summary || {};
   const summaryItems = [
@@ -103,28 +130,62 @@ export default function DeviceDetails({ device, onBack }) {
   );
 
   const renderSoftware = () => {
-    const rows = details.software || [];
-    if (!rows.length) return placeholderTable(["Software Name", "Version", "Action"]);
+    if (!softwareRows.length)
+      return placeholderTable(["Software Name", "Version", "Action"]);
+
     return (
-      <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Software Name</TableCell>
-              <TableCell>Version</TableCell>
-              <TableCell>Action</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {rows.map((s, i) => (
-              <TableRow key={`${s.name}-${i}`}>
-                <TableCell>{s.name}</TableCell>
-                <TableCell>{s.version}</TableCell>
-                <TableCell></TableCell>
+      <Box>
+        <Box sx={{ mb: 1 }}>
+          <TextField
+            size="small"
+            placeholder="Search software..."
+            value={softwareSearch}
+            onChange={(e) => setSoftwareSearch(e.target.value)}
+            sx={{
+              input: { color: "#fff" },
+              "& .MuiOutlinedInput-root": {
+                "& fieldset": { borderColor: "#555" },
+                "&:hover fieldset": { borderColor: "#888" }
+              }
+            }}
+          />
+        </Box>
+        <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell sortDirection={softwareOrderBy === "name" ? softwareOrder : false}>
+                  <TableSortLabel
+                    active={softwareOrderBy === "name"}
+                    direction={softwareOrderBy === "name" ? softwareOrder : "asc"}
+                    onClick={() => handleSoftwareSort("name")}
+                  >
+                    Software Name
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell sortDirection={softwareOrderBy === "version" ? softwareOrder : false}>
+                  <TableSortLabel
+                    active={softwareOrderBy === "version"}
+                    direction={softwareOrderBy === "version" ? softwareOrder : "asc"}
+                    onClick={() => handleSoftwareSort("version")}
+                  >
+                    Version
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell>Action</TableCell>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHead>
+            <TableBody>
+              {softwareRows.map((s, i) => (
+                <TableRow key={`${s.name}-${i}`}>
+                  <TableCell>{s.name}</TableCell>
+                  <TableCell>{s.version}</TableCell>
+                  <TableCell></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Box>
       </Box>
     );
   };
@@ -159,7 +220,13 @@ export default function DeviceDetails({ device, onBack }) {
   };
 
   const renderStorage = () => {
-    const rows = details.storage || [];
+    const rows = (details.storage || []).map((d) => ({
+      drive: d.drive,
+      disk_type: d.disk_type,
+      usage: d.usage !== undefined ? Number(d.usage) : undefined,
+      total: d.total !== undefined ? Number(d.total) : undefined,
+      free: d.free !== undefined ? Number(d.free) : undefined,
+    }));
     if (!rows.length)
       return placeholderTable(["Drive Letter", "Disk Type", "Usage", "Total Size", "Free %"]);
     return (
@@ -184,7 +251,7 @@ export default function DeviceDetails({ device, onBack }) {
                     <Box sx={{ flexGrow: 1, mr: 1 }}>
                       <LinearProgress
                         variant="determinate"
-                        value={d.usage}
+                        value={d.usage ?? 0}
                         sx={{
                           height: 10,
                           bgcolor: "#333",
@@ -193,16 +260,20 @@ export default function DeviceDetails({ device, onBack }) {
                       />
                     </Box>
                     <Typography variant="body2">
-                      {d.usage !== undefined && d.usage !== null && d.usage !== "unknown"
-                        ? `${d.usage.toFixed ? d.usage.toFixed(1) : d.usage}%`
+                      {d.usage !== undefined && !Number.isNaN(d.usage)
+                        ? `${d.usage.toFixed(1)}%`
                         : "unknown"}
                     </Typography>
                   </Box>
                 </TableCell>
-                <TableCell>{formatBytes(d.total)}</TableCell>
                 <TableCell>
-                  {d.free !== undefined && d.free !== null && d.free !== "unknown"
-                    ? `${d.free.toFixed ? d.free.toFixed(1) : d.free}%`
+                  {d.total !== undefined && !Number.isNaN(d.total)
+                    ? formatBytes(d.total)
+                    : "unknown"}
+                </TableCell>
+                <TableCell>
+                  {d.free !== undefined && !Number.isNaN(d.free)
+                    ? `${d.free.toFixed(1)}%`
                     : "unknown"}
                 </TableCell>
               </TableRow>
@@ -242,17 +313,6 @@ export default function DeviceDetails({ device, onBack }) {
 
   const tabs = [
     { label: "Summary", content: renderSummary() },
-    {
-      label: "Monitors",
-      content: placeholderTable([
-        "Type",
-        "Description",
-        "Latest Value",
-        "Policy",
-        "Latest 10 Days of Alerts",
-        "Enabled/Disabled Status"
-      ])
-    },
     { label: "Software", content: renderSoftware() },
     { label: "Memory", content: renderMemory() },
     { label: "Storage", content: renderStorage() },
