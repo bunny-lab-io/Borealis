@@ -29,6 +29,7 @@ import DeviceList from "./Device_List";
 import ScriptList from "./Script_List";
 import ScheduledJobsList from "./Scheduled_Jobs_List";
 import Login from "./Login.jsx";
+import DeviceDetails from "./Device_Details";
 
 import { io } from "socket.io-client";
 
@@ -77,6 +78,7 @@ export default function App() {
   const [tabs, setTabs] = useState([{ id: "flow_1", tab_name: "Flow 1", nodes: [], edges: [] }]);
   const [activeTabId, setActiveTabId] = useState("flow_1");
   const [currentPage, setCurrentPage] = useState("devices");
+  const [selectedDevice, setSelectedDevice] = useState(null);
 
   const [aboutAnchorEl, setAboutAnchorEl] = useState(null);
   const [creditsDialogOpen, setCreditsDialogOpen] = useState(false);
@@ -288,7 +290,25 @@ export default function App() {
   const renderMainContent = () => {
     switch (currentPage) {
       case "devices":
-        return <DeviceList />;
+        return (
+          <DeviceList
+            onSelectDevice={(d) => {
+              setSelectedDevice(d);
+              setCurrentPage("device_details");
+            }}
+          />
+        );
+
+      case "device_details":
+        return (
+          <DeviceDetails
+            device={selectedDevice}
+            onBack={() => {
+              setCurrentPage("devices");
+              setSelectedDevice(null);
+            }}
+          />
+        );
 
       case "jobs":
         return <ScheduledJobsList />;

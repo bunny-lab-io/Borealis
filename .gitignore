@@ -17,7 +17,7 @@ Borealis-Server.exe
 /ElectronApp/
 
 # Misc Files/Folders
-.vs/s
+.vs/
 /Update_Staging/
 /Macro_Testing/
 
@@ -26,3 +26,6 @@ Borealis-Server.exe
 /Dependencies/Python/
 /Dependencies/AutoHotKey/
 /Data/Server/Python_API_Endpoints/Tesseract-OCR/
+
+# Deployed Environment Folders
+/Devices/
