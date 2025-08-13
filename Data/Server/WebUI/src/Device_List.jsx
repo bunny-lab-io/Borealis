@@ -165,33 +165,44 @@ export default function DeviceList({ onSelectDevice }) {
         </TableHead>
         <TableBody>
           {sorted.map((r, i) => (
-            <TableRow
-              key={r.id || i}
-              hover
-              onClick={() => onSelectDevice && onSelectDevice(r)}
-              sx={{ cursor: onSelectDevice ? "pointer" : "default" }}
-            >
+            <TableRow key={r.id || i} hover>
               <TableCell>
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: 10,
-                    height: 10,
-                    borderRadius: 10,
-                    background: statusColor(r.status),
-                    marginRight: 8,
-                    verticalAlign: "middle"
-                  }}
-                />
-                {r.status}
+                <Box sx={{ display: "flex", alignItems: "center" }}>
+                  <Box
+                    component="span"
+                    sx={{
+                      display: "inline-block",
+                      width: 10,
+                      height: 10,
+                      borderRadius: 10,
+                      bgcolor: statusColor(r.status),
+                      mr: 1,
+                    }}
+                  />
+                  {r.status}
+                </Box>
               </TableCell>
-              <TableCell>{r.hostname}</TableCell>
+              <TableCell
+                onClick={() => onSelectDevice && onSelectDevice(r)}
+                sx={{
+                  color: "#58a6ff",
+                  "&:hover": {
+                    cursor: onSelectDevice ? "pointer" : "default",
+                    textDecoration: onSelectDevice ? "underline" : "none",
+                  },
+                }}
+              >
+                {r.hostname}
+              </TableCell>
               <TableCell>{timeSince(r.lastSeen)}</TableCell>
               <TableCell>{r.os}</TableCell>
               <TableCell align="right">
                 <IconButton
                   size="small"
-                  onClick={(e) => openMenu(e, r)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openMenu(e, r);
+                  }}
                   sx={{ color: "#ccc" }}
                 >
                   <MoreVertIcon fontSize="small" />

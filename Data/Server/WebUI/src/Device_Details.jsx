@@ -283,15 +283,65 @@ export default function DeviceDetails({ device, onBack }) {
   };
 
   const renderStorage = () => {
-    const rows = (details.storage || []).map((d) => ({
-      drive: d.drive,
-      disk_type: d.disk_type,
-      usage: d.usage !== undefined ? Number(d.usage) : undefined,
-      total: d.total !== undefined ? Number(d.total) : undefined,
-      free: d.free !== undefined ? Number(d.free) : undefined,
-    }));
+    const toNum = (val) => {
+      if (val === undefined || val === null) return undefined;
+      if (typeof val === "number") {
+        return Number.isNaN(val) ? undefined : val;
+      }
+      const n = parseFloat(String(val).replace(/[^0-9.]+/g, ""));
+      return Number.isNaN(n) ? undefined : n;
+    };
+
+    const rows = (details.storage || []).map((d) => {
+      const total = toNum(d.total);
+      let usagePct = toNum(d.usage);
+      let usedBytes = toNum(d.used);
+      let freeBytes = toNum(d.free);
+      let freePct;
+
+      if (usagePct !== undefined) {
+        if (usagePct <= 1) usagePct *= 100;
+        freePct = 100 - usagePct;
+      }
+
+      if (usedBytes === undefined && total !== undefined && usagePct !== undefined) {
+        usedBytes = (usagePct / 100) * total;
+      }
+
+      if (freeBytes === undefined && total !== undefined && usedBytes !== undefined) {
+        freeBytes = total - usedBytes;
+      }
+
+      if (freePct === undefined && total !== undefined && freeBytes !== undefined) {
+        freePct = (freeBytes / total) * 100;
+      }
+
+      if (usagePct === undefined && freePct !== undefined) {
+        usagePct = 100 - freePct;
+      }
+
+      return {
+        drive: d.drive,
+        disk_type: d.disk_type,
+        used: usedBytes,
+        freePct,
+        freeBytes,
+        total,
+        usage: usagePct,
+      };
+    });
+
     if (!rows.length)
-      return placeholderTable(["Drive Letter", "Disk Type", "Usage", "Total Size", "Free %"]);
+      return placeholderTable([
+        "Drive Letter",
+        "Disk Type",
+        "Used",
+        "Free %",
+        "Free GB",
+        "Total Size",
+        "Usage",
+      ]);
+
     return (
       <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
         <Table size="small">
@@ -299,9 +349,11 @@ export default function DeviceDetails({ device, onBack }) {
             <TableRow>
               <TableCell>Drive Letter</TableCell>
               <TableCell>Disk Type</TableCell>
-              <TableCell>Usage</TableCell>
-              <TableCell>Total Size</TableCell>
+              <TableCell>Used</TableCell>
               <TableCell>Free %</TableCell>
+              <TableCell>Free GB</TableCell>
+              <TableCell>Total Size</TableCell>
+              <TableCell>Usage</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -309,6 +361,26 @@ export default function DeviceDetails({ device, onBack }) {
               <TableRow key={`${d.drive}-${i}`}>
                 <TableCell>{d.drive}</TableCell>
                 <TableCell>{d.disk_type}</TableCell>
+                <TableCell>
+                  {d.used !== undefined && !Number.isNaN(d.used)
+                    ? formatBytes(d.used)
+                    : "unknown"}
+                </TableCell>
+                <TableCell>
+                  {d.freePct !== undefined && !Number.isNaN(d.freePct)
+                    ? `${d.freePct.toFixed(1)}%`
+                    : "unknown"}
+                </TableCell>
+                <TableCell>
+                  {d.freeBytes !== undefined && !Number.isNaN(d.freeBytes)
+                    ? formatBytes(d.freeBytes)
+                    : "unknown"}
+                </TableCell>
+                <TableCell>
+                  {d.total !== undefined && !Number.isNaN(d.total)
+                    ? formatBytes(d.total)
+                    : "unknown"}
+                </TableCell>
                 <TableCell>
                   <Box sx={{ display: "flex", alignItems: "center" }}>
                     <Box sx={{ flexGrow: 1, mr: 1 }}>
@@ -318,7 +390,7 @@ export default function DeviceDetails({ device, onBack }) {
                         sx={{
                           height: 10,
                           bgcolor: "#333",
-                          "& .MuiLinearProgress-bar": { bgcolor: "#58a6ff" }
+                          "& .MuiLinearProgress-bar": { bgcolor: "#00d18c" }
                         }}
                       />
                     </Box>
@@ -328,16 +400,6 @@ export default function DeviceDetails({ device, onBack }) {
                         : "unknown"}
                     </Typography>
                   </Box>
-                </TableCell>
-                <TableCell>
-                  {d.total !== undefined && !Number.isNaN(d.total)
-                    ? formatBytes(d.total)
-                    : "unknown"}
-                </TableCell>
-                <TableCell>
-                  {d.free !== undefined && !Number.isNaN(d.free)
-                    ? `${d.free.toFixed(1)}%`
-                    : "unknown"}
                 </TableCell>
               </TableRow>
             ))}

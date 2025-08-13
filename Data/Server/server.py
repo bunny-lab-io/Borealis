@@ -398,6 +398,36 @@ def init_db():
 
 init_db()
 
+
+def load_agents_from_db():
+    """Populate registered_agents with any devices stored in the database."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT hostname, details FROM device_details")
+        for hostname, details_json in cur.fetchall():
+            try:
+                details = json.loads(details_json or "{}")
+            except Exception:
+                details = {}
+            summary = details.get("summary", {})
+            agent_id = summary.get("agent_id") or hostname
+            registered_agents[agent_id] = {
+                "agent_id": agent_id,
+                "hostname": summary.get("hostname") or hostname,
+                "agent_operating_system": summary.get("operating_system")
+                or summary.get("agent_operating_system")
+                or "-",
+                "last_seen": summary.get("last_seen") or 0,
+                "status": "Offline",
+            }
+        conn.close()
+    except Exception as e:
+        print(f"[WARN] Failed to load agents from DB: {e}")
+
+
+load_agents_from_db()
+
 @app.route("/api/agents")
 def get_agents():
     """
@@ -481,10 +511,20 @@ def set_device_description(hostname: str):
 
 @app.route("/api/agent/<agent_id>", methods=["DELETE"])
 def delete_agent(agent_id: str):
-    """Remove an agent from the in-memory registry."""
-    if agent_id in registered_agents:
-        registered_agents.pop(agent_id, None)
-        agent_configurations.pop(agent_id, None)
+    """Remove an agent from the registry and database."""
+    info = registered_agents.pop(agent_id, None)
+    agent_configurations.pop(agent_id, None)
+    hostname = info.get("hostname") if info else None
+    if hostname:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("DELETE FROM device_details WHERE hostname = ?", (hostname,))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    if info:
         return jsonify({"status": "removed"})
     return jsonify({"error": "agent not found"}), 404
 
