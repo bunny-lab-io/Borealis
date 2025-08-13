@@ -17,7 +17,7 @@ Borealis-Server.exe
 /ElectronApp/
 
 # Misc Files/Folders
-.vs/s
+.vs/
 /Update_Staging/
 /Macro_Testing/
 
