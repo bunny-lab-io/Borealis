@@ -17,6 +17,8 @@ import time  # Heartbeat timestamps
 import subprocess
 import getpass
 import datetime
+import shutil
+import string
 
 import requests
 try:
@@ -469,61 +471,79 @@ def collect_storage():
                     "used": usage.used,
                 })
         elif plat == "windows":
-            try:
-                out = subprocess.run(
-                    ["wmic", "logicaldisk", "get", "DeviceID,Size,FreeSpace"],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                lines = [l for l in out.stdout.splitlines() if l.strip()][1:]
-                for line in lines:
-                    parts = line.split()
-                    if len(parts) >= 3:
-                        drive, free, size = parts[0], parts[1], parts[2]
-                        try:
-                            total = float(size)
-                            free_bytes = float(free)
-                            used = total - free_bytes
-                            usage = (used / total * 100) if total else 0
-                            disks.append({
-                                "drive": drive,
-                                "disk_type": "Fixed Disk",
-                                "usage": usage,
-                                "total": total,
-                                "free": free_bytes,
-                                "used": used,
-                            })
-                        except Exception:
-                            pass
-            except FileNotFoundError:
-                ps_cmd = (
-                    "Get-PSDrive -PSProvider FileSystem | "
-                    "Select-Object Name,Free,Used,Capacity,Root | ConvertTo-Json"
-                )
-                out = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", ps_cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                data = json.loads(out.stdout or "[]")
-                if isinstance(data, dict):
-                    data = [data]
-                for d in data:
-                    total = d.get("Capacity") or 0
-                    used = d.get("Used") or 0
-                    free_bytes = d.get("Free") or max(total - used, 0)
-                    usage = (used / total * 100) if total else 0
-                    drive = d.get("Root") or f"{d.get('Name','')}:"
+            found = False
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                if os.path.exists(drive):
+                    try:
+                        usage = shutil.disk_usage(drive)
+                    except Exception:
+                        continue
                     disks.append({
                         "drive": drive,
                         "disk_type": "Fixed Disk",
-                        "usage": usage,
-                        "total": total,
-                        "free": free_bytes,
-                        "used": used,
+                        "usage": (usage.used / usage.total * 100) if usage.total else 0,
+                        "total": usage.total,
+                        "free": usage.free,
+                        "used": usage.used,
                     })
+                    found = True
+            if not found:
+                try:
+                    out = subprocess.run(
+                        ["wmic", "logicaldisk", "get", "DeviceID,Size,FreeSpace"],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    lines = [l for l in out.stdout.splitlines() if l.strip()][1:]
+                    for line in lines:
+                        parts = line.split()
+                        if len(parts) >= 3:
+                            drive, free, size = parts[0], parts[1], parts[2]
+                            try:
+                                total = float(size)
+                                free_bytes = float(free)
+                                used = total - free_bytes
+                                usage = (used / total * 100) if total else 0
+                                disks.append({
+                                    "drive": drive,
+                                    "disk_type": "Fixed Disk",
+                                    "usage": usage,
+                                    "total": total,
+                                    "free": free_bytes,
+                                    "used": used,
+                                })
+                            except Exception:
+                                pass
+                except FileNotFoundError:
+                    ps_cmd = (
+                        "Get-PSDrive -PSProvider FileSystem | "
+                        "Select-Object Name,Free,Used,Capacity,Root | ConvertTo-Json"
+                    )
+                    out = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command", ps_cmd],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    data = json.loads(out.stdout or "[]")
+                    if isinstance(data, dict):
+                        data = [data]
+                    for d in data:
+                        total = d.get("Capacity") or 0
+                        used = d.get("Used") or 0
+                        free_bytes = d.get("Free") or max(total - used, 0)
+                        usage = (used / total * 100) if total else 0
+                        drive = d.get("Root") or f"{d.get('Name','')}:"
+                        disks.append({
+                            "drive": drive,
+                            "disk_type": "Fixed Disk",
+                            "usage": usage,
+                            "total": total,
+                            "free": free_bytes,
+                            "used": used,
+                        })
         else:
             out = subprocess.run(
                 ["df", "-kP"], capture_output=True, text=True, timeout=60
