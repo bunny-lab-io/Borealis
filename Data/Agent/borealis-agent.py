@@ -16,6 +16,7 @@ import importlib.util
 import time  # Heartbeat timestamps
 import subprocess
 import getpass
+import datetime
 
 import requests
 try:
@@ -228,13 +229,60 @@ def _get_internal_ip():
 
 def collect_summary():
     try:
-        last_user = getpass.getuser()
+        username = getpass.getuser()
+        domain = os.environ.get("USERDOMAIN") or socket.gethostname()
+        last_user = f"{domain}\\{username}" if username else "unknown"
     except Exception:
         last_user = "unknown"
     try:
         last_reboot = "unknown"
         if psutil:
-            last_reboot = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(psutil.boot_time()))
+            try:
+                last_reboot = time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(psutil.boot_time()),
+                )
+            except Exception:
+                last_reboot = "unknown"
+        if last_reboot == "unknown":
+            plat = platform.system().lower()
+            if plat == "windows":
+                try:
+                    out = subprocess.run(
+                        ["wmic", "os", "get", "lastbootuptime"],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    raw = "".join(out.stdout.splitlines()[1:]).strip()
+                    if raw:
+                        boot = datetime.datetime.strptime(raw.split(".")[0], "%Y%m%d%H%M%S")
+                        last_reboot = boot.strftime("%Y-%m-%d %H:%M:%S")
+                except FileNotFoundError:
+                    ps_cmd = "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime"
+                    out = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command", ps_cmd],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    raw = out.stdout.strip()
+                    if raw:
+                        try:
+                            boot = datetime.datetime.strptime(raw.split(".")[0], "%Y%m%d%H%M%S")
+                            last_reboot = boot.strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pass
+            else:
+                try:
+                    out = subprocess.run(
+                        ["uptime", "-s"], capture_output=True, text=True, timeout=30
+                    )
+                    val = out.stdout.strip()
+                    if val:
+                        last_reboot = val
+                except Exception:
+                    pass
     except Exception:
         last_reboot = "unknown"
 
@@ -264,14 +312,41 @@ def collect_software():
     plat = platform.system().lower()
     try:
         if plat == "windows":
-            out = subprocess.run(["wmic", "product", "get", "name,version"], capture_output=True, text=True, timeout=60)
-            for line in out.stdout.splitlines():
-                if line.strip() and not line.lower().startswith("name"):
-                    parts = line.strip().split("  ")
-                    name = parts[0].strip()
-                    version = parts[-1].strip() if len(parts) > 1 else ""
+            try:
+                out = subprocess.run(["wmic", "product", "get", "name,version"],
+                                     capture_output=True, text=True, timeout=60)
+                for line in out.stdout.splitlines():
+                    if line.strip() and not line.lower().startswith("name"):
+                        parts = line.strip().split("  ")
+                        name = parts[0].strip()
+                        version = parts[-1].strip() if len(parts) > 1 else ""
+                        if name:
+                            items.append({"name": name, "version": version})
+            except FileNotFoundError:
+                ps_cmd = (
+                    "Get-ItemProperty "
+                    "'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+                    "'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' "
+                    "| Where-Object { $_.DisplayName } "
+                    "| Select-Object DisplayName,DisplayVersion "
+                    "| ConvertTo-Json"
+                )
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                data = json.loads(out.stdout or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for pkg in data:
+                    name = pkg.get("DisplayName")
                     if name:
-                        items.append({"name": name, "version": version})
+                        items.append({
+                            "name": name,
+                            "version": pkg.get("DisplayVersion", "")
+                        })
         elif plat == "linux":
             out = subprocess.run(["dpkg-query", "-W", "-f=${Package}\t${Version}\n"], capture_output=True, text=True)
             for line in out.stdout.splitlines():
@@ -292,21 +367,43 @@ def collect_memory():
     plat = platform.system().lower()
     try:
         if plat == "windows":
-            out = subprocess.run([
-                "wmic",
-                "memorychip",
-                "get",
-                "BankLabel,Speed,SerialNumber,Capacity"
-            ], capture_output=True, text=True)
-            lines = [l for l in out.stdout.splitlines() if l.strip() and "BankLabel" not in l]
-            for line in lines:
-                parts = [p for p in line.split() if p]
-                if len(parts) >= 4:
+            try:
+                out = subprocess.run(
+                    ["wmic", "memorychip", "get", "BankLabel,Speed,SerialNumber,Capacity"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                lines = [l for l in out.stdout.splitlines() if l.strip() and "BankLabel" not in l]
+                for line in lines:
+                    parts = [p for p in line.split() if p]
+                    if len(parts) >= 4:
+                        entries.append({
+                            "slot": parts[0],
+                            "speed": parts[1],
+                            "serial": parts[2],
+                            "capacity": parts[3],
+                        })
+            except FileNotFoundError:
+                ps_cmd = (
+                    "Get-CimInstance Win32_PhysicalMemory | "
+                    "Select-Object BankLabel,Speed,SerialNumber,Capacity | ConvertTo-Json"
+                )
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                data = json.loads(out.stdout or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for stick in data:
                     entries.append({
-                        "slot": parts[0],
-                        "speed": parts[1],
-                        "serial": parts[2],
-                        "capacity": parts[3],
+                        "slot": stick.get("BankLabel", "unknown"),
+                        "speed": str(stick.get("Speed", "unknown")),
+                        "serial": stick.get("SerialNumber", "unknown"),
+                        "capacity": stick.get("Capacity", "unknown"),
                     })
         elif plat == "linux":
             out = subprocess.run(["dmidecode", "-t", "17"], capture_output=True, text=True)
@@ -355,6 +452,7 @@ def collect_memory():
 
 def collect_storage():
     disks = []
+    plat = platform.system().lower()
     try:
         if psutil:
             for part in psutil.disk_partitions():
@@ -369,18 +467,128 @@ def collect_storage():
                     "total": usage.total,
                     "free": 100 - usage.percent,
                 })
+        elif plat == "windows":
+            try:
+                out = subprocess.run(
+                    ["wmic", "logicaldisk", "get", "DeviceID,Size,FreeSpace"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                lines = [l for l in out.stdout.splitlines() if l.strip()][1:]
+                for line in lines:
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        drive, free, size = parts[0], parts[1], parts[2]
+                        try:
+                            total = float(size)
+                            free_bytes = float(free)
+                            used = total - free_bytes
+                            usage = (used / total * 100) if total else 0
+                            free_pct = 100 - usage
+                            disks.append({
+                                "drive": drive,
+                                "disk_type": "Fixed Disk",
+                                "usage": usage,
+                                "total": total,
+                                "free": free_pct,
+                            })
+                        except Exception:
+                            pass
+            except FileNotFoundError:
+                ps_cmd = (
+                    "Get-PSDrive -PSProvider FileSystem | "
+                    "Select-Object Name,Free,Used,Capacity,Root | ConvertTo-Json"
+                )
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                data = json.loads(out.stdout or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for d in data:
+                    total = d.get("Capacity") or 0
+                    used = d.get("Used") or 0
+                    usage = (used / total * 100) if total else 0
+                    free = 100 - usage
+                    drive = d.get("Root") or f"{d.get('Name','')}:"
+                    disks.append({
+                        "drive": drive,
+                        "disk_type": "Fixed Disk",
+                        "usage": usage,
+                        "total": total,
+                        "free": free,
+                    })
+        else:
+            out = subprocess.run(
+                ["df", "-kP"], capture_output=True, text=True, timeout=60
+            )
+            lines = out.stdout.strip().splitlines()[1:]
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 6:
+                    total = int(parts[1]) * 1024
+                    used = int(parts[2]) * 1024
+                    usage = float(parts[4].rstrip("%"))
+                    free = 100 - usage
+                    disks.append({
+                        "drive": parts[5],
+                        "disk_type": "Fixed Disk",
+                        "usage": usage,
+                        "total": total,
+                        "free": free,
+                    })
     except Exception as e:
         print(f"[WARN] collect_storage failed: {e}")
     return disks
 
 def collect_network():
     adapters = []
+    plat = platform.system().lower()
     try:
         if psutil:
             for name, addrs in psutil.net_if_addrs().items():
                 ips = [a.address for a in addrs if getattr(a, "family", None) == socket.AF_INET]
                 mac = next((a.address for a in addrs if getattr(a, "family", None) == getattr(psutil, "AF_LINK", object)), "unknown")
                 adapters.append({"adapter": name, "ips": ips, "mac": mac})
+        elif plat == "windows":
+            ps_cmd = (
+                "Get-NetIPConfiguration | "
+                "Select-Object InterfaceAlias,@{Name='IPv4';Expression={$_.IPv4Address.IPAddress}},"
+                "@{Name='MAC';Expression={$_.NetAdapter.MacAddress}} | ConvertTo-Json"
+            )
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            data = json.loads(out.stdout or "[]")
+            if isinstance(data, dict):
+                data = [data]
+            for a in data:
+                ip = a.get("IPv4")
+                adapters.append({
+                    "adapter": a.get("InterfaceAlias", "unknown"),
+                    "ips": [ip] if ip else [],
+                    "mac": a.get("MAC", "unknown"),
+                })
+        else:
+            out = subprocess.run(
+                ["ip", "-o", "-4", "addr", "show"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            for line in out.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 4:
+                    name = parts[1]
+                    ip = parts[3].split("/")[0]
+                    adapters.append({"adapter": name, "ips": [ip], "mac": "unknown"})
     except Exception as e:
         print(f"[WARN] collect_network failed: {e}")
     return adapters
@@ -397,8 +605,13 @@ async def send_agent_details():
                 "network": collect_network(),
             }
             url = CONFIG.data.get("borealis_server_url", "http://localhost:5000") + "/api/agent/details"
+            payload = {
+                "agent_id": AGENT_ID,
+                "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
+                "details": details,
+            }
             async with aiohttp.ClientSession() as session:
-                await session.post(url, json={"agent_id": AGENT_ID, "details": details}, timeout=10)
+                await session.post(url, json=payload, timeout=10)
         except Exception as e:
             print(f"[WARN] Failed to send agent details: {e}")
         await asyncio.sleep(300)
