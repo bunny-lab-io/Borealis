@@ -92,28 +92,6 @@ function NavigationSidebar({ currentPage, onNavigate }) {
           </AccordionDetails>
         </Accordion>
 
-        {/* Filters & Groups */}
-        <Accordion
-          expanded={expandedNav.filters}
-          onChange={(_, e) => setExpandedNav((s) => ({ ...s, filters: e }))}
-          square
-          disableGutters
-          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            sx={{ backgroundColor: "#2c2c2c", minHeight: "36px", "& .MuiAccordionSummary-content": { margin: 0 } }}
-          >
-            <Typography sx={{ fontSize: "0.9rem", color: "#0475c2" }}>
-              <b>Filters & Groups</b>
-            </Typography>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-            <NavItem icon={<FilterIcon fontSize="small" />} label="Filters" pageKey="filters" />
-            <NavItem icon={<GroupsIcon fontSize="small" />} label="Groups" pageKey="groups" />
-          </AccordionDetails>
-        </Accordion>
-
         {/* Automation */}
         <Accordion
           expanded={expandedNav.automation}
@@ -135,6 +113,28 @@ function NavigationSidebar({ currentPage, onNavigate }) {
             <NavItem icon={<ScriptIcon fontSize="small" />} label="Scripts" pageKey="scripts" />
             <NavItem icon={<WorkflowsIcon fontSize="small" />} label="Workflows" pageKey="workflows" />
             <NavItem icon={<CommunityIcon fontSize="small" />} label="Community Content" pageKey="community" />
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Filters & Groups */}
+        <Accordion
+          expanded={expandedNav.filters}
+          onChange={(_, e) => setExpandedNav((s) => ({ ...s, filters: e }))}
+          square
+          disableGutters
+          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            sx={{ backgroundColor: "#2c2c2c", minHeight: "36px", "& .MuiAccordionSummary-content": { margin: 0 } }}
+          >
+            <Typography sx={{ fontSize: "0.9rem", color: "#0475c2" }}>
+              <b>Filters & Groups</b>
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
+            <NavItem icon={<FilterIcon fontSize="small" />} label="Filters" pageKey="filters" />
+            <NavItem icon={<GroupsIcon fontSize="small" />} label="Groups" pageKey="groups" />
           </AccordionDetails>
         </Accordion>
       </Box>

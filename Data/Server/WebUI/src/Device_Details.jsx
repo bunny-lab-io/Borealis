@@ -82,7 +82,7 @@ export default function DeviceDetails({ device, onBack }) {
       let [hh, mm, ss] = timePart.split(":").map(Number);
       const ampm = hh >= 12 ? "PM" : "AM";
       hh = hh % 12 || 12;
-      return `${m.toString().padStart(2, "0")}/${d.toString().padStart(2, "0")}/${y} - ${hh}:${mm
+      return `${m.toString().padStart(2, "0")}/${d.toString().padStart(2, "0")}/${y} @ ${hh}:${mm
         .toString()
         .padStart(2, "0")}${ampm}`;
     } catch {
