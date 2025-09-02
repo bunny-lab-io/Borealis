@@ -18,15 +18,21 @@ import {
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import { DeleteDeviceDialog } from "./Dialogs.jsx";
 
-function timeSince(tsSec) {
+function formatLastSeen(tsSec, offlineAfter = 15) {
   if (!tsSec) return "unknown";
   const now = Date.now() / 1000;
-  const s = Math.max(0, Math.floor(now - tsSec));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
+  if (now - tsSec <= offlineAfter) return "Currently Online";
+  const d = new Date(tsSec * 1000);
+  const date = d.toLocaleDateString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+  const time = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${date} @ ${time}`;
 }
 
 function statusFromHeartbeat(tsSec, offlineAfter = 15) {
@@ -118,7 +124,7 @@ export default function DeviceList({ onSelectDevice }) {
           Devices
         </Typography>
         <Typography variant="body2" sx={{ color: "#aaa" }}>
-          Devices connected to Borealis via Agent and their recent heartbeats.
+          Devices connected to Borealis via Agent and their last check-ins.
         </Typography>
       </Box>
       <Table size="small" sx={{ minWidth: 680 }}>
@@ -148,7 +154,7 @@ export default function DeviceList({ onSelectDevice }) {
                 direction={orderBy === "lastSeen" ? order : "asc"}
                 onClick={() => handleSort("lastSeen")}
               >
-                Last Heartbeat
+                Last Seen
               </TableSortLabel>
             </TableCell>
             <TableCell sortDirection={orderBy === "os" ? order : false}>
@@ -194,7 +200,7 @@ export default function DeviceList({ onSelectDevice }) {
               >
                 {r.hostname}
               </TableCell>
-              <TableCell>{timeSince(r.lastSeen)}</TableCell>
+              <TableCell>{formatLastSeen(r.lastSeen)}</TableCell>
               <TableCell>{r.os}</TableCell>
               <TableCell align="right">
                 <IconButton
