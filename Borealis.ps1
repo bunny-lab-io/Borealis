@@ -14,6 +14,41 @@
     Usage:
       Set-ExecutionPolicy Unrestricted -Scope Process; .\Borealis.ps1
 #>
+
+[CmdletBinding()]
+param(
+    [switch]$Server,
+    [switch]$Agent,
+    [switch]$Vite,
+    [switch]$Flask,
+    [switch]$Quick
+)
+
+# Preselect menu choices from CLI args (optional)
+$choice = $null
+$modeChoice = $null
+
+if ($Server -and $Agent) {
+    Write-Host "Cannot use -Server and -Agent together." -ForegroundColor Red
+    exit 1
+}
+
+if ($Vite -and $Flask) {
+    Write-Host "Cannot combine -Vite and -Flask." -ForegroundColor Red
+    exit 1
+}
+
+if ($Server) {
+    $choice = '1'
+} elseif ($Agent) {
+    $choice = '2'
+}
+
+if ($Server) {
+    if     ($Vite)             { $modeChoice = '3' }
+    elseif ($Flask -and $Quick){ $modeChoice = '2' }
+    elseif ($Flask)            { $modeChoice = '1' }
+}
 $host.UI.RawUI.WindowTitle = "Borealis"
 Clear-Host
 
@@ -272,38 +307,42 @@ foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
 $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), (Split-Path $nodeExe), $env:PATH
 
 # ---------------------- Menu Prompt & User Input ----------------------
-Write-Host " "
-Write-Host "Please choose which function you want to launch:"
-Write-Host " 1) Borealis Server" -ForegroundColor DarkGray
-Write-Host " 2) Borealis Agent" -ForegroundColor DarkGray
-Write-Host " 3) Build Electron App " -NoNewline -ForegroundColor DarkGray
-Write-Host "[Experimental]" -ForegroundColor Red
-Write-Host " 4) Package Self-Contained EXE of Server or Agent " -NoNewline -ForegroundColor DarkGray
-Write-Host "[Experimental]" -ForegroundColor Red
-Write-Host " 5) Update Borealis " -NoNewLine -ForegroundColor DarkGray
-Write-Host "[Requires Re-Build]" -ForegroundColor Red
-Write-Host " 6) Perform AutoHotKey Automation Testing " -NoNewline -ForegroundColor DarkGray
-Write-Host "[Experimental - Dev Testing]" -ForegroundColor Red
-Write-Host "Type a number and press " -NoNewLine
-Write-Host "<ENTER>" -ForegroundColor DarkCyan
-$choice = Read-Host
+if (-not $choice) {
+    Write-Host " "
+    Write-Host "Please choose which function you want to launch:"
+    Write-Host " 1) Borealis Server" -ForegroundColor DarkGray
+    Write-Host " 2) Borealis Agent" -ForegroundColor DarkGray
+    Write-Host " 3) Build Electron App " -NoNewline -ForegroundColor DarkGray
+    Write-Host "[Experimental]" -ForegroundColor Red
+    Write-Host " 4) Package Self-Contained EXE of Server or Agent " -NoNewline -ForegroundColor DarkGray
+    Write-Host "[Experimental]" -ForegroundColor Red
+    Write-Host " 5) Update Borealis " -NoNewLine -ForegroundColor DarkGray
+    Write-Host "[Requires Re-Build]" -ForegroundColor Red
+    Write-Host " 6) Perform AutoHotKey Automation Testing " -NoNewline -ForegroundColor DarkGray
+    Write-Host "[Experimental - Dev Testing]" -ForegroundColor Red
+    Write-Host "Type a number and press " -NoNewLine
+    Write-Host "<ENTER>" -ForegroundColor DarkCyan
+    $choice = Read-Host
+}
 switch ($choice) {
 
     "1" {
         $host.UI.RawUI.WindowTitle = "Borealis Server"
-        Write-Host " "
-        Write-Host "Configure Borealis Server Mode:" -ForegroundColor DarkYellow
-        Write-Host " 1) Build & Launch > " -NoNewLine -ForegroundColor DarkGray
-        Write-Host "Production Flask Server @ " -NoNewLine
-        Write-Host "http://localhost:5000" -ForegroundColor DarkCyan
-        Write-Host " 2) [Skip Build] & Immediately Launch > " -NoNewLine -ForegroundColor DarkGray
-        Write-Host "Production Flask Server @ " -NoNewLine
-        Write-Host "http://localhost:5000" -ForegroundColor DarkCyan
-        Write-Host " 3) Launch > " -NoNewLine -ForegroundColor DarkGray
-        Write-Host "[Hotload-Ready] " -NoNewLine -ForegroundColor Green
-        Write-Host "Vite Dev Server @ " -NoNewLine
-        Write-Host "http://localhost:5173" -ForegroundColor DarkCyan
-        $modeChoice = Read-Host "Enter choice [1/2/3]"
+        if (-not $modeChoice) {
+            Write-Host " "
+            Write-Host "Configure Borealis Server Mode:" -ForegroundColor DarkYellow
+            Write-Host " 1) Build & Launch > " -NoNewLine -ForegroundColor DarkGray
+            Write-Host "Production Flask Server @ " -NoNewLine
+            Write-Host "http://localhost:5000" -ForegroundColor DarkCyan
+            Write-Host " 2) [Skip Build] & Immediately Launch > " -NoNewLine -ForegroundColor DarkGray
+            Write-Host "Production Flask Server @ " -NoNewLine
+            Write-Host "http://localhost:5000" -ForegroundColor DarkCyan
+            Write-Host " 3) Launch > " -NoNewLine -ForegroundColor DarkGray
+            Write-Host "[Hotload-Ready] " -NoNewLine -ForegroundColor Green
+            Write-Host "Vite Dev Server @ " -NoNewLine
+            Write-Host "http://localhost:5173" -ForegroundColor DarkCyan
+            $modeChoice = Read-Host "Enter choice [1/2/3]"
+        }
 
         switch ($modeChoice) {
             "1" { $borealis_operation_mode = "production" }
