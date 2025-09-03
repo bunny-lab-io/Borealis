@@ -15,6 +15,7 @@
     "@mui/x-tree-view": "8.10.0",
     "normalize.css": "8.0.1",
     "prismjs": "1.30.0",
+    "react-simple-code-editor": "0.13.1",
     "react": "19.1.0",
     "react-color": "2.19.3",
     "react-dom": "19.1.0",

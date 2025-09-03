@@ -30,6 +30,7 @@ import "prismjs/components/prism-bash";
 import "prismjs/components/prism-powershell";
 import "prismjs/components/prism-batch";
 import "prismjs/themes/prism-okaidia.css";
+import Editor from "react-simple-code-editor";
 
 // ---------- helpers ----------
 const TYPE_OPTIONS = [
@@ -52,9 +53,11 @@ function typeFromFilename(name = "") {
 }
 
 function ensureExt(baseName, typeKey) {
+  if (!baseName) return baseName;
+  // If user already provided any extension, keep it.
+  if (/\.[^./\\]+$/i.test(baseName)) return baseName;
   const t = TYPES[typeKey] || TYPES.ansible;
-  const bn = baseName.replace(/\.(yml|ps1|bat|sh)$/i, "");
-  return bn + t.ext;
+  return baseName + t.ext;
 }
 
 function buildTree(scripts, folders) {
@@ -121,12 +124,12 @@ function highlightedHtml(code, prismLang) {
     const grammar = Prism.languages[prismLang] || Prism.languages.markup;
     return Prism.highlight(code ?? "", grammar, prismLang);
   } catch {
-    return (code ?? "").replace(/[&<>]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+    return (code ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
   }
 }
 
 // Local dialog: rename script file
-function RenameScriptDialog({ open, value, onChange, onCancel, onSave }) {
+function RenameScriptDialog({ open, value, onChange, onCancel, onSave, onBlur }) {
   return (
     <Paper
       component={(props) => (
@@ -155,6 +158,7 @@ function RenameScriptDialog({ open, value, onChange, onCancel, onSave }) {
             variant="outlined"
             value={value}
             onChange={(e) => onChange(e.target.value)}
+            onBlur={() => onBlur && onBlur()}
             sx={{
               "& .MuiOutlinedInput-root": {
                 backgroundColor: "#2a2a2a",
@@ -177,7 +181,7 @@ function RenameScriptDialog({ open, value, onChange, onCancel, onSave }) {
 }
 
 // Local dialog: new script (name + type)
-function NewScriptDialog({ open, name, type, onChangeName, onChangeType, onCancel, onCreate }) {
+function NewScriptDialog({ open, name, type, onChangeName, onChangeType, onCancel, onCreate, onBlurName }) {
   return (
     <Paper component={(p) => <div {...p} />} sx={{ display: open ? "block" : "none" }}>
       <div
@@ -201,6 +205,7 @@ function NewScriptDialog({ open, name, type, onChangeName, onChangeType, onCance
             variant="outlined"
             value={name}
             onChange={(e) => onChangeName(e.target.value)}
+            onBlur={() => onBlurName && onBlurName()}
             sx={{
               "& .MuiOutlinedInput-root": {
                 backgroundColor: "#2a2a2a",
@@ -344,9 +349,11 @@ export default function ScriptEditor() {
       setNewScriptOpen(true);
       return;
     }
+    // Ensure filename extension aligns with selected type when saving new file by name
+    const normalizedName = currentPath ? undefined : ensureExt(fileName, type);
     const payload = {
       path: currentPath || undefined,
-      name: currentPath ? undefined : fileName,
+      name: normalizedName,
       content: code,
       type
     };
@@ -400,10 +407,11 @@ export default function ScriptEditor() {
 
   const saveRenameFile = async () => {
     try {
+      const finalName = ensureExt(renameValue, type);
       const res = await fetch("/api/scripts/rename_file", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: selectedNode.path, new_name: renameValue, type })
+        body: JSON.stringify({ path: selectedNode.path, new_name: finalName, type })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
@@ -491,7 +499,7 @@ export default function ScriptEditor() {
   };
 
   const rootChildIds = tree[0]?.children?.map((c) => c.id) || [];
-  const highlighted = useMemo(() => highlightedHtml(code, prismLang), [code, prismLang]);
+  // live highlighting handled by react-simple-code-editor
 
   const renderItems = (nodes) =>
     (nodes || []).map((n) => (
@@ -523,7 +531,7 @@ export default function ScriptEditor() {
   return (
     <Box sx={{ display: "flex", flex: 1, height: "100%", overflow: "hidden" }}>
       {/* Left: Tree */}
-      <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e", width: 360, flexShrink: 0 }} elevation={2}>
+      <Paper sx={{ m: 1, p: 0, bgcolor: "#1e1e1e", width: 320, flexShrink: 0 }} elevation={2}>
         <Box sx={{ p: 2, pb: 1 }}>
           <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>Scripts</Typography>
           <Typography variant="body2" sx={{ color: "#aaa" }}>
@@ -575,7 +583,7 @@ export default function ScriptEditor() {
       </Paper>
 
       {/* Right: Editor */}
-      <Paper sx={{ m: 2, p: 2, bgcolor: "#1e1e1e", display: "flex", flexDirection: "column", flex: 1 }} elevation={2}>
+      <Paper sx={{ m: 1, p: 1.5, bgcolor: "#1e1e1e", display: "flex", flexDirection: "column", flex: 1 }} elevation={2}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
           <FormControl size="small" sx={{ minWidth: 220 }}>
             <InputLabel sx={{ color: "#aaa" }}>Type</InputLabel>
@@ -622,34 +630,25 @@ export default function ScriptEditor() {
           </Button>
         </Box>
 
-        {/* Editor input */}
-        <TextField
-          multiline
-          minRows={18}
-          placeholder={currentPath ? `Editing: ${currentPath}` : "New Script..."}
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          sx={{
-            flex: 0,
-            mb: 2,
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#121212",
+        {/* Single-pane live-highlight editor */}
+        <Box sx={{ flex: 1, minHeight: 300, border: "1px solid #444", borderRadius: 1, background: "#121212", overflow: "auto" }}>
+          <Editor
+            value={code}
+            onValueChange={setCode}
+            highlight={(src) => highlightedHtml(src, prismLang)}
+            padding={12}
+            placeholder={currentPath ? `Editing: ${currentPath}` : "New Script..."}
+            style={{
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+              fontSize: 14,
               color: "#e6edf3",
-              fontFamily: "monospace",
-              fontSize: "0.9rem",
+              background: "#121212",
+              outline: "none",
+              minHeight: 300,
               lineHeight: 1.4,
-              "& fieldset": { borderColor: "#444" },
-              "&:hover fieldset": { borderColor: "#666" }
-            }
-          }}
-        />
-
-        {/* Highlighted preview */}
-        <Box sx={{ flex: 1, minHeight: 120, overflowY: "auto", border: "1px solid #444", borderRadius: 1, p: 1, background: "#121212" }}>
-          <Typography variant="caption" sx={{ color: "#aaa" }}>Preview (syntax highlighted)</Typography>
-          <pre style={{ margin: 0 }}>
-            <code dangerouslySetInnerHTML={{ __html: highlighted }} />
-          </pre>
+              caretColor: "#58a6ff"
+            }}
+          />
         </Box>
       </Paper>
 
@@ -660,6 +659,7 @@ export default function ScriptEditor() {
         onChange={setRenameValue}
         onCancel={() => setRenameOpen(false)}
         onSave={saveRenameFile}
+        onBlur={() => setRenameValue((v) => ensureExt(v, type))}
       />
 
       <RenameFolderDialog
@@ -680,6 +680,7 @@ export default function ScriptEditor() {
         onChangeType={setNewScriptType}
         onCancel={() => setNewScriptOpen(false)}
         onCreate={createNewScript}
+        onBlurName={() => setNewScriptName((v) => ensureExt(v, newScriptType))}
       />
 
       <ConfirmDeleteDialog

@@ -498,17 +498,20 @@ def save_script():
 
     # Determine target path
     if rel_path:
-        # Ensure extension matches type if provided
+        # Append extension only if none provided
         base, ext = os.path.splitext(rel_path)
-        desired_ext = _ext_for_type(script_type) or ext
-        if desired_ext and not rel_path.lower().endswith(desired_ext):
-            rel_path = base + desired_ext
+        if not ext:
+            desired_ext = _ext_for_type(script_type)
+            if desired_ext:
+                rel_path = base + desired_ext
         abs_path = os.path.abspath(os.path.join(scripts_root, rel_path))
     else:
         if not name:
             return jsonify({"error": "Missing name"}), 400
-        desired_ext = _ext_for_type(script_type) or os.path.splitext(name)[1] or ".txt"
-        if not name.lower().endswith(desired_ext):
+        # Append extension only if none provided
+        ext = os.path.splitext(name)[1]
+        if not ext:
+            desired_ext = _ext_for_type(script_type) or ".txt"
             name = os.path.splitext(name)[0] + desired_ext
         abs_path = os.path.abspath(os.path.join(scripts_root, os.path.basename(name)))
 
@@ -537,9 +540,11 @@ def rename_script_file():
         return jsonify({"error": "File not found"}), 404
     if not new_name:
         return jsonify({"error": "Invalid new_name"}), 400
-    desired_ext = _ext_for_type(script_type) or os.path.splitext(new_name)[1]
-    if desired_ext and not new_name.lower().endswith(desired_ext):
-        new_name = os.path.splitext(new_name)[0] + desired_ext
+    # Append extension only if none provided
+    if not os.path.splitext(new_name)[1]:
+        desired_ext = _ext_for_type(script_type)
+        if desired_ext:
+            new_name = os.path.splitext(new_name)[0] + desired_ext
     new_abs = os.path.join(os.path.dirname(old_abs), os.path.basename(new_name))
     try:
         os.rename(old_abs, new_abs)
