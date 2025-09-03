@@ -83,7 +83,7 @@ function NavigationSidebar({ currentPage, onNavigate }) {
             expandIcon={<ExpandMoreIcon />}
             sx={{ backgroundColor: "#2c2c2c", minHeight: "36px", "& .MuiAccordionSummary-content": { margin: 0 } }}
           >
-            <Typography sx={{ fontSize: "0.9rem", color: "#0475c2" }}>
+            <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
               <b>Devices</b>
             </Typography>
           </AccordionSummary>
@@ -104,7 +104,7 @@ function NavigationSidebar({ currentPage, onNavigate }) {
             expandIcon={<ExpandMoreIcon />}
             sx={{ backgroundColor: "#2c2c2c", minHeight: "36px", "& .MuiAccordionSummary-content": { margin: 0 } }}
           >
-            <Typography sx={{ fontSize: "0.9rem", color: "#0475c2" }}>
+            <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
               <b>Automation</b>
             </Typography>
           </AccordionSummary>
@@ -128,7 +128,7 @@ function NavigationSidebar({ currentPage, onNavigate }) {
             expandIcon={<ExpandMoreIcon />}
             sx={{ backgroundColor: "#2c2c2c", minHeight: "36px", "& .MuiAccordionSummary-content": { margin: 0 } }}
           >
-            <Typography sx={{ fontSize: "0.9rem", color: "#0475c2" }}>
+            <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
               <b>Filters & Groups</b>
             </Typography>
           </AccordionSummary>
