@@ -9,11 +9,6 @@ Borealis-Server.exe
 /Agent/
 /ElectronApp/
 
-# Misc Files/Folders
-.vs/s
-/Update_Staging/
-agent_settings.json
-
 # On-the-Fly Downloaded Dependencies
 /Dependencies/NodeJS/
 /Dependencies/Python/
@@ -22,3 +17,9 @@ agent_settings.json
 
 # Server-Level Database
 /Databases/
+
+# Misc Files/Folders
+.vs/s
+/Update_Staging/
+agent_settings.json
+users.json
