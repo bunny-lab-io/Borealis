@@ -204,6 +204,9 @@ async def send_heartbeat():
     Periodically send agent heartbeat to the server so the Devices page can
     show hostname, OS, and last_seen.
     """
+    # Initial heartbeat is sent in the WebSocket 'connect' handler.
+    # Delay the loop start so we don't double-send immediately.
+    await asyncio.sleep(60)
     while True:
         try:
             payload = {
@@ -215,7 +218,8 @@ async def send_heartbeat():
             await sio.emit("agent_heartbeat", payload)
         except Exception as e:
             print(f"[WARN] heartbeat emit failed: {e}")
-        await asyncio.sleep(5)
+        # Send periodic heartbeats every 60 seconds
+        await asyncio.sleep(60)
 
 # ---------------- Detailed Agent Data ----------------
 

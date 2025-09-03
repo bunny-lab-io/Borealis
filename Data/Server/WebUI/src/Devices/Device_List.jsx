@@ -18,7 +18,7 @@ import {
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import { DeleteDeviceDialog } from "../Dialogs.jsx";
 
-function formatLastSeen(tsSec, offlineAfter = 15) {
+function formatLastSeen(tsSec, offlineAfter = 120) {
   if (!tsSec) return "unknown";
   const now = Date.now() / 1000;
   if (now - tsSec <= offlineAfter) return "Currently Online";
@@ -35,7 +35,7 @@ function formatLastSeen(tsSec, offlineAfter = 15) {
   return `${date} @ ${time}`;
 }
 
-function statusFromHeartbeat(tsSec, offlineAfter = 15) {
+function statusFromHeartbeat(tsSec, offlineAfter = 120) {
   if (!tsSec) return "Offline";
   const now = Date.now() / 1000;
   return now - tsSec <= offlineAfter ? "Online" : "Offline";

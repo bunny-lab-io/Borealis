@@ -399,6 +399,48 @@ def init_db():
 init_db()
 
 
+def _persist_last_seen(hostname: str, last_seen: int):
+    """Persist the last_seen timestamp into the device_details.details JSON.
+
+    Ensures that after a server restart, we can restore last_seen from DB
+    even if the agent is offline.
+    """
+    if not hostname or str(hostname).strip().lower() == "unknown":
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT details, description FROM device_details WHERE hostname = ?",
+            (hostname,),
+        )
+        row = cur.fetchone()
+        # Load existing details JSON or create a minimal one
+        if row and row[0]:
+            try:
+                details = json.loads(row[0])
+            except Exception:
+                details = {}
+            description = row[1] if len(row) > 1 else ""
+        else:
+            details = {}
+            description = ""
+
+        summary = details.get("summary") or {}
+        summary["hostname"] = summary.get("hostname") or hostname
+        summary["last_seen"] = int(last_seen or 0)
+        details["summary"] = summary
+
+        cur.execute(
+            "REPLACE INTO device_details (hostname, description, details) VALUES (?, ?, ?)",
+            (hostname, description, json.dumps(details)),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[WARN] Failed to persist last_seen for {hostname}: {e}")
+
+
 def load_agents_from_db():
     """Populate registered_agents with any devices stored in the database."""
     try:
@@ -441,6 +483,7 @@ def save_agent_details():
     data = request.get_json(silent=True) or {}
     hostname = data.get("hostname")
     details = data.get("details")
+    agent_id = data.get("agent_id")
     if not hostname and isinstance(details, dict):
         hostname = details.get("summary", {}).get("hostname")
     if not hostname or not isinstance(details, dict):
@@ -448,12 +491,34 @@ def save_agent_details():
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
+        # Load existing details/description so we can preserve description and merge last_seen
         cur.execute(
-            "SELECT description FROM device_details WHERE hostname = ?",
+            "SELECT details, description FROM device_details WHERE hostname = ?",
             (hostname,),
         )
         row = cur.fetchone()
-        description = row[0] if row else ""
+        prev_details = {}
+        if row and row[0]:
+            try:
+                prev_details = json.loads(row[0])
+            except Exception:
+                prev_details = {}
+        description = row[1] if row and len(row) > 1 else ""
+
+        # Ensure details.summary.last_seen is preserved/merged so it survives restarts
+        try:
+            incoming_summary = details.setdefault("summary", {})
+            if not incoming_summary.get("last_seen"):
+                last_seen = None
+                if agent_id and agent_id in registered_agents:
+                    last_seen = registered_agents[agent_id].get("last_seen")
+                if not last_seen:
+                    last_seen = (prev_details.get("summary") or {}).get("last_seen")
+                if last_seen:
+                    incoming_summary["last_seen"] = int(last_seen)
+        except Exception:
+            pass
+
         cur.execute(
             "REPLACE INTO device_details (hostname, description, details) VALUES (?, ?, ?)",
             (hostname, description, json.dumps(details)),
@@ -667,6 +732,12 @@ def connect_agent(data):
     rec["agent_operating_system"] = rec.get("agent_operating_system", "-")
     rec["last_seen"] = int(time.time())
     rec["status"] = "provisioned" if agent_id in agent_configurations else "orphaned"
+    # If we already know the hostname for this agent, persist last_seen so it
+    # can be restored after server restarts.
+    try:
+        _persist_last_seen(rec.get("hostname"), rec["last_seen"])
+    except Exception:
+        pass
 
 @socketio.on("agent_heartbeat")
 def on_agent_heartbeat(data):
@@ -696,6 +767,11 @@ def on_agent_heartbeat(data):
         rec["agent_operating_system"] = data.get("agent_operating_system")
     rec["last_seen"] = int(data.get("last_seen") or time.time())
     rec["status"] = "provisioned" if agent_id in agent_configurations else rec.get("status", "orphaned")
+    # Persist last_seen into DB keyed by hostname so it survives restarts.
+    try:
+        _persist_last_seen(rec.get("hostname") or hostname, rec["last_seen"])
+    except Exception:
+        pass
 
 @socketio.on("request_config")
 def send_agent_config(data):
