@@ -531,7 +531,7 @@ export default function ScriptEditor() {
   return (
     <Box sx={{ display: "flex", flex: 1, height: "100%", overflow: "hidden" }}>
       {/* Left: Tree */}
-      <Paper sx={{ m: 1, p: 0, bgcolor: "#1e1e1e", width: 320, flexShrink: 0 }} elevation={2}>
+      <Paper sx={{ my: 2, ml: 2, mr: 1, p: 0, bgcolor: "#1e1e1e", width: 320, flexShrink: 0 }} elevation={2}>
         <Box sx={{ p: 2, pb: 1 }}>
           <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>Scripts</Typography>
           <Typography variant="body2" sx={{ color: "#aaa" }}>
@@ -583,7 +583,7 @@ export default function ScriptEditor() {
       </Paper>
 
       {/* Right: Editor */}
-      <Paper sx={{ m: 1, p: 1.5, bgcolor: "#1e1e1e", display: "flex", flexDirection: "column", flex: 1 }} elevation={2}>
+      <Paper sx={{ my: 2, mr: 2, ml: 1, p: 1.5, bgcolor: "#1e1e1e", display: "flex", flexDirection: "column", flex: 1 }} elevation={2}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
           <FormControl size="small" sx={{ minWidth: 220 }}>
             <InputLabel sx={{ color: "#aaa" }}>Type</InputLabel>
