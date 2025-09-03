@@ -66,7 +66,7 @@ Clear-Host
 '@ | Write-Host -ForegroundColor DarkCyan
 Write-Host "Automation Platform" -ForegroundColor DarkGray
 Write-Host " "
-Write-Host "Ensuring Dependencies Exist..." -ForegroundColor DarkCyan
+## Note: Heavy dependency downloads are deferred until selecting Server (option 1)
 # ---------------------- ASCII Art Terminal Required Changes ----------------------
 # Set the .NET Console output encoding to UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -125,160 +125,163 @@ $node7zUrl      = "https://nodejs.org/dist/v23.11.0/node-v23.11.0-win-x64.7z"
 $nodeInstallDir = Join-Path $depsRoot "NodeJS"
 $node7zPath     = Join-Path $depsRoot "node-v23.11.0-win-x64.7z"
 
-# ---------------------- Ensure NodeJS is Present (Bundled via 7-Zip) ----------------------
-Run-Step "Dependency: NodeJS" {
-    if (-not (Test-Path $nodeExe)) {
-        # Download archive if not present
-        if (-not (Test-Path $node7zPath)) {
-            Invoke-WebRequest -Uri $node7zUrl -OutFile $node7zPath
-        }
+# ---------------------- Dependency Installation Functions ----------------------
+function Install_Shared_Dependencies {
+    # Python (shared by Server and Agent)
+    Run-Step "Dependency: Python" {
+        $pythonInstallDir = Join-Path $scriptDir "Dependencies\Python"
+        $localPythonExe   = Join-Path $pythonInstallDir "python.exe"
 
-        # Extract using bundled 7z
-        if (-not (Test-Path $sevenZipExe)) {
-            throw "7-Zip CLI not found at: $sevenZipExe"
-        }
+        $pythonMsiBaseUrl = "https://www.python.org/ftp/python/3.13.3/amd64/"
+        $pythonMsiFiles = @(
+            "core.msi",
+            "exe.msi",
+            "lib.msi",
+            "pip.msi",
+            "dev.msi"
+        )
 
-        & $sevenZipExe x $node7zPath "-o$nodeInstallDir" -y | Out-Null
-
-        # The extracted contents might live under a subfolder; flatten if needed
-        $extracted = Get-ChildItem $nodeInstallDir | Where-Object { $_.PSIsContainer } | Select-Object -First 1
-        if ($extracted) {
-            Get-ChildItem $extracted.FullName | Move-Item -Destination $nodeInstallDir -Force
-            Remove-Item $extracted.FullName -Recurse -Force
-        }
-
-        # Clean Up 7z File After Extraction
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $node7zPath
-    }
-}
-
-# ---------------------- Ensure Python is Present (via Installer Extraction) ----------------------
-Run-Step "Dependency: Python" {
-    $pythonInstallDir = Join-Path $scriptDir "Dependencies\Python"
-    $pythonExe = Join-Path $pythonInstallDir "python.exe"
-
-    $pythonMsiBaseUrl = "https://www.python.org/ftp/python/3.13.3/amd64/"
-    $pythonMsiFiles = @(
-        "core.msi",
-        "exe.msi",
-        "lib.msi",
-        "pip.msi",
-        "dev.msi"
-    )
-
-    if (-not (Test-Path $pythonExe)) {
-        if (-not (Test-Path $pythonInstallDir)) {
-            New-Item -ItemType Directory -Path $pythonInstallDir | Out-Null
-        }
-
-        foreach ($file in $pythonMsiFiles) {
-            $url = "$pythonMsiBaseUrl$file"
-            $localPath = Join-Path $scriptDir "Dependencies\$file"
-
-            # Download if missing
-            if (-not (Test-Path $localPath)) {
-                Invoke-WebRequest -Uri $url -OutFile $localPath
+        if (-not (Test-Path $localPythonExe)) {
+            if (-not (Test-Path $pythonInstallDir)) {
+                New-Item -ItemType Directory -Path $pythonInstallDir | Out-Null
             }
 
-            # Extract MSI into install directory
-            Start-Process -Wait -NoNewWindow -FilePath "msiexec.exe" `
-                -ArgumentList "/a `"$localPath`" /qn TARGETDIR=`"$pythonInstallDir`""
-        }
+            foreach ($file in $pythonMsiFiles) {
+                $url = "$pythonMsiBaseUrl$file"
+                $localPath = Join-Path $scriptDir "Dependencies\$file"
 
-        # Clean up downloaded MSIs
-        foreach ($file in $pythonMsiFiles) {
-            $localPath = Join-Path $scriptDir "Dependencies\$file"
-            Remove-Item $localPath -Force -ErrorAction SilentlyContinue
-        }
+                # Download if missing
+                if (-not (Test-Path $localPath)) {
+                    Invoke-WebRequest -Uri $url -OutFile $localPath
+                }
 
-        # Validate success
-        if (-not (Test-Path $pythonExe)) {
-            throw "Python executable not found after MSI extraction."
+                # Extract MSI into install directory
+                Start-Process -Wait -NoNewWindow -FilePath "msiexec.exe" `
+                    -ArgumentList "/a `"$localPath`" /qn TARGETDIR=`"$pythonInstallDir`""
+            }
+
+            # Clean up downloaded MSIs
+            foreach ($file in $pythonMsiFiles) {
+                $localPath = Join-Path $scriptDir "Dependencies\$file"
+                Remove-Item $localPath -Force -ErrorAction SilentlyContinue
+            }
+
+            # Validate success
+            if (-not (Test-Path $localPythonExe)) {
+                throw "Python executable not found after MSI extraction."
+            }
         }
-    } else {
     }
 }
 
-# ---------------------- Ensure Tesseract OCR is Present (Extract from SFX EXE) ----------------------
-Run-Step "Dependency: Tesseract-OCR" {
-    $tessExeUrl     = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
-    $tessExePath    = Join-Path $depsRoot "tesseract-installer.exe"
-    $tessInstallDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
+function Install_Server_Dependencies {
+    # NodeJS (required for Vite / Web UI)
+    Run-Step "Dependency: NodeJS" {
+        if (-not (Test-Path $nodeExe)) {
+            # Download archive if not present
+            if (-not (Test-Path $node7zPath)) {
+                Invoke-WebRequest -Uri $node7zUrl -OutFile $node7zPath
+            }
 
-    if (-not (Test-Path (Join-Path $tessInstallDir "tesseract.exe"))) {
-        # Download the installer if it doesn't exist
-        if (-not (Test-Path $tessExePath)) {
-            Invoke-WebRequest -Uri $tessExeUrl -OutFile $tessExePath
+            # Extract using bundled 7z
+            if (-not (Test-Path $sevenZipExe)) {
+                throw "7-Zip CLI not found at: $sevenZipExe"
+            }
+
+            & $sevenZipExe x $node7zPath "-o$nodeInstallDir" -y | Out-Null
+
+            # The extracted contents might live under a subfolder; flatten if needed
+            $extracted = Get-ChildItem $nodeInstallDir | Where-Object { $_.PSIsContainer } | Select-Object -First 1
+            if ($extracted) {
+                Get-ChildItem $extracted.FullName | Move-Item -Destination $nodeInstallDir -Force
+                Remove-Item $extracted.FullName -Recurse -Force
+            }
+
+            # Clean Up 7z File After Extraction
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $node7zPath
         }
-
-        # Extract using 7-Zip
-        if (-not (Test-Path $sevenZipExe)) {
-            throw "7-Zip CLI not found at: $sevenZipExe"
-        }
-
-        if (Test-Path $tessInstallDir) {
-            Remove-Item $tessInstallDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        New-Item -ItemType Directory -Path $tessInstallDir | Out-Null
-
-        & $sevenZipExe x $tessExePath "-o$tessInstallDir" -y | Out-Null
-
-        # Optional cleanup
-        Remove-Item $tessExePath -Force -ErrorAction SilentlyContinue
     }
 }
 
-# ---------------------- Download Tesseract English Language Trained Data ----------------------
-Run-Step "Dependency: Tesseract-OCR - Trained Model Data" {
-    $langDataDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR\tessdata"
-    $engPath     = Join-Path $langDataDir "eng.traineddata"
-    $osdPath     = Join-Path $langDataDir "osd.traineddata"
+function Install_Agent_Dependencies {
+    # Tesseract OCR Engine
+    Run-Step "Dependency: Tesseract-OCR" {
+        $tessExeUrl     = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
+        $tessExePath    = Join-Path $depsRoot "tesseract-installer.exe"
+        $tessInstallDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
 
-    if (-not (Test-Path $engPath)) {
-        Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata" -OutFile $engPath
+        if (-not (Test-Path (Join-Path $tessInstallDir "tesseract.exe"))) {
+            # Download the installer if it doesn't exist
+            if (-not (Test-Path $tessExePath)) {
+                Invoke-WebRequest -Uri $tessExeUrl -OutFile $tessExePath
+            }
+
+            # Extract using 7-Zip
+            if (-not (Test-Path $sevenZipExe)) {
+                throw "7-Zip CLI not found at: $sevenZipExe"
+            }
+
+            if (Test-Path $tessInstallDir) {
+                Remove-Item $tessInstallDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            New-Item -ItemType Directory -Path $tessInstallDir | Out-Null
+
+            & $sevenZipExe x $tessExePath "-o$tessInstallDir" -y | Out-Null
+
+            # Optional cleanup
+            Remove-Item $tessExePath -Force -ErrorAction SilentlyContinue
+        }
     }
 
-    if (-not (Test-Path $osdPath)) {
-        Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/osd.traineddata" -OutFile $osdPath
+    # Tesseract language data
+    Run-Step "Dependency: Tesseract-OCR - Trained Model Data" {
+        $langDataDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR\tessdata"
+        $engPath     = Join-Path $langDataDir "eng.traineddata"
+        $osdPath     = Join-Path $langDataDir "osd.traineddata"
+
+        if (-not (Test-Path $engPath)) {
+            Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata" -OutFile $engPath
+        }
+
+        if (-not (Test-Path $osdPath)) {
+            Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/osd.traineddata" -OutFile $osdPath
+        }
     }
-}
 
-# ---------------------- Ensure AutoHotKey is Present (Bundled Portable ZIP) ----------------------
-Run-Step "Dependency: AutoHotKey" {
-    $ahkVersion    = "2.0.19"   # Update this field for new AHK releases (without the 'v' prefix)
-    $ahkVersionTag = "v$ahkVersion"
-    $ahkZipName    = "AutoHotkey_$ahkVersion.zip"
-    $ahkZipUrl     = "https://github.com/AutoHotkey/AutoHotkey/releases/download/$ahkVersionTag/$ahkZipName"
-    $ahkZipPath    = Join-Path $depsRoot $ahkZipName
-    $ahkInstallDir = Join-Path $depsRoot "AutoHotKey"
-    $ahkExePath    = Join-Path $ahkInstallDir "AutoHotkey64.exe"   # Adjust if needed
+    # AutoHotKey portable
+    Run-Step "Dependency: AutoHotKey" {
+        $ahkVersion    = "2.0.19"
+        $ahkVersionTag = "v$ahkVersion"
+        $ahkZipName    = "AutoHotkey_$ahkVersion.zip"
+        $ahkZipUrl     = "https://github.com/AutoHotkey/AutoHotkey/releases/download/$ahkVersionTag/$ahkZipName"
+        $ahkZipPath    = Join-Path $depsRoot $ahkZipName
+        $ahkInstallDir = Join-Path $depsRoot "AutoHotKey"
+        $ahkExePath    = Join-Path $ahkInstallDir "AutoHotkey64.exe"
 
-    if (-not (Test-Path $ahkExePath)) {
-        # SECTION: Download Step
-        if (-not (Test-Path $ahkZipPath)) {
-            Invoke-WebRequest -Uri $ahkZipUrl -OutFile $ahkZipPath
-        }
-
-        # SECTION: Extraction Step
-        if (-not (Test-Path $sevenZipExe)) {
-            throw "7-Zip CLI not found at: $sevenZipExe"
-        }
-
-        if (Test-Path $ahkInstallDir) {
-            Remove-Item $ahkInstallDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        New-Item -ItemType Directory -Path $ahkInstallDir | Out-Null
-        & $sevenZipExe x $ahkZipPath "-o$ahkInstallDir" -y | Out-Null
-
-        # SECTION: Post-Processing / Cleanup
-        Remove-Item $ahkZipPath -Force -ErrorAction SilentlyContinue
-
-        # SECTION: Validation
         if (-not (Test-Path $ahkExePath)) {
-            throw "AutoHotKey executable not found after extraction."
+            if (-not (Test-Path $ahkZipPath)) {
+                Invoke-WebRequest -Uri $ahkZipUrl -OutFile $ahkZipPath
+            }
+
+            if (-not (Test-Path $sevenZipExe)) {
+                throw "7-Zip CLI not found at: $sevenZipExe"
+            }
+
+            if (Test-Path $ahkInstallDir) {
+                Remove-Item $ahkInstallDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            New-Item -ItemType Directory -Path $ahkInstallDir | Out-Null
+            & $sevenZipExe x $ahkZipPath "-o$ahkInstallDir" -y | Out-Null
+
+            Remove-Item $ahkZipPath -Force -ErrorAction SilentlyContinue
+
+            if (-not (Test-Path $ahkExePath)) {
+                throw "AutoHotKey executable not found after extraction."
+            }
         }
     }
 }
+### Heavy dependency bootstrap moved into Server menu (choice 1)
 
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
@@ -297,14 +300,7 @@ Clear-Host
 '@ | Write-Host -ForegroundColor DarkCyan
 Write-Host "Automation Platform" -ForegroundColor DarkGray
 
-foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
-    if (-not (Test-Path $tool)) {
-        Write-Host "`r$($symbols.Fail) Bundled executable not found at '$tool'." -ForegroundColor Red
-        exit 1
-    }
-}
-
-$env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), (Split-Path $nodeExe), $env:PATH
+## Defer PATH updates and tool presence checks until after a selection is made
 
 # ---------------------- Menu Prompt & User Input ----------------------
 if (-not $choice) {
@@ -328,6 +324,19 @@ switch ($choice) {
 
     "1" {
         $host.UI.RawUI.WindowTitle = "Borealis Server"
+        Write-Host "Ensuring Server Dependencies Exist..." -ForegroundColor DarkCyan
+        Install_Shared_Dependencies
+        Install_Server_Dependencies
+
+        # After ensuring dependencies, verify key tools and update PATH
+        foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
+            if (-not (Test-Path $tool)) {
+                Write-Host "`r$($symbols.Fail) Bundled executable not found at '$tool'." -ForegroundColor Red
+                exit 1
+            }
+        }
+        $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), (Split-Path $nodeExe), $env:PATH
+
         if (-not $modeChoice) {
             Write-Host " "
             Write-Host "Configure Borealis Server Mode:" -ForegroundColor DarkYellow
@@ -439,6 +448,15 @@ switch ($choice) {
         $host.UI.RawUI.WindowTitle = "Borealis Agent"
         # Agent Deployment (Client / Data Collector)
         Write-Host " "
+        Write-Host "Ensuring Agent Dependencies Exist..." -ForegroundColor DarkCyan
+        Install_Shared_Dependencies
+        Install_Agent_Dependencies
+        # Confirm Python presence and update PATH
+        if (-not (Test-Path $pythonExe)) {
+            Write-Host "`r$($symbols.Fail) Bundled Python not found at '$pythonExe'." -ForegroundColor Red
+            exit 1
+        }
+        $env:PATH = '{0};{1}' -f (Split-Path $pythonExe), $env:PATH
         Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
         
         $venvFolder             = "Agent"
@@ -450,7 +468,18 @@ switch ($choice) {
 
         Run-Step "Create Virtual Python Environment" {
             if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
-                & $pythonExe -m venv $venvFolder
+                $pythonForVenv = $pythonExe
+                if (-not (Test-Path $pythonForVenv)) {
+                    $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+                    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+                    if ($pyCmd) { $pythonForVenv = $pyCmd.Source }
+                    elseif ($pythonCmd) { $pythonForVenv = $pythonCmd.Source }
+                    else {
+                        Write-Host "Python not found. Install Python or run Server setup (option 1)." -ForegroundColor Red
+                        exit 1
+                    }
+                }
+                & $pythonForVenv -m venv $venvFolder
             }
             if (Test-Path $agentSourcePath) {
                 # Remove Existing "Agent/Borealis" folder.
@@ -663,7 +692,18 @@ switch ($choice) {
 
         Run-Step "Create Virtual Python Environment" {
             if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
-                & $pythonExe -m venv $venvFolder
+                $pythonForVenv = $pythonExe
+                if (-not (Test-Path $pythonForVenv)) {
+                    $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+                    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+                    if ($pyCmd) { $pythonForVenv = $pyCmd.Source }
+                    elseif ($pythonCmd) { $pythonForVenv = $pythonCmd.Source }
+                    else {
+                        Write-Host "Python not found. Install Python or run Server setup (option 1)." -ForegroundColor Red
+                        exit 1
+                    }
+                }
+                & $pythonForVenv -m venv $venvFolder
             }
             if (Test-Path $scriptSourcePath) {
                 Remove-Item $scriptDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
