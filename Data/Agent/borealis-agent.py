@@ -48,7 +48,90 @@ import agent_roles
 # //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: CONFIG MANAGER
 # //////////////////////////////////////////////////////////////////////////
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "agent_settings.json")
+
+def _user_config_default_path():
+    """Return the prior per-user config file path (used for migration)."""
+    try:
+        plat = sys.platform
+        if plat.startswith("win"):
+            base = os.environ.get("APPDATA") or os.path.expanduser(r"~\AppData\Roaming")
+            return os.path.join(base, "Borealis", "agent_settings.json")
+        elif plat == "darwin":
+            base = os.path.expanduser("~/Library/Application Support")
+            return os.path.join(base, "Borealis", "agent_settings.json")
+        else:
+            base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+            return os.path.join(base, "borealis", "agent_settings.json")
+    except Exception:
+        return os.path.join(os.path.dirname(__file__), "agent_settings.json")
+
+def _find_project_root():
+    """Attempt to locate the Borealis project root (folder with Borealis.ps1 or users.json)."""
+    # Allow explicit override
+    override_root = os.environ.get("BOREALIS_ROOT") or os.environ.get("BOREALIS_PROJECT_ROOT")
+    if override_root and os.path.isdir(override_root):
+        return os.path.abspath(override_root)
+
+    cur = os.path.abspath(os.path.dirname(__file__))
+    for _ in range(8):
+        if (
+            os.path.exists(os.path.join(cur, "Borealis.ps1"))
+            or os.path.exists(os.path.join(cur, "users.json"))
+            or os.path.isdir(os.path.join(cur, ".git"))
+        ):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    # Heuristic fallback: two levels up from Agent/Borealis
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+def _resolve_config_path():
+    """
+    Decide where to store agent_settings.json, per user’s requirement:
+    - Prefer env var BOREALIS_AGENT_CONFIG (full file path)
+    - Else use <ProjectRoot> alongside Borealis.ps1 and users.json
+    - Migrate from legacy locations if found (user config dir or next to this script)
+    """
+    # Full file path override
+    override_file = os.environ.get("BOREALIS_AGENT_CONFIG")
+    if override_file:
+        cfg_dir = os.path.dirname(override_file)
+        if cfg_dir and not os.path.exists(cfg_dir):
+            os.makedirs(cfg_dir, exist_ok=True)
+        return override_file
+
+    # Optional directory override
+    override_dir = os.environ.get("BOREALIS_AGENT_CONFIG_DIR")
+    if override_dir:
+        os.makedirs(override_dir, exist_ok=True)
+        return os.path.join(override_dir, "agent_settings.json")
+
+    # Target config in project root
+    project_root = _find_project_root()
+    cfg_path = os.path.join(project_root, "agent_settings.json")
+    if os.path.exists(cfg_path):
+        return cfg_path
+
+    # Migration: from legacy user dir or script dir
+    legacy_user = _user_config_default_path()
+    legacy_script_dir = os.path.join(os.path.dirname(__file__), "agent_settings.json")
+    for legacy in (legacy_user, legacy_script_dir):
+        try:
+            if legacy and os.path.exists(legacy):
+                try:
+                    shutil.move(legacy, cfg_path)
+                except Exception:
+                    shutil.copy2(legacy, cfg_path)
+                return cfg_path
+        except Exception:
+            pass
+
+    # Nothing to migrate; return desired path in root
+    return cfg_path
+
+CONFIG_PATH = _resolve_config_path()
 DEFAULT_CONFIG = {
     "borealis_server_url": "http://localhost:5000",
     "max_task_workers": 8,

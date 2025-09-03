@@ -1,17 +1,10 @@
-# Python Byte-compiled / Optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Compiled Release Files
+# Pyinstaller Packaging Files
+/Data/Agent/Packaging_Data/
+/Data/Server/Packaging_Server/
 Borealis-Agent.exe
 Borealis-Server.exe
 
-# Pyinstaller Files
-/Data/Agent/Packaging_Data/
-/Data/Server/Packaging_Server/
-
-# Development Folders
+# Production Deployment Folders
 /Server/
 /Agent/
 /ElectronApp/
@@ -19,7 +12,7 @@ Borealis-Server.exe
 # Misc Files/Folders
 .vs/s
 /Update_Staging/
-/Macro_Testing/
+agent_settings.json
 
 # On-the-Fly Downloaded Dependencies
 /Dependencies/NodeJS/
@@ -27,5 +20,5 @@ Borealis-Server.exe
 /Dependencies/AutoHotKey/
 /Data/Server/Python_API_Endpoints/Tesseract-OCR/
 
-# Server Database
+# Server-Level Database
 /Databases/
