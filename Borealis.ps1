@@ -326,12 +326,13 @@ switch ($choice) {
         Write-Host "Ensuring Server Dependencies Exist..." -ForegroundColor DarkCyan
         
         # ---------------------- Ensure users.json is Present ----------------------
-        Run-Step "Config: users.json" {
+        Run-Step "First-Run: Generating users.json" {
             $usersJsonPath = Join-Path $scriptDir "users.json"
             if (-not (Test-Path $usersJsonPath)) {
-                $defaultUsers = @{ users = @(@{ username = "admin"; password = "e6c83b282aeb2e022844595721cc00bbda47cb24537c1779f9bb84f04039e1676e6ba8573e588da1052510e3aa0a32a9e55879ae22b0c2d62136fc0a3e85f8bb" }) } |
-                    ConvertTo-Json -Depth 4
-                Set-Content -Path $usersJsonPath -Value $defaultUsers -Encoding UTF8
+        $defaultUsers = @{ users = @(@{ username = "admin"; password = "e6c83b282aeb2e022844595721cc00bbda47cb24537c1779f9bb84f04039e1676e6ba8573e588da1052510e3aa0a32a9e55879ae22b0c2d62136fc0a3e85f8bb" }) } |
+            ConvertTo-Json -Depth 4
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($usersJsonPath, $defaultUsers, $utf8NoBom)
             }
         }
         
