@@ -53,7 +53,11 @@ function NavigationSidebar({ currentPage, onNavigate }) {
             transition: "width 0.15s ease"
           }}
         />
-        {icon && <Box sx={{ mr: 1, display: "flex", alignItems: "center" }}>{icon}</Box>}
+        {icon && (
+          <Box sx={{ mr: 1, display: "flex", alignItems: "center", color: "#58a6ff" }}>
+            {icon}
+          </Box>
+        )}
         <ListItemText primary={label} primaryTypographyProps={{ fontSize: "0.95rem" }} />
       </ListItemButton>
     );
