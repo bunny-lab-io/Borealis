@@ -26,7 +26,7 @@ import StatusBar from "./Status_Bar";
 import NavigationSidebar from "./Navigation_Sidebar";
 import WorkflowList from "./Workflows/Workflow_List";
 import DeviceList from "./Devices/Device_List";
-import ScriptList from "./Scripting/Script_List";
+import ScriptEditor from "./Scripting/Script_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
 import Login from "./Login.jsx";
 import DeviceDetails from "./Devices/Device_Details";
@@ -371,7 +371,7 @@ export default function App() {
         );
 
       case "scripts":
-        return <ScriptList />;
+        return <ScriptEditor />;
 
       case "workflow-editor":
         return (
