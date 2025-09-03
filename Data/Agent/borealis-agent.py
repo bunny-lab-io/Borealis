@@ -137,9 +137,105 @@ def detect_agent_os():
         plat = platform.system().lower()
 
         if plat.startswith('win'):
-            # On Windows, platform.release() gives major version (e.g., "10", "11")
-            # platform.version() can also give build info, but isn't always user-friendly
-            return f"Windows {platform.release()}"
+            # Aim for: "Microsoft Windows 11 Pro 24H2 Build 26100.5074"
+            # Pull details from the registry when available and correct
+            # historical quirks like CurrentVersion reporting 6.3.
+            try:
+                import winreg  # Only available on Windows
+
+                reg_path = r"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
+                access = winreg.KEY_READ
+                try:
+                    access |= winreg.KEY_WOW64_64KEY
+                except Exception:
+                    pass
+
+                try:
+                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, access)
+                except OSError:
+                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, winreg.KEY_READ)
+
+                def _get(name, default=None):
+                    try:
+                        return winreg.QueryValueEx(key, name)[0]
+                    except Exception:
+                        return default
+
+                product_name = _get("ProductName", "")  # e.g., "Windows 11 Pro"
+                edition_id = _get("EditionID", "")       # e.g., "Professional"
+                display_version = _get("DisplayVersion", "")  # e.g., "24H2" / "22H2"
+                release_id = _get("ReleaseId", "")            # e.g., "2004" on older Windows 10
+                build_number = _get("CurrentBuildNumber", "") or _get("CurrentBuild", "")
+                ubr = _get("UBR", None)  # Update Build Revision (int)
+
+                # Determine Windows major (10 vs 11) from build number to avoid relying
+                # on inconsistent registry values like CurrentVersion (which may say 6.3).
+                try:
+                    build_int = int(str(build_number).split(".")[0]) if build_number else 0
+                except Exception:
+                    build_int = 0
+                if build_int >= 22000:
+                    major_label = "11"
+                elif build_int >= 10240:
+                    major_label = "10"
+                else:
+                    major_label = platform.release()
+
+                # Derive friendly edition name, prefer parsing from ProductName
+                edition = ""
+                pn = product_name or ""
+                if pn.lower().startswith("windows "):
+                    tokens = pn.split()
+                    # tokens like ["Windows", "11", "Pro", ...]
+                    if len(tokens) >= 3:
+                        edition = " ".join(tokens[2:])
+                if not edition and edition_id:
+                    eid_map = {
+                        "Professional": "Pro",
+                        "ProfessionalN": "Pro N",
+                        "ProfessionalEducation": "Pro Education",
+                        "ProfessionalWorkstation": "Pro for Workstations",
+                        "Enterprise": "Enterprise",
+                        "EnterpriseN": "Enterprise N",
+                        "EnterpriseS": "Enterprise LTSC",
+                        "Education": "Education",
+                        "EducationN": "Education N",
+                        "Core": "Home",
+                        "CoreN": "Home N",
+                        "CoreSingleLanguage": "Home Single Language",
+                        "IoTEnterprise": "IoT Enterprise",
+                    }
+                    edition = eid_map.get(edition_id, edition_id)
+
+                os_name = f"Windows {major_label}"
+
+                # Choose version label: DisplayVersion (preferred) then ReleaseId
+                version_label = display_version or release_id or ""
+
+                # Build string with UBR if present
+                if isinstance(ubr, int):
+                    build_str = f"{build_number}.{ubr}" if build_number else str(ubr)
+                else:
+                    try:
+                        build_str = f"{build_number}.{int(ubr)}" if build_number and ubr is not None else build_number
+                    except Exception:
+                        build_str = build_number
+
+                parts = ["Microsoft", os_name]
+                if edition:
+                    parts.append(edition)
+                if version_label:
+                    parts.append(version_label)
+                if build_str:
+                    parts.append(f"Build {build_str}")
+
+                # Correct possible mislabeling in ProductName (e.g., says Windows 10 on Win 11)
+                # by trusting build-based major_label.
+                return " ".join(p for p in parts if p).strip()
+
+            except Exception:
+                # Safe fallback if registry lookups fail
+                return f"Windows {platform.release()}"
 
         elif plat.startswith('linux'):
             try:
