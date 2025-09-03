@@ -28,8 +28,24 @@ except Exception:
 import aiohttp
 
 import socketio
+# Reduce noisy Qt output and attempt to avoid Windows OleInitialize warnings
+os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false;*.debug=false")
 from qasync import QEventLoop
 from PyQt5 import QtCore, QtGui, QtWidgets
+try:
+    # Swallow Qt warnings like OleInitialize failures on Windows consoles
+    def _qt_msg_handler(mode, context, message):
+        # Intentionally suppress all Qt framework messages to keep console clean
+        return
+    QtCore.qInstallMessageHandler(_qt_msg_handler)
+except Exception:
+    pass
+try:
+    # Pre-initialize OLE to reduce chances of RPC_E_CHANGED_MODE warnings
+    import ctypes
+    ctypes.windll.ole32.OleInitialize(0)
+except Exception:
+    pass
 from PIL import ImageGrab
 
 # //////////////////////////////////////////////////////////////////////////
@@ -52,9 +68,8 @@ class ConfigManager:
         self.load()
 
     def load(self):
-        print("[DEBUG] Loading config from disk.")
         if not os.path.exists(self.path):
-            print("[DEBUG] Config file not found. Creating default.")
+            print("[INFO] agent_settings.json not found - Creating...")
             self.data = DEFAULT_CONFIG.copy()
             self._write()
         else:
@@ -62,7 +77,6 @@ class ConfigManager:
                 with open(self.path, 'r') as f:
                     loaded = json.load(f)
                 self.data = {**DEFAULT_CONFIG, **loaded}
-                print("[DEBUG] Config loaded:", self.data)
             except Exception as e:
                 print(f"[WARN] Failed to parse config: {e}")
                 self.data = DEFAULT_CONFIG.copy()
@@ -75,7 +89,6 @@ class ConfigManager:
         try:
             with open(self.path, 'w') as f:
                 json.dump(self.data, f, indent=2)
-            print("[DEBUG] Config written to disk.")
         except Exception as e:
             print(f"[ERROR] Could not write config: {e}")
 
@@ -83,7 +96,6 @@ class ConfigManager:
         try:
             mtime = os.path.getmtime(self.path)
             if self._last_mtime is None or mtime != self._last_mtime:
-                print("[CONFIG] Detected config change, reloading.")
                 self.load()
                 return True
         except Exception:
@@ -100,7 +112,6 @@ def init_agent_id():
     return CONFIG.data['agent_id']
 
 AGENT_ID = init_agent_id()
-print(f"[DEBUG] Using AGENT_ID: {AGENT_ID}")
 
 def clear_regions_only():
     CONFIG.data['regions'] = CONFIG.data.get('regions', {})
@@ -645,7 +656,7 @@ async def send_agent_details():
 
 @sio.event
 async def connect():
-    print(f"[WebSocket] Connected to Borealis Server with Agent ID: {AGENT_ID}")
+    print(f"[INFO] Successfully Connected to Borealis Server!")
     await sio.emit('connect_agent', {"agent_id": AGENT_ID})
 
     # Send an immediate heartbeat so the UI can populate instantly.
@@ -978,18 +989,15 @@ async def macro_task(cfg):
 
 # ---------------- Config Watcher ----------------
 async def config_watcher():
-    print("[DEBUG] Starting config watcher")
     while True:
         CONFIG.watch()
         await asyncio.sleep(CONFIG.data.get('config_file_watcher_interval',2))
 
 # ---------------- Persistent Idle Task ----------------
 async def idle_task():
-    print("[Agent] Entering idle state. Awaiting instructions...")
     try:
         while True:
             await asyncio.sleep(60)
-            print("[DEBUG] Idle task still alive.")
     except asyncio.CancelledError:
         print("[FATAL] Idle task was cancelled!")
     except Exception as e:
@@ -1013,7 +1021,7 @@ async def connect_loop():
     while True:
         try:
             url=CONFIG.data.get('borealis_server_url',"http://localhost:5000")
-            print(f"[WebSocket] Connecting to {url}...")
+            print(f"[INFO] Connecting Agent to {url}...")
             await sio.connect(url,transports=['websocket'])
             break
         except Exception as e:
@@ -1024,7 +1032,6 @@ if __name__=='__main__':
     app=QtWidgets.QApplication(sys.argv)
     loop=QEventLoop(app); asyncio.set_event_loop(loop)
     dummy_window=PersistentWindow(); dummy_window.show()
-    print("[DEBUG] Dummy window shown to prevent Qt exit")
     try:
         background_tasks.append(loop.create_task(config_watcher()))
         background_tasks.append(loop.create_task(connect_loop()))
