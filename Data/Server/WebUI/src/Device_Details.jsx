@@ -35,6 +35,23 @@ export default function DeviceDetails({ device, onBack }) {
 
   const statusColor = (s) => (s === "Online" ? "#00d18c" : "#ff4f4f");
 
+  const formatLastSeen = (tsSec, offlineAfter = 15) => {
+    if (!tsSec) return "unknown";
+    const now = Date.now() / 1000;
+    if (now - tsSec <= offlineAfter) return "Currently Online";
+    const d = new Date(tsSec * 1000);
+    const date = d.toLocaleDateString("en-US", {
+      month: "2-digit",
+      day: "2-digit",
+      year: "numeric",
+    });
+    const time = d.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    return `${date} @ ${time}`;
+  };
+
   useEffect(() => {
     if (!device || !device.hostname) return;
     const load = async () => {
@@ -84,7 +101,7 @@ export default function DeviceDetails({ device, onBack }) {
       hh = hh % 12 || 12;
       return `${m.toString().padStart(2, "0")}/${d.toString().padStart(2, "0")}/${y} @ ${hh}:${mm
         .toString()
-        .padStart(2, "0")}${ampm}`;
+        .padStart(2, "0")} ${ampm}`;
     } catch {
       return str;
     }
@@ -134,7 +151,8 @@ export default function DeviceDetails({ device, onBack }) {
     { label: "Internal IP", value: summary.internal_ip || "unknown" },
     { label: "External IP", value: summary.external_ip || "unknown" },
     { label: "Last Reboot", value: summary.last_reboot ? formatDateTime(summary.last_reboot) : "unknown" },
-    { label: "Created", value: summary.created ? formatDateTime(summary.created) : "unknown" }
+    { label: "Created", value: summary.created ? formatDateTime(summary.created) : "unknown" },
+    { label: "Last Seen", value: formatLastSeen(agent.last_seen || device?.lastSeen) }
   ];
 
   const renderSummary = () => (
@@ -483,4 +501,3 @@ export default function DeviceDetails({ device, onBack }) {
     </Paper>
   );
 }
-
