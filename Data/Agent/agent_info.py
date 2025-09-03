@@ -1,19 +1,9 @@
-#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Agent/borealis-agent.py
-import sys
-import uuid
-import socket
 import os
+import sys
 import json
-import asyncio
-import concurrent.futures
-from functools import partial
-from io import BytesIO
-import base64
-import traceback
-import random  # Macro Randomization
-import platform  # OS Detection
-import importlib.util
-import time  # Heartbeat timestamps
+import time
+import socket
+import platform
 import subprocess
 import getpass
 import datetime
@@ -22,110 +12,12 @@ import string
 
 import requests
 try:
-    import psutil
+    import psutil  # type: ignore
 except Exception:
-    psutil = None
+    psutil = None  # graceful degradation if unavailable
 import aiohttp
 
-import socketio
-# Reduce noisy Qt output and attempt to avoid Windows OleInitialize warnings
-os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false;*.debug=false")
-from qasync import QEventLoop
-from PyQt5 import QtCore, QtGui, QtWidgets
-try:
-    # Swallow Qt warnings like OleInitialize failures on Windows consoles
-    def _qt_msg_handler(mode, context, message):
-        # Intentionally suppress all Qt framework messages to keep console clean
-        return
-    QtCore.qInstallMessageHandler(_qt_msg_handler)
-except Exception:
-    pass
-try:
-    # Pre-initialize OLE to reduce chances of RPC_E_CHANGED_MODE warnings
-    import ctypes
-    ctypes.windll.ole32.OleInitialize(0)
-except Exception:
-    pass
-from PIL import ImageGrab
 
-# New modularized components
-import agent_info
-import agent_roles
-
-# //////////////////////////////////////////////////////////////////////////
-# CORE SECTION: CONFIG MANAGER
-# //////////////////////////////////////////////////////////////////////////
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "agent_settings.json")
-DEFAULT_CONFIG = {
-    "borealis_server_url": "http://localhost:5000",
-    "max_task_workers": 8,
-    "config_file_watcher_interval": 2,
-    "agent_id": "",
-    "regions": {}
-}
-
-class ConfigManager:
-    def __init__(self, path):
-        self.path = path
-        self._last_mtime = None
-        self.data = {}
-        self.load()
-
-    def load(self):
-        if not os.path.exists(self.path):
-            print("[INFO] agent_settings.json not found - Creating...")
-            self.data = DEFAULT_CONFIG.copy()
-            self._write()
-        else:
-            try:
-                with open(self.path, 'r') as f:
-                    loaded = json.load(f)
-                self.data = {**DEFAULT_CONFIG, **loaded}
-            except Exception as e:
-                print(f"[WARN] Failed to parse config: {e}")
-                self.data = DEFAULT_CONFIG.copy()
-        try:
-            self._last_mtime = os.path.getmtime(self.path)
-        except Exception:
-            self._last_mtime = None
-
-    def _write(self):
-        try:
-            with open(self.path, 'w') as f:
-                json.dump(self.data, f, indent=2)
-        except Exception as e:
-            print(f"[ERROR] Could not write config: {e}")
-
-    def watch(self):
-        try:
-            mtime = os.path.getmtime(self.path)
-            if self._last_mtime is None or mtime != self._last_mtime:
-                self.load()
-                return True
-        except Exception:
-            pass
-        return False
-
-CONFIG = ConfigManager(CONFIG_PATH)
-CONFIG.load()
-
-def init_agent_id():
-    if not CONFIG.data.get('agent_id'):
-        CONFIG.data['agent_id'] = f"{socket.gethostname().lower()}-agent-{uuid.uuid4().hex[:8]}"
-        CONFIG._write()
-    return CONFIG.data['agent_id']
-
-AGENT_ID = init_agent_id()
-
-def clear_regions_only():
-    CONFIG.data['regions'] = CONFIG.data.get('regions', {})
-    CONFIG._write()
-
-clear_regions_only()
-
-# //////////////////////////////////////////////////////////////////////////
-# CORE SECTION: OPERATING SYSTEM DETECTION
-# //////////////////////////////////////////////////////////////////////////
 def detect_agent_os():
     """
     Detects the full, user-friendly operating system name and version.
@@ -141,9 +33,6 @@ def detect_agent_os():
         plat = platform.system().lower()
 
         if plat.startswith('win'):
-            # Aim for: "Microsoft Windows 11 Pro 24H2 Build 26100.5074"
-            # Pull details from the registry when available and correct
-            # historical quirks like CurrentVersion reporting 6.3.
             try:
                 import winreg  # Only available on Windows
 
@@ -172,8 +61,6 @@ def detect_agent_os():
                 build_number = _get("CurrentBuildNumber", "") or _get("CurrentBuild", "")
                 ubr = _get("UBR", None)  # Update Build Revision (int)
 
-                # Determine Windows major (10 vs 11) from build number to avoid relying
-                # on inconsistent registry values like CurrentVersion (which may say 6.3).
                 try:
                     build_int = int(str(build_number).split(".")[0]) if build_number else 0
                 except Exception:
@@ -185,12 +72,10 @@ def detect_agent_os():
                 else:
                     major_label = platform.release()
 
-                # Derive friendly edition name, prefer parsing from ProductName
                 edition = ""
                 pn = product_name or ""
                 if pn.lower().startswith("windows "):
                     tokens = pn.split()
-                    # tokens like ["Windows", "11", "Pro", ...]
                     if len(tokens) >= 3:
                         edition = " ".join(tokens[2:])
                 if not edition and edition_id:
@@ -212,11 +97,8 @@ def detect_agent_os():
                     edition = eid_map.get(edition_id, edition_id)
 
                 os_name = f"Windows {major_label}"
-
-                # Choose version label: DisplayVersion (preferred) then ReleaseId
                 version_label = display_version or release_id or ""
 
-                # Build string with UBR if present
                 if isinstance(ubr, int):
                     build_str = f"{build_number}.{ubr}" if build_number else str(ubr)
                 else:
@@ -233,12 +115,9 @@ def detect_agent_os():
                 if build_str:
                     parts.append(f"Build {build_str}")
 
-                # Correct possible mislabeling in ProductName (e.g., says Windows 10 on Win 11)
-                # by trusting build-based major_label.
                 return " ".join(p for p in parts if p).strip()
 
             except Exception:
-                # Safe fallback if registry lookups fail
                 return f"Windows {platform.release()}"
 
         elif plat.startswith('linux'):
@@ -248,16 +127,12 @@ def detect_agent_os():
                 if name:
                     return name
                 else:
-                    # Fallback if pretty name not found
                     return f"{platform.system()} {platform.release()}"
             except ImportError:
-                # Fallback to basic info if distro not installed
                 return f"{platform.system()} {platform.release()}"
 
         elif plat.startswith('darwin'):
-            # macOS — platform.mac_ver()[0] returns version number
             version = platform.mac_ver()[0]
-            # Optional: map version numbers to marketing names
             macos_names = {
                 "14": "Sonoma",
                 "13": "Ventura",
@@ -275,67 +150,158 @@ def detect_agent_os():
         print(f"[WARN] OS detection failed: {e}")
         return "Unknown"
 
-CONFIG.data['agent_operating_system'] = agent_info.detect_agent_os()
-CONFIG._write()
 
-# //////////////////////////////////////////////////////////////////////////
-# CORE SECTION: ASYNC TASK / WEBSOCKET
-# //////////////////////////////////////////////////////////////////////////
-
-sio = socketio.AsyncClient(reconnection=True, reconnection_attempts=0, reconnection_delay=5)
-role_tasks = {}
-background_tasks = []
-roles_ctx = None
-
-async def stop_all_roles():
-    print("[DEBUG] Stopping all roles.")
-    for task in list(role_tasks.values()):
-        print(f"[DEBUG] Cancelling task for node: {task}")
-        task.cancel()
-    role_tasks.clear()
-    # Close overlays managed in agent_roles module
+def _get_internal_ip():
     try:
-        agent_roles.close_all_overlays()
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
     except Exception:
-        pass
+        return "unknown"
 
-# ---------------- Heartbeat ----------------
-async def send_heartbeat():
-    """
-    Periodically send agent heartbeat to the server so the Devices page can
-    show hostname, OS, and last_seen.
-    """
-    # Initial heartbeat is sent in the WebSocket 'connect' handler.
-    # Delay the loop start so we don't double-send immediately.
-    await asyncio.sleep(60)
-    while True:
+
+def collect_summary(config):
+    try:
+        username = getpass.getuser()
+        domain = os.environ.get("USERDOMAIN") or socket.gethostname()
+        last_user = f"{domain}\\{username}" if username else "unknown"
+    except Exception:
+        last_user = "unknown"
+
+    try:
+        last_reboot = "unknown"
+        if psutil:
+            try:
+                last_reboot = time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(psutil.boot_time()),
+                )
+            except Exception:
+                last_reboot = "unknown"
+        if last_reboot == "unknown":
+            plat = platform.system().lower()
+            if plat == "windows":
+                try:
+                    out = subprocess.run(
+                        ["wmic", "os", "get", "lastbootuptime"],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    raw = "".join(out.stdout.splitlines()[1:]).strip()
+                    if raw:
+                        boot = datetime.datetime.strptime(raw.split(".")[0], "%Y%m%d%H%M%S")
+                        last_reboot = boot.strftime("%Y-%m-%d %H:%M:%S")
+                except FileNotFoundError:
+                    ps_cmd = "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime"
+                    out = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command", ps_cmd],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    raw = out.stdout.strip()
+                    if raw:
+                        try:
+                            boot = datetime.datetime.strptime(raw.split(".")[0], "%Y%m%d%H%M%S")
+                            last_reboot = boot.strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pass
+            else:
+                try:
+                    out = subprocess.run(["uptime", "-s"], capture_output=True, text=True, timeout=30)
+                    val = out.stdout.strip()
+                    if val:
+                        last_reboot = val
+                except Exception:
+                    pass
+    except Exception:
+        last_reboot = "unknown"
+
+    created = config.data.get("created")
+    if not created:
+        created = time.strftime("%Y-%m-%d %H:%M:%S")
+        config.data["created"] = created
         try:
-            payload = {
-                "agent_id": AGENT_ID,
-                "hostname": socket.gethostname(),
-                "agent_operating_system": CONFIG.data.get("agent_operating_system", agent_info.detect_agent_os()),
-                "last_seen": int(time.time())
-            }
-            await sio.emit("agent_heartbeat", payload)
-        except Exception as e:
-            print(f"[WARN] heartbeat emit failed: {e}")
-        # Send periodic heartbeats every 60 seconds
-        await asyncio.sleep(60)
+            config._write()
+        except Exception:
+            pass
 
-# ---------------- Detailed Agent Data ----------------
-## Moved to agent_info module
+    try:
+        external_ip = requests.get("https://api.ipify.org", timeout=5).text.strip()
+    except Exception:
+        external_ip = "unknown"
 
-def collect_summary():
-    # Moved to agent_info.collect_summary
-    return agent_info.collect_summary(CONFIG)
+    return {
+        "hostname": socket.gethostname(),
+        "operating_system": config.data.get("agent_operating_system", detect_agent_os()),
+        "last_user": last_user,
+        "internal_ip": _get_internal_ip(),
+        "external_ip": external_ip,
+        "last_reboot": last_reboot,
+        "created": created,
+    }
+
 
 def collect_software():
-    # Moved to agent_info.collect_software
-    return agent_info.collect_software()
+    items = []
+    plat = platform.system().lower()
+    try:
+        if plat == "windows":
+            try:
+                out = subprocess.run(["wmic", "product", "get", "name,version"],
+                                     capture_output=True, text=True, timeout=60)
+                for line in out.stdout.splitlines():
+                    if line.strip() and not line.lower().startswith("name"):
+                        parts = line.strip().split("  ")
+                        name = parts[0].strip()
+                        version = parts[-1].strip() if len(parts) > 1 else ""
+                        if name:
+                            items.append({"name": name, "version": version})
+            except FileNotFoundError:
+                ps_cmd = (
+                    "Get-ItemProperty "
+                    "'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+                    "'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' "
+                    "| Where-Object { $_.DisplayName } "
+                    "| Select-Object DisplayName,DisplayVersion "
+                    "| ConvertTo-Json"
+                )
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                data = json.loads(out.stdout or "[]")
+                if isinstance(data, dict):
+                    data = [data]
+                for pkg in data:
+                    name = pkg.get("DisplayName")
+                    if name:
+                        items.append({
+                            "name": name,
+                            "version": pkg.get("DisplayVersion", "")
+                        })
+        elif plat == "linux":
+            out = subprocess.run(["dpkg-query", "-W", "-f=${Package}\t${Version}\n"], capture_output=True, text=True)
+            for line in out.stdout.splitlines():
+                if "\t" in line:
+                    name, version = line.split("\t", 1)
+                    items.append({"name": name, "version": version})
+        else:
+            out = subprocess.run([sys.executable, "-m", "pip", "list", "--format", "json"], capture_output=True, text=True)
+            data = json.loads(out.stdout or "[]")
+            for pkg in data:
+                items.append({"name": pkg.get("name"), "version": pkg.get("version")})
+    except Exception as e:
+        print(f"[WARN] collect_software failed: {e}")
+    return items[:100]
+
 
 def collect_memory():
-    # Delegated to agent_info module
-    return agent_info.collect_memory()
     entries = []
     plat = platform.system().lower()
     try:
@@ -423,9 +389,8 @@ def collect_memory():
             pass
     return entries
 
+
 def collect_storage():
-    # Delegated to agent_info module
-    return agent_info.collect_storage()
     disks = []
     plat = platform.system().lower()
     try:
@@ -489,61 +454,38 @@ def collect_storage():
                                 })
                             except Exception:
                                 pass
-                except FileNotFoundError:
-                    ps_cmd = (
-                        "Get-PSDrive -PSProvider FileSystem | "
-                        "Select-Object Name,Free,Used,Capacity,Root | ConvertTo-Json"
-                    )
-                    out = subprocess.run(
-                        ["powershell", "-NoProfile", "-Command", ps_cmd],
-                        capture_output=True,
-                        text=True,
-                        timeout=60,
-                    )
-                    data = json.loads(out.stdout or "[]")
-                    if isinstance(data, dict):
-                        data = [data]
-                    for d in data:
-                        total = d.get("Capacity") or 0
-                        used = d.get("Used") or 0
-                        free_bytes = d.get("Free") or max(total - used, 0)
-                        usage = (used / total * 100) if total else 0
-                        drive = d.get("Root") or f"{d.get('Name','')}:"
+                except Exception:
+                    pass
+        else:
+            try:
+                out = subprocess.run(["df", "-hP"], capture_output=True, text=True)
+                for line in out.stdout.splitlines()[1:]:
+                    parts = line.split()
+                    if len(parts) >= 6:
+                        try:
+                            usage_str = parts[4].rstrip('%')
+                            usage = float(usage_str)
+                        except Exception:
+                            usage = 0
+                        total = parts[1]
+                        free_bytes = parts[3]
+                        used = parts[2]
                         disks.append({
-                            "drive": drive,
-                            "disk_type": "Fixed Disk",
+                            "drive": parts[0],
+                            "disk_type": "Mounted",
                             "usage": usage,
                             "total": total,
                             "free": free_bytes,
                             "used": used,
                         })
-        else:
-            out = subprocess.run(
-                ["df", "-kP"], capture_output=True, text=True, timeout=60
-            )
-            lines = out.stdout.strip().splitlines()[1:]
-            for line in lines:
-                parts = line.split()
-                if len(parts) >= 6:
-                    total = int(parts[1]) * 1024
-                    used = int(parts[2]) * 1024
-                    free_bytes = int(parts[3]) * 1024
-                    usage = float(parts[4].rstrip("%"))
-                    disks.append({
-                        "drive": parts[5],
-                        "disk_type": "Fixed Disk",
-                        "usage": usage,
-                        "total": total,
-                        "free": free_bytes,
-                        "used": used,
-                    })
+            except Exception:
+                pass
     except Exception as e:
         print(f"[WARN] collect_storage failed: {e}")
     return disks
 
+
 def collect_network():
-    # Delegated to agent_info module
-    return agent_info.collect_network()
     adapters = []
     plat = platform.system().lower()
     try:
@@ -575,12 +517,7 @@ def collect_network():
                     "mac": a.get("MAC", "unknown"),
                 })
         else:
-            out = subprocess.run(
-                ["ip", "-o", "-4", "addr", "show"],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
+            out = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True, timeout=60)
             for line in out.stdout.splitlines():
                 parts = line.split()
                 if len(parts) >= 4:
@@ -591,20 +528,21 @@ def collect_network():
         print(f"[WARN] collect_network failed: {e}")
     return adapters
 
-async def send_agent_details():
+
+async def send_agent_details(agent_id, config):
     """Collect detailed agent data and send to server periodically."""
     while True:
         try:
             details = {
-                "summary": collect_summary(),
+                "summary": collect_summary(config),
                 "software": collect_software(),
                 "memory": collect_memory(),
                 "storage": collect_storage(),
                 "network": collect_network(),
             }
-            url = CONFIG.data.get("borealis_server_url", "http://localhost:5000") + "/api/agent/details"
+            url = config.data.get("borealis_server_url", "http://localhost:5000") + "/api/agent/details"
             payload = {
-                "agent_id": AGENT_ID,
+                "agent_id": agent_id,
                 "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
                 "details": details,
             }
@@ -614,140 +552,3 @@ async def send_agent_details():
             print(f"[WARN] Failed to send agent details: {e}")
         await asyncio.sleep(300)
 
-@sio.event
-async def connect():
-    print(f"[INFO] Successfully Connected to Borealis Server!")
-    await sio.emit('connect_agent', {"agent_id": AGENT_ID})
-
-    # Send an immediate heartbeat so the UI can populate instantly.
-    try:
-        await sio.emit("agent_heartbeat", {
-            "agent_id": AGENT_ID,
-            "hostname": socket.gethostname(),
-            "agent_operating_system": CONFIG.data.get("agent_operating_system", agent_info.detect_agent_os()),
-            "last_seen": int(time.time())
-        })
-    except Exception as e:
-        print(f"[WARN] initial heartbeat failed: {e}")
-
-    await sio.emit('request_config', {"agent_id": AGENT_ID})
-
-@sio.event
-async def disconnect():
-    print("[WebSocket] Disconnected from Borealis server.")
-    await stop_all_roles()
-    CONFIG.data['regions'].clear()
-    CONFIG._write()
-
-# //////////////////////////////////////////////////////////////////////////
-# CORE SECTION: AGENT CONFIG MANAGEMENT / WINDOW MANAGEMENT
-# //////////////////////////////////////////////////////////////////////////
-@sio.on('agent_config')
-async def on_agent_config(cfg):
-    print("[DEBUG] agent_config event received.")
-    roles = cfg.get('roles', [])
-    if not roles:
-        print("[CONFIG] Config Reset by Borealis Server Operator - Awaiting New Config...")
-        await stop_all_roles()
-        return
-
-    print(f"[CONFIG] Received New Agent Config with {len(roles)} Role(s).")
-
-    new_ids = {r.get('node_id') for r in roles if r.get('node_id')}
-    old_ids = set(role_tasks.keys())
-    removed = old_ids - new_ids
-
-    for rid in removed:
-        print(f"[DEBUG] Removing node {rid} from regions/overlays.")
-        CONFIG.data['regions'].pop(rid, None)
-        try:
-            agent_roles.close_overlay(rid)
-        except Exception:
-            pass
-    if removed:
-        CONFIG._write()
-
-    for task in list(role_tasks.values()):
-        task.cancel()
-    role_tasks.clear()
-
-    for role_cfg in roles:
-        nid = role_cfg.get('node_id')
-        role = role_cfg.get('role')
-        if role == 'screenshot':
-            print(f"[DEBUG] Starting screenshot task for {nid}")
-            task = asyncio.create_task(agent_roles.screenshot_task(roles_ctx, role_cfg))
-            role_tasks[nid] = task
-        elif role == 'macro':
-            print(f"[DEBUG] Starting macro task for {nid}")
-            task = asyncio.create_task(agent_roles.macro_task(roles_ctx, role_cfg))
-            role_tasks[nid] = task
-
-@sio.on('list_agent_windows')
-async def handle_list_agent_windows(data):
-    windows = agent_roles.get_window_list()
-    await sio.emit('agent_window_list', {
-        'agent_id': AGENT_ID,
-        'windows': windows
-    })
-
-# ---------------- Config Watcher ----------------
-async def config_watcher():
-    while True:
-        CONFIG.watch()
-        await asyncio.sleep(CONFIG.data.get('config_file_watcher_interval',2))
-
-# ---------------- Persistent Idle Task ----------------
-async def idle_task():
-    try:
-        while True:
-            await asyncio.sleep(60)
-    except asyncio.CancelledError:
-        print("[FATAL] Idle task was cancelled!")
-    except Exception as e:
-        print(f"[FATAL] Idle task crashed: {e}")
-        traceback.print_exc()
-
-# ---------------- Dummy Qt Widget to Prevent Exit ----------------
-class PersistentWindow(QtWidgets.QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("KeepAlive")
-        self.setGeometry(-1000,-1000,1,1)
-        self.setAttribute(QtCore.Qt.WA_DontShowOnScreen)
-        self.hide()
-
-# //////////////////////////////////////////////////////////////////////////
-# MAIN & EVENT LOOP
-# //////////////////////////////////////////////////////////////////////////
-async def connect_loop():
-    retry=5
-    while True:
-        try:
-            url=CONFIG.data.get('borealis_server_url',"http://localhost:5000")
-            print(f"[INFO] Connecting Agent to {url}...")
-            await sio.connect(url,transports=['websocket'])
-            break
-        except Exception as e:
-            print(f"[WebSocket] Server unavailable: {e}. Retrying in {retry}s...")
-            await asyncio.sleep(retry)
-
-if __name__=='__main__':
-    app=QtWidgets.QApplication(sys.argv)
-    loop=QEventLoop(app); asyncio.set_event_loop(loop)
-    dummy_window=PersistentWindow(); dummy_window.show()
-    # Initialize roles context for role tasks
-    roles_ctx = agent_roles.RolesContext(sio=sio, agent_id=AGENT_ID, config=CONFIG)
-    try:
-        background_tasks.append(loop.create_task(config_watcher()))
-        background_tasks.append(loop.create_task(connect_loop()))
-        background_tasks.append(loop.create_task(idle_task()))
-        # Start periodic heartbeats
-        background_tasks.append(loop.create_task(send_heartbeat()))
-        background_tasks.append(loop.create_task(agent_info.send_agent_details(AGENT_ID, CONFIG)))
-        loop.run_forever()
-    except Exception as e:
-        print(f"[FATAL] Event loop crashed: {e}")
-        traceback.print_exc()
-    finally:
-        print("[FATAL] Agent exited unexpectedly.")

@@ -453,9 +453,16 @@ switch ($choice) {
                 & $pythonExe -m venv $venvFolder
             }
             if (Test-Path $agentSourcePath) {
+                # Remove Existing "Agent/Borealis" folder.
                 Remove-Item $agentDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
+
+                # Create New "Agent/Borealis" folder.
                 New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
-                Copy-Item $agentSourcePath $agentDestinationFile -Force
+                
+                # Agent Files and Modules
+                Copy-Item "Data\Agent\borealis-agent.py" $agentDestinationFolder -Recurse
+                Copy-Item "Data\Agent\agent_info.py" $agentDestinationFolder -Recurse
+                Copy-Item "Data\Agent\agent_roles.py" $agentDestinationFolder -Recurse
                 Copy-Item "Data\Agent\Python_API_Endpoints" $agentDestinationFolder -Recurse
             }
             . "$venvFolder\Scripts\Activate"
