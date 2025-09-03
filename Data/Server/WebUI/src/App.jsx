@@ -8,7 +8,7 @@ import {
 import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
   InfoOutlined as InfoOutlinedIcon,
-  MergeType as MergeTypeIcon,
+  GitHub as GitHub,
   People as PeopleIcon
 } from "@mui/icons-material";
 import { ReactFlowProvider } from "reactflow";
@@ -459,8 +459,8 @@ export default function App() {
               About
             </Button>
             <Menu anchorEl={aboutAnchorEl} open={Boolean(aboutAnchorEl)} onClose={handleAboutMenuClose}>
-              <MenuItem onClick={() => { handleAboutMenuClose(); window.open("https://git.bunny-lab.io/bunny-lab/Borealis", "_blank"); }}>
-                <MergeTypeIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} /> Gitea Project
+              <MenuItem onClick={() => { handleAboutMenuClose(); window.open("https://github.com/bunny-lab-io/Borealis", "_blank"); }}>
+                <GitHub sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} /> Github Project
               </MenuItem>
               <MenuItem onClick={openCreditsDialog}>
                 <PeopleIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} /> Credits

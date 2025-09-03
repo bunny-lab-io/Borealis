@@ -38,7 +38,7 @@ export function CreditsDialog({ open, onClose }) {
           alt="Borealis Logo"
           style={{ width: "120px", marginBottom: "12px" }}
         />
-        <DialogTitle sx={{ p: 0, mb: 1 }}>Borealis Workflow Automation Tool</DialogTitle>
+        <DialogTitle sx={{ p: 0, mb: 1 }}>Borealis - Automation Platform</DialogTitle>
         <DialogContentText sx={{ color: "#ccc" }}>
           Designed by Nicole Rappe @{" "}
           <a
