@@ -26,6 +26,16 @@ export default function DeviceDetails({ device, onBack }) {
   const [softwareOrder, setSoftwareOrder] = useState("asc");
   const [softwareSearch, setSoftwareSearch] = useState("");
   const [description, setDescription] = useState("");
+  // Snapshotted status for the lifetime of this page
+  const [lockedStatus, setLockedStatus] = useState(() => {
+    // Prefer status provided by the device list row if available
+    if (device?.status) return device.status;
+    // Fallback: compute once from the provided lastSeen timestamp
+    const tsSec = device?.lastSeen;
+    if (!tsSec) return "Offline";
+    const now = Date.now() / 1000;
+    return now - tsSec <= 15 ? "Online" : "Offline";
+  });
 
   const statusFromHeartbeat = (tsSec, offlineAfter = 15) => {
     if (!tsSec) return "Offline";
@@ -53,6 +63,11 @@ export default function DeviceDetails({ device, onBack }) {
   };
 
   useEffect(() => {
+    // When navigating to a different device, take a fresh snapshot of its status
+    if (device) {
+      setLockedStatus(device.status || statusFromHeartbeat(device.lastSeen));
+    }
+
     if (!device || !device.hostname) return;
     const load = async () => {
       try {
@@ -461,7 +476,8 @@ export default function DeviceDetails({ device, onBack }) {
     { label: "Storage", content: renderStorage() },
     { label: "Network", content: renderNetwork() }
   ];
-  const status = statusFromHeartbeat(agent.last_seen || device?.lastSeen);
+  // Use the snapshotted status so it stays static while on this page
+  const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
 
   return (
     <Paper sx={{ m: 2, p: 2, bgcolor: "#1e1e1e" }} elevation={2}>
