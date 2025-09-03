@@ -16,7 +16,7 @@ import {
   MenuItem
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
-import { DeleteDeviceDialog } from "./Dialogs.jsx";
+import { DeleteDeviceDialog } from "../Dialogs.jsx";
 
 function formatLastSeen(tsSec, offlineAfter = 15) {
   if (!tsSec) return "unknown";

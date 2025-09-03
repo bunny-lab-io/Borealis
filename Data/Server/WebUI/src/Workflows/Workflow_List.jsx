@@ -11,7 +11,7 @@ import {
   RenameFolderDialog,
   NewWorkflowDialog,
   ConfirmDeleteDialog
-} from "./Dialogs";
+} from "../Dialogs";
 
 function buildTree(workflows, folders) {
   const map = {};
@@ -389,4 +389,3 @@ export default function WorkflowList({ onOpenWorkflow }) {
     </Paper>
   );
 }
-

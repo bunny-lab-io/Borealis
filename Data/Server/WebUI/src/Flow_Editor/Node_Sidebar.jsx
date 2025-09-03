@@ -21,7 +21,7 @@ import {
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon
 } from "@mui/icons-material";
-import { SaveWorkflowDialog } from "./Dialogs";
+import { SaveWorkflowDialog } from "../Dialogs";
 
 export default function NodeSidebar({
   categorizedNodes,

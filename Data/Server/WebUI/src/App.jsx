@@ -14,9 +14,9 @@ import {
 import { ReactFlowProvider } from "reactflow";
 import "reactflow/dist/style.css";
 
-import FlowTabs from "./Flow_Tabs";
-import FlowEditor from "./Flow_Editor";
-import NodeSidebar from "./Node_Sidebar";
+import FlowTabs from "./Flow_Editor/Flow_Tabs";
+import FlowEditor from "./Flow_Editor/Flow_Editor";
+import NodeSidebar from "./Flow_Editor/Node_Sidebar";
 import {
   CloseAllDialog, CreditsDialog, RenameTabDialog, TabContextMenu
 } from "./Dialogs";
@@ -24,12 +24,12 @@ import StatusBar from "./Status_Bar";
 
 // New imports for split pages
 import NavigationSidebar from "./Navigation_Sidebar";
-import WorkflowList from "./Workflow_List";
-import DeviceList from "./Device_List";
-import ScriptList from "./Script_List";
-import ScheduledJobsList from "./Scheduled_Jobs_List";
+import WorkflowList from "./Workflows/Workflow_List";
+import DeviceList from "./Devices/Device_List";
+import ScriptList from "./Scripting/Script_List";
+import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
 import Login from "./Login.jsx";
-import DeviceDetails from "./Device_Details";
+import DeviceDetails from "./Devices/Device_Details";
 
 import { io } from "socket.io-client";
 
