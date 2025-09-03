@@ -175,35 +175,6 @@ function Install_Shared_Dependencies {
 }
 
 function Install_Server_Dependencies {
-    # NodeJS (required for Vite / Web UI)
-    Run-Step "Dependency: NodeJS" {
-        if (-not (Test-Path $nodeExe)) {
-            # Download archive if not present
-            if (-not (Test-Path $node7zPath)) {
-                Invoke-WebRequest -Uri $node7zUrl -OutFile $node7zPath
-            }
-
-            # Extract using bundled 7z
-            if (-not (Test-Path $sevenZipExe)) {
-                throw "7-Zip CLI not found at: $sevenZipExe"
-            }
-
-            & $sevenZipExe x $node7zPath "-o$nodeInstallDir" -y | Out-Null
-
-            # The extracted contents might live under a subfolder; flatten if needed
-            $extracted = Get-ChildItem $nodeInstallDir | Where-Object { $_.PSIsContainer } | Select-Object -First 1
-            if ($extracted) {
-                Get-ChildItem $extracted.FullName | Move-Item -Destination $nodeInstallDir -Force
-                Remove-Item $extracted.FullName -Recurse -Force
-            }
-
-            # Clean Up 7z File After Extraction
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $node7zPath
-        }
-    }
-}
-
-function Install_Agent_Dependencies {
     # Tesseract OCR Engine
     Run-Step "Dependency: Tesseract-OCR" {
         $tessExeUrl     = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
@@ -233,8 +204,8 @@ function Install_Agent_Dependencies {
         }
     }
 
-    # Tesseract language data
-    Run-Step "Dependency: Tesseract-OCR - Trained Model Data" {
+    # Tesseract Language Data
+    Run-Step "Dependency: Tesseract-OCR - Pre-Trained Model Data" {
         $langDataDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR\tessdata"
         $engPath     = Join-Path $langDataDir "eng.traineddata"
         $osdPath     = Join-Path $langDataDir "osd.traineddata"
@@ -248,6 +219,35 @@ function Install_Agent_Dependencies {
         }
     }
 
+    # NodeJS (required for Vite / Web UI)
+    Run-Step "Dependency: NodeJS" {
+        if (-not (Test-Path $nodeExe)) {
+            # Download archive if not present
+            if (-not (Test-Path $node7zPath)) {
+                Invoke-WebRequest -Uri $node7zUrl -OutFile $node7zPath
+            }
+
+            # Extract using bundled 7z
+            if (-not (Test-Path $sevenZipExe)) {
+                throw "7-Zip CLI not found at: $sevenZipExe"
+            }
+
+            & $sevenZipExe x $node7zPath "-o$nodeInstallDir" -y | Out-Null
+
+            # The extracted contents might live under a subfolder; flatten if needed
+            $extracted = Get-ChildItem $nodeInstallDir | Where-Object { $_.PSIsContainer } | Select-Object -First 1
+            if ($extracted) {
+                Get-ChildItem $extracted.FullName | Move-Item -Destination $nodeInstallDir -Force
+                Remove-Item $extracted.FullName -Recurse -Force
+            }
+
+            # Clean Up 7z File After Extraction
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $node7zPath
+        }
+    }
+}
+
+function Install_Agent_Dependencies {
     # AutoHotKey portable
     Run-Step "Dependency: AutoHotKey" {
         $ahkVersion    = "2.0.19"
@@ -281,7 +281,6 @@ function Install_Agent_Dependencies {
         }
     }
 }
-### Heavy dependency bootstrap moved into Server menu (choice 1)
 
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
