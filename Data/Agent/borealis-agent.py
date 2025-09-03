@@ -33,17 +33,10 @@ os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false;*.debug=false")
 from qasync import QEventLoop
 from PyQt5 import QtCore, QtGui, QtWidgets
 try:
-    # Swallow Qt warnings like OleInitialize failures on Windows consoles
+    # Swallow Qt framework messages to keep console clean
     def _qt_msg_handler(mode, context, message):
-        # Intentionally suppress all Qt framework messages to keep console clean
         return
     QtCore.qInstallMessageHandler(_qt_msg_handler)
-except Exception:
-    pass
-try:
-    # Pre-initialize OLE to reduce chances of RPC_E_CHANGED_MODE warnings
-    import ctypes
-    ctypes.windll.ole32.OleInitialize(0)
 except Exception:
     pass
 from PIL import ImageGrab
