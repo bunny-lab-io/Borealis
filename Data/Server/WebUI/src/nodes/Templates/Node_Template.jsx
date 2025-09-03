@@ -41,7 +41,7 @@ const TemplateNode = ({ id, data }) => {
 
   // Local state holds the current string value shown in the textbox
   // AI Note: valueRef.current tracks the last emitted value to prevent redundant bus writes
-  const [renderValue, setRenderValue] = useState(data?.value || "/Data/Server/WebUI/src/nodes/Templates/Node_Template.jsx");
+  const [renderValue, setRenderValue] = useState(data?.value || "/Data/Server/WebUI/src/Nodes/Templates/Node_Template.jsx");
   const valueRef = useRef(renderValue);
 
   /**

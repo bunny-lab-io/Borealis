@@ -41,7 +41,7 @@ if (!window.BorealisUpdateRate) {
 }
 
 // Load node modules dynamically
-const modules = import.meta.glob('./nodes/**/*.jsx', { eager: true });
+const modules = import.meta.glob('./Nodes/**/*.jsx', { eager: true });
 const nodeTypes = {};
 const categorizedNodes = {};
 Object.entries(modules).forEach(([path, mod]) => {
@@ -49,7 +49,7 @@ Object.entries(modules).forEach(([path, mod]) => {
   if (!comp) return;
   const { type, component } = comp;
   if (!type || !component) return;
-  const parts = path.replace('./nodes/', '').split('/');
+  const parts = path.replace('./Nodes/', '').split('/');
   const category = parts[0];
   if (!categorizedNodes[category]) categorizedNodes[category] = [];
   categorizedNodes[category].push(comp);
