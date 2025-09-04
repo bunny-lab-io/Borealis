@@ -28,6 +28,7 @@ import "prismjs/components/prism-powershell";
 import "prismjs/components/prism-batch";
 import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
+import QuickJob from "../Scheduling/Quick_Job.jsx";
 
 export default function DeviceDetails({ device, onBack }) {
   const [tab, setTab] = useState(0);
@@ -44,6 +45,7 @@ export default function DeviceDetails({ device, onBack }) {
   const [outputTitle, setOutputTitle] = useState("");
   const [outputContent, setOutputContent] = useState("");
   const [outputLang, setOutputLang] = useState("powershell");
+  const [quickJobOpen, setQuickJobOpen] = useState(false);
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
     // Prefer status provided by the device list row if available
@@ -671,28 +673,45 @@ export default function DeviceDetails({ device, onBack }) {
 
   return (
     <Paper sx={{ m: 2, p: 2, bgcolor: "#1e1e1e" }} elevation={2}>
-      <Box sx={{ mb: 2, display: "flex", alignItems: "center" }}>
-        {onBack && (
-          <Button variant="outlined" size="small" onClick={onBack} sx={{ mr: 2 }}>
-            Back
-          </Button>
-        )}
-        <Typography
-          variant="h6"
-          sx={{ color: "#58a6ff", display: "flex", alignItems: "center" }}
-        >
-          <span
-            style={{
-              display: "inline-block",
-              width: 10,
-              height: 10,
-              borderRadius: 10,
-              background: statusColor(status),
-              marginRight: 8,
+      <Box sx={{ mb: 2, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <Box sx={{ display: "flex", alignItems: "center" }}>
+          {onBack && (
+            <Button variant="outlined" size="small" onClick={onBack} sx={{ mr: 2 }}>
+              Back
+            </Button>
+          )}
+          <Typography
+            variant="h6"
+            sx={{ color: "#58a6ff", display: "flex", alignItems: "center" }}
+          >
+            <span
+              style={{
+                display: "inline-block",
+                width: 10,
+                height: 10,
+                borderRadius: 10,
+                background: statusColor(status),
+                marginRight: 8,
+              }}
+            />
+            {agent.hostname || "Device Details"}
+          </Typography>
+        </Box>
+        <Box>
+          <Button
+            variant="outlined"
+            size="small"
+            disabled={!(agent?.hostname || device?.hostname)}
+            onClick={() => setQuickJobOpen(true)}
+            sx={{
+              color: !(agent?.hostname || device?.hostname) ? "#666" : "#58a6ff",
+              borderColor: !(agent?.hostname || device?.hostname) ? "#333" : "#58a6ff",
+              textTransform: "none"
             }}
-          />
-          {agent.hostname || "Device Details"}
-        </Typography>
+          >
+            Quick Job
+          </Button>
+        </Box>
       </Box>
       <Tabs
         value={tab}
@@ -730,6 +749,14 @@ export default function DeviceDetails({ device, onBack }) {
           <Button onClick={() => setOutputOpen(false)} sx={{ color: "#58a6ff" }}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      {quickJobOpen && (
+        <QuickJob
+          open={quickJobOpen}
+          onClose={() => setQuickJobOpen(false)}
+          hostnames={[agent?.hostname || device?.hostname].filter(Boolean)}
+        />
+      )}
     </Paper>
   );
 }
