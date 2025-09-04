@@ -998,18 +998,22 @@ async def on_quick_job_run(payload):
         content = payload.get('script_content') or ''
         # Only handle non-SYSTEM runs here; SYSTEM runs are handled by the LocalSystem service agent
         if run_mode == 'system':
-            # Optionally, could emit a status indicating delegation; for now, just ignore to avoid overlap
+            # Ignore: handled by SYSTEM supervisor/agent
             return
         if script_type != 'powershell':
             await sio.emit('quick_job_result', { 'job_id': job_id, 'status': 'Failed', 'stdout': '', 'stderr': f"Unsupported type: {script_type}" })
             return
-        path = _write_temp_script(content, '.ps1')
         rc = 0; out = ''; err = ''
         if run_mode == 'admin':
             # Admin credentialed runs are disabled in current design
-            rc, out, err = -1, '', 'Admin credentialed runs are disabled; use SYSTEM (service) or Current User.'
+            rc, out, err = -1, '', 'Admin credentialed runs are disabled; use SYSTEM or Current User.'
         else:
-            rc, out, err = await _run_powershell_local(path)
+            # Prefer ephemeral scheduled task in current user context
+            rc, out, err = await _run_powershell_via_user_task(content)
+            if rc == -999:
+                # Fallback to direct execution
+                path = _write_temp_script(content, '.ps1')
+                rc, out, err = await _run_powershell_local(path)
         status = 'Success' if rc == 0 else 'Failed'
         await sio.emit('quick_job_result', {
             'job_id': job_id,
@@ -1052,6 +1056,60 @@ async def idle_task():
     except Exception as e:
         print(f"[FATAL] Idle task crashed: {e}")
         traceback.print_exc()
+
+async def _run_powershell_via_user_task(content: str):
+    ps = None
+    if IS_WINDOWS:
+        ps = os.path.expandvars(r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
+        if not os.path.isfile(ps):
+            ps = "powershell.exe"
+    else:
+        return -999, '', 'Windows only'
+    try:
+        temp_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'Temp')
+        temp_dir = os.path.abspath(temp_dir)
+        os.makedirs(temp_dir, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix='usr_task_', suffix='.ps1', dir=temp_dir, text=True)
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(content or '')
+        out_path = os.path.join(temp_dir, f'out_{uuid.uuid4().hex}.txt')
+        name = f"Borealis Agent - Task - {uuid.uuid4().hex} @ CurrentUser"
+        task_ps = f"""
+$ErrorActionPreference='Continue'
+$task = "{name}"
+$ps   = "{ps}"
+$scr  = "{path}"
+$out  = "{out_path}"
+try {{ Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+$action   = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $scr + '" *> "' + $out + '"')
+$settings = New-ScheduledTaskSettingsSet -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$principal= New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName $task -Action $action -Settings $settings -Principal $principal -Force | Out-Null
+Start-ScheduledTask -TaskName $task | Out-Null
+Start-Sleep -Seconds 2
+Get-ScheduledTask -TaskName $task | Out-Null
+"""
+        proc = await asyncio.create_subprocess_exec(ps, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', task_ps, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        await proc.communicate()
+        if proc.returncode != 0:
+            return -999, '', 'failed to create user task'
+        # Wait for output
+        deadline = time.time() + 60
+        out_data = ''
+        while time.time() < deadline:
+            try:
+                if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+                    with open(out_path, 'r', encoding='utf-8', errors='replace') as f:
+                        out_data = f.read()
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+        cleanup = f"try {{ Unregister-ScheduledTask -TaskName '{name}' -Confirm:$false }} catch {{}}"
+        await asyncio.create_subprocess_exec(ps, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', cleanup)
+        return 0, out_data or '', ''
+    except Exception as e:
+        return -999, '', str(e)
 
 # ---------------- Dummy Qt Widget to Prevent Exit ----------------
 class PersistentWindow(QtWidgets.QWidget):

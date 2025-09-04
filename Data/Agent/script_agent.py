@@ -10,6 +10,8 @@ import tempfile
 import socketio
 import platform
 import time
+import uuid
+import tempfile
 
 
 def get_project_root():
@@ -89,7 +91,11 @@ async def main():
                     'stderr': f"Unsupported type: {script_type}"
                 })
                 return
-            rc, out, err = run_powershell_script_content(content)
+            # Preferred: run via ephemeral scheduled task under SYSTEM for isolation
+            rc, out, err = run_powershell_via_system_task(content)
+            if rc == -999:
+                # Fallback to direct execution if task creation not available
+                rc, out, err = run_powershell_script_content(content)
             status = 'Success' if rc == 0 else 'Failed'
             await sio.emit('quick_job_result', {
                 'job_id': job_id,
@@ -142,6 +148,62 @@ async def main():
         except Exception as e:
             print(f"[ScriptAgent] reconnect in 5s: {e}")
             await asyncio.sleep(5)
+
+
+def run_powershell_via_system_task(content: str):
+    """Create an ephemeral scheduled task under SYSTEM to run the script.
+    Returns (rc, stdout, stderr). If the environment lacks PowerShell ScheduledTasks module, returns (-999, '', 'unavailable').
+    """
+    ps_exe = os.path.expandvars(r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
+    if not os.path.isfile(ps_exe):
+        ps_exe = 'powershell.exe'
+    try:
+        os.makedirs(os.path.join(get_project_root(), 'Temp'), exist_ok=True)
+        # Write the target script
+        script_fd, script_path = tempfile.mkstemp(prefix='sys_task_', suffix='.ps1', dir=os.path.join(get_project_root(), 'Temp'), text=True)
+        with os.fdopen(script_fd, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(content or '')
+        # Output capture path
+        out_path = os.path.join(get_project_root(), 'Temp', f'out_{uuid.uuid4().hex}.txt')
+        task_name = f"Borealis Agent - Task - {uuid.uuid4().hex} @ SYSTEM"
+        # Build PS to create/run task with DeleteExpiredTaskAfter
+        task_ps = f"""
+$ErrorActionPreference='Continue'
+$task = "{task_name}"
+$ps   = "{ps_exe}"
+$scr  = "{script_path}"
+$out  = "{out_path}"
+try {{ Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+$action   = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $scr + '" *> "' + $out + '"')
+$settings = New-ScheduledTaskSettingsSet -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$principal= New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskName $task -Action $action -Settings $settings -Principal $principal -Force | Out-Null
+Start-ScheduledTask -TaskName $task | Out-Null
+Start-Sleep -Seconds 2
+Get-ScheduledTask -TaskName $task | Out-Null
+"""
+        # Run task creation
+        proc = subprocess.run([ps_exe, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', task_ps], capture_output=True, text=True)
+        if proc.returncode != 0:
+            return -999, '', (proc.stderr or proc.stdout or 'scheduled task creation failed')
+        # Wait up to 60s for output to be written
+        deadline = time.time() + 60
+        out_data = ''
+        while time.time() < deadline:
+            try:
+                if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+                    with open(out_path, 'r', encoding='utf-8', errors='replace') as f:
+                        out_data = f.read()
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        # Cleanup task (best-effort)
+        cleanup_ps = f"try {{ Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false }} catch {{}}"
+        subprocess.run([ps_exe, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', cleanup_ps], capture_output=True, text=True)
+        return 0, out_data or '', ''
+    except Exception as e:
+        return -999, '', str(e)
 
 
 if __name__ == '__main__':

@@ -37,14 +37,12 @@ class TrayApp(QtWidgets.QSystemTrayIcon):
         self.action_show_console = self.menu.addAction('Switch to Foreground Mode')
         self.action_hide_console = self.menu.addAction('Switch to Background Mode')
         self.action_restart = self.menu.addAction('Restart Agent')
-        self.action_restart_service = self.menu.addAction('Restart Borealis Agent Service')
         self.menu.addSeparator()
         self.action_quit = self.menu.addAction('Quit Agent and Tray')
 
         self.action_show_console.triggered.connect(self.switch_to_console)
         self.action_hide_console.triggered.connect(self.switch_to_background)
         self.action_restart.triggered.connect(self.restart_agent)
-        self.action_restart_service.triggered.connect(self.restart_script_service)
         self.action_quit.triggered.connect(self.quit_all)
         self.setContextMenu(self.menu)
 
@@ -101,35 +99,7 @@ class TrayApp(QtWidgets.QSystemTrayIcon):
         # Restart using current mode
         self._start_agent(console=self.console_mode)
 
-    def restart_script_service(self):
-        # Try direct stop/start; if fails (likely due to permissions), attempt elevation via PowerShell
-        service_name = 'BorealisAgent'
-        try:
-            # Stop service
-            subprocess.run(["sc.exe", "stop", service_name], check=False, capture_output=True)
-            # Start service
-            subprocess.run(["sc.exe", "start", service_name], check=False, capture_output=True)
-            return
-        except Exception:
-            pass
-
-        # Fallback: elevate via PowerShell
-        try:
-            script = (
-                f"$ErrorActionPreference='Continue'; "
-                f"try {{ Stop-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue }} catch {{}}; "
-                f"Start-Sleep -Seconds 1; "
-                f"try {{ Start-Service -Name '{service_name}' }} catch {{}};"
-            )
-            # Start-Process PowerShell -Verb RunAs to elevate
-            ps_cmd = [
-                'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                '-Command',
-                "Start-Process PowerShell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"" + script.replace("\"", "\\\"") + "\"'"
-            ]
-            subprocess.Popen(ps_cmd)
-        except Exception:
-            pass
+    # Service controls removed in task-centric architecture
 
     def quit_all(self):
         self._stop_agent()

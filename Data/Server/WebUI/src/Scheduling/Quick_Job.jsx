@@ -185,7 +185,7 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
                 label={<Typography variant="body2">Run as currently logged-in user</Typography>}
               />
               <Typography variant="caption" sx={{ color: "#888" }}>
-                Unchecked = run as SYSTEM (requires agent service)
+                Unchecked = Run-As BUILTIN\SYSTEM
               </Typography>
             </Box>
             {error && (
