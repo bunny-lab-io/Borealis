@@ -340,20 +340,29 @@ function Ensure-AgentTasks {
     if (-not (Test-Path $regScript)) { Write-Host "Register helper script not found: $regScript" -ForegroundColor Red; return }
     if (-not (Test-Path $wdSource))  { Write-Host "Watchdog script not found: $wdSource" -ForegroundColor Red; return }
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'powershell.exe'
-    $psi.Verb = 'runas'
-    $psi.UseShellExecute = $true
-    $psi.ArgumentList = @(
-        '-NoProfile','-ExecutionPolicy','Bypass',
-        '-File', $regScript,
-        '-SupName', $supName,
-        '-PythonExe', $py,
-        '-SupScript', $supScript,
-        '-WdName', $wdName,
-        '-WdSource', $wdSource
-    )
-    try { $proc = [System.Diagnostics.Process]::Start($psi); $proc.WaitForExit() } catch {
+    # Launch registrar elevated using -EncodedCommand to avoid quoting/binding issues
+    $qSupName  = $supName  -replace "'","''"
+    $qPy       = $py       -replace "'","''"
+    $qSupScript= $supScript-replace "'","''"
+    $qWdName   = $wdName   -replace "'","''"
+    $qWdSource = $wdSource -replace "'","''"
+    $qRegScript= $regScript-replace "'","''"
+    $inline = @"
+`$p = @{
+    SupName   = '$qSupName'
+    PythonExe = '$qPy'
+    SupScript = '$qSupScript'
+    WdName    = '$qWdName'
+    WdSource  = '$qWdSource'
+}
+& '$qRegScript' @p
+"@
+    $bytes   = [System.Text.Encoding]::Unicode.GetBytes($inline)
+    $encoded = [Convert]::ToBase64String($bytes)
+    $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand', $encoded)
+    try {
+        Start-Process -FilePath 'powershell.exe' -ArgumentList ($argList -join ' ') -Verb RunAs -Wait | Out-Null
+    } catch {
         Write-Host "Failed to elevate for task registration." -ForegroundColor Red
     }
 }

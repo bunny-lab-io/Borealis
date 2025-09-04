@@ -1278,10 +1278,22 @@ def on_agent_heartbeat(data):
     hostname = data.get("hostname")
 
     if hostname:
+        # Avoid duplicate entries per-hostname. Prefer non-script agents over script helpers.
+        try:
+            is_current_script = isinstance(agent_id, str) and agent_id.lower().endswith('-script')
+        except Exception:
+            is_current_script = False
         for aid, info in list(registered_agents.items()):
-            if aid != agent_id and info.get("hostname") == hostname:
-                registered_agents.pop(aid, None)
-                agent_configurations.pop(aid, None)
+            if aid == agent_id:
+                continue
+            if info.get("hostname") == hostname:
+                if info.get('is_script_agent') and not is_current_script:
+                    # Replace script helper with full agent record
+                    registered_agents.pop(aid, None)
+                    agent_configurations.pop(aid, None)
+                else:
+                    # Keep existing non-script agent; do not evict it for script heartbeats
+                    pass
 
     rec = registered_agents.setdefault(agent_id, {})
     rec["agent_id"] = agent_id

@@ -108,14 +108,14 @@ def ensure_user_logon_task(paths):
     pyw = paths.get("venv_pythonw") or paths["venv_python"]
     cmd = f'"{pyw}" -W ignore::SyntaxWarning "{paths["agent_script"]}"'
     # Try create non-elevated
-    q = run(["schtasks.exe", "/Query", "/TN", task_name])
+    q = run(["schtasks.exe", "/Query", "/TN", task_name], capture=True)
     if q.returncode == 0:
-        d = run(["schtasks.exe", "/Delete", "/TN", task_name, "/F"])
+        d = run(["schtasks.exe", "/Delete", "/TN", task_name, "/F"], capture=True)
         if d.returncode != 0:
             pass
-    c = run(["schtasks.exe", "/Create", "/SC", "ONLOGON", "/TN", task_name, "/TR", cmd, "/F", "/RL", "LIMITED"])
+    c = run(["schtasks.exe", "/Create", "/SC", "ONLOGON", "/TN", task_name, "/TR", cmd, "/F", "/RL", "LIMITED"], capture=True)
     if c.returncode == 0:
-        run(["schtasks.exe", "/Run", "/TN", task_name])
+        run(["schtasks.exe", "/Run", "/TN", task_name], capture=True)
         return True
     # Elevated fallback using ScheduledTasks cmdlets for better reliability
     ps = f"""
@@ -160,4 +160,3 @@ def main(argv):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))
-
