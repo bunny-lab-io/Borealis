@@ -334,47 +334,28 @@ function Ensure-AgentTasks {
     $supScript= Join-Path $ScriptRoot 'Data\Agent\agent_supervisor.py'
     $wdName   = 'Borealis Agent - Watchdog'
 
-    $taskStub = @"
-$ErrorActionPreference='Continue'
-$sup = '$supName'
-$py  = "$py"
-$supScr = "$supScript"
-$wd  = '$wdName'
+    # Elevate and run the external registrar script with parameters
+    $regScript  = Join-Path $ScriptRoot 'Data\Agent\Scripts\register_agent_tasks.ps1'
+    $wdSource   = Join-Path $ScriptRoot 'Data\Agent\Scripts\watchdog.ps1'
+    if (-not (Test-Path $regScript)) { Write-Host "Register helper script not found: $regScript" -ForegroundColor Red; return }
+    if (-not (Test-Path $wdSource))  { Write-Host "Watchdog script not found: $wdSource" -ForegroundColor Red; return }
 
-try { Unregister-ScheduledTask -TaskName $sup -Confirm:$false -ErrorAction SilentlyContinue } catch {}
-$a = New-ScheduledTaskAction -Execute $py -Argument ('-W ignore::SyntaxWarning "' + $supScr + '"')
-$t = New-ScheduledTaskTrigger -AtStartup
-$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-$p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-Register-ScheduledTask -TaskName $sup -Action $a -Trigger $t -Settings $s -Principal $p -Force | Out-Null
-
-$wdScript = @"
-$ErrorActionPreference='SilentlyContinue'
-if (-not (Get-ScheduledTask -TaskName "$sup" -ErrorAction SilentlyContinue)) { exit }
-$st = (Get-ScheduledTask -TaskName "$sup").State
-if ($st -eq 'Disabled') { Enable-ScheduledTask -TaskName "$sup" | Out-Null }
-if ($st -ne 'Running') { Start-ScheduledTask -TaskName "$sup" | Out-Null }
-"@
-$wdFile = Join-Path $env:ProgramData 'Borealis\watchdog.ps1'
-New-Item -ItemType Directory -Force -Path (Split-Path $wdFile -Parent) | Out-Null
-Set-Content -Path $wdFile -Value $wdScript -Encoding UTF8
-try { Unregister-ScheduledTask -TaskName $wd -Confirm:$false -ErrorAction SilentlyContinue } catch {}
-$wa = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $wdFile + '"')
-$wt = New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 365)
-$ws = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden
-Register-ScheduledTask -TaskName $wd -Action $wa -Trigger $wt -Settings $ws -Principal $p -Force | Out-Null
-Start-ScheduledTask -TaskName $sup | Out-Null
-@"
-    $tmpElev = New-TemporaryFile
-    Set-Content -Path $tmpElev.FullName -Value $taskStub -Encoding UTF8
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = 'powershell.exe'
     $psi.Verb = 'runas'
-    $psi.ArgumentList = @('-NoProfile','-ExecutionPolicy','Bypass','-File', $tmpElev.FullName)
     $psi.UseShellExecute = $true
-    try { $proc = [System.Diagnostics.Process]::Start($psi); $proc.WaitForExit() } catch {}
-    Remove-Item $tmpElev.FullName -Force -ErrorAction SilentlyContinue
-"@
+    $psi.ArgumentList = @(
+        '-NoProfile','-ExecutionPolicy','Bypass',
+        '-File', $regScript,
+        '-SupName', $supName,
+        '-PythonExe', $py,
+        '-SupScript', $supScript,
+        '-WdName', $wdName,
+        '-WdSource', $wdSource
+    )
+    try { $proc = [System.Diagnostics.Process]::Start($psi); $proc.WaitForExit() } catch {
+        Write-Host "Failed to elevate for task registration." -ForegroundColor Red
+    }
 }
 function InstallOrUpdate-BorealisAgent {
     Write-Host "Ensuring Agent Dependencies Exist..." -ForegroundColor DarkCyan
