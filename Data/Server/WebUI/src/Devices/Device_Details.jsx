@@ -1,6 +1,6 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Device_Details.js
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Paper,
   Box,
@@ -15,8 +15,19 @@ import {
   Button,
   LinearProgress,
   TableSortLabel,
-  TextField
+  TextField,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions
 } from "@mui/material";
+import Prism from "prismjs";
+import "prismjs/components/prism-yaml";
+import "prismjs/components/prism-bash";
+import "prismjs/components/prism-powershell";
+import "prismjs/components/prism-batch";
+import "prismjs/themes/prism-okaidia.css";
+import Editor from "react-simple-code-editor";
 
 export default function DeviceDetails({ device, onBack }) {
   const [tab, setTab] = useState(0);
@@ -26,6 +37,13 @@ export default function DeviceDetails({ device, onBack }) {
   const [softwareOrder, setSoftwareOrder] = useState("asc");
   const [softwareSearch, setSoftwareSearch] = useState("");
   const [description, setDescription] = useState("");
+  const [historyRows, setHistoryRows] = useState([]);
+  const [historyOrderBy, setHistoryOrderBy] = useState("ran_at");
+  const [historyOrder, setHistoryOrder] = useState("desc");
+  const [outputOpen, setOutputOpen] = useState(false);
+  const [outputTitle, setOutputTitle] = useState("");
+  const [outputContent, setOutputContent] = useState("");
+  const [outputLang, setOutputLang] = useState("powershell");
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
     // Prefer status provided by the device list row if available
@@ -89,6 +107,21 @@ export default function DeviceDetails({ device, onBack }) {
     load();
   }, [device]);
 
+  const loadHistory = useCallback(async () => {
+    if (!device?.hostname) return;
+    try {
+      const resp = await fetch(`/api/device/activity/${encodeURIComponent(device.hostname)}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      setHistoryRows(data.history || []);
+    } catch (e) {
+      console.warn("Failed to load activity history", e);
+      setHistoryRows([]);
+    }
+  }, [device]);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+
   const saveDescription = async () => {
     if (!details.summary?.hostname) return;
     try {
@@ -136,6 +169,20 @@ export default function DeviceDetails({ device, onBack }) {
     return `${num.toFixed(1)} ${units[i]}`;
   };
 
+  const formatTimestamp = (epochSec) => {
+    const ts = Number(epochSec || 0);
+    if (!ts) return "unknown";
+    const d = new Date(ts * 1000);
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    let hh = d.getHours();
+    const ampm = hh >= 12 ? "PM" : "AM";
+    hh = hh % 12 || 12;
+    const min = String(d.getMinutes()).padStart(2, "0");
+    return `${mm}/${dd}/${yyyy} @ ${hh}:${min} ${ampm}`;
+  };
+
   const handleSoftwareSort = (col) => {
     if (softwareOrderBy === col) {
       setSoftwareOrder(softwareOrder === "asc" ? "desc" : "asc");
@@ -162,7 +209,15 @@ export default function DeviceDetails({ device, onBack }) {
   const summaryItems = [
     { label: "Device Name", value: summary.hostname || agent.hostname || device?.hostname || "unknown" },
     { label: "Operating System", value: summary.operating_system || agent.agent_operating_system || "unknown" },
-    { label: "Last User", value: summary.last_user || "unknown" },
+    { label: "Last User", value: (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box component="span" sx={{
+          display: 'inline-block', width: 10, height: 10, borderRadius: 10,
+          bgcolor: agent?.collector_active ? '#00d18c' : '#ff4f4f'
+        }} />
+        <span>{summary.last_user || 'unknown'}</span>
+      </Box>
+    ) },
     { label: "Internal IP", value: summary.internal_ip || "unknown" },
     { label: "External IP", value: summary.external_ip || "unknown" },
     { label: "Last Reboot", value: summary.last_reboot ? formatDateTime(summary.last_reboot) : "unknown" },
@@ -469,12 +524,147 @@ export default function DeviceDetails({ device, onBack }) {
     );
   };
 
+  const jobStatusColor = (s) => {
+    const val = String(s || "").toLowerCase();
+    if (val === "running") return "#58a6ff"; // borealis blue
+    if (val === "success") return "#00d18c";
+    if (val === "failed") return "#ff4f4f";
+    return "#666";
+  };
+
+  const highlightCode = (code, lang) => {
+    try {
+      return Prism.highlight(code ?? "", Prism.languages[lang] || Prism.languages.markup, lang);
+    } catch {
+      return String(code || "");
+    }
+  };
+
+  const handleViewOutput = async (row, which) => {
+    try {
+      const resp = await fetch(`/api/device/activity/job/${row.id}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const lang = ((data.script_path || "").toLowerCase().endsWith(".ps1")) ? "powershell"
+        : ((data.script_path || "").toLowerCase().endsWith(".bat")) ? "batch"
+        : ((data.script_path || "").toLowerCase().endsWith(".sh")) ? "bash"
+        : ((data.script_path || "").toLowerCase().endsWith(".yml")) ? "yaml" : "powershell";
+      setOutputLang(lang);
+      setOutputTitle(`${which === 'stderr' ? 'StdErr' : 'StdOut'} - ${data.script_name}`);
+      setOutputContent(which === 'stderr' ? (data.stderr || "") : (data.stdout || ""));
+      setOutputOpen(true);
+    } catch (e) {
+      console.warn("Failed to load output", e);
+    }
+  };
+
+  const handleHistorySort = (col) => {
+    if (historyOrderBy === col) setHistoryOrder(historyOrder === "asc" ? "desc" : "asc");
+    else {
+      setHistoryOrderBy(col);
+      setHistoryOrder("asc");
+    }
+  };
+
+  const sortedHistory = useMemo(() => {
+    const dir = historyOrder === "asc" ? 1 : -1;
+    return [...historyRows].sort((a, b) => {
+      const A = a[historyOrderBy];
+      const B = b[historyOrderBy];
+      if (historyOrderBy === "ran_at") return ((A || 0) - (B || 0)) * dir;
+      return String(A ?? "").localeCompare(String(B ?? "")) * dir;
+    });
+  }, [historyRows, historyOrderBy, historyOrder]);
+
+  const renderHistory = () => (
+    <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell sortDirection={historyOrderBy === "script_name" ? historyOrder : false}>
+              <TableSortLabel
+                active={historyOrderBy === "script_name"}
+                direction={historyOrderBy === "script_name" ? historyOrder : "asc"}
+                onClick={() => handleHistorySort("script_name")}
+              >
+                Script Executed
+              </TableSortLabel>
+            </TableCell>
+            <TableCell sortDirection={historyOrderBy === "ran_at" ? historyOrder : false}>
+              <TableSortLabel
+                active={historyOrderBy === "ran_at"}
+                direction={historyOrderBy === "ran_at" ? historyOrder : "asc"}
+                onClick={() => handleHistorySort("ran_at")}
+              >
+                Ran On
+              </TableSortLabel>
+            </TableCell>
+            <TableCell sortDirection={historyOrderBy === "status" ? historyOrder : false}>
+              <TableSortLabel
+                active={historyOrderBy === "status"}
+                direction={historyOrderBy === "status" ? historyOrder : "asc"}
+                onClick={() => handleHistorySort("status")}
+              >
+                Job Status
+              </TableSortLabel>
+            </TableCell>
+            <TableCell>
+              StdOut / StdErr
+            </TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {sortedHistory.map((r) => (
+            <TableRow key={r.id}>
+              <TableCell>{r.script_name}</TableCell>
+              <TableCell>{formatTimestamp(r.ran_at)}</TableCell>
+              <TableCell>
+                <Box sx={{
+                  display: "inline-block",
+                  px: 1.2,
+                  py: 0.25,
+                  borderRadius: 999,
+                  bgcolor: jobStatusColor(r.status),
+                  color: "#000",
+                  fontWeight: 600,
+                  fontSize: "12px"
+                }}>
+                  {r.status}
+                </Box>
+              </TableCell>
+              <TableCell>
+                <Box sx={{ display: "flex", gap: 1 }}>
+                  {r.has_stdout ? (
+                    <Button size="small" onClick={() => handleViewOutput(r, 'stdout')} sx={{ color: "#58a6ff", textTransform: "none", minWidth: 0, p: 0 }}>
+                      StdOut
+                    </Button>
+                  ) : null}
+                  {r.has_stderr ? (
+                    <Button size="small" onClick={() => handleViewOutput(r, 'stderr')} sx={{ color: "#ff4f4f", textTransform: "none", minWidth: 0, p: 0 }}>
+                      StdErr
+                    </Button>
+                  ) : null}
+                </Box>
+              </TableCell>
+            </TableRow>
+          ))}
+          {sortedHistory.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={4} sx={{ color: "#888" }}>No activity yet.</TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </Box>
+  );
+
   const tabs = [
     { label: "Summary", content: renderSummary() },
     { label: "Software", content: renderSoftware() },
     { label: "Memory", content: renderMemory() },
     { label: "Storage", content: renderStorage() },
-    { label: "Network", content: renderNetwork() }
+    { label: "Network", content: renderNetwork() },
+    { label: "Activity History", content: renderHistory() }
   ];
   // Use the snapshotted status so it stays static while on this page
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
@@ -514,6 +704,32 @@ export default function DeviceDetails({ device, onBack }) {
         ))}
       </Tabs>
       <Box sx={{ mt: 2 }}>{tabs[tab].content}</Box>
+
+      <Dialog open={outputOpen} onClose={() => setOutputOpen(false)} fullWidth maxWidth="md"
+        PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+      >
+        <DialogTitle>{outputTitle}</DialogTitle>
+        <DialogContent>
+          <Box sx={{ border: "1px solid #333", borderRadius: 1, bgcolor: "#1e1e1e", maxHeight: 500, overflow: "auto" }}>
+            <Editor
+              value={outputContent}
+              onValueChange={() => {}}
+              highlight={(code) => highlightCode(code, outputLang)}
+              padding={12}
+              style={{
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                fontSize: 12,
+                color: "#e6edf3",
+                minHeight: 200
+              }}
+              textareaProps={{ readOnly: true }}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOutputOpen(false)} sx={{ color: "#58a6ff" }}>Close</Button>
+        </DialogActions>
+      </Dialog>
     </Paper>
   );
 }

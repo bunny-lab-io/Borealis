@@ -19,6 +19,7 @@ import io
 
 # Borealis Python API Endpoints
 from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
+from Python_API_Endpoints.script_engines import run_powershell_script
 
 # ---------------------------------------------
 # Flask + WebSocket Server Configuration
@@ -659,6 +660,22 @@ def init_db():
     cur.execute(
         "CREATE TABLE IF NOT EXISTS device_details (hostname TEXT PRIMARY KEY, description TEXT, details TEXT)"
     )
+    # Activity history table for script/job runs
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hostname TEXT,
+            script_path TEXT,
+            script_name TEXT,
+            script_type TEXT,
+            ran_at INTEGER,
+            status TEXT,
+            stdout TEXT,
+            stderr TEXT
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -738,10 +755,20 @@ load_agents_from_db()
 
 @app.route("/api/agents")
 def get_agents():
-    """
-    Return a dict keyed by agent_id with hostname, os, last_seen, status.
-    """
-    return jsonify(registered_agents)
+    """Return agents with collector activity indicator."""
+    now = time.time()
+    out = {}
+    for aid, info in (registered_agents or {}).items():
+        # Hide script-execution agents from the public list
+        if aid and isinstance(aid, str) and aid.lower().endswith('-script'):
+            continue
+        if info.get('is_script_agent'):
+            continue
+        d = dict(info)
+        ts = d.get('collector_active_ts') or 0
+        d['collector_active'] = bool(ts and (now - float(ts) < 130))
+        out[aid] = d
+    return jsonify(out)
 
 
 @app.route("/api/agent/details", methods=["POST"])
@@ -838,6 +865,230 @@ def set_device_description(hostname: str):
         return jsonify({"status": "ok"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------------------------
+# Quick Job Execution + Activity History
+# ---------------------------------------------
+def _detect_script_type(fn: str) -> str:
+    fn = (fn or "").lower()
+    if fn.endswith(".yml"):
+        return "ansible"
+    if fn.endswith(".ps1"):
+        return "powershell"
+    if fn.endswith(".bat"):
+        return "batch"
+    if fn.endswith(".sh"):
+        return "bash"
+    return "unknown"
+
+
+def _safe_filename(rel_path: str) -> str:
+    try:
+        return os.path.basename(rel_path or "")
+    except Exception:
+        return rel_path or ""
+
+
+@app.route("/api/scripts/quick_run", methods=["POST"])
+def scripts_quick_run():
+    """Queue a Quick Job to agents via WebSocket and record Running status.
+
+    Payload: { script_path: str, hostnames: [str], run_mode?: 'current_user'|'admin'|'system', admin_user?, admin_pass? }
+    """
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("script_path") or "").strip()
+    hostnames = data.get("hostnames") or []
+    run_mode = (data.get("run_mode") or "system").strip().lower()
+    admin_user = ""
+    admin_pass = ""
+
+    if not rel_path or not isinstance(hostnames, list) or not hostnames:
+        return jsonify({"error": "Missing script_path or hostnames[]"}), 400
+
+    scripts_root = _scripts_root()
+    abs_path = os.path.abspath(os.path.join(scripts_root, rel_path))
+    if not abs_path.startswith(scripts_root) or not os.path.isfile(abs_path):
+        return jsonify({"error": "Script not found"}), 404
+
+    script_type = _detect_script_type(abs_path)
+    if script_type != "powershell":
+        return jsonify({"error": f"Unsupported script type '{script_type}'. Only powershell is supported for Quick Job currently."}), 400
+
+    try:
+        with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+    except Exception as e:
+        return jsonify({"error": f"Failed to read script: {e}"}), 500
+
+    now = int(time.time())
+    results = []
+    for host in hostnames:
+        job_id = None
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO activity_history(hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr)
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (
+                    host,
+                    rel_path.replace(os.sep, "/"),
+                    _safe_filename(rel_path),
+                    script_type,
+                    now,
+                    "Running",
+                    "",
+                    "",
+                ),
+            )
+            job_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+        except Exception as db_err:
+            return jsonify({"error": f"DB insert failed: {db_err}"}), 500
+
+        payload = {
+            "job_id": job_id,
+            "target_hostname": host,
+            "script_type": script_type,
+            "script_name": _safe_filename(rel_path),
+            "script_path": rel_path.replace(os.sep, "/"),
+            "script_content": content,
+            "run_mode": run_mode,
+            "admin_user": admin_user,
+            "admin_pass": admin_pass,
+        }
+        # Broadcast to all connected clients; no broadcast kw in python-socketio v5
+        socketio.emit("quick_job_run", payload)
+        results.append({"hostname": host, "job_id": job_id, "status": "Running"})
+
+    return jsonify({"results": results})
+
+
+@app.route("/api/device/activity/<hostname>", methods=["GET"])
+def device_activity(hostname: str):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, script_name, script_path, script_type, ran_at, status, LENGTH(stdout), LENGTH(stderr) FROM activity_history WHERE hostname = ? ORDER BY ran_at DESC, id DESC",
+            (hostname,),
+        )
+        rows = cur.fetchall()
+        conn.close()
+        out = []
+        for (jid, name, path, stype, ran_at, status, so_len, se_len) in rows:
+            out.append({
+                "id": jid,
+                "script_name": name,
+                "script_path": path,
+                "script_type": stype,
+                "ran_at": ran_at,
+                "status": status,
+                "has_stdout": bool(so_len or 0),
+                "has_stderr": bool(se_len or 0),
+            })
+        return jsonify({"history": out})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/device/activity/job/<int:job_id>", methods=["GET"])
+def device_activity_job(job_id: int):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, hostname, script_name, script_path, script_type, ran_at, status, stdout, stderr FROM activity_history WHERE id = ?",
+            (job_id,),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "Not found"}), 404
+        (jid, hostname, name, path, stype, ran_at, status, stdout, stderr) = row
+        return jsonify({
+            "id": jid,
+            "hostname": hostname,
+            "script_name": name,
+            "script_path": path,
+            "script_type": stype,
+            "ran_at": ran_at,
+            "status": status,
+            "stdout": stdout or "",
+            "stderr": stderr or "",
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@socketio.on("quick_job_result")
+def handle_quick_job_result(data):
+    """Agent reports back stdout/stderr/status for a job."""
+    try:
+        job_id = int(data.get("job_id"))
+    except Exception:
+        return
+    status = (data.get("status") or "").strip() or "Failed"
+    stdout = data.get("stdout") or ""
+    stderr = data.get("stderr") or ""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE activity_history SET status=?, stdout=?, stderr=? WHERE id=?",
+            (status, stdout, stderr, job_id),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] quick_job_result DB update failed for job {job_id}: {e}")
+
+
+@socketio.on("collector_status")
+def handle_collector_status(data):
+    """Collector agent reports activity and optional last_user."""
+    agent_id = (data or {}).get('agent_id')
+    hostname = (data or {}).get('hostname')
+    active = bool((data or {}).get('active'))
+    last_user = (data or {}).get('last_user')
+    if not agent_id:
+        return
+    rec = registered_agents.setdefault(agent_id, {})
+    rec['agent_id'] = agent_id
+    if hostname:
+        rec['hostname'] = hostname
+    if active:
+        rec['collector_active_ts'] = time.time()
+    if last_user and (hostname or rec.get('hostname')):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT details, description FROM device_details WHERE hostname = ?",
+                (hostname or rec.get('hostname'),),
+            )
+            row = cur.fetchone()
+            details = {}
+            if row and row[0]:
+                try:
+                    details = json.loads(row[0])
+                except Exception:
+                    details = {}
+            summary = details.get('summary') or {}
+            summary['last_user'] = last_user
+            details['summary'] = summary
+            cur.execute(
+                "REPLACE INTO device_details (hostname, description, details) VALUES (?, COALESCE((SELECT description FROM device_details WHERE hostname=?), ''), ?)",
+                ((hostname or rec.get('hostname')), (hostname or rec.get('hostname')), json.dumps(details))
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.route("/api/agent/<agent_id>", methods=["DELETE"])
@@ -979,7 +1230,8 @@ def receive_screenshot_task(data):
             "timestamp": time.time()
         }
 
-    emit("agent_screenshot_task", data, broadcast=True)
+    # Relay to all connected clients; use server-level emit
+    socketio.emit("agent_screenshot_task", data)
 
 @socketio.on("connect_agent")
 def connect_agent(data):
@@ -998,6 +1250,12 @@ def connect_agent(data):
     rec["agent_operating_system"] = rec.get("agent_operating_system", "-")
     rec["last_seen"] = int(time.time())
     rec["status"] = "provisioned" if agent_id in agent_configurations else "orphaned"
+    # Flag script agents so they can be filtered out elsewhere if desired
+    try:
+        if isinstance(agent_id, str) and agent_id.lower().endswith('-script'):
+            rec['is_script_agent'] = True
+    except Exception:
+        pass
     # If we already know the hostname for this agent, persist last_seen so it
     # can be restored after server restarts.
     try:
@@ -1056,7 +1314,8 @@ def receive_screenshot(data):
             "image_base64": image,
             "timestamp": time.time()
         }
-        emit("new_screenshot", {"agent_id": agent_id, "image_base64": image}, broadcast=True)
+        # Broadcast to all clients; use server-level emit
+        socketio.emit("new_screenshot", {"agent_id": agent_id, "image_base64": image})
 
 @socketio.on("disconnect")
 def on_disconnect():
@@ -1076,21 +1335,24 @@ def receive_macro_status(data):
     }
     """
     print(f"[Macro Status] Agent {data.get('agent_id')} Node {data.get('node_id')} Success: {data.get('success')} Msg: {data.get('message')}")
-    emit("macro_status", data, broadcast=True)
+    # Broadcast to all; use server-level emit for v5 API
+    socketio.emit("macro_status", data)
 
 @socketio.on("list_agent_windows")
 def handle_list_agent_windows(data):
     """
     Forwards list_agent_windows event to all agents (or filter for a specific agent_id).
     """
-    emit("list_agent_windows", data, broadcast=True)
+    # Forward to all agents/clients
+    socketio.emit("list_agent_windows", data)
 
 @socketio.on("agent_window_list")
 def handle_agent_window_list(data):
     """
     Relay the list of windows from the agent back to all connected clients.
     """
-    emit("agent_window_list", data, broadcast=True)
+    # Relay the list to all interested clients
+    socketio.emit("agent_window_list", data)
 
 # ---------------------------------------------
 # Server Launch

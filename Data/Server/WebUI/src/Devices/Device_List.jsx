@@ -11,12 +11,15 @@ import {
   TableHead,
   TableRow,
   TableSortLabel,
+  Checkbox,
+  Button,
   IconButton,
   Menu,
   MenuItem
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import { DeleteDeviceDialog } from "../Dialogs.jsx";
+import QuickJob from "../Scheduling/Quick_Job.jsx";
 
 function formatLastSeen(tsSec, offlineAfter = 120) {
   if (!tsSec) return "unknown";
@@ -48,6 +51,8 @@ export default function DeviceList({ onSelectDevice }) {
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [selected, setSelected] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [selectedHosts, setSelectedHosts] = useState(() => new Set());
+  const [quickJobOpen, setQuickJobOpen] = useState(false);
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -117,19 +122,65 @@ export default function DeviceList({ onSelectDevice }) {
     setSelected(null);
   };
 
+  const isAllChecked = sorted.length > 0 && sorted.every((r) => selectedHosts.has(r.hostname));
+  const isIndeterminate = selectedHosts.size > 0 && !isAllChecked;
+  const toggleAll = (e) => {
+    const checked = e.target.checked;
+    setSelectedHosts((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        sorted.forEach((r) => next.add(r.hostname));
+      } else {
+        next.clear();
+      }
+      return next;
+    });
+  };
+
+  const toggleOne = (hostname) => (e) => {
+    const checked = e.target.checked;
+    setSelectedHosts((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(hostname);
+      else next.delete(hostname);
+      return next;
+    });
+  };
+
   return (
     <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
-      <Box sx={{ p: 2, pb: 1 }}>
+      <Box sx={{ p: 2, pb: 1, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
           Devices
         </Typography>
-        <Typography variant="body2" sx={{ color: "#aaa" }}>
-          Devices connected to Borealis via Agent and their last check-ins.
-        </Typography>
+        <Box>
+          <Button
+            variant="outlined"
+            size="small"
+            disabled={selectedHosts.size === 0}
+            onClick={() => setQuickJobOpen(true)}
+            sx={{
+              mr: 1,
+              color: selectedHosts.size === 0 ? "#666" : "#58a6ff",
+              borderColor: selectedHosts.size === 0 ? "#333" : "#58a6ff",
+              textTransform: "none"
+            }}
+          >
+            Quick Job
+          </Button>
+        </Box>
       </Box>
       <Table size="small" sx={{ minWidth: 680 }}>
         <TableHead>
           <TableRow>
+            <TableCell padding="checkbox">
+              <Checkbox
+                indeterminate={isIndeterminate}
+                checked={isAllChecked}
+                onChange={toggleAll}
+                sx={{ color: "#777" }}
+              />
+            </TableCell>
             <TableCell sortDirection={orderBy === "status" ? order : false}>
               <TableSortLabel
                 active={orderBy === "status"}
@@ -172,6 +223,13 @@ export default function DeviceList({ onSelectDevice }) {
         <TableBody>
           {sorted.map((r, i) => (
             <TableRow key={r.id || i} hover>
+              <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
+                <Checkbox
+                  checked={selectedHosts.has(r.hostname)}
+                  onChange={toggleOne(r.hostname)}
+                  sx={{ color: "#777" }}
+                />
+              </TableCell>
               <TableCell>
                 <Box sx={{ display: "flex", alignItems: "center" }}>
                   <Box
@@ -218,7 +276,7 @@ export default function DeviceList({ onSelectDevice }) {
           ))}
           {sorted.length === 0 && (
             <TableRow>
-              <TableCell colSpan={5} sx={{ color: "#888" }}>
+              <TableCell colSpan={6} sx={{ color: "#888" }}>
                 No agents connected.
               </TableCell>
             </TableRow>
@@ -238,6 +296,14 @@ export default function DeviceList({ onSelectDevice }) {
         onCancel={() => setConfirmOpen(false)}
         onConfirm={handleDelete}
       />
+
+      {quickJobOpen && (
+        <QuickJob
+          open={quickJobOpen}
+          onClose={() => setQuickJobOpen(false)}
+          hostnames={[...selectedHosts]}
+        />
+      )}
     </Paper>
   );
 }

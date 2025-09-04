@@ -282,6 +282,327 @@ function Install_Agent_Dependencies {
     }
 }
 
+#<# ---------------------- Agent Service Helper Functions (Windows) [Deprecated: superseded by Data/Agent/agent_deployment.py] ----------------------
+function Ensure-BorealisAgent-Service {
+    param(
+        [string]$VenvPython,
+        [string]$ServiceScript
+    )
+    if (-not (Test-IsWindows)) {
+        Write-Host "Agent service setup skipped (non-Windows)." -ForegroundColor DarkGray
+        return
+    }
+
+    $serviceName = 'BorealisAgent'
+    $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+    $needsInstall = $false
+    if (-not $svc) { $needsInstall = $true }
+    else {
+        if ($svc.StartMode -notin @('Auto','Automatic')) { $needsInstall = $true }
+        if ($svc.StartName -ne 'LocalSystem') { $needsInstall = $true }
+        # Verify the service points to the current project venv (folder may have moved)
+        try {
+            $venvRoot = Split-Path $VenvPython -Parent
+            $pathName = $svc.PathName
+            if ($pathName -and $venvRoot) {
+                if ($pathName -notlike ("*" + $venvRoot + "*")) { $needsInstall = $true }
+            }
+        } catch {}
+    }
+
+    if ($needsInstall) {
+        if (-not (Test-IsAdmin)) {
+            Write-Host "Admin rights required to install/update the agent service. Prompting UAC..." -ForegroundColor Yellow
+            $tmp = New-TemporaryFile
+            $logDir = Join-Path $scriptDir 'Logs'
+            if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+            $log = Join-Path $logDir 'Borealis_AgentService_Install.log'
+            $vEsc = $VenvPython.Replace('"','""')
+            $sEsc = $ServiceScript.Replace('"','""')
+            $content = @"
+$ErrorActionPreference = 'Continue'
+$venv = "$vEsc"
+$srv  = "$sEsc"
+$logPath = "$log"
+try {
+  try { New-Item -ItemType Directory -Force -Path (Split-Path $logPath -Parent) | Out-Null } catch {}
+  # Ensure pywin32 postinstall is applied in this venv (required for services)
+  try {
+    & $venv -m pywin32_postinstall -install *>&1 | Tee-Object -FilePath $logPath -Append
+  } catch { }
+  "[INFO] Installing service via: $venv $srv --startup auto install" | Out-File -FilePath $logPath -Encoding UTF8
+  & $venv $srv --startup auto install *>&1 | Tee-Object -FilePath $logPath -Append
+  try { sc.exe config BorealisAgent obj= LocalSystem | Tee-Object -FilePath $logPath -Append } catch {}
+  $code = $LASTEXITCODE
+  if ($code -eq $null) { $code = 0 }
+  "[INFO] Exit code: $code" | Tee-Object -FilePath $logPath -Append | Out-Host
+} catch {
+  "[ERROR] $_" | Tee-Object -FilePath $logPath -Append | Out-Host
+  $code = 1
+} finally {
+  if ($code -ne 0 -or $env:BOREALIS_DEBUG_UAC -eq '1') {
+    Read-Host 'Press Enter to close this elevated window...'
+  }
+  exit $code
+}
+"@
+            # pass key vars via env so the elevated scope can see them
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = 'powershell.exe'
+            $psi.Verb = 'runas'
+            $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($tmp.FullName)`""
+            $psi.UseShellExecute = $true
+            $psi.WindowStyle = 'Normal'
+            Set-Content -Path $tmp.FullName -Value $content -Force -Encoding UTF8
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $proc.WaitForExit()
+            Remove-Item $tmp.FullName -Force -ErrorAction SilentlyContinue
+            if (Test-Path $log) {
+                Write-Host "--- Elevated install log: $log ---" -ForegroundColor DarkCyan
+                Get-Content $log | Write-Host
+            }
+        } else {
+            try { & $VenvPython $ServiceScript remove } catch {}
+            & $VenvPython $ServiceScript --startup auto install
+            try { sc.exe config BorealisAgent obj= LocalSystem } catch {}
+        }
+        # Refresh service object
+        $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+        if (-not $svc) {
+            Write-Host "Failed to install Borealis Agent service." -ForegroundColor Red
+            return
+        }
+    }
+
+    if ($svc.State -ne 'Running') {
+        if (-not (Test-IsAdmin)) {
+            Write-Host "Admin rights required to start the agent service. Prompting UAC..." -ForegroundColor Yellow
+            $tmp2 = New-TemporaryFile
+            $log2 = Join-Path $scriptDir 'Logs\Borealis_AgentService_Start.log'
+            $content2 = @"
+$ErrorActionPreference = 'Continue'
+try {
+  Start-Service -Name '$serviceName'
+  "[INFO] Started Borealis Agent service." | Out-File -FilePath "$log2" -Encoding UTF8
+  $code = 0
+} catch {
+  "[ERROR] $_" | Out-File -FilePath "$log2" -Encoding UTF8
+  $code = 1
+} finally {
+  if ($code -ne 0 -or $env:BOREALIS_DEBUG_UAC -eq '1') { Read-Host 'Press Enter to close this elevated window...' }
+  exit $code
+}
+"@
+            Set-Content -Path $tmp2.FullName -Value $content2 -Force -Encoding UTF8
+            $psi2 = New-Object System.Diagnostics.ProcessStartInfo
+            $psi2.FileName = 'powershell.exe'
+            $psi2.Verb = 'runas'
+            $psi2.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($tmp2.FullName)`""
+            $psi2.UseShellExecute = $true
+            $psi2.WindowStyle = 'Normal'
+            $proc2 = [System.Diagnostics.Process]::Start($psi2)
+            $proc2.WaitForExit()
+            Remove-Item $tmp2.FullName -Force -ErrorAction SilentlyContinue
+            if (Test-Path $log2) {
+                Write-Host "--- Elevated start log: $log2 ---" -ForegroundColor DarkCyan
+                Get-Content $log2 | Write-Host
+            }
+        } else {
+            Start-Service -Name $serviceName
+        }
+    }
+
+    Write-Host "Borealis Agent service is installed and running as LocalSystem (Automatic)." -ForegroundColor Green
+}
+
+# Ensure Script Agent (LocalSystem Windows Service)
+function Ensure-BorealisScriptAgent-Service {
+    param(
+        [string]$VenvPython,
+        [string]$ServiceScript
+    )
+    if (-not (Test-IsWindows)) { return }
+    $serviceName = 'BorealisScriptService'
+    $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+    $needsInstall = $false
+    if (-not $svc) { $needsInstall = $true }
+    else {
+        if ($svc.StartMode -notin @('Auto','Automatic')) { $needsInstall = $true }
+        if ($svc.StartName -ne 'LocalSystem') { $needsInstall = $true }
+        try {
+            $venvRoot = Split-Path $VenvPython -Parent
+            if ($svc.PathName -and $venvRoot -and ($svc.PathName -notlike ("*" + $venvRoot + "*"))) { $needsInstall = $true }
+        } catch {}
+    }
+
+    $logs = Join-Path $scriptDir 'Logs'
+    $tempDir = Join-Path $scriptDir 'Temp'; if (-not (Test-Path $tempDir)) { New-Item -ItemType Directory -Path $tempDir -Force | Out-Null }
+    if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Path $logs -Force | Out-Null }
+    $preflight = Join-Path $logs 'Borealis_ScriptAgent_Preflight.log'
+    "$(Get-Date -Format s) Preflight: Ensure-BorealisScriptAgent-Service (needsInstall=$needsInstall)" | Out-File -FilePath $preflight -Append -Encoding UTF8
+
+    if ($needsInstall) {
+        if (-not (Test-IsAdmin)) {
+            Write-Host "Admin rights required to install/update the script agent service. Prompting UAC..." -ForegroundColor Yellow
+            $log = Join-Path $logs 'Borealis_ScriptAgent_Install.log'
+            $vEsc = $VenvPython.Replace('"','""')
+            $sEsc = $ServiceScript.Replace('"','""')
+            $content = @"
+$ErrorActionPreference = 'Continue'
+$venv = "$vEsc"
+$srv  = "$sEsc"
+$logPath = "$log"
+try {
+  try { New-Item -ItemType Directory -Force -Path (Split-Path $logPath -Parent) | Out-Null } catch {}
+  & $venv -m pywin32_postinstall -install *>&1 | Tee-Object -FilePath $logPath -Append
+  try { & $venv $srv remove *>&1 | Tee-Object -FilePath $logPath -Append } catch {}
+  & $venv $srv --startup auto install *>&1 | Tee-Object -FilePath $logPath -Append
+  sc.exe config $serviceName obj= LocalSystem | Tee-Object -FilePath $logPath -Append
+  $code = $LASTEXITCODE; if ($code -eq $null) { $code = 0 }
+} catch {
+  "[ERROR] $_" | Tee-Object -FilePath $logPath -Append | Out-Host
+  $code = 1
+} finally {
+  if ($code -ne 0 -or $env:BOREALIS_DEBUG_UAC -eq '1') { Read-Host 'Press Enter to close this elevated window...' }
+  exit $code
+}
+"@
+            $elevateScript = Join-Path $tempDir 'Elevated-Install-ScriptAgent.ps1'
+            Set-Content -Path $elevateScript -Value $content -Force -Encoding UTF8
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = 'powershell.exe'
+            $psi.Verb = 'runas'
+            $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$elevateScript`""
+            $psi.UseShellExecute = $true
+            $psi.WindowStyle = 'Normal'
+            $psi.WorkingDirectory = $scriptDir
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $proc.WaitForExit()
+            if ($proc.ExitCode -eq 0) { Remove-Item $elevateScript -Force -ErrorAction SilentlyContinue } else { Write-Host "Keeping stub for troubleshooting: $elevateScript" -ForegroundColor Yellow }
+            if (Test-Path $log) { Write-Host "--- Elevated install log: $log ---" -ForegroundColor DarkCyan; Get-Content $log | Write-Host }
+            else { Write-Host "Install log not found at: $log" -ForegroundColor Yellow }
+            if ($proc.ExitCode -ne 0) { Write-Host "Elevated install returned code $($proc.ExitCode)" -ForegroundColor Red; return }
+        } else {
+            try { & $VenvPython $ServiceScript remove } catch {}
+            & $VenvPython $ServiceScript --startup auto install
+            try { sc.exe config $serviceName obj= LocalSystem } catch {}
+        }
+    }
+
+    $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+    if (-not $svc) { Write-Host "ScriptAgent service not found after install." -ForegroundColor Red; return $false }
+    if ($svc.State -ne 'Running') {
+        if (-not (Test-IsAdmin)) {
+            Write-Host "Admin rights required to start the script agent service. Prompting UAC..." -ForegroundColor Yellow
+            $log2 = Join-Path $logs 'Borealis_ScriptAgent_Start.log'
+            $content2 = @"
+$ErrorActionPreference = 'Continue'
+try { Start-Service -Name '$serviceName'; "[INFO] Started." | Out-File -FilePath "$log2" -Encoding UTF8; $code = 0 } catch { "[ERROR] $_" | Out-File -FilePath "$log2" -Encoding UTF8; $code = 1 } finally { if ($code -ne 0 -or $env:BOREALIS_DEBUG_UAC -eq '1') { Read-Host 'Press Enter to close this elevated window...' }; exit $code }
+"@
+            $elevateStart = Join-Path $tempDir 'Elevated-Start-ScriptAgent.ps1'
+            Set-Content -Path $elevateStart -Value $content2 -Force -Encoding UTF8
+            $psi2 = New-Object System.Diagnostics.ProcessStartInfo
+            $psi2.FileName = 'powershell.exe'
+            $psi2.Verb = 'runas'
+            $psi2.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$elevateStart`""
+            $psi2.UseShellExecute = $true
+            $psi2.WindowStyle = 'Normal'
+            $psi2.WorkingDirectory = $scriptDir
+            $proc2 = [System.Diagnostics.Process]::Start($psi2)
+            $proc2.WaitForExit()
+            if ($proc2.ExitCode -eq 0) { Remove-Item $elevateStart -Force -ErrorAction SilentlyContinue } else { Write-Host "Keeping stub for troubleshooting: $elevateStart" -ForegroundColor Yellow }
+            if (Test-Path $log2) { Write-Host "--- Elevated start log: $log2 ---" -ForegroundColor DarkCyan; Get-Content $log2 | Write-Host }
+            else { Write-Host "Start log not found at: $log2" -ForegroundColor Yellow }
+            if ($proc2.ExitCode -ne 0) { Write-Host "Elevated start returned code $($proc2.ExitCode)" -ForegroundColor Red; return }
+        } else {
+            Start-Service -Name $serviceName
+        }
+        Start-Sleep -Seconds 2
+        $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+        if ($svc.State -ne 'Running') { Write-Host "ScriptAgent service failed to start." -ForegroundColor Red; return $false }
+    }
+    return $true
+}
+
+# Ensure Collector Agent (per-user scheduled task)
+function Ensure-BorealisCollector-Task {
+    param(
+        [string]$VenvPython,
+        [string]$CollectorScript
+    )
+    $logs = Join-Path $scriptDir 'Logs'
+    if (-not (Test-Path $logs)) { New-Item -ItemType Directory -Path $logs -Force | Out-Null }
+    "$(Get-Date -Format s) Preflight: Ensure-BorealisCollector-Task" | Out-File -FilePath (Join-Path $logs 'Borealis_Collector_Preflight.log') -Append -Encoding UTF8
+
+    $tempDir = Join-Path $scriptDir 'Temp'
+    if (-not (Test-Path $tempDir)) { New-Item -ItemType Directory -Path $tempDir -Force | Out-Null }
+    $logC = Join-Path $logs 'Borealis_CollectorTask_Install.log'
+
+    $taskName = 'BorealisCollectorAgent'
+    $taskExists = $false
+    try {
+        $null = schtasks.exe /Query /TN $taskName 2>$null
+        if ($LASTEXITCODE -eq 0) { $taskExists = $true }
+    } catch {}
+
+    $quoted = '"' + $VenvPython + '" -W ignore::SyntaxWarning "' + $CollectorScript + '"'
+
+    if ($taskExists) {
+        # Replace to ensure it points to current project
+        # Attempt delete in current user context first
+        try {
+            schtasks.exe /Delete /TN $taskName /F 2>&1 | Tee-Object -FilePath $logC -Append | Out-Host
+        } catch {}
+        if ($LASTEXITCODE -ne 0) {
+            # If deletion failed (likely created under elevated/Admin previously), delete via elevated stub
+            $stubDel = Join-Path $tempDir 'Elevated-Delete-CollectorTask.ps1'
+            $tnEsc = $taskName.Replace('"','""')
+            $lgEsc = $logC.Replace('"','""')
+            $contentDel = @"
+$ErrorActionPreference = 'Continue'
+try {
+  schtasks.exe /Delete /TN "$tnEsc" /F *>&1 | Tee-Object -FilePath "$lgEsc" -Append
+  $code = $LASTEXITCODE; if ($code -eq $null) { $code = 0 }
+} catch { "[ERROR] $_" | Tee-Object -FilePath "$lgEsc" -Append; $code = 1 } finally {
+  if ($code -ne 0 -or $env:BOREALIS_DEBUG_UAC -eq '1') { Read-Host 'Press Enter to close this elevated window...' }
+  exit $code
+}
+"@
+            Set-Content -Path $stubDel -Value $contentDel -Force -Encoding UTF8
+            $psiD = New-Object System.Diagnostics.ProcessStartInfo
+            $psiD.FileName  = 'powershell.exe'
+            $psiD.Verb      = 'runas'
+            $psiD.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$stubDel`""
+            $psiD.UseShellExecute = $true
+            $psiD.WindowStyle = 'Normal'
+            try { $psiD.WorkingDirectory = $scriptDir; $pd = [System.Diagnostics.Process]::Start($psiD); $pd.WaitForExit() } catch {}
+            Remove-Item $stubDel -Force -ErrorAction SilentlyContinue
+        }
+        # Re-evaluate existence; if still present, abort
+        try { $null = schtasks.exe /Query /TN $taskName 2>$null } catch {}
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Failed to remove existing Collector task (permissions)." -ForegroundColor Red
+            if (Test-Path $logC) { Write-Host "--- Collector task log: $logC ---" -ForegroundColor DarkCyan; Get-Content $logC | Write-Host }
+            return $false
+        }
+    }
+
+    # Create per-user task in the current (non-elevated) user context
+    # Do NOT elevate creation to avoid creating task under Administrator by mistake
+    schtasks.exe /Create /SC ONLOGON /TN $taskName /TR $quoted /F /RL LIMITED 2>&1 | Tee-Object -FilePath $logC -Append | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Failed to create Collector task." -ForegroundColor Red
+        if (Test-Path $logC) { Write-Host "--- Collector task log: $logC ---" -ForegroundColor DarkCyan; Get-Content $logC | Write-Host }
+        return $false
+    }
+    # If currently logged in, start now
+    try { schtasks.exe /Run /TN $taskName 2>&1 | Tee-Object -FilePath $logC -Append | Out-Host } catch {}
+    # Validate task exists
+    try { $null = schtasks.exe /Query /TN $taskName 2>$null } catch {}
+    if ($LASTEXITCODE -ne 0) { Write-Host "Collector task missing after create." -ForegroundColor Red; return $false }
+    return $true
+}
+#>
 # ---------------------- Common Initialization & Visuals ----------------------
 Clear-Host
 
@@ -504,6 +825,10 @@ switch ($choice) {
                 Copy-Item "Data\Agent\agent_info.py" $agentDestinationFolder -Recurse
                 Copy-Item "Data\Agent\agent_roles.py" $agentDestinationFolder -Recurse
                 Copy-Item "Data\Agent\Python_API_Endpoints" $agentDestinationFolder -Recurse
+                Copy-Item "Data\Agent\windows_script_service.py" $agentDestinationFolder -Force
+                Copy-Item "Data\Agent\agent_deployment.py" $agentDestinationFolder -Force
+                Copy-Item "Data\Agent\tray_launcher.py" $agentDestinationFolder -Force
+                if (Test-Path "Data\Agent\Borealis.ico") { Copy-Item "Data\Agent\Borealis.ico" $agentDestinationFolder -Force }
             }
             . "$venvFolder\Scripts\Activate"
         }
@@ -514,9 +839,17 @@ switch ($choice) {
             }
         }
 
-        Write-Host "`nLaunching Borealis Agent..." -ForegroundColor Blue
+        Write-Host "`nConfiguring Borealis Agent (service + logon task)..." -ForegroundColor Blue
         Write-Host "===================================================================================="
-        & $venvPython -W ignore::SyntaxWarning $agentDestinationFile
+        $deployScript = Join-Path $agentDestinationFolder 'agent_deployment.py'
+        & $venvPython -W ignore::SyntaxWarning $deployScript ensure-all
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Agent setup FAILED." -ForegroundColor Red
+            Write-Host " - See logs under: $(Join-Path $scriptDir 'Logs')" -ForegroundColor Red
+            exit 1
+        } else {
+            Write-Host "Agent setup complete. Service + logon task ensured." -ForegroundColor DarkGreen
+        }
     }
 
     "3" {

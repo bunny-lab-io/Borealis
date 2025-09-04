@@ -362,6 +362,204 @@ sio = socketio.AsyncClient(reconnection=True, reconnection_attempts=0, reconnect
 role_tasks = {}
 background_tasks = []
 roles_ctx = None
+AGENT_LOOP = None
+
+# ---------------- Local IPC Bridge (Service -> Agent) ----------------
+def start_agent_bridge_pipe(loop_ref):
+    import threading
+    import win32pipe, win32file, win32con, pywintypes
+
+    pipe_name = r"\\.\pipe\Borealis_Agent_Bridge"
+
+    def forward_to_server(msg: dict):
+        try:
+            evt = msg.get('type')
+            if evt == 'screenshot':
+                payload = {
+                    'agent_id': AGENT_ID,
+                    'node_id': msg.get('node_id') or 'user_session',
+                    'image_base64': msg.get('image_base64') or '',
+                    'timestamp': msg.get('timestamp') or int(time.time())
+                }
+                asyncio.run_coroutine_threadsafe(sio.emit('agent_screenshot_task', payload), loop_ref)
+        except Exception:
+            pass
+
+    def server_thread():
+        while True:
+            try:
+                handle = win32pipe.CreateNamedPipe(
+                    pipe_name,
+                    win32con.PIPE_ACCESS_DUPLEX,
+                    win32con.PIPE_TYPE_MESSAGE | win32con.PIPE_READMODE_MESSAGE | win32con.PIPE_WAIT,
+                    1, 65536, 65536, 0, None)
+            except pywintypes.error:
+                time.sleep(1.0)
+                continue
+
+            try:
+                win32pipe.ConnectNamedPipe(handle, None)
+            except pywintypes.error:
+                try:
+                    win32file.CloseHandle(handle)
+                except Exception:
+                    pass
+                time.sleep(0.5)
+                continue
+
+            # Read loop per connection
+            try:
+                while True:
+                    try:
+                        hr, data = win32file.ReadFile(handle, 65536)
+                        if not data:
+                            break
+                        try:
+                            obj = json.loads(data.decode('utf-8', errors='ignore'))
+                            forward_to_server(obj)
+                        except Exception:
+                            pass
+                    except pywintypes.error:
+                        break
+            finally:
+                try:
+                    win32file.CloseHandle(handle)
+                except Exception:
+                    pass
+            time.sleep(0.2)
+
+    t = threading.Thread(target=server_thread, daemon=True)
+    t.start()
+
+def send_service_control(msg: dict):
+    try:
+        import win32file
+        pipe = r"\\.\pipe\Borealis_Service_Control"
+        h = win32file.CreateFile(
+            pipe,
+            win32file.GENERIC_WRITE,
+            0,
+            None,
+            win32file.OPEN_EXISTING,
+            0,
+            None,
+        )
+        try:
+            win32file.WriteFile(h, json.dumps(msg).encode('utf-8'))
+        finally:
+            win32file.CloseHandle(h)
+    except Exception:
+        pass
+IS_WINDOWS = sys.platform.startswith('win')
+
+def _is_admin_windows():
+    if not IS_WINDOWS:
+        return False
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+def _write_temp_script(content: str, suffix: str):
+    import tempfile
+    temp_dir = os.path.join(tempfile.gettempdir(), "Borealis", "quick_jobs")
+    os.makedirs(temp_dir, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="bj_", suffix=suffix, dir=temp_dir, text=True)
+    with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write(content or "")
+    return path
+
+async def _run_powershell_local(path: str):
+    """Run powershell script as current user hidden window and capture output."""
+    ps = None
+    if IS_WINDOWS:
+        ps = os.path.expandvars(r"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+        if not os.path.isfile(ps):
+            ps = "powershell.exe"
+    else:
+        ps = "pwsh"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ps,
+            "-ExecutionPolicy", "Bypass" if IS_WINDOWS else "Bypass",
+            "-NoProfile",
+            "-File", path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=(0x08000000 if IS_WINDOWS else 0)  # CREATE_NO_WINDOW
+        )
+        out_b, err_b = await proc.communicate()
+        rc = proc.returncode
+        out = (out_b or b"").decode(errors='replace')
+        err = (err_b or b"").decode(errors='replace')
+        return rc, out, err
+    except Exception as e:
+        return -1, "", str(e)
+
+async def _run_powershell_as_system(path: str):
+    """Attempt to run as SYSTEM using schtasks; requires admin."""
+    if not IS_WINDOWS:
+        return -1, "", "SYSTEM run not supported on this OS"
+    # Name with timestamp to avoid collisions
+    name = f"Borealis_QuickJob_{int(time.time())}_{random.randint(1000,9999)}"
+    # Create scheduled task
+    # Start time: 1 minute from now (HH:MM)
+    t = time.localtime(time.time() + 60)
+    st = f"{t.tm_hour:02d}:{t.tm_min:02d}"
+    create_cmd = [
+        "schtasks", "/Create", "/TN", name,
+        "/TR", f"\"powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"\"{path}\"\"\"",
+        "/SC", "ONCE", "/ST", st, "/RL", "HIGHEST", "/RU", "SYSTEM", "/F"
+    ]
+    try:
+        p1 = await asyncio.create_subprocess_exec(*create_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        c_out, c_err = await p1.communicate()
+        if p1.returncode != 0:
+            return p1.returncode, "", (c_err or b"").decode(errors='replace')
+        # Run immediately
+        run_cmd = ["schtasks", "/Run", "/TN", name]
+        p2 = await asyncio.create_subprocess_exec(*run_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        r_out, r_err = await p2.communicate()
+        # Give some time for task to run and finish (best-effort)
+        await asyncio.sleep(5)
+        # We cannot reliably capture stdout from scheduled task directly; advise writing output to file in script if needed.
+        # Return status of scheduling; actual script result unknown. We will try to check last run result.
+        query_cmd = ["schtasks", "/Query", "/TN", name, "/V", "/FO", "LIST"]
+        p3 = await asyncio.create_subprocess_exec(*query_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        q_out, q_err = await p3.communicate()
+        status_txt = (q_out or b"").decode(errors='replace')
+        # Cleanup
+        await asyncio.create_subprocess_exec("schtasks", "/Delete", "/TN", name, "/F")
+        # We cannot get stdout/stderr; return status text to stderr and treat success based on return codes
+        status = "Success" if p2.returncode == 0 else "Failed"
+        return 0 if status == "Success" else 1, "", status_txt
+    except Exception as e:
+        return -1, "", str(e)
+
+async def _run_powershell_with_credentials(path: str, username: str, password: str):
+    if not IS_WINDOWS:
+        return -1, "", "Credentialed run not supported on this OS"
+    # Build a one-liner to convert plaintext password to SecureString and run Start-Process -Credential
+    ps_cmd = (
+        f"$user=\"{username}\"; "
+        f"$pass=\"{password}\"; "
+        f"$sec=ConvertTo-SecureString $pass -AsPlainText -Force; "
+        f"$cred=New-Object System.Management.Automation.PSCredential($user,$sec); "
+        f"Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -NoProfile -File \"{path}\"' -Credential $cred -WindowStyle Hidden -PassThru | Wait-Process;"
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "powershell.exe", "-NoProfile", "-Command", ps_cmd,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            creationflags=(0x08000000 if IS_WINDOWS else 0)
+        )
+        out_b, err_b = await proc.communicate()
+        out = (out_b or b"").decode(errors='replace')
+        err = (err_b or b"").decode(errors='replace')
+        return proc.returncode, out, err
+    except Exception as e:
+        return -1, "", str(e)
 
 async def stop_all_roles():
     print("[DEBUG] Stopping all roles.")
@@ -393,6 +591,14 @@ async def send_heartbeat():
                 "last_seen": int(time.time())
             }
             await sio.emit("agent_heartbeat", payload)
+            # Also report collector status alive ping with last_user
+            import getpass
+            await sio.emit('collector_status', {
+                'agent_id': AGENT_ID,
+                'hostname': socket.gethostname(),
+                'active': True,
+                'last_user': f"{os.environ.get('USERDOMAIN') or socket.gethostname()}\\{getpass.getuser()}"
+            })
         except Exception as e:
             print(f"[WARN] heartbeat emit failed: {e}")
         # Send periodic heartbeats every 60 seconds
@@ -706,6 +912,18 @@ async def connect():
     except Exception as e:
         print(f"[WARN] initial heartbeat failed: {e}")
 
+    # Let server know collector is active and who the user is
+    try:
+        import getpass
+        await sio.emit('collector_status', {
+            'agent_id': AGENT_ID,
+            'hostname': socket.gethostname(),
+            'active': True,
+            'last_user': f"{os.environ.get('USERDOMAIN') or socket.gethostname()}\\{getpass.getuser()}"
+        })
+    except Exception:
+        pass
+
     await sio.emit('request_config', {"agent_id": AGENT_ID})
 
 @sio.event
@@ -747,6 +965,15 @@ async def on_agent_config(cfg):
         task.cancel()
     role_tasks.clear()
 
+    # Forward screenshot config to service helper (interval only)
+    try:
+        for role_cfg in roles:
+            if role_cfg.get('role') == 'screenshot':
+                interval_ms = int(role_cfg.get('interval', 1000))
+                send_service_control({ 'type': 'screenshot_config', 'interval_ms': interval_ms })
+    except Exception:
+        pass
+
     for role_cfg in roles:
         nid = role_cfg.get('node_id')
         role = role_cfg.get('role')
@@ -758,6 +985,49 @@ async def on_agent_config(cfg):
             print(f"[DEBUG] Starting macro task for {nid}")
             task = asyncio.create_task(agent_roles.macro_task(roles_ctx, role_cfg))
             role_tasks[nid] = task
+
+@sio.on('quick_job_run')
+async def on_quick_job_run(payload):
+    try:
+        target = (payload.get('target_hostname') or '').strip().lower()
+        if not target or target != socket.gethostname().lower():
+            return
+        job_id = payload.get('job_id')
+        script_type = (payload.get('script_type') or '').lower()
+        run_mode = (payload.get('run_mode') or 'current_user').lower()
+        content = payload.get('script_content') or ''
+        if script_type != 'powershell':
+            await sio.emit('quick_job_result', { 'job_id': job_id, 'status': 'Failed', 'stdout': '', 'stderr': f"Unsupported type: {script_type}" })
+            return
+        path = _write_temp_script(content, '.ps1')
+        rc = 0; out = ''; err = ''
+        if run_mode == 'system':
+            if not _is_admin_windows():
+                rc, out, err = -1, '', 'Agent is not elevated. SYSTEM execution requires running the agent as Administrator or service.'
+            else:
+                rc, out, err = await _run_powershell_as_system(path)
+        elif run_mode == 'admin':
+            # Admin credentialed runs are disabled in current design
+            rc, out, err = -1, '', 'Admin credentialed runs are disabled; use SYSTEM (service) or Current User.'
+        else:
+            rc, out, err = await _run_powershell_local(path)
+        status = 'Success' if rc == 0 else 'Failed'
+        await sio.emit('quick_job_result', {
+            'job_id': job_id,
+            'status': status,
+            'stdout': out,
+            'stderr': err,
+        })
+    except Exception as e:
+        try:
+            await sio.emit('quick_job_result', {
+                'job_id': payload.get('job_id') if isinstance(payload, dict) else None,
+                'status': 'Failed',
+                'stdout': '',
+                'stderr': str(e),
+            })
+        except Exception:
+            pass
 
 @sio.on('list_agent_windows')
 async def handle_list_agent_windows(data):
@@ -811,6 +1081,11 @@ async def connect_loop():
 if __name__=='__main__':
     app=QtWidgets.QApplication(sys.argv)
     loop=QEventLoop(app); asyncio.set_event_loop(loop)
+    AGENT_LOOP = loop
+    try:
+        start_agent_bridge_pipe(loop)
+    except Exception:
+        pass
     dummy_window=PersistentWindow(); dummy_window.show()
     # Initialize roles context for role tasks
     roles_ctx = agent_roles.RolesContext(sio=sio, agent_id=AGENT_ID, config=CONFIG)

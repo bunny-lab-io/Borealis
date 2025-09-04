@@ -5,9 +5,12 @@ Borealis-Agent.exe
 Borealis-Server.exe
 
 # Production Deployment Folders
-/Server/
 /Agent/
+/Server/
 /ElectronApp/
+/Databases/
+/Logs/
+/Temp/
 
 # On-the-Fly Downloaded Dependencies
 /Dependencies/NodeJS/
@@ -15,11 +18,9 @@ Borealis-Server.exe
 /Dependencies/AutoHotKey/
 /Data/Server/Python_API_Endpoints/Tesseract-OCR/
 
-# Server-Level Database
-/Databases/
-
 # Misc Files/Folders
 .vs/s
+__pycache__
 /Update_Staging/
 agent_settings.json
 users.json

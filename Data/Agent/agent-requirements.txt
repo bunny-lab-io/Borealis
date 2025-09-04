@@ -25,3 +25,4 @@ pywinauto # Windows-based Macro Automation Library
 # Audio Streaming Dependencies
 sounddevice
 numpy
+pywin32; platform_system == "Windows"
