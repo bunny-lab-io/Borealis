@@ -6,12 +6,14 @@ import asyncio
 import json
 import subprocess
 import tempfile
+from typing import Optional
 
 import socketio
 import platform
 import time
 import uuid
 import tempfile
+import contextlib
 
 
 def get_project_root():
@@ -54,6 +56,13 @@ def run_powershell_script_content(content: str):
         return proc.returncode, proc.stdout or "", proc.stderr or ""
     except Exception as e:
         return -1, "", str(e)
+    finally:
+        # Best-effort cleanup of the ephemeral script
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
 
 
 async def main():
@@ -201,10 +210,49 @@ Get-ScheduledTask -TaskName $task | Out-Null
         # Cleanup task (best-effort)
         cleanup_ps = f"try {{ Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false }} catch {{}}"
         subprocess.run([ps_exe, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', cleanup_ps], capture_output=True, text=True)
+        # Best-effort removal of temp script and output files
+        try:
+            if os.path.isfile(script_path):
+                os.remove(script_path)
+        except Exception:
+            pass
+        try:
+            if os.path.isfile(out_path):
+                os.remove(out_path)
+        except Exception:
+            pass
         return 0, out_data or '', ''
     except Exception as e:
         return -999, '', str(e)
 
 
 if __name__ == '__main__':
+    # Ensure only a single instance of the script agent runs (Windows-only lock)
+    def _acquire_singleton_lock() -> bool:
+        try:
+            lock_dir = os.path.join(get_project_root(), 'Logs', 'Agent')
+            os.makedirs(lock_dir, exist_ok=True)
+            lock_path = os.path.join(lock_dir, 'script_agent.lock')
+            # Keep handle open for process lifetime
+            fh = open(lock_path, 'a')
+            try:
+                import msvcrt  # type: ignore
+                # Lock 1 byte non-blocking; released on handle close/process exit
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                globals()['_LOCK_FH'] = fh
+                return True
+            except Exception:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+                return False
+        except Exception:
+            # If we cannot establish a lock, continue (do not prevent agent)
+            return True
+
+    if not _acquire_singleton_lock():
+        print('[ScriptAgent] Another instance is running; exiting.')
+        sys.exit(0)
+
     asyncio.run(main())

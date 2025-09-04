@@ -1065,6 +1065,8 @@ async def _run_powershell_via_user_task(content: str):
             ps = "powershell.exe"
     else:
         return -999, '', 'Windows only'
+    path = None
+    out_path = None
     try:
         temp_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'Temp')
         temp_dir = os.path.abspath(temp_dir)
@@ -1110,6 +1112,18 @@ Get-ScheduledTask -TaskName $task | Out-Null
         return 0, out_data or '', ''
     except Exception as e:
         return -999, '', str(e)
+    finally:
+        # Best-effort cleanup of temp script and output files
+        try:
+            if path and os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
+        try:
+            if out_path and os.path.isfile(out_path):
+                os.remove(out_path)
+        except Exception:
+            pass
 
 # ---------------- Dummy Qt Widget to Prevent Exit ----------------
 class PersistentWindow(QtWidgets.QWidget):
