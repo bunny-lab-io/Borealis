@@ -19,6 +19,8 @@
 param(
     [switch]$Server,
     [switch]$Agent,
+    [ValidateSet('install','repair','remove','launch','')]
+    [string]$AgentAction = '',
     [switch]$Vite,
     [switch]$Flask,
     [switch]$Quick
@@ -27,6 +29,7 @@ param(
 # Preselect menu choices from CLI args (optional)
 $choice = $null
 $modeChoice = $null
+$agentSubChoice = $null
 
 if ($Server -and $Agent) {
     Write-Host "Cannot use -Server and -Agent together." -ForegroundColor Red
@@ -42,6 +45,13 @@ if ($Server) {
     $choice = '1'
 } elseif ($Agent) {
     $choice = '2'
+    switch ($AgentAction) {
+        'install' { $agentSubChoice = '1' }
+        'repair'  { $agentSubChoice = '2' }
+        'remove'  { $agentSubChoice = '3' }
+        'launch'  { $agentSubChoice = '4' }
+        default   { }
+    }
 }
 
 if ($Server) {
@@ -80,6 +90,125 @@ $symbols = @{
     Running = [char]0x23F3
     Fail    = [char]0x274C
     Info    = [char]0x2139
+}
+
+# Ensure log directories
+function Ensure-AgentLogDir {
+    $logRoot = Join-Path $scriptDir 'Logs'
+    $agentLogDir = Join-Path $logRoot 'Agent'
+    if (-not (Test-Path $agentLogDir)) { New-Item -ItemType Directory -Path $agentLogDir -Force | Out-Null }
+    return $agentLogDir
+}
+
+function Write-AgentLog {
+    param(
+        [string]$FileName,
+        [string]$Message
+    )
+    $dir = Ensure-AgentLogDir
+    $path = Join-Path $dir $FileName
+    $ts = Get-Date -Format s
+    "[$ts] $Message" | Out-File -FilePath $path -Append -Encoding UTF8
+}
+
+# Forcefully remove legacy and current Borealis services and tasks
+function Remove-BorealisServicesAndTasks {
+    param([string]$LogName)
+    $svcNames = @('BorealisAgent','BorealisScriptService','BorealisScriptAgent')
+    foreach ($n in $svcNames) {
+        Write-AgentLog -FileName $LogName -Message "Attempting to stop service: $n"
+        try { sc.exe stop $n 2>$null | Out-Null } catch {}
+        Start-Sleep -Milliseconds 300
+        Write-AgentLog -FileName $LogName -Message "Attempting to delete service: $n"
+        try { sc.exe delete $n 2>$null | Out-Null } catch {}
+    }
+    # Remove scheduled task if it exists
+    $taskName = 'Borealis Agent'
+    Write-AgentLog -FileName $LogName -Message "Attempting to delete scheduled task: $taskName"
+    try { schtasks.exe /Delete /TN "$taskName" /F 2>$null | Out-Null } catch {}
+}
+
+# Repair routine: cleans services, ensures venv files, reinstalls and starts BorealisAgent
+function Repair-BorealisAgent {
+    $logName = 'Repair.log'
+    Write-AgentLog -FileName $logName -Message "=== Repair start ==="
+    $agentDir = Join-Path $scriptDir 'Agent'
+    $venvPython = Join-Path $agentDir 'Scripts\python.exe'
+    $deployScript = Join-Path $agentDir 'Borealis\agent_deployment.py'
+
+    # Aggressive cleanup first
+    Remove-BorealisServicesAndTasks -LogName $logName
+    Start-Sleep -Seconds 1
+
+    # Ensure venv and files exist by reusing the install block
+    Write-AgentLog -FileName $logName -Message "Ensuring agent venv and files"
+    $venvFolder             = 'Agent'
+    $agentSourcePath        = 'Data\Agent\borealis-agent.py'
+    $agentRequirements      = 'Data\Agent\agent-requirements.txt'
+    $agentDestinationFolder = "$venvFolder\Borealis"
+    $venvPythonPath         = Join-Path $scriptDir $venvFolder | Join-Path -ChildPath 'Scripts\python.exe'
+
+    if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
+        $pythonForVenv = $pythonExe
+        if (-not (Test-Path $pythonForVenv)) {
+            $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+            $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+            if ($pyCmd) { $pythonForVenv = $pyCmd.Source }
+            elseif ($pythonCmd) { $pythonForVenv = $pythonCmd.Source }
+            else { throw "Python not found. Please run Server setup (option 1) first." }
+        }
+        Write-AgentLog -FileName $logName -Message "Creating venv using: $pythonForVenv"
+        & $pythonForVenv -m venv $venvFolder | Out-Null
+    }
+
+    if (Test-Path $agentSourcePath) {
+        Write-AgentLog -FileName $logName -Message "Refreshing Agent/Borealis files"
+        Remove-Item $agentDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
+        Copy-Item 'Data\Agent\borealis-agent.py'    $agentDestinationFolder -Recurse
+        Copy-Item 'Data\Agent\agent_info.py'        $agentDestinationFolder -Recurse
+        Copy-Item 'Data\Agent\agent_roles.py'       $agentDestinationFolder -Recurse
+        Copy-Item 'Data\Agent\Python_API_Endpoints' $agentDestinationFolder -Recurse
+        Copy-Item 'Data\Agent\windows_script_service.py' $agentDestinationFolder -Force
+        Copy-Item 'Data\Agent\agent_deployment.py'  $agentDestinationFolder -Force
+        Copy-Item 'Data\Agent\tray_launcher.py'     $agentDestinationFolder -Force
+        if (Test-Path 'Data\Agent\Borealis.ico') { Copy-Item 'Data\Agent\Borealis.ico' $agentDestinationFolder -Force }
+    }
+
+    . "$venvFolder\Scripts\Activate"
+    if (Test-Path $agentRequirements) {
+        Write-AgentLog -FileName $logName -Message "Installing agent requirements"
+        & $venvPythonPath -m pip install --disable-pip-version-check -q -r $agentRequirements | Out-Null
+    }
+
+    # Install service via deployment helper (sets PythonHome/PythonPath)
+    Write-AgentLog -FileName $logName -Message "Running agent_deployment.py ensure-all"
+    $deployScript = Join-Path $agentDestinationFolder 'agent_deployment.py'
+    & $venvPythonPath -W ignore::SyntaxWarning $deployScript ensure-all *>&1 | Tee-Object -FilePath (Join-Path (Ensure-AgentLogDir) $logName) -Append | Out-Null
+
+    # Start the service explicitly
+    Write-AgentLog -FileName $logName -Message "Starting service BorealisAgent"
+    try { sc.exe start BorealisAgent 2>$null | Out-Null } catch {}
+    Start-Sleep -Seconds 2
+    Write-AgentLog -FileName $logName -Message "Query service state"
+    sc.exe query BorealisAgent *>> (Join-Path (Ensure-AgentLogDir) $logName)
+    Write-AgentLog -FileName $logName -Message "=== Repair end ==="
+}
+
+function Remove-BorealisAgent {
+    $logName = 'Removal.log'
+    Write-AgentLog -FileName $logName -Message "=== Removal start ==="
+    Remove-BorealisServicesAndTasks -LogName $logName
+    # Kill stray helpers
+    Write-AgentLog -FileName $logName -Message "Terminating stray helper processes"
+    Get-Process python,pythonw -ErrorAction SilentlyContinue | Where-Object { $_.Path -like (Join-Path $scriptDir 'Agent\*') } | ForEach-Object {
+        try { $_ | Stop-Process -Force } catch {}
+    }
+    # Remove venv folder
+    $venvFolder = Join-Path $scriptDir 'Agent'
+    Write-AgentLog -FileName $logName -Message "Removing folder: $venvFolder"
+    try { Remove-Item $venvFolder -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    Write-AgentLog -FileName $logName -Message "=== Removal end ==="
 }
 
 function Write-ProgressStep {
@@ -422,7 +551,7 @@ function Ensure-BorealisScriptAgent-Service {
         [string]$ServiceScript
     )
     if (-not (Test-IsWindows)) { return }
-    $serviceName = 'BorealisScriptService'
+    $serviceName = 'BorealisAgent'
     $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
     $needsInstall = $false
     if (-not $svc) { $needsInstall = $true }
@@ -778,77 +907,104 @@ switch ($choice) {
 
     "2" {
         $host.UI.RawUI.WindowTitle = "Borealis Agent"
-        # Agent Deployment (Client / Data Collector)
         Write-Host " "
-        Write-Host "Ensuring Agent Dependencies Exist..." -ForegroundColor DarkCyan
-        Install_Shared_Dependencies
-        Install_Agent_Dependencies
-        # Confirm Python presence and update PATH
-        if (-not (Test-Path $pythonExe)) {
-            Write-Host "`r$($symbols.Fail) Bundled Python not found at '$pythonExe'." -ForegroundColor Red
-            exit 1
-        }
-        $env:PATH = '{0};{1}' -f (Split-Path $pythonExe), $env:PATH
-        Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
-        
-        $venvFolder             = "Agent"
-        $agentSourcePath        = "Data\Agent\borealis-agent.py"
-        $agentRequirements      = "Data\Agent\agent-requirements.txt"
-        $agentDestinationFolder = "$venvFolder\Borealis"
-        $agentDestinationFile   = "$venvFolder\Borealis\borealis-agent.py"
-        $venvPython = Join-Path $scriptDir $venvFolder | Join-Path -ChildPath 'Scripts\python.exe'
+        Write-Host "Agent Menu:" -ForegroundColor Cyan
+        Write-Host " 1) Install/Update Agent"
+        Write-Host " 2) Repair Borealis Agent"
+        Write-Host " 3) Remove Agent"
+        Write-Host " 4) Launch UserSession Helper (current session)"
+        Write-Host " 5) Back"
+        if (-not $agentSubChoice) { $agentSubChoice = Read-Host "Select an option" }
 
-        Run-Step "Create Virtual Python Environment" {
-            if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
-                $pythonForVenv = $pythonExe
-                if (-not (Test-Path $pythonForVenv)) {
-                    $pyCmd = Get-Command py -ErrorAction SilentlyContinue
-                    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-                    if ($pyCmd) { $pythonForVenv = $pyCmd.Source }
-                    elseif ($pythonCmd) { $pythonForVenv = $pythonCmd.Source }
-                    else {
-                        Write-Host "Python not found. Install Python or run Server setup (option 1)." -ForegroundColor Red
-                        exit 1
+        switch ($agentSubChoice) {
+            '2' {
+                Repair-BorealisAgent
+                break
+            }
+            '3' {
+                Remove-BorealisAgent
+                break
+            }
+            '4' {
+                # Manually launch helper for the current session (optional)
+                $venvPythonw = Join-Path $scriptDir 'Agent\Scripts\pythonw.exe'
+                $helper = Join-Path $scriptDir 'Agent\Borealis\borealis-agent.py'
+                if (-not (Test-Path $venvPythonw)) { Write-Host "pythonw.exe not found under Agent\Scripts" -ForegroundColor Yellow }
+                if (-not (Test-Path $helper)) { Write-Host "Helper not found under Agent\Borealis" -ForegroundColor Yellow }
+                if ((Test-Path $venvPythonw) -and (Test-Path $helper)) {
+                    Start-Process -FilePath $venvPythonw -ArgumentList @('-W','ignore::SyntaxWarning', $helper) -WorkingDirectory (Split-Path $helper -Parent)
+                    Write-Host "Launched user-session helper." -ForegroundColor Green
+                }
+                break
+            }
+            '5' { break }
+            Default {
+                # 1) Install/Update Agent (original behavior)
+                Write-Host "Ensuring Agent Dependencies Exist..." -ForegroundColor DarkCyan
+                Install_Shared_Dependencies
+                Install_Agent_Dependencies
+                if (-not (Test-Path $pythonExe)) {
+                    Write-Host "`r$($symbols.Fail) Bundled Python not found at '$pythonExe'." -ForegroundColor Red
+                    exit 1
+                }
+                $env:PATH = '{0};{1}' -f (Split-Path $pythonExe), $env:PATH
+                Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
+
+                $venvFolder             = "Agent"
+                $agentSourcePath        = "Data\Agent\borealis-agent.py"
+                $agentRequirements      = "Data\Agent\agent-requirements.txt"
+                $agentDestinationFolder = "$venvFolder\Borealis"
+                $agentDestinationFile   = "$venvFolder\Borealis\borealis-agent.py"
+                $venvPython = Join-Path $scriptDir $venvFolder | Join-Path -ChildPath 'Scripts\python.exe'
+
+                Run-Step "Create Virtual Python Environment" {
+                    if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
+                        $pythonForVenv = $pythonExe
+                        if (-not (Test-Path $pythonForVenv)) {
+                            $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+                            $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+                            if ($pyCmd) { $pythonForVenv = $pyCmd.Source }
+                            elseif ($pythonCmd) { $pythonForVenv = $pythonCmd.Source }
+                            else {
+                                Write-Host "Python not found. Install Python or run Server setup (option 1)." -ForegroundColor Red
+                                exit 1
+                            }
+                        }
+                        & $pythonForVenv -m venv $venvFolder
+                    }
+                    if (Test-Path $agentSourcePath) {
+                        Remove-Item $agentDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
+                        New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
+                        Copy-Item "Data\Agent\borealis-agent.py" $agentDestinationFolder -Recurse
+                        Copy-Item "Data\Agent\agent_info.py" $agentDestinationFolder -Recurse
+                        Copy-Item "Data\Agent\agent_roles.py" $agentDestinationFolder -Recurse
+                        Copy-Item "Data\Agent\Python_API_Endpoints" $agentDestinationFolder -Recurse
+                        Copy-Item "Data\Agent\windows_script_service.py" $agentDestinationFolder -Force
+                        Copy-Item "Data\Agent\agent_deployment.py" $agentDestinationFolder -Force
+                        Copy-Item "Data\Agent\tray_launcher.py" $agentDestinationFolder -Force
+                        if (Test-Path "Data\Agent\Borealis.ico") { Copy-Item "Data\Agent\Borealis.ico" $agentDestinationFolder -Force }
+                    }
+                    . "$venvFolder\Scripts\Activate"
+                }
+
+                Run-Step "Install Python Dependencies" {
+                    if (Test-Path $agentRequirements) {
+                        & $venvPython -m pip install --disable-pip-version-check -q -r $agentRequirements | Out-Null
                     }
                 }
-                & $pythonForVenv -m venv $venvFolder
-            }
-            if (Test-Path $agentSourcePath) {
-                # Remove Existing "Agent/Borealis" folder.
-                Remove-Item $agentDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
 
-                # Create New "Agent/Borealis" folder.
-                New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
-                
-                # Agent Files and Modules
-                Copy-Item "Data\Agent\borealis-agent.py" $agentDestinationFolder -Recurse
-                Copy-Item "Data\Agent\agent_info.py" $agentDestinationFolder -Recurse
-                Copy-Item "Data\Agent\agent_roles.py" $agentDestinationFolder -Recurse
-                Copy-Item "Data\Agent\Python_API_Endpoints" $agentDestinationFolder -Recurse
-                Copy-Item "Data\Agent\windows_script_service.py" $agentDestinationFolder -Force
-                Copy-Item "Data\Agent\agent_deployment.py" $agentDestinationFolder -Force
-                Copy-Item "Data\Agent\tray_launcher.py" $agentDestinationFolder -Force
-                if (Test-Path "Data\Agent\Borealis.ico") { Copy-Item "Data\Agent\Borealis.ico" $agentDestinationFolder -Force }
+                Write-Host "`nConfiguring Borealis Agent (service)..." -ForegroundColor Blue
+                Write-Host "===================================================================================="
+                $deployScript = Join-Path $agentDestinationFolder 'agent_deployment.py'
+                & $venvPython -W ignore::SyntaxWarning $deployScript ensure-all
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "Agent setup FAILED." -ForegroundColor Red
+                    Write-Host " - See logs under: $(Join-Path $scriptDir 'Logs')" -ForegroundColor Red
+                    exit 1
+                } else {
+                    Write-Host "Agent setup complete. Service ensured." -ForegroundColor DarkGreen
+                }
             }
-            . "$venvFolder\Scripts\Activate"
-        }
-
-        Run-Step "Install Python Dependencies" {
-            if (Test-Path $agentRequirements) {
-                & $venvPython -m pip install --disable-pip-version-check -q -r $agentRequirements | Out-Null
-            }
-        }
-
-        Write-Host "`nConfiguring Borealis Agent (service + logon task)..." -ForegroundColor Blue
-        Write-Host "===================================================================================="
-        $deployScript = Join-Path $agentDestinationFolder 'agent_deployment.py'
-        & $venvPython -W ignore::SyntaxWarning $deployScript ensure-all
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Agent setup FAILED." -ForegroundColor Red
-            Write-Host " - See logs under: $(Join-Path $scriptDir 'Logs')" -ForegroundColor Red
-            exit 1
-        } else {
-            Write-Host "Agent setup complete. Service + logon task ensured." -ForegroundColor DarkGreen
         }
     }
 

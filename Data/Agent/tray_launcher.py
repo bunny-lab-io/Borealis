@@ -37,7 +37,7 @@ class TrayApp(QtWidgets.QSystemTrayIcon):
         self.action_show_console = self.menu.addAction('Switch to Foreground Mode')
         self.action_hide_console = self.menu.addAction('Switch to Background Mode')
         self.action_restart = self.menu.addAction('Restart Agent')
-        self.action_restart_service = self.menu.addAction('Restart Script Execution Service')
+        self.action_restart_service = self.menu.addAction('Restart Borealis Agent Service')
         self.menu.addSeparator()
         self.action_quit = self.menu.addAction('Quit Agent and Tray')
 
@@ -103,7 +103,7 @@ class TrayApp(QtWidgets.QSystemTrayIcon):
 
     def restart_script_service(self):
         # Try direct stop/start; if fails (likely due to permissions), attempt elevation via PowerShell
-        service_name = 'BorealisScriptService'
+        service_name = 'BorealisAgent'
         try:
             # Stop service
             subprocess.run(["sc.exe", "stop", service_name], check=False, capture_output=True)

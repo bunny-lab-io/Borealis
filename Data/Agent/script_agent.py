@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 
 import socketio
+import platform
+import time
 
 
 def get_project_root():
@@ -72,6 +74,10 @@ async def main():
             target = (payload.get('target_hostname') or '').strip().lower()
             if target and target != hostname.lower():
                 return
+            run_mode = (payload.get('run_mode') or 'current_user').lower()
+            # Only the SYSTEM service handles system-mode jobs; ignore others
+            if run_mode != 'system':
+                return
             job_id = payload.get('job_id')
             script_type = (payload.get('script_type') or '').lower()
             content = payload.get('script_content') or ''
@@ -106,11 +112,33 @@ async def main():
     async def disconnect():
         print("[ScriptAgent] Disconnected")
 
+    async def heartbeat_loop():
+        # Minimal heartbeat so device appears online even without a user helper
+        while True:
+            try:
+                await sio.emit("agent_heartbeat", {
+                    "agent_id": f"{hostname}-script",
+                    "hostname": hostname,
+                    "agent_operating_system": f"{platform.system()} {platform.release()} (Service)",
+                    "last_seen": int(time.time())
+                })
+            except Exception:
+                pass
+            await asyncio.sleep(30)
+
     url = get_server_url()
     while True:
         try:
             await sio.connect(url, transports=['websocket'])
-            await sio.wait()
+            # Heartbeat while connected
+            hb = asyncio.create_task(heartbeat_loop())
+            try:
+                await sio.wait()
+            finally:
+                try:
+                    hb.cancel()
+                except Exception:
+                    pass
         except Exception as e:
             print(f"[ScriptAgent] reconnect in 5s: {e}")
             await asyncio.sleep(5)

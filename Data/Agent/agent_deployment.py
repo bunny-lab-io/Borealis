@@ -159,7 +159,7 @@ def current_service_path(service_name):
 
 
 def ensure_script_service(paths):
-    service_name = "BorealisScriptService"
+    service_name = "BorealisAgent"
     log_name = "Borealis_ScriptService_Install.log"
     ensure_dirs(paths)
     log_write(paths, log_name, "[INFO] Ensuring script execution service...")
@@ -191,14 +191,16 @@ $post = "{postinstall}"
 $pyhome = "{py_home}"
 try {{
   try {{ New-Item -ItemType Directory -Force -Path (Split-Path $log -Parent) | Out-Null }} catch {{}}
-  # Remove legacy service name if present
+  # Remove legacy service names if present
   try {{ sc.exe stop BorealisScriptAgent 2>$null | Out-Null }} catch {{}}
   try {{ sc.exe delete BorealisScriptAgent 2>$null | Out-Null }} catch {{}}
+  try {{ sc.exe stop BorealisScriptService 2>$null | Out-Null }} catch {{}}
+  try {{ sc.exe delete BorealisScriptService 2>$null | Out-Null }} catch {{}}
   if (Test-Path $post) {{ & $venv $post -install *>> "$log" }} else {{ & $venv -m pywin32_postinstall -install *>> "$log" }}
   try {{ & $venv $srv remove *>> "$log" }} catch {{}}
   & $venv $srv --startup auto install *>> "$log"
   # Ensure registry points to correct module and PY path
-  reg add "HKLM\SYSTEM\CurrentControlSet\Services\{service_name}\PythonClass" /ve /t REG_SZ /d "windows_script_service.BorealisScriptAgentService" /f | Out-Null
+  reg add "HKLM\SYSTEM\CurrentControlSet\Services\{service_name}\PythonClass" /ve /t REG_SZ /d "windows_script_service.BorealisAgentService" /f | Out-Null
   reg add "HKLM\SYSTEM\CurrentControlSet\Services\{service_name}\PythonPath" /ve /t REG_SZ /d "{paths['borealis_dir']}" /f | Out-Null
   reg add "HKLM\SYSTEM\CurrentControlSet\Services\{service_name}\PythonHome" /ve /t REG_SZ /d "$pyhome" /f | Out-Null
   sc.exe config {service_name} obj= LocalSystem start= auto | Out-File -FilePath "$log" -Append -Encoding UTF8
@@ -226,14 +228,42 @@ try {{
         # Remove legacy service if it exists
         run(["sc.exe", "stop", "BorealisScriptAgent"])  # ignore rc
         run(["sc.exe", "delete", "BorealisScriptAgent"])  # ignore rc
+        run(["sc.exe", "stop", "BorealisScriptService"])  # ignore rc
+        run(["sc.exe", "delete", "BorealisScriptService"])  # ignore rc
         if need_install:
             run([paths["venv_python"], paths["service_script"], "remove"])  # ignore rc
             r1 = run([paths["venv_python"], paths["service_script"], "--startup", "auto", "install"], capture=True)
             log_write(paths, log_name, f"[INFO] install rc={r1.returncode} out={r1.stdout}\nerr={r1.stderr}")
-        # fix registry for module import and path
-        run(["reg", "add", fr"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{service_name}\\PythonClass", "/ve", "/t", "REG_SZ", "/d", "windows_script_service.BorealisScriptAgentService", "/f"])  # noqa
-        run(["reg", "add", fr"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{service_name}\\PythonPath", "/ve", "/t", "REG_SZ", "/d", paths["borealis_dir"], "/f"])  # noqa
-        run(["reg", "add", fr"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{service_name}\\PythonHome", "/ve", "/t", "REG_SZ", "/d", paths["venv_root"], "/f"])  # noqa
+        # fix registry for module import and runtime resolution
+        # PythonHome: base interpreter home (from pyvenv.cfg 'home') so pythonservice can load pythonXY.dll
+        # PythonPath: add Borealis dir and venv site-packages including pywin32 dirs
+        try:
+            cfg = os.path.join(paths["venv_root"], "pyvenv.cfg")
+            base_home = None
+            if os.path.isfile(cfg):
+                with open(cfg, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if line.strip().lower().startswith("home ="):
+                            base_home = line.split("=",1)[1].strip()
+                            break
+            if not base_home:
+                # fallback to parent of venv Scripts
+                base_home = os.path.dirname(os.path.dirname(paths["venv_python"]))
+        except Exception:
+            base_home = os.path.dirname(os.path.dirname(paths["venv_python"]))
+
+        site = os.path.join(paths["venv_root"], "Lib", "site-packages")
+        pypath = ";".join([
+            paths["borealis_dir"],
+            site,
+            os.path.join(site, "win32"),
+            os.path.join(site, "win32", "lib"),
+            os.path.join(site, "pywin32_system32"),
+        ])
+
+        run(["reg", "add", fr"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{service_name}\\PythonClass", "/ve", "/t", "REG_SZ", "/d", "windows_script_service.BorealisAgentService", "/f"])  # noqa
+        run(["reg", "add", fr"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{service_name}\\PythonPath", "/ve", "/t", "REG_SZ", "/d", pypath, "/f"])  # noqa
+        run(["reg", "add", fr"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{service_name}\\PythonHome", "/ve", "/t", "REG_SZ", "/d", base_home, "/f"])  # noqa
         run(["sc.exe", "config", service_name, "obj=", "LocalSystem"])  # ensure LocalSystem
         run(["sc.exe", "start", service_name])
         # quick validate
@@ -332,8 +362,8 @@ def ensure_all():
     paths = project_paths()
     ensure_dirs(paths)
     ok_svc = ensure_script_service(paths)
-    ok_task = ensure_user_logon_task(paths)
-    return 0 if (ok_svc and ok_task) else 1
+    # Service now launches per-session helper; scheduled task is not required.
+    return 0 if ok_svc else 1
 
 
 def main(argv):
@@ -350,7 +380,7 @@ def main(argv):
     if cmd == "service-install":
         return 0 if ensure_script_service(paths) else 1
     if cmd == "service-remove":
-        name = "BorealisScriptService"
+        name = "BorealisAgent"
         if not is_admin():
             ps = f"try {{ sc.exe stop {name} }} catch {{}}; try {{ sc.exe delete {name} }} catch {{}}"
             return run_elevated_powershell(paths, ps, "Borealis_ScriptService_Remove.log")

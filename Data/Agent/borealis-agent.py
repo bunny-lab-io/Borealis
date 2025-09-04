@@ -996,17 +996,16 @@ async def on_quick_job_run(payload):
         script_type = (payload.get('script_type') or '').lower()
         run_mode = (payload.get('run_mode') or 'current_user').lower()
         content = payload.get('script_content') or ''
+        # Only handle non-SYSTEM runs here; SYSTEM runs are handled by the LocalSystem service agent
+        if run_mode == 'system':
+            # Optionally, could emit a status indicating delegation; for now, just ignore to avoid overlap
+            return
         if script_type != 'powershell':
             await sio.emit('quick_job_result', { 'job_id': job_id, 'status': 'Failed', 'stdout': '', 'stderr': f"Unsupported type: {script_type}" })
             return
         path = _write_temp_script(content, '.ps1')
         rc = 0; out = ''; err = ''
-        if run_mode == 'system':
-            if not _is_admin_windows():
-                rc, out, err = -1, '', 'Agent is not elevated. SYSTEM execution requires running the agent as Administrator or service.'
-            else:
-                rc, out, err = await _run_powershell_as_system(path)
-        elif run_mode == 'admin':
+        if run_mode == 'admin':
             # Admin credentialed runs are disabled in current design
             rc, out, err = -1, '', 'Admin credentialed runs are disabled; use SYSTEM (service) or Current User.'
         else:
