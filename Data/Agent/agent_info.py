@@ -153,14 +153,84 @@ def detect_agent_os():
 
 
 def _get_internal_ip():
+    """Best-effort detection of primary IPv4 address without external reachability.
+
+    Order of attempts:
+      1) psutil.net_if_addrs() – first non-loopback, non-APIPA IPv4
+      2) UDP connect trick to 8.8.8.8 (common technique)
+      3) Windows: PowerShell Get-NetIPAddress
+      4) Linux/macOS: `ip -o -4 addr show` or `hostname -I`
+    """
+    # 1) psutil interfaces
+    try:
+        if psutil:
+            for name, addrs in (psutil.net_if_addrs() or {}).items():
+                for a in addrs:
+                    if getattr(a, "family", None) == socket.AF_INET:
+                        ip = a.address
+                        if (
+                            ip
+                            and not ip.startswith("127.")
+                            and not ip.startswith("169.254.")
+                            and ip != "0.0.0.0"
+                        ):
+                            return ip
+    except Exception:
+        pass
+
+    # 2) UDP connect trick
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
-        return ip
+        if ip:
+            return ip
     except Exception:
-        return "unknown"
+        pass
+
+    plat = platform.system().lower()
+    # 3) Windows PowerShell
+    if plat == "windows":
+        try:
+            ps_cmd = (
+                "Get-NetIPAddress -AddressFamily IPv4 | "
+                "Where-Object { $_.IPAddress -and $_.IPAddress -notmatch '^169\\.254\\.' -and $_.IPAddress -notmatch '^127\\.' } | "
+                "Sort-Object -Property PrefixLength | Select-Object -First 1 -ExpandProperty IPAddress"
+            )
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            val = (out.stdout or "").strip()
+            if val:
+                return val
+        except Exception:
+            pass
+
+    # 4) Linux/macOS
+    try:
+        out = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True, timeout=10)
+        for line in out.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 4:
+                ip = parts[3].split("/")[0]
+                if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                    return ip
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=5)
+        val = (out.stdout or "").strip().split()
+        for ip in val:
+            if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                return ip
+    except Exception:
+        pass
+
+    return "unknown"
 
 
 def collect_summary(config):
@@ -173,6 +243,7 @@ def collect_summary(config):
 
     try:
         last_reboot = "unknown"
+        # First, prefer psutil if available
         if psutil:
             try:
                 last_reboot = time.strftime(
@@ -184,35 +255,46 @@ def collect_summary(config):
         if last_reboot == "unknown":
             plat = platform.system().lower()
             if plat == "windows":
+                # Try WMIC, then robust PowerShell fallback regardless of WMIC presence
+                raw = ""
                 try:
                     out = subprocess.run(
                         ["wmic", "os", "get", "lastbootuptime"],
                         capture_output=True,
                         text=True,
-                        timeout=60,
+                        timeout=20,
                     )
                     raw = "".join(out.stdout.splitlines()[1:]).strip()
-                    if raw:
+                except Exception:
+                    raw = ""
+                # If WMIC didn't yield a value, try CIM and format directly in PowerShell
+                if not raw:
+                    try:
+                        ps_cmd = (
+                            "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime | "
+                            "ForEach-Object { (Get-Date -Date $_ -Format 'yyyy-MM-dd HH:mm:ss') }"
+                        )
+                        out = subprocess.run(
+                            ["powershell", "-NoProfile", "-Command", ps_cmd],
+                            capture_output=True,
+                            text=True,
+                            timeout=20,
+                        )
+                        raw = (out.stdout or "").strip()
+                        if raw:
+                            last_reboot = raw
+                    except Exception:
+                        raw = ""
+                # Parse WMIC-style if we had it
+                if last_reboot == "unknown" and raw:
+                    try:
                         boot = datetime.datetime.strptime(raw.split(".")[0], "%Y%m%d%H%M%S")
                         last_reboot = boot.strftime("%Y-%m-%d %H:%M:%S")
-                except FileNotFoundError:
-                    ps_cmd = "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime"
-                    out = subprocess.run(
-                        ["powershell", "-NoProfile", "-Command", ps_cmd],
-                        capture_output=True,
-                        text=True,
-                        timeout=60,
-                    )
-                    raw = out.stdout.strip()
-                    if raw:
-                        try:
-                            boot = datetime.datetime.strptime(raw.split(".")[0], "%Y%m%d%H%M%S")
-                            last_reboot = boot.strftime("%Y-%m-%d %H:%M:%S")
-                        except Exception:
-                            pass
+                    except Exception:
+                        pass
             else:
                 try:
-                    out = subprocess.run(["uptime", "-s"], capture_output=True, text=True, timeout=30)
+                    out = subprocess.run(["uptime", "-s"], capture_output=True, text=True, timeout=10)
                     val = out.stdout.strip()
                     if val:
                         last_reboot = val
@@ -230,10 +312,15 @@ def collect_summary(config):
         except Exception:
             pass
 
-    try:
-        external_ip = requests.get("https://api.ipify.org", timeout=5).text.strip()
-    except Exception:
-        external_ip = "unknown"
+    # External IP detection with fallbacks
+    external_ip = "unknown"
+    for url in ("https://api.ipify.org", "https://api64.ipify.org", "https://ifconfig.me/ip"):
+        try:
+            external_ip = requests.get(url, timeout=5).text.strip()
+            if external_ip:
+                break
+        except Exception:
+            continue
 
     return {
         "hostname": socket.gethostname(),
@@ -551,4 +638,5 @@ async def send_agent_details(agent_id, config):
                 await session.post(url, json=payload, timeout=10)
         except Exception as e:
             print(f"[WARN] Failed to send agent details: {e}")
-        await asyncio.sleep(300)
+        # Report every ~2 minutes
+        await asyncio.sleep(120)
