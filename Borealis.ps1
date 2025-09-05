@@ -328,10 +328,14 @@ function Ensure-AgentTasks {
     param(
         [string]$ScriptRoot
     )
-    $supName = 'Borealis Agent - Supervisor'
-    $py       = Join-Path $ScriptRoot 'Agent\Scripts\python.exe'
-    $supScript= Join-Path $ScriptRoot 'Data\Agent\agent_supervisor.py'
-    $wdName   = 'Borealis Agent - Watchdog'
+    $supName   = 'Borealis Agent - Supervisor'
+    $py        = Join-Path $ScriptRoot 'Agent\Scripts\python.exe'
+    $supScript = Join-Path $ScriptRoot 'Data\Agent\agent_supervisor.py'
+    $wdName    = 'Borealis Agent - Watchdog'
+    # Per-user tray helper task (ensure within same elevation to avoid second UAC)
+    $userTaskName = 'Borealis Agent'
+    $userExe      = Join-Path $ScriptRoot 'Agent\Scripts\pythonw.exe'
+    $userScript   = Join-Path $ScriptRoot 'Agent\Borealis\tray_launcher.py'
 
     # Elevate and run the external registrar script with parameters
     $regScript  = Join-Path $ScriptRoot 'Data\Agent\Scripts\register_agent_tasks.ps1'
@@ -340,19 +344,28 @@ function Ensure-AgentTasks {
     if (-not (Test-Path $wdSource))  { Write-Host "Watchdog script not found: $wdSource" -ForegroundColor Red; return }
 
     # Launch registrar elevated using -EncodedCommand to avoid quoting/binding issues
-    $qSupName  = $supName  -replace "'","''"
-    $qPy       = $py       -replace "'","''"
-    $qSupScript= $supScript-replace "'","''"
-    $qWdName   = $wdName   -replace "'","''"
-    $qWdSource = $wdSource -replace "'","''"
-    $qRegScript= $regScript-replace "'","''"
+    $qSupName      = $supName      -replace "'","''"
+    $qPy           = $py           -replace "'","''"
+    $qSupScript    = $supScript    -replace "'","''"
+    $qWdName       = $wdName       -replace "'","''"
+    $qWdSource     = $wdSource     -replace "'","''"
+    $qRegScript    = $regScript    -replace "'","''"
+    $qUserTaskName = $userTaskName -replace "'","''"
+    $qUserExe      = $userExe      -replace "'","''"
+    $qUserScript   = $userScript   -replace "'","''"
+    $currentUser   = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $qUserPrincipal= $currentUser  -replace "'","''"
     $inline = @"
 `$p = @{
-    SupName   = '$qSupName'
-    PythonExe = '$qPy'
-    SupScript = '$qSupScript'
-    WdName    = '$qWdName'
-    WdSource  = '$qWdSource'
+    SupName       = '$qSupName'
+    PythonExe     = '$qPy'
+    SupScript     = '$qSupScript'
+    WdName        = '$qWdName'
+    WdSource      = '$qWdSource'
+    UserTaskName  = '$qUserTaskName'
+    UserExe       = '$qUserExe'
+    UserScript    = '$qUserScript'
+    UserPrincipal = '$qUserPrincipal'
 }
 & '$qRegScript' @p
 "@
@@ -421,10 +434,6 @@ function InstallOrUpdate-BorealisAgent {
     Write-Host "`nConfiguring Borealis Agent (tasks)..." -ForegroundColor Blue
     Write-Host "===================================================================================="
     Ensure-AgentTasks -ScriptRoot $scriptDir
-
-    # Ensure per-user logon task for helper
-    $deployScript = Join-Path (Join-Path $scriptDir 'Agent\Borealis') 'agent_deployment.py'
-    try { & (Join-Path $scriptDir 'Agent\Scripts\python.exe') -W ignore::SyntaxWarning $deployScript task-ensure | Out-Null } catch {}
 }
 
 # ---------------------- Main ----------------------
