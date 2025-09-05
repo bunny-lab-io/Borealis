@@ -35,7 +35,7 @@ try {
     $wdArg = ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -SupervisorTaskName "{1}"' -f $wdDest, $SupName)
     $wdAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $wdArg
     $wdTrigger = New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 365)
-    $wdSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden -ExecutionTimeLimit ([TimeSpan]::Zero)
+    $wdSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
     Register-ScheduledTask -TaskName $WdName -Action $wdAction -Trigger $wdTrigger -Settings $wdSettings -Principal $principal -Force | Out-Null
 
     # Ensure supervisor is running
@@ -52,7 +52,7 @@ try {
             $usrArg   = ('-W ignore::SyntaxWarning "{0}"' -f $UserScript)
             $usrAction = New-ScheduledTaskAction -Execute $UserExe -Argument $usrArg
             $usrTrig   = New-ScheduledTaskTrigger -AtLogOn
-            $usrSet    = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit ([TimeSpan]::Zero)
+            $usrSet    = New-ScheduledTaskSettingsSet -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
             $usrPrin   = New-ScheduledTaskPrincipal -UserId $targetUser -LogonType Interactive -RunLevel Limited
             Register-ScheduledTask -TaskName $UserTaskName -Action $usrAction -Trigger $usrTrig -Settings $usrSet -Principal $usrPrin -Force | Out-Null
             Start-ScheduledTask -TaskName $UserTaskName | Out-Null

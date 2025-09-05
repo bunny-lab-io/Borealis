@@ -126,7 +126,7 @@ $arg  = "-W ignore::SyntaxWarning {paths['agent_script']}"
 try {{ Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
 $action = New-ScheduledTaskAction -Execute $py -Argument $arg
 $trigger= New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit ([TimeSpan]::Zero)
+$settings = New-ScheduledTaskSettingsSet -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName $task | Out-Null
 """
