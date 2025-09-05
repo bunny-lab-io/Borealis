@@ -27,7 +27,6 @@ if ($Vite -and $Flask) {
 }
 
 if ($Server) {
-    $choice = '1'
 } elseif ($Agent) {
     $choice = '2'
     switch ($AgentAction) {

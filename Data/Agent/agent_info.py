@@ -16,6 +16,7 @@ try:
 except Exception:
     psutil = None  # graceful degradation if unavailable
 import aiohttp
+import asyncio
 
 
 def detect_agent_os():
@@ -551,4 +552,3 @@ async def send_agent_details(agent_id, config):
         except Exception as e:
             print(f"[WARN] Failed to send agent details: {e}")
         await asyncio.sleep(300)
-
