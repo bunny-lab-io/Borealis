@@ -627,7 +627,7 @@ export default function DeviceDetails({ device, onBack }) {
                   py: 0.25,
                   borderRadius: 999,
                   bgcolor: jobStatusColor(r.status),
-                  color: "#000",
+                  color: "#fff",
                   fontWeight: 600,
                   fontSize: "12px"
                 }}>

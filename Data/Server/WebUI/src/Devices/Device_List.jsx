@@ -231,18 +231,18 @@ export default function DeviceList({ onSelectDevice }) {
                 />
               </TableCell>
               <TableCell>
-                <Box sx={{ display: "flex", alignItems: "center" }}>
-                  <Box
-                    component="span"
-                    sx={{
-                      display: "inline-block",
-                      width: 10,
-                      height: 10,
-                      borderRadius: 10,
-                      bgcolor: statusColor(r.status),
-                      mr: 1,
-                    }}
-                  />
+                <Box
+                  sx={{
+                    display: "inline-block",
+                    px: 1.2,
+                    py: 0.25,
+                    borderRadius: 999,
+                    bgcolor: statusColor(r.status),
+                    color: "#fff",
+                    fontWeight: 600,
+                    fontSize: "12px",
+                  }}
+                >
                   {r.status}
                 </Box>
               </TableCell>
