@@ -17,10 +17,12 @@ import {
   Menu,
   MenuItem,
   Popover,
-  TextField
+  TextField,
+  Tooltip
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import FilterListIcon from "@mui/icons-material/FilterList";
+import ViewColumnIcon from "@mui/icons-material/ViewColumn";
 import { DeleteDeviceDialog } from "../Dialogs.jsx";
 import QuickJob from "../Scheduling/Quick_Job.jsx";
 
@@ -59,26 +61,44 @@ export default function DeviceList({ onSelectDevice }) {
   const [quickJobOpen, setQuickJobOpen] = useState(false);
 
   // Column configuration and rearranging state
+  const COL_LABELS = useMemo(
+    () => ({
+      status: "Status",
+      hostname: "Hostname",
+      description: "Description",
+      lastUser: "Last User",
+      type: "Type",
+      os: "OS",
+      internalIp: "Internal IP",
+      externalIp: "External IP",
+      lastReboot: "Last Reboot",
+      created: "Created",
+      lastSeen: "Last Seen",
+    }),
+    []
+  );
+
   const defaultColumns = useMemo(
     () => [
-      { id: "status", label: "Status" },
-      { id: "hostname", label: "Hostname" },
-      { id: "lastUser", label: "Last User" },
-      { id: "type", label: "Type" },
-      { id: "os", label: "OS" },
-      { id: "created", label: "Created" }
+      { id: "status", label: COL_LABELS.status },
+      { id: "hostname", label: COL_LABELS.hostname },
+      { id: "description", label: COL_LABELS.description },
+      { id: "lastUser", label: COL_LABELS.lastUser },
+      { id: "type", label: COL_LABELS.type },
+      { id: "os", label: COL_LABELS.os },
     ],
-    []
+    [COL_LABELS]
   );
   const [columns, setColumns] = useState(defaultColumns);
   const dragColId = useRef(null);
+  const [colChooserAnchor, setColChooserAnchor] = useState(null);
 
   // Per-column filters
   const [filters, setFilters] = useState({});
   const [filterAnchor, setFilterAnchor] = useState(null); // { id, anchorEl }
 
   // Cache device details to avoid re-fetching every refresh
-  const [detailsByHost, setDetailsByHost] = useState({}); // hostname -> { lastUser, created, createdTs }
+  const [detailsByHost, setDetailsByHost] = useState({}); // hostname -> cached fields
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -98,6 +118,10 @@ export default function DeviceList({ onSelectDevice }) {
           type: a.device_type || details.type || "",
           created: details.created || "",
           createdTs: details.createdTs || 0,
+          internalIp: details.internalIp || "",
+          externalIp: details.externalIp || "",
+          lastReboot: details.lastReboot || "",
+          description: details.description || "",
         };
       });
       setRows(arr);
@@ -129,9 +153,22 @@ export default function DeviceList({ onSelectDevice }) {
                   createdTs = isNaN(parsed) ? 0 : Math.floor(parsed / 1000);
                 }
                 const deviceType = (summary.device_type || "").trim();
+                const internalIp = summary.internal_ip || "";
+                const externalIp = summary.external_ip || "";
+                const lastReboot = summary.last_reboot || "";
+                const description = summary.description || "";
                 setDetailsByHost((prev) => ({
                   ...prev,
-                  [h]: { lastUser, created: createdRaw, createdTs, type: deviceType },
+                  [h]: {
+                    lastUser,
+                    created: createdRaw,
+                    createdTs,
+                    type: deviceType,
+                    internalIp,
+                    externalIp,
+                    lastReboot,
+                    description,
+                  },
                 }));
               } catch {
                 // ignore per-host failure
@@ -150,6 +187,10 @@ export default function DeviceList({ onSelectDevice }) {
               type: det.type || r.type,
               created: det.created || r.created,
               createdTs: det.createdTs || r.createdTs,
+              internalIp: det.internalIp || r.internalIp,
+              externalIp: det.externalIp || r.externalIp,
+              lastReboot: det.lastReboot || r.lastReboot,
+              description: det.description || r.description,
             };
           })
         );
@@ -176,14 +217,24 @@ export default function DeviceList({ onSelectDevice }) {
           return row.status || "";
         case "hostname":
           return row.hostname || "";
+        case "description":
+          return row.description || "";
         case "lastUser":
           return row.lastUser || "";
         case "type":
           return row.type || "";
         case "os":
           return row.os || "";
+        case "internalIp":
+          return row.internalIp || "";
+        case "externalIp":
+          return row.externalIp || "";
+        case "lastReboot":
+          return row.lastReboot || "";
         case "created":
           return formatCreated(row.created, row.createdTs);
+        case "lastSeen":
+          return formatLastSeen(row.lastSeen);
         default:
           return "";
       }
@@ -310,7 +361,16 @@ export default function DeviceList({ onSelectDevice }) {
         <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
           Devices
         </Typography>
-        <Box>
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          <Tooltip title="Column Chooser">
+            <IconButton
+              size="small"
+              onClick={(e) => setColChooserAnchor(e.currentTarget)}
+              sx={{ color: "#bbb", mr: 1 }}
+            >
+              <ViewColumnIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Button
             variant="outlined"
             size="small"
@@ -415,15 +475,27 @@ export default function DeviceList({ onSelectDevice }) {
                         {r.hostname}
                       </TableCell>
                     );
+                  case "description":
+                    return <TableCell key={col.id}>{r.description || ""}</TableCell>;
                   case "lastUser":
                     return <TableCell key={col.id}>{r.lastUser || ""}</TableCell>;
                   case "type":
                     return <TableCell key={col.id}>{r.type || ""}</TableCell>;
                   case "os":
                     return <TableCell key={col.id}>{r.os}</TableCell>;
+                  case "internalIp":
+                    return <TableCell key={col.id}>{r.internalIp || ""}</TableCell>;
+                  case "externalIp":
+                    return <TableCell key={col.id}>{r.externalIp || ""}</TableCell>;
+                  case "lastReboot":
+                    return <TableCell key={col.id}>{r.lastReboot || ""}</TableCell>;
                   case "created":
                     return (
                       <TableCell key={col.id}>{formatCreated(r.created, r.createdTs)}</TableCell>
+                    );
+                  case "lastSeen":
+                    return (
+                      <TableCell key={col.id}>{formatLastSeen(r.lastSeen)}</TableCell>
                     );
                   default:
                     return <TableCell key={col.id} />;
@@ -452,6 +524,63 @@ export default function DeviceList({ onSelectDevice }) {
           )}
         </TableBody>
       </Table>
+      {/* Column chooser popover */}
+      <Popover
+        open={Boolean(colChooserAnchor)}
+        anchorEl={colChooserAnchor}
+        onClose={() => setColChooserAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: '#fff', p: 1 } }}
+      >
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, p: 1 }}>
+          {[
+            { id: 'hostname', label: 'Hostname' },
+            { id: 'os', label: 'Operating System' },
+            { id: 'type', label: 'Device Type' },
+            { id: 'lastUser', label: 'Last User' },
+            { id: 'internalIp', label: 'Internal IP' },
+            { id: 'externalIp', label: 'External IP' },
+            { id: 'lastReboot', label: 'Last Reboot' },
+            { id: 'created', label: 'Created' },
+            { id: 'lastSeen', label: 'Last Seen' },
+            { id: 'description', label: 'Description' },
+          ].map((opt) => (
+            <MenuItem key={opt.id} disableRipple onClick={(e) => e.stopPropagation()} sx={{ gap: 1 }}>
+              <Checkbox
+                size="small"
+                checked={columns.some((c) => c.id === opt.id)}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setColumns((prev) => {
+                    // Keep 'status' always present; manage others per toggle
+                    const exists = prev.some((c) => c.id === opt.id);
+                    if (checked) {
+                      if (exists) return prev;
+                      // Append new column at the end with canonical label
+                      const label = COL_LABELS[opt.id] || opt.label || opt.id;
+                      return [...prev, { id: opt.id, label }];
+                    }
+                    // Remove column
+                    return prev.filter((c) => c.id !== opt.id);
+                  });
+                }}
+                sx={{ p: 0.3, color: '#bbb' }}
+              />
+              <Typography variant="body2" sx={{ color: '#ddd' }}>{opt.label}</Typography>
+            </MenuItem>
+          ))}
+          <Box sx={{ display: 'flex', gap: 1, pt: 0.5 }}>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => setColumns(defaultColumns)}
+              sx={{ textTransform: 'none', borderColor: '#555', color: '#bbb' }}
+            >
+              Reset Default
+            </Button>
+          </Box>
+        </Box>
+      </Popover>
       {/* Filter popover */}
       <Popover
         open={Boolean(filterAnchor)}
