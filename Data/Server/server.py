@@ -681,6 +681,189 @@ def init_db():
 
 init_db()
 
+# Views database (device list saved views)
+VIEWS_DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "Databases", "devices_list_views.db")
+)
+os.makedirs(os.path.dirname(VIEWS_DB_PATH), exist_ok=True)
+
+def init_views_db():
+    conn = sqlite3.connect(VIEWS_DB_PATH)
+    cur = conn.cursor()
+    # Store name, ordered column ids as JSON, and filters as JSON
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_list_views (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            columns_json TEXT NOT NULL,
+            filters_json TEXT,
+            created_at INTEGER,
+            updated_at INTEGER
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+init_views_db()
+
+
+# ---------------------------------------------
+# Device List Views API
+# ---------------------------------------------
+def _row_to_view(row):
+    return {
+        "id": row[0],
+        "name": row[1],
+        "columns": json.loads(row[2] or "[]"),
+        "filters": json.loads(row[3] or "{}"),
+        "created_at": row[4],
+        "updated_at": row[5],
+    }
+
+
+@app.route("/api/device_list_views", methods=["GET"])
+def list_device_list_views():
+    try:
+        conn = sqlite3.connect(VIEWS_DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, columns_json, filters_json, created_at, updated_at FROM device_list_views ORDER BY name COLLATE NOCASE ASC"
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return jsonify({"views": [_row_to_view(r) for r in rows]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/device_list_views/<int:view_id>", methods=["GET"])
+def get_device_list_view(view_id: int):
+    try:
+        conn = sqlite3.connect(VIEWS_DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, columns_json, filters_json, created_at, updated_at FROM device_list_views WHERE id = ?",
+            (view_id,),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        return jsonify(_row_to_view(row))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/device_list_views", methods=["POST"])
+def create_device_list_view():
+    payload = request.get_json(silent=True) or {}
+    name = (payload.get("name") or "").strip()
+    columns = payload.get("columns") or []
+    filters = payload.get("filters") or {}
+
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    if name.lower() == "default view":
+        return jsonify({"error": "reserved name"}), 400
+    if not isinstance(columns, list) or not all(isinstance(x, str) for x in columns):
+        return jsonify({"error": "columns must be a list of strings"}), 400
+    if not isinstance(filters, dict):
+        return jsonify({"error": "filters must be an object"}), 400
+
+    now = int(time.time())
+    try:
+        conn = sqlite3.connect(VIEWS_DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO device_list_views(name, columns_json, filters_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (name, json.dumps(columns), json.dumps(filters), now, now),
+        )
+        vid = cur.lastrowid
+        conn.commit()
+        cur.execute(
+            "SELECT id, name, columns_json, filters_json, created_at, updated_at FROM device_list_views WHERE id = ?",
+            (vid,),
+        )
+        row = cur.fetchone()
+        conn.close()
+        return jsonify(_row_to_view(row)), 201
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "name already exists"}), 409
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/device_list_views/<int:view_id>", methods=["PUT"])
+def update_device_list_view(view_id: int):
+    payload = request.get_json(silent=True) or {}
+    name = payload.get("name")
+    columns = payload.get("columns")
+    filters = payload.get("filters")
+    if name is not None:
+        name = (name or "").strip()
+        if not name:
+            return jsonify({"error": "name cannot be empty"}), 400
+        if name.lower() == "default view":
+            return jsonify({"error": "reserved name"}), 400
+    if columns is not None:
+        if not isinstance(columns, list) or not all(isinstance(x, str) for x in columns):
+            return jsonify({"error": "columns must be a list of strings"}), 400
+    if filters is not None and not isinstance(filters, dict):
+        return jsonify({"error": "filters must be an object"}), 400
+
+    fields = []
+    params = []
+    if name is not None:
+        fields.append("name = ?")
+        params.append(name)
+    if columns is not None:
+        fields.append("columns_json = ?")
+        params.append(json.dumps(columns))
+    if filters is not None:
+        fields.append("filters_json = ?")
+        params.append(json.dumps(filters))
+    fields.append("updated_at = ?")
+    params.append(int(time.time()))
+    params.append(view_id)
+
+    try:
+        conn = sqlite3.connect(VIEWS_DB_PATH)
+        cur = conn.cursor()
+        cur.execute(f"UPDATE device_list_views SET {', '.join(fields)} WHERE id = ?", params)
+        if cur.rowcount == 0:
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        conn.commit()
+        cur.execute(
+            "SELECT id, name, columns_json, filters_json, created_at, updated_at FROM device_list_views WHERE id = ?",
+            (view_id,),
+        )
+        row = cur.fetchone()
+        conn.close()
+        return jsonify(_row_to_view(row))
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "name already exists"}), 409
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/device_list_views/<int:view_id>", methods=["DELETE"])
+def delete_device_list_view(view_id: int):
+    try:
+        conn = sqlite3.connect(VIEWS_DB_PATH)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM device_list_views WHERE id = ?", (view_id,))
+        if cur.rowcount == 0:
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 def _persist_last_seen(hostname: str, last_seen: int):
     """Persist the last_seen timestamp into the device_details.details JSON.

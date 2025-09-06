@@ -23,7 +23,8 @@ import {
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import ViewColumnIcon from "@mui/icons-material/ViewColumn";
-import { DeleteDeviceDialog } from "../Dialogs.jsx";
+import AddIcon from "@mui/icons-material/Add";
+import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
 import QuickJob from "../Scheduling/Quick_Job.jsx";
 
 function formatLastSeen(tsSec, offlineAfter = 120) {
@@ -59,6 +60,17 @@ export default function DeviceList({ onSelectDevice }) {
   // Track selection by agent id to avoid duplicate hostname collisions
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [quickJobOpen, setQuickJobOpen] = useState(false);
+
+  // Saved custom views (from server)
+  const [views, setViews] = useState([]); // [{id, name, columns:[id], filters:{}}]
+  const [selectedViewId, setSelectedViewId] = useState("default");
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [newViewName, setNewViewName] = useState("");
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameViewName, setRenameViewName] = useState("");
+  const [renameTarget, setRenameTarget] = useState(null); // {id, name}
+  const [viewActionAnchor, setViewActionAnchor] = useState(null); // anchor for per-item actions
+  const [viewActionTarget, setViewActionTarget] = useState(null); // view object for actions
 
   // Column configuration and rearranging state
   const COL_LABELS = useMemo(
@@ -201,11 +213,47 @@ export default function DeviceList({ onSelectDevice }) {
     }
   }, [detailsByHost]);
 
+  const fetchViews = useCallback(async () => {
+    try {
+      const res = await fetch("/api/device_list_views");
+      const data = await res.json();
+      if (data && Array.isArray(data.views)) setViews(data.views);
+      else setViews([]);
+    } catch {
+      setViews([]);
+    }
+  }, []);
+
   useEffect(() => {
     fetchAgents();
     const t = setInterval(fetchAgents, 5000);
     return () => clearInterval(t);
   }, [fetchAgents]);
+
+  useEffect(() => {
+    fetchViews();
+  }, [fetchViews]);
+
+  const applyView = useCallback((view) => {
+    if (!view || view.id === "default") {
+      setColumns(defaultColumns);
+      setFilters({});
+      return;
+    }
+    try {
+      const ids = Array.isArray(view.columns) ? view.columns : [];
+      // Ensure status is present and first
+      const finalIds = ["status", ...ids.filter((x) => x !== "status")];
+      const mapped = finalIds
+        .filter((id) => COL_LABELS[id])
+        .map((id) => ({ id, label: COL_LABELS[id] }));
+      setColumns(mapped.length ? mapped : defaultColumns);
+      setFilters(view.filters && typeof view.filters === "object" ? view.filters : {});
+    } catch {
+      setColumns(defaultColumns);
+      setFilters({});
+    }
+  }, [COL_LABELS, defaultColumns]);
 
   const filtered = useMemo(() => {
     // Apply simple contains filter per column based on displayed string
@@ -357,27 +405,111 @@ export default function DeviceList({ onSelectDevice }) {
 
   return (
     <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
-      <Box sx={{ p: 2, pb: 1, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
-          Devices
-        </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-          <Tooltip title="Column Chooser">
-            <IconButton
-              size="small"
-              onClick={(e) => setColChooserAnchor(e.currentTarget)}
-              sx={{ color: "#bbb", mr: 1 }}
-            >
-              <ViewColumnIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
+      {/* Header area with title on left and controls on right */}
+      <Box sx={{ p: 2, pb: 1, display: "flex", flexDirection: 'column', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
+            Devices
+          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            {/* Views dropdown + add button */}
+            <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
+              <TextField
+                select
+                size="small"
+                value={selectedViewId}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedViewId(val);
+                  if (val === "default") applyView({ id: "default" });
+                  else {
+                    const v = views.find((x) => String(x.id) === String(val));
+                    if (v) applyView(v);
+                  }
+                }}
+                sx={{
+                  minWidth: 220,
+                  mr: 0,
+                  '& .MuiOutlinedInput-root': {
+                    height: 32,
+                    pr: 0,
+                    borderTopRightRadius: 0,
+                    borderBottomRightRadius: 0,
+                    '& fieldset': { borderColor: '#555', borderRight: '1px solid #555' },
+                    '&:hover fieldset': { borderColor: '#888' },
+                  },
+                  '& .MuiSelect-select': {
+                    display: 'flex',
+                    alignItems: 'center',
+                    py: 0,
+                  },
+                }}
+                SelectProps={{
+                  MenuProps: {
+                    PaperProps: { sx: { bgcolor: '#1e1e1e', color: '#fff' } },
+                  },
+                  renderValue: (val) => {
+                    if (val === "default") return "Default View";
+                    const v = views.find((x) => String(x.id) === String(val));
+                    return v ? v.name : "Default View";
+                  }
+                }}
+              >
+                <MenuItem value="default">Default View</MenuItem>
+                {views.map((v) => (
+                  <MenuItem key={v.id} value={v.id} disableRipple>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                      <span>{v.name}</span>
+                      <IconButton
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setViewActionAnchor(e.currentTarget);
+                          setViewActionTarget(v);
+                        }}
+                        sx={{ color: '#ccc' }}
+                      >
+                        <MoreVertIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  </MenuItem>
+                ))}
+              </TextField>
+              <IconButton
+                size="small"
+                onClick={() => { setNewViewName(""); setCreateDialogOpen(true); }}
+                sx={{
+                  ml: '-1px',
+                  border: '1px solid #555',
+                  borderLeft: '1px solid #555',
+                  borderRadius: '0 4px 4px 0',
+                  color: '#bbb',
+                  height: 32,
+                  width: 32,
+                }}
+              >
+                <AddIcon fontSize="small" />
+              </IconButton>
+            </Box>
+            <Tooltip title="Column Chooser">
+              <IconButton
+                size="small"
+                onClick={(e) => setColChooserAnchor(e.currentTarget)}
+                sx={{ color: "#bbb", mr: 1 }}
+              >
+                <ViewColumnIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </Box>
+        {/* Second row: Quick Job button aligned under header title */}
+        <Box sx={{ display: 'flex' }}>
           <Button
             variant="outlined"
             size="small"
             disabled={selectedIds.size === 0}
             onClick={() => setQuickJobOpen(true)}
             sx={{
-              mr: 1,
               color: selectedIds.size === 0 ? "#666" : "#58a6ff",
               borderColor: selectedIds.size === 0 ? "#333" : "#58a6ff",
               textTransform: "none"
@@ -524,6 +656,92 @@ export default function DeviceList({ onSelectDevice }) {
           )}
         </TableBody>
       </Table>
+      {/* View actions menu (rename/delete for custom views) */}
+      <Menu
+        anchorEl={viewActionAnchor}
+        open={Boolean(viewActionAnchor)}
+        onClose={() => { setViewActionAnchor(null); setViewActionTarget(null); }}
+        PaperProps={{ sx: { bgcolor: '#1e1e1e', color: '#fff', fontSize: '13px' } }}
+      >
+        <MenuItem onClick={() => {
+          const v = viewActionTarget;
+          setViewActionAnchor(null);
+          if (!v) return;
+          setRenameTarget(v);
+          setRenameViewName(v.name || "");
+          setRenameDialogOpen(true);
+        }}>Rename</MenuItem>
+        <MenuItem sx={{ color: '#ff4f4f' }} onClick={async () => {
+          const v = viewActionTarget;
+          setViewActionAnchor(null);
+          if (!v) return;
+          try {
+            await fetch(`/api/device_list_views/${encodeURIComponent(v.id)}`, { method: 'DELETE' });
+          } catch {}
+          setViews((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
+          if (String(selectedViewId) === String(v.id)) {
+            setSelectedViewId('default');
+            applyView({ id: 'default' });
+          }
+        }}>Delete</MenuItem>
+      </Menu>
+
+      {/* Create new custom view dialog */}
+      <CreateCustomViewDialog
+        open={createDialogOpen}
+        value={newViewName}
+        onChange={setNewViewName}
+        onCancel={() => setCreateDialogOpen(false)}
+        onSave={async () => {
+          const name = (newViewName || '').trim();
+          if (!name) return;
+          // Build current config
+          const cols = (columns || []).map((c) => c.id);
+          const cfg = { name, columns: cols, filters };
+          try {
+            const res = await fetch('/api/device_list_views', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(cfg)
+            });
+            if (res.ok) {
+              const created = await res.json();
+              setViews((prev) => [...prev, created].sort((a, b) => String(a.name).localeCompare(String(b.name))));
+              setSelectedViewId(String(created.id));
+              // Already applied in UI; we keep current state
+              setCreateDialogOpen(false);
+              setNewViewName('');
+            }
+          } catch {}
+        }}
+      />
+
+      {/* Rename custom view dialog */}
+      <RenameCustomViewDialog
+        open={renameDialogOpen}
+        value={renameViewName}
+        onChange={setRenameViewName}
+        onCancel={() => setRenameDialogOpen(false)}
+        onSave={async () => {
+          const v = renameTarget;
+          const newName = (renameViewName || '').trim();
+          if (!v || !newName) return;
+          try {
+            const res = await fetch(`/api/device_list_views/${encodeURIComponent(v.id)}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: newName })
+            });
+            if (res.ok) {
+              const updated = await res.json();
+              setViews((prev) => prev.map((x) => String(x.id) === String(v.id) ? updated : x));
+              setRenameDialogOpen(false);
+              setRenameViewName('');
+              setRenameTarget(null);
+            }
+          } catch {}
+        }}
+      />
       {/* Column chooser popover */}
       <Popover
         open={Boolean(colChooserAnchor)}

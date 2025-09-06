@@ -296,3 +296,73 @@ export function TabContextMenu({ anchor, onClose, onRename, onCloseTab }) {
     </Menu>
   );
 }
+
+export function CreateCustomViewDialog({ open, value, onChange, onCancel, onSave }) {
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Create a New Custom View</DialogTitle>
+      <DialogContent>
+        <DialogContentText sx={{ color: "#ccc", mb: 1 }}>
+          Saving a view will save column order, visibility, and filters.
+        </DialogContentText>
+        <TextField
+          autoFocus
+          fullWidth
+          margin="dense"
+          label="View Name"
+          variant="outlined"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Add a name for this custom view"
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "#2a2a2a",
+              color: "#ccc",
+              "& fieldset": { borderColor: "#444" },
+              "&:hover fieldset": { borderColor: "#666" }
+            },
+            label: { color: "#aaa" },
+            mt: 1
+          }}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+export function RenameCustomViewDialog({ open, value, onChange, onCancel, onSave }) {
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Rename Custom View</DialogTitle>
+      <DialogContent>
+        <TextField
+          autoFocus
+          fullWidth
+          margin="dense"
+          label="View Name"
+          variant="outlined"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "#2a2a2a",
+              color: "#ccc",
+              "& fieldset": { borderColor: "#444" },
+              "&:hover fieldset": { borderColor: "#666" }
+            },
+            label: { color: "#aaa" },
+            mt: 1
+          }}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
