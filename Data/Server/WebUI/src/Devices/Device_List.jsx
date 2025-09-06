@@ -95,7 +95,7 @@ export default function DeviceList({ onSelectDevice }) {
           os: a.agent_operating_system || a.os || "-",
           // Enriched fields from details cache
           lastUser: details.lastUser || "",
-          type: "", // Placeholder until provided by backend
+          type: a.device_type || details.type || "",
           created: details.created || "",
           createdTs: details.createdTs || 0,
         };
@@ -128,9 +128,10 @@ export default function DeviceList({ onSelectDevice }) {
                   const parsed = Date.parse(createdRaw.replace(" ", "T"));
                   createdTs = isNaN(parsed) ? 0 : Math.floor(parsed / 1000);
                 }
+                const deviceType = (summary.device_type || "").trim();
                 setDetailsByHost((prev) => ({
                   ...prev,
-                  [h]: { lastUser, created: createdRaw, createdTs },
+                  [h]: { lastUser, created: createdRaw, createdTs, type: deviceType },
                 }));
               } catch {
                 // ignore per-host failure
@@ -146,6 +147,7 @@ export default function DeviceList({ onSelectDevice }) {
             return {
               ...r,
               lastUser: det.lastUser || r.lastUser,
+              type: det.type || r.type,
               created: det.created || r.created,
               createdTs: det.createdTs || r.createdTs,
             };

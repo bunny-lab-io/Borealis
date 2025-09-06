@@ -743,6 +743,7 @@ def load_agents_from_db():
                 "agent_operating_system": summary.get("operating_system")
                 or summary.get("agent_operating_system")
                 or "-",
+                "device_type": summary.get("device_type") or "",
                 "last_seen": summary.get("last_seen") or 0,
                 "status": "Offline",
             }
@@ -809,6 +810,18 @@ def save_agent_details():
                     last_seen = (prev_details.get("summary") or {}).get("last_seen")
                 if last_seen:
                     incoming_summary["last_seen"] = int(last_seen)
+            # Refresh server-side cache so /api/agents includes latest OS and device type
+            try:
+                if agent_id and agent_id in registered_agents:
+                    rec = registered_agents[agent_id]
+                    os_name = incoming_summary.get("operating_system") or incoming_summary.get("agent_operating_system")
+                    if os_name:
+                        rec["agent_operating_system"] = os_name
+                    dt = (incoming_summary.get("device_type") or "").strip()
+                    if dt:
+                        rec["device_type"] = dt
+            except Exception:
+                pass
         except Exception:
             pass
 

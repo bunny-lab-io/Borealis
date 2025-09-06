@@ -211,6 +211,7 @@ export default function DeviceDetails({ device, onBack }) {
   const summaryItems = [
     { label: "Device Name", value: summary.hostname || agent.hostname || device?.hostname || "unknown" },
     { label: "Operating System", value: summary.operating_system || agent.agent_operating_system || "unknown" },
+    { label: "Device Type", value: summary.device_type || "unknown" },
     { label: "Last User", value: (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Box component="span" sx={{
