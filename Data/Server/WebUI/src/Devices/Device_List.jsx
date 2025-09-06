@@ -1,6 +1,6 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Device_List.jsx
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Paper,
   Box,
@@ -15,9 +15,12 @@ import {
   Button,
   IconButton,
   Menu,
-  MenuItem
+  MenuItem,
+  Popover,
+  TextField
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
+import FilterListIcon from "@mui/icons-material/FilterList";
 import { DeleteDeviceDialog } from "../Dialogs.jsx";
 import QuickJob from "../Scheduling/Quick_Job.jsx";
 
@@ -51,26 +54,109 @@ export default function DeviceList({ onSelectDevice }) {
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [selected, setSelected] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [selectedHosts, setSelectedHosts] = useState(() => new Set());
+  // Track selection by agent id to avoid duplicate hostname collisions
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [quickJobOpen, setQuickJobOpen] = useState(false);
+
+  // Column configuration and rearranging state
+  const defaultColumns = useMemo(
+    () => [
+      { id: "status", label: "Status" },
+      { id: "hostname", label: "Hostname" },
+      { id: "lastUser", label: "Last User" },
+      { id: "type", label: "Type" },
+      { id: "os", label: "OS" },
+      { id: "created", label: "Created" }
+    ],
+    []
+  );
+  const [columns, setColumns] = useState(defaultColumns);
+  const dragColId = useRef(null);
+
+  // Per-column filters
+  const [filters, setFilters] = useState({});
+  const [filterAnchor, setFilterAnchor] = useState(null); // { id, anchorEl }
+
+  // Cache device details to avoid re-fetching every refresh
+  const [detailsByHost, setDetailsByHost] = useState({}); // hostname -> { lastUser, created, createdTs }
 
   const fetchAgents = useCallback(async () => {
     try {
       const res = await fetch("/api/agents");
       const data = await res.json();
-      const arr = Object.entries(data || {}).map(([id, a]) => ({
-        id,
-        hostname: a.hostname || id || "unknown",
-        status: statusFromHeartbeat(a.last_seen),
-        lastSeen: a.last_seen || 0,
-        os: a.agent_operating_system || a.os || "-"
-      }));
+      const arr = Object.entries(data || {}).map(([id, a]) => {
+        const hostname = a.hostname || id || "unknown";
+        const details = detailsByHost[hostname] || {};
+        return {
+          id,
+          hostname,
+          status: statusFromHeartbeat(a.last_seen),
+          lastSeen: a.last_seen || 0,
+          os: a.agent_operating_system || a.os || "-",
+          // Enriched fields from details cache
+          lastUser: details.lastUser || "",
+          type: "", // Placeholder until provided by backend
+          created: details.created || "",
+          createdTs: details.createdTs || 0,
+        };
+      });
       setRows(arr);
+
+      // Fetch missing details (last_user, created) for hosts not cached yet
+      const hostsToFetch = arr
+        .map((r) => r.hostname)
+        .filter((h) => h && !detailsByHost[h]);
+      if (hostsToFetch.length) {
+        // Limit concurrency a bit
+        const chunks = [];
+        const size = 6;
+        for (let i = 0; i < hostsToFetch.length; i += size) {
+          chunks.push(hostsToFetch.slice(i, i + size));
+        }
+        for (const chunk of chunks) {
+          await Promise.all(
+            chunk.map(async (h) => {
+              try {
+                const resp = await fetch(`/api/device/details/${encodeURIComponent(h)}`);
+                const det = await resp.json();
+                const summary = det?.summary || {};
+                const lastUser = summary.last_user || "";
+                const createdRaw = summary.created || "";
+                // Try to parse created to epoch seconds for sorting; fallback to 0
+                let createdTs = 0;
+                if (createdRaw) {
+                  const parsed = Date.parse(createdRaw.replace(" ", "T"));
+                  createdTs = isNaN(parsed) ? 0 : Math.floor(parsed / 1000);
+                }
+                setDetailsByHost((prev) => ({
+                  ...prev,
+                  [h]: { lastUser, created: createdRaw, createdTs },
+                }));
+              } catch {
+                // ignore per-host failure
+              }
+            })
+          );
+        }
+        // After caching, refresh rows to apply newly available details
+        setRows((prev) =>
+          prev.map((r) => {
+            const det = detailsByHost[r.hostname];
+            if (!det) return r;
+            return {
+              ...r,
+              lastUser: det.lastUser || r.lastUser,
+              created: det.created || r.created,
+              createdTs: det.createdTs || r.createdTs,
+            };
+          })
+        );
+      }
     } catch (e) {
       console.warn("Failed to load agents:", e);
       setRows([]);
     }
-  }, []);
+  }, [detailsByHost]);
 
   useEffect(() => {
     fetchAgents();
@@ -78,15 +164,46 @@ export default function DeviceList({ onSelectDevice }) {
     return () => clearInterval(t);
   }, [fetchAgents]);
 
+  const filtered = useMemo(() => {
+    // Apply simple contains filter per column based on displayed string
+    const activeFilters = Object.entries(filters).filter(([, v]) => (v || "").trim() !== "");
+    if (!activeFilters.length) return rows;
+    const toDisplay = (colId, row) => {
+      switch (colId) {
+        case "status":
+          return row.status || "";
+        case "hostname":
+          return row.hostname || "";
+        case "lastUser":
+          return row.lastUser || "";
+        case "type":
+          return row.type || "";
+        case "os":
+          return row.os || "";
+        case "created":
+          return formatCreated(row.created, row.createdTs);
+        default:
+          return "";
+      }
+    };
+    return rows.filter((r) =>
+      activeFilters.every(([k, val]) =>
+        toDisplay(k, r).toLowerCase().includes(String(val).toLowerCase())
+      )
+    );
+  }, [rows, filters]);
+
   const sorted = useMemo(() => {
     const dir = order === "asc" ? 1 : -1;
-    return [...rows].sort((a, b) => {
+    return [...filtered].sort((a, b) => {
+      // Support numeric sort for created/lastSeen
+      if (orderBy === "lastSeen") return ((a.lastSeen || 0) - (b.lastSeen || 0)) * dir;
+      if (orderBy === "created") return ((a.createdTs || 0) - (b.createdTs || 0)) * dir;
       const A = a[orderBy];
       const B = b[orderBy];
-      if (orderBy === "lastSeen") return (A - B) * dir;
-      return String(A).localeCompare(String(B)) * dir;
+      return String(A || "").localeCompare(String(B || "")) * dir;
     });
-  }, [rows, orderBy, order]);
+  }, [filtered, orderBy, order]);
 
   const handleSort = (col) => {
     if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
@@ -122,29 +239,67 @@ export default function DeviceList({ onSelectDevice }) {
     setSelected(null);
   };
 
-  const isAllChecked = sorted.length > 0 && sorted.every((r) => selectedHosts.has(r.hostname));
-  const isIndeterminate = selectedHosts.size > 0 && !isAllChecked;
+  const isAllChecked = sorted.length > 0 && sorted.every((r) => selectedIds.has(r.id));
+  const isIndeterminate = selectedIds.size > 0 && !isAllChecked;
   const toggleAll = (e) => {
     const checked = e.target.checked;
-    setSelectedHosts((prev) => {
+    setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (checked) {
-        sorted.forEach((r) => next.add(r.hostname));
-      } else {
-        next.clear();
-      }
+      if (checked) sorted.forEach((r) => next.add(r.id));
+      else next.clear();
       return next;
     });
   };
 
-  const toggleOne = (hostname) => (e) => {
+  const toggleOne = (id) => (e) => {
     const checked = e.target.checked;
-    setSelectedHosts((prev) => {
+    setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (checked) next.add(hostname);
-      else next.delete(hostname);
+      if (checked) next.add(id);
+      else next.delete(id);
       return next;
     });
+  };
+
+  // Column drag handlers
+  const onHeaderDragStart = (colId) => (e) => {
+    dragColId.current = colId;
+    try { e.dataTransfer.setData("text/plain", colId); } catch {}
+  };
+  const onHeaderDragOver = (e) => { e.preventDefault(); };
+  const onHeaderDrop = (targetColId) => (e) => {
+    e.preventDefault();
+    const fromId = dragColId.current;
+    if (!fromId || fromId === targetColId) return;
+    setColumns((prev) => {
+      const cur = [...prev];
+      const fromIdx = cur.findIndex((c) => c.id === fromId);
+      const toIdx = cur.findIndex((c) => c.id === targetColId);
+      if (fromIdx < 0 || toIdx < 0) return prev;
+      const [moved] = cur.splice(fromIdx, 1);
+      cur.splice(toIdx, 0, moved);
+      return cur;
+    });
+    dragColId.current = null;
+  };
+
+  // Filter popover handlers
+  const openFilter = (id) => (e) => setFilterAnchor({ id, anchorEl: e.currentTarget });
+  const closeFilter = () => setFilterAnchor(null);
+  const onFilterChange = (id) => (e) => setFilters((prev) => ({ ...prev, [id]: e.target.value }));
+
+  const formatCreated = (created, createdTs) => {
+    if (createdTs) {
+      const d = new Date(createdTs * 1000);
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const yyyy = d.getFullYear();
+      const hh = d.getHours() % 12 || 12;
+      const min = String(d.getMinutes()).padStart(2, "0");
+      const ampm = d.getHours() >= 12 ? "PM" : "AM";
+      return `${mm}/${dd}/${yyyy} @ ${hh}:${min} ${ampm}`;
+    }
+    return created || "";
   };
 
   return (
@@ -157,12 +312,12 @@ export default function DeviceList({ onSelectDevice }) {
           <Button
             variant="outlined"
             size="small"
-            disabled={selectedHosts.size === 0}
+            disabled={selectedIds.size === 0}
             onClick={() => setQuickJobOpen(true)}
             sx={{
               mr: 1,
-              color: selectedHosts.size === 0 ? "#666" : "#58a6ff",
-              borderColor: selectedHosts.size === 0 ? "#333" : "#58a6ff",
+              color: selectedIds.size === 0 ? "#666" : "#58a6ff",
+              borderColor: selectedIds.size === 0 ? "#333" : "#58a6ff",
               textTransform: "none"
             }}
           >
@@ -170,7 +325,7 @@ export default function DeviceList({ onSelectDevice }) {
           </Button>
         </Box>
       </Box>
-      <Table size="small" sx={{ minWidth: 680 }}>
+      <Table size="small" sx={{ minWidth: 820 }}>
         <TableHead>
           <TableRow>
             <TableCell padding="checkbox">
@@ -181,42 +336,33 @@ export default function DeviceList({ onSelectDevice }) {
                 sx={{ color: "#777" }}
               />
             </TableCell>
-            <TableCell sortDirection={orderBy === "status" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "status"}
-                direction={orderBy === "status" ? order : "asc"}
-                onClick={() => handleSort("status")}
+            {columns.map((col) => (
+              <TableCell
+                key={col.id}
+                sortDirection={orderBy === col.id ? order : false}
+                draggable
+                onDragStart={onHeaderDragStart(col.id)}
+                onDragOver={onHeaderDragOver}
+                onDrop={onHeaderDrop(col.id)}
               >
-                Status
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={orderBy === "hostname" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "hostname"}
-                direction={orderBy === "hostname" ? order : "asc"}
-                onClick={() => handleSort("hostname")}
-              >
-                Device Hostname
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={orderBy === "lastSeen" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "lastSeen"}
-                direction={orderBy === "lastSeen" ? order : "asc"}
-                onClick={() => handleSort("lastSeen")}
-              >
-                Last Seen
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={orderBy === "os" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "os"}
-                direction={orderBy === "os" ? order : "asc"}
-                onClick={() => handleSort("os")}
-              >
-                OS
-              </TableSortLabel>
-            </TableCell>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                  <TableSortLabel
+                    active={orderBy === col.id}
+                    direction={orderBy === col.id ? order : "asc"}
+                    onClick={() => handleSort(col.id)}
+                  >
+                    {col.label}
+                  </TableSortLabel>
+                  <IconButton
+                    size="small"
+                    onClick={openFilter(col.id)}
+                    sx={{ color: filters[col.id] ? "#58a6ff" : "#888" }}
+                  >
+                    <FilterListIcon fontSize="inherit" />
+                  </IconButton>
+                </Box>
+              </TableCell>
+            ))}
             <TableCell />
           </TableRow>
         </TableHead>
@@ -225,41 +371,62 @@ export default function DeviceList({ onSelectDevice }) {
             <TableRow key={r.id || i} hover>
               <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
                 <Checkbox
-                  checked={selectedHosts.has(r.hostname)}
-                  onChange={toggleOne(r.hostname)}
+                  checked={selectedIds.has(r.id)}
+                  onChange={toggleOne(r.id)}
                   sx={{ color: "#777" }}
                 />
               </TableCell>
-              <TableCell>
-                <Box
-                  sx={{
-                    display: "inline-block",
-                    px: 1.2,
-                    py: 0.25,
-                    borderRadius: 999,
-                    bgcolor: statusColor(r.status),
-                    color: "#fff",
-                    fontWeight: 600,
-                    fontSize: "12px",
-                  }}
-                >
-                  {r.status}
-                </Box>
-              </TableCell>
-              <TableCell
-                onClick={() => onSelectDevice && onSelectDevice(r)}
-                sx={{
-                  color: "#58a6ff",
-                  "&:hover": {
-                    cursor: onSelectDevice ? "pointer" : "default",
-                    textDecoration: onSelectDevice ? "underline" : "none",
-                  },
-                }}
-              >
-                {r.hostname}
-              </TableCell>
-              <TableCell>{formatLastSeen(r.lastSeen)}</TableCell>
-              <TableCell>{r.os}</TableCell>
+              {columns.map((col) => {
+                switch (col.id) {
+                  case "status":
+                    return (
+                      <TableCell key={col.id}>
+                        <Box
+                          sx={{
+                            display: "inline-block",
+                            px: 1.2,
+                            py: 0.25,
+                            borderRadius: 999,
+                            bgcolor: statusColor(r.status),
+                            color: "#fff",
+                            fontWeight: 600,
+                            fontSize: "12px",
+                          }}
+                        >
+                          {r.status}
+                        </Box>
+                      </TableCell>
+                    );
+                  case "hostname":
+                    return (
+                      <TableCell
+                        key={col.id}
+                        onClick={() => onSelectDevice && onSelectDevice(r)}
+                        sx={{
+                          color: "#58a6ff",
+                          "&:hover": {
+                            cursor: onSelectDevice ? "pointer" : "default",
+                            textDecoration: onSelectDevice ? "underline" : "none",
+                          },
+                        }}
+                      >
+                        {r.hostname}
+                      </TableCell>
+                    );
+                  case "lastUser":
+                    return <TableCell key={col.id}>{r.lastUser || ""}</TableCell>;
+                  case "type":
+                    return <TableCell key={col.id}>{r.type || ""}</TableCell>;
+                  case "os":
+                    return <TableCell key={col.id}>{r.os}</TableCell>;
+                  case "created":
+                    return (
+                      <TableCell key={col.id}>{formatCreated(r.created, r.createdTs)}</TableCell>
+                    );
+                  default:
+                    return <TableCell key={col.id} />;
+                }
+              })}
               <TableCell align="right">
                 <IconButton
                   size="small"
@@ -276,13 +443,53 @@ export default function DeviceList({ onSelectDevice }) {
           ))}
           {sorted.length === 0 && (
             <TableRow>
-              <TableCell colSpan={6} sx={{ color: "#888" }}>
+              <TableCell colSpan={columns.length + 2} sx={{ color: "#888" }}>
                 No agents connected.
               </TableCell>
             </TableRow>
           )}
         </TableBody>
       </Table>
+      {/* Filter popover */}
+      <Popover
+        open={Boolean(filterAnchor)}
+        anchorEl={filterAnchor?.anchorEl || null}
+        onClose={closeFilter}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        PaperProps={{ sx: { bgcolor: "#1e1e1e", p: 1 } }}
+      >
+        {filterAnchor && (
+          <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+            <TextField
+              autoFocus
+              size="small"
+              placeholder={`Filter ${columns.find((c) => c.id === filterAnchor.id)?.label || ""}`}
+              value={filters[filterAnchor.id] || ""}
+              onChange={onFilterChange(filterAnchor.id)}
+              onKeyDown={(e) => { if (e.key === "Escape") closeFilter(); }}
+              sx={{
+                input: { color: "#fff" },
+                minWidth: 220,
+                "& .MuiOutlinedInput-root": {
+                  "& fieldset": { borderColor: "#555" },
+                  "&:hover fieldset": { borderColor: "#888" },
+                },
+              }}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => {
+                setFilters((prev) => ({ ...prev, [filterAnchor.id]: "" }));
+                closeFilter();
+              }}
+              sx={{ textTransform: "none", borderColor: "#555", color: "#bbb" }}
+            >
+              Clear
+            </Button>
+          </Box>
+        )}
+      </Popover>
       <Menu
         anchorEl={menuAnchor}
         open={Boolean(menuAnchor)}
@@ -301,7 +508,7 @@ export default function DeviceList({ onSelectDevice }) {
         <QuickJob
           open={quickJobOpen}
           onClose={() => setQuickJobOpen(false)}
-          hostnames={[...selectedHosts]}
+          hostnames={rows.filter((r) => selectedIds.has(r.id)).map((r) => r.hostname)}
         />
       )}
     </Paper>
