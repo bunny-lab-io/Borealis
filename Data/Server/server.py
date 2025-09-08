@@ -865,11 +865,12 @@ def delete_device_list_view(view_id: int):
         return jsonify({"error": str(e)}), 500
 
 
-def _persist_last_seen(hostname: str, last_seen: int):
-    """Persist the last_seen timestamp into the device_details.details JSON.
+def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
+    """Persist last_seen (and agent_id if provided) into device_details.details JSON.
 
-    Ensures that after a server restart, we can restore last_seen from DB
-    even if the agent is offline.
+    Ensures that after a server restart, we can restore last_seen from DB even
+    if the agent is offline, and helps merge entries by keeping track of the
+    last known agent_id for a hostname.
     """
     if not hostname or str(hostname).strip().lower() == "unknown":
         return
@@ -895,6 +896,11 @@ def _persist_last_seen(hostname: str, last_seen: int):
         summary = details.get("summary") or {}
         summary["hostname"] = summary.get("hostname") or hostname
         summary["last_seen"] = int(last_seen or 0)
+        if agent_id:
+            try:
+                summary["agent_id"] = str(agent_id)
+            except Exception:
+                pass
         details["summary"] = summary
 
         cur.execute(
@@ -941,7 +947,8 @@ load_agents_from_db()
 def get_agents():
     """Return agents with collector activity indicator."""
     now = time.time()
-    out = {}
+    # Collapse duplicates by hostname; prefer newer last_seen and non-script entries
+    seen_by_hostname = {}
     for aid, info in (registered_agents or {}).items():
         # Hide script-execution agents from the public list
         if aid and isinstance(aid, str) and aid.lower().endswith('-script'):
@@ -951,7 +958,12 @@ def get_agents():
         d = dict(info)
         ts = d.get('collector_active_ts') or 0
         d['collector_active'] = bool(ts and (now - float(ts) < 130))
-        out[aid] = d
+        host = (d.get('hostname') or '').strip() or 'unknown'
+        # Select best record per hostname: highest last_seen wins
+        cur = seen_by_hostname.get(host)
+        if not cur or int(d.get('last_seen') or 0) >= int(cur[1].get('last_seen') or 0):
+            seen_by_hostname[host] = (aid, d)
+    out = { aid: d for host, (aid, d) in seen_by_hostname.items() }
     return jsonify(out)
 
 
@@ -985,6 +997,14 @@ def save_agent_details():
         # Ensure details.summary.last_seen is preserved/merged so it survives restarts
         try:
             incoming_summary = details.setdefault("summary", {})
+            # Attach agent_id and hostname if provided/missing to aid future merges
+            try:
+                if agent_id and not incoming_summary.get("agent_id"):
+                    incoming_summary["agent_id"] = str(agent_id)
+            except Exception:
+                pass
+            if hostname and not incoming_summary.get("hostname"):
+                incoming_summary["hostname"] = hostname
             if not incoming_summary.get("last_seen"):
                 last_seen = None
                 if agent_id and agent_id in registered_agents:
@@ -1292,16 +1312,10 @@ def delete_agent(agent_id: str):
     """Remove an agent from the registry and database."""
     info = registered_agents.pop(agent_id, None)
     agent_configurations.pop(agent_id, None)
-    hostname = info.get("hostname") if info else None
-    if hostname:
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute("DELETE FROM device_details WHERE hostname = ?", (hostname,))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+    # IMPORTANT: Do NOT delete device_details here. Multiple in-memory agent
+    # records can refer to the same hostname; removing one should not wipe the
+    # persisted device inventory for the hostname. A dedicated endpoint can be
+    # added later to purge device_details by hostname if needed.
     if info:
         return jsonify({"status": "removed"})
     return jsonify({"error": "agent not found"}), 404
@@ -1455,7 +1469,7 @@ def connect_agent(data):
     # If we already know the hostname for this agent, persist last_seen so it
     # can be restored after server restarts.
     try:
-        _persist_last_seen(rec.get("hostname"), rec["last_seen"])
+        _persist_last_seen(rec.get("hostname"), rec["last_seen"], rec.get("agent_id"))
     except Exception:
         pass
 
@@ -1474,22 +1488,33 @@ def on_agent_heartbeat(data):
     hostname = data.get("hostname")
 
     if hostname:
-        # Avoid duplicate entries per-hostname. Prefer non-script agents over script helpers.
+        # Avoid duplicate entries per-hostname by collapsing to the newest agent_id.
+        # Prefer non-script agents; we do not surface script agents in /api/agents.
         try:
             is_current_script = isinstance(agent_id, str) and agent_id.lower().endswith('-script')
         except Exception:
             is_current_script = False
+        # Transfer any existing configuration from displaced entries to this agent if needed
+        transferred_cfg = False
         for aid, info in list(registered_agents.items()):
             if aid == agent_id:
                 continue
             if info.get("hostname") == hostname:
-                if info.get('is_script_agent') and not is_current_script:
-                    # Replace script helper with full agent record
-                    registered_agents.pop(aid, None)
-                    agent_configurations.pop(aid, None)
-                else:
-                    # Keep existing non-script agent; do not evict it for script heartbeats
-                    pass
+                # If the incoming is a script helper and there is a non-script entry, keep non-script
+                if is_current_script and not info.get('is_script_agent'):
+                    # Do not register duplicate script entry; just update last_seen persistence below
+                    # and return after persistence to avoid creating a second record.
+                    try:
+                        _persist_last_seen(hostname, int(data.get("last_seen") or time.time()), info.get("agent_id") or aid)
+                    except Exception:
+                        pass
+                    return
+                # Otherwise, evict the older/placeholder/script entry and transfer config if present
+                if not transferred_cfg and aid in agent_configurations and agent_id not in agent_configurations:
+                    agent_configurations[agent_id] = agent_configurations.get(aid)
+                    transferred_cfg = True
+                registered_agents.pop(aid, None)
+                agent_configurations.pop(aid, None)
 
     rec = registered_agents.setdefault(agent_id, {})
     rec["agent_id"] = agent_id
@@ -1499,9 +1524,9 @@ def on_agent_heartbeat(data):
         rec["agent_operating_system"] = data.get("agent_operating_system")
     rec["last_seen"] = int(data.get("last_seen") or time.time())
     rec["status"] = "provisioned" if agent_id in agent_configurations else rec.get("status", "orphaned")
-    # Persist last_seen into DB keyed by hostname so it survives restarts.
+    # Persist last_seen (and agent_id) into DB keyed by hostname so it survives restarts.
     try:
-        _persist_last_seen(rec.get("hostname") or hostname, rec["last_seen"])
+        _persist_last_seen(rec.get("hostname") or hostname, rec["last_seen"], rec.get("agent_id"))
     except Exception:
         pass
 
