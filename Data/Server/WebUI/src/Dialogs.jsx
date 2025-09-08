@@ -207,6 +207,23 @@ export function NewWorkflowDialog({ open, value, onChange, onCancel, onCreate })
   );
 }
 
+export function ClearDeviceActivityDialog({ open, onCancel, onConfirm }) {
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Clear Device Activity</DialogTitle>
+      <DialogContent>
+        <DialogContentText sx={{ color: "#ccc" }}>
+          All device activity history will be cleared, are you sure?
+        </DialogContentText>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button onClick={onConfirm} sx={{ color: "#ff4f4f" }}>Clear</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 export function SaveWorkflowDialog({ open, value, onChange, onCancel, onSave }) {
   return (
     <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>

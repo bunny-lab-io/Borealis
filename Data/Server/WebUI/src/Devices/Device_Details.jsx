@@ -13,6 +13,9 @@ import {
   TableCell,
   TableBody,
   Button,
+  IconButton,
+  Menu,
+  MenuItem,
   LinearProgress,
   TableSortLabel,
   TextField,
@@ -21,6 +24,8 @@ import {
   DialogContent,
   DialogActions
 } from "@mui/material";
+import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
+import { ClearDeviceActivityDialog } from "../Dialogs.jsx";
 import Prism from "prismjs";
 import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-bash";
@@ -46,6 +51,8 @@ export default function DeviceDetails({ device, onBack }) {
   const [outputContent, setOutputContent] = useState("");
   const [outputLang, setOutputLang] = useState("powershell");
   const [quickJobOpen, setQuickJobOpen] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState(null);
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
     // Prefer status provided by the device list row if available
@@ -123,6 +130,17 @@ export default function DeviceDetails({ device, onBack }) {
   }, [device]);
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  const clearHistory = async () => {
+    if (!device?.hostname) return;
+    try {
+      const resp = await fetch(`/api/device/activity/${encodeURIComponent(device.hostname)}`, { method: "DELETE" });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      setHistoryRows([]);
+    } catch (e) {
+      console.warn("Failed to clear activity history", e);
+    }
+  };
 
   const saveDescription = async () => {
     if (!details.summary?.hostname) return;
@@ -699,19 +717,43 @@ export default function DeviceDetails({ device, onBack }) {
           </Typography>
         </Box>
         <Box>
-          <Button
-            variant="outlined"
+          <IconButton
             size="small"
             disabled={!(agent?.hostname || device?.hostname)}
-            onClick={() => setQuickJobOpen(true)}
+            onClick={(e) => setMenuAnchor(e.currentTarget)}
             sx={{
               color: !(agent?.hostname || device?.hostname) ? "#666" : "#58a6ff",
               borderColor: !(agent?.hostname || device?.hostname) ? "#333" : "#58a6ff",
-              textTransform: "none"
+              border: "1px solid",
+              borderRadius: 1,
+              width: 32,
+              height: 32
             }}
           >
-            Quick Job
-          </Button>
+            <MoreHorizIcon fontSize="small" />
+          </IconButton>
+          <Menu
+            anchorEl={menuAnchor}
+            open={Boolean(menuAnchor)}
+            onClose={() => setMenuAnchor(null)}
+          >
+            <MenuItem
+              onClick={() => {
+                setMenuAnchor(null);
+                setQuickJobOpen(true);
+              }}
+            >
+              Quick Job
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                setMenuAnchor(null);
+                setClearDialogOpen(true);
+              }}
+            >
+              Clear Device Activity
+            </MenuItem>
+          </Menu>
         </Box>
       </Box>
       <Tabs
@@ -751,13 +793,22 @@ export default function DeviceDetails({ device, onBack }) {
         </DialogActions>
       </Dialog>
 
-      {quickJobOpen && (
-        <QuickJob
-          open={quickJobOpen}
-          onClose={() => setQuickJobOpen(false)}
-          hostnames={[agent?.hostname || device?.hostname].filter(Boolean)}
+        <ClearDeviceActivityDialog
+          open={clearDialogOpen}
+          onCancel={() => setClearDialogOpen(false)}
+          onConfirm={() => {
+            clearHistory();
+            setClearDialogOpen(false);
+          }}
         />
-      )}
-    </Paper>
-  );
-}
+
+        {quickJobOpen && (
+          <QuickJob
+            open={quickJobOpen}
+            onClose={() => setQuickJobOpen(false)}
+            hostnames={[agent?.hostname || device?.hostname].filter(Boolean)}
+          />
+        )}
+      </Paper>
+    );
+  }

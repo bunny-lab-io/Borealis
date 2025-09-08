@@ -1409,11 +1409,17 @@ def scripts_quick_run():
     return jsonify({"results": results})
 
 
-@app.route("/api/device/activity/<hostname>", methods=["GET"])
+@app.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
 def device_activity(hostname: str):
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
+        if request.method == "DELETE":
+            cur.execute("DELETE FROM activity_history WHERE hostname = ?", (hostname,))
+            conn.commit()
+            conn.close()
+            return jsonify({"status": "ok"})
+
         cur.execute(
             "SELECT id, script_name, script_path, script_type, ran_at, status, LENGTH(stdout), LENGTH(stderr) FROM activity_history WHERE hostname = ? ORDER BY ran_at DESC, id DESC",
             (hostname,),
