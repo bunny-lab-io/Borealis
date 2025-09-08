@@ -9,11 +9,7 @@ Borealis began as a visual node-graph builder. It is now evolving into a central
 
 ![Script Editor](Data/Repository_Resources/Script_Editor.png)
 
-![Workflow Editor](Data/Repository_Resources/Workflow_Editor.png)
-
-## Youtube Video Demonstration:
-You can click the image below to watch a youtube video demonstrating the deployment, launching, and basic example usage of Borealis.
-[![Borealis Usage Demonstration](Data/Repository_Resources/data_workflow_example_01.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
+[![Workflow Editor Demonstration](Data/Repository_Resources/Workflow_Editor.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
 
 ## 🚀 What Is Borealis?
 
