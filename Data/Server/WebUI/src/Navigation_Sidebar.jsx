@@ -38,29 +38,56 @@ function NavigationSidebar({ currentPage, onNavigate }) {
         sx={{
           pl: indent ? 4 : 2,
           py: 1,
-          color: "#ccc",
+          color: active ? "#e6f2ff" : "#ccc",
           position: "relative",
-          bgcolor: active ? "#2a2a2a" : "transparent",
-          "&:hover": { bgcolor: "#2c2c2c" }
+          background: active
+            ? "linear-gradient(90deg, rgba(88,166,255,0.10) 0%, rgba(88,166,255,0.03) 60%, rgba(88,166,255,0.00) 100%)"
+            : "transparent",
+          borderTopRightRadius: 8,
+          borderBottomRightRadius: 8,
+          boxShadow: active
+            ? "inset 0 0 0 1px rgba(88,166,255,0.25)"
+            : "none",
+          transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease",
+          "&:hover": {
+            background: active
+              ? "linear-gradient(90deg, rgba(88,166,255,0.14) 0%, rgba(88,166,255,0.06) 60%, rgba(88,166,255,0.00) 100%)"
+              : "#2c2c2c"
+          }
         }}
+        selected={active}
       >
         <Box
           sx={{
             position: "absolute",
             left: 0,
-            top: 0,
-            bottom: 0,
+            top: 6,
+            bottom: 6,
             width: active ? 3 : 0,
             bgcolor: "#58a6ff",
-            transition: "width 0.15s ease"
+            borderTopRightRadius: 2,
+            borderBottomRightRadius: 2,
+            boxShadow: active ? "0 0 6px rgba(88,166,255,0.35)" : "none",
+            transition: "width 180ms ease, box-shadow 200ms ease"
           }}
         />
         {icon && (
-          <Box sx={{ mr: 1, display: "flex", alignItems: "center", color: "#58a6ff" }}>
+          <Box
+            sx={{
+              mr: 1,
+              display: "flex",
+              alignItems: "center",
+              color: active ? "#7db7ff" : "#58a6ff",
+              transition: "color 160ms ease"
+            }}
+          >
             {icon}
           </Box>
         )}
-        <ListItemText primary={label} primaryTypographyProps={{ fontSize: "0.95rem" }} />
+        <ListItemText
+          primary={label}
+          primaryTypographyProps={{ fontSize: "0.95rem", fontWeight: active ? 600 : 400 }}
+        />
       </ListItemButton>
     );
   };
@@ -78,6 +105,9 @@ function NavigationSidebar({ currentPage, onNavigate }) {
     >
       <Box sx={{ flex: 1, overflowY: "auto" }}>
         {/* Sites */}
+        {(() => {
+          const groupActive = currentPage === "sites";
+          return (
         <Accordion
           expanded={expandedNav.sites}
           onChange={(_, e) => setExpandedNav((s) => ({ ...s, sites: e }))}
@@ -87,7 +117,26 @@ function NavigationSidebar({ currentPage, onNavigate }) {
         >
           <AccordionSummary
             expandIcon={<ExpandMoreIcon />}
-            sx={{ backgroundColor: "#2c2c2c", minHeight: "36px", "& .MuiAccordionSummary-content": { margin: 0 } }}
+            sx={{
+              position: "relative",
+              background: groupActive
+                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
+                : "#2c2c2c",
+              minHeight: "36px",
+              "& .MuiAccordionSummary-content": { margin: 0 },
+              "&::before": {
+                content: '""',
+                position: "absolute",
+                left: 0,
+                top: 6,
+                bottom: 6,
+                width: groupActive ? 2 : 0,
+                bgcolor: "#58a6ff",
+                borderTopRightRadius: 2,
+                borderBottomRightRadius: 2,
+                transition: "width 160ms ease"
+              }
+            }}
           >
             <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
               <b>Sites</b>
@@ -97,7 +146,12 @@ function NavigationSidebar({ currentPage, onNavigate }) {
             <NavItem icon={<SitesIcon fontSize="small" />} label="All Sites" pageKey="sites" />
           </AccordionDetails>
         </Accordion>
+          );
+        })()}
         {/* Devices */}
+        {(() => {
+          const groupActive = currentPage === "devices";
+          return (
         <Accordion
           expanded={expandedNav.devices}
           onChange={(_, e) => setExpandedNav((s) => ({ ...s, devices: e }))}
@@ -107,7 +161,26 @@ function NavigationSidebar({ currentPage, onNavigate }) {
         >
           <AccordionSummary
             expandIcon={<ExpandMoreIcon />}
-            sx={{ backgroundColor: "#2c2c2c", minHeight: "36px", "& .MuiAccordionSummary-content": { margin: 0 } }}
+            sx={{
+              position: "relative",
+              background: groupActive
+                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
+                : "#2c2c2c",
+              minHeight: "36px",
+              "& .MuiAccordionSummary-content": { margin: 0 },
+              "&::before": {
+                content: '""',
+                position: "absolute",
+                left: 0,
+                top: 6,
+                bottom: 6,
+                width: groupActive ? 2 : 0,
+                bgcolor: "#58a6ff",
+                borderTopRightRadius: 2,
+                borderBottomRightRadius: 2,
+                transition: "width 160ms ease"
+              }
+            }}
           >
             <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
               <b>Devices</b>
@@ -117,8 +190,13 @@ function NavigationSidebar({ currentPage, onNavigate }) {
             <NavItem icon={<DevicesIcon fontSize="small" />} label="Devices" pageKey="devices" />
           </AccordionDetails>
         </Accordion>
+          );
+        })()}
 
         {/* Automation */}
+        {(() => {
+          const groupActive = ["jobs", "scripts", "workflows", "community"].includes(currentPage);
+          return (
         <Accordion
           expanded={expandedNav.automation}
           onChange={(_, e) => setExpandedNav((s) => ({ ...s, automation: e }))}
@@ -128,7 +206,26 @@ function NavigationSidebar({ currentPage, onNavigate }) {
         >
           <AccordionSummary
             expandIcon={<ExpandMoreIcon />}
-            sx={{ backgroundColor: "#2c2c2c", minHeight: "36px", "& .MuiAccordionSummary-content": { margin: 0 } }}
+            sx={{
+              position: "relative",
+              background: groupActive
+                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
+                : "#2c2c2c",
+              minHeight: "36px",
+              "& .MuiAccordionSummary-content": { margin: 0 },
+              "&::before": {
+                content: '""',
+                position: "absolute",
+                left: 0,
+                top: 6,
+                bottom: 6,
+                width: groupActive ? 2 : 0,
+                bgcolor: "#58a6ff",
+                borderTopRightRadius: 2,
+                borderBottomRightRadius: 2,
+                transition: "width 160ms ease"
+              }
+            }}
           >
             <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
               <b>Automation</b>
@@ -141,8 +238,13 @@ function NavigationSidebar({ currentPage, onNavigate }) {
             <NavItem icon={<CommunityIcon fontSize="small" />} label="Community Content" pageKey="community" />
           </AccordionDetails>
         </Accordion>
+          );
+        })()}
 
         {/* Filters & Groups */}
+        {(() => {
+          const groupActive = currentPage === "filters" || currentPage === "groups";
+          return (
         <Accordion
           expanded={expandedNav.filters}
           onChange={(_, e) => setExpandedNav((s) => ({ ...s, filters: e }))}
@@ -152,7 +254,26 @@ function NavigationSidebar({ currentPage, onNavigate }) {
         >
           <AccordionSummary
             expandIcon={<ExpandMoreIcon />}
-            sx={{ backgroundColor: "#2c2c2c", minHeight: "36px", "& .MuiAccordionSummary-content": { margin: 0 } }}
+            sx={{
+              position: "relative",
+              background: groupActive
+                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
+                : "#2c2c2c",
+              minHeight: "36px",
+              "& .MuiAccordionSummary-content": { margin: 0 },
+              "&::before": {
+                content: '""',
+                position: "absolute",
+                left: 0,
+                top: 6,
+                bottom: 6,
+                width: groupActive ? 2 : 0,
+                bgcolor: "#58a6ff",
+                borderTopRightRadius: 2,
+                borderBottomRightRadius: 2,
+                transition: "width 160ms ease"
+              }
+            }}
           >
             <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
               <b>Filters & Groups</b>
@@ -163,6 +284,8 @@ function NavigationSidebar({ currentPage, onNavigate }) {
             <NavItem icon={<GroupsIcon fontSize="small" />} label="Groups" pageKey="groups" />
           </AccordionDetails>
         </Accordion>
+          );
+        })()}
       </Box>
     </Box>
   );
