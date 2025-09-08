@@ -371,12 +371,44 @@ function Ensure-AgentTasks {
 "@
     $bytes   = [System.Text.Encoding]::Unicode.GetBytes($inline)
     $encoded = [Convert]::ToBase64String($bytes)
-    $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand', $encoded)
+
+    # Use a temporary VBS shim to elevate and run PowerShell fully hidden (no flashing console)
+    $tempDir = Join-Path $ScriptRoot 'Temp'
+    if (-not (Test-Path $tempDir)) { New-Item -ItemType Directory -Path $tempDir -Force | Out-Null }
+    $vbsPath = Join-Path $tempDir 'RunAgentRegistrarElevatedHidden.vbs'
+    $vbs = @'
+Set sh = CreateObject("Shell.Application")
+cmd = "powershell.exe"
+args = " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " & "<ENC>"
+sh.ShellExecute cmd, args, "", "runas", 0
+'@
+    $vbs = $vbs -replace '<ENC>', $encoded
+    Write-AgentLog -FileName 'AgentTaskRegistration.log' -Message 'Preparing elevated hidden registrar VBS shim.'
+    Set-Content -Path $vbsPath -Value $vbs -Encoding ASCII -Force
     try {
-        Start-Process -FilePath 'powershell.exe' -ArgumentList ($argList -join ' ') -Verb RunAs -Wait | Out-Null
+        Write-AgentLog -FileName 'AgentTaskRegistration.log' -Message 'Invoking wscript.exe to run registrar hidden with elevation.'
+        Start-Process -FilePath 'wscript.exe' -ArgumentList ('"{0}"' -f $vbsPath) -WindowStyle Hidden -Wait | Out-Null
     } catch {
         Write-Host "Failed to elevate for task registration." -ForegroundColor Red
+        Write-AgentLog -FileName 'AgentTaskRegistration.log' -Message ("Registrar elevation failed: " + $_)
+    } finally {
+        Remove-Item $vbsPath -Force -ErrorAction SilentlyContinue
     }
+    # Best-effort: wait briefly for tasks to be registered so subsequent steps see them
+    try {
+        $maxWaitSec = 30
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        do {
+            Start-Sleep -Milliseconds 500
+            try { $ts = Get-ScheduledTask -TaskName $supName -ErrorAction SilentlyContinue } catch { $ts = $null }
+        } while (-not $ts -and $sw.Elapsed.TotalSeconds -lt $maxWaitSec)
+        $sw.Stop()
+        if ($ts) {
+            Write-AgentLog -FileName 'AgentTaskRegistration.log' -Message "Supervisor task detected after $([int]$sw.Elapsed.TotalSeconds)s."
+        } else {
+            Write-AgentLog -FileName 'AgentTaskRegistration.log' -Message "Supervisor task not detected within timeout; continuing."
+        }
+    } catch {}
 }
 function InstallOrUpdate-BorealisAgent {
     Write-Host "Ensuring Agent Dependencies Exist..." -ForegroundColor DarkCyan

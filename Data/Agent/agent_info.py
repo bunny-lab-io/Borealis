@@ -18,6 +18,28 @@ except Exception:
 import aiohttp
 import asyncio
 
+# ---------------- Helpers for hidden subprocess on Windows ----------------
+IS_WINDOWS = os.name == 'nt'
+CREATE_NO_WINDOW = 0x08000000 if IS_WINDOWS else 0
+
+
+def _run_hidden(cmd_list, timeout=None):
+    """Run a subprocess hidden on Windows (no visible console window)."""
+    kwargs = {"capture_output": True, "text": True}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if IS_WINDOWS:
+        kwargs["creationflags"] = CREATE_NO_WINDOW
+    return subprocess.run(cmd_list, **kwargs)
+
+
+def _run_powershell_hidden(ps_cmd: str, timeout: int = 60):
+    """Run a powershell -NoProfile -Command string fully hidden on Windows."""
+    ps = os.path.expandvars(r"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+    if not os.path.isfile(ps):
+        ps = "powershell.exe"
+    return _run_hidden([ps, "-NoProfile", "-Command", ps_cmd], timeout=timeout)
+
 
 def detect_agent_os():
     """
@@ -194,12 +216,7 @@ def _detect_virtual_machine() -> bool:
                     "$model = [string]$cs.Model; $manu = [string]$cs.Manufacturer; "
                     "Write-Output ($model + '|' + $manu)"
                 )
-                out = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", ps_cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=6,
-                )
+                out = _run_powershell_hidden(ps_cmd, timeout=6)
                 s = (out.stdout or "").strip().lower()
                 if any(k in s for k in ("virtual", "vmware", "virtualbox", "kvm", "qemu", "xen", "hyper-v")):
                     return True
@@ -257,12 +274,7 @@ def _detect_device_type_non_vm() -> str:
                     "Write-Output ($typeEx.ToString() + '|' + $type.ToString() + '|' + "
                     "([string]::Join(',', $ch)) + '|' + $hasBatt)"
                 )
-                out = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", ps_cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=6,
-                )
+                out = _run_powershell_hidden(ps_cmd, timeout=6)
                 resp = (out.stdout or "").strip()
                 parts = resp.split("|")
                 type_ex = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else None
@@ -429,12 +441,7 @@ def _get_internal_ip():
                 "Where-Object { $_.IPAddress -and $_.IPAddress -notmatch '^169\\.254\\.' -and $_.IPAddress -notmatch '^127\\.' } | "
                 "Sort-Object -Property PrefixLength | Select-Object -First 1 -ExpandProperty IPAddress"
             )
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_cmd],
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
+            out = _run_powershell_hidden(ps_cmd, timeout=20)
             val = (out.stdout or "").strip()
             if val:
                 return val
@@ -489,12 +496,7 @@ def collect_summary(config):
                 # Try WMIC, then robust PowerShell fallback regardless of WMIC presence
                 raw = ""
                 try:
-                    out = subprocess.run(
-                        ["wmic", "os", "get", "lastbootuptime"],
-                        capture_output=True,
-                        text=True,
-                        timeout=20,
-                    )
+                    out = _run_hidden(["wmic", "os", "get", "lastbootuptime"], timeout=20)
                     raw = "".join(out.stdout.splitlines()[1:]).strip()
                 except Exception:
                     raw = ""
@@ -505,12 +507,7 @@ def collect_summary(config):
                             "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime | "
                             "ForEach-Object { (Get-Date -Date $_ -Format 'yyyy-MM-dd HH:mm:ss') }"
                         )
-                        out = subprocess.run(
-                            ["powershell", "-NoProfile", "-Command", ps_cmd],
-                            capture_output=True,
-                            text=True,
-                            timeout=20,
-                        )
+                        out = _run_powershell_hidden(ps_cmd, timeout=20)
                         raw = (out.stdout or "").strip()
                         if raw:
                             last_reboot = raw
@@ -571,8 +568,7 @@ def collect_software():
     try:
         if plat == "windows":
             try:
-                out = subprocess.run(["wmic", "product", "get", "name,version"],
-                                     capture_output=True, text=True, timeout=60)
+                out = _run_hidden(["wmic", "product", "get", "name,version"], timeout=60)
                 for line in out.stdout.splitlines():
                     if line.strip() and not line.lower().startswith("name"):
                         parts = line.strip().split("  ")
@@ -589,12 +585,7 @@ def collect_software():
                     "| Select-Object DisplayName,DisplayVersion "
                     "| ConvertTo-Json"
                 )
-                out = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", ps_cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
+                out = _run_powershell_hidden(ps_cmd, timeout=60)
                 data = json.loads(out.stdout or "[]")
                 if isinstance(data, dict):
                     data = [data]
@@ -627,12 +618,7 @@ def collect_memory():
     try:
         if plat == "windows":
             try:
-                out = subprocess.run(
-                    ["wmic", "memorychip", "get", "BankLabel,Speed,SerialNumber,Capacity"],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
+                out = _run_hidden(["wmic", "memorychip", "get", "BankLabel,Speed,SerialNumber,Capacity"], timeout=60)
                 lines = [l for l in out.stdout.splitlines() if l.strip() and "BankLabel" not in l]
                 for line in lines:
                     parts = [p for p in line.split() if p]
@@ -648,12 +634,7 @@ def collect_memory():
                     "Get-CimInstance Win32_PhysicalMemory | "
                     "Select-Object BankLabel,Speed,SerialNumber,Capacity | ConvertTo-Json"
                 )
-                out = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", ps_cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
+                out = _run_powershell_hidden(ps_cmd, timeout=60)
                 data = json.loads(out.stdout or "[]")
                 if isinstance(data, dict):
                     data = [data]
@@ -748,12 +729,7 @@ def collect_storage():
                     found = True
             if not found:
                 try:
-                    out = subprocess.run(
-                        ["wmic", "logicaldisk", "get", "DeviceID,Size,FreeSpace"],
-                        capture_output=True,
-                        text=True,
-                        timeout=60,
-                    )
+                    out = _run_hidden(["wmic", "logicaldisk", "get", "DeviceID,Size,FreeSpace"], timeout=60)
                     lines = [l for l in out.stdout.splitlines() if l.strip()][1:]
                     for line in lines:
                         parts = line.split()
@@ -820,12 +796,7 @@ def collect_network():
                 "Select-Object InterfaceAlias,@{Name='IPv4';Expression={$_.IPv4Address.IPAddress}},"
                 "@{Name='MAC';Expression={$_.NetAdapter.MacAddress}} | ConvertTo-Json"
             )
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_cmd],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
+            out = _run_powershell_hidden(ps_cmd, timeout=60)
             data = json.loads(out.stdout or "[]")
             if isinstance(data, dict):
                 data = [data]

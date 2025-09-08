@@ -32,7 +32,7 @@ try {
 
     # Watchdog task (5-min repetition for 1 year)
     try { Unregister-ScheduledTask -TaskName $WdName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
-    $wdArg = ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -SupervisorTaskName "{1}"' -f $wdDest, $SupName)
+    $wdArg = ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -SupervisorTaskName "{1}"' -f $wdDest, $SupName)
     $wdAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $wdArg
     $wdTrigger = New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 365)
     $wdSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)

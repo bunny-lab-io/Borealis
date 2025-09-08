@@ -47,11 +47,13 @@ def run_powershell_script_content(content: str):
     if not os.path.isfile(ps):
         ps = "powershell.exe"
     try:
+        flags = 0x08000000 if os.name == 'nt' else 0  # CREATE_NO_WINDOW
         proc = subprocess.run(
             [ps, "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", path],
             capture_output=True,
             text=True,
             timeout=60*60,
+            creationflags=flags,
         )
         return proc.returncode, proc.stdout or "", proc.stderr or ""
     except Exception as e:
@@ -183,7 +185,7 @@ $ps   = "{ps_exe}"
 $scr  = "{script_path}"
 $out  = "{out_path}"
 try {{ Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-$action   = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $scr + '" *> "' + $out + '"')
+$action   = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $scr + '" *> "' + $out + '"')
 $settings = New-ScheduledTaskSettingsSet -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $principal= New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 Register-ScheduledTask -TaskName $task -Action $action -Settings $settings -Principal $principal -Force | Out-Null

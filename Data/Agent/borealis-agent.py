@@ -509,7 +509,7 @@ async def _run_powershell_as_system(path: str):
     st = f"{t.tm_hour:02d}:{t.tm_min:02d}"
     create_cmd = [
         "schtasks", "/Create", "/TN", name,
-        "/TR", f"\"powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"\"{path}\"\"\"",
+        "/TR", f"\"powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File \"\"{path}\"\"\"",
         "/SC", "ONCE", "/ST", st, "/RL", "HIGHEST", "/RU", "SYSTEM", "/F"
     ]
     try:
@@ -1083,7 +1083,7 @@ $ps   = "{ps}"
 $scr  = "{path}"
 $out  = "{out_path}"
 try {{ Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-$action   = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $scr + '" *> "' + $out + '"')
+$action   = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $scr + '" *> "' + $out + '"')
 $settings = New-ScheduledTaskSettingsSet -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $principal= New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $task -Action $action -Settings $settings -Principal $principal -Force | Out-Null

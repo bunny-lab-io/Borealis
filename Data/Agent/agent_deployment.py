@@ -84,9 +84,10 @@ def run_elevated_powershell(paths, ps_content, log_name):
     sei.hwnd = None
     sei.lpVerb = "runas"
     sei.lpFile = "powershell.exe"
-    sei.lpParameters = f"-NoProfile -ExecutionPolicy Bypass -File \"{stub_path}\""
+    sei.lpParameters = f"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{stub_path}\""
     sei.lpDirectory = paths["project_root"]
-    sei.nShow = 1
+    # Hide the elevated PowerShell window entirely (UAC prompt may still appear)
+    sei.nShow = 0
     if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei)):
         log_write(paths, log_name, "[ERROR] UAC elevation failed (ShellExecuteExW)")
         return 1
