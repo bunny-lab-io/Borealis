@@ -1,11 +1,15 @@
 ![Borealis Logo](https://github.com/bunny-lab-io/Borealis/blob/main/Data/Server/WebUI/public/Borealis_Logo_Full.png)
 
-![Device List](Data/Repository_Resources/Device_List.png)
-
 **Borealis** is an all-in-one visual automation platform.
 Whether you want to automate data flows, control a computer, extract data from images, or connect to APIs and webhooks, Borealis turns these advanced tasks into a simple, visual drag-and-drop experience.
 
 Borealis began as a visual node-graph builder. It is now evolving into a centralized remote management and automation platform that still embraces visual workflows, while prioritizing fleet orchestration, inventory, and scripted automations at-scale. Items marked (*roadmap*) indicate forward-looking capabilities under active design.
+
+![Device List](Data/Repository_Resources/Device_List.png)
+
+![Script Editor](Data/Repository_Resources/Script_Editor.png)
+
+![Workflow Editor](Data/Repository_Resources/Workflow_Editor.png)
 
 ## Youtube Video Demonstration:
 You can click the image below to watch a youtube video demonstrating the deployment, launching, and basic example usage of Borealis.
