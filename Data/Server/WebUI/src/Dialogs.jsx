@@ -1,5 +1,6 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Dialogs.jsx
 
+import React from "react";
 import {
   Dialog,
   DialogTitle,
@@ -362,6 +363,81 @@ export function RenameCustomViewDialog({ open, value, onChange, onCancel, onSave
       <DialogActions>
         <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
         <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+export function CreateSiteDialog({ open, onCancel, onCreate }) {
+  const [name, setName] = React.useState("");
+  const [description, setDescription] = React.useState("");
+
+  React.useEffect(() => {
+    if (open) {
+      setName("");
+      setDescription("");
+    }
+  }, [open]);
+
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Create Site</DialogTitle>
+      <DialogContent>
+        <DialogContentText sx={{ color: "#ccc", mb: 1 }}>
+          Create a new site and optionally add a description.
+        </DialogContentText>
+        <TextField
+          autoFocus
+          fullWidth
+          margin="dense"
+          label="Site Name"
+          variant="outlined"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "#2a2a2a",
+              color: "#ccc",
+              "& fieldset": { borderColor: "#444" },
+              "&:hover fieldset": { borderColor: "#666" }
+            },
+            label: { color: "#aaa" },
+            mt: 1
+          }}
+        />
+        <TextField
+          fullWidth
+          multiline
+          minRows={3}
+          margin="dense"
+          label="Description"
+          variant="outlined"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "#2a2a2a",
+              color: "#ccc",
+              "& fieldset": { borderColor: "#444" },
+              "&:hover fieldset": { borderColor: "#666" }
+            },
+            label: { color: "#aaa" },
+            mt: 2
+          }}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button
+          onClick={() => {
+            const nm = (name || '').trim();
+            if (!nm) return;
+            onCreate && onCreate(nm, description || '');
+          }}
+          sx={{ color: "#58a6ff" }}
+        >
+          Create
+        </Button>
       </DialogActions>
     </Dialog>
   );

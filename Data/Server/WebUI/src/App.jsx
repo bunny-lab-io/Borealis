@@ -26,6 +26,7 @@ import StatusBar from "./Status_Bar";
 import NavigationSidebar from "./Navigation_Sidebar";
 import WorkflowList from "./Workflows/Workflow_List";
 import DeviceList from "./Devices/Device_List";
+import SiteList from "./Sites/Site_List";
 import ScriptEditor from "./Scripting/Script_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
 import Login from "./Login.jsx";
@@ -289,6 +290,17 @@ export default function App() {
 
   const renderMainContent = () => {
     switch (currentPage) {
+      case "sites":
+        return (
+          <SiteList
+            onOpenDevicesForSite={(siteName) => {
+              try {
+                localStorage.setItem('device_list_initial_site_filter', String(siteName || ''));
+              } catch {}
+              setCurrentPage("devices");
+            }}
+          />
+        );
       case "devices":
         return (
           <DeviceList

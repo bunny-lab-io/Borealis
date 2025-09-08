@@ -20,6 +20,7 @@ import {
   Code as ScriptIcon,
   PeopleOutline as CommunityIcon
 } from "@mui/icons-material";
+import { LocationCity as SitesIcon } from "@mui/icons-material";
 
 function NavigationSidebar({ currentPage, onNavigate }) {
   const [expandedNav, setExpandedNav] = useState({
@@ -75,6 +76,8 @@ function NavigationSidebar({ currentPage, onNavigate }) {
       }}
     >
       <Box sx={{ flex: 1, overflowY: "auto" }}>
+        {/* Top-level Sites */}
+        <NavItem icon={<SitesIcon fontSize="small" />} label="Sites" pageKey="sites" />
         {/* Devices */}
         <Accordion
           expanded={expandedNav.devices}

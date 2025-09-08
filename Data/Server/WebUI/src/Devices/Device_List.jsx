@@ -76,6 +76,7 @@ export default function DeviceList({ onSelectDevice }) {
   const COL_LABELS = useMemo(
     () => ({
       status: "Status",
+      site: "Site",
       hostname: "Hostname",
       description: "Description",
       lastUser: "Last User",
@@ -93,6 +94,7 @@ export default function DeviceList({ onSelectDevice }) {
   const defaultColumns = useMemo(
     () => [
       { id: "status", label: COL_LABELS.status },
+      { id: "site", label: COL_LABELS.site },
       { id: "hostname", label: COL_LABELS.hostname },
       { id: "description", label: COL_LABELS.description },
       { id: "lastUser", label: COL_LABELS.lastUser },
@@ -111,6 +113,11 @@ export default function DeviceList({ onSelectDevice }) {
 
   // Cache device details to avoid re-fetching every refresh
   const [detailsByHost, setDetailsByHost] = useState({}); // hostname -> cached fields
+  const [siteMapping, setSiteMapping] = useState({}); // hostname -> { site_id, site_name }
+  const [sites, setSites] = useState([]); // sites list for assignment
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [assignSiteId, setAssignSiteId] = useState(null);
+  const [assignTargets, setAssignTargets] = useState([]); // hostnames
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -137,6 +144,16 @@ export default function DeviceList({ onSelectDevice }) {
         };
       });
       setRows(arr);
+
+      // Fetch site mapping for these hostnames
+      try {
+        const hostCsv = arr.map((r) => r.hostname).filter(Boolean).map(encodeURIComponent).join(',');
+        const resp = await fetch(`/api/sites/device_map?hostnames=${hostCsv}`);
+        const mapData = await resp.json();
+        const mapping = mapData?.mapping || {};
+        setSiteMapping(mapping);
+        setRows((prev) => prev.map((r) => ({ ...r, site: mapping[r.hostname]?.site_name || "Not Configured" })));
+      } catch {}
 
       // Fetch missing details (last_user, created) for hosts not cached yet
       const hostsToFetch = arr
@@ -234,6 +251,33 @@ export default function DeviceList({ onSelectDevice }) {
     fetchViews();
   }, [fetchViews]);
 
+  // Sites helper fetch
+  const fetchSites = useCallback(async () => {
+    try {
+      const res = await fetch('/api/sites');
+      const data = await res.json();
+      setSites(Array.isArray(data?.sites) ? data.sites : []);
+    } catch { setSites([]); }
+  }, []);
+
+  // Apply initial site filter from Sites page
+  useEffect(() => {
+    try {
+      const site = localStorage.getItem('device_list_initial_site_filter');
+      if (site && site.trim()) {
+        setColumns((prev) => {
+          const hasSite = prev.some((c) => c.id === 'site');
+          if (hasSite) return prev;
+          const next = [...prev];
+          next.splice(1, 0, { id: 'site', label: COL_LABELS.site });
+          return next;
+        });
+        setFilters((f) => ({ ...f, site }));
+        localStorage.removeItem('device_list_initial_site_filter');
+      }
+    } catch {}
+  }, [COL_LABELS.site]);
+
   const applyView = useCallback((view) => {
     if (!view || view.id === "default") {
       setColumns(defaultColumns);
@@ -263,6 +307,8 @@ export default function DeviceList({ onSelectDevice }) {
       switch (colId) {
         case "status":
           return row.status || "";
+        case "site":
+          return row.site || "Not Configured";
         case "hostname":
           return row.hostname || "";
         case "description":
@@ -591,6 +637,8 @@ export default function DeviceList({ onSelectDevice }) {
                         </Box>
                       </TableCell>
                     );
+                  case "site":
+                    return <TableCell key={col.id}>{r.site || "Not Configured"}</TableCell>;
                   case "hostname":
                     return (
                       <TableCell
@@ -752,6 +800,7 @@ export default function DeviceList({ onSelectDevice }) {
       >
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, p: 1 }}>
           {[
+            { id: 'site', label: 'Site' },
             { id: 'hostname', label: 'Hostname' },
             { id: 'os', label: 'Operating System' },
             { id: 'type', label: 'Device Type' },
@@ -845,7 +894,29 @@ export default function DeviceList({ onSelectDevice }) {
         onClose={closeMenu}
         PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
       >
-        <MenuItem onClick={confirmDelete}>Delete</MenuItem>
+        <MenuItem onClick={async () => {
+          closeMenu();
+          await fetchSites();
+          const targets = new Set(selectedIds);
+          if (selected && !targets.has(selected.id)) targets.add(selected.id);
+          const idToHost = new Map(rows.map((r) => [r.id, r.hostname]));
+          const hostnames = Array.from(targets).map((id) => idToHost.get(id)).filter(Boolean);
+          setAssignTargets(hostnames);
+          setAssignSiteId(null);
+          setAssignDialogOpen(true);
+        }}>Add to Site</MenuItem>
+        <MenuItem onClick={async () => {
+          closeMenu();
+          await fetchSites();
+          const targets = new Set(selectedIds);
+          if (selected && !targets.has(selected.id)) targets.add(selected.id);
+          const idToHost = new Map(rows.map((r) => [r.id, r.hostname]));
+          const hostnames = Array.from(targets).map((id) => idToHost.get(id)).filter(Boolean);
+          setAssignTargets(hostnames);
+          setAssignSiteId(null);
+          setAssignDialogOpen(true);
+        }}>Move to Another Site</MenuItem>
+        <MenuItem onClick={confirmDelete} sx={{ color: '#ff8a8a' }}>Delete</MenuItem>
       </Menu>
       <DeleteDeviceDialog
         open={confirmOpen}
@@ -859,6 +930,61 @@ export default function DeviceList({ onSelectDevice }) {
           onClose={() => setQuickJobOpen(false)}
           hostnames={rows.filter((r) => selectedIds.has(r.id)).map((r) => r.hostname)}
         />
+      )}
+      {assignDialogOpen && (
+        <Popover
+          open={assignDialogOpen}
+          onClose={() => setAssignDialogOpen(false)}
+          anchorReference="anchorPosition"
+          anchorPosition={{ top: Math.max(Math.floor(window.innerHeight*0.5), 200), left: Math.max(Math.floor(window.innerWidth*0.5), 300) }}
+          PaperProps={{ sx: { bgcolor: '#1e1e1e', color: '#fff', p: 2, minWidth: 360 } }}
+        >
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Typography variant="subtitle1">Assign {assignTargets.length} device(s) to a site</Typography>
+            <TextField
+              select
+              size="small"
+              label="Select Site"
+              value={assignSiteId ?? ''}
+              onChange={(e) => setAssignSiteId(Number(e.target.value))}
+              sx={{ '& .MuiOutlinedInput-root': { '& fieldset': { borderColor: '#444' }, '&:hover fieldset': { borderColor: '#666' } }, label: { color: '#aaa' } }}
+            >
+              {sites.map((s) => (
+                <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>
+              ))}
+            </TextField>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+              <Button variant="outlined" size="small" onClick={() => setAssignDialogOpen(false)} sx={{ textTransform: 'none', borderColor: '#555', color: '#bbb' }}>Cancel</Button>
+              <Button
+                variant="outlined"
+                size="small"
+                disabled={!assignSiteId || assignTargets.length === 0}
+                onClick={async () => {
+                  try {
+                    await fetch('/api/sites/assign', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ site_id: assignSiteId, hostnames: assignTargets })
+                    });
+                  } catch {}
+                  setAssignDialogOpen(false);
+                  // Refresh mapping to update Site column
+                  try {
+                    const hostCsv = rows.map((r) => r.hostname).filter(Boolean).map(encodeURIComponent).join(',');
+                    const resp = await fetch(`/api/sites/device_map?hostnames=${hostCsv}`);
+                    const mapData = await resp.json();
+                    const mapping = mapData?.mapping || {};
+                    setSiteMapping(mapping);
+                    setRows((prev) => prev.map((r) => ({ ...r, site: mapping[r.hostname]?.site_name || 'Not Configured' })));
+                  } catch {}
+                }}
+                sx={{ textTransform: 'none', borderColor: '#58a6ff', color: '#58a6ff' }}
+              >
+                Assign
+              </Button>
+            </Box>
+          </Box>
+        </Popover>
       )}
     </Paper>
   );

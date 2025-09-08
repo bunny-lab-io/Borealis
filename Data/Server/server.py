@@ -708,6 +708,231 @@ def init_views_db():
 
 init_views_db()
 
+# ---------------------------------------------
+# Sites database (site list + device assignments)
+# ---------------------------------------------
+SITES_DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "Databases", "sites.db")
+)
+os.makedirs(os.path.dirname(SITES_DB_PATH), exist_ok=True)
+
+def init_sites_db():
+    conn = sqlite3.connect(SITES_DB_PATH)
+    cur = conn.cursor()
+    # Sites master table
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_at INTEGER
+        )
+        """
+    )
+    # Device assignments. A device (hostname) can be assigned to at most one site.
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_sites (
+            device_hostname TEXT UNIQUE NOT NULL,
+            site_id INTEGER NOT NULL,
+            assigned_at INTEGER,
+            FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+init_sites_db()
+
+# ---------------------------------------------
+# Sites API
+# ---------------------------------------------
+
+def _row_to_site(row):
+    # id, name, description, created_at, device_count
+    return {
+        "id": row[0],
+        "name": row[1],
+        "description": row[2] or "",
+        "created_at": row[3] or 0,
+        "device_count": row[4] or 0,
+    }
+
+
+@app.route("/api/sites", methods=["GET"])
+def list_sites():
+    try:
+        conn = sqlite3.connect(SITES_DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT s.id, s.name, s.description, s.created_at,
+                   COALESCE(ds.cnt, 0) AS device_count
+            FROM sites s
+            LEFT JOIN (
+                SELECT site_id, COUNT(*) AS cnt
+                FROM device_sites
+                GROUP BY site_id
+            ) ds ON ds.site_id = s.id
+            ORDER BY LOWER(s.name) ASC
+            """
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return jsonify({"sites": [_row_to_site(r) for r in rows]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sites", methods=["POST"])
+def create_site():
+    payload = request.get_json(silent=True) or {}
+    name = (payload.get("name") or "").strip()
+    description = (payload.get("description") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    now = int(time.time())
+    try:
+        conn = sqlite3.connect(SITES_DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sites(name, description, created_at) VALUES (?, ?, ?)",
+            (name, description, now),
+        )
+        site_id = cur.lastrowid
+        conn.commit()
+        # Return created row with device_count = 0
+        cur.execute(
+            "SELECT id, name, description, created_at, 0 FROM sites WHERE id = ?",
+            (site_id,),
+        )
+        row = cur.fetchone()
+        conn.close()
+        return jsonify(_row_to_site(row))
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "name already exists"}), 409
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sites/delete", methods=["POST"])
+def delete_sites():
+    payload = request.get_json(silent=True) or {}
+    ids = payload.get("ids") or []
+    if not isinstance(ids, list) or not all(isinstance(x, (int, str)) for x in ids):
+        return jsonify({"error": "ids must be a list"}), 400
+    # Normalize to ints where possible
+    norm_ids = []
+    for x in ids:
+        try:
+            norm_ids.append(int(x))
+        except Exception:
+            pass
+    if not norm_ids:
+        return jsonify({"status": "ok", "deleted": 0})
+    try:
+        conn = sqlite3.connect(SITES_DB_PATH)
+        cur = conn.cursor()
+        # Clean assignments first (in case FK ON DELETE CASCADE not enforced)
+        cur.execute(
+            f"DELETE FROM device_sites WHERE site_id IN ({','.join('?'*len(norm_ids))})",
+            tuple(norm_ids),
+        )
+        cur.execute(
+            f"DELETE FROM sites WHERE id IN ({','.join('?'*len(norm_ids))})",
+            tuple(norm_ids),
+        )
+        deleted = cur.rowcount
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok", "deleted": deleted})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sites/device_map", methods=["GET"])
+def sites_device_map():
+    """
+    Map hostnames to assigned site.
+    Optional query param: hostnames=comma,separated,list to filter.
+    Returns: { mapping: { hostname: { site_id, site_name } } }
+    """
+    try:
+        host_param = (request.args.get("hostnames") or "").strip()
+        filter_set = set()
+        if host_param:
+            for part in host_param.split(','):
+                p = part.strip()
+                if p:
+                    filter_set.add(p)
+        conn = sqlite3.connect(SITES_DB_PATH)
+        cur = conn.cursor()
+        if filter_set:
+            placeholders = ','.join('?' * len(filter_set))
+            cur.execute(
+                f"""
+                SELECT ds.device_hostname, s.id, s.name
+                FROM device_sites ds
+                JOIN sites s ON s.id = ds.site_id
+                WHERE ds.device_hostname IN ({placeholders})
+                """,
+                tuple(filter_set),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT ds.device_hostname, s.id, s.name
+                FROM device_sites ds
+                JOIN sites s ON s.id = ds.site_id
+                """
+            )
+        mapping = {}
+        for hostname, site_id, site_name in cur.fetchall():
+            mapping[str(hostname)] = {"site_id": site_id, "site_name": site_name}
+        conn.close()
+        return jsonify({"mapping": mapping})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sites/assign", methods=["POST"])
+def assign_devices_to_site():
+    payload = request.get_json(silent=True) or {}
+    site_id = payload.get("site_id")
+    hostnames = payload.get("hostnames") or []
+    try:
+        site_id = int(site_id)
+    except Exception:
+        return jsonify({"error": "invalid site_id"}), 400
+    if not isinstance(hostnames, list) or not all(isinstance(x, str) and x.strip() for x in hostnames):
+        return jsonify({"error": "hostnames must be a list of strings"}), 400
+    now = int(time.time())
+    try:
+        conn = sqlite3.connect(SITES_DB_PATH)
+        cur = conn.cursor()
+        # Ensure site exists
+        cur.execute("SELECT 1 FROM sites WHERE id = ?", (site_id,))
+        if not cur.fetchone():
+            conn.close()
+            return jsonify({"error": "site not found"}), 404
+        # Assign each hostname (replace existing assignment if present)
+        for hn in hostnames:
+            hn = hn.strip()
+            if not hn:
+                continue
+            cur.execute(
+                "INSERT INTO device_sites(device_hostname, site_id, assigned_at) VALUES (?, ?, ?)\n"
+                "ON CONFLICT(device_hostname) DO UPDATE SET site_id=excluded.site_id, assigned_at=excluded.assigned_at",
+                (hn, site_id, now),
+            )
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 # ---------------------------------------------
 # Device List Views API
