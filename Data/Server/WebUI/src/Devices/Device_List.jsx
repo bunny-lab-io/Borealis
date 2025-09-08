@@ -24,6 +24,7 @@ import MoreVertIcon from "@mui/icons-material/MoreVert";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import ViewColumnIcon from "@mui/icons-material/ViewColumn";
 import AddIcon from "@mui/icons-material/Add";
+import CachedIcon from "@mui/icons-material/Cached";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
 import QuickJob from "../Scheduling/Quick_Job.jsx";
 
@@ -242,9 +243,8 @@ export default function DeviceList({ onSelectDevice }) {
   }, []);
 
   useEffect(() => {
+    // Initial load only; removed auto-refresh interval
     fetchAgents();
-    const t = setInterval(fetchAgents, 5000);
-    return () => clearInterval(t);
   }, [fetchAgents]);
 
   useEffect(() => {
@@ -537,6 +537,15 @@ export default function DeviceList({ onSelectDevice }) {
                 <AddIcon fontSize="small" />
               </IconButton>
             </Box>
+            <Tooltip title="Refresh Devices to Detect Changes">
+              <IconButton
+                size="small"
+                onClick={fetchAgents}
+                sx={{ color: "#bbb", mr: 1 }}
+              >
+                <CachedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Tooltip title="Column Chooser">
               <IconButton
                 size="small"
