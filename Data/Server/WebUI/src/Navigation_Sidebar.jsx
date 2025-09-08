@@ -26,8 +26,8 @@ function NavigationSidebar({ currentPage, onNavigate }) {
   const [expandedNav, setExpandedNav] = useState({
     sites: true,
     devices: true,
-    filters: true,
-    automation: true
+    automation: true,
+    filters: true
   });
 
   const NavItem = ({ icon, label, pageKey, indent = 0 }) => {
@@ -86,7 +86,7 @@ function NavigationSidebar({ currentPage, onNavigate }) {
         )}
         <ListItemText
           primary={label}
-          primaryTypographyProps={{ fontSize: "0.95rem", fontWeight: active ? 600 : 400 }}
+          primaryTypographyProps={{ fontSize: "0.75rem", fontWeight: active ? 600 : 400 }}
         />
       </ListItemButton>
     );
@@ -138,7 +138,7 @@ function NavigationSidebar({ currentPage, onNavigate }) {
               }
             }}
           >
-            <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
+            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
               <b>Sites</b>
             </Typography>
           </AccordionSummary>
@@ -182,7 +182,7 @@ function NavigationSidebar({ currentPage, onNavigate }) {
               }
             }}
           >
-            <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
+            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
               <b>Devices</b>
             </Typography>
           </AccordionSummary>
@@ -227,7 +227,7 @@ function NavigationSidebar({ currentPage, onNavigate }) {
               }
             }}
           >
-            <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
+            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
               <b>Automation</b>
             </Typography>
           </AccordionSummary>
@@ -275,7 +275,7 @@ function NavigationSidebar({ currentPage, onNavigate }) {
               }
             }}
           >
-            <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
+            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
               <b>Filters & Groups</b>
             </Typography>
           </AccordionSummary>
