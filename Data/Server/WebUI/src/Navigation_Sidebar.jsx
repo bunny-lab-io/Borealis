@@ -24,6 +24,7 @@ import { LocationCity as SitesIcon } from "@mui/icons-material";
 
 function NavigationSidebar({ currentPage, onNavigate }) {
   const [expandedNav, setExpandedNav] = useState({
+    sites: true,
     devices: true,
     filters: true,
     automation: true
@@ -76,8 +77,26 @@ function NavigationSidebar({ currentPage, onNavigate }) {
       }}
     >
       <Box sx={{ flex: 1, overflowY: "auto" }}>
-        {/* Top-level Sites */}
-        <NavItem icon={<SitesIcon fontSize="small" />} label="Sites" pageKey="sites" />
+        {/* Sites */}
+        <Accordion
+          expanded={expandedNav.sites}
+          onChange={(_, e) => setExpandedNav((s) => ({ ...s, sites: e }))}
+          square
+          disableGutters
+          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            sx={{ backgroundColor: "#2c2c2c", minHeight: "36px", "& .MuiAccordionSummary-content": { margin: 0 } }}
+          >
+            <Typography sx={{ fontSize: "0.9rem", color: "#58a6ff" }}>
+              <b>Sites</b>
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
+            <NavItem icon={<SitesIcon fontSize="small" />} label="All Sites" pageKey="sites" />
+          </AccordionDetails>
+        </Accordion>
         {/* Devices */}
         <Accordion
           expanded={expandedNav.devices}
