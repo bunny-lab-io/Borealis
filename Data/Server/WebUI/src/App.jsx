@@ -15,7 +15,7 @@ import Login from "./Login.jsx";
 import NavigationSidebar from "./Navigation_Sidebar";
 import { CloseAllDialog, CreditsDialog, RenameTabDialog, TabContextMenu } from "./Dialogs";
 
-// Lists
+// Navigation Pages
 import SiteList from "./Sites/Site_List";
 import DeviceList from "./Devices/Device_List";
 import DeviceDetails from "./Devices/Device_Details";
