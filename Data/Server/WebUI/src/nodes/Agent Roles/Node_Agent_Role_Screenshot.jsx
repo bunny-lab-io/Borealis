@@ -55,6 +55,15 @@ const AgentScreenshotNode = ({ id, data }) => {
 
     const handleScreenshot = (payload) => {
       if (payload?.node_id !== id) return;
+      // Additionally ensure payload is from the agent connected upstream of this node
+      try {
+        const agentEdge = edges.find(e => e.target === id && e.sourceHandle === "provisioner");
+        const agentNode = getNodes().find(n => n.id === agentEdge?.source);
+        const selectedAgentId = agentNode?.data?.agent_id;
+        if (!selectedAgentId || payload?.agent_id !== selectedAgentId) return;
+      } catch (err) {
+        return; // fail-closed if we cannot resolve upstream agent
+      }
 
       if (payload.image_base64) {
         setImageBase64(payload.image_base64);
@@ -77,7 +86,7 @@ const AgentScreenshotNode = ({ id, data }) => {
 
     socket.on("agent_screenshot_task", handleScreenshot);
     return () => socket.off("agent_screenshot_task", handleScreenshot);
-  }, [id, setNodes]);
+  }, [id, setNodes, edges, getNodes]);
 
   // Register this node for the agent provisioning sync
   window.__BorealisInstructionNodes = window.__BorealisInstructionNodes || {};

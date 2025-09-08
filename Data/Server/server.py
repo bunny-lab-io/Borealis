@@ -6,7 +6,7 @@ eventlet.monkey_patch()
 
 import requests
 from flask import Flask, request, jsonify, Response, send_from_directory, make_response
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 
 import time
@@ -1335,7 +1335,12 @@ def provision_agent():
     if agent_id in registered_agents:
         registered_agents[agent_id]["status"] = "provisioned"
 
-    socketio.emit("agent_config", config)
+    # Target only the intended agent by emitting to its room
+    try:
+        socketio.emit("agent_config", {**config, "agent_id": agent_id}, room=agent_id)
+    except TypeError:
+        # Compatibility with older flask-socketio versions that use 'to'
+        socketio.emit("agent_config", {**config, "agent_id": agent_id}, to=agent_id)
     return jsonify({"status": "provisioned", "roles": roles})
 
 # ---------------------------------------------
@@ -1453,6 +1458,12 @@ def connect_agent(data):
     if not agent_id:
         return
     print(f"Agent connected: {agent_id}")
+
+    # Join per-agent room so we can address this connection specifically
+    try:
+        join_room(agent_id)
+    except Exception:
+        pass
 
     rec = registered_agents.setdefault(agent_id, {})
     rec["agent_id"] = agent_id
