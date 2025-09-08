@@ -43,8 +43,8 @@ function NavigationSidebar({ currentPage, onNavigate }) {
           background: active
             ? "linear-gradient(90deg, rgba(88,166,255,0.10) 0%, rgba(88,166,255,0.03) 60%, rgba(88,166,255,0.00) 100%)"
             : "transparent",
-          borderTopRightRadius: 8,
-          borderBottomRightRadius: 8,
+          borderTopRightRadius: 0,
+          borderBottomRightRadius: 0,
           boxShadow: active
             ? "inset 0 0 0 1px rgba(88,166,255,0.25)"
             : "none",
