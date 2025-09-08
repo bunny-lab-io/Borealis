@@ -1,45 +1,51 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/App.jsx
 
-// Styling
+//Shared Imports
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { ReactFlowProvider } from "reactflow";
+import "reactflow/dist/style.css";
+import {
+  CloseAllDialog, CreditsDialog, RenameTabDialog, TabContextMenu
+} from "./Dialogs";
+import NavigationSidebar from "./Navigation_Sidebar";
+
+// Styling Imports
+import {
+  AppBar, Toolbar, Typography, Box, Menu, MenuItem, Button,
+  CssBaseline, ThemeProvider, createTheme
+} from "@mui/material";
 import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
   InfoOutlined as InfoOutlinedIcon,
   GitHub as GitHub,
   People as PeopleIcon
 } from "@mui/icons-material";
-import { AppBar, Toolbar, Typography, Box, Menu, MenuItem, Button, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 
-// General
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import Login from "./Login.jsx";
-import NavigationSidebar from "./Navigation_Sidebar";
-import { CloseAllDialog, CreditsDialog, RenameTabDialog, TabContextMenu } from "./Dialogs";
-
-// Navigation Pages
-import SiteList from "./Sites/Site_List";
-import DeviceList from "./Devices/Device_List";
-import DeviceDetails from "./Devices/Device_Details";
-import ScriptEditor from "./Scripting/Script_Editor";
-import WorkflowList from "./Workflows/Workflow_List";
-import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
-
-// Workflow Editor
-import StatusBar from "./Status_Bar";
+// Workflow Editor Imports
 import FlowTabs from "./Flow_Editor/Flow_Tabs";
 import FlowEditor from "./Flow_Editor/Flow_Editor";
 import NodeSidebar from "./Flow_Editor/Node_Sidebar";
-import ReactFlowProvider from "reactflow";
-import "reactflow/dist/style.css";
+import StatusBar from "./Status_Bar";
 
-// Networking
+// Borealis Page Imports
+import Login from "./Login.jsx";
+import SiteList from "./Sites/Site_List";
+import DeviceList from "./Devices/Device_List";
+import DeviceDetails from "./Devices/Device_Details";
+import WorkflowList from "./Workflows/Workflow_List";
+import ScriptEditor from "./Scripting/Script_Editor";
+import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
+
+// Networking Imports
 import { io } from "socket.io-client";
-
 if (!window.BorealisSocket) {
   window.BorealisSocket = io(window.location.origin, { transports: ["websocket"] });
 }
 if (!window.BorealisUpdateRate) {
-  window.BorealisUpdateRate = 1000;
+  window.BorealisUpdateRate = 200;
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Load node modules dynamically
 const modules = import.meta.glob('./Nodes/**/*.jsx', { eager: true });
