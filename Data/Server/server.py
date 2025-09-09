@@ -1708,12 +1708,24 @@ def connect_agent(data):
     sid = request.sid
     remote = request.remote_addr
     conn_type = "script_agent" if isinstance(agent_id, str) and agent_id.lower().endswith('-script') else "agent"
+    now = time.time()
+    existing = socket_connections.get(sid)
+    if existing and existing.get("agent_id") == agent_id:
+        # Avoid duplicate logs if the agent re-sends connect_agent for the same sid.
+        existing.update({
+            "type": conn_type,
+            "remote_addr": remote,
+            "last_heartbeat": now,
+        })
+        existing.setdefault("connected_at", now)
+        return
+
     socket_connections[sid] = {
         "type": conn_type,
         "agent_id": agent_id,
         "remote_addr": remote,
-        "connected_at": time.time(),
-        "last_heartbeat": time.time(),
+        "connected_at": now,
+        "last_heartbeat": now,
     }
     print(f"[WebSocket] {conn_type.replace('_', ' ').title()} connected: {agent_id} (sid={sid}, remote={remote})")
 
@@ -1849,12 +1861,16 @@ def on_disconnect():
     hb_info = ""
     if last_hb:
         hb_info = f", last heartbeat {int(time.time() - last_hb)}s ago"
+    connected_at = conn.get("connected_at")
+    duration_info = ""
+    if connected_at:
+        duration_info = f", connected for {int(time.time() - connected_at)}s"
 
     if conn_type in ("agent", "script_agent"):
         role = "Script agent" if conn_type == "script_agent" else "Agent"
-        print(f"[WebSocket] {role} disconnected: {agent_id} (sid={sid}, remote={conn.get('remote_addr')}{hb_info})")
+        print(f"[WebSocket] {role} disconnected: {agent_id} (sid={sid}, remote={conn.get('remote_addr')}{hb_info}{duration_info})")
     else:
-        print(f"[WebSocket] Client disconnected: sid={sid} remote={conn.get('remote_addr')}{hb_info}")
+        print(f"[WebSocket] Client disconnected: sid={sid} remote={conn.get('remote_addr')}{hb_info}{duration_info}")
 
 # Macro Websocket Handlers
 @socketio.on("macro_status")
