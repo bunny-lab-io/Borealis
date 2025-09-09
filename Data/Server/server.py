@@ -647,6 +647,8 @@ def scripts_rename_folder():
 registered_agents: Dict[str, Dict] = {}
 agent_configurations: Dict[str, Dict] = {}
 latest_images: Dict[str, Dict] = {}
+# Track websocket connections by session id so we can log disconnects
+socket_connections: Dict[str, Dict] = {}
 
 # Device database initialization
 DB_PATH = os.path.abspath(
@@ -1679,6 +1681,21 @@ def receive_screenshot_task(data):
     # Relay to all connected clients; use server-level emit
     socketio.emit("agent_screenshot_task", data)
 
+
+@socketio.on("connect")
+def on_connect():
+    """Log when a new websocket client connects."""
+    sid = request.sid
+    remote = request.remote_addr
+    socket_connections[sid] = {
+        "type": "client",
+        "agent_id": None,
+        "remote_addr": remote,
+        "connected_at": time.time(),
+        "last_heartbeat": None,
+    }
+    print(f"[WebSocket] Client connected: sid={sid} remote={remote}")
+
 @socketio.on("connect_agent")
 def connect_agent(data):
     """
@@ -1688,7 +1705,17 @@ def connect_agent(data):
     agent_id = (data or {}).get("agent_id")
     if not agent_id:
         return
-    print(f"Agent connected: {agent_id}")
+    sid = request.sid
+    remote = request.remote_addr
+    conn_type = "script_agent" if isinstance(agent_id, str) and agent_id.lower().endswith('-script') else "agent"
+    socket_connections[sid] = {
+        "type": conn_type,
+        "agent_id": agent_id,
+        "remote_addr": remote,
+        "connected_at": time.time(),
+        "last_heartbeat": time.time(),
+    }
+    print(f"[WebSocket] {conn_type.replace('_', ' ').title()} connected: {agent_id} (sid={sid}, remote={remote})")
 
     # Join per-agent room so we can address this connection specifically
     try:
@@ -1703,11 +1730,8 @@ def connect_agent(data):
     rec["last_seen"] = int(time.time())
     rec["status"] = "provisioned" if agent_id in agent_configurations else "orphaned"
     # Flag script agents so they can be filtered out elsewhere if desired
-    try:
-        if isinstance(agent_id, str) and agent_id.lower().endswith('-script'):
-            rec['is_script_agent'] = True
-    except Exception:
-        pass
+    if conn_type == "script_agent":
+        rec['is_script_agent'] = True
     # If we already know the hostname for this agent, persist last_seen so it
     # can be restored after server restarts.
     try:
@@ -1728,6 +1752,24 @@ def on_agent_heartbeat(data):
     if not agent_id:
         return
     hostname = data.get("hostname")
+
+    sid = request.sid
+    now = time.time()
+    conn = socket_connections.get(sid)
+    if conn:
+        delta = now - (conn.get("last_heartbeat") or conn.get("connected_at") or now)
+        conn["last_heartbeat"] = now
+        print(f"[WebSocket] Heartbeat from {agent_id} (sid={sid}) {delta:.1f}s since last")
+    else:
+        # Record unknown connections to help debug unexpected heartbeats
+        socket_connections[sid] = {
+            "type": "agent",
+            "agent_id": agent_id,
+            "remote_addr": request.remote_addr,
+            "connected_at": now,
+            "last_heartbeat": now,
+        }
+        print(f"[WebSocket] Heartbeat from untracked sid={sid} agent={agent_id}")
 
     if hostname:
         # Avoid duplicate entries per-hostname by collapsing to the newest agent_id.
@@ -1794,7 +1836,25 @@ def receive_screenshot(data):
 
 @socketio.on("disconnect")
 def on_disconnect():
-    print("[WebSocket] Connection Disconnected")
+    sid = request.sid
+    remote = request.remote_addr
+    conn = socket_connections.pop(sid, None)
+    if not conn:
+        print(f"[WebSocket] Unknown connection disconnected: sid={sid} remote={remote}")
+        return
+
+    conn_type = conn.get("type", "client")
+    agent_id = conn.get("agent_id")
+    last_hb = conn.get("last_heartbeat")
+    hb_info = ""
+    if last_hb:
+        hb_info = f", last heartbeat {int(time.time() - last_hb)}s ago"
+
+    if conn_type in ("agent", "script_agent"):
+        role = "Script agent" if conn_type == "script_agent" else "Agent"
+        print(f"[WebSocket] {role} disconnected: {agent_id} (sid={sid}, remote={conn.get('remote_addr')}{hb_info})")
+    else:
+        print(f"[WebSocket] Client disconnected: sid={sid} remote={conn.get('remote_addr')}{hb_info}")
 
 # Macro Websocket Handlers
 @socketio.on("macro_status")
