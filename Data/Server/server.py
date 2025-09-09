@@ -648,18 +648,21 @@ registered_agents: Dict[str, Dict] = {}
 agent_configurations: Dict[str, Dict] = {}
 latest_images: Dict[str, Dict] = {}
 
-# Device database initialization
-DB_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "Databases", "devices.db")
-)
+# Database initialization (merged into a single SQLite database)
+DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "database.db"))
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
+
 def init_db():
+    """Initialize all required tables in the unified database."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+
+    # Device details table
     cur.execute(
         "CREATE TABLE IF NOT EXISTS device_details (hostname TEXT PRIMARY KEY, description TEXT, details TEXT)"
     )
+
     # Activity history table for script/job runs
     cur.execute(
         """
@@ -676,21 +679,8 @@ def init_db():
         )
         """
     )
-    conn.commit()
-    conn.close()
 
-init_db()
-
-# Views database (device list saved views)
-VIEWS_DB_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "Databases", "devices_list_views.db")
-)
-os.makedirs(os.path.dirname(VIEWS_DB_PATH), exist_ok=True)
-
-def init_views_db():
-    conn = sqlite3.connect(VIEWS_DB_PATH)
-    cur = conn.cursor()
-    # Store name, ordered column ids as JSON, and filters as JSON
+    # Saved device list views
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS device_list_views (
@@ -703,22 +693,7 @@ def init_views_db():
         )
         """
     )
-    conn.commit()
-    conn.close()
 
-init_views_db()
-
-# ---------------------------------------------
-# Sites database (site list + device assignments)
-# ---------------------------------------------
-SITES_DB_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "Databases", "sites.db")
-)
-os.makedirs(os.path.dirname(SITES_DB_PATH), exist_ok=True)
-
-def init_sites_db():
-    conn = sqlite3.connect(SITES_DB_PATH)
-    cur = conn.cursor()
     # Sites master table
     cur.execute(
         """
@@ -730,6 +705,7 @@ def init_sites_db():
         )
         """
     )
+
     # Device assignments. A device (hostname) can be assigned to at most one site.
     cur.execute(
         """
@@ -741,10 +717,12 @@ def init_sites_db():
         )
         """
     )
+
     conn.commit()
     conn.close()
 
-init_sites_db()
+
+init_db()
 
 # ---------------------------------------------
 # Sites API
@@ -764,7 +742,7 @@ def _row_to_site(row):
 @app.route("/api/sites", methods=["GET"])
 def list_sites():
     try:
-        conn = sqlite3.connect(SITES_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute(
             """
@@ -795,7 +773,7 @@ def create_site():
         return jsonify({"error": "name is required"}), 400
     now = int(time.time())
     try:
-        conn = sqlite3.connect(SITES_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO sites(name, description, created_at) VALUES (?, ?, ?)",
@@ -833,7 +811,7 @@ def delete_sites():
     if not norm_ids:
         return jsonify({"status": "ok", "deleted": 0})
     try:
-        conn = sqlite3.connect(SITES_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         # Clean assignments first (in case FK ON DELETE CASCADE not enforced)
         cur.execute(
@@ -867,7 +845,7 @@ def sites_device_map():
                 p = part.strip()
                 if p:
                     filter_set.add(p)
-        conn = sqlite3.connect(SITES_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         if filter_set:
             placeholders = ','.join('?' * len(filter_set))
@@ -910,7 +888,7 @@ def assign_devices_to_site():
         return jsonify({"error": "hostnames must be a list of strings"}), 400
     now = int(time.time())
     try:
-        conn = sqlite3.connect(SITES_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         # Ensure site exists
         cur.execute("SELECT 1 FROM sites WHERE id = ?", (site_id,))
@@ -951,7 +929,7 @@ def _row_to_view(row):
 @app.route("/api/device_list_views", methods=["GET"])
 def list_device_list_views():
     try:
-        conn = sqlite3.connect(VIEWS_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute(
             "SELECT id, name, columns_json, filters_json, created_at, updated_at FROM device_list_views ORDER BY name COLLATE NOCASE ASC"
@@ -966,7 +944,7 @@ def list_device_list_views():
 @app.route("/api/device_list_views/<int:view_id>", methods=["GET"])
 def get_device_list_view(view_id: int):
     try:
-        conn = sqlite3.connect(VIEWS_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute(
             "SELECT id, name, columns_json, filters_json, created_at, updated_at FROM device_list_views WHERE id = ?",
@@ -999,7 +977,7 @@ def create_device_list_view():
 
     now = int(time.time())
     try:
-        conn = sqlite3.connect(VIEWS_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO device_list_views(name, columns_json, filters_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
@@ -1054,7 +1032,7 @@ def update_device_list_view(view_id: int):
     params.append(view_id)
 
     try:
-        conn = sqlite3.connect(VIEWS_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute(f"UPDATE device_list_views SET {', '.join(fields)} WHERE id = ?", params)
         if cur.rowcount == 0:
@@ -1077,7 +1055,7 @@ def update_device_list_view(view_id: int):
 @app.route("/api/device_list_views/<int:view_id>", methods=["DELETE"])
 def delete_device_list_view(view_id: int):
     try:
-        conn = sqlite3.connect(VIEWS_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("DELETE FROM device_list_views WHERE id = ?", (view_id,))
         if cur.rowcount == 0:
