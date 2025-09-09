@@ -8,7 +8,6 @@ Borealis-Server.exe
 /Agent/
 /Server/
 /ElectronApp/
-/Databases/
 /Logs/
 /Temp/
 
@@ -24,3 +23,4 @@ __pycache__
 /Update_Staging/
 agent_settings.json
 users.json
+database.db
