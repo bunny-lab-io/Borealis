@@ -61,10 +61,10 @@ export default function DeviceDetails({ device, onBack }) {
     const tsSec = device?.lastSeen;
     if (!tsSec) return "Offline";
     const now = Date.now() / 1000;
-    return now - tsSec <= 120 ? "Online" : "Offline";
+    return now - tsSec <= 300 ? "Online" : "Offline";
   });
 
-  const statusFromHeartbeat = (tsSec, offlineAfter = 120) => {
+  const statusFromHeartbeat = (tsSec, offlineAfter = 300) => {
     if (!tsSec) return "Offline";
     const now = Date.now() / 1000;
     return now - tsSec <= offlineAfter ? "Online" : "Offline";

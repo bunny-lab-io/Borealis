@@ -28,7 +28,7 @@ import CachedIcon from "@mui/icons-material/Cached";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
 import QuickJob from "../Scheduling/Quick_Job.jsx";
 
-function formatLastSeen(tsSec, offlineAfter = 120) {
+function formatLastSeen(tsSec, offlineAfter = 300) {
   if (!tsSec) return "unknown";
   const now = Date.now() / 1000;
   if (now - tsSec <= offlineAfter) return "Currently Online";
@@ -45,7 +45,7 @@ function formatLastSeen(tsSec, offlineAfter = 120) {
   return `${date} @ ${time}`;
 }
 
-function statusFromHeartbeat(tsSec, offlineAfter = 120) {
+function statusFromHeartbeat(tsSec, offlineAfter = 300) {
   if (!tsSec) return "Offline";
   const now = Date.now() / 1000;
   return now - tsSec <= offlineAfter ? "Online" : "Offline";
