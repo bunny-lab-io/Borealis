@@ -42,8 +42,7 @@ except Exception:
 from PIL import ImageGrab
 
 # New modularized components
-import agent_info
-import agent_roles
+from role_manager import RoleManager
 
 # //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: CONFIG MANAGER
@@ -351,7 +350,7 @@ def detect_agent_os():
         print(f"[WARN] OS detection failed: {e}")
         return "Unknown"
 
-CONFIG.data['agent_operating_system'] = agent_info.detect_agent_os()
+CONFIG.data['agent_operating_system'] = detect_agent_os()
 CONFIG._write()
 
 # //////////////////////////////////////////////////////////////////////////
@@ -361,8 +360,8 @@ CONFIG._write()
 sio = socketio.AsyncClient(reconnection=True, reconnection_attempts=0, reconnection_delay=5)
 role_tasks = {}
 background_tasks = []
-roles_ctx = None
 AGENT_LOOP = None
+ROLE_MANAGER = None
 
 # ---------------- Local IPC Bridge (Service -> Agent) ----------------
 def start_agent_bridge_pipe(loop_ref):
@@ -563,13 +562,9 @@ async def _run_powershell_with_credentials(path: str, username: str, password: s
 
 async def stop_all_roles():
     print("[DEBUG] Stopping all roles.")
-    for task in list(role_tasks.values()):
-        print(f"[DEBUG] Cancelling task for node: {task}")
-        task.cancel()
-    role_tasks.clear()
-    # Close overlays managed in agent_roles module
     try:
-        agent_roles.close_all_overlays()
+        if ROLE_MANAGER is not None:
+            ROLE_MANAGER.stop_all()
     except Exception:
         pass
 
@@ -587,7 +582,7 @@ async def send_heartbeat():
             payload = {
                 "agent_id": AGENT_ID,
                 "hostname": socket.gethostname(),
-                "agent_operating_system": CONFIG.data.get("agent_operating_system", agent_info.detect_agent_os()),
+                "agent_operating_system": CONFIG.data.get("agent_operating_system", detect_agent_os()),
                 "last_seen": int(time.time())
             }
             await sio.emit("agent_heartbeat", payload)
@@ -608,16 +603,15 @@ async def send_heartbeat():
 ## Moved to agent_info module
 
 def collect_summary():
-    # Moved to agent_info.collect_summary
-    return agent_info.collect_summary(CONFIG)
+    # migrated to role_DeviceInventory
+    return {}
 
 def collect_software():
-    # Moved to agent_info.collect_software
-    return agent_info.collect_software()
+    # migrated to role_DeviceInventory
+    return []
 
 def collect_memory():
-    # Delegated to agent_info module
-    return agent_info.collect_memory()
+    # migrated to role_DeviceInventory
     entries = []
     plat = platform.system().lower()
     try:
@@ -706,8 +700,7 @@ def collect_memory():
     return entries
 
 def collect_storage():
-    # Delegated to agent_info module
-    return agent_info.collect_storage()
+    # migrated to role_DeviceInventory
     disks = []
     plat = platform.system().lower()
     try:
@@ -824,8 +817,7 @@ def collect_storage():
     return disks
 
 def collect_network():
-    # Delegated to agent_info module
-    return agent_info.collect_network()
+    # migrated to role_DeviceInventory
     adapters = []
     plat = platform.system().lower()
     try:
@@ -906,7 +898,7 @@ async def connect():
         await sio.emit("agent_heartbeat", {
             "agent_id": AGENT_ID,
             "hostname": socket.gethostname(),
-            "agent_operating_system": CONFIG.data.get("agent_operating_system", agent_info.detect_agent_os()),
+            "agent_operating_system": CONFIG.data.get("agent_operating_system", detect_agent_os()),
             "last_seen": int(time.time())
         })
     except Exception as e:
@@ -947,98 +939,23 @@ async def on_agent_config(cfg):
 
     print(f"[CONFIG] Received New Agent Config with {len(roles)} Role(s).")
 
-    new_ids = {r.get('node_id') for r in roles if r.get('node_id')}
-    old_ids = set(role_tasks.keys())
-    removed = old_ids - new_ids
-
-    for rid in removed:
-        print(f"[DEBUG] Removing node {rid} from regions/overlays.")
-        CONFIG.data['regions'].pop(rid, None)
-        try:
-            agent_roles.close_overlay(rid)
-        except Exception:
-            pass
-    if removed:
-        CONFIG._write()
-
-    for task in list(role_tasks.values()):
-        task.cancel()
-    role_tasks.clear()
-
     # Forward screenshot config to service helper (interval only)
     try:
         for role_cfg in roles:
             if role_cfg.get('role') == 'screenshot':
                 interval_ms = int(role_cfg.get('interval', 1000))
-                send_service_control({ 'type': 'screenshot_config', 'interval_ms': interval_ms })
+                send_service_control({'type': 'screenshot_config', 'interval_ms': interval_ms})
+                break
     except Exception:
         pass
 
-    for role_cfg in roles:
-        nid = role_cfg.get('node_id')
-        role = role_cfg.get('role')
-        if role == 'screenshot':
-            print(f"[DEBUG] Starting screenshot task for {nid}")
-            task = asyncio.create_task(agent_roles.screenshot_task(roles_ctx, role_cfg))
-            role_tasks[nid] = task
-        elif role == 'macro':
-            print(f"[DEBUG] Starting macro task for {nid}")
-            task = asyncio.create_task(agent_roles.macro_task(roles_ctx, role_cfg))
-            role_tasks[nid] = task
-
-@sio.on('quick_job_run')
-async def on_quick_job_run(payload):
     try:
-        target = (payload.get('target_hostname') or '').strip().lower()
-        if not target or target != socket.gethostname().lower():
-            return
-        job_id = payload.get('job_id')
-        script_type = (payload.get('script_type') or '').lower()
-        run_mode = (payload.get('run_mode') or 'current_user').lower()
-        content = payload.get('script_content') or ''
-        # Only handle non-SYSTEM runs here; SYSTEM runs are handled by the LocalSystem service agent
-        if run_mode == 'system':
-            # Ignore: handled by SYSTEM supervisor/agent
-            return
-        if script_type != 'powershell':
-            await sio.emit('quick_job_result', { 'job_id': job_id, 'status': 'Failed', 'stdout': '', 'stderr': f"Unsupported type: {script_type}" })
-            return
-        rc = 0; out = ''; err = ''
-        if run_mode == 'admin':
-            # Admin credentialed runs are disabled in current design
-            rc, out, err = -1, '', 'Admin credentialed runs are disabled; use SYSTEM or Current User.'
-        else:
-            # Prefer ephemeral scheduled task in current user context
-            rc, out, err = await _run_powershell_via_user_task(content)
-            if rc == -999:
-                # Fallback to direct execution
-                path = _write_temp_script(content, '.ps1')
-                rc, out, err = await _run_powershell_local(path)
-        status = 'Success' if rc == 0 else 'Failed'
-        await sio.emit('quick_job_result', {
-            'job_id': job_id,
-            'status': status,
-            'stdout': out,
-            'stderr': err,
-        })
+        if ROLE_MANAGER is not None:
+            ROLE_MANAGER.on_config(roles)
     except Exception as e:
-        try:
-            await sio.emit('quick_job_result', {
-                'job_id': payload.get('job_id') if isinstance(payload, dict) else None,
-                'status': 'Failed',
-                'stdout': '',
-                'stderr': str(e),
-            })
-        except Exception:
-            pass
+        print(f"[WARN] role manager apply config failed: {e}")
 
-@sio.on('list_agent_windows')
-async def handle_list_agent_windows(data):
-    windows = agent_roles.get_window_list()
-    await sio.emit('agent_window_list', {
-        'agent_id': AGENT_ID,
-        'windows': windows
-    })
+## Script execution and list windows handlers are registered by roles
 
 # ---------------- Config Watcher ----------------
 async def config_watcher():
@@ -1159,17 +1076,31 @@ if __name__=='__main__':
         pass
     dummy_window=PersistentWindow(); dummy_window.show()
     # Initialize roles context for role tasks
-    roles_ctx = agent_roles.RolesContext(sio=sio, agent_id=AGENT_ID, config=CONFIG)
+    # Initialize role manager and hot-load roles from Roles/
+    try:
+        hooks = {'send_service_control': send_service_control}
+        ROLE_MANAGER = RoleManager(
+            base_dir=os.path.dirname(__file__),
+            context='interactive',
+            sio=sio,
+            agent_id=AGENT_ID,
+            config=CONFIG,
+            loop=loop,
+            hooks=hooks,
+        )
+        ROLE_MANAGER.load()
+    except Exception:
+        pass
     try:
         background_tasks.append(loop.create_task(config_watcher()))
         background_tasks.append(loop.create_task(connect_loop()))
         background_tasks.append(loop.create_task(idle_task()))
         # Start periodic heartbeats
         background_tasks.append(loop.create_task(send_heartbeat()))
-        background_tasks.append(loop.create_task(agent_info.send_agent_details(AGENT_ID, CONFIG)))
         loop.run_forever()
     except Exception as e:
         print(f"[FATAL] Event loop crashed: {e}")
         traceback.print_exc()
     finally:
         print("[FATAL] Agent exited unexpectedly.")
+

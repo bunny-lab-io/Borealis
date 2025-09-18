@@ -151,7 +151,7 @@ launch_agent() {
     run_step "Install System Dependencies" install_core_dependencies
 
     venvFolder="Agent"
-    agentSourcePath="Data/Agent/borealis-agent.py"
+    agentSourcePath="Data/Agent/agent.py"
     agentRequirements="Data/Agent/agent-requirements.txt"
     agentDestinationFolder="${venvFolder}/Borealis"
 
@@ -169,13 +169,16 @@ launch_agent() {
 
     run_step "Copy Agent Script" bash -c "
         mkdir -p '${agentDestinationFolder}'
-        cp '${agentSourcePath}' '${agentDestinationFolder}/'
+        cp 'Data/Agent/agent.py' '${agentDestinationFolder}/'
+        cp 'Data/Agent/role_manager.py' '${agentDestinationFolder}/'
+        if [ -d 'Data/Agent/Roles' ]; then cp -r 'Data/Agent/Roles' '${agentDestinationFolder}/'; fi
+        if [ -d 'Data/Agent/Python_API_Endpoints' ]; then cp -r 'Data/Agent/Python_API_Endpoints' '${agentDestinationFolder}/'; fi
     "
 
     echo -e "\n${GREEN}Launching Borealis Agent...${RESET}"
     echo "===================================================================================="
     source '${venvFolder}/bin/activate'
-    python3 "${agentDestinationFolder}/borealis-agent.py"
+    python3 "${agentDestinationFolder}/agent.py"
 }
 
 # Main menu

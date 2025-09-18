@@ -24,7 +24,7 @@ def project_paths():
         "borealis_dir": borealis_dir,
         "logs_dir": logs_dir,
         "temp_dir": temp_dir,
-        "agent_script": os.path.join(borealis_dir, "tray_launcher.py"),
+        "agent_script": os.path.join(borealis_dir, "agent.py"),
     }
 
 

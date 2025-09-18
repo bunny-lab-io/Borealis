@@ -9,7 +9,6 @@ Borealis-Server.exe
 /Server/
 /ElectronApp/
 /Logs/
-/Temp/
 
 # On-the-Fly Downloaded Dependencies
 /Dependencies/NodeJS/
@@ -20,6 +19,7 @@ Borealis-Server.exe
 # Misc Files/Folders
 .vs/s
 __pycache__
+/Agent/Python_API_Endpoints/__pycache__/
 /Update_Staging/
 agent_settings.json
 users.json

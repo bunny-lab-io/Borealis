@@ -11,8 +11,8 @@ PyQt5
 qasync
 
 # Computer Vision & OCR Dependencies
-opencv-python          # Computer vision processing
-Pillow                 # Image processing (Windows)
+opencv-python             # Computer vision processing
+Pillow                    # Image processing (Windows)
 ###mss                    # Fast cross-platform screen capture
 
 # WebRTC Video Libraries

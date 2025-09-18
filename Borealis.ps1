@@ -62,6 +62,44 @@ $symbols = @{
     Info    = [char]0x2139
 }
 
+# Admin/Elevation helpers for Agent deployment
+function Test-IsAdmin {
+    try {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $p  = New-Object Security.Principal.WindowsPrincipal($id)
+        return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { return $false }
+}
+
+function Request-AgentElevation {
+    param(
+        [string]$ScriptPath,
+        [string]$AgentActionParam,
+        [switch]$Auto
+    )
+    if (Test-IsAdmin) { return $true }
+
+    if (-not $Auto) {
+        Write-Host ""  # spacer
+        Write-Host "Agent requires Administrator permissions to register scheduled tasks and run reliably." -ForegroundColor Yellow -BackgroundColor Black
+        Write-Host "Grant elevated permissions now? (Y/N)" -ForegroundColor Yellow -BackgroundColor Black
+        $resp = Read-Host
+        if ($resp -notin @('y','Y','yes','YES')) { return $false }
+    }
+
+    $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File', '"' + $ScriptPath + '"', '-Agent')
+    if ($AgentActionParam -and $AgentActionParam.Trim()) {
+        $args += @('-AgentAction', $AgentActionParam)
+    }
+    try {
+        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args -WindowStyle Normal | Out-Null
+        return $false  # stop current non-elevated instance
+    } catch {
+        Write-Host "Elevation was denied or failed." -ForegroundColor Red
+        return $false
+    }
+}
+
 # Ensure log directories
 function Ensure-AgentLogDir {
     $logRoot = Join-Path $scriptDir 'Logs'
@@ -324,91 +362,21 @@ function Install_Agent_Dependencies {
 }
 
 function Ensure-AgentTasks {
-    # Registers SYSTEM Supervisor + 5-min Watchdog via UAC-elevated stub
-    param(
-        [string]$ScriptRoot
-    )
-    $supName   = 'Borealis Agent - Supervisor'
-    $py        = Join-Path $ScriptRoot 'Agent\Scripts\python.exe'
-    $supScript = Join-Path $ScriptRoot 'Data\Agent\agent_supervisor.py'
-    $wdName    = 'Borealis Agent - Watchdog'
-    # Per-user tray helper task (ensure within same elevation to avoid second UAC)
+    param([string]$ScriptRoot)
     $userTaskName = 'Borealis Agent'
     $userExe      = Join-Path $ScriptRoot 'Agent\Scripts\pythonw.exe'
-    $userScript   = Join-Path $ScriptRoot 'Agent\Borealis\tray_launcher.py'
-
-    # Elevate and run the external registrar script with parameters
-    $regScript  = Join-Path $ScriptRoot 'Data\Agent\Scripts\register_agent_tasks.ps1'
-    $wdSource   = Join-Path $ScriptRoot 'Data\Agent\Scripts\watchdog.ps1'
-    if (-not (Test-Path $regScript)) { Write-Host "Register helper script not found: $regScript" -ForegroundColor Red; return }
-    if (-not (Test-Path $wdSource))  { Write-Host "Watchdog script not found: $wdSource" -ForegroundColor Red; return }
-
-    # Launch registrar elevated using -EncodedCommand to avoid quoting/binding issues
-    $qSupName      = $supName      -replace "'","''"
-    $qPy           = $py           -replace "'","''"
-    $qSupScript    = $supScript    -replace "'","''"
-    $qWdName       = $wdName       -replace "'","''"
-    $qWdSource     = $wdSource     -replace "'","''"
-    $qRegScript    = $regScript    -replace "'","''"
-    $qUserTaskName = $userTaskName -replace "'","''"
-    $qUserExe      = $userExe      -replace "'","''"
-    $qUserScript   = $userScript   -replace "'","''"
+    $agentScript  = Join-Path $ScriptRoot 'Agent\Borealis\agent.py'
+    if (-not (Test-Path $userExe))   { Write-Host "pythonw.exe not found under Agent\Scripts" -ForegroundColor Yellow; return }
+    if (-not (Test-Path $agentScript)) { Write-Host "Agent script not found under Agent\Borealis" -ForegroundColor Yellow; return }
+    try { Unregister-ScheduledTask -TaskName $userTaskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+    $usrArg   = ('-W ignore::SyntaxWarning "{0}"' -f $agentScript)
+    $usrAction = New-ScheduledTaskAction -Execute $userExe -Argument $usrArg
+    $usrTrig   = New-ScheduledTaskTrigger -AtLogOn
+    $usrSet    = New-ScheduledTaskSettingsSet -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
     $currentUser   = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $qUserPrincipal= $currentUser  -replace "'","''"
-    $inline = @"
-`$p = @{
-    SupName       = '$qSupName'
-    PythonExe     = '$qPy'
-    SupScript     = '$qSupScript'
-    WdName        = '$qWdName'
-    WdSource      = '$qWdSource'
-    UserTaskName  = '$qUserTaskName'
-    UserExe       = '$qUserExe'
-    UserScript    = '$qUserScript'
-    UserPrincipal = '$qUserPrincipal'
-}
-& '$qRegScript' @p
-"@
-    $bytes   = [System.Text.Encoding]::Unicode.GetBytes($inline)
-    $encoded = [Convert]::ToBase64String($bytes)
-
-    # Use a temporary VBS shim to elevate and run PowerShell fully hidden (no flashing console)
-    $tempDir = Join-Path $ScriptRoot 'Temp'
-    if (-not (Test-Path $tempDir)) { New-Item -ItemType Directory -Path $tempDir -Force | Out-Null }
-    $vbsPath = Join-Path $tempDir 'RunAgentRegistrarElevatedHidden.vbs'
-    $vbs = @'
-Set sh = CreateObject("Shell.Application")
-cmd = "powershell.exe"
-args = " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " & "<ENC>"
-sh.ShellExecute cmd, args, "", "runas", 0
-'@
-    $vbs = $vbs -replace '<ENC>', $encoded
-    Write-AgentLog -FileName 'AgentTaskRegistration.log' -Message 'Preparing elevated hidden registrar VBS shim.'
-    Set-Content -Path $vbsPath -Value $vbs -Encoding ASCII -Force
-    try {
-        Write-AgentLog -FileName 'AgentTaskRegistration.log' -Message 'Invoking wscript.exe to run registrar hidden with elevation.'
-        Start-Process -FilePath 'wscript.exe' -ArgumentList ('"{0}"' -f $vbsPath) -WindowStyle Hidden -Wait | Out-Null
-    } catch {
-        Write-Host "Failed to elevate for task registration." -ForegroundColor Red
-        Write-AgentLog -FileName 'AgentTaskRegistration.log' -Message ("Registrar elevation failed: " + $_)
-    } finally {
-        Remove-Item $vbsPath -Force -ErrorAction SilentlyContinue
-    }
-    # Best-effort: wait briefly for tasks to be registered so subsequent steps see them
-    try {
-        $maxWaitSec = 30
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        do {
-            Start-Sleep -Milliseconds 500
-            try { $ts = Get-ScheduledTask -TaskName $supName -ErrorAction SilentlyContinue } catch { $ts = $null }
-        } while (-not $ts -and $sw.Elapsed.TotalSeconds -lt $maxWaitSec)
-        $sw.Stop()
-        if ($ts) {
-            Write-AgentLog -FileName 'AgentTaskRegistration.log' -Message "Supervisor task detected after $([int]$sw.Elapsed.TotalSeconds)s."
-        } else {
-            Write-AgentLog -FileName 'AgentTaskRegistration.log' -Message "Supervisor task not detected within timeout; continuing."
-        }
-    } catch {}
+    $usrPrin   = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+    Register-ScheduledTask -TaskName $userTaskName -Action $usrAction -Trigger $usrTrig -Settings $usrSet -Principal $usrPrin -Force | Out-Null
+    try { Start-ScheduledTask -TaskName $userTaskName | Out-Null } catch {}
 }
 function InstallOrUpdate-BorealisAgent {
     Write-Host "Ensuring Agent Dependencies Exist..." -ForegroundColor DarkCyan
@@ -422,10 +390,10 @@ function InstallOrUpdate-BorealisAgent {
     Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
 
     $venvFolder             = "Agent"
-    $agentSourcePath        = "Data\Agent\borealis-agent.py"
+    $agentSourcePath        = "Data\Agent\agent.py"
     $agentRequirements      = "Data\Agent\agent-requirements.txt"
     $agentDestinationFolder = "$venvFolder\Borealis"
-    $agentDestinationFile   = "$venvFolder\Borealis\borealis-agent.py"
+    $agentDestinationFile   = "$venvFolder\Borealis\agent.py"
     $venvPython = Join-Path $scriptDir $venvFolder | Join-Path -ChildPath 'Scripts\python.exe'
 
     Run-Step "Create Virtual Python Environment" {
@@ -446,12 +414,14 @@ function InstallOrUpdate-BorealisAgent {
         if (Test-Path $agentSourcePath) {
             Remove-Item $agentDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
             New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
-            Copy-Item "Data\Agent\borealis-agent.py" $agentDestinationFolder -Recurse
-            Copy-Item "Data\Agent\agent_info.py" $agentDestinationFolder -Recurse
-            Copy-Item "Data\Agent\agent_roles.py" $agentDestinationFolder -Recurse
+            Copy-Item "Data\Agent\agent.py" $agentDestinationFolder -Recurse
+            # agent_info has been migrated into roles; no longer copied
+            # Legacy agent_roles kept for compatibility only if needed
             Copy-Item "Data\Agent\Python_API_Endpoints" $agentDestinationFolder -Recurse
+            Copy-Item "Data\Agent\role_manager.py" $agentDestinationFolder -Force
+            if (Test-Path "Data\Agent\Roles") { Copy-Item "Data\Agent\Roles" $agentDestinationFolder -Recurse }
             Copy-Item "Data\Agent\agent_deployment.py" $agentDestinationFolder -Force
-            Copy-Item "Data\Agent\tray_launcher.py" $agentDestinationFolder -Force
+            # tray is now embedded in CURRENTUSER role; no launcher to copy
             if (Test-Path "Data\Agent\Borealis.ico") { Copy-Item "Data\Agent\Borealis.ico" $agentDestinationFolder -Force }
         }
         . "$venvFolder\Scripts\Activate"
@@ -496,8 +466,7 @@ if (-not $choice) {
     Write-Host "[Experimental]" -ForegroundColor Red
     Write-Host " 5) Update Borealis " -NoNewLine -ForegroundColor DarkGray
     Write-Host "[Requires Re-Build]" -ForegroundColor Red
-    Write-Host " 6) Perform AutoHotKey Automation Testing " -NoNewline -ForegroundColor DarkGray
-    Write-Host "[Experimental - Dev Testing]" -ForegroundColor Red
+    # (Removed) AutoHotKey experimental testing
     Write-Host "Type a number and press " -NoNewLine
     Write-Host "<ENTER>" -ForegroundColor DarkCyan
     $choice = Read-Host
@@ -613,6 +582,15 @@ switch ($choice) {
     "2" {
         $host.UI.RawUI.WindowTitle = "Borealis Agent"
         Write-Host " "
+        # Ensure elevation before showing Agent menu
+        $scriptPath = $PSCommandPath
+        if (-not $scriptPath -or $scriptPath -eq '') { $scriptPath = $MyInvocation.MyCommand.Definition }
+        # If already elevated, skip prompt; otherwise prompt, then relaunch directly to the Agent menu via -Agent
+        $cont = Request-AgentElevation -ScriptPath $scriptPath -AgentActionParam $AgentAction
+        if (-not $cont -and -not (Test-IsAdmin)) { return }
+        if (Test-IsAdmin) {
+            Write-Host "Escalated Permissions Granted > Agent is Eligible for Deployment." -ForegroundColor Green
+        }
         Write-Host "Agent Menu:" -ForegroundColor Cyan
         Write-Host " 1) Install/Update Agent"
         Write-Host " 2) Repair Borealis Agent"
@@ -627,7 +605,7 @@ switch ($choice) {
             '3' { Remove-BorealisAgent; break }
             '4' {
                 $venvPythonw = Join-Path $scriptDir 'Agent\Scripts\pythonw.exe'
-                $helper = Join-Path $scriptDir 'Agent\Borealis\borealis-agent.py'
+                $helper = Join-Path $scriptDir 'Agent\Borealis\agent.py'
                 if (-not (Test-Path $venvPythonw)) { Write-Host "pythonw.exe not found under Agent\Scripts" -ForegroundColor Yellow }
                 if (-not (Test-Path $helper)) { Write-Host "Helper not found under Agent\Borealis" -ForegroundColor Yellow }
                 if ((Test-Path $venvPythonw) -and (Test-Path $helper)) {
@@ -758,43 +736,7 @@ switch ($choice) {
         Exit 0
     }
 
-    "6" {
-        $host.UI.RawUI.WindowTitle = "AutoHotKey Automation Testing"
-        Write-Host " "
-        Write-Host "Lauching AutoHotKey Testing Script..." -ForegroundColor Blue
-        $venvFolder             = "Macro_Testing"
-        $scriptSourcePath       = "Data\Experimental\Macros\Macro_Script.py"
-        $scriptRequirements     = "Data\Experimental\Macros\macro-requirements.txt"
-        $scriptDestinationFolder= "$venvFolder\Borealis"
-        $scriptDestinationFile  = "$venvFolder\Borealis\Macro_Script.py"
-        $venvPython = Join-Path $scriptDir $venvFolder | Join-Path -ChildPath 'Scripts\python.exe'
-
-        Run-Step "Create Virtual Python Environment" {
-            if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
-                $pythonForVenv = $pythonExe
-                if (-not (Test-Path $pythonForVenv)) {
-                    $pyCmd = Get-Command py -ErrorAction SilentlyContinue
-                    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-                    if ($pyCmd) { $pythonForVenv = $pyCmd.Source }
-                    elseif ($pythonCmd) { $pythonForVenv = $pythonCmd.Source }
-                    else { Write-Host "Python not found. Install Python or run Server setup (option 1)." -ForegroundColor Red; exit 1 }
-                }
-                & $pythonForVenv -m venv $venvFolder
-            }
-            if (Test-Path $scriptSourcePath) {
-                Remove-Item $scriptDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
-                New-Item -Path $scriptDestinationFolder -ItemType Directory -Force | Out-Null
-                Copy-Item $scriptSourcePath $scriptDestinationFile -Force
-                Copy-Item "Dependencies\AutoHotKey" $scriptDestinationFolder -Recurse
-            }
-            . "$venvFolder\Scripts\Activate"
-        }
-
-        Run-Step "Install Python Dependencies" { if (Test-Path $scriptRequirements) { & $venvPython -m pip install --disable-pip-version-check -q -r $scriptRequirements | Out-Null } }
-        Write-Host "`nLaunching Macro Testing Script..." -ForegroundColor Blue
-        Write-Host "===================================================================================="
-        & $venvPython -W ignore::SyntaxWarning $scriptDestinationFile
-    }
+    # (Removed) case "6" experimental AHK test
 
     default { Write-Host "Invalid selection. Exiting..." -ForegroundColor Red; exit 1 }
 }

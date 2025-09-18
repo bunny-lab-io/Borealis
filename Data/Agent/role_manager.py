@@ -1,0 +1,95 @@
+import os
+import importlib.util
+from typing import Dict, List, Optional
+
+
+class RoleManager:
+    """
+    Discovers and loads role modules from Data/Agent/Roles.
+    Each role module should expose:
+      - ROLE_NAME: str
+      - ROLE_CONTEXTS: List[str] (e.g., ["interactive"], ["system"], or ["interactive","system"])
+      - class Role(ctx): with methods:
+            - register_events(): optional, bind socket events
+            - on_config(roles: List[dict]): optional, apply server config
+            - stop_all(): optional, cancel tasks/cleanup
+
+    The ctx passed to each Role is a simple object storing common references.
+    """
+
+    class Ctx:
+        def __init__(self, sio, agent_id, config, loop, hooks: Optional[dict] = None):
+            self.sio = sio
+            self.agent_id = agent_id
+            self.config = config
+            self.loop = loop
+            self.hooks = hooks or {}
+
+    def __init__(self, base_dir: str, context: str, sio, agent_id: str, config, loop, hooks: Optional[dict] = None):
+        self.base_dir = base_dir
+        self.context = context  # "interactive" or "system"
+        self.sio = sio
+        self.agent_id = agent_id
+        self.config = config
+        self.loop = loop
+        self.hooks = hooks or {}
+        self.roles: Dict[str, object] = {}
+
+    def _iter_role_files(self) -> List[str]:
+        roles_dir = os.path.join(self.base_dir, 'Roles')
+        if not os.path.isdir(roles_dir):
+            return []
+        files = []
+        for fn in os.listdir(roles_dir):
+            if fn.lower().startswith('role_') and fn.lower().endswith('.py'):
+                files.append(os.path.join(roles_dir, fn))
+        return sorted(files)
+
+    def load(self):
+        for path in self._iter_role_files():
+            try:
+                spec = importlib.util.spec_from_file_location(os.path.splitext(os.path.basename(path))[0], path)
+                mod = importlib.util.module_from_spec(spec)
+                assert spec and spec.loader
+                spec.loader.exec_module(mod)
+            except Exception:
+                continue
+
+            role_name = getattr(mod, 'ROLE_NAME', None)
+            role_contexts = getattr(mod, 'ROLE_CONTEXTS', ['interactive', 'system'])
+            RoleClass = getattr(mod, 'Role', None)
+
+            if not role_name or not RoleClass:
+                continue
+            if self.context not in (role_contexts or []):
+                continue
+
+            try:
+                ctx = RoleManager.Ctx(self.sio, self.agent_id, self.config, self.loop, hooks=self.hooks)
+                role_obj = RoleClass(ctx)
+                # Optional event registration
+                if hasattr(role_obj, 'register_events'):
+                    try:
+                        role_obj.register_events()
+                    except Exception:
+                        pass
+                self.roles[role_name] = role_obj
+            except Exception:
+                continue
+
+    def on_config(self, roles_cfg: List[dict]):
+        for role in list(self.roles.values()):
+            try:
+                if hasattr(role, 'on_config'):
+                    role.on_config(roles_cfg)
+            except Exception:
+                pass
+
+    def stop_all(self):
+        for role in list(self.roles.values()):
+            try:
+                if hasattr(role, 'stop_all'):
+                    role.stop_all()
+            except Exception:
+                pass
+
