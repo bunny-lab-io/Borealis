@@ -56,12 +56,42 @@ All runtime logs live under `Logs/<ServiceName>` relative to the project root (`
 - `agent.py` contains only core transport/config logic and role loading.
 
 ## Operational Guidance
-- Launch or test a single agent locally with `.\Borealis.ps1 -Agent` (or combine with `-AgentAction install|repair|launch|remove` as needed). The same entry point manages the server (`-Server`) with either Vite or Flask flags.
+- Launch or test a single agent locally with `.\\Borealis.ps1 -Agent` (or combine with `-AgentAction install|repair|launch|remove` as needed). The same entry point manages the server (`-Server`) with either Vite or Flask flags.
 - When debugging, tail files under `Logs/Agent`. Use the PowerShell packaging scripts in `Data/Agent/Scripts` to reinstall the user logon scheduled task if it drifts.
-- Updates today require manually stopping related processes (`taskkill /IM "node.exe" /IM "pythonw.exe" /IM "python.exe" /F`) followed by a fresh run of `Borealis.ps1 -Agent`. This is a known limitation; future work should automate graceful agent restarts and remote updates without collateral downtime.
+- Agent installs/repairs now stop only Agent venv Python processes (scoped to `Agent\\*`) and no longer kill global `node.exe`. This prevents accidental termination of the dev WebUI (Vite/esbuild) when working on agents.
 - Known stability gaps include suspected Python memory leaks in both the server and agents under multi-day workloads, occasional heartbeat mismatches, and the flashing watchdog console window. A more robust keepalive should eventually remove the watchdog dependency.
 - Expect the agent to remain running for days or weeks; contributions should focus on reconnect logic, light resource usage, and graceful shutdown/restart semantics.
 
+## New: Agent Launch Model, Tasks, and Logging
+- SYSTEM mode is launched via a wrapper to guarantee WorkingDirectory and capture stdout/stderr:
+  - `Agent\\Borealis\\launch_service.ps1` is registered as the scheduled task action for the SYSTEM agent.
+  - The wrapper runs `Agent\\Scripts\\pythonw.exe Agent\\Borealis\\agent.py --system-service --config svc` with `Set-Location` to `Agent\\Borealis` and redirects output to `%ProgramData%\\Borealis\\svc.out.log` and `svc.err.log`.
+  - This avoids 0x1/0x2 Task Scheduler errors on hosts where WorkingDirectory is ignored.
+- UserHelper (interactive) is still a direct task action to `pythonw.exe "Agent\\Borealis\\agent.py" --config user`.
+- Config files and inheritance:
+  - Base config lives at `<ProjectRoot>\\agent_settings.json`.
+  - On first run per-suffix, the agent seeds: `agent_settings_svc.json` (SYSTEM), `agent_settings_user.json` (interactive) from the base.
+  - Set `borealis_server_url` in the base file so both inherit the same server endpoint.
+- Logging:
+  - Early bootstrap log: `<ProjectRoot>\\Logs\\Agent\\bootstrap.log` (helps verify launch + mode).
+  - Main logs: `<ProjectRoot>\\Logs\\Agent\\agent.log`, `agent.error.log`.
+  - Wrapper logs (SYSTEM task): `%ProgramData%\\Borealis\\svc.out.log`, `svc.err.log`.
+  - Last SYSTEM script for debugging: `<ProjectRoot>\\Logs\\Agent\\system_last.ps1`.
+
+## Recommended Dev Flows
+- Start the server in Flask-only or dev mode before the agent so WebSocket connect succeeds:
+  - Flask quick start: `.\\Borealis.ps1 -Server -Flask -Quick`.
+  - Dev UI separately (if needed): `cd Server\\web-interface && npm run dev`.
+- Launch/repair agent (elevated PowerShell): `.\\Borealis.ps1 -Agent -AgentAction install`.
+- Manual short-run agent checks (non-blocking):
+  - `Start-Process .\\Agent\\Scripts\\pythonw.exe -ArgumentList '".\\Agent\\Borealis\\agent.py" --system-service --config svc'`
+  - Verify logs under `Logs\\Agent` and presence of `agent_settings_svc.json`.
+
+## Troubleshooting Checklist
+- Agent task “Ready” with 0x1: ensure the SYSTEM task uses `launch_service.ps1` and that WorkingDirectory is `Agent\\Borealis`.
+- No logs/configs created: verify venv exists under `Agent\\Scripts` and that wrapper points at the right paths.
+- Agent connects but Devices empty: check `agent.error.log` for aiohttp errors and confirm `borealis_server_url` is reachable; device details post occurs once on connect and then every ~5 minutes.
+- Quick jobs “Running” forever: ensure SYSTEM and UserHelper agents are both running; check `system_last.ps1` and wrapper logs for PowerShell errors.
 ## State & Persistence
 `database.db` currently stores device inventory, runtime facts, and job history. Workflow and scheduling metadata are not yet persisted, and no internal scheduler exists beyond WebUI prototypes. Planned scheduling work will need schema updates and migration guidance once implemented.
 
@@ -77,6 +107,7 @@ Windows is the reference environment today. `Borealis.ps1` owns the full deploym
 
 ## Security Outlook
 Security and authentication are intentionally deferred. There is currently no agent/server handshake, credential model, or ACL on powerful endpoints, so deployments must remain in controlled environments. A future milestone will introduce mutual registration, scoped API tokens, and hardened remote execution surfaces; until then, prioritize resilience and modularity while acknowledging the risk.
+
 
 
 

@@ -34,7 +34,7 @@ if ($Server) {
         'repair'  { $agentSubChoice = '2' }
         'remove'  { $agentSubChoice = '3' }
         'launch'  { $agentSubChoice = '4' }
-        default   { }
+        default   { $agentSubChoice = '1' }
     }
 }
 
@@ -130,10 +130,30 @@ function Remove-BorealisServicesAndTasks {
         Write-AgentLog -FileName $LogName -Message "Attempting to delete service: $n"
         try { sc.exe delete $n 2>$null | Out-Null } catch {}
     }
-    # Remove scheduled task if it exists
-    $taskName = 'Borealis Agent'
-    Write-AgentLog -FileName $LogName -Message "Attempting to delete scheduled task: $taskName"
-    try { schtasks.exe /Delete /TN "$taskName" /F 2>$null | Out-Null } catch {}
+    # Remove all Borealis scheduled tasks (supervisor/watchdog/legacy/user helper)
+    try {
+        $tasks = @()
+        try { $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'Borealis Agent*' -or $_.TaskName -like 'Borealis*Supervisor*' -or $_.TaskName -like 'Borealis*Watchdog*' } } catch {}
+        foreach ($t in $tasks) {
+            Write-AgentLog -FileName $LogName -Message ("Deleting scheduled task: {0}" -f $t.TaskName)
+            try { Unregister-ScheduledTask -TaskName $t.TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+        }
+        # Fallback to schtasks for machines without the ScheduledTasks module
+        foreach ($tn in @('Borealis Agent','Borealis Agent (UserHelper)','Borealis Agent - Supervisor','Borealis Agent - Watchdog')) {
+            try { schtasks.exe /Delete /TN "$tn" /F 2>$null | Out-Null } catch {}
+        }
+    } catch {}
+
+    # Gracefully stop only Agent venv Python processes (avoid killing dev web UI/node)
+    Write-Host "Stopping Agent Python processes scoped to Agent venv..." -ForegroundColor Yellow
+    Write-AgentLog -FileName $LogName -Message "Stopping Agent Python processes in Agent\\*"
+    try {
+        Get-Process python,pythonw -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -like (Join-Path $scriptDir 'Agent\*') } |
+            ForEach-Object { try { $_ | Stop-Process -Force } catch {} }
+    } catch {}
+    # Remove legacy watchdog script if present
+    try { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:ProgramData 'Borealis\watchdog.ps1') } catch {}
 }
 
 # Repair routine: cleans services, ensures venv files, reinstalls and starts BorealisAgent
@@ -363,20 +383,37 @@ function Install_Agent_Dependencies {
 
 function Ensure-AgentTasks {
     param([string]$ScriptRoot)
-    $userTaskName = 'Borealis Agent'
-    $userExe      = Join-Path $ScriptRoot 'Agent\Scripts\pythonw.exe'
-    $agentScript  = Join-Path $ScriptRoot 'Agent\Borealis\agent.py'
-    if (-not (Test-Path $userExe))   { Write-Host "pythonw.exe not found under Agent\Scripts" -ForegroundColor Yellow; return }
-    if (-not (Test-Path $agentScript)) { Write-Host "Agent script not found under Agent\Borealis" -ForegroundColor Yellow; return }
-    try { Unregister-ScheduledTask -TaskName $userTaskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
-    $usrArg   = ('-W ignore::SyntaxWarning "{0}"' -f $agentScript)
-    $usrAction = New-ScheduledTaskAction -Execute $userExe -Argument $usrArg
-    $usrTrig   = New-ScheduledTaskTrigger -AtLogOn
-    $usrSet    = New-ScheduledTaskSettingsSet -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-    $currentUser   = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $usrPrin   = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName $userTaskName -Action $usrAction -Trigger $usrTrig -Settings $usrSet -Principal $usrPrin -Force | Out-Null
-    try { Start-ScheduledTask -TaskName $userTaskName | Out-Null } catch {}
+    $pyw         = Join-Path $ScriptRoot 'Agent\Scripts\pythonw.exe'
+    $agentPy     = Join-Path $ScriptRoot 'Agent\Borealis\agent.py'
+    $svcWrapper  = Join-Path $ScriptRoot 'Agent\Borealis\launch_service.ps1'
+    if (-not (Test-Path $pyw))      { Write-Host "pythonw.exe not found under Agent\Scripts" -ForegroundColor Yellow; return }
+    if (-not (Test-Path $agentPy))  { Write-Host "Agent script not found under Agent\Borealis" -ForegroundColor Yellow; return }
+    if (-not (Test-Path $svcWrapper)) { Write-Host "launch_service.ps1 not found under Agent\Borealis" -ForegroundColor Yellow; return }
+
+    # Clean old tasks first
+    try { Unregister-ScheduledTask -TaskName 'Borealis Agent' -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+    try { Unregister-ScheduledTask -TaskName 'Borealis Agent (UserHelper)' -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+
+    # SYSTEM startup task
+    # Use a wrapper PowerShell to enforce WorkingDirectory and capture stdout/stderr
+    $sysArg     = ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $svcWrapper)
+    $sysAction  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $sysArg -WorkingDirectory (Split-Path $svcWrapper -Parent)
+    $sysTrigger = New-ScheduledTaskTrigger -AtStartup
+    $sysSet     = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+    $sysPrin    = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskName 'Borealis Agent' -Action $sysAction -Trigger $sysTrigger -Settings $sysSet -Principal $sysPrin -Force | Out-Null
+    try { Start-ScheduledTask -TaskName 'Borealis Agent' | Out-Null } catch {}
+
+    # Optional user-session helper for interactive roles (tray, overlays)
+    $helperName = 'Borealis Agent (UserHelper)'
+    $usrArg     = ('"{0}" --config user' -f $agentPy)
+    $usrAction  = New-ScheduledTaskAction -Execute $pyw -Argument $usrArg -WorkingDirectory (Split-Path $agentPy -Parent)
+    $usrTrig    = New-ScheduledTaskTrigger -AtLogOn
+    $usrSet     = New-ScheduledTaskSettingsSet -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+    $currentUser= [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $usrPrin    = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+    Register-ScheduledTask -TaskName $helperName -Action $usrAction -Trigger $usrTrig -Settings $usrSet -Principal $usrPrin -Force | Out-Null
+    try { Start-ScheduledTask -TaskName $helperName | Out-Null } catch {}
 }
 function InstallOrUpdate-BorealisAgent {
     Write-Host "Ensuring Agent Dependencies Exist..." -ForegroundColor DarkCyan
@@ -387,6 +424,8 @@ function InstallOrUpdate-BorealisAgent {
         exit 1
     }
     $env:PATH = '{0};{1}' -f (Split-Path $pythonExe), $env:PATH
+    Write-Host "Cleaning previous agent tasks/processes..." -ForegroundColor Yellow
+    Remove-BorealisServicesAndTasks -LogName 'Install.log'
     Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
 
     $venvFolder             = "Agent"
@@ -423,6 +462,7 @@ function InstallOrUpdate-BorealisAgent {
             Copy-Item "Data\Agent\agent_deployment.py" $agentDestinationFolder -Force
             # tray is now embedded in CURRENTUSER role; no launcher to copy
             if (Test-Path "Data\Agent\Borealis.ico") { Copy-Item "Data\Agent\Borealis.ico" $agentDestinationFolder -Force }
+            if (Test-Path "Data\Agent\launch_service.ps1") { Copy-Item "Data\Agent\launch_service.ps1" $agentDestinationFolder -Force }
         }
         . "$venvFolder\Scripts\Activate"
     }

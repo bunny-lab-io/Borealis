@@ -53,8 +53,17 @@ def _run_powershell_via_system_task(content: str):
         script_fd, script_path = tempfile.mkstemp(prefix='sys_task_', suffix='.ps1', dir=os.path.join(_project_root(), 'Temp'), text=True)
         with os.fdopen(script_fd, 'w', encoding='utf-8', newline='\n') as f:
             f.write(content or '')
+        try:
+            log_dir = os.path.join(_project_root(), 'Logs', 'Agent')
+            os.makedirs(log_dir, exist_ok=True)
+            with open(os.path.join(log_dir, 'system_last.ps1'), 'w', encoding='utf-8', newline='\n') as df:
+                df.write(content or '')
+        except Exception:
+            pass
         out_path = os.path.join(_project_root(), 'Temp', f'out_{uuid.uuid4().hex}.txt')
         task_name = f"Borealis Agent - Task - {uuid.uuid4().hex} @ SYSTEM"
+        # Use WorkingDirectory set to the script folder to avoid 0x2 'file not found' issues
+        # on some systems when PowerShell resolves relative paths.
         task_ps = f"""
 $ErrorActionPreference='Continue'
 $task = "{task_name}"
@@ -62,7 +71,7 @@ $ps   = "{ps_exe}"
 $scr  = "{script_path}"
 $out  = "{out_path}"
 try {{ Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-$action   = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $scr + '" *> "' + $out + '"')
+$action   = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $scr + '" *> "' + $out + '"') -WorkingDirectory (Split-Path -Parent $scr)
 $settings = New-ScheduledTaskSettingsSet -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $principal= New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 Register-ScheduledTask -TaskName $task -Action $action -Settings $settings -Principal $principal -Force | Out-Null
@@ -150,4 +159,3 @@ class Role:
                     })
                 except Exception:
                     pass
-

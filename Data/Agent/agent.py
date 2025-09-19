@@ -28,18 +28,45 @@ except Exception:
 import aiohttp
 
 import socketio
-# Reduce noisy Qt output and attempt to avoid Windows OleInitialize warnings
-os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false;*.debug=false")
-from qasync import QEventLoop
-from PyQt5 import QtCore, QtGui, QtWidgets
-try:
-    # Swallow Qt framework messages to keep console clean
-    def _qt_msg_handler(mode, context, message):
-        return
-    QtCore.qInstallMessageHandler(_qt_msg_handler)
-except Exception:
-    pass
-from PIL import ImageGrab
+
+# Early bootstrap logging (path relative to this file)
+def _bootstrap_log(msg: str):
+    try:
+        base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'Logs', 'Agent'))
+        os.makedirs(base, exist_ok=True)
+        ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(os.path.join(base, 'bootstrap.log'), 'a', encoding='utf-8') as fh:
+            fh.write(f'[{ts}] {msg}\n')
+    except Exception:
+        pass
+
+# Headless/service mode flag (skip Qt and interactive UI)
+SYSTEM_SERVICE_MODE = ('--system-service' in sys.argv) or (os.environ.get('BOREALIS_AGENT_MODE') == 'system')
+_bootstrap_log(f'agent.py loaded; SYSTEM_SERVICE_MODE={SYSTEM_SERVICE_MODE}; argv={sys.argv!r}')
+def _argv_get(flag: str, default: str = None):
+    try:
+        if flag in sys.argv:
+            idx = sys.argv.index(flag)
+            if idx >= 0 and idx + 1 < len(sys.argv):
+                return sys.argv[idx + 1]
+    except Exception:
+        pass
+    return default
+CONFIG_NAME_SUFFIX = _argv_get('--config', None)
+
+if not SYSTEM_SERVICE_MODE:
+    # Reduce noisy Qt output and attempt to avoid Windows OleInitialize warnings
+    os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false;*.debug=false")
+    from qasync import QEventLoop
+    from PyQt5 import QtCore, QtGui, QtWidgets
+    try:
+        # Swallow Qt framework messages to keep console clean
+        def _qt_msg_handler(mode, context, message):
+            return
+        QtCore.qInstallMessageHandler(_qt_msg_handler)
+    except Exception:
+        pass
+    from PIL import ImageGrab
 
 # New modularized components
 from role_manager import RoleManager
@@ -86,6 +113,18 @@ def _find_project_root():
     # Heuristic fallback: two levels up from Agent/Borealis
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
+# Simple file logger under Logs/Agent
+def _log_agent(message: str, fname: str = 'agent.log'):
+    try:
+        root = _find_project_root()
+        log_dir = os.path.join(root, 'Logs', 'Agent')
+        os.makedirs(log_dir, exist_ok=True)
+        ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(os.path.join(log_dir, fname), 'a', encoding='utf-8') as fh:
+            fh.write(f'[{ts}] {message}\n')
+    except Exception:
+        pass
+
 def _resolve_config_path():
     """
     Decide where to store agent_settings.json, per user’s requirement:
@@ -109,9 +148,30 @@ def _resolve_config_path():
 
     # Target config in project root
     project_root = _find_project_root()
-    cfg_path = os.path.join(project_root, "agent_settings.json")
+    cfg_basename = 'agent_settings.json'
+    try:
+        if CONFIG_NAME_SUFFIX:
+            suffix = ''.join(ch for ch in CONFIG_NAME_SUFFIX if ch.isalnum() or ch in ('_', '-')).strip()
+            if suffix:
+                cfg_basename = f"agent_settings_{suffix}.json"
+    except Exception:
+        pass
+    cfg_path = os.path.join(project_root, cfg_basename)
     if os.path.exists(cfg_path):
         return cfg_path
+
+    # If using a suffixed config and there is a base config in the project root, seed from it
+    try:
+        if CONFIG_NAME_SUFFIX:
+            base_cfg = os.path.join(project_root, 'agent_settings.json')
+            if os.path.exists(base_cfg):
+                try:
+                    shutil.copy2(base_cfg, cfg_path)
+                    return cfg_path
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     # Migration: from legacy user dir or script dir
     legacy_user = _user_config_default_path()
@@ -186,7 +246,15 @@ CONFIG.load()
 
 def init_agent_id():
     if not CONFIG.data.get('agent_id'):
-        CONFIG.data['agent_id'] = f"{socket.gethostname().lower()}-agent-{uuid.uuid4().hex[:8]}"
+        host = socket.gethostname().lower()
+        rand = uuid.uuid4().hex[:8]
+        if SYSTEM_SERVICE_MODE:
+            aid = f"{host}-agent-svc-{rand}"
+        elif (CONFIG_NAME_SUFFIX or '').lower() == 'user':
+            aid = f"{host}-agent-{rand}-script"
+        else:
+            aid = f"{host}-agent-{rand}"
+        CONFIG.data['agent_id'] = aid
         CONFIG._write()
     return CONFIG.data['agent_id']
 
@@ -362,6 +430,7 @@ role_tasks = {}
 background_tasks = []
 AGENT_LOOP = None
 ROLE_MANAGER = None
+ROLE_MANAGER_SYS = None
 
 # ---------------- Local IPC Bridge (Service -> Agent) ----------------
 def start_agent_bridge_pipe(loop_ref):
@@ -565,6 +634,11 @@ async def stop_all_roles():
     try:
         if ROLE_MANAGER is not None:
             ROLE_MANAGER.stop_all()
+    except Exception:
+        pass
+    try:
+        if ROLE_MANAGER_SYS is not None:
+            ROLE_MANAGER_SYS.stop_all()
     except Exception:
         pass
 
@@ -884,13 +958,37 @@ async def send_agent_details():
             }
             async with aiohttp.ClientSession() as session:
                 await session.post(url, json=payload, timeout=10)
+            _log_agent('Posted agent details to server.')
         except Exception as e:
             print(f"[WARN] Failed to send agent details: {e}")
+            _log_agent(f'Failed to send agent details: {e}', fname='agent.error.log')
         await asyncio.sleep(300)
+
+async def send_agent_details_once():
+    try:
+        details = {
+            "summary": collect_summary(),
+            "software": collect_software(),
+            "memory": collect_memory(),
+            "storage": collect_storage(),
+            "network": collect_network(),
+        }
+        url = CONFIG.data.get("borealis_server_url", "http://localhost:5000") + "/api/agent/details"
+        payload = {
+            "agent_id": AGENT_ID,
+            "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
+            "details": details,
+        }
+        async with aiohttp.ClientSession() as session:
+            await session.post(url, json=payload, timeout=10)
+        _log_agent('Posted agent details (once) to server.')
+    except Exception as e:
+        _log_agent(f'Failed to post agent details once: {e}', fname='agent.error.log')
 
 @sio.event
 async def connect():
     print(f"[INFO] Successfully Connected to Borealis Server!")
+    _log_agent('Connected to server.')
     await sio.emit('connect_agent', {"agent_id": AGENT_ID})
 
     # Send an immediate heartbeat so the UI can populate instantly.
@@ -903,6 +1001,7 @@ async def connect():
         })
     except Exception as e:
         print(f"[WARN] initial heartbeat failed: {e}")
+        _log_agent(f'Initial heartbeat failed: {e}', fname='agent.error.log')
 
     # Let server know collector is active and who the user is
     try:
@@ -917,6 +1016,11 @@ async def connect():
         pass
 
     await sio.emit('request_config', {"agent_id": AGENT_ID})
+    # Kick off a one-time device details post for faster UI population
+    try:
+        asyncio.create_task(send_agent_details_once())
+    except Exception:
+        pass
 
 @sio.event
 async def disconnect():
@@ -953,7 +1057,12 @@ async def on_agent_config(cfg):
         if ROLE_MANAGER is not None:
             ROLE_MANAGER.on_config(roles)
     except Exception as e:
-        print(f"[WARN] role manager apply config failed: {e}")
+        print(f"[WARN] role manager (interactive) apply config failed: {e}")
+    try:
+        if ROLE_MANAGER_SYS is not None:
+            ROLE_MANAGER_SYS.on_config(roles)
+    except Exception as e:
+        print(f"[WARN] role manager (system) apply config failed: {e}")
 
 ## Script execution and list windows handlers are registered by roles
 
@@ -973,6 +1082,108 @@ async def idle_task():
     except Exception as e:
         print(f"[FATAL] Idle task crashed: {e}")
         traceback.print_exc()
+
+# ---------------- Quick Job Helpers (System/Local) ----------------
+def _project_root_for_temp():
+    try:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    except Exception:
+        return os.path.abspath(os.path.dirname(__file__))
+
+def _run_powershell_script_content_local(content: str):
+    try:
+        temp_dir = os.path.join(_project_root_for_temp(), "Temp")
+        os.makedirs(temp_dir, exist_ok=True)
+        import tempfile as _tf
+        fd, path = _tf.mkstemp(prefix="sj_", suffix=".ps1", dir=temp_dir, text=True)
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write(content or "")
+        ps = os.path.expandvars(r"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+        if not os.path.isfile(ps):
+            ps = "powershell.exe"
+        flags = 0x08000000 if os.name == 'nt' else 0
+        proc = subprocess.run([ps, "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", path], capture_output=True, text=True, timeout=60*60, creationflags=flags)
+        return proc.returncode, proc.stdout or "", proc.stderr or ""
+    except Exception as e:
+        return -1, "", str(e)
+    finally:
+        try:
+            if 'path' in locals() and os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+def _run_powershell_via_system_task(content: str):
+    ps_exe = os.path.expandvars(r"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+    if not os.path.isfile(ps_exe):
+        ps_exe = 'powershell.exe'
+    script_path = None
+    out_path = None
+    try:
+        temp_root = os.path.join(_project_root_for_temp(), 'Temp')
+        os.makedirs(temp_root, exist_ok=True)
+        import tempfile as _tf
+        fd, script_path = _tf.mkstemp(prefix='sys_task_', suffix='.ps1', dir=temp_root, text=True)
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(content or '')
+        try:
+            log_dir = os.path.join(_project_root_for_temp(), 'Logs', 'Agent')
+            os.makedirs(log_dir, exist_ok=True)
+            debug_copy = os.path.join(log_dir, 'system_last.ps1')
+            with open(debug_copy, 'w', encoding='utf-8', newline='\n') as df:
+                df.write(content or '')
+        except Exception:
+            pass
+        out_path = os.path.join(temp_root, f'out_{uuid.uuid4().hex}.txt')
+        task_name = f"Borealis Agent - Task - {uuid.uuid4().hex} @ SYSTEM"
+        task_ps = f"""
+$ErrorActionPreference='Continue'
+$task = "{task_name}"
+$ps   = "{ps_exe}"
+$scr  = "{script_path}"
+$out  = "{out_path}"
+try {{ Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+$action   = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $scr + '" *> "' + $out + '"') -WorkingDirectory (Split-Path -Parent $scr)
+$settings = New-ScheduledTaskSettingsSet -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$principal= New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskName $task -Action $action -Settings $settings -Principal $principal -Force | Out-Null
+Start-ScheduledTask -TaskName $task | Out-Null
+Start-Sleep -Seconds 2
+Get-ScheduledTask -TaskName $task | Out-Null
+"""
+        proc = subprocess.run([ps_exe, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', task_ps], capture_output=True, text=True)
+        if proc.returncode != 0:
+            return -999, '', (proc.stderr or proc.stdout or 'scheduled task creation failed')
+        deadline = time.time() + 60
+        out_data = ''
+        while time.time() < deadline:
+            try:
+                if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+                    with open(out_path, 'r', encoding='utf-8', errors='replace') as f:
+                        out_data = f.read()
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        # Cleanup best-effort
+        try:
+            cleanup_ps = f"try {{ Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false }} catch {{}}"
+            subprocess.run([ps_exe, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', cleanup_ps], capture_output=True, text=True)
+        except Exception:
+            pass
+        try:
+            if script_path and os.path.isfile(script_path):
+                os.remove(script_path)
+        except Exception:
+            pass
+        try:
+            if out_path and os.path.isfile(out_path):
+                os.remove(out_path)
+        except Exception:
+            pass
+        return 0, out_data or '', ''
+    except Exception as e:
+        return -999, '', str(e)
 
 async def _run_powershell_via_user_task(content: str):
     ps = None
@@ -1043,13 +1254,14 @@ Get-ScheduledTask -TaskName $task | Out-Null
             pass
 
 # ---------------- Dummy Qt Widget to Prevent Exit ----------------
-class PersistentWindow(QtWidgets.QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("KeepAlive")
-        self.setGeometry(-1000,-1000,1,1)
-        self.setAttribute(QtCore.Qt.WA_DontShowOnScreen)
-        self.hide()
+if not SYSTEM_SERVICE_MODE:
+    class PersistentWindow(QtWidgets.QWidget):
+        def __init__(self):
+            super().__init__()
+            self.setWindowTitle("KeepAlive")
+            self.setGeometry(-1000,-1000,1,1)
+            self.setAttribute(QtCore.Qt.WA_DontShowOnScreen)
+            self.hide()
 
 # //////////////////////////////////////////////////////////////////////////
 # MAIN & EVENT LOOP
@@ -1060,47 +1272,150 @@ async def connect_loop():
         try:
             url=CONFIG.data.get('borealis_server_url',"http://localhost:5000")
             print(f"[INFO] Connecting Agent to {url}...")
+            _log_agent(f'Connecting to {url}...')
             await sio.connect(url,transports=['websocket'])
             break
         except Exception as e:
             print(f"[WebSocket] Server unavailable: {e}. Retrying in {retry}s...")
+            _log_agent(f'Server unavailable: {e}', fname='agent.error.log')
             await asyncio.sleep(retry)
 
 if __name__=='__main__':
-    app=QtWidgets.QApplication(sys.argv)
-    loop=QEventLoop(app); asyncio.set_event_loop(loop)
-    AGENT_LOOP = loop
     try:
-        start_agent_bridge_pipe(loop)
+        _bootstrap_log('enter __main__')
     except Exception:
         pass
-    dummy_window=PersistentWindow(); dummy_window.show()
+    if SYSTEM_SERVICE_MODE:
+        loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+    else:
+        app=QtWidgets.QApplication(sys.argv)
+        loop=QEventLoop(app); asyncio.set_event_loop(loop)
+    AGENT_LOOP = loop
+    try:
+        if not SYSTEM_SERVICE_MODE:
+            start_agent_bridge_pipe(loop)
+    except Exception:
+        pass
+    if not SYSTEM_SERVICE_MODE:
+        dummy_window=PersistentWindow(); dummy_window.show()
     # Initialize roles context for role tasks
     # Initialize role manager and hot-load roles from Roles/
     try:
         hooks = {'send_service_control': send_service_control}
-        ROLE_MANAGER = RoleManager(
+        if not SYSTEM_SERVICE_MODE:
+            # Load interactive-context roles (tray/UI, current-user execution, screenshot, etc.)
+            ROLE_MANAGER = RoleManager(
+                base_dir=os.path.dirname(__file__),
+                context='interactive',
+                sio=sio,
+                agent_id=AGENT_ID,
+                config=CONFIG,
+                loop=loop,
+                hooks=hooks,
+            )
+            ROLE_MANAGER.load()
+        # Load system roles when headless or alongside interactive
+        ROLE_MANAGER_SYS = RoleManager(
             base_dir=os.path.dirname(__file__),
-            context='interactive',
+            context='system',
             sio=sio,
             agent_id=AGENT_ID,
             config=CONFIG,
             loop=loop,
             hooks=hooks,
         )
-        ROLE_MANAGER.load()
-    except Exception:
-        pass
+        ROLE_MANAGER_SYS.load()
+    except Exception as e:
+        try:
+            _bootstrap_log(f'role load init failed: {e}')
+        except Exception:
+            pass
     try:
         background_tasks.append(loop.create_task(config_watcher()))
         background_tasks.append(loop.create_task(connect_loop()))
         background_tasks.append(loop.create_task(idle_task()))
         # Start periodic heartbeats
         background_tasks.append(loop.create_task(send_heartbeat()))
+        # Periodic device details upload so Devices view populates
+        try:
+            background_tasks.append(loop.create_task(send_agent_details()))
+        except Exception:
+            pass
+        
+        # Register unified Quick Job handler last to avoid role override issues
+        @sio.on('quick_job_run')
+        async def _quick_job_dispatch(payload):
+            try:
+                _log_agent(f"quick_job_run received: mode={payload.get('run_mode')} type={payload.get('script_type')} job_id={payload.get('job_id')}")
+                import socket as _s
+                hostname = _s.gethostname()
+                target = (payload.get('target_hostname') or '').strip().lower()
+                if target and target not in ('unknown', '*', '(unknown)') and target != hostname.lower():
+                    return
+                job_id = payload.get('job_id')
+                script_type = (payload.get('script_type') or '').lower()
+                content = payload.get('script_content') or ''
+                run_mode = (payload.get('run_mode') or 'current_user').lower()
+                if script_type != 'powershell':
+                    await sio.emit('quick_job_result', { 'job_id': job_id, 'status': 'Failed', 'stdout': '', 'stderr': f"Unsupported type: {script_type}" })
+                    return
+                rc = -1; out = ''; err = ''
+                if run_mode == 'system':
+                    if not SYSTEM_SERVICE_MODE:
+                        # Let the SYSTEM service handle these exclusively
+                        return
+                    try:
+                        # Save last SYSTEM script for debugging
+                        dbg_dir = os.path.join(_find_project_root(), 'Logs', 'Agent')
+                        os.makedirs(dbg_dir, exist_ok=True)
+                        with open(os.path.join(dbg_dir, 'system_last.ps1'), 'w', encoding='utf-8', newline='\n') as df:
+                            df.write(content or '')
+                    except Exception:
+                        pass
+                    rc, out, err = _run_powershell_script_content_local(content)
+                    if rc == -999:
+                        # Fallback: attempt scheduled task (should not be needed in service mode)
+                        rc, out, err = _run_powershell_via_system_task(content)
+                elif run_mode == 'admin':
+                    rc, out, err = -1, '', 'Admin credentialed runs are disabled; use SYSTEM or Current User.'
+                else:
+                    rc, out, err = await _run_powershell_via_user_task(content)
+                    if rc == -999:
+                        # Fallback to plain local run
+                        rc, out, err = _run_powershell_script_content_local(content)
+                status = 'Success' if rc == 0 else 'Failed'
+                await sio.emit('quick_job_result', {
+                    'job_id': job_id,
+                    'status': status,
+                    'stdout': out or '',
+                    'stderr': err or '',
+                })
+                _log_agent(f"quick_job_result sent: job_id={job_id} status={status}")
+            except Exception as e:
+                try:
+                    await sio.emit('quick_job_result', {
+                        'job_id': payload.get('job_id') if isinstance(payload, dict) else None,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': str(e),
+                    })
+                except Exception:
+                    pass
+                _log_agent(f"quick_job_run handler error: {e}", fname='agent.error.log')
+        _bootstrap_log('starting event loop...')
         loop.run_forever()
     except Exception as e:
+        try:
+            _bootstrap_log(f'FATAL: event loop crashed: {e}')
+        except Exception:
+            pass
         print(f"[FATAL] Event loop crashed: {e}")
         traceback.print_exc()
     finally:
+        try:
+            _bootstrap_log('Agent exited unexpectedly.')
+        except Exception:
+            pass
         print("[FATAL] Agent exited unexpectedly.")
 
+# (moved earlier so async tasks can log immediately)
