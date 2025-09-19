@@ -19,7 +19,7 @@ except Exception:
     aiohttp = None
 
 
-ROLE_NAME = 'device_inventory'
+ROLE_NAME = 'device_audit'
 ROLE_CONTEXTS = ['interactive']
 
 
