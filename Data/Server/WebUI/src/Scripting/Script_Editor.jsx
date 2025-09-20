@@ -535,7 +535,7 @@ export default function ScriptEditor() {
         <Box sx={{ p: 2, pb: 1 }}>
           <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>Scripts</Typography>
           <Typography variant="body2" sx={{ color: "#aaa" }}>
-            Create, edit, and rearrange scripts in folders.
+            Create, edit, and organize various types of scripts.
           </Typography>
         </Box>
         <Box

@@ -75,6 +75,7 @@ export default function UserManagement() {
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuUser, setMenuUser] = useState(null);
   const [resetOpen, setResetOpen] = useState(false);
+  const [resetTarget, setResetTarget] = useState(null);
   const [newPassword, setNewPassword] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState({ username: "", display_name: "", password: "", role: "User" });
@@ -191,6 +192,11 @@ export default function UserManagement() {
 
   const openChangeRole = (user) => {
     if (!user) return;
+    if (me && user.username && String(me.username).toLowerCase() === String(user.username).toLowerCase()) {
+      setWarnMessage("You cannot change your own role.");
+      setWarnOpen(true);
+      return;
+    }
     const nextRole = (String(user.role || "User").toLowerCase() === "admin") ? "User" : "Admin";
     setChangeRoleTarget(user);
     setChangeRoleNext(nextRole);
@@ -224,7 +230,7 @@ export default function UserManagement() {
   };
 
   const doResetPassword = async () => {
-    const user = menuUser;
+    const user = resetTarget;
     if (!user) return;
     const pw = newPassword || "";
     if (!pw.trim()) return;
@@ -242,6 +248,7 @@ export default function UserManagement() {
         return;
       }
       setResetOpen(false);
+      setResetTarget(null);
       setNewPassword("");
     } catch (e) {
       console.error(e);
@@ -249,7 +256,12 @@ export default function UserManagement() {
     }
   };
 
-  const openReset = () => { setResetOpen(true); setNewPassword(""); closeMenu(); };
+  const openReset = (user) => {
+    if (!user) return;
+    setResetTarget(user);
+    setResetOpen(true);
+    setNewPassword("");
+  };
 
   const openCreate = () => { setCreateOpen(true); setCreateForm({ username: "", display_name: "", password: "", role: "User" }); };
   const doCreate = async () => {
@@ -408,15 +420,20 @@ export default function UserManagement() {
           >
             Delete User
           </MenuItem>
-          <MenuItem onClick={() => { openReset(); }}>Reset Password</MenuItem>
-          <MenuItem onClick={() => { const u = menuUser; closeMenu(); openChangeRole(u); }}>Change Role</MenuItem>
+          <MenuItem onClick={() => { const u = menuUser; closeMenu(); openReset(u); }}>Reset Password</MenuItem>
+          <MenuItem
+            disabled={me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase()}
+            onClick={() => { const u = menuUser; closeMenu(); openChangeRole(u); }}
+          >
+            Change Role
+          </MenuItem>
         </Menu>
 
         <Dialog open={resetOpen} onClose={() => setResetOpen(false)} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
           <DialogTitle>Reset Password</DialogTitle>
           <DialogContent>
             <DialogContentText sx={{ color: "#ccc" }}>
-              Enter a new password for {menuUser?.username}.
+              Enter a new password for {resetTarget?.username}.
             </DialogContentText>
             <TextField
               autoFocus
@@ -440,7 +457,7 @@ export default function UserManagement() {
             />
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setResetOpen(false)} sx={{ color: "#58a6ff" }}>Cancel</Button>
+            <Button onClick={() => { setResetOpen(false); setResetTarget(null); }} sx={{ color: "#58a6ff" }}>Cancel</Button>
             <Button onClick={doResetPassword} sx={{ color: "#58a6ff" }}>OK</Button>
           </DialogActions>
         </Dialog>
