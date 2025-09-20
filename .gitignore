@@ -22,5 +22,7 @@ __pycache__
 /Agent/Python_API_Endpoints/__pycache__/
 /Update_Staging/
 agent_settings.json
+agent_settings_svc.json
+agent_settings_user.json
 users.json
 database.db

@@ -35,6 +35,8 @@ import DeviceDetails from "./Devices/Device_Details";
 import WorkflowList from "./Workflows/Workflow_List";
 import ScriptEditor from "./Scripting/Script_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
+import UserManagement from "./Admin/User_Management.jsx";
+import ServerInfo from "./Admin/Server_Info.jsx";
 
 // Networking Imports
 import { io } from "socket.io-client";
@@ -97,6 +99,7 @@ export default function App() {
   const [tabMenuTabId, setTabMenuTabId] = useState(null);
   const fileInputRef = useRef(null);
   const [user, setUser] = useState(null);
+  const [userRole, setUserRole] = useState(null);
 
   useEffect(() => {
     const session = localStorage.getItem("borealis_session");
@@ -105,6 +108,7 @@ export default function App() {
         const data = JSON.parse(session);
         if (Date.now() - data.timestamp < 3600 * 1000) {
           setUser(data.username);
+          setUserRole(data.role || null);
         } else {
           localStorage.removeItem("borealis_session");
         }
@@ -112,13 +116,28 @@ export default function App() {
         localStorage.removeItem("borealis_session");
       }
     }
+    (async () => {
+      try {
+        const resp = await fetch('/api/auth/me', { credentials: 'include' });
+        if (resp.ok) {
+          const me = await resp.json();
+          setUser(me.username);
+          setUserRole(me.role || null);
+          localStorage.setItem(
+            "borealis_session",
+            JSON.stringify({ username: me.username, role: me.role, timestamp: Date.now() })
+          );
+        }
+      } catch {}
+    })();
   }, []);
 
-  const handleLoginSuccess = (username) => {
+  const handleLoginSuccess = ({ username, role }) => {
     setUser(username);
+    setUserRole(role || null);
     localStorage.setItem(
       "borealis_session",
-      JSON.stringify({ username, timestamp: Date.now() })
+      JSON.stringify({ username, role: role || null, timestamp: Date.now() })
     );
   };
 
@@ -391,6 +410,12 @@ export default function App() {
       case "scripts":
         return <ScriptEditor />;
 
+      case "admin_users":
+        return <UserManagement />;
+
+      case "server_info":
+        return <ServerInfo />;
+
       case "workflow-editor":
         return (
           <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
@@ -487,7 +512,7 @@ export default function App() {
           </Toolbar>
         </AppBar>
         <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
-          <NavigationSidebar currentPage={currentPage} onNavigate={setCurrentPage} />
+          <NavigationSidebar currentPage={currentPage} onNavigate={setCurrentPage} isAdmin={(String(userRole||'').toLowerCase()==='admin')} />
           <Box sx={{ flexGrow: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
             {renderMainContent()}
           </Box>

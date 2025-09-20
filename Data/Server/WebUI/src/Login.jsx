@@ -1,18 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Box, TextField, Button, Typography } from "@mui/material";
 
 export default function Login({ onLogin }) {
-  const [users, setUsers] = useState([]);
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    fetch("/api/users")
-      .then((res) => res.json())
-      .then((data) => setUsers(data.users || []))
-      .catch(() => setUsers([]));
-  }, []);
 
   const sha512 = async (text) => {
     const encoder = new TextEncoder();
@@ -24,16 +16,19 @@ export default function Login({ onLogin }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const user = users.find((u) => u.username === username);
-    if (!user) {
-      setError("Invalid username or password");
-      return;
-    }
-    const hash = await sha512(password);
-    if (hash.toLowerCase() === (user.password || "").toLowerCase()) {
+    try {
+      const hash = await sha512(password);
+      const resp = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ username, password_sha512: hash })
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       setError("");
-      onLogin(username);
-    } else {
+      onLogin({ username: data.username, role: data.role });
+    } catch (err) {
       setError("Invalid username or password");
     }
   };
@@ -100,4 +95,3 @@ export default function Login({ onLogin }) {
     </Box>
   );
 }
-

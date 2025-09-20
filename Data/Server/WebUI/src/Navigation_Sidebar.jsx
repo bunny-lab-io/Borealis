@@ -21,13 +21,15 @@ import {
   PeopleOutline as CommunityIcon
 } from "@mui/icons-material";
 import { LocationCity as SitesIcon } from "@mui/icons-material";
+import { ManageAccounts as AdminUsersIcon, Dns as ServerInfoIcon } from "@mui/icons-material";
 
-function NavigationSidebar({ currentPage, onNavigate }) {
+function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
   const [expandedNav, setExpandedNav] = useState({
     sites: true,
     devices: true,
     automation: true,
-    filters: true
+    filters: true,
+    admin: true
   });
 
   const NavItem = ({ icon, label, pageKey, indent = 0 }) => {
@@ -282,6 +284,53 @@ function NavigationSidebar({ currentPage, onNavigate }) {
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
             <NavItem icon={<FilterIcon fontSize="small" />} label="Filters" pageKey="filters" />
             <NavItem icon={<GroupsIcon fontSize="small" />} label="Groups" pageKey="groups" />
+          </AccordionDetails>
+        </Accordion>
+          );
+        })()}
+
+        {/* Admin */}
+        {(() => {
+          if (!isAdmin) return null;
+          const groupActive = currentPage === "admin_users" || currentPage === "server_info";
+          return (
+        <Accordion
+          expanded={expandedNav.admin}
+          onChange={(_, e) => setExpandedNav((s) => ({ ...s, admin: e }))}
+          square
+          disableGutters
+          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            sx={{
+              position: "relative",
+              background: groupActive
+                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
+                : "#2c2c2c",
+              minHeight: "36px",
+              "& .MuiAccordionSummary-content": { margin: 0 },
+              "&::before": {
+                content: '""',
+                position: "absolute",
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: groupActive ? 3 : 0,
+                bgcolor: "#58a6ff",
+                borderTopRightRadius: 2,
+                borderBottomRightRadius: 2,
+                transition: "width 160ms ease"
+              }
+            }}
+          >
+            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
+              <b>Admin</b>
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
+            <NavItem icon={<AdminUsersIcon fontSize="small" />} label="User Management" pageKey="admin_users" />
+            <NavItem icon={<ServerInfoIcon fontSize="small" />} label="Server Info" pageKey="server_info" />
           </AccordionDetails>
         </Accordion>
           );

@@ -5,7 +5,7 @@ import eventlet
 eventlet.monkey_patch()
 
 import requests
-from flask import Flask, request, jsonify, Response, send_from_directory, make_response
+from flask import Flask, request, jsonify, Response, send_from_directory, make_response, session
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 
@@ -30,8 +30,11 @@ app = Flask(
     static_url_path=''
 )
 
-# Enable CORS on All Routes
-CORS(app)
+# Enable CORS on All Routes (allow credentials for dev UI)
+CORS(app, supports_credentials=True)
+
+# Basic secret key for session cookies (can be overridden via env)
+app.secret_key = os.environ.get('BOREALIS_SECRET', 'borealis-dev-secret')
 
 socketio = SocketIO(
     app,
@@ -65,18 +68,270 @@ def health():
     return jsonify({"status": "ok"})
 
 # ---------------------------------------------
-# User Authentication Endpoint
+# Auth + Users (DB-backed)
 # ---------------------------------------------
-@app.route("/api/users", methods=["GET"])
-def get_users():
-    users_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "users.json")
-    )
+def _now_ts() -> int:
+    return int(time.time())
+
+
+def _sha512_hex(s: str) -> str:
+    import hashlib
+    return hashlib.sha512((s or '').encode('utf-8')).hexdigest()
+
+
+def _db_conn():
+    return sqlite3.connect(DB_PATH)
+
+
+def _user_row_to_dict(row):
+    # id, username, display_name, role, last_login, created_at, updated_at
+    return {
+        "id": row[0],
+        "username": row[1],
+        "display_name": row[2] or row[1],
+        "role": row[3] or "User",
+        "last_login": row[4] or 0,
+        "created_at": row[5] or 0,
+        "updated_at": row[6] or 0,
+    }
+
+
+def _current_user():
+    u = session.get('username')
+    role = session.get('role')
+    if not u:
+        return None
+    return {"username": u, "role": role or "User"}
+
+
+def _require_login():
+    user = _current_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    return None
+
+
+def _require_admin():
+    user = _current_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    if (user.get('role') or '').lower() != 'admin':
+        return jsonify({"error": "forbidden"}), 403
+    return None
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_login():
+    payload = request.get_json(silent=True) or {}
+    username = (payload.get('username') or '').strip()
+    password = payload.get('password')  # plain (optional)
+    password_sha512 = (payload.get('password_sha512') or '').strip().lower()
+    if not username or (not password and not password_sha512):
+        return jsonify({"error": "missing credentials"}), 400
+
     try:
-        with open(users_path, "r", encoding="utf-8") as fh:
-            return jsonify(json.load(fh))
-    except Exception:
-        return jsonify({"users": []})
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, username, display_name, password_sha512, role, last_login, created_at, updated_at FROM users WHERE LOWER(username)=LOWER(?)",
+            (username,)
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"error": "invalid username or password"}), 401
+        stored_hash = (row[3] or '').lower()
+        check_hash = password_sha512 or _sha512_hex(password or '')
+        if stored_hash != (check_hash or '').lower():
+            conn.close()
+            return jsonify({"error": "invalid username or password"}), 401
+        role = row[4] or 'User'
+        # update last_login
+        now = _now_ts()
+        cur.execute("UPDATE users SET last_login=?, updated_at=? WHERE id=?", (now, now, row[0]))
+        conn.commit()
+        conn.close()
+        # set session cookie
+        session['username'] = row[1]
+        session['role'] = role
+        return jsonify({"status": "ok", "username": row[1], "role": role})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/auth/logout", methods=["POST"])  # simple logout
+def api_logout():
+    session.clear()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/auth/me", methods=["GET"])  # whoami
+def api_me():
+    user = _current_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    return jsonify(user)
+
+
+@app.route("/api/users", methods=["GET"])
+def api_users_list():
+    chk = _require_admin()
+    if chk:
+        return chk
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, username, display_name, role, last_login, created_at, updated_at FROM users ORDER BY LOWER(username) ASC"
+        )
+        rows = cur.fetchall()
+        conn.close()
+        users = [
+            {
+                "id": r[0],
+                "username": r[1],
+                "display_name": r[2] or r[1],
+                "role": r[3] or 'User',
+                "last_login": r[4] or 0,
+                "created_at": r[5] or 0,
+                "updated_at": r[6] or 0,
+            }
+            for r in rows
+        ]
+        return jsonify({"users": users})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/users", methods=["POST"])  # create user
+def api_users_create():
+    chk = _require_admin()
+    if chk:
+        return chk
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    display_name = (data.get('display_name') or username).strip()
+    role = (data.get('role') or 'User').strip().title()
+    password_sha512 = (data.get('password_sha512') or '').strip().lower()
+    if not username or not password_sha512:
+        return jsonify({"error": "username and password_sha512 are required"}), 400
+    if role not in ('User', 'Admin'):
+        return jsonify({"error": "invalid role"}), 400
+    now = _now_ts()
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO users(username, display_name, password_sha512, role, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (username, display_name or username, password_sha512, role, now, now)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok"})
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "username already exists"}), 409
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/users/<username>", methods=["DELETE"])  # delete user
+def api_users_delete(username):
+    chk = _require_admin()
+    if chk:
+        return chk
+    username = (username or '').strip()
+    if not username:
+        return jsonify({"error": "invalid username"}), 400
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        # prevent deleting current user
+        me = _current_user()
+        if me and (me.get('username','').lower() == username.lower()):
+            conn.close()
+            return jsonify({"error": "You cannot delete the user you are currently logged in as."}), 400
+        # ensure at least one other user remains
+        cur.execute("SELECT COUNT(*) FROM users")
+        total = cur.fetchone()[0] or 0
+        if total <= 1:
+            conn.close()
+            return jsonify({"error": "There is only one user currently configured, you cannot delete this user until you have created another."}), 400
+        cur.execute("DELETE FROM users WHERE LOWER(username)=LOWER(?)", (username,))
+        deleted = cur.rowcount
+        conn.commit()
+        conn.close()
+        if deleted == 0:
+            return jsonify({"error": "user not found"}), 404
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/users/<username>/reset_password", methods=["POST"])  # reset password
+def api_users_reset_password(username):
+    chk = _require_admin()
+    if chk:
+        return chk
+    data = request.get_json(silent=True) or {}
+    password_sha512 = (data.get('password_sha512') or '').strip().lower()
+    if not password_sha512 or len(password_sha512) != 128:
+        return jsonify({"error": "invalid password hash"}), 400
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        now = _now_ts()
+        cur.execute(
+            "UPDATE users SET password_sha512=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
+            (password_sha512, now, username)
+        )
+        if cur.rowcount == 0:
+            conn.close()
+            return jsonify({"error": "user not found"}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/users/<username>/role", methods=["POST"])  # change role
+def api_users_change_role(username):
+    chk = _require_admin()
+    if chk:
+        return chk
+    data = request.get_json(silent=True) or {}
+    role = (data.get('role') or '').strip().title()
+    if role not in ('User', 'Admin'):
+        return jsonify({"error": "invalid role"}), 400
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        # Prevent removing last admin
+        if role == 'User':
+            cur.execute("SELECT COUNT(*) FROM users WHERE LOWER(role)='admin'")
+            admin_cnt = cur.fetchone()[0] or 0
+            cur.execute("SELECT LOWER(role) FROM users WHERE LOWER(username)=LOWER(?)", (username,))
+            row = cur.fetchone()
+            if row and (row[0] or '').lower() == 'admin' and admin_cnt <= 1:
+                conn.close()
+                return jsonify({"error": "cannot demote the last admin"}), 400
+        now = _now_ts()
+        cur.execute(
+            "UPDATE users SET role=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
+            (role, now, username)
+        )
+        if cur.rowcount == 0:
+            conn.close()
+            return jsonify({"error": "user not found"}), 404
+        conn.commit()
+        conn.close()
+        # If current user changed their own role, refresh session role
+        me = _current_user()
+        if me and me.get('username','').lower() == username.lower():
+            session['role'] = role
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ---------------------------------------------
 # Borealis Python API Endpoints
@@ -718,11 +973,51 @@ def init_db():
         """
     )
 
+    # Users table
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            display_name TEXT,
+            password_sha512 TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'Admin',
+            last_login INTEGER,
+            created_at INTEGER,
+            updated_at INTEGER
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
 
 
 init_db()
+
+
+def ensure_default_admin():
+    """Ensure the default admin account exists (admin / Password)."""
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users WHERE LOWER(username)='admin'")
+        exists = (cur.fetchone()[0] or 0) > 0
+        if not exists:
+            now = _now_ts()
+            default_hash = "e6c83b282aeb2e022844595721cc00bbda47cb24537c1779f9bb84f04039e1676e6ba8573e588da1052510e3aa0a32a9e55879ae22b0c2d62136fc0a3e85f8bb"
+            cur.execute(
+                "INSERT INTO users(username, display_name, password_sha512, role, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+                ("admin", "Administrator", default_hash, "Admin", now, now)
+            )
+            conn.commit()
+        conn.close()
+    except Exception:
+        # Non-fatal if this fails; /health etc still work
+        pass
+
+
+ensure_default_admin()
 
 # ---------------------------------------------
 # Sites API
