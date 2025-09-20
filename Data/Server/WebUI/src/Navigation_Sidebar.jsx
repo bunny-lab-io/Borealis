@@ -325,7 +325,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             }}
           >
             <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
-              <b>Admin</b>
+              <b>Admin Settings</b>
             </Typography>
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>

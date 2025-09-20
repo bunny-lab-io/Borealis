@@ -21,10 +21,36 @@ import {
   TextField,
   Select,
   FormControl,
-  InputLabel
+  InputLabel,
+  Popover
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
+import FilterListIcon from "@mui/icons-material/FilterList";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
+
+/* ---------- Formatting helpers to keep this page in lockstep with Device_List ---------- */
+const tablePaperSx = { m: 2, p: 0, bgcolor: "#1e1e1e" };
+const tableSx = {
+  minWidth: 820,
+  "& th, & td": {
+    color: "#ddd",
+    borderColor: "#2a2a2a",
+    fontSize: 13,
+    py: 0.75
+  },
+  "& th .MuiTableSortLabel-root": { color: "#ddd" },
+  "& th .MuiTableSortLabel-root.Mui-active": { color: "#ddd" }
+};
+const menuPaperSx = { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" };
+const filterFieldSx = {
+  input: { color: "#fff" },
+  minWidth: 220,
+  "& .MuiOutlinedInput-root": {
+    "& fieldset": { borderColor: "#555" },
+    "&:hover fieldset": { borderColor: "#888" }
+  }
+};
+/* -------------------------------------------------------------------- */
 
 function formatTs(tsSec) {
   if (!tsSec) return "-";
@@ -61,6 +87,20 @@ export default function UserManagement() {
   const [warnMessage, setWarnMessage] = useState("");
   const [me, setMe] = useState(null);
 
+  // Columns and filters
+  const columns = useMemo(() => ([
+    { id: "display_name", label: "Display Name" },
+    { id: "username", label: "User Name" },
+    { id: "last_login", label: "Last Login" },
+    { id: "role", label: "User Role" },
+    { id: "actions", label: "" }
+  ]), []);
+  const [filters, setFilters] = useState({}); // id -> string
+  const [filterAnchor, setFilterAnchor] = useState(null); // { id, anchorEl }
+  const openFilter = (id) => (e) => setFilterAnchor({ id, anchorEl: e.currentTarget });
+  const closeFilter = () => setFilterAnchor(null);
+  const onFilterChange = (id) => (e) => setFilters((prev) => ({ ...prev, [id]: e.target.value }));
+
   const fetchUsers = useCallback(async () => {
     try {
       const res = await fetch("/api/users", { credentials: "include" });
@@ -75,7 +115,7 @@ export default function UserManagement() {
     fetchUsers();
     (async () => {
       try {
-        const resp = await fetch('/api/auth/me', { credentials: 'include' });
+        const resp = await fetch("/api/auth/me", { credentials: "include" });
         if (resp.ok) {
           const who = await resp.json();
           setMe(who);
@@ -89,15 +129,28 @@ export default function UserManagement() {
     else { setOrderBy(col); setOrder("asc"); }
   };
 
-  const sorted = useMemo(() => {
+  const filteredSorted = useMemo(() => {
+    const applyFilters = (r) => {
+      for (const [key, val] of Object.entries(filters || {})) {
+        if (!val) continue;
+        const needle = String(val).toLowerCase();
+        let hay = "";
+        if (key === "last_login") hay = String(formatTs(r.last_login));
+        else hay = String(r[key] ?? "");
+        if (!hay.toLowerCase().includes(needle)) return false;
+      }
+      return true;
+    };
+
     const dir = order === "asc" ? 1 : -1;
-    const arr = [...rows];
+    const arr = rows.filter(applyFilters);
     arr.sort((a, b) => {
       if (orderBy === "last_login") return ((a.last_login || 0) - (b.last_login || 0)) * dir;
-      return String(a[orderBy] ?? "").toLowerCase().localeCompare(String(b[orderBy] ?? "").toLowerCase()) * dir;
+      return String(a[orderBy] ?? "").toLowerCase()
+        .localeCompare(String(b[orderBy] ?? "").toLowerCase()) * dir;
     });
     return arr;
-  }, [rows, orderBy, order]);
+  }, [rows, filters, orderBy, order]);
 
   const openMenu = (evt, user) => {
     setMenuAnchor({ mouseX: evt.clientX, mouseY: evt.clientY, anchorEl: evt.currentTarget });
@@ -121,7 +174,7 @@ export default function UserManagement() {
     setConfirmDeleteOpen(false);
     if (!user) return;
     try {
-      const resp = await fetch(`/api/users/${encodeURIComponent(user.username)}`, { method: 'DELETE', credentials: 'include' });
+      const resp = await fetch(`/api/users/${encodeURIComponent(user.username)}`, { method: "DELETE", credentials: "include" });
       const data = await resp.json();
       if (!resp.ok) {
         setWarnMessage(data?.error || "Failed to delete user");
@@ -138,7 +191,7 @@ export default function UserManagement() {
 
   const openChangeRole = (user) => {
     if (!user) return;
-    const nextRole = (String(user.role || 'User').toLowerCase() === 'admin') ? 'User' : 'Admin';
+    const nextRole = (String(user.role || "User").toLowerCase() === "admin") ? "User" : "Admin";
     setChangeRoleTarget(user);
     setChangeRoleNext(nextRole);
     setConfirmChangeRoleOpen(true);
@@ -151,9 +204,9 @@ export default function UserManagement() {
     if (!user || !nextRole) return;
     try {
       const resp = await fetch(`/api/users/${encodeURIComponent(user.username)}/role`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ role: nextRole })
       });
       const data = await resp.json();
@@ -173,14 +226,14 @@ export default function UserManagement() {
   const doResetPassword = async () => {
     const user = menuUser;
     if (!user) return;
-    const pw = newPassword || '';
+    const pw = newPassword || "";
     if (!pw.trim()) return;
     try {
       const hash = await sha512(pw);
       const resp = await fetch(`/api/users/${encodeURIComponent(user.username)}/reset_password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ password_sha512: hash })
       });
       const data = await resp.json();
@@ -200,228 +253,281 @@ export default function UserManagement() {
 
   const openCreate = () => { setCreateOpen(true); setCreateForm({ username: "", display_name: "", password: "", role: "User" }); };
   const doCreate = async () => {
-    const u = (createForm.username || '').trim();
+    const u = (createForm.username || "").trim();
     const dn = (createForm.display_name || u).trim();
-    const pw = (createForm.password || '').trim();
-    const role = (createForm.role || 'User');
+    const pw = (createForm.password || "").trim();
+    const role = (createForm.role || "User");
     if (!u || !pw) return;
     try {
       const hash = await sha512(pw);
-      const resp = await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+      const resp = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ username: u, display_name: dn, password_sha512: hash, role })
       });
       const data = await resp.json();
       if (!resp.ok) {
-        alert(data?.error || 'Failed to create user');
+        alert(data?.error || "Failed to create user");
         return;
       }
       setCreateOpen(false);
       await fetchUsers();
     } catch (e) {
       console.error(e);
-      alert('Failed to create user');
+      alert("Failed to create user");
     }
   };
 
   return (
     <>
-    <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
-      <Box sx={{ p: 2, pb: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Box>
-          <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>User Management</Typography>
-          <Typography sx={{ color: '#aaa', fontSize: '0.85rem', mt: 0.5 }}>
-            Create, Edit, and Remove Borealis Server Operators
-          </Typography>
-        </Box>
-        <Box>
+      <Paper sx={tablePaperSx} elevation={2}>
+        <Box sx={{ p: 2, pb: 1, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <Box>
+            <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
+              User Management
+            </Typography>
+            <Typography variant="body2" sx={{ color: "#aaa" }}>
+              Manage authorized users of the Borealis Automation Platform.
+            </Typography>
+          </Box>
           <Button
             variant="outlined"
             size="small"
             onClick={openCreate}
-            sx={{ color: '#58a6ff', borderColor: '#58a6ff', textTransform: 'none' }}
+            sx={{ color: "#58a6ff", borderColor: "#58a6ff", textTransform: "none" }}
           >
             Create User
           </Button>
         </Box>
-      </Box>
 
-      <Table size="small" sx={{ minWidth: 700 }}>
-        <TableHead>
-          <TableRow>
-            {[
-              { id: 'display_name', label: 'Display Name' },
-              { id: 'username', label: 'User Name' },
-              { id: 'last_login', label: 'Last Login' },
-              { id: 'role', label: 'User Role' },
-              { id: 'actions', label: '' },
-            ].map((col) => (
-              <TableCell key={col.id} sortDirection={['actions'].includes(col.id) ? false : (orderBy === col.id ? order : false)}>
-                {col.id !== 'actions' ? (
-                  <TableSortLabel
-                    active={orderBy === col.id}
-                    direction={orderBy === col.id ? order : 'asc'}
-                    onClick={() => handleSort(col.id)}
-                  >
-                    {col.label}
-                  </TableSortLabel>
-                ) : null}
-              </TableCell>
-            ))}
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {sorted.map((u) => (
-            <TableRow key={u.username} hover>
-              <TableCell>{u.display_name || u.username}</TableCell>
-              <TableCell>{u.username}</TableCell>
-              <TableCell>{formatTs(u.last_login)}</TableCell>
-              <TableCell>{u.role || 'User'}</TableCell>
-              <TableCell align="right" sx={{ width: 1 }}>
-                <IconButton size="small" onClick={(e) => openMenu(e, u)} sx={{ color: '#aaa' }}>
-                  <MoreVertIcon fontSize="inherit" />
-                </IconButton>
-              </TableCell>
+        <Table size="small" sx={tableSx}>
+          <TableHead>
+            <TableRow>
+              {/* Leading checkbox gutter to match Devices table rhythm */}
+              <TableCell padding="checkbox" />
+              {columns.map((col) => (
+                <TableCell
+                  key={col.id}
+                  sortDirection={["actions"].includes(col.id) ? false : (orderBy === col.id ? order : false)}
+                >
+                  {col.id !== "actions" ? (
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                      <TableSortLabel
+                        active={orderBy === col.id}
+                        direction={orderBy === col.id ? order : "asc"}
+                        onClick={() => handleSort(col.id)}
+                      >
+                        {col.label}
+                      </TableSortLabel>
+                      <IconButton
+                        size="small"
+                        onClick={openFilter(col.id)}
+                        sx={{ color: filters[col.id] ? "#58a6ff" : "#888" }}
+                      >
+                        <FilterListIcon fontSize="inherit" />
+                      </IconButton>
+                    </Box>
+                  ) : null}
+                </TableCell>
+              ))}
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHead>
 
-      <Menu
-        anchorEl={menuAnchor?.anchorEl}
-        open={Boolean(menuAnchor)}
-        onClose={closeMenu}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-        PaperProps={{ sx: { bgcolor: '#1e1e1e', color: '#fff' } }}
-      >
-        <MenuItem
-          disabled={me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase()}
-          onClick={() => { const u = menuUser; closeMenu(); confirmDelete(u); }}
+          <TableBody>
+            {filteredSorted.map((u) => (
+              <TableRow key={u.username} hover>
+                {/* Body gutter to stay aligned with header */}
+                <TableCell padding="checkbox" />
+                <TableCell>{u.display_name || u.username}</TableCell>
+                <TableCell>{u.username}</TableCell>
+                <TableCell>{formatTs(u.last_login)}</TableCell>
+                <TableCell>{u.role || "User"}</TableCell>
+                <TableCell align="right">
+                  <IconButton size="small" onClick={(e) => openMenu(e, u)} sx={{ color: "#ccc" }}>
+                    <MoreVertIcon fontSize="inherit" />
+                  </IconButton>
+                </TableCell>
+              </TableRow>
+            ))}
+            {filteredSorted.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={columns.length + 1} sx={{ color: "#888" }}>
+                  No users found.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+
+        {/* Filter popover (styled to match Device_List) */}
+        <Popover
+          open={Boolean(filterAnchor)}
+          anchorEl={filterAnchor?.anchorEl || null}
+          onClose={closeFilter}
+          anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+          PaperProps={{ sx: { bgcolor: "#1e1e1e", p: 1 } }}
         >
-          Delete User
-        </MenuItem>
-        <MenuItem onClick={() => { openReset(); }}>Reset Password</MenuItem>
-        <MenuItem onClick={() => { const u = menuUser; closeMenu(); openChangeRole(u); }}>Change Role</MenuItem>
-      </Menu>
+          {filterAnchor && (
+            <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+              <TextField
+                autoFocus
+                size="small"
+                placeholder={`Filter ${columns.find((c) => c.id === filterAnchor.id)?.label || ""}`}
+                value={filters[filterAnchor.id] || ""}
+                onChange={onFilterChange(filterAnchor.id)}
+                onKeyDown={(e) => { if (e.key === "Escape") closeFilter(); }}
+                sx={filterFieldSx}
+              />
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => {
+                  setFilters((prev) => ({ ...prev, [filterAnchor.id]: "" }));
+                  closeFilter();
+                }}
+                sx={{ textTransform: "none", borderColor: "#555", color: "#bbb" }}
+              >
+                Clear
+              </Button>
+            </Box>
+          )}
+        </Popover>
 
-      <Dialog open={resetOpen} onClose={() => setResetOpen(false)} PaperProps={{ sx: { bgcolor: '#121212', color: '#fff' } }}>
-        <DialogTitle>Reset Password</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ color: '#ccc' }}>
-            Enter a new password for {menuUser?.username}.
-          </DialogContentText>
-          <TextField
-            autoFocus
-            margin="dense"
-            fullWidth
-            label="New Password"
-            type="password"
-            variant="outlined"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            sx={{
-              "& .MuiOutlinedInput-root": {
-                backgroundColor: "#2a2a2a",
-                color: "#ccc",
-                "& fieldset": { borderColor: "#444" },
-                "&:hover fieldset": { borderColor: "#666" }
-              },
-              label: { color: "#aaa" },
-              mt: 1
-            }}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setResetOpen(false)} sx={{ color: '#58a6ff' }}>Cancel</Button>
-          <Button onClick={doResetPassword} sx={{ color: '#58a6ff' }}>OK</Button>
-        </DialogActions>
-      </Dialog>
+        <Menu
+          anchorEl={menuAnchor?.anchorEl}
+          open={Boolean(menuAnchor)}
+          onClose={closeMenu}
+          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+          transformOrigin={{ vertical: "top", horizontal: "right" }}
+          PaperProps={{ sx: menuPaperSx }}
+        >
+          <MenuItem
+            disabled={me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase()}
+            onClick={() => { const u = menuUser; closeMenu(); confirmDelete(u); }}
+          >
+            Delete User
+          </MenuItem>
+          <MenuItem onClick={() => { openReset(); }}>Reset Password</MenuItem>
+          <MenuItem onClick={() => { const u = menuUser; closeMenu(); openChangeRole(u); }}>Change Role</MenuItem>
+        </Menu>
 
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} PaperProps={{ sx: { bgcolor: '#121212', color: '#fff' } }}>
-        <DialogTitle>Create User</DialogTitle>
-        <DialogContent>
-          <TextField
-            autoFocus
-            margin="dense"
-            fullWidth
-            label="Username"
-            variant="outlined"
-            value={createForm.username}
-            onChange={(e) => setCreateForm((p) => ({ ...p, username: e.target.value }))}
-            sx={{
-              "& .MuiOutlinedInput-root": { backgroundColor: "#2a2a2a", color: "#ccc", "& fieldset": { borderColor: "#444" }, "&:hover fieldset": { borderColor: "#666" } },
-              label: { color: "#aaa" }, mt: 1
-            }}
-          />
-          <TextField
-            margin="dense"
-            fullWidth
-            label="Display Name (optional)"
-            variant="outlined"
-            value={createForm.display_name}
-            onChange={(e) => setCreateForm((p) => ({ ...p, display_name: e.target.value }))}
-            sx={{
-              "& .MuiOutlinedInput-root": { backgroundColor: "#2a2a2a", color: "#ccc", "& fieldset": { borderColor: "#444" }, "&:hover fieldset": { borderColor: "#666" } },
-              label: { color: "#aaa" }, mt: 1
-            }}
-          />
-          <TextField
-            margin="dense"
-            fullWidth
-            label="Password"
-            type="password"
-            variant="outlined"
-            value={createForm.password}
-            onChange={(e) => setCreateForm((p) => ({ ...p, password: e.target.value }))}
-            sx={{
-              "& .MuiOutlinedInput-root": { backgroundColor: "#2a2a2a", color: "#ccc", "& fieldset": { borderColor: "#444" }, "&:hover fieldset": { borderColor: "#666" } },
-              label: { color: "#aaa" }, mt: 1
-            }}
-          />
-          <FormControl fullWidth sx={{ mt: 2 }}>
-            <InputLabel sx={{ color: '#aaa' }}>Role</InputLabel>
-            <Select
-              native
-              value={createForm.role}
-              onChange={(e) => setCreateForm((p) => ({ ...p, role: e.target.value }))}
+        <Dialog open={resetOpen} onClose={() => setResetOpen(false)} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+          <DialogTitle>Reset Password</DialogTitle>
+          <DialogContent>
+            <DialogContentText sx={{ color: "#ccc" }}>
+              Enter a new password for {menuUser?.username}.
+            </DialogContentText>
+            <TextField
+              autoFocus
+              margin="dense"
+              fullWidth
+              label="New Password"
+              type="password"
+              variant="outlined"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
               sx={{
-                backgroundColor: '#2a2a2a',
-                color: '#ccc',
-                borderColor: '#444'
+                "& .MuiOutlinedInput-root": {
+                  backgroundColor: "#2a2a2a",
+                  color: "#ccc",
+                  "& fieldset": { borderColor: "#444" },
+                  "&:hover fieldset": { borderColor: "#666" }
+                },
+                label: { color: "#aaa" },
+                mt: 1
               }}
-            >
-              <option value="User">User</option>
-              <option value="Admin">Admin</option>
-            </Select>
-          </FormControl>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setCreateOpen(false)} sx={{ color: '#58a6ff' }}>Cancel</Button>
-          <Button onClick={doCreate} sx={{ color: '#58a6ff' }}>Create</Button>
-        </DialogActions>
-      </Dialog>
-    </Paper>
-    <ConfirmDeleteDialog
-      open={confirmDeleteOpen}
-      message={`Are you sure you want to delete user '${deleteTarget?.username || ''}'?`}
-      onCancel={() => setConfirmDeleteOpen(false)}
-      onConfirm={doDelete}
-    />
-    <ConfirmDeleteDialog
-      open={confirmChangeRoleOpen}
-      message={changeRoleTarget ? `Change role for '${changeRoleTarget.username}' to ${changeRoleNext}?` : ''}
-      onCancel={() => setConfirmChangeRoleOpen(false)}
-      onConfirm={doChangeRole}
-    />
-    <ConfirmDeleteDialog
-      open={warnOpen}
-      message={warnMessage}
-      onCancel={() => setWarnOpen(false)}
-      onConfirm={() => setWarnOpen(false)}
-    />
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setResetOpen(false)} sx={{ color: "#58a6ff" }}>Cancel</Button>
+            <Button onClick={doResetPassword} sx={{ color: "#58a6ff" }}>OK</Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog open={createOpen} onClose={() => setCreateOpen(false)} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+          <DialogTitle>Create User</DialogTitle>
+          <DialogContent>
+            <TextField
+              autoFocus
+              margin="dense"
+              fullWidth
+              label="Username"
+              variant="outlined"
+              value={createForm.username}
+              onChange={(e) => setCreateForm((p) => ({ ...p, username: e.target.value }))}
+              sx={{
+                "& .MuiOutlinedInput-root": { backgroundColor: "#2a2a2a", color: "#ccc", "& fieldset": { borderColor: "#444" }, "&:hover fieldset": { borderColor: "#666" } },
+                label: { color: "#aaa" }, mt: 1
+              }}
+            />
+            <TextField
+              margin="dense"
+              fullWidth
+              label="Display Name (optional)"
+              variant="outlined"
+              value={createForm.display_name}
+              onChange={(e) => setCreateForm((p) => ({ ...p, display_name: e.target.value }))}
+              sx={{
+                "& .MuiOutlinedInput-root": { backgroundColor: "#2a2a2a", color: "#ccc", "& fieldset": { borderColor: "#444" }, "&:hover fieldset": { borderColor: "#666" } },
+                label: { color: "#aaa" }, mt: 1
+              }}
+            />
+            <TextField
+              margin="dense"
+              fullWidth
+              label="Password"
+              type="password"
+              variant="outlined"
+              value={createForm.password}
+              onChange={(e) => setCreateForm((p) => ({ ...p, password: e.target.value }))}
+              sx={{
+                "& .MuiOutlinedInput-root": { backgroundColor: "#2a2a2a", color: "#ccc", "& fieldset": { borderColor: "#444" }, "&:hover fieldset": { borderColor: "#666" } },
+                label: { color: "#aaa" }, mt: 1
+              }}
+            />
+            <FormControl fullWidth sx={{ mt: 2 }}>
+              <InputLabel sx={{ color: "#aaa" }}>Role</InputLabel>
+              <Select
+                native
+                value={createForm.role}
+                onChange={(e) => setCreateForm((p) => ({ ...p, role: e.target.value }))}
+                sx={{
+                  backgroundColor: "#2a2a2a",
+                  color: "#ccc",
+                  borderColor: "#444"
+                }}
+              >
+                <option value="User">User</option>
+                <option value="Admin">Admin</option>
+              </Select>
+            </FormControl>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setCreateOpen(false)} sx={{ color: "#58a6ff" }}>Cancel</Button>
+            <Button onClick={doCreate} sx={{ color: "#58a6ff" }}>Create</Button>
+          </DialogActions>
+        </Dialog>
+      </Paper>
+
+      <ConfirmDeleteDialog
+        open={confirmDeleteOpen}
+        message={`Are you sure you want to delete user '${deleteTarget?.username || ""}'?`}
+        onCancel={() => setConfirmDeleteOpen(false)}
+        onConfirm={doDelete}
+      />
+      <ConfirmDeleteDialog
+        open={confirmChangeRoleOpen}
+        message={changeRoleTarget ? `Change role for '${changeRoleTarget.username}' to ${changeRoleNext}?` : ""}
+        onCancel={() => setConfirmChangeRoleOpen(false)}
+        onConfirm={doChangeRole}
+      />
+      <ConfirmDeleteDialog
+        open={warnOpen}
+        message={warnMessage}
+        onCancel={() => setWarnOpen(false)}
+        onConfirm={() => setWarnOpen(false)}
+      />
     </>
   );
 }
