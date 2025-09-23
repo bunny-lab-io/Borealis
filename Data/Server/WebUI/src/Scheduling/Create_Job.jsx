@@ -21,7 +21,8 @@ import {
   TableHead,
   TableRow,
   TableCell,
-  TableBody
+  TableBody,
+  TableSortLabel
 } from "@mui/material";
 import { Add as AddIcon, Delete as DeleteIcon } from "@mui/icons-material";
 import { SimpleTreeView, TreeItem } from "@mui/x-tree-view";
@@ -159,7 +160,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   ]); // {type:'script'|'workflow', path, name, description}
   const [targets, setTargets] = useState([]); // array of hostnames
   const [scheduleType, setScheduleType] = useState("immediately");
-  const [startDateTime, setStartDateTime] = useState(() => dayjs().add(5, "minute"));
+  const [startDateTime, setStartDateTime] = useState(() => dayjs().add(5, "minute").second(0));
   const [stopAfterEnabled, setStopAfterEnabled] = useState(false);
   const [expiration, setExpiration] = useState("no_expire");
   const [execContext, setExecContext] = useState("system");
@@ -188,6 +189,158 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const editing = !!(initialJob && initialJob.id);
 
+  // --- Job History (only when editing) ---
+  const [historyRows, setHistoryRows] = useState([]);
+  const [historyOrderBy, setHistoryOrderBy] = useState("started_ts");
+  const [historyOrder, setHistoryOrder] = useState("desc");
+
+  const fmtTs = useCallback((ts) => {
+    if (!ts) return '';
+    try {
+      const d = new Date(Number(ts) * 1000);
+      return d.toLocaleString(undefined, { year:'numeric', month:'2-digit', day:'2-digit', hour:'numeric', minute:'2-digit' });
+    } catch { return ''; }
+  }, []);
+
+  const loadHistory = useCallback(async () => {
+    if (!editing) return;
+    try {
+      const [runsResp, jobResp, devResp] = await Promise.all([
+        fetch(`/api/scheduled_jobs/${initialJob.id}/runs?days=30`),
+        fetch(`/api/scheduled_jobs/${initialJob.id}`),
+        fetch(`/api/scheduled_jobs/${initialJob.id}/devices`)
+      ]);
+      const runs = await runsResp.json();
+      const job = await jobResp.json();
+      const dev = await devResp.json();
+      if (!runsResp.ok) throw new Error(runs.error || `HTTP ${runsResp.status}`);
+      if (!jobResp.ok) throw new Error(job.error || `HTTP ${jobResp.status}`);
+      if (!devResp.ok) throw new Error(dev.error || `HTTP ${devResp.status}`);
+      setHistoryRows(Array.isArray(runs.runs) ? runs.runs : []);
+      setJobSummary(job.job || {});
+      setDeviceRows(Array.isArray(dev.devices) ? dev.devices : []);
+    } catch {
+      setHistoryRows([]);
+      setJobSummary({});
+      setDeviceRows([]);
+    }
+  }, [editing, initialJob?.id]);
+
+  useEffect(() => {
+    if (!editing) return;
+    let t;
+    (async () => { try { await loadHistory(); } catch {} })();
+    t = setInterval(loadHistory, 10000);
+    return () => { if (t) clearInterval(t); };
+  }, [editing, loadHistory]);
+
+  const resultChip = (status) => {
+    const map = {
+      Success: { bg: '#00d18c', fg: '#000' },
+      Running: { bg: '#58a6ff', fg: '#000' },
+      Scheduled: { bg: '#999999', fg: '#fff' },
+      Expired: { bg: '#777777', fg: '#fff' },
+      Failed: { bg: '#ff4f4f', fg: '#fff' },
+      Warning: { bg: '#ff8c00', fg: '#000' }
+    };
+    const c = map[status] || { bg: '#aaa', fg: '#000' };
+    return (
+      <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 999, background: c.bg, color: c.fg, fontWeight: 600, fontSize: 12 }}>
+        {status || ''}
+      </span>
+    );
+  };
+
+  const sortedHistory = useMemo(() => {
+    const dir = historyOrder === 'asc' ? 1 : -1;
+    const key = historyOrderBy;
+    return [...historyRows].sort((a, b) => {
+      const A = a?.[key];
+      const B = b?.[key];
+      if (key === 'started_ts' || key === 'finished_ts' || key === 'scheduled_ts') {
+        return ((A || 0) - (B || 0)) * dir;
+      }
+      return String(A ?? '').localeCompare(String(B ?? '')) * dir;
+    });
+  }, [historyRows, historyOrderBy, historyOrder]);
+
+  const handleHistorySort = (col) => {
+    if (historyOrderBy === col) setHistoryOrder(historyOrder === 'asc' ? 'desc' : 'asc');
+    else { setHistoryOrderBy(col); setHistoryOrder('asc'); }
+  };
+
+  const renderHistory = () => (
+    <Box sx={{ maxHeight: 400, overflowY: 'auto' }}>
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell sortDirection={historyOrderBy === 'scheduled_ts' ? historyOrder : false}>
+              <TableSortLabel active={historyOrderBy === 'scheduled_ts'} direction={historyOrderBy === 'scheduled_ts' ? historyOrder : 'asc'} onClick={() => handleHistorySort('scheduled_ts')}>
+                Scheduled
+              </TableSortLabel>
+            </TableCell>
+            <TableCell sortDirection={historyOrderBy === 'started_ts' ? historyOrder : false}>
+              <TableSortLabel active={historyOrderBy === 'started_ts'} direction={historyOrderBy === 'started_ts' ? historyOrder : 'asc'} onClick={() => handleHistorySort('started_ts')}>
+                Started
+              </TableSortLabel>
+            </TableCell>
+            <TableCell sortDirection={historyOrderBy === 'finished_ts' ? historyOrder : false}>
+              <TableSortLabel active={historyOrderBy === 'finished_ts'} direction={historyOrderBy === 'finished_ts' ? historyOrder : 'asc'} onClick={() => handleHistorySort('finished_ts')}>
+                Finished
+              </TableSortLabel>
+            </TableCell>
+            <TableCell>Status</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {sortedHistory.map((r) => (
+            <TableRow key={r.id}>
+              <TableCell>{fmtTs(r.scheduled_ts)}</TableCell>
+              <TableCell>{fmtTs(r.started_ts)}</TableCell>
+              <TableCell>{fmtTs(r.finished_ts)}</TableCell>
+              <TableCell>{resultChip(r.status)}</TableCell>
+            </TableRow>
+          ))}
+          {sortedHistory.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={4} sx={{ color: '#888' }}>No runs in the last 30 days.</TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </Box>
+  );
+
+  // --- Job Progress (summary) ---
+  const [jobSummary, setJobSummary] = useState({});
+  const sumCounts = (o, k) => Number((o?.result_counts||{})[k] || 0);
+  const counts = jobSummary?.result_counts || {};
+
+  const ProgressSummary = () => (
+    <Box sx={{ p: 2, bgcolor: '#1b1b1b', border: '1px solid #333', borderRadius: 1, mb: 2 }}>
+      <Typography variant="subtitle1" sx={{ color: '#7db7ff', mb: 1 }}>Job Progress</Typography>
+      <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+        {[
+          ['pending','Pending','#999999'],
+          ['running','Running','#58a6ff'],
+          ['success','Success','#00d18c'],
+          ['failed','Failed','#ff4f4f'],
+          ['expired','Expired','#777777'],
+          ['timed_out','Timed Out','#b36ae2']
+        ].map(([key,label,color]) => (
+          <Box key={key} sx={{ color: '#ddd', display: 'flex', alignItems: 'center', gap: 1 }}>
+            <span style={{ display:'inline-block', width:10, height:10, borderRadius:10, background: color }} />
+            <span>{label}: {Number((counts||{})[key] || 0)}</span>
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
+
+  // --- Devices breakdown ---
+  const [deviceRows, setDeviceRows] = useState([]);
+  const deviceSorted = useMemo(() => deviceRows, [deviceRows]);
+
   useEffect(() => {
     if (initialJob && initialJob.id) {
       setJobName(initialJob.name || "");
@@ -195,7 +348,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
       setComponents(comps.length ? comps : [{ type: "script", path: "demo/component", name: "Demonstration Component", description: "placeholder" }]);
       setTargets(Array.isArray(initialJob.targets) ? initialJob.targets : []);
       setScheduleType(initialJob.schedule_type || initialJob.schedule?.type || "immediately");
-      setStartDateTime(initialJob.start_ts ? dayjs(Number(initialJob.start_ts) * 1000) : (initialJob.schedule?.start ? dayjs(initialJob.schedule.start) : dayjs().add(5, "minute")));
+      setStartDateTime(initialJob.start_ts ? dayjs(Number(initialJob.start_ts) * 1000).second(0) : (initialJob.schedule?.start ? dayjs(initialJob.schedule.start).second(0) : dayjs().add(5, "minute").second(0)));
       setStopAfterEnabled(Boolean(initialJob.duration_stop_enabled));
       setExpiration(initialJob.expiration || "no_expire");
       setExecContext(initialJob.execution_context || "system");
@@ -269,7 +422,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
       name: jobName,
       components,
       targets,
-      schedule: { type: scheduleType, start: scheduleType !== "immediately" ? (startDateTime?.toISOString?.() || startDateTime) : null },
+      schedule: { type: scheduleType, start: scheduleType !== "immediately" ? (() => { try { const d = startDateTime?.toDate?.() || new Date(startDateTime); d.setSeconds(0,0); return d.toISOString(); } catch { return startDateTime; } })() : null },
       duration: { stopAfterEnabled, expiration },
       execution_context: execContext
     };
@@ -288,13 +441,17 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
     }
   };
 
-  const tabDefs = useMemo(() => ([
-    { key: "name", label: "Job Name" },
-    { key: "components", label: "Scripts/Workflows" },
-    { key: "targets", label: "Targets" },
-    { key: "schedule", label: "Schedule" },
-    { key: "context", label: "Execution Context" }
-  ]), []);
+  const tabDefs = useMemo(() => {
+    const base = [
+      { key: "name", label: "Job Name" },
+      { key: "components", label: "Scripts/Workflows" },
+      { key: "targets", label: "Targets" },
+      { key: "schedule", label: "Schedule" },
+      { key: "context", label: "Execution Context" }
+    ];
+    if (editing) base.push({ key: 'history', label: 'Job History' });
+    return base;
+  }, [editing]);
 
   return (
     <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
@@ -441,7 +598,9 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
                   <LocalizationProvider dateAdapter={AdapterDayjs}>
                     <DateTimePicker
                       value={startDateTime}
-                      onChange={(val) => setStartDateTime(val)}
+                      onChange={(val) => setStartDateTime(val?.second ? val.second(0) : val)}
+                      views={['year','month','day','hours','minutes']}
+                      format="YYYY-MM-DD hh:mm A"
                       slotProps={{ textField: { size: "small" } }}
                     />
                   </LocalizationProvider>
@@ -479,6 +638,70 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
               <MenuItem value="system">Run as SYSTEM Account</MenuItem>
               <MenuItem value="current_user">Run as the Logged-In User</MenuItem>
             </Select>
+          </Box>
+        )}
+
+        {/* Job History tab (only when editing) */}
+        {editing && tab === tabDefs.findIndex(t => t.key === 'history') && (
+          <Box>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Typography variant="h6" sx={{ color: '#58a6ff' }}>Job History</Typography>
+              <Button size="small" variant="outlined" sx={{ color: '#ff6666', borderColor: '#ff6666', textTransform: 'none' }}
+                onClick={async () => { try { await fetch(`/api/scheduled_jobs/${initialJob.id}/runs`, { method: 'DELETE' }); await loadHistory(); } catch {} }}
+              >
+                Clear Job History
+              </Button>
+            </Box>
+            <Typography variant="caption" sx={{ color: '#aaa' }}>Showing the last 30 days of runs.</Typography>
+
+            <Box sx={{ mt: 2 }}>
+              <ProgressSummary />
+            </Box>
+
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle1" sx={{ color: '#7db7ff', mb: 1 }}>Devices</Typography>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Hostname</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>Site</TableCell>
+                    <TableCell>Ran On</TableCell>
+                    <TableCell>Job Status</TableCell>
+                    <TableCell>StdOut / StdErr</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {deviceSorted.map((d, i) => (
+                    <TableRow key={`${d.hostname}-${i}`} hover>
+                      <TableCell>{d.hostname}</TableCell>
+                      <TableCell>
+                        <span style={{ display:'inline-block', width:10, height:10, borderRadius:10, background: d.online ? '#00d18c' : '#ff4f4f', marginRight:8, verticalAlign:'middle' }} />
+                        {d.online ? 'Online' : 'Offline'}
+                      </TableCell>
+                      <TableCell>{d.site || ''}</TableCell>
+                      <TableCell>{fmtTs(d.ran_on)}</TableCell>
+                      <TableCell>{resultChip(d.job_status)}</TableCell>
+                      <TableCell>
+                        <Box sx={{ display:'flex', gap:1 }}>
+                          {d.has_stdout ? <Button size="small" sx={{ color:'#58a6ff', textTransform:'none', minWidth:0, p:0 }}>StdOut</Button> : null}
+                          {d.has_stderr ? <Button size="small" sx={{ color:'#ff4f4f', textTransform:'none', minWidth:0, p:0 }}>StdErr</Button> : null}
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {deviceSorted.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={6} sx={{ color:'#888' }}>No targets found for this job.</TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </Box>
+
+            <Box sx={{ mt: 2 }}>
+              {renderHistory()}
+            </Box>
           </Box>
         )}
       </Box>

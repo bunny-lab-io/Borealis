@@ -42,17 +42,22 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         const occurrence = (j.schedule_type || 'immediately').replace(/^./, (c) => c.toUpperCase());
         const fmt = (ts) => {
           if (!ts) return '';
-          try { const d = new Date(Number(ts) * 1000); return d.toLocaleString(); } catch { return ''; }
+          try {
+            const d = new Date(Number(ts) * 1000);
+            return d.toLocaleString(undefined, { year:'numeric', month:'2-digit', day:'2-digit', hour:'numeric', minute:'2-digit' });
+          } catch { return ''; }
         };
+        const result = j.last_status || (j.next_run_ts ? 'Scheduled' : '');
         return {
           id: j.id,
           name: j.name,
           scriptWorkflow: compName,
           target: targetText,
           occurrence,
-          lastRun: '',
-          nextRun: fmt(j.start_ts),
-          result: 'Success',
+          lastRun: fmt(j.last_run_ts),
+          nextRun: fmt(j.next_run_ts || j.start_ts),
+          result,
+          resultsCounts: j.result_counts || { pending: (Array.isArray(j.targets)?j.targets.length:0) },
           enabled: !!j.enabled,
           raw: j
         };
@@ -64,8 +69,13 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     }
   };
 
-  React.useEffect(() => { loadJobs(); }, []);
-  React.useEffect(() => { loadJobs(); }, [refreshToken]);
+  // Initial load and polling each 5 seconds for live status updates
+  React.useEffect(() => {
+    let timer;
+    (async () => { try { await loadJobs(); } catch {} })();
+    timer = setInterval(loadJobs, 5000);
+    return () => { if (timer) clearInterval(timer); };
+  }, [refreshToken]);
 
   const handleSort = (col) => {
     if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
@@ -84,8 +94,48 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     });
   }, [rows, orderBy, order]);
 
-  const resultColor = (r) =>
-    r === "Success" ? "#00d18c" : r === "Warning" ? "#ff8c00" : "#ff4f4f";
+  const resultColor = (r) => {
+    if (r === 'Success') return '#00d18c';
+    if (r === 'Running') return '#58a6ff';
+    if (r === 'Scheduled') return '#999999';
+    if (r === 'Expired') return '#777777';
+    if (r === 'Timed Out') return '#b36ae2';
+    if (r === 'Warning') return '#ff8c00';
+    if (r === 'Failed') return '#ff4f4f';
+    return '#aaaaaa';
+  };
+
+  const ResultsBar = ({ counts }) => {
+    const total = Math.max(1, Number(counts?.total_targets || 0));
+    const seg = (n) => `${Math.round(((n||0)/total)*100)}%`;
+    const styleSeg = (bg, w) => ({ display: 'inline-block', height: 8, background: bg, width: w });
+    const s = counts || {};
+    const sections = [
+      { key: 'success', color: '#00d18c' },
+      { key: 'running', color: '#58a6ff' },
+      { key: 'failed', color: '#ff4f4f' },
+      { key: 'timed_out', color: '#b36ae2' },
+      { key: 'expired', color: '#777777' },
+      { key: 'pending', color: '#999999' }
+    ];
+    return (
+      <div>
+        <div style={{ background: '#333', borderRadius: 2, overflow: 'hidden', width: 260 }}>
+          {sections.map(({key,color}) => (s[key] ? <span key={key} style={styleSeg(color, seg(s[key]))} /> : null))}
+        </div>
+        <div style={{ color: '#aaa', fontSize: 12, marginTop: 4 }}>
+          {['success','running','failed','timed_out','expired','pending']
+            .filter(k => s[k])
+            .map((k,i) => (
+              <span key={k} style={{ marginRight: 10 }}>
+                <span style={{ display: 'inline-block', width: 8, height: 8, background: sections.find(x=>x.key===k).color, marginRight: 6 }} />
+                {s[k]} {k.replace('_',' ').replace(/^./, c=>c.toUpperCase())}
+              </span>
+            ))}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
@@ -125,12 +175,13 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
               ["occurrence", "Schedule Occurrence"],
               ["lastRun", "Last Run"],
               ["nextRun", "Next Run"],
-              ["result", "Result"],
-              ["enabled", "Enabled"],
-              ["edit", "Edit Job"]
+            ["result", "Result"],
+            ["results", "Results"],
+            ["enabled", "Enabled"],
+            ["edit", "Edit Job"]
             ].map(([key, label]) => (
               <TableCell key={key} sortDirection={orderBy === key ? order : false}>
-                {key !== "edit" ? (
+                {key !== "edit" && key !== "results" ? (
                   <TableSortLabel
                     active={orderBy === key}
                     direction={orderBy === key ? order : "asc"}
@@ -167,6 +218,9 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
                   }}
                 />
                 {r.result}
+              </TableCell>
+              <TableCell>
+                <ResultsBar counts={r.resultsCounts} />
               </TableCell>
               <TableCell>
                 <Switch
