@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Borealis - Server (Flask)",
+      "label": "Borealis - Server (Production)",
       "type": "shell",
       "command": "powershell.exe",
       "args": [
@@ -17,7 +17,7 @@
       "problemMatcher": []
     },
     {
-      "label": "Borealis - Server (Vite)",
+      "label": "Borealis - Server (Dev)",
       "type": "shell",
       "command": "powershell.exe",
       "args": [

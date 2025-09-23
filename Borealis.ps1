@@ -27,6 +27,8 @@ if ($Vite -and $Flask) {
 }
 
 if ($Server) {
+    # Auto-select main menu option for Server when -Server flag is provided
+    $choice = '1'
 } elseif ($Agent) {
     $choice = '2'
     switch ($AgentAction) {
