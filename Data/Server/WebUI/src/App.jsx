@@ -35,6 +35,7 @@ import DeviceDetails from "./Devices/Device_Details";
 import WorkflowList from "./Workflows/Workflow_List";
 import ScriptEditor from "./Scripting/Script_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
+import CreateJob from "./Scheduling/Create_Job.jsx";
 import UserManagement from "./Admin/User_Management.jsx";
 import ServerInfo from "./Admin/Server_Info.jsx";
 
@@ -100,6 +101,8 @@ export default function App() {
   const fileInputRef = useRef(null);
   const [user, setUser] = useState(null);
   const [userRole, setUserRole] = useState(null);
+  const [editingJob, setEditingJob] = useState(null);
+  const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
 
   useEffect(() => {
     const session = localStorage.getItem("borealis_session");
@@ -348,7 +351,22 @@ export default function App() {
         );
 
       case "jobs":
-        return <ScheduledJobsList />;
+        return (
+          <ScheduledJobsList
+            onCreateJob={() => { setEditingJob(null); setCurrentPage("create_job"); }}
+            onEditJob={(job) => { setEditingJob(job); setCurrentPage("create_job"); }}
+            refreshToken={jobsRefreshToken}
+          />
+        );
+
+      case "create_job":
+        return (
+          <CreateJob
+            initialJob={editingJob}
+            onCancel={() => { setCurrentPage("jobs"); setEditingJob(null); }}
+            onCreated={() => { setCurrentPage("jobs"); setEditingJob(null); setJobsRefreshToken(Date.now()); }}
+          />
+        );
 
       case "workflows":
         return (
