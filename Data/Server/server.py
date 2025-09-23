@@ -70,6 +70,43 @@ def health():
     return jsonify({"status": "ok"})
 
 # ---------------------------------------------
+# Server Time Endpoint
+# ---------------------------------------------
+@app.route("/api/server/time", methods=["GET"])
+def api_server_time():
+    try:
+        from datetime import datetime, timezone
+        now_local = datetime.now().astimezone()
+        now_utc = datetime.now(timezone.utc)
+        tzinfo = now_local.tzinfo
+        offset = tzinfo.utcoffset(now_local) if tzinfo else None
+        # Friendly display string, e.g., "September 23rd 2025 @ 12:49AM"
+        def _ordinal(n: int) -> str:
+            if 11 <= (n % 100) <= 13:
+                suf = 'th'
+            else:
+                suf = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+            return f"{n}{suf}"
+        month = now_local.strftime("%B")
+        day_disp = _ordinal(now_local.day)
+        year = now_local.strftime("%Y")
+        hour24 = now_local.hour
+        hour12 = hour24 % 12 or 12
+        minute = now_local.minute
+        ampm = "AM" if hour24 < 12 else "PM"
+        display = f"{month} {day_disp} {year} @ {hour12}:{minute:02d}{ampm}"
+        return jsonify({
+            "epoch": int(now_local.timestamp()),
+            "iso": now_local.isoformat(),
+            "utc_iso": now_utc.isoformat().replace("+00:00", "Z"),
+            "timezone": str(tzinfo) if tzinfo else "",
+            "offset_seconds": int(offset.total_seconds()) if offset else 0,
+            "display": display,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------------------------
 # Auth + Users (DB-backed)
 # ---------------------------------------------
 def _now_ts() -> int:
