@@ -41,10 +41,30 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       const resp = await fetch('/api/scheduled_jobs');
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      const pretty = (st) => {
+        const s = String(st || '').toLowerCase();
+        const map = {
+          'immediately': 'Immediately',
+          'once': 'Once',
+          'every_5_minutes': 'Every 5 Minutes',
+          'every_10_minutes': 'Every 10 Minutes',
+          'every_15_minutes': 'Every 15 Minutes',
+          'every_30_minutes': 'Every 30 Minutes',
+          'every_hour': 'Every Hour',
+          'daily': 'Daily',
+          'weekly': 'Weekly',
+          'monthly': 'Monthly',
+          'yearly': 'Yearly',
+        };
+        if (map[s]) return map[s];
+        try {
+          return s.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+        } catch { return String(st || ''); }
+      };
       const rows = (data.jobs || []).map((j) => {
         const compName = (Array.isArray(j.components) && j.components[0]?.name) || "Demonstration Component";
         const targetText = Array.isArray(j.targets) ? `${j.targets.length} device${j.targets.length!==1?'s':''}` : '';
-        const occurrence = (j.schedule_type || 'immediately').replace(/^./, (c) => c.toUpperCase());
+        const occurrence = pretty(j.schedule_type || 'immediately');
         const fmt = (ts) => {
           if (!ts) return '';
           try {

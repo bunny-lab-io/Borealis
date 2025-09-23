@@ -594,6 +594,11 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
                 <Select size="small" fullWidth value={scheduleType} onChange={(e) => setScheduleType(e.target.value)}>
                   <MenuItem value="immediately">Immediately</MenuItem>
                   <MenuItem value="once">At selected date and time</MenuItem>
+                  <MenuItem value="every_5_minutes">Every 5 Minutes</MenuItem>
+                  <MenuItem value="every_10_minutes">Every 10 Minutes</MenuItem>
+                  <MenuItem value="every_15_minutes">Every 15 Minutes</MenuItem>
+                  <MenuItem value="every_30_minutes">Every 30 Minutes</MenuItem>
+                  <MenuItem value="every_hour">Every Hour</MenuItem>
                   <MenuItem value="daily">Daily</MenuItem>
                   <MenuItem value="weekly">Weekly</MenuItem>
                   <MenuItem value="monthly">Monthly</MenuItem>

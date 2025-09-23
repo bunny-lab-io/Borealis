@@ -297,6 +297,20 @@ class JobScheduler:
 
         # For recurring types, base off start_ts and last_run_ts
         last = last_run_ts if last_run_ts else None
+        # Minute/Hour intervals
+        if st in ("every_5_minutes", "every_10_minutes", "every_15_minutes", "every_30_minutes", "every_hour"):
+            period_map = {
+                "every_5_minutes": 5 * 60,
+                "every_10_minutes": 10 * 60,
+                "every_15_minutes": 15 * 60,
+                "every_30_minutes": 30 * 60,
+                "every_hour": 60 * 60,
+            }
+            period = period_map.get(st)
+            candidate = (last + period) if last else start_ts
+            while candidate is not None and candidate <= now_ts - 1:
+                candidate += period
+            return candidate
         if st == "daily":
             period = 86400
             candidate = last + period if last else start_ts
