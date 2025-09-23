@@ -381,7 +381,7 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
         </DialogActions>
       </Dialog>
 
-      {/* ---- NEW: Accent Color Picker Dialog ---- */}
+      {/* ---- Accent Color Picker Dialog ---- */}
       <Dialog
         open={colorDialogOpen}
         onClose={() => setColorDialogOpen(false)}

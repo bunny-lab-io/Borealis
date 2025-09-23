@@ -16,7 +16,7 @@ import {
   FilterAlt as FilterIcon,
   Groups as GroupsIcon,
   Work as JobsIcon,
-  AutoAwesomeMosaic as WorkflowsIcon,
+  Polyline as WorkflowsIcon,
   Code as ScriptIcon,
   PeopleOutline as CommunityIcon
 } from "@mui/icons-material";
