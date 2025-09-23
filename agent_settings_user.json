@@ -3,20 +3,7 @@
   "max_task_workers": 8,
   "config_file_watcher_interval": 2,
   "agent_id": "lab-operator-01-agent-66ba3ad3",
-  "regions": {
-    "node-1757304427610": {
-      "x": 2864,
-      "y": 258,
-      "w": 497,
-      "h": 442
-    },
-    "node-1758330030680": {
-      "x": 3058,
-      "y": 1016,
-      "w": 565,
-      "h": 126
-    }
-  },
+  "regions": {},
   "agent_operating_system": "Windows 11 Pro 24H2 Build 26100.6584",
   "created": "2025-09-02 23:57:00"
 }

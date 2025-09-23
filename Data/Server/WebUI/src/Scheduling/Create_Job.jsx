@@ -46,6 +46,15 @@ function SectionHeader({ title, action }) {
   );
 }
 
+// Recursive renderer for both Scripts and Workflows trees
+function renderTreeNodes(nodes = [], map = {}) {
+  return nodes.map((n) => (
+    <TreeItem key={n.id} itemId={n.id} label={n.label}>
+      {n.children && n.children.length ? renderTreeNodes(n.children, map) : null}
+    </TreeItem>
+  ));
+}
+
 // --- Scripts tree helpers (reuse approach from Quick_Job) ---
 function buildScriptTree(scripts, folders) {
   const map = {};
@@ -112,7 +121,7 @@ function buildWorkflowTree(workflows, folders) {
 
 function ComponentCard({ comp, onRemove }) {
   return (
-    <Paper sx={{ bgcolor: "#232323", border: "1px solid #333", p: 1, mb: 1 }}>
+    <Paper sx={{ bgcolor: "#2a2a2a", border: "1px solid #3a3a3a", p: 1.2, mb: 1.2, borderRadius: 1 }}>
       <Box sx={{ display: "flex", gap: 2 }}>
         <Box sx={{ flex: 1 }}>
           <Typography variant="subtitle2" sx={{ color: "#e6edf3" }}>
@@ -154,10 +163,8 @@ function ComponentCard({ comp, onRemove }) {
 export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [tab, setTab] = useState(0);
   const [jobName, setJobName] = useState("");
-  // Pre-seed with a placeholder component to keep flows working during UI build-out
-  const [components, setComponents] = useState([
-    { type: "script", path: "demo/component", name: "Demonstration Component", description: "placeholder" }
-  ]); // {type:'script'|'workflow', path, name, description}
+  // Components the job will run: {type:'script'|'workflow', path, name, description}
+  const [components, setComponents] = useState([]);
   const [targets, setTargets] = useState([]); // array of hostnames
   const [scheduleType, setScheduleType] = useState("immediately");
   const [startDateTime, setStartDateTime] = useState(() => dayjs().add(5, "minute").second(0));
@@ -345,7 +352,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
     if (initialJob && initialJob.id) {
       setJobName(initialJob.name || "");
       const comps = Array.isArray(initialJob.components) ? initialJob.components : [];
-      setComponents(comps.length ? comps : [{ type: "script", path: "demo/component", name: "Demonstration Component", description: "placeholder" }]);
+      setComponents(comps.length ? comps : []);
       setTargets(Array.isArray(initialJob.targets) ? initialJob.targets : []);
       setScheduleType(initialJob.schedule_type || initialJob.schedule?.type || "immediately");
       setStartDateTime(initialJob.start_ts ? dayjs(Number(initialJob.start_ts) * 1000).second(0) : (initialJob.schedule?.start ? dayjs(initialJob.schedule.start).second(0) : dayjs().add(5, "minute").second(0)));
@@ -380,19 +387,20 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const addSelectedComponent = () => {
     const map = compTab === "scripts" ? scriptMap : workflowMap;
     const node = map[selectedNodeId];
-    if (!node || node.isFolder) return;
+    if (!node || node.isFolder) return false;
     if (compTab === "scripts" && node.script) {
       setComponents((prev) => [
         ...prev,
         { type: "script", path: node.path, name: node.fileName || node.label, description: node.path }
       ]);
+      setSelectedNodeId("");
+      return true;
     } else if (compTab === "workflows" && node.workflow) {
-      setComponents((prev) => [
-        ...prev,
-        { type: "workflow", path: node.path, name: node.label, description: node.path }
-      ]);
+      alert("Workflows within Scheduled Jobs are not supported yet");
+      return false;
     }
     setSelectedNodeId("");
+    return false;
   };
 
   const openAddTargets = async () => {
@@ -659,7 +667,8 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
             </Box>
 
             <Box sx={{ mt: 2 }}>
-              <Typography variant="subtitle1" sx={{ color: '#7db7ff', mb: 1 }}>Devices</Typography>
+              <Typography variant="subtitle1" sx={{ color: '#7db7ff', mb: 0.5 }}>Devices</Typography>
+              <Typography variant="caption" sx={{ color: '#aaa' }}>Devices targeted by this scheduled job.  Individual job history is listed here.</Typography>
               <Table size="small">
                 <TableHead>
                   <TableRow>
@@ -700,7 +709,11 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
             </Box>
 
             <Box sx={{ mt: 2 }}>
-              {renderHistory()}
+              <Typography variant="subtitle1" sx={{ color: '#7db7ff', mb: 0.5 }}>Past Job History</Typography>
+              <Typography variant="caption" sx={{ color: '#aaa' }}>Historical job history summaries.  Detailed job history is not recorded.</Typography>
+              <Box sx={{ mt: 1 }}>
+                {renderHistory()}
+              </Box>
             </Box>
           </Box>
         )}
@@ -726,14 +739,15 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
           </Box>
           {compTab === "scripts" && (
             <Paper sx={{ p: 1, bgcolor: "#1e1e1e", maxHeight: 400, overflow: "auto" }}>
-              <SimpleTreeView onItemSelectionToggle={(_, id) => setSelectedNodeId(id)}>
-                {scriptTree.length ? scriptTree.map((n) => (
+              <SimpleTreeView onItemSelectionToggle={(_, id) => {
+                  const n = scriptMap[id];
+                  if (n && !n.isFolder) setSelectedNodeId(id);
+                }}>
+                {scriptTree.length ? (scriptTree.map((n) => (
                   <TreeItem key={n.id} itemId={n.id} label={n.label}>
-                    {n.children?.map((c) => (
-                      <TreeItem key={c.id} itemId={c.id} label={c.label} />
-                    ))}
+                    {n.children && n.children.length ? renderTreeNodes(n.children, scriptMap) : null}
                   </TreeItem>
-                )) : (
+                ))) : (
                   <Typography variant="body2" sx={{ color: "#888", p: 1 }}>No scripts found.</Typography>
                 )}
               </SimpleTreeView>
@@ -741,14 +755,15 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
           )}
           {compTab === "workflows" && (
             <Paper sx={{ p: 1, bgcolor: "#1e1e1e", maxHeight: 400, overflow: "auto" }}>
-              <SimpleTreeView onItemSelectionToggle={(_, id) => setSelectedNodeId(id)}>
-                {workflowTree.length ? workflowTree.map((n) => (
+              <SimpleTreeView onItemSelectionToggle={(_, id) => {
+                  const n = workflowMap[id];
+                  if (n && !n.isFolder) setSelectedNodeId(id);
+                }}>
+                {workflowTree.length ? (workflowTree.map((n) => (
                   <TreeItem key={n.id} itemId={n.id} label={n.label}>
-                    {n.children?.map((c) => (
-                      <TreeItem key={c.id} itemId={c.id} label={c.label} />
-                    ))}
+                    {n.children && n.children.length ? renderTreeNodes(n.children, workflowMap) : null}
                   </TreeItem>
-                )) : (
+                ))) : (
                   <Typography variant="body2" sx={{ color: "#888", p: 1 }}>No workflows found.</Typography>
                 )}
               </SimpleTreeView>
@@ -757,7 +772,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAddCompOpen(false)} sx={{ color: "#58a6ff" }}>Close</Button>
-          <Button onClick={() => { addSelectedComponent(); setAddCompOpen(false); }}
+          <Button onClick={() => { const ok = addSelectedComponent(); if (ok) setAddCompOpen(false); }}
             sx={{ color: "#58a6ff" }} disabled={!selectedNodeId}
           >Add</Button>
         </DialogActions>

@@ -13,23 +13,28 @@ import {
   TableRow,
   TableSortLabel,
   Switch,
-  IconButton,
-  Menu,
-  MenuItem,
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions
+  DialogActions,
+  Checkbox,
+  Popover,
+  TextField,
+  IconButton
 } from "@mui/material";
-import { MoreHoriz as MoreHorizIcon } from "@mui/icons-material";
+import FilterListIcon from "@mui/icons-material/FilterList";
 
 export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken }) {
   const [rows, setRows] = useState([]);
   const [orderBy, setOrderBy] = useState("name");
   const [order, setOrder] = useState("asc");
-  const [menuAnchor, setMenuAnchor] = useState(null);
-  const [menuRow, setMenuRow] = useState(null);
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [filters, setFilters] = useState({}); // {name, occurrence, lastRun, nextRun}
+  const [filterAnchor, setFilterAnchor] = useState(null); // { id, anchorEl }
+  const openFilter = (id) => (e) => setFilterAnchor({ id, anchorEl: e.currentTarget });
+  const closeFilter = () => setFilterAnchor(null);
+  const onFilterChange = (id) => (e) => setFilters((prev) => ({ ...prev, [id]: e.target.value }));
 
   const loadJobs = async () => {
     try {
@@ -85,14 +90,43 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     }
   };
 
+  const filtered = useMemo(() => {
+    const f = filters || {};
+    const match = (val, q) => String(val || "").toLowerCase().includes(String(q || "").toLowerCase());
+    return rows.filter((r) => (
+      (!f.name || match(r.name, f.name)) &&
+      (!f.occurrence || match(r.occurrence, f.occurrence)) &&
+      (!f.lastRun || match(r.lastRun, f.lastRun)) &&
+      (!f.nextRun || match(r.nextRun, f.nextRun))
+    ));
+  }, [rows, filters]);
+
   const sorted = useMemo(() => {
     const dir = order === "asc" ? 1 : -1;
-    return [...rows].sort((a, b) => {
+    return [...filtered].sort((a, b) => {
       const A = a[orderBy] || "";
       const B = b[orderBy] || "";
       return String(A).localeCompare(String(B)) * dir;
     });
-  }, [rows, orderBy, order]);
+  }, [filtered, orderBy, order]);
+
+  // Selection helpers
+  const anySelected = selected.size > 0;
+  const allSelected = useMemo(() => (sorted.length > 0 && sorted.every(r => selected.has(r.id))), [sorted, selected]);
+  const toggleSelect = (id, checked) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = (checked) => {
+    if (checked) {
+      setSelected(new Set(sorted.map(r => r.id)));
+    } else {
+      setSelected(new Set());
+    }
+  };
 
   const resultColor = (r) => {
     if (r === 'Success') return '#00d18c';
@@ -124,14 +158,25 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
           {sections.map(({key,color}) => (s[key] ? <span key={key} style={styleSeg(color, seg(s[key]))} /> : null))}
         </div>
         <div style={{ color: '#aaa', fontSize: 12, marginTop: 4 }}>
-          {['success','running','failed','timed_out','expired','pending']
-            .filter(k => s[k])
-            .map((k,i) => (
-              <span key={k} style={{ marginRight: 10 }}>
-                <span style={{ display: 'inline-block', width: 8, height: 8, background: sections.find(x=>x.key===k).color, marginRight: 6 }} />
-                {s[k]} {k.replace('_',' ').replace(/^./, c=>c.toUpperCase())}
-              </span>
-            ))}
+          {(() => {
+            const nonPendingKeys = ['success','running','failed','timed_out','expired'].filter(k => s[k]);
+            if (nonPendingKeys.length === 0 && s['pending']) {
+              // Pending-only: show simple "Scheduled" label under the bar
+              return <span>Scheduled</span>;
+            }
+            return (
+              <>
+                {['success','running','failed','timed_out','expired','pending']
+                  .filter(k => s[k])
+                  .map((k) => (
+                    <span key={k} style={{ marginRight: 10 }}>
+                      <span style={{ display: 'inline-block', width: 8, height: 8, background: sections.find(x=>x.key===k).color, marginRight: 6 }} />
+                      {s[k]} {k === 'pending' ? 'Scheduled' : k.replace('_',' ').replace(/^./, c=>c.toUpperCase())}
+                    </span>
+                  ))}
+              </>
+            );
+          })()}
         </div>
       </div>
     );
@@ -156,39 +201,63 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             List of automation jobs with schedules, results, and actions.
           </Typography>
         </Box>
-        <Button
-          variant="outlined"
-          size="small"
-          sx={{ color: "#58a6ff", borderColor: "#58a6ff", textTransform: "none" }}
-          onClick={() => onCreateJob && onCreateJob()}
-        >
-          Create Job
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Button
+            variant="outlined"
+            size="small"
+            disabled={!anySelected}
+            sx={{ color: anySelected ? "#ff6666" : "#666", borderColor: anySelected ? "#ff6666" : "#444", textTransform: "none" }}
+            onClick={() => setBulkDeleteOpen(true)}
+          >
+            Delete Job
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            sx={{ color: "#58a6ff", borderColor: "#58a6ff", textTransform: "none" }}
+            onClick={() => onCreateJob && onCreateJob()}
+          >
+            Create Job
+          </Button>
+        </Box>
       </Box>
       <Table size="small" sx={{ minWidth: 900 }}>
         <TableHead>
           <TableRow>
+            <TableCell width={40}>
+              <Checkbox
+                size="small"
+                checked={allSelected}
+                indeterminate={!allSelected && anySelected}
+                onChange={(e) => toggleSelectAll(e.target.checked)}
+              />
+            </TableCell>
             {[
               ["name", "Name"],
               ["scriptWorkflow", "Script / Workflow"],
               ["target", "Target"],
-              ["occurrence", "Schedule Occurrence"],
+              ["occurrence", "Recurrence"],
               ["lastRun", "Last Run"],
               ["nextRun", "Next Run"],
-            ["result", "Result"],
-            ["results", "Results"],
-            ["enabled", "Enabled"],
-            ["edit", "Edit Job"]
+              ["results", "Results"],
+              ["enabled", "Enabled"]
             ].map(([key, label]) => (
               <TableCell key={key} sortDirection={orderBy === key ? order : false}>
-                {key !== "edit" && key !== "results" ? (
-                  <TableSortLabel
-                    active={orderBy === key}
-                    direction={orderBy === key ? order : "asc"}
-                    onClick={() => handleSort(key)}
-                  >
-                    {label}
-                  </TableSortLabel>
+                {key !== "results" ? (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <TableSortLabel
+                      active={orderBy === key}
+                      direction={orderBy === key ? order : "asc"}
+                      onClick={() => handleSort(key)}
+                    >
+                      {label}
+                    </TableSortLabel>
+                    {['name','occurrence','lastRun','nextRun'].includes(key) ? (
+                      <IconButton size="small" onClick={openFilter(key)} sx={{ color: filters[key] ? '#58a6ff' : '#888' }}>
+                        <FilterListIcon fontSize="inherit" />
+                      </IconButton>
+                    ) : null}
+                  </Box>
                 ) : (
                   label
                 )}
@@ -199,26 +268,21 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         <TableBody>
           {sorted.map((r, i) => (
             <TableRow key={i} hover>
-              <TableCell>{r.name}</TableCell>
+              <TableCell width={40}>
+                <Checkbox size="small" checked={selected.has(r.id)} onChange={(e) => toggleSelect(r.id, e.target.checked)} />
+              </TableCell>
+              <TableCell>
+                <Button onClick={() => { const job = r.raw; if (job && typeof onEditJob === 'function') onEditJob(job); }}
+                  sx={{ color: '#58a6ff', textTransform: 'none', p: 0, minWidth: 0 }}
+                >
+                  {r.name}
+                </Button>
+              </TableCell>
               <TableCell>{r.scriptWorkflow || "Demonstration Component"}</TableCell>
               <TableCell>{r.target}</TableCell>
               <TableCell>{r.occurrence}</TableCell>
               <TableCell>{r.lastRun}</TableCell>
               <TableCell>{r.nextRun}</TableCell>
-              <TableCell>
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: 10,
-                    height: 10,
-                    borderRadius: 10,
-                    background: resultColor(r.result),
-                    marginRight: 8,
-                    verticalAlign: "middle"
-                  }}
-                />
-                {r.result}
-              </TableCell>
               <TableCell>
                 <ResultsBar counts={r.resultsCounts} />
               </TableCell>
@@ -238,11 +302,6 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
                   size="small"
                 />
               </TableCell>
-              <TableCell>
-                <IconButton size="small" onClick={(e) => { setMenuAnchor(e.currentTarget); setMenuRow(r); }} sx={{ color: "#58a6ff" }}>
-                  <MoreHorizIcon fontSize="small" />
-                </IconButton>
-              </TableCell>
             </TableRow>
           ))}
           {sorted.length === 0 && (
@@ -254,45 +313,65 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
           )}
         </TableBody>
       </Table>
-      <Menu
-        open={Boolean(menuAnchor)}
-        anchorEl={menuAnchor}
-        onClose={() => { setMenuAnchor(null); setMenuRow(null); }}
-        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
-      >
-        <MenuItem onClick={() => {
-          const job = menuRow?.raw;
-          setMenuAnchor(null); setMenuRow(null);
-          if (job && onEditJob) onEditJob(job);
-        }}>Edit</MenuItem>
-        <MenuItem onClick={() => { setMenuAnchor(null); setDeleteOpen(true); }}>Delete</MenuItem>
-      </Menu>
-
-      <Dialog open={deleteOpen} onClose={() => setDeleteOpen(false)}
+      <Dialog open={bulkDeleteOpen} onClose={() => setBulkDeleteOpen(false)}
         PaperProps={{ sx: { bgcolor: '#121212', color: '#fff' } }}
       >
-        <DialogTitle>Delete this Job?</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" sx={{ color: '#aaa' }}>
-            This will permanently remove the scheduled job from the list.
-          </Typography>
-        </DialogContent>
+        <DialogTitle>Are you sure you want to delete this job(s)?</DialogTitle>
         <DialogActions>
-          <Button onClick={() => setDeleteOpen(false)} sx={{ color: '#58a6ff' }}>Cancel</Button>
+          <Button onClick={() => setBulkDeleteOpen(false)} sx={{ color: '#58a6ff' }}>Cancel</Button>
           <Button onClick={async () => {
             try {
-              if (menuRow?.id) {
-                await fetch(`/api/scheduled_jobs/${menuRow.id}`, { method: 'DELETE' });
-                setRows((prev) => prev.filter((r) => r.id !== menuRow.id));
-              }
+              const ids = Array.from(selected);
+              await Promise.allSettled(ids.map(id => fetch(`/api/scheduled_jobs/${id}`, { method: 'DELETE' })));
+              setRows(prev => prev.filter(r => !selected.has(r.id)));
+              setSelected(new Set());
             } catch {}
-            setDeleteOpen(false);
-            setMenuRow(null);
-            // Optionally reload to be safe
+            setBulkDeleteOpen(false);
             try { await loadJobs(); } catch {}
-          }} variant="outlined" sx={{ color: '#58a6ff', borderColor: '#58a6ff' }}>Delete</Button>
+          }} variant="outlined" sx={{ color: '#58a6ff', borderColor: '#58a6ff' }}>Confirm</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Column filter popover */}
+      <Popover
+        open={Boolean(filterAnchor)}
+        anchorEl={filterAnchor?.anchorEl || null}
+        onClose={closeFilter}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        PaperProps={{ sx: { bgcolor: '#1e1e1e', p: 1 } }}
+      >
+        {filterAnchor && (
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <TextField
+              autoFocus
+              size="small"
+              placeholder={`Filter ${(
+                {
+                  name: 'Name',
+                  occurrence: 'Recurrence',
+                  lastRun: 'Last Run',
+                  nextRun: 'Next Run'
+                })[filterAnchor.id] || ''}`}
+              value={filters[filterAnchor.id] || ''}
+              onChange={onFilterChange(filterAnchor.id)}
+              onKeyDown={(e) => { if (e.key === 'Escape') closeFilter(); }}
+              sx={{
+                input: { color: '#fff' },
+                minWidth: 220,
+                '& .MuiOutlinedInput-root': { '& fieldset': { borderColor: '#555' }, '&:hover fieldset': { borderColor: '#888' } }
+              }}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => { setFilters((prev) => ({ ...prev, [filterAnchor.id]: '' })); closeFilter(); }}
+              sx={{ textTransform: 'none', borderColor: '#555', color: '#bbb' }}
+            >
+              Clear
+            </Button>
+          </Box>
+        )}
+      </Popover>
     </Paper>
   );
 }
