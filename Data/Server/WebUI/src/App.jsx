@@ -12,13 +12,14 @@ import NavigationSidebar from "./Navigation_Sidebar";
 // Styling Imports
 import {
   AppBar, Toolbar, Typography, Box, Menu, MenuItem, Button,
-  CssBaseline, ThemeProvider, createTheme
+  CssBaseline, ThemeProvider, createTheme, Breadcrumbs
 } from "@mui/material";
 import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
   InfoOutlined as InfoOutlinedIcon,
   GitHub as GitHub,
-  People as PeopleIcon
+  People as PeopleIcon,
+  NavigateNext as NavigateNextIcon
 } from "@mui/icons-material";
 
 // Workflow Editor Imports
@@ -103,6 +104,69 @@ export default function App() {
   const [userRole, setUserRole] = useState(null);
   const [editingJob, setEditingJob] = useState(null);
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
+
+  // Build breadcrumb items for current view
+  const breadcrumbs = React.useMemo(() => {
+    const items = [];
+    switch (currentPage) {
+      case "sites":
+        items.push({ label: "Sites" });
+        break;
+      case "devices":
+        items.push({ label: "Devices" });
+        break;
+      case "device_details":
+        items.push({ label: "Devices", page: "devices" });
+        items.push({ label: "Device Details" });
+        break;
+      case "jobs":
+        items.push({ label: "Automation", page: "jobs" });
+        items.push({ label: "Scheduled Jobs", page: "jobs" });
+        break;
+      case "create_job":
+        items.push({ label: "Automation", page: "jobs" });
+        items.push({ label: "Scheduled Jobs", page: "jobs" });
+        items.push({ label: editingJob ? "Edit Job" : "Create Job" });
+        break;
+      case "workflows":
+        items.push({ label: "Automation", page: "jobs" });
+        items.push({ label: "Workflows" });
+        break;
+      case "workflow-editor":
+        items.push({ label: "Automation", page: "jobs" });
+        items.push({ label: "Workflows", page: "workflows" });
+        items.push({ label: "Flow Editor" });
+        break;
+      case "scripts":
+        items.push({ label: "Automation", page: "jobs" });
+        items.push({ label: "Scripts" });
+        break;
+      case "community":
+        items.push({ label: "Automation", page: "jobs" });
+        items.push({ label: "Community Content" });
+        break;
+      case "admin_users":
+        items.push({ label: "Admin Settings", page: "admin_users" });
+        items.push({ label: "User Management" });
+        break;
+      case "server_info":
+        items.push({ label: "Admin Settings", page: "admin_users" });
+        items.push({ label: "Server Info" });
+        break;
+      case "filters":
+        items.push({ label: "Filters & Groups", page: "filters" });
+        items.push({ label: "Filters" });
+        break;
+      case "groups":
+        items.push({ label: "Filters & Groups", page: "filters" });
+        items.push({ label: "Groups" });
+        break;
+      default:
+        // Fallback to a neutral crumb if unknown
+        if (currentPage) items.push({ label: String(currentPage) });
+    }
+    return items;
+  }, [currentPage, selectedDevice, editingJob]);
 
   useEffect(() => {
     const session = localStorage.getItem("borealis_session");
@@ -507,9 +571,60 @@ export default function App() {
       <CssBaseline />
       <Box sx={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <AppBar position="static" sx={{ bgcolor: "#16191d" }}>
-          <Toolbar sx={{ minHeight: "36px" }}>
+          <Toolbar sx={{ minHeight: "36px", position: 'relative' }}>
             <Box component="img" src="/Borealis_Logo_Full.png" alt="Borealis Logo" sx={{ height: "52px", marginRight: "8px" }} />
-            <Typography variant="h6" sx={{ flexGrow: 1, fontSize: "1rem" }}></Typography>
+            {/* Breadcrumbs inline in top bar (transparent), aligned to content area */}
+            <Box
+              sx={{
+                position: 'absolute',
+                left: 'calc(260px - 2px)', // fine-tuned to align with black content edge
+                right: 160,   // keep clear of About
+                bottom: 6,
+                display: 'flex',
+                alignItems: 'flex-end',
+                pointerEvents: 'none' // avoid interfering with About menu positioning
+              }}
+            >
+              <Breadcrumbs
+                separator={<NavigateNextIcon fontSize="inherit" sx={{ color: "#6b6b6b" }} />}
+                aria-label="breadcrumb"
+                sx={{
+                  color: "#9aa0a6",
+                  fontSize: "0.825rem", // 50% larger than previous
+                  '& .MuiBreadcrumbs-separator': { mx: 0.6 },
+                  pointerEvents: 'auto'
+                }}
+              >
+                {breadcrumbs.map((c, idx) => {
+                  const isLast = idx === breadcrumbs.length - 1;
+                  if (!isLast && c.page) {
+                    return (
+                      <Button
+                        key={idx}
+                        onClick={() => setCurrentPage(c.page)}
+                        size="small"
+                        sx={{
+                          color: "#7db7ff",
+                          textTransform: "none",
+                          minWidth: 0,
+                          p: 0,
+                          fontSize: "0.825rem"
+                        }}
+                      >
+                        {c.label}
+                      </Button>
+                    );
+                  }
+                  return (
+                    <Typography key={idx} component="span" sx={{ color: isLast ? "#e0e0e0" : "#9aa0a6", fontSize: "0.825rem" }}>
+                      {c.label}
+                    </Typography>
+                  );
+                })}
+              </Breadcrumbs>
+            </Box>
+            {/* Spacer to keep About aligned right */}
+            <Box sx={{ flexGrow: 1 }} />
             <Button
               color="inherit"
               onClick={handleAboutMenuOpen}
