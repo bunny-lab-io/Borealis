@@ -110,13 +110,16 @@ export default function App() {
     const items = [];
     switch (currentPage) {
       case "sites":
-        items.push({ label: "Sites" });
+        items.push({ label: "Sites", page: "sites" });
+        items.push({ label: "Site List", page: "sites" });
         break;
       case "devices":
-        items.push({ label: "Devices" });
+        items.push({ label: "Devices", page: "devices" });
+        items.push({ label: "Device List", page: "devices" });
         break;
       case "device_details":
         items.push({ label: "Devices", page: "devices" });
+        items.push({ label: "Device List", page: "devices" });
         items.push({ label: "Device Details" });
         break;
       case "jobs":
@@ -126,11 +129,11 @@ export default function App() {
       case "create_job":
         items.push({ label: "Automation", page: "jobs" });
         items.push({ label: "Scheduled Jobs", page: "jobs" });
-        items.push({ label: editingJob ? "Edit Job" : "Create Job" });
+        items.push({ label: editingJob ? "Edit Job" : "Create Job", page: "create_job" });
         break;
       case "workflows":
         items.push({ label: "Automation", page: "jobs" });
-        items.push({ label: "Workflows" });
+        items.push({ label: "Workflows", page: "workflows" });
         break;
       case "workflow-editor":
         items.push({ label: "Automation", page: "jobs" });
@@ -139,27 +142,27 @@ export default function App() {
         break;
       case "scripts":
         items.push({ label: "Automation", page: "jobs" });
-        items.push({ label: "Scripts" });
+        items.push({ label: "Scripts", page: "scripts" });
         break;
       case "community":
         items.push({ label: "Automation", page: "jobs" });
-        items.push({ label: "Community Content" });
+        items.push({ label: "Community Content", page: "community" });
         break;
       case "admin_users":
         items.push({ label: "Admin Settings", page: "admin_users" });
-        items.push({ label: "User Management" });
+        items.push({ label: "User Management", page: "admin_users" });
         break;
       case "server_info":
         items.push({ label: "Admin Settings", page: "admin_users" });
-        items.push({ label: "Server Info" });
+        items.push({ label: "Server Info", page: "server_info" });
         break;
       case "filters":
         items.push({ label: "Filters & Groups", page: "filters" });
-        items.push({ label: "Filters" });
+        items.push({ label: "Filters", page: "filters" });
         break;
       case "groups":
         items.push({ label: "Filters & Groups", page: "filters" });
-        items.push({ label: "Groups" });
+        items.push({ label: "Groups", page: "groups" });
         break;
       default:
         // Fallback to a neutral crumb if unknown
@@ -596,8 +599,7 @@ export default function App() {
                 }}
               >
                 {breadcrumbs.map((c, idx) => {
-                  const isLast = idx === breadcrumbs.length - 1;
-                  if (!isLast && c.page) {
+                  if (c.page) {
                     return (
                       <Button
                         key={idx}
@@ -616,7 +618,7 @@ export default function App() {
                     );
                   }
                   return (
-                    <Typography key={idx} component="span" sx={{ color: isLast ? "#e0e0e0" : "#9aa0a6", fontSize: "0.825rem" }}>
+                    <Typography key={idx} component="span" sx={{ color: "#e0e0e0", fontSize: "0.825rem" }}>
                       {c.label}
                     </Typography>
                   );
