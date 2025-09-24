@@ -8,6 +8,8 @@ import requests
 from flask import Flask, request, jsonify, Response, send_from_directory, make_response, session
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 import time
 import os  # To Read Production ReactJS Server Folder
@@ -32,11 +34,32 @@ app = Flask(
     static_url_path=''
 )
 
-# Enable CORS on All Routes (allow credentials for dev UI)
-CORS(app, supports_credentials=True)
+# Respect reverse proxy headers for scheme/host so cookies and redirects behave
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
+# Enable CORS on All Routes (allow credentials). Optionally lock down via env.
+_cors_origins = os.environ.get('BOREALIS_CORS_ORIGINS')  # e.g. "https://ui.example.com,https://admin.example.com"
+if _cors_origins:
+    origins = [o.strip() for o in _cors_origins.split(',') if o.strip()]
+    CORS(app, supports_credentials=True, origins=origins)
+else:
+    CORS(app, supports_credentials=True)
 
 # Basic secret key for session cookies (can be overridden via env)
 app.secret_key = os.environ.get('BOREALIS_SECRET', 'borealis-dev-secret')
+
+# Session cookie policy (tunable for dev/prod/reverse proxy)
+# Defaults keep dev working; override via env in production/proxy scenarios.
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE=os.environ.get('BOREALIS_COOKIE_SAMESITE', 'Lax'),  # set to 'None' when UI/API are on different sites
+    SESSION_COOKIE_SECURE=(os.environ.get('BOREALIS_COOKIE_SECURE', '0').lower() in ('1', 'true', 'yes')),
+)
+
+# Optionally pin cookie domain if served under a fixed hostname (leave unset for host-only/IP dev)
+_cookie_domain = os.environ.get('BOREALIS_COOKIE_DOMAIN')  # e.g. ".example.com" or "borealis.bunny-lab.io"
+if _cookie_domain:
+    app.config['SESSION_COOKIE_DOMAIN'] = _cookie_domain
 
 socketio = SocketIO(
     app,
@@ -136,11 +159,24 @@ def _user_row_to_dict(row):
 
 
 def _current_user():
+    # Prefer server-side session if present
     u = session.get('username')
     role = session.get('role')
-    if not u:
-        return None
-    return {"username": u, "role": role or "User"}
+    if u:
+        return {"username": u, "role": role or "User"}
+
+    # Otherwise allow token-based auth (Authorization: Bearer <token> or borealis_auth cookie)
+    token = None
+    auth = request.headers.get('Authorization') or ''
+    if auth.lower().startswith('bearer '):
+        token = auth.split(' ', 1)[1].strip()
+    if not token:
+        token = request.cookies.get('borealis_auth')
+    if token:
+        user = _verify_token(token)
+        if user:
+            return user
+    return None
 
 
 def _require_login():
@@ -157,6 +193,30 @@ def _require_admin():
     if (user.get('role') or '').lower() != 'admin':
         return jsonify({"error": "forbidden"}), 403
     return None
+
+
+# ---------------------------------------------
+# Token helpers (for dev/proxy-friendly auth)
+# ---------------------------------------------
+def _token_serializer():
+    secret = app.secret_key or 'borealis-dev-secret'
+    return URLSafeTimedSerializer(secret, salt='borealis-auth')
+
+
+def _make_token(username: str, role: str) -> str:
+    s = _token_serializer()
+    payload = {"u": username, "r": role or 'User', "ts": _now_ts()}
+    return s.dumps(payload)
+
+
+def _verify_token(token: str):
+    try:
+        s = _token_serializer()
+        max_age = int(os.environ.get('BOREALIS_TOKEN_TTL_SECONDS', 60*60*24*30))  # 30 days
+        data = s.loads(token, max_age=max_age)
+        return {"username": data.get('u'), "role": data.get('r') or 'User'}
+    except (BadSignature, SignatureExpired, Exception):
+        return None
 
 
 @app.route("/api/auth/login", methods=["POST"])
@@ -193,7 +253,16 @@ def api_login():
         # set session cookie
         session['username'] = row[1]
         session['role'] = role
-        return jsonify({"status": "ok", "username": row[1], "role": role})
+
+        # also issue a signed bearer token and set a dev-friendly cookie
+        token = _make_token(row[1], role)
+        resp = jsonify({"status": "ok", "username": row[1], "role": role, "token": token})
+        # mirror session cookie flags for the token cookie
+        samesite = app.config.get('SESSION_COOKIE_SAMESITE', 'Lax')
+        secure = bool(app.config.get('SESSION_COOKIE_SECURE', False))
+        domain = app.config.get('SESSION_COOKIE_DOMAIN', None)
+        resp.set_cookie('borealis_auth', token, httponly=False, samesite=samesite, secure=secure, domain=domain, path='/')
+        return resp
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -201,7 +270,10 @@ def api_login():
 @app.route("/api/auth/logout", methods=["POST"])  # simple logout
 def api_logout():
     session.clear()
-    return jsonify({"status": "ok"})
+    resp = jsonify({"status": "ok"})
+    # Clear token cookie as well
+    resp.set_cookie('borealis_auth', '', expires=0, path='/')
+    return resp
 
 
 @app.route("/api/auth/me", methods=["GET"])  # whoami

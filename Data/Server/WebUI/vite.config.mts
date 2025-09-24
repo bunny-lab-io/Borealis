@@ -9,10 +9,16 @@ export default defineConfig({
     open: true,
     host: true,
     strictPort: true,
-    allowedHosts: ['localhost','127.0.0.1','borealis.bunny-lab.io'],
+    // Allow LAN/IP access during dev (so other devices can reach Vite)
+    // If you want to restrict, replace `true` with an explicit allowlist.
+    allowedHosts: true,
     proxy: {
-      '/api': 'http://localhost:5000',
-      '/socket.io': { target:'ws://localhost:5000', ws:true }
+      // Ensure cookies/headers are forwarded correctly to Flask
+      '/api': {
+        target: 'http://127.0.0.1:5000',
+        changeOrigin: true,
+      },
+      '/socket.io': { target:'ws://127.0.0.1:5000', ws:true, changeOrigin: true }
     }
   },
   build: {

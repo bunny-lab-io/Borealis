@@ -7,25 +7,43 @@ export default function Login({ onLogin }) {
   const [error, setError] = useState("");
 
   const sha512 = async (text) => {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(text);
-    const hashBuffer = await crypto.subtle.digest("SHA-512", data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    try {
+      if (window.crypto && window.crypto.subtle && window.isSecureContext) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(text);
+        const hashBuffer = await window.crypto.subtle.digest("SHA-512", data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+      }
+    } catch (_) {
+      // fall through to return null
+    }
+    // Not a secure context or subtle crypto unavailable
+    return null;
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
       const hash = await sha512(password);
+      const body = hash
+        ? { username, password_sha512: hash }
+        : { username, password };
       const resp = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ username, password_sha512: hash })
+        body: JSON.stringify(body)
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      // Persist token via cookie as a proxy-friendly fallback
+      if (data?.token) {
+        try {
+          // Set cookie for current host; SameSite=Lax for dev
+          document.cookie = `borealis_auth=${data.token}; Path=/; SameSite=Lax`;
+        } catch (_) {}
+      }
       setError("");
       onLogin({ username: data.username, role: data.role });
     } catch (err) {
