@@ -68,7 +68,7 @@ async function sha512(text) {
   return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export default function UserManagement() {
+export default function UserManagement({ isAdmin = false }) {
   const [rows, setRows] = useState([]); // {username, display_name, role, last_login}
   const [orderBy, setOrderBy] = useState("username");
   const [order, setOrder] = useState("asc");
@@ -113,7 +113,7 @@ export default function UserManagement() {
   }, []);
 
   useEffect(() => {
-    fetchUsers();
+    if (!isAdmin) return;
     (async () => {
       try {
         const resp = await fetch("/api/auth/me", { credentials: "include" });
@@ -123,7 +123,8 @@ export default function UserManagement() {
         }
       } catch {}
     })();
-  }, [fetchUsers]);
+    fetchUsers();
+  }, [fetchUsers, isAdmin]);
 
   const handleSort = (col) => {
     if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
@@ -290,6 +291,8 @@ export default function UserManagement() {
       alert("Failed to create user");
     }
   };
+
+  if (!isAdmin) return null;
 
   return (
     <>

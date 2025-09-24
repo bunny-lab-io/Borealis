@@ -5,7 +5,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { ReactFlowProvider } from "reactflow";
 import "reactflow/dist/style.css";
 import {
-  CloseAllDialog, CreditsDialog, RenameTabDialog, TabContextMenu
+  CloseAllDialog, CreditsDialog, RenameTabDialog, TabContextMenu, NotAuthorizedDialog
 } from "./Dialogs";
 import NavigationSidebar from "./Navigation_Sidebar";
 
@@ -104,6 +104,7 @@ export default function App() {
   const [userRole, setUserRole] = useState(null);
   const [editingJob, setEditingJob] = useState(null);
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
+  const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
 
   // Build breadcrumb items for current view
   const breadcrumbs = React.useMemo(() => {
@@ -383,6 +384,15 @@ export default function App() {
     [tabs, activeTabId]
   );
 
+  const isAdmin = (String(userRole || '').toLowerCase() === 'admin');
+
+  useEffect(() => {
+    if (!isAdmin && (currentPage === 'admin_users' || currentPage === 'server_info')) {
+      setNotAuthorizedOpen(true);
+      setCurrentPage('devices');
+    }
+  }, [currentPage, isAdmin]);
+
   const renderMainContent = () => {
     switch (currentPage) {
       case "sites":
@@ -496,10 +506,10 @@ export default function App() {
         return <ScriptEditor />;
 
       case "admin_users":
-        return <UserManagement />;
+        return <UserManagement isAdmin={isAdmin} />;
 
       case "server_info":
-        return <ServerInfo />;
+        return <ServerInfo isAdmin={isAdmin} />;
 
       case "workflow-editor":
         return (
@@ -647,7 +657,7 @@ export default function App() {
           </Toolbar>
         </AppBar>
         <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
-          <NavigationSidebar currentPage={currentPage} onNavigate={setCurrentPage} isAdmin={(String(userRole||'').toLowerCase()==='admin')} />
+          <NavigationSidebar currentPage={currentPage} onNavigate={setCurrentPage} isAdmin={isAdmin} />
           <Box sx={{ flexGrow: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
             {renderMainContent()}
           </Box>
@@ -668,6 +678,7 @@ export default function App() {
         onRename={handleRenameTab}
         onCloseTab={handleCloseTab}
       />
+      <NotAuthorizedDialog open={notAuthorizedOpen} onClose={() => setNotAuthorizedOpen(false)} />
     </ThemeProvider>
   );
 }

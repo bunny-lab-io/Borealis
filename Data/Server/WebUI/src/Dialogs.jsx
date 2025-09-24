@@ -30,6 +30,26 @@ export function CloseAllDialog({ open, onClose, onConfirm }) {
   );
 }
 
+export function NotAuthorizedDialog({ open, onClose }) {
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+    >
+      <DialogTitle>Not Authorized</DialogTitle>
+      <DialogContent>
+        <DialogContentText sx={{ color: "#ccc" }}>
+          You are not authorized to access this section.
+        </DialogContentText>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} sx={{ color: "#58a6ff" }}>OK</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 export function CreditsDialog({ open, onClose }) {
   return (
     <Dialog open={open} onClose={onClose} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>

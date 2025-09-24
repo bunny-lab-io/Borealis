@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { Paper, Box, Typography } from "@mui/material";
 
-export default function ServerInfo() {
+export default function ServerInfo({ isAdmin = false }) {
   const [serverTime, setServerTime] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    if (!isAdmin) return;
     let isMounted = true;
     const fetchTime = async () => {
       try {
@@ -23,7 +24,9 @@ export default function ServerInfo() {
     fetchTime();
     const id = setInterval(fetchTime, 60000); // update once per minute
     return () => { isMounted = false; clearInterval(id); };
-  }, []);
+  }, [isAdmin]);
+
+  if (!isAdmin) return null;
 
   return (
     <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
