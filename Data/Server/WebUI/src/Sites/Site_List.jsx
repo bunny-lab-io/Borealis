@@ -64,6 +64,18 @@ export default function SiteList({ onOpenDevicesForSite }) {
 
   useEffect(() => { fetchSites(); }, [fetchSites]);
 
+  // Apply initial filters from global search
+  useEffect(() => {
+    try {
+      const json = localStorage.getItem('site_list_initial_filters');
+      if (json) {
+        const obj = JSON.parse(json);
+        if (obj && typeof obj === 'object') setFilters((prev) => ({ ...prev, ...obj }));
+        localStorage.removeItem('site_list_initial_filters');
+      }
+    } catch {}
+  }, []);
+
   const handleSort = (col) => {
     if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
     else { setOrderBy(col); setOrder("asc"); }
@@ -320,4 +332,3 @@ export default function SiteList({ onOpenDevicesForSite }) {
     </Paper>
   );
 }
-

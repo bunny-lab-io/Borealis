@@ -1388,6 +1388,150 @@ def assign_devices_to_site():
 
 
 # ---------------------------------------------
+# Global Search (suggestions)
+# ---------------------------------------------
+
+def _load_device_records(limit: int = 0):
+    """
+    Load device records from SQLite and flatten commonly-searched fields
+    from the JSON details column. Returns a list of dicts with keys:
+      hostname, description, last_user, internal_ip, external_ip, site_id, site_name
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT hostname, description, details FROM device_details")
+        rows = cur.fetchall()
+
+        # Build device -> site mapping
+        cur.execute(
+            """
+            SELECT ds.device_hostname, s.id, s.name
+            FROM device_sites ds
+            JOIN sites s ON s.id = ds.site_id
+            """
+        )
+        site_map = {r[0]: {"site_id": r[1], "site_name": r[2]} for r in cur.fetchall()}
+
+        conn.close()
+    except Exception:
+        rows = []
+        site_map = {}
+
+    out = []
+    for hostname, description, details_json in rows:
+        d = {}
+        try:
+            d = json.loads(details_json or "{}")
+        except Exception:
+            d = {}
+        summary = d.get("summary") or {}
+        rec = {
+            "hostname": hostname or summary.get("hostname") or "",
+            "description": (description or summary.get("description") or ""),
+            "last_user": summary.get("last_user") or summary.get("last_user_name") or "",
+            "internal_ip": summary.get("internal_ip") or "",
+            "external_ip": summary.get("external_ip") or "",
+        }
+        site_info = site_map.get(rec["hostname"]) or {}
+        rec.update({
+            "site_id": site_info.get("site_id"),
+            "site_name": site_info.get("site_name") or "",
+        })
+        out.append(rec)
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
+@app.route("/api/search/suggest", methods=["GET"])
+def search_suggest():
+    """
+    Suggest results for the top-bar search with category selector.
+    Query parameters:
+      field: one of hostname|description|last_user|internal_ip|external_ip|serial_number|site_name|site_description
+      q: text fragment (case-insensitive contains)
+      limit: max results per group (default 5)
+    Returns: { devices: [...], sites: [...], field: "...", q: "..." }
+    """
+    field = (request.args.get("field") or "hostname").strip().lower()
+    q = (request.args.get("q") or "").strip()
+    try:
+        limit = int(request.args.get("limit") or 5)
+    except Exception:
+        limit = 5
+
+    q_lc = q.lower()
+
+    device_fields = {
+        "hostname": "hostname",
+        "description": "description",
+        "last_user": "last_user",
+        "internal_ip": "internal_ip",
+        "external_ip": "external_ip",
+        "serial_number": "serial_number",  # placeholder, currently not stored
+    }
+    site_fields = {
+        "site_name": "name",
+        "site_description": "description",
+    }
+
+    devices = []
+    sites = []
+
+    # Device suggestions
+    if field in device_fields:
+        key = device_fields[field]
+        for rec in _load_device_records():
+            # serial_number is not currently tracked; produce no suggestions
+            if key == "serial_number":
+                break
+            val = str(rec.get(key) or "")
+            if not q or q_lc in val.lower():
+                devices.append({
+                    "hostname": rec.get("hostname") or "",
+                    "value": val,
+                    "site_id": rec.get("site_id"),
+                    "site_name": rec.get("site_name") or "",
+                    "description": rec.get("description") or "",
+                    "last_user": rec.get("last_user") or "",
+                    "internal_ip": rec.get("internal_ip") or "",
+                    "external_ip": rec.get("external_ip") or "",
+                })
+            if len(devices) >= limit:
+                break
+
+    # Site suggestions
+    if field in site_fields:
+        column = site_fields[field]
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT id, name, description FROM sites")
+            for sid, name, desc in cur.fetchall():
+                val = name if column == "name" else (desc or "")
+                if not q or q_lc in str(val).lower():
+                    sites.append({
+                        "site_id": sid,
+                        "site_name": name,
+                        "site_description": desc or "",
+                        "value": val or "",
+                    })
+                if len(sites) >= limit:
+                    break
+            conn.close()
+        except Exception:
+            pass
+
+    return jsonify({
+        "field": field,
+        "q": q,
+        "devices": devices,
+        "sites": sites,
+    })
+
+
+# ---------------------------------------------
 # Device List Views API
 # ---------------------------------------------
 def _row_to_view(row):

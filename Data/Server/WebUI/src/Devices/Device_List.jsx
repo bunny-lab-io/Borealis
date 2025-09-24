@@ -263,6 +263,20 @@ export default function DeviceList({ onSelectDevice }) {
   // Apply initial site filter from Sites page
   useEffect(() => {
     try {
+      // General initial filters (set by global search)
+      const json = localStorage.getItem('device_list_initial_filters');
+      if (json) {
+        const obj = JSON.parse(json);
+        if (obj && typeof obj === 'object') {
+          setFilters((prev) => ({ ...prev, ...obj }));
+          // Optionally ensure Site column exists when site filter is present
+          if (obj.site) {
+            setColumns((prev) => (prev.some((c) => c.id === 'site') ? prev : [{ id: 'status', label: COL_LABELS.status }, { id: 'site', label: COL_LABELS.site }, ...prev.filter((c) => c.id !== 'status') ]));
+          }
+        }
+        localStorage.removeItem('device_list_initial_filters');
+      }
+
       const site = localStorage.getItem('device_list_initial_site_filter');
       if (site && site.trim()) {
         setColumns((prev) => {
