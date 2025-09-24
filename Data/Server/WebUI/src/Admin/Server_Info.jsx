@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { Paper, Box, Typography } from "@mui/material";
+import { Paper, Box, Typography, Button } from "@mui/material";
+import { GitHub as GitHubIcon, InfoOutlined as InfoIcon } from "@mui/icons-material";
+import { CreditsDialog } from "../Dialogs.jsx";
 
 export default function ServerInfo({ isAdmin = false }) {
   const [serverTime, setServerTime] = useState(null);
   const [error, setError] = useState(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -39,7 +42,32 @@ export default function ServerInfo({ isAdmin = false }) {
             {error ? `Error: ${error}` : (serverTime || 'Loading...')}
           </Typography>
         </Box>
+
+        <Box sx={{ mt: 3 }}>
+          <Typography variant="subtitle1" sx={{ color: "#58a6ff", mb: 1 }}>Project Links</Typography>
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+            <Button
+              variant="outlined"
+              color="primary"
+              startIcon={<GitHubIcon />}
+              onClick={() => window.open("https://github.com/bunny-lab-io/Borealis", "_blank")}
+              sx={{ borderColor: '#3a3a3a', color: '#7db7ff' }}
+            >
+              GitHub Project
+            </Button>
+            <Button
+              variant="outlined"
+              color="inherit"
+              startIcon={<InfoIcon />}
+              onClick={() => setAboutOpen(true)}
+              sx={{ borderColor: '#3a3a3a', color: '#ddd' }}
+            >
+              About Borealis
+            </Button>
+          </Box>
+        </Box>
       </Box>
+      <CreditsDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </Paper>
   );
 }

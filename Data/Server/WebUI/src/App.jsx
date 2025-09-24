@@ -5,7 +5,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { ReactFlowProvider } from "reactflow";
 import "reactflow/dist/style.css";
 import {
-  CloseAllDialog, CreditsDialog, RenameTabDialog, TabContextMenu, NotAuthorizedDialog
+  CloseAllDialog, RenameTabDialog, TabContextMenu, NotAuthorizedDialog
 } from "./Dialogs";
 import NavigationSidebar from "./Navigation_Sidebar";
 
@@ -16,9 +16,7 @@ import {
 } from "@mui/material";
 import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
-  InfoOutlined as InfoOutlinedIcon,
-  GitHub as GitHub,
-  People as PeopleIcon,
+  Logout as LogoutIcon,
   NavigateNext as NavigateNextIcon
 } from "@mui/icons-material";
 
@@ -91,8 +89,7 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState("devices");
   const [selectedDevice, setSelectedDevice] = useState(null);
 
-  const [aboutAnchorEl, setAboutAnchorEl] = useState(null);
-  const [creditsDialogOpen, setCreditsDialogOpen] = useState(false);
+  const [userMenuAnchorEl, setUserMenuAnchorEl] = useState(null);
   const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameTabId, setRenameTabId] = useState(null);
@@ -102,6 +99,7 @@ export default function App() {
   const fileInputRef = useRef(null);
   const [user, setUser] = useState(null);
   const [userRole, setUserRole] = useState(null);
+  const [userDisplayName, setUserDisplayName] = useState(null);
   const [editingJob, setEditingJob] = useState(null);
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
   const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
@@ -180,6 +178,7 @@ export default function App() {
         if (Date.now() - data.timestamp < 3600 * 1000) {
           setUser(data.username);
           setUserRole(data.role || null);
+          setUserDisplayName(data.display_name || data.username);
         } else {
           localStorage.removeItem("borealis_session");
         }
@@ -194,9 +193,10 @@ export default function App() {
           const me = await resp.json();
           setUser(me.username);
           setUserRole(me.role || null);
+          setUserDisplayName(me.display_name || me.username);
           localStorage.setItem(
             "borealis_session",
-            JSON.stringify({ username: me.username, role: me.role, timestamp: Date.now() })
+            JSON.stringify({ username: me.username, display_name: me.display_name || me.username, role: me.role, timestamp: Date.now() })
           );
         }
       } catch {}
@@ -206,10 +206,25 @@ export default function App() {
   const handleLoginSuccess = ({ username, role }) => {
     setUser(username);
     setUserRole(role || null);
+    setUserDisplayName(username);
     localStorage.setItem(
       "borealis_session",
-      JSON.stringify({ username, role: role || null, timestamp: Date.now() })
+      JSON.stringify({ username, display_name: username, role: role || null, timestamp: Date.now() })
     );
+    // Refresh full profile (to get display_name) in background
+    (async () => {
+      try {
+        const resp = await fetch('/api/auth/me', { credentials: 'include' });
+        if (resp.ok) {
+          const me = await resp.json();
+          setUserDisplayName(me.display_name || me.username);
+          localStorage.setItem(
+            "borealis_session",
+            JSON.stringify({ username: me.username, display_name: me.display_name || me.username, role: me.role, timestamp: Date.now() })
+          );
+        }
+      } catch {}
+    })();
   };
 
   useEffect(() => {
@@ -257,9 +272,17 @@ export default function App() {
     );
   }, [activeTabId]);
 
-  const handleAboutMenuOpen = (event) => setAboutAnchorEl(event.currentTarget);
-  const handleAboutMenuClose = () => setAboutAnchorEl(null);
-  const openCreditsDialog = () => { handleAboutMenuClose(); setCreditsDialogOpen(true); };
+  const handleUserMenuOpen = (event) => setUserMenuAnchorEl(event.currentTarget);
+  const handleUserMenuClose = () => setUserMenuAnchorEl(null);
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch {}
+    try { localStorage.removeItem('borealis_session'); } catch {}
+    setUser(null);
+    setUserRole(null);
+    setUserDisplayName(null);
+  };
 
   const handleTabRightClick = (evt, tabId) => {
     evt.preventDefault();
@@ -635,23 +658,19 @@ export default function App() {
                 })}
               </Breadcrumbs>
             </Box>
-            {/* Spacer to keep About aligned right */}
+            {/* Spacer to keep user menu aligned right */}
             <Box sx={{ flexGrow: 1 }} />
             <Button
               color="inherit"
-              onClick={handleAboutMenuOpen}
+              onClick={handleUserMenuOpen}
               endIcon={<KeyboardArrowDownIcon />}
-              startIcon={<InfoOutlinedIcon />}
               sx={{ height: "36px" }}
             >
-              About
+              {userDisplayName || user || 'User'}
             </Button>
-            <Menu anchorEl={aboutAnchorEl} open={Boolean(aboutAnchorEl)} onClose={handleAboutMenuClose}>
-              <MenuItem onClick={() => { handleAboutMenuClose(); window.open("https://github.com/bunny-lab-io/Borealis", "_blank"); }}>
-                <GitHub sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} /> Github Project
-              </MenuItem>
-              <MenuItem onClick={openCreditsDialog}>
-                <PeopleIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} /> Credits
+            <Menu anchorEl={userMenuAnchorEl} open={Boolean(userMenuAnchorEl)} onClose={handleUserMenuClose}>
+              <MenuItem onClick={() => { handleUserMenuClose(); handleLogout(); }}>
+                <LogoutIcon sx={{ fontSize: 18, color: "#ff6b6b", mr: 1 }} /> Logout
               </MenuItem>
             </Menu>
           </Toolbar>
@@ -664,7 +683,6 @@ export default function App() {
         </Box>
       </Box>
       <CloseAllDialog open={confirmCloseOpen} onClose={() => setConfirmCloseOpen(false)} onConfirm={() => {}} />
-      <CreditsDialog open={creditsDialogOpen} onClose={() => setCreditsDialogOpen(false)} />
       <RenameTabDialog
         open={renameDialogOpen}
         value={renameValue}

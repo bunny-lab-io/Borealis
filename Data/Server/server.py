@@ -281,7 +281,33 @@ def api_me():
     user = _current_user()
     if not user:
         return jsonify({"error": "unauthorized"}), 401
-    return jsonify(user)
+    # Enrich with display_name if possible
+    username = (user.get('username') or '').strip()
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, username, display_name, role, last_login, created_at, updated_at FROM users WHERE LOWER(username)=LOWER(?)",
+            (username,)
+        )
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            info = _user_row_to_dict(row)
+            # Return minimal fields but include display_name
+            return jsonify({
+                "username": info['username'],
+                "display_name": info['display_name'],
+                "role": info['role']
+            })
+    except Exception:
+        pass
+    # Fallback to original shape
+    return jsonify({
+        "username": username,
+        "display_name": username,
+        "role": user.get('role') or 'User'
+    })
 
 
 @app.route("/api/users", methods=["GET"])
