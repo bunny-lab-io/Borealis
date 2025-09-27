@@ -19,6 +19,7 @@ import {
       Logout as LogoutIcon,
       NavigateNext as NavigateNextIcon
     } from "@mui/icons-material";
+    import ClickAwayListener from "@mui/material/ClickAwayListener";
     import SearchIcon from "@mui/icons-material/Search";
     import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
     import ArrowDropUpIcon from "@mui/icons-material/ArrowDropUp";
@@ -126,6 +127,27 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       const searchAnchorRef = useRef(null);
       const searchDebounceRef = useRef(null);
 
+      // Gentle highlight helper for matched substrings
+      const highlightText = useCallback((text, query) => {
+        const t = String(text ?? "");
+        const q = String(query ?? "").trim();
+        if (!q) return t;
+        try {
+          const esc = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(`(${esc})`, "ig");
+          const parts = t.split(re);
+          return parts.map((part, i) =>
+            part.toLowerCase() === q.toLowerCase()
+              ? (
+                  <span key={i} style={{ backgroundColor: '#243a52', color: '#a7d0ff', borderRadius: 2, padding: '0 1px' }}>{part}</span>
+                )
+              : <span key={i}>{part}</span>
+          );
+        } catch {
+          return t;
+        }
+      }, []);
+
   // Build breadcrumb items for current view
   const breadcrumbs = React.useMemo(() => {
     const items = [];
@@ -227,11 +249,16 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
       // Suggest fetcher with debounce
       const fetchSuggestions = useCallback((field, q) => {
-        const params = new URLSearchParams({ field, q, limit: "5" });
+        const query = String(q || "").trim();
+        if (query.length < 3) {
+          setSuggestions({ devices: [], sites: [], q: query, field });
+          return;
+        }
+        const params = new URLSearchParams({ field, q: query, limit: "5" });
         fetch(`/api/search/suggest?${params.toString()}`)
-          .then((r) => (r.ok ? r.json() : { devices: [], sites: [] }))
+          .then((r) => (r.ok ? r.json() : { devices: [], sites: [], q: query, field }))
           .then((data) => setSuggestions(data))
-          .catch(() => setSuggestions({ devices: [], sites: [], q, field }));
+          .catch(() => setSuggestions({ devices: [], sites: [], q: query, field }));
       }, []);
 
       useEffect(() => {
@@ -243,7 +270,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); };
       }, [searchOpen, searchCategory, searchQuery, fetchSuggestions]);
 
-      const execSearch = useCallback((field, q, navigateImmediate = true) => {
+      const execSearch = useCallback(async (field, q, navigateImmediate = true) => {
         const cat = SEARCH_CATEGORIES.find((c) => c.key === field) || SEARCH_CATEGORIES[0];
         if (cat.scope === "site") {
           try {
@@ -264,14 +291,42 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             serial_number: 'serialNumber', // placeholder (ignored by Device_List for now)
           };
           const k = fieldMap[field] || 'hostname';
-          try {
-            const payload = (k === 'serialNumber') ? {} : { [k]: q };
-            localStorage.setItem('device_list_initial_filters', JSON.stringify(payload));
-          } catch {}
-          if (navigateImmediate) setCurrentPage("devices");
+          const qLc = String(q || '').toLowerCase();
+          const exact = (suggestions.devices || []).find((d) => String(d.hostname || d.value || '').toLowerCase() === qLc);
+          if (exact && (exact.hostname || '').trim()) {
+            setSelectedDevice({ hostname: exact.hostname.trim() });
+            if (navigateImmediate) setCurrentPage('device_details');
+          } else if (field === 'hostname') {
+            // Probe device existence and open directly if found
+            try {
+              const resp = await fetch(`/api/device/details/${encodeURIComponent(q)}`);
+              if (resp.ok) {
+                const data = await resp.json();
+                if (data && (data.summary?.hostname || Object.keys(data).length > 0)) {
+                  setSelectedDevice({ hostname: q });
+                  if (navigateImmediate) setCurrentPage('device_details');
+                } else {
+                  try { localStorage.setItem('device_list_initial_filters', JSON.stringify({ [k]: q })); } catch {}
+                  if (navigateImmediate) setCurrentPage('devices');
+                }
+              } else {
+                try { localStorage.setItem('device_list_initial_filters', JSON.stringify({ [k]: q })); } catch {}
+                if (navigateImmediate) setCurrentPage('devices');
+              }
+            } catch {
+              try { localStorage.setItem('device_list_initial_filters', JSON.stringify({ [k]: q })); } catch {}
+              if (navigateImmediate) setCurrentPage('devices');
+            }
+          } else {
+            try {
+              const payload = (k === 'serialNumber') ? {} : { [k]: q };
+              localStorage.setItem('device_list_initial_filters', JSON.stringify(payload));
+            } catch {}
+            if (navigateImmediate) setCurrentPage("devices");
+          }
         }
         setSearchOpen(false);
-      }, [SEARCH_CATEGORIES, setCurrentPage]);
+      }, [SEARCH_CATEGORIES, setCurrentPage, suggestions.devices]);
 
   const handleLoginSuccess = ({ username, role }) => {
     setUser(username);
@@ -728,6 +783,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
               </Breadcrumbs>
                 </Box>
                 {/* Top search: category + input */}
+                <ClickAwayListener onClickAway={() => setSearchOpen(false)}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 2 }}>
                   <Button
                     variant="outlined"
@@ -761,10 +817,10 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
                       </MenuItem>
                     ))}
                   </Menu>
-                  <Box
-                    ref={searchAnchorRef}
-                    sx={{ position: 'relative', left: -2, bottom: -6, display: 'flex', alignItems: 'center', border: '1px solid #3a3f44', borderRadius: 1, height: 32, minWidth: 320, bgcolor: '#1e2328' }}
-                  >
+                       <Box
+                         ref={searchAnchorRef}
+                         sx={{ position: 'relative', left: -2, bottom: -6, display: 'flex', alignItems: 'center', border: '1px solid #3a3f44', borderRadius: 1, height: 32, minWidth: 320, bgcolor: '#1e2328' }}
+                         >
                     <input
                       value={searchQuery}
                       onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
@@ -782,24 +838,37 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
                       }}
                     />
                     <SearchIcon sx={{ position: 'absolute', right: 6, color: '#8aa0b4', fontSize: 18 }} />
-                    {searchOpen && (
-                      <Box
-                        sx={{ position: 'absolute', top: '100%', left: 0, right: 0, bgcolor: '#121417', border: '1px solid #2b2f34', borderTop: 'none', zIndex: 1400, borderRadius: '0 0 6px 6px', maxHeight: 320, overflowY: 'auto' }}
-                      >
-                        {/* Devices group */}
-                        {((suggestions.devices || []).length > 0 || (SEARCH_CATEGORIES.find(c=>c.key===searchCategory)?.scope==='device')) && (
-                          <Box sx={{ borderBottom: '1px solid #2b2f34' }}>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 1.2, py: 0.8, color: '#9aa0a6', fontSize: 12 }}>
-                              <span>Devices</span>
-                              <Button size="small" onClick={() => execSearch(searchCategory, searchQuery)} sx={{ textTransform: 'none', color: '#80bfff' }}>View Results</Button>
-                            </Box>
-                            {suggestions.devices && suggestions.devices.length > 0 ? (
-                              suggestions.devices.map((d, idx) => (
-                                <Box key={idx} onClick={() => execSearch(searchCategory, d.value)} sx={{ px: 1.2, py: 0.6, '&:hover': { bgcolor: '#1c2127' }, cursor: 'pointer' }}>
-                                  <Typography variant="body2" sx={{ color: '#e8eaed' }}>{d.hostname || d.value}</Typography>
-                                  <Typography variant="caption" sx={{ color: '#9aa0a6' }}>{[d.site_name, d.internal_ip || d.external_ip || d.description || d.last_user].filter(Boolean).join(' • ')}</Typography>
-                                </Box>
-                              ))
+                         {searchOpen && (((SEARCH_CATEGORIES.find(c=>c.key===searchCategory)?.scope==='device') && (suggestions.devices||[]).length>0) || ((SEARCH_CATEGORIES.find(c=>c.key===searchCategory)?.scope==='site') && (suggestions.sites||[]).length>0)) && (
+                           <Box
+                             sx={{ position: 'absolute', top: '100%', left: 0, right: 0, bgcolor: '#1e2328', border: '1px solid #3a3f44', borderTop: 'none', zIndex: 1400, borderRadius: '0 0 6px 6px', maxHeight: 320, overflowY: 'auto' }}
+                             >
+                             {/* Devices group */}
+                             {((suggestions.devices || []).length > 0 && (SEARCH_CATEGORIES.find(c=>c.key===searchCategory)?.scope==='device')) && (
+                               <Box sx={{ borderBottom: '1px solid #2b2f34' }}>
+                                 <Box sx={{ display: 'flex', alignItems: 'center', px: 1.2, py: 0.8, color: '#9aa0a6', fontSize: 12 }}>Devices</Box>
+                              {suggestions.devices && suggestions.devices.length > 0 ? (
+                              suggestions.devices.map((d, idx) => {
+                                const primary = (searchCategory === 'hostname')
+                                  ? highlightText(d.hostname || d.value, searchQuery)
+                                  : (d.hostname || d.value);
+                                // Choose a secondary value based on category; fallback to best-available info
+                                let secVal = '';
+                                if (searchCategory === 'internal_ip') secVal = d.internal_ip || '';
+                                else if (searchCategory === 'external_ip') secVal = d.external_ip || '';
+                                else if (searchCategory === 'description') secVal = d.description || '';
+                                else if (searchCategory === 'last_user') secVal = d.last_user || '';
+                                const secHighlighted = (searchCategory !== 'hostname' && secVal)
+                                  ? highlightText(secVal, searchQuery)
+                                  : (d.internal_ip || d.external_ip || d.description || d.last_user || '');
+                                return (
+                                  <Box key={idx} onClick={() => { setSelectedDevice({ hostname: d.hostname || d.value }); setCurrentPage('device_details'); setSearchOpen(false); }} sx={{ px: 1.2, py: 0.6, '&:hover': { bgcolor: '#22272e' }, cursor: 'pointer' }}>
+                                    <Typography variant="body2" sx={{ color: '#e8eaed' }}>{primary}</Typography>
+                                    <Typography variant="caption" sx={{ color: '#9aa0a6' }}>
+                                      {d.site_name || ''}{(d.site_name && (secVal || (d.internal_ip || d.external_ip || d.description || d.last_user))) ? ' • ' : ''}{secHighlighted}
+                                    </Typography>
+                                  </Box>
+                                );
+                              })
                             ) : (
                               <Box sx={{ px: 1.2, py: 1, color: '#6b737c', fontSize: 12 }}>
                                 {searchCategory === 'serial_number' ? 'Serial numbers are not tracked yet.' : 'No matches'}
@@ -807,29 +876,27 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
                             )}
                           </Box>
                         )}
-                        {/* Sites group */}
-                        {((suggestions.sites || []).length > 0 || (SEARCH_CATEGORIES.find(c=>c.key===searchCategory)?.scope==='site')) && (
-                          <Box>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 1.2, py: 0.8, color: '#9aa0a6', fontSize: 12 }}>
-                              <span>Sites</span>
-                              <Button size="small" onClick={() => execSearch(searchCategory, searchQuery)} sx={{ textTransform: 'none', color: '#80bfff' }}>View Results</Button>
-                            </Box>
-                            {suggestions.sites && suggestions.sites.length > 0 ? (
+                             {/* Sites group */}
+                             {((suggestions.sites || []).length > 0 && (SEARCH_CATEGORIES.find(c=>c.key===searchCategory)?.scope==='site')) && (
+                               <Box>
+                                 <Box sx={{ display: 'flex', alignItems: 'center', px: 1.2, py: 0.8, color: '#9aa0a6', fontSize: 12 }}>Sites</Box>
+                              {suggestions.sites && suggestions.sites.length > 0 ? (
                               suggestions.sites.map((s, idx) => (
-                                <Box key={idx} onClick={() => execSearch(searchCategory, s.value)} sx={{ px: 1.2, py: 0.6, '&:hover': { bgcolor: '#1c2127' }, cursor: 'pointer' }}>
-                                  <Typography variant="body2" sx={{ color: '#e8eaed' }}>{s.site_name}</Typography>
-                                  <Typography variant="caption" sx={{ color: '#9aa0a6' }}>{s.site_description || ''}</Typography>
+                                <Box key={idx} onClick={() => execSearch(searchCategory, s.value)} sx={{ px: 1.2, py: 0.6, '&:hover': { bgcolor: '#22272e' }, cursor: 'pointer' }}>
+                                  <Typography variant="body2" sx={{ color: '#e8eaed' }}>{searchCategory === 'site_name' ? highlightText(s.site_name, searchQuery) : s.site_name}</Typography>
+                                  <Typography variant="caption" sx={{ color: '#9aa0a6' }}>{searchCategory === 'site_description' ? highlightText(s.site_description || '', searchQuery) : (s.site_description || '')}</Typography>
                                 </Box>
                               ))
                             ) : (
                               <Box sx={{ px: 1.2, py: 1, color: '#6b737c', fontSize: 12 }}>No matches</Box>
                             )}
-                          </Box>
-                        )}
-                      </Box>
-                    )}
-                  </Box>
-                </Box>
+                               </Box>
+                             )}
+                           </Box>
+                         )}
+                       </Box>
+                    </Box>
+                </ClickAwayListener>
                 {/* Spacer to keep user menu aligned right */}
                 <Box sx={{ flexGrow: 1 }} />
                 <Button

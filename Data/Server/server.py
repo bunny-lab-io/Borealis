@@ -1484,6 +1484,9 @@ def search_suggest():
         limit = 5
 
     q_lc = q.lower()
+    # Do not suggest on very short queries to avoid dumping all rows
+    if len(q_lc) < 3:
+        return jsonify({"field": field, "q": q, "devices": [], "sites": []})
 
     device_fields = {
         "hostname": "hostname",
