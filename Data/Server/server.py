@@ -1154,20 +1154,42 @@ init_db()
 
 
 def ensure_default_admin():
-    """Ensure the default admin account exists (admin / Password)."""
+    """Ensure at least one admin user exists.
+
+    If no user with role 'Admin' exists, create the default
+    admin account (username 'admin', password 'Password').
+    If an admin already exists, leave the user table untouched.
+    """
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM users WHERE LOWER(username)='admin'")
-        exists = (cur.fetchone()[0] or 0) > 0
-        if not exists:
+
+        # Check if any admin role exists (case-insensitive)
+        cur.execute("SELECT COUNT(*) FROM users WHERE LOWER(role)='admin'")
+        has_admin = (cur.fetchone()[0] or 0) > 0
+
+        if not has_admin:
             now = _now_ts()
             default_hash = "e6c83b282aeb2e022844595721cc00bbda47cb24537c1779f9bb84f04039e1676e6ba8573e588da1052510e3aa0a32a9e55879ae22b0c2d62136fc0a3e85f8bb"
-            cur.execute(
-                "INSERT INTO users(username, display_name, password_sha512, role, created_at, updated_at) VALUES(?,?,?,?,?,?)",
-                ("admin", "Administrator", default_hash, "Admin", now, now)
-            )
+
+            # Prefer to (re)create the built-in 'admin' user if missing.
+            # If a non-admin 'admin' user exists, promote it rather than failing insert.
+            cur.execute("SELECT COUNT(*) FROM users WHERE LOWER(username)='admin'")
+            admin_user_exists = (cur.fetchone()[0] or 0) > 0
+
+            if not admin_user_exists:
+                cur.execute(
+                    "INSERT INTO users(username, display_name, password_sha512, role, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+                    ("admin", "Administrator", default_hash, "Admin", now, now)
+                )
+            else:
+                # Promote existing 'admin' user to Admin if needed (preserve password)
+                cur.execute(
+                    "UPDATE users SET role='Admin', updated_at=? WHERE LOWER(username)='admin' AND LOWER(role)!='admin'",
+                    (now,)
+                )
             conn.commit()
+
         conn.close()
     except Exception:
         # Non-fatal if this fails; /health etc still work
