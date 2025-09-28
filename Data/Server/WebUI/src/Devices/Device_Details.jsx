@@ -509,7 +509,15 @@ export default function DeviceDetails({ device, onBack }) {
             }}
           />
         </Box>
-        <Box sx={{ width: '100%' }}>
+        {/* Constrain the table height within the page and enable scrolling */}
+        <Box
+          sx={{
+            width: '100%',
+            maxHeight: 'calc(100vh - 320px)',
+            overflow: 'auto',
+            pr: 1,
+          }}
+        >
           <Table size="small" sx={{ width: '100%' }}>
             <TableHead>
               <TableRow>
