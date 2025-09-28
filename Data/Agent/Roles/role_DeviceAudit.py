@@ -20,7 +20,7 @@ except Exception:
 
 
 ROLE_NAME = 'device_audit'
-ROLE_CONTEXTS = ['interactive']
+ROLE_CONTEXTS = ['system']
 
 
 IS_WINDOWS = os.name == 'nt'
@@ -124,9 +124,127 @@ def collect_summary(CONFIG):
         return {'hostname': socket.gethostname()}
 
 
+def _ps_json(cmd: str, timeout: int = 60):
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=timeout)
+        txt = out.stdout or ""
+        if txt.strip():
+            try:
+                data = json.loads(txt)
+                return data
+            except Exception:
+                # Sometimes PS emits BOM or warnings; try to find JSON block
+                try:
+                    start = txt.find('[{')
+                    if start == -1:
+                        start = txt.find('{')
+                    end = txt.rfind('}')
+                    if start != -1 and end != -1 and end > start:
+                        return json.loads(txt[start:end+1])
+                except Exception:
+                    pass
+        return None
+    except Exception:
+        return None
+
+
 def collect_software():
-    # Placeholder: fuller inventory can be added later
-    return []
+    plat = platform.system().lower()
+    if plat != 'windows':
+        return []
+    # 1) Try PowerShell registry scrape (fast when ConvertTo-Json is available)
+    try:
+        ps = r"""
+$paths = @(
+  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)
+$list = @()
+foreach ($p in $paths) {
+  try {
+    $list += Get-ItemProperty -Path $p -ErrorAction SilentlyContinue |
+      Select-Object DisplayName, DisplayVersion
+  } catch {}
+}
+$list = $list | Where-Object { $_.DisplayName -and ("$($_.DisplayName)".Trim().Length -gt 0) }
+$list | Sort-Object DisplayName -Unique | ConvertTo-Json -Depth 2
+"""
+        data = _ps_json(ps, timeout=120)
+        out = []
+        if isinstance(data, dict):
+            data = [data]
+        for it in (data or []):
+            name = str(it.get('DisplayName') or '').strip()
+            if not name:
+                continue
+            ver = str(it.get('DisplayVersion') or '').strip()
+            out.append({'name': name, 'version': ver})
+        if out:
+            return out
+    except Exception:
+        pass
+
+    # 2) Fallback: read registry directly via Python winreg (works on Win7+)
+    try:
+        try:
+            import winreg  # type: ignore
+        except Exception:
+            return []
+
+        def _enum_uninstall(root, path, wow_flag=0):
+            items = []
+            try:
+                key = winreg.OpenKey(root, path, 0, winreg.KEY_READ | wow_flag)
+            except Exception:
+                return items
+            try:
+                i = 0
+                while True:
+                    try:
+                        sub = winreg.EnumKey(key, i)
+                    except OSError:
+                        break
+                    i += 1
+                    try:
+                        sk = winreg.OpenKey(key, sub, 0, winreg.KEY_READ | wow_flag)
+                        try:
+                            name, _ = winreg.QueryValueEx(sk, 'DisplayName')
+                        except Exception:
+                            name = ''
+                        if name and str(name).strip():
+                            try:
+                                ver, _ = winreg.QueryValueEx(sk, 'DisplayVersion')
+                            except Exception:
+                                ver = ''
+                            items.append({'name': str(name).strip(), 'version': str(ver or '').strip()})
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            return items
+
+        HKLM = getattr(winreg, 'HKEY_LOCAL_MACHINE')
+        HKCU = getattr(winreg, 'HKEY_CURRENT_USER')
+        WOW64_64 = getattr(winreg, 'KEY_WOW64_64KEY', 0)
+        WOW64_32 = getattr(winreg, 'KEY_WOW64_32KEY', 0)
+        paths = [
+            (HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", WOW64_64),
+            (HKLM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", WOW64_32),
+            (HKLM, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall", 0),
+            (HKCU, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", 0),
+        ]
+        merged = {}
+        for root, path, flag in paths:
+            for it in _enum_uninstall(root, path, flag):
+                key = (it['name'] or '').lower()
+                if not key:
+                    continue
+                if key not in merged:
+                    merged[key] = it
+        return sorted(merged.values(), key=lambda x: x['name'])
+    except Exception:
+        return []
 
 
 def collect_memory():
@@ -207,19 +325,63 @@ def collect_network():
     adapters = []
     try:
         if IS_WINDOWS:
+            # Try modern Get-NetIPAddress; fallback to ipconfig parsing (Win7)
             try:
                 ps_cmd = (
-                    "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | "
-                    "ForEach-Object { $_ | Select-Object -Property InterfaceAlias, MacAddress } | ConvertTo-Json"
+                    "try { "
+                    "$ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | "
+                    "Where-Object { $_.IPAddress -and $_.IPAddress -notmatch '^169\\.254\\.' -and $_.IPAddress -ne '127.0.0.1' }; "
+                    "$ad = Get-NetAdapter | ForEach-Object { $_ | Select-Object -Property InterfaceAlias, MacAddress }; "
+                    "$map = @{}; foreach($a in $ad){ $map[$a.InterfaceAlias] = $a.MacAddress }; "
+                    "$out = @(); foreach($e in $ip){ $mac = $map[$e.InterfaceAlias]; $out += [pscustomobject]@{ InterfaceAlias=$e.InterfaceAlias; IPAddress=$e.IPAddress; MacAddress=$mac } } "
+                    "$out | ConvertTo-Json -Depth 3 } catch { '' }"
                 )
-                out = subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, text=True, timeout=60)
-                data = json.loads(out.stdout or "[]")
+                data = _ps_json(ps_cmd, timeout=60)
                 if isinstance(data, dict):
                     data = [data]
-                for a in data:
-                    adapters.append({'adapter': a.get('InterfaceAlias', 'unknown'), 'ips': [], 'mac': a.get('MacAddress', 'unknown')})
+                tmp = {}
+                for e in (data or []):
+                    alias = e.get('InterfaceAlias') or 'unknown'
+                    ip = e.get('IPAddress') or ''
+                    mac = e.get('MacAddress') or 'unknown'
+                    if not ip:
+                        continue
+                    item = tmp.setdefault(alias, {'adapter': alias, 'ips': [], 'mac': mac})
+                    if ip not in item['ips']:
+                        item['ips'].append(ip)
+                if tmp:
+                    adapters = list(tmp.values())
+                else:
+                    raise Exception('empty')
             except Exception:
-                pass
+                # Win7/older fallback: parse ipconfig
+                try:
+                    out = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=30)
+                    cur = None
+                    for line in (out.stdout or '').splitlines():
+                        s = line.strip()
+                        if not s:
+                            continue
+                        if s.endswith(":") and ('adapter' in s.lower() or 'ethernet' in s.lower() or 'wireless' in s.lower()):
+                            cur = {'adapter': s.replace(':','').strip(), 'ips': [], 'mac': 'unknown'}
+                            adapters.append(cur)
+                            continue
+                        if s.lower().startswith('ipv4 address') or s.lower().startswith('ipv4-adresse') or 'ipv4' in s.lower():
+                            try:
+                                ip = s.split(':')[-1].strip()
+                            except Exception:
+                                ip = ''
+                            if ip and not ip.startswith('169.254.') and ip != '127.0.0.1' and cur:
+                                cur['ips'].append(ip)
+                        if s.lower().startswith('physical address') or s.lower().startswith('mac address'):
+                            try:
+                                mac = s.split(':')[-1].strip()
+                            except Exception:
+                                mac = ''
+                            if mac and cur:
+                                cur['mac'] = mac
+                except Exception:
+                    pass
         else:
             out = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True, timeout=60)
             for line in out.stdout.splitlines():
@@ -233,9 +395,36 @@ def collect_network():
     return adapters
 
 
+def detect_device_type():
+    try:
+        plat = platform.system().lower()
+        if plat != 'windows':
+            return ''
+        ps = r"""
+function _getCim($cls){ try { return Get-CimInstance $cls -ErrorAction Stop } catch { try { return Get-WmiObject -Class $cls -ErrorAction Stop } catch { return $null } } }
+$os = _getCim 'Win32_OperatingSystem'
+$cs = _getCim 'Win32_ComputerSystem'
+$caption = ""; if ($os) { $caption = [string]$os.Caption }
+$model = ""; if ($cs) { $model = [string]$cs.Model }
+$manu  = ""; if ($cs) { $manu = [string]$cs.Manufacturer }
+$virt = $false
+if ($model -match 'Virtual' -or $manu -match 'Microsoft Corporation' -and $model -match 'Virtual Machine' -or $manu -match 'VMware' -or $manu -match 'innotek' -or $manu -match 'VirtualBox' -or $manu -match 'QEMU' -or $manu -match 'Xen' -or $manu -match 'Parallels') { $virt = $true }
+if ($virt) { 'Virtual Machine' }
+elseif ($caption -match 'Server') { 'Server' }
+else { 'Workstation' }
+"""
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=15)
+        s = (out.stdout or '').strip()
+        return s.splitlines()[0].strip() if s else ''
+    except Exception:
+        return ''
+
+
 class Role:
     def __init__(self, ctx):
         self.ctx = ctx
+        self._ext_ip = None
+        self._ext_ip_ts = 0
         try:
             # Set OS string once
             self.ctx.config.data['agent_operating_system'] = detect_agent_os()
@@ -265,6 +454,29 @@ class Role:
                     'storage': collect_storage(),
                     'network': collect_network(),
                 }
+                # Derive additional summary fields
+                try:
+                    # Internal IP: first IPv4 on first adapter
+                    internal_ip = ''
+                    for a in (details.get('network') or []):
+                        for ip in (a.get('ips') or []):
+                            if ip and not ip.startswith('169.254.') and ip != '127.0.0.1':
+                                internal_ip = ip
+                                break
+                        if internal_ip:
+                            break
+                    details['summary']['internal_ip'] = internal_ip
+                except Exception:
+                    pass
+                try:
+                    details['summary']['device_type'] = detect_device_type()
+                except Exception:
+                    pass
+                try:
+                    if psutil:
+                        details['summary']['last_reboot'] = int(psutil.boot_time())
+                except Exception:
+                    pass
                 url = (self.ctx.config.data.get('borealis_server_url', 'http://localhost:5000') or '').rstrip('/') + '/api/agent/details'
                 payload = {
                     'agent_id': self.ctx.agent_id,
@@ -273,8 +485,38 @@ class Role:
                 }
                 if aiohttp is not None:
                     async with aiohttp.ClientSession() as session:
+                        # External IP: refresh at most every 30 minutes
+                        try:
+                            now = time.time()
+                            if (now - self._ext_ip_ts) > 1800:
+                                # Try ipify JSON; fallback to plain-text ifconfig.me
+                                ok = False
+                                try:
+                                    async with session.get('https://api.ipify.org?format=json', timeout=8) as resp:
+                                        if resp.status == 200:
+                                            j = await resp.json()
+                                            self._ext_ip = (j.get('ip') or '').strip()
+                                            self._ext_ip_ts = now
+                                            ok = True
+                                except Exception:
+                                    pass
+                                if not ok:
+                                    try:
+                                        async with session.get('https://ifconfig.me/ip', timeout=8) as resp2:
+                                            if resp2.status == 200:
+                                                t = (await resp2.text()) or ''
+                                                t = t.strip()
+                                                if t:
+                                                    self._ext_ip = t
+                                                    self._ext_ip_ts = now
+                                                    ok = True
+                                    except Exception:
+                                        pass
+                            if self._ext_ip:
+                                details['summary']['external_ip'] = self._ext_ip
+                        except Exception:
+                            pass
                         await session.post(url, json=payload, timeout=10)
             except Exception:
                 pass
             await asyncio.sleep(300)
-

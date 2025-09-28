@@ -1016,11 +1016,7 @@ async def connect():
         pass
 
     await sio.emit('request_config', {"agent_id": AGENT_ID})
-    # Kick off a one-time device details post for faster UI population
-    try:
-        asyncio.create_task(send_agent_details_once())
-    except Exception:
-        pass
+    # Inventory details posting is managed by the DeviceAudit role (SYSTEM). No one-shot post here.
 
 @sio.event
 async def disconnect():
@@ -1314,17 +1310,19 @@ if __name__=='__main__':
                 hooks=hooks,
             )
             ROLE_MANAGER.load()
-        # Load system roles when headless or alongside interactive
-        ROLE_MANAGER_SYS = RoleManager(
-            base_dir=os.path.dirname(__file__),
-            context='system',
-            sio=sio,
-            agent_id=AGENT_ID,
-            config=CONFIG,
-            loop=loop,
-            hooks=hooks,
-        )
-        ROLE_MANAGER_SYS.load()
+        # Load system roles only when running in SYSTEM service mode
+        ROLE_MANAGER_SYS = None
+        if SYSTEM_SERVICE_MODE:
+            ROLE_MANAGER_SYS = RoleManager(
+                base_dir=os.path.dirname(__file__),
+                context='system',
+                sio=sio,
+                agent_id=AGENT_ID,
+                config=CONFIG,
+                loop=loop,
+                hooks=hooks,
+            )
+            ROLE_MANAGER_SYS.load()
     except Exception as e:
         try:
             _bootstrap_log(f'role load init failed: {e}')
@@ -1336,11 +1334,8 @@ if __name__=='__main__':
         background_tasks.append(loop.create_task(idle_task()))
         # Start periodic heartbeats
         background_tasks.append(loop.create_task(send_heartbeat()))
-        # Periodic device details upload so Devices view populates
-        try:
-            background_tasks.append(loop.create_task(send_agent_details()))
-        except Exception:
-            pass
+        # Inventory upload is handled by the DeviceAudit role running in SYSTEM context.
+        # Do not schedule the legacy agent-level details poster to avoid duplicates.
         
         # Register unified Quick Job handler last to avoid role override issues
         @sio.on('quick_job_run')

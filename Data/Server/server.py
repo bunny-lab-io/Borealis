@@ -142,7 +142,17 @@ def _sha512_hex(s: str) -> str:
 
 
 def _db_conn():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    try:
+        cur = conn.cursor()
+        # Enable better read/write concurrency
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        conn.commit()
+    except Exception:
+        pass
+    return conn
 
 
 def _user_row_to_dict(row):
@@ -1047,13 +1057,21 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 def init_db():
     """Initialize all required tables in the unified database."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_conn()
     cur = conn.cursor()
 
     # Device details table
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS device_details (hostname TEXT PRIMARY KEY, description TEXT, details TEXT)"
+        "CREATE TABLE IF NOT EXISTS device_details (hostname TEXT PRIMARY KEY, description TEXT, details TEXT, created_at INTEGER)"
     )
+    # Backfill missing created_at column on existing installs
+    try:
+        cur.execute("PRAGMA table_info(device_details)")
+        cols = [r[1] for r in cur.fetchall()]
+        if 'created_at' not in cols:
+            cur.execute("ALTER TABLE device_details ADD COLUMN created_at INTEGER")
+    except Exception:
+        pass
 
     # Activity history table for script/job runs
     cur.execute(
@@ -1239,7 +1257,7 @@ def _row_to_site(row):
 @app.route("/api/sites", methods=["GET"])
 def list_sites():
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
             """
@@ -1270,7 +1288,7 @@ def create_site():
         return jsonify({"error": "name is required"}), 400
     now = int(time.time())
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO sites(name, description, created_at) VALUES (?, ?, ?)",
@@ -1308,7 +1326,7 @@ def delete_sites():
     if not norm_ids:
         return jsonify({"status": "ok", "deleted": 0})
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         # Clean assignments first (in case FK ON DELETE CASCADE not enforced)
         cur.execute(
@@ -1342,7 +1360,7 @@ def sites_device_map():
                 p = part.strip()
                 if p:
                     filter_set.add(p)
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         if filter_set:
             placeholders = ','.join('?' * len(filter_set))
@@ -1385,7 +1403,7 @@ def assign_devices_to_site():
         return jsonify({"error": "hostnames must be a list of strings"}), 400
     now = int(time.time())
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         # Ensure site exists
         cur.execute("SELECT 1 FROM sites WHERE id = ?", (site_id,))
@@ -1420,7 +1438,7 @@ def _load_device_records(limit: int = 0):
       hostname, description, last_user, internal_ip, external_ip, site_id, site_name
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute("SELECT hostname, description, details FROM device_details")
         rows = cur.fetchall()
@@ -1530,7 +1548,7 @@ def search_suggest():
     if field in site_fields:
         column = site_fields[field]
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = _db_conn()
             cur = conn.cursor()
             cur.execute("SELECT id, name, description FROM sites")
             for sid, name, desc in cur.fetchall():
@@ -1573,7 +1591,7 @@ def _row_to_view(row):
 @app.route("/api/device_list_views", methods=["GET"])
 def list_device_list_views():
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
             "SELECT id, name, columns_json, filters_json, created_at, updated_at FROM device_list_views ORDER BY name COLLATE NOCASE ASC"
@@ -1588,7 +1606,7 @@ def list_device_list_views():
 @app.route("/api/device_list_views/<int:view_id>", methods=["GET"])
 def get_device_list_view(view_id: int):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
             "SELECT id, name, columns_json, filters_json, created_at, updated_at FROM device_list_views WHERE id = ?",
@@ -1621,7 +1639,7 @@ def create_device_list_view():
 
     now = int(time.time())
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO device_list_views(name, columns_json, filters_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
@@ -1676,7 +1694,7 @@ def update_device_list_view(view_id: int):
     params.append(view_id)
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute(f"UPDATE device_list_views SET {', '.join(fields)} WHERE id = ?", params)
         if cur.rowcount == 0:
@@ -1699,7 +1717,7 @@ def update_device_list_view(view_id: int):
 @app.route("/api/device_list_views/<int:view_id>", methods=["DELETE"])
 def delete_device_list_view(view_id: int):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute("DELETE FROM device_list_views WHERE id = ?", (view_id,))
         if cur.rowcount == 0:
@@ -1722,27 +1740,31 @@ def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
     if not hostname or str(hostname).strip().lower() == "unknown":
         return
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT details, description FROM device_details WHERE hostname = ?",
+            "SELECT details, description, created_at FROM device_details WHERE hostname = ?",
             (hostname,),
         )
         row = cur.fetchone()
-        # Load existing details JSON or create a minimal one
         if row and row[0]:
             try:
                 details = json.loads(row[0])
             except Exception:
                 details = {}
-            description = row[1] if len(row) > 1 else ""
+            description = row[1] or ""
+            created_at = int(row[2] or 0)
         else:
             details = {}
             description = ""
+            created_at = 0
 
         summary = details.get("summary") or {}
         summary["hostname"] = summary.get("hostname") or hostname
-        summary["last_seen"] = int(last_seen or 0)
+        try:
+            summary["last_seen"] = int(last_seen or 0)
+        except Exception:
+            summary["last_seen"] = int(time.time())
         if agent_id:
             try:
                 summary["agent_id"] = str(agent_id)
@@ -1750,9 +1772,27 @@ def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
                 pass
         details["summary"] = summary
 
+        now = int(time.time())
+        # Ensure 'created' string aligns with created_at we will store
+        target_created_at = created_at or now
+        try:
+            from datetime import datetime, timezone
+            human = datetime.fromtimestamp(target_created_at, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            details.setdefault('summary', {})['created'] = details.get('summary', {}).get('created') or human
+        except Exception:
+            pass
+
+        # Single upsert to avoid unique-constraint races
         cur.execute(
-            "REPLACE INTO device_details (hostname, description, details) VALUES (?, ?, ?)",
-            (hostname, description, json.dumps(details)),
+            """
+            INSERT INTO device_details(hostname, description, details, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(hostname) DO UPDATE SET
+                description=excluded.description,
+                details=excluded.details,
+                created_at=COALESCE(device_details.created_at, excluded.created_at)
+            """,
+            (hostname, description, json.dumps(details), target_created_at),
         )
         conn.commit()
         conn.close()
@@ -1763,7 +1803,7 @@ def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
 def load_agents_from_db():
     """Populate registered_agents with any devices stored in the database."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute("SELECT hostname, details FROM device_details")
         for hostname, details_json in cur.fetchall():
@@ -1820,6 +1860,28 @@ def get_agents():
 ## dayjs_to_ts removed; scheduling parsing now lives in job_scheduler
 
 
+def _is_empty(v):
+    return v is None or v == '' or v == [] or v == {}
+
+
+def _deep_merge_preserve(prev: dict, incoming: dict) -> dict:
+    out = dict(prev or {})
+    for k, v in (incoming or {}).items():
+        if isinstance(v, dict):
+            out[k] = _deep_merge_preserve(out.get(k) or {}, v)
+        elif isinstance(v, list):
+            # Only replace list if incoming has content; else keep prev
+            if v:
+                out[k] = v
+        else:
+            # Keep previous non-empty values when incoming is empty
+            if _is_empty(v):
+                # do not overwrite
+                continue
+            out[k] = v
+    return out
+
+
 @app.route("/api/agent/details", methods=["POST"])
 def save_agent_details():
     data = request.get_json(silent=True) or {}
@@ -1827,63 +1889,104 @@ def save_agent_details():
     details = data.get("details")
     agent_id = data.get("agent_id")
     if not hostname and isinstance(details, dict):
-        hostname = details.get("summary", {}).get("hostname")
+        hostname = (details.get("summary") or {}).get("hostname")
     if not hostname or not isinstance(details, dict):
         return jsonify({"error": "invalid payload"}), 400
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
-        # Load existing details/description so we can preserve description and merge last_seen
+        # Load existing row to preserve description and created_at and merge fields
         cur.execute(
-            "SELECT details, description FROM device_details WHERE hostname = ?",
+            "SELECT details, description, created_at FROM device_details WHERE hostname = ?",
             (hostname,),
         )
         row = cur.fetchone()
         prev_details = {}
-        if row and row[0]:
+        description = ""
+        created_at = 0
+        if row:
             try:
-                prev_details = json.loads(row[0])
+                prev_details = json.loads(row[0] or '{}')
             except Exception:
                 prev_details = {}
-        description = row[1] if row and len(row) > 1 else ""
+            description = row[1] or ""
+            try:
+                created_at = int(row[2] or 0)
+            except Exception:
+                created_at = 0
 
-        # Ensure details.summary.last_seen is preserved/merged so it survives restarts
-        try:
-            incoming_summary = details.setdefault("summary", {})
-            # Attach agent_id and hostname if provided/missing to aid future merges
+        # Ensure summary exists and attach hostname/agent_id if missing
+        incoming_summary = details.setdefault("summary", {})
+        if agent_id and not incoming_summary.get("agent_id"):
             try:
-                if agent_id and not incoming_summary.get("agent_id"):
-                    incoming_summary["agent_id"] = str(agent_id)
+                incoming_summary["agent_id"] = str(agent_id)
             except Exception:
                 pass
-            if hostname and not incoming_summary.get("hostname"):
-                incoming_summary["hostname"] = hostname
-            if not incoming_summary.get("last_seen"):
-                last_seen = None
-                if agent_id and agent_id in registered_agents:
-                    last_seen = registered_agents[agent_id].get("last_seen")
-                if not last_seen:
-                    last_seen = (prev_details.get("summary") or {}).get("last_seen")
-                if last_seen:
+        if hostname and not incoming_summary.get("hostname"):
+            incoming_summary["hostname"] = hostname
+
+        # Preserve last_seen if incoming omitted it
+        if not incoming_summary.get("last_seen"):
+            last_seen = None
+            if agent_id and agent_id in registered_agents:
+                last_seen = registered_agents[agent_id].get("last_seen")
+            if last_seen is None:
+                last_seen = (prev_details.get("summary") or {}).get("last_seen")
+            if last_seen is not None:
+                try:
                     incoming_summary["last_seen"] = int(last_seen)
-            # Refresh server-side cache so /api/agents includes latest OS and device type
-            try:
-                if agent_id and agent_id in registered_agents:
-                    rec = registered_agents[agent_id]
-                    os_name = incoming_summary.get("operating_system") or incoming_summary.get("agent_operating_system")
-                    if os_name:
-                        rec["agent_operating_system"] = os_name
-                    dt = (incoming_summary.get("device_type") or "").strip()
-                    if dt:
-                        rec["device_type"] = dt
-            except Exception:
-                pass
+                except Exception:
+                    pass
+
+        # Deep-merge incoming over previous, but do not overwrite with empties
+        merged = _deep_merge_preserve(prev_details, details)
+
+        # Preserve last_user if incoming omitted/empty
+        try:
+            prev_last_user = (prev_details.get('summary') or {}).get('last_user')
+            cur_last_user = (merged.get('summary') or {}).get('last_user')
+            if _is_empty(cur_last_user) and prev_last_user:
+                merged.setdefault('summary', {})['last_user'] = prev_last_user
         except Exception:
             pass
 
+        # Refresh server-side in-memory registry for OS and device type
+        try:
+            if agent_id and agent_id in registered_agents:
+                rec = registered_agents[agent_id]
+                os_name = (merged.get("summary") or {}).get("operating_system") or (merged.get("summary") or {}).get("agent_operating_system")
+                if os_name:
+                    rec["agent_operating_system"] = os_name
+                dt = ((merged.get("summary") or {}).get("device_type") or "").strip()
+                if dt:
+                    rec["device_type"] = dt
+        except Exception:
+            pass
+
+        now = int(time.time())
+        # Ensure created_at is set on first insert and mirror into merged.summary.created as human string
+        if created_at <= 0:
+            created_at = now
+        try:
+            from datetime import datetime, timezone
+            human = datetime.fromtimestamp(created_at, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            merged.setdefault('summary', {})
+            if not merged['summary'].get('created'):
+                merged['summary']['created'] = human
+        except Exception:
+            pass
+
+        # Upsert row without destroying created_at; keep previous created_at if exists
         cur.execute(
-            "REPLACE INTO device_details (hostname, description, details) VALUES (?, ?, ?)",
-            (hostname, description, json.dumps(details)),
+            """
+            INSERT INTO device_details(hostname, description, details, created_at)
+            VALUES (?,?,?,?)
+            ON CONFLICT(hostname) DO UPDATE SET
+                description=excluded.description,
+                details=excluded.details,
+                created_at=COALESCE(device_details.created_at, excluded.created_at)
+            """,
+            (hostname, description, json.dumps(merged), created_at),
         )
         conn.commit()
         conn.close()
@@ -1895,10 +1998,10 @@ def save_agent_details():
 @app.route("/api/device/details/<hostname>", methods=["GET"])
 def get_device_details(hostname: str):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT details, description FROM device_details WHERE hostname = ?",
+            "SELECT details, description, created_at FROM device_details WHERE hostname = ?",
             (hostname,),
         )
         row = cur.fetchone()
@@ -1909,8 +2012,16 @@ def get_device_details(hostname: str):
             except Exception:
                 details = {}
             description = row[1] if len(row) > 1 else ""
+            created_at = int(row[2] or 0) if len(row) > 2 else 0
             if description:
                 details.setdefault("summary", {})["description"] = description
+            # Ensure created string exists from created_at
+            try:
+                if created_at and not (details.get('summary') or {}).get('created'):
+                    from datetime import datetime
+                    details.setdefault('summary', {})['created'] = datetime.utcfromtimestamp(created_at).strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                pass
             return jsonify(details)
     except Exception:
         pass
@@ -1922,12 +2033,19 @@ def set_device_description(hostname: str):
     data = request.get_json(silent=True) or {}
     description = (data.get("description") or "").strip()
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
+        now = int(time.time())
+        # Insert row if missing with created_at; otherwise update description only
         cur.execute(
-            "INSERT INTO device_details(hostname, description, details) VALUES (?, ?, COALESCE((SELECT details FROM device_details WHERE hostname = ?), '{}')) "
-            "ON CONFLICT(hostname) DO UPDATE SET description=excluded.description",
-            (hostname, description, hostname),
+            "INSERT INTO device_details(hostname, description, details, created_at) "
+            "VALUES (?, COALESCE(?, ''), COALESCE((SELECT details FROM device_details WHERE hostname = ?), '{}'), ?) "
+            "ON CONFLICT(hostname) DO NOTHING",
+            (hostname, description, hostname, now),
+        )
+        cur.execute(
+            "UPDATE device_details SET description=? WHERE hostname=?",
+            (description, hostname),
         )
         conn.commit()
         conn.close()
@@ -1995,7 +2113,7 @@ def scripts_quick_run():
     for host in hostnames:
         job_id = None
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = _db_conn()
             cur = conn.cursor()
             cur.execute(
                 """
@@ -2040,7 +2158,7 @@ def scripts_quick_run():
 @app.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
 def device_activity(hostname: str):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         if request.method == "DELETE":
             cur.execute("DELETE FROM activity_history WHERE hostname = ?", (hostname,))
@@ -2074,7 +2192,7 @@ def device_activity(hostname: str):
 @app.route("/api/device/activity/job/<int:job_id>", methods=["GET"])
 def device_activity_job(job_id: int):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
             "SELECT id, hostname, script_name, script_path, script_type, ran_at, status, stdout, stderr FROM activity_history WHERE id = ?",
@@ -2111,7 +2229,7 @@ def handle_quick_job_result(data):
     stdout = data.get("stdout") or ""
     stderr = data.get("stderr") or ""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
             "UPDATE activity_history SET status=?, stdout=?, stderr=? WHERE id=?",
@@ -2140,25 +2258,40 @@ def handle_collector_status(data):
         rec['collector_active_ts'] = time.time()
     if last_user and (hostname or rec.get('hostname')):
         try:
-            conn = sqlite3.connect(DB_PATH)
+            host = hostname or rec.get('hostname')
+            conn = _db_conn()
             cur = conn.cursor()
             cur.execute(
-                "SELECT details, description FROM device_details WHERE hostname = ?",
-                (hostname or rec.get('hostname'),),
+                "SELECT details, description, created_at FROM device_details WHERE hostname = ?",
+                (host,),
             )
             row = cur.fetchone()
-            details = {}
             if row and row[0]:
                 try:
                     details = json.loads(row[0])
                 except Exception:
                     details = {}
+                description = row[1] or ""
+                created_at = int(row[2] or 0)
+            else:
+                details = {}
+                description = ""
+                created_at = 0
             summary = details.get('summary') or {}
+            # Only update last_user if provided; do not clear other fields
             summary['last_user'] = last_user
             details['summary'] = summary
+            now = int(time.time())
             cur.execute(
-                "REPLACE INTO device_details (hostname, description, details) VALUES (?, COALESCE((SELECT description FROM device_details WHERE hostname=?), ''), ?)",
-                ((hostname or rec.get('hostname')), (hostname or rec.get('hostname')), json.dumps(details))
+                """
+                INSERT INTO device_details(hostname, description, details, created_at)
+                VALUES (?,?,?,?)
+                ON CONFLICT(hostname) DO UPDATE SET
+                    description=excluded.description,
+                    details=excluded.details,
+                    created_at=COALESCE(device_details.created_at, excluded.created_at)
+                """,
+                (host, description, json.dumps(details), created_at or now),
             )
             conn.commit()
             conn.close()
