@@ -430,15 +430,17 @@ function InstallOrUpdate-BorealisAgent {
     Remove-BorealisServicesAndTasks -LogName 'Install.log'
     Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
 
-    $venvFolder             = "Agent"
-    $agentSourcePath        = "Data\Agent\agent.py"
-    $agentRequirements      = "Data\Agent\agent-requirements.txt"
-    $agentDestinationFolder = "$venvFolder\Borealis"
-    $agentDestinationFile   = "$venvFolder\Borealis\agent.py"
-    $venvPython = Join-Path $scriptDir $venvFolder | Join-Path -ChildPath 'Scripts\python.exe'
+    # Resolve all paths relative to the script directory to avoid CWD issues
+    $venvFolderPath         = Join-Path $scriptDir 'Agent'
+    $agentSourceRoot        = Join-Path $scriptDir 'Data\Agent'
+    $agentSourcePath        = Join-Path $agentSourceRoot 'agent.py'
+    $agentRequirements      = Join-Path $agentSourceRoot 'agent-requirements.txt'
+    $agentDestinationFolder = Join-Path $venvFolderPath 'Borealis'
+    $agentDestinationFile   = Join-Path $agentDestinationFolder 'agent.py'
+    $venvPython             = Join-Path $venvFolderPath 'Scripts\python.exe'
 
     Run-Step "Create Virtual Python Environment" {
-        if (-not (Test-Path "$venvFolder\Scripts\Activate")) {
+        if (-not (Test-Path (Join-Path $venvFolderPath 'Scripts\Activate'))) {
             $pythonForVenv = $pythonExe
             if (-not (Test-Path $pythonForVenv)) {
                 $pyCmd = Get-Command py -ErrorAction SilentlyContinue
@@ -450,23 +452,27 @@ function InstallOrUpdate-BorealisAgent {
                     exit 1
                 }
             }
-            & $pythonForVenv -m venv $venvFolder
+            & $pythonForVenv -m venv $venvFolderPath
         }
         if (Test-Path $agentSourcePath) {
+            # Cleanup Previous Agent Folder & Create New Folder
             Remove-Item $agentDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
             New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
-            Copy-Item "Data\Agent\agent.py" $agentDestinationFolder -Recurse
-            # agent_info has been migrated into roles; no longer copied
-            # Legacy agent_roles kept for compatibility only if needed
-            Copy-Item "Data\Agent\Python_API_Endpoints" $agentDestinationFolder -Recurse
-            Copy-Item "Data\Agent\role_manager.py" $agentDestinationFolder -Force
-            if (Test-Path "Data\Agent\Roles") { Copy-Item "Data\Agent\Roles" $agentDestinationFolder -Recurse }
-            Copy-Item "Data\Agent\agent_deployment.py" $agentDestinationFolder -Force
-            # tray is now embedded in CURRENTUSER role; no launcher to copy
-            if (Test-Path "Data\Agent\Borealis.ico") { Copy-Item "Data\Agent\Borealis.ico" $agentDestinationFolder -Force }
-            if (Test-Path "Data\Agent\launch_service.ps1") { Copy-Item "Data\Agent\launch_service.ps1" $agentDestinationFolder -Force }
+
+            # Copy Agent Files to Virtual Python Environment
+            $coreAgentFiles = @(
+                (Join-Path $agentSourceRoot 'agent.py'),
+                (Join-Path $agentSourceRoot 'Python_API_Endpoints'),
+                (Join-Path $agentSourceRoot 'agent_deployment.py'),
+                (Join-Path $agentSourceRoot 'Borealis.ico'),
+                (Join-Path $agentSourceRoot 'launch_service.ps1'),
+                (Join-Path $agentSourceRoot 'role_manager.py'),
+                (Join-Path $agentSourceRoot 'Roles')
+            )
+
+            Copy-Item $coreAgentFiles -Destination $agentDestinationFolder -Recurse -Force
         }
-        . "$venvFolder\Scripts\Activate"
+        . (Join-Path $venvFolderPath 'Scripts\Activate')
     }
 
     Run-Step "Install Python Dependencies" {

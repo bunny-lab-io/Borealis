@@ -1,0 +1,120 @@
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Collect summary via PowerShell
+      ansible.builtin.shell: |
+        $ErrorActionPreference = 'Stop'
+        $hostname = $env:COMPUTERNAME
+        $username = $env:USERNAME
+        $domain   = $env:USERDOMAIN
+        $w = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+        $product = [string]$w.ProductName
+        $display = [string]$w.DisplayVersion
+        $build   = [string]$w.CurrentBuildNumber
+        $os      = ($product + ' ' + $display).Trim()
+        $boot    = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+        $uptime  = [int]((Get-Date) - $boot).TotalSeconds
+        $epoch   = [int](((Get-Date $boot).ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds)
+        $out = [pscustomobject]@{ hostname=$hostname; os=$os; username=$username; domain=$domain; uptime_sec=$uptime; last_reboot=$epoch }
+        $out | ConvertTo-Json -Depth 4
+      register: summary_raw
+      changed_when: false
+
+    - name: Parse summary JSON
+      ansible.builtin.set_fact:
+        _summary: "{{ summary_raw.stdout | from_json | default({}, true) }}"
+
+    - name: Collect installed software
+      ansible.builtin.shell: |
+        $ErrorActionPreference = 'SilentlyContinue'
+        $paths = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                  'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*')
+        $items = foreach ($p in $paths) {
+          if (Test-Path $p) {
+            Get-ItemProperty -Path $p | Where-Object { $_.DisplayName } | ForEach-Object {
+              [pscustomobject]@{ name=[string]$_.DisplayName; version=[string]$_.DisplayVersion }
+            }
+          }
+        }
+        $items | Sort-Object name -Unique | ConvertTo-Json -Depth 4
+      register: software_raw
+      changed_when: false
+
+    - name: Parse software JSON
+      ansible.builtin.set_fact:
+        _software: "{{ software_raw.stdout | default('[]') | from_json | default([], true) }}"
+
+    - name: Collect memory modules
+      ansible.builtin.shell: |
+        $ErrorActionPreference = 'SilentlyContinue'
+        Get-CimInstance Win32_PhysicalMemory | ForEach-Object {
+          [pscustomobject]@{ slot=$_.BankLabel; speed=[string]$_.Speed; serial=[string]$_.SerialNumber; capacity=[string]$_.Capacity }
+        } | ConvertTo-Json -Depth 4
+      register: memory_raw
+      changed_when: false
+
+    - name: Parse memory JSON
+      ansible.builtin.set_fact:
+        _memory: "{{ memory_raw.stdout | default('[]') | from_json | default([], true) }}"
+
+    - name: Collect storage volumes
+      ansible.builtin.shell: |
+        $ErrorActionPreference = 'SilentlyContinue'
+        Get-CimInstance Win32_LogicalDisk | ForEach-Object {
+          $total = [double]$_.Size; $free = [double]$_.FreeSpace; $used = $total - $free;
+          $usage = if ($total -gt 0) { [math]::Round(($used / $total) * 100, 2) } else { 0 }
+          $type = switch ($_.DriveType) { 2 {'Removable'} 3 {'Fixed Disk'} default {'Unknown'} }
+          [pscustomobject]@{ drive=$_.DeviceID; disk_type=$type; usage=$usage; total=$total; free=$free; used=$used }
+        } | ConvertTo-Json -Depth 4
+      register: storage_raw
+      changed_when: false
+
+    - name: Parse storage JSON
+      ansible.builtin.set_fact:
+        _storage: "{{ storage_raw.stdout | default('[]') | from_json | default([], true) }}"
+
+    - name: Collect network adapters
+      ansible.builtin.shell: |
+        $ErrorActionPreference = 'SilentlyContinue'
+        try {
+          $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.IPAddress -and $_.IPAddress -notmatch '^169\.254\.' -and $_.IPAddress -ne '127.0.0.1' }
+          $ad = Get-NetAdapter | ForEach-Object { $_ | Select-Object -Property Name, InterfaceAlias, MacAddress }
+          $map = @{}; foreach($a in $ad){ $map[$a.InterfaceAlias] = $a.MacAddress }
+          $tmp = @{}
+          foreach($e in $ip){
+            $alias = if ($e.InterfaceAlias) { $e.InterfaceAlias } else { 'unknown' }
+            $item = $tmp[$alias]
+            if (-not $item) { $item = [pscustomobject]@{ adapter=$alias; ips=@(); mac='' }; $tmp[$alias] = $item }
+            $item.mac = $map[$alias]
+            if ($e.IPAddress -and $item.ips -notcontains $e.IPAddress) { $item.ips += $e.IPAddress }
+          }
+          $out = $tmp.GetEnumerator() | ForEach-Object { $_.Value }
+        } catch { $out = @() }
+        $out | ConvertTo-Json -Depth 4
+      register: network_raw
+      changed_when: false
+
+    - name: Parse network JSON
+      ansible.builtin.set_fact:
+        _network: "{{ network_raw.stdout | default('[]') | from_json | default([], true) }}"
+
+    - name: Compose device details structure
+      ansible.builtin.set_fact:
+        device_details:
+          summary: "{{ _summary }}"
+          software: "{{ _software }}"
+          memory: "{{ _memory }}"
+          storage: "{{ _storage }}"
+          network: "{{ _network }}"
+
+    - name: Derive internal IP
+      ansible.builtin.set_fact:
+        device_details: "{{ device_details | combine({'summary': (device_details.summary | combine({'internal_ip': ( (_network | map(attribute='ips') | list | first | default([])) | first | default('') ) })) }) }}"
+
+    - name: Write device details JSON
+      ansible.builtin.copy:
+        content: "{{ device_details | to_nice_json }}"
+        dest: "{{ output_file }}"
+      run_once: true
+

@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import socket
@@ -7,6 +8,7 @@ import subprocess
 import shutil
 import string
 import asyncio
+from pathlib import Path
 
 try:
     import psutil  # type: ignore
@@ -122,6 +124,79 @@ def collect_summary(CONFIG):
         }
     except Exception:
         return {'hostname': socket.gethostname()}
+
+
+def _project_root():
+    try:
+        # Agent layout: Agent/Borealis/{this_file}; root is two levels up
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    except Exception:
+        return os.getcwd()
+
+
+def _run_ansible_audit(ctx) -> dict:
+    try:
+        exe_dir = os.path.dirname(sys.executable)
+        candidate = os.path.join(exe_dir, 'ansible-playbook.exe' if IS_WINDOWS else 'ansible-playbook')
+        ansible_playbook = candidate if os.path.isfile(candidate) else 'ansible-playbook'
+
+        base = os.path.join(_project_root(), 'Logs', 'Agent', 'ansible')
+        os.makedirs(base, exist_ok=True)
+        out_path = os.path.join(base, 'audit.json')
+
+        # Require an external playbook; look next to this role first, then source tree as fallback
+        roles_dir = os.path.dirname(__file__)
+        pb_candidates = [
+            os.path.join(roles_dir, 'Device_Audit.yml'),
+            os.path.join(_project_root(), 'Data', 'Agent', 'Roles', 'Device_Audit.yml'),
+        ]
+        pb_path = next((p for p in pb_candidates if os.path.isfile(p)), None)
+        if not pb_path:
+            # Log helpful error and return empty
+            try:
+                with open(os.path.join(base, 'ansible.err.log'), 'w', encoding='utf-8', newline='\n') as ef:
+                    ef.write('Device_Audit.yml not found in roles directory.\n')
+                    ef.write('Searched:\n - ' + '\n - '.join(pb_candidates))
+            except Exception:
+                pass
+            return {}
+
+        out_posix = Path(out_path).as_posix()
+        py_interp = Path(sys.executable).as_posix()
+
+        env = os.environ.copy()
+        env.setdefault('PYTHONIOENCODING', 'utf-8')
+        env.setdefault('ANSIBLE_FORCE_COLOR', '0')
+
+        cmd = [
+            ansible_playbook,
+            '-i', 'localhost,',
+            '-c', 'local',
+            pb_path,
+            '-e', f'ansible_python_interpreter={py_interp}',
+            '-e', 'ansible_shell_type=powershell' if IS_WINDOWS else 'ansible_shell_type=sh',
+            '-e', 'ansible_shell_executable=powershell.exe' if IS_WINDOWS else 'ansible_shell_executable=/bin/sh',
+            '-e', f'output_file={out_posix}',
+        ]
+
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
+        if proc.returncode != 0:
+            try:
+                with open(os.path.join(base, 'ansible.err.log'), 'w', encoding='utf-8', newline='\n') as ef:
+                    ef.write(proc.stdout or '')
+                    ef.write('\n--- STDERR ---\n')
+                    ef.write(proc.stderr or '')
+            except Exception:
+                pass
+            return {}
+        try:
+            with open(out_path, 'r', encoding='utf-8') as jf:
+                details = json.load(jf)
+            return details if isinstance(details, dict) else {}
+        except Exception:
+            return {}
+    except Exception:
+        return {}
 
 
 def _ps_json(cmd: str, timeout: int = 60):
@@ -425,6 +500,9 @@ class Role:
         self.ctx = ctx
         self._ext_ip = None
         self._ext_ip_ts = 0
+        self._ansible_cache = None
+        self._ansible_ts = 0
+        self._last_details = None
         try:
             # Set OS string once
             self.ctx.config.data['agent_operating_system'] = detect_agent_os()
@@ -445,78 +523,35 @@ class Role:
             pass
 
     async def _report_loop(self):
+        interval_sec = 300  # post heartbeat/details every 5 minutes
         while True:
             try:
-                details = {
-                    'summary': collect_summary(self.ctx.config),
-                    'software': collect_software(),
-                    'memory': collect_memory(),
-                    'storage': collect_storage(),
-                    'network': collect_network(),
-                }
-                # Derive additional summary fields
+                # Determine audit refresh interval (minutes), default 30
                 try:
-                    # Internal IP: first IPv4 on first adapter
-                    internal_ip = ''
-                    for a in (details.get('network') or []):
-                        for ip in (a.get('ips') or []):
-                            if ip and not ip.startswith('169.254.') and ip != '127.0.0.1':
-                                internal_ip = ip
-                                break
-                        if internal_ip:
-                            break
-                    details['summary']['internal_ip'] = internal_ip
+                    refresh_min = int(self.ctx.config.data.get('audit_interval_minutes', 30))
                 except Exception:
-                    pass
-                try:
-                    details['summary']['device_type'] = detect_device_type()
-                except Exception:
-                    pass
-                try:
-                    if psutil:
-                        details['summary']['last_reboot'] = int(psutil.boot_time())
-                except Exception:
-                    pass
+                    refresh_min = 30
+                refresh_sec = max(300, refresh_min * 60)
+
+                now = time.time()
+                need_refresh = (not self._last_details) or ((now - self._ansible_ts) > refresh_sec)
+                if need_refresh:
+                    details = _run_ansible_audit(self.ctx)
+                    if details:
+                        self._last_details = details
+                        self._ansible_ts = now
+
+                # Always post the latest available details (possibly cached)
+                details_to_send = self._last_details or {'summary': collect_summary(self.ctx.config)}
                 url = (self.ctx.config.data.get('borealis_server_url', 'http://localhost:5000') or '').rstrip('/') + '/api/agent/details'
                 payload = {
                     'agent_id': self.ctx.agent_id,
-                    'hostname': details.get('summary', {}).get('hostname', socket.gethostname()),
-                    'details': details,
+                    'hostname': details_to_send.get('summary', {}).get('hostname', socket.gethostname()),
+                    'details': details_to_send,
                 }
                 if aiohttp is not None:
                     async with aiohttp.ClientSession() as session:
-                        # External IP: refresh at most every 30 minutes
-                        try:
-                            now = time.time()
-                            if (now - self._ext_ip_ts) > 1800:
-                                # Try ipify JSON; fallback to plain-text ifconfig.me
-                                ok = False
-                                try:
-                                    async with session.get('https://api.ipify.org?format=json', timeout=8) as resp:
-                                        if resp.status == 200:
-                                            j = await resp.json()
-                                            self._ext_ip = (j.get('ip') or '').strip()
-                                            self._ext_ip_ts = now
-                                            ok = True
-                                except Exception:
-                                    pass
-                                if not ok:
-                                    try:
-                                        async with session.get('https://ifconfig.me/ip', timeout=8) as resp2:
-                                            if resp2.status == 200:
-                                                t = (await resp2.text()) or ''
-                                                t = t.strip()
-                                                if t:
-                                                    self._ext_ip = t
-                                                    self._ext_ip_ts = now
-                                                    ok = True
-                                    except Exception:
-                                        pass
-                            if self._ext_ip:
-                                details['summary']['external_ip'] = self._ext_ip
-                        except Exception:
-                            pass
                         await session.post(url, json=payload, timeout=10)
             except Exception:
                 pass
-            await asyncio.sleep(300)
+            await asyncio.sleep(interval_sec)
