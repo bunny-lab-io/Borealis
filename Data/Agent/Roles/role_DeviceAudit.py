@@ -117,7 +117,7 @@ def collect_summary(CONFIG):
         hostname = socket.gethostname()
         return {
             'hostname': hostname,
-            'os': CONFIG.data.get('agent_operating_system', detect_agent_os()),
+            'os': detect_agent_os(),
             'username': os.environ.get('USERNAME') or os.environ.get('USER') or '',
             'domain': os.environ.get('USERDOMAIN') or '',
             'uptime_sec': int(time.time() - psutil.boot_time()) if psutil else None,
@@ -662,12 +662,7 @@ class Role:
         self._ext_ip_ts = 0
         self._refresh_ts = 0
         self._last_details = None
-        try:
-            # Set OS string once
-            self.ctx.config.data['agent_operating_system'] = detect_agent_os()
-            self.ctx.config._write()
-        except Exception:
-            pass
+        # OS is collected dynamically; do not persist in config
         # Start periodic reporter
         try:
             self.task = self.ctx.loop.create_task(self._report_loop())
@@ -708,7 +703,8 @@ class Role:
 
                 # Always post the latest available details (possibly cached)
                 details_to_send = self._last_details or {'summary': collect_summary(self.ctx.config)}
-                url = (self.ctx.config.data.get('borealis_server_url', 'http://localhost:5000') or '').rstrip('/') + '/api/agent/details'
+                get_url = (self.ctx.hooks.get('get_server_url') if isinstance(self.ctx.hooks, dict) else None) or (lambda: 'http://localhost:5000')
+                url = (get_url() or '').rstrip('/') + '/api/agent/details'
                 payload = {
                     'agent_id': self.ctx.agent_id,
                     'hostname': details_to_send.get('summary', {}).get('hostname', socket.gethostname()),

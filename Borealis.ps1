@@ -481,6 +481,31 @@ function InstallOrUpdate-BorealisAgent {
         }
     }
 
+    Run-Step "Configure Agent Settings" {
+        $settingsDir = Join-Path $scriptDir 'Agent\Borealis\Settings'
+        $oldSettingsDir = Join-Path $scriptDir 'Agent\Settings'
+        if (-not (Test-Path $settingsDir)) { New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null }
+        $serverUrlPath = Join-Path $settingsDir 'server_url.txt'
+        # Migrate any prior interim location file if present
+        $oldServerUrlPath = Join-Path $oldSettingsDir 'server_url.txt'
+        if (-not (Test-Path $serverUrlPath) -and (Test-Path $oldServerUrlPath)) {
+            try { Move-Item -Path $oldServerUrlPath -Destination $serverUrlPath -Force } catch { try { Copy-Item $oldServerUrlPath $serverUrlPath -Force } catch {} }
+        }
+        $defaultUrl = 'http://localhost:5000'
+        $currentUrl = $defaultUrl
+        if (Test-Path $serverUrlPath) {
+            try { $txt = (Get-Content -Path $serverUrlPath -ErrorAction SilentlyContinue | Select-Object -First 1) } catch { $txt = '' }
+            if ($txt -and $txt.Trim()) { $currentUrl = $txt.Trim() }
+        }
+        Write-Host ""; Write-Host "Set Borealis Server URL" -ForegroundColor DarkYellow
+        $prompt = "Server URL [$currentUrl]"
+        $inputUrl = Read-Host $prompt
+        if (-not $inputUrl) { $inputUrl = $currentUrl }
+        $inputUrl = $inputUrl.Trim()
+        if (-not $inputUrl) { $inputUrl = $defaultUrl }
+        $inputUrl | Out-File -FilePath $serverUrlPath -Encoding utf8 -Force
+    }
+
     Write-Host "`nConfiguring Borealis Agent (tasks)..." -ForegroundColor Blue
     Write-Host "===================================================================================="
     Ensure-AgentTasks -ScriptRoot $scriptDir

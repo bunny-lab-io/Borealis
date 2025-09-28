@@ -300,7 +300,9 @@ class Role:
 
         interval = cfg.get('interval', 1000) / 1000.0
         loop = asyncio.get_event_loop()
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.ctx.config.data.get('max_task_workers', 8))
+        # Maximum number of screenshot roles you can assign to an agent. (8 already feels overkill)
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+        
         try:
             while True:
                 x, y, w, h = overlay_widgets[nid].get_geometry()
@@ -319,4 +321,3 @@ class Role:
             pass
         except Exception:
             traceback.print_exc()
-

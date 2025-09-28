@@ -127,10 +127,14 @@ def _log_agent(message: str, fname: str = 'agent.log'):
 
 def _resolve_config_path():
     """
-    Decide where to store agent_settings.json, per user’s requirement:
-    - Prefer env var BOREALIS_AGENT_CONFIG (full file path)
-    - Else use <ProjectRoot> alongside Borealis.ps1 and users.json
-    - Migrate from legacy locations if found (user config dir or next to this script)
+    Resolve the path for agent settings json in the centralized location:
+    <ProjectRoot>/Agent/Borealis/Settings/agent_settings[_{suffix}].json
+
+    Precedence/order:
+    - If BOREALIS_AGENT_CONFIG is set (full path), use it.
+    - Else if BOREALIS_AGENT_CONFIG_DIR is set (dir), use agent_settings.json under it.
+    - Else use <ProjectRoot>/Agent/Borealis/Settings and migrate any legacy files into it.
+    - If suffix is provided, seed from base if present.
     """
     # Full file path override
     override_file = os.environ.get("BOREALIS_AGENT_CONFIG")
@@ -146,8 +150,14 @@ def _resolve_config_path():
         os.makedirs(override_dir, exist_ok=True)
         return os.path.join(override_dir, "agent_settings.json")
 
-    # Target config in project root
     project_root = _find_project_root()
+    settings_dir = os.path.join(project_root, 'Agent', 'Borealis', 'Settings')
+    try:
+        os.makedirs(settings_dir, exist_ok=True)
+    except Exception:
+        pass
+
+    # Determine filename with optional suffix
     cfg_basename = 'agent_settings.json'
     try:
         if CONFIG_NAME_SUFFIX:
@@ -156,20 +166,50 @@ def _resolve_config_path():
                 cfg_basename = f"agent_settings_{suffix}.json"
     except Exception:
         pass
-    cfg_path = os.path.join(project_root, cfg_basename)
+
+    cfg_path = os.path.join(settings_dir, cfg_basename)
     if os.path.exists(cfg_path):
         return cfg_path
 
-    # If using a suffixed config and there is a base config in the project root, seed from it
+    # If using a suffixed config and there is a base config (new or legacy), seed from it
     try:
         if CONFIG_NAME_SUFFIX:
-            base_cfg = os.path.join(project_root, 'agent_settings.json')
-            if os.path.exists(base_cfg):
+            base_new = os.path.join(settings_dir, 'agent_settings.json')
+            base_old_settings = os.path.join(project_root, 'Agent', 'Settings', 'agent_settings.json')
+            base_legacy = os.path.join(project_root, 'agent_settings.json')
+            seed_from = None
+            if os.path.exists(base_new):
+                seed_from = base_new
+            elif os.path.exists(base_old_settings):
+                seed_from = base_old_settings
+            elif os.path.exists(base_legacy):
+                seed_from = base_legacy
+            if seed_from:
                 try:
-                    shutil.copy2(base_cfg, cfg_path)
+                    shutil.copy2(seed_from, cfg_path)
                     return cfg_path
                 except Exception:
                     pass
+    except Exception:
+        pass
+
+    # Migrate legacy root configs or prior Agent/Settings into Agent/Borealis/Settings
+    try:
+        legacy_root = os.path.join(project_root, cfg_basename)
+        old_settings_dir = os.path.join(project_root, 'Agent', 'Settings')
+        legacy_old_settings = os.path.join(old_settings_dir, cfg_basename)
+        if os.path.exists(legacy_root):
+            try:
+                shutil.move(legacy_root, cfg_path)
+            except Exception:
+                shutil.copy2(legacy_root, cfg_path)
+            return cfg_path
+        if os.path.exists(legacy_old_settings):
+            try:
+                shutil.move(legacy_old_settings, cfg_path)
+            except Exception:
+                shutil.copy2(legacy_old_settings, cfg_path)
+            return cfg_path
     except Exception:
         pass
 
@@ -187,13 +227,11 @@ def _resolve_config_path():
         except Exception:
             pass
 
-    # Nothing to migrate; return desired path in root
+    # Nothing to migrate; return desired path in new Settings dir
     return cfg_path
 
 CONFIG_PATH = _resolve_config_path()
 DEFAULT_CONFIG = {
-    "borealis_server_url": "http://localhost:5000",
-    "max_task_workers": 8,
     "config_file_watcher_interval": 2,
     "agent_id": "",
     "regions": {}
@@ -216,6 +254,15 @@ class ConfigManager:
                 with open(self.path, 'r') as f:
                     loaded = json.load(f)
                 self.data = {**DEFAULT_CONFIG, **loaded}
+                # Strip deprecated/relocated fields
+                for k in ('borealis_server_url','max_task_workers','agent_operating_system','created'):
+                    if k in self.data:
+                        self.data.pop(k, None)
+                        # persist cleanup best-effort
+                        try:
+                            self._write()
+                        except Exception:
+                            pass
             except Exception as e:
                 print(f"[WARN] Failed to parse config: {e}")
                 self.data = DEFAULT_CONFIG.copy()
@@ -418,8 +465,51 @@ def detect_agent_os():
         print(f"[WARN] OS detection failed: {e}")
         return "Unknown"
 
-CONFIG.data['agent_operating_system'] = detect_agent_os()
-CONFIG._write()
+def _settings_dir():
+    try:
+        return os.path.join(_find_project_root(), 'Agent', 'Borealis', 'Settings')
+    except Exception:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings'))
+
+def get_server_url() -> str:
+    """Return the Borealis server URL from env or Agent/Borealis/Settings/server_url.txt.
+    Fallback to http://localhost:5000 if missing/empty.
+    """
+    try:
+        env_url = os.environ.get('BOREALIS_SERVER_URL')
+        if env_url and env_url.strip():
+            return env_url.strip()
+        # New location
+        path = os.path.join(_settings_dir(), 'server_url.txt')
+        if os.path.isfile(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    txt = (f.read() or '').strip()
+                if txt:
+                    return txt
+            except Exception:
+                pass
+        # Prior interim location (Agent/Settings) migration support
+        try:
+            project_root = _find_project_root()
+            old_path = os.path.join(project_root, 'Agent', 'Settings', 'server_url.txt')
+            if os.path.isfile(old_path):
+                with open(old_path, 'r', encoding='utf-8') as f:
+                    txt = (f.read() or '').strip()
+                if txt:
+                    # Best-effort copy forward to new location so future reads use it
+                    try:
+                        os.makedirs(_settings_dir(), exist_ok=True)
+                        with open(path, 'w', encoding='utf-8') as wf:
+                            wf.write(txt)
+                    except Exception:
+                        pass
+                    return txt
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return 'http://localhost:5000'
 
 # //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: ASYNC TASK / WEBSOCKET
@@ -656,7 +746,7 @@ async def send_heartbeat():
             payload = {
                 "agent_id": AGENT_ID,
                 "hostname": socket.gethostname(),
-                "agent_operating_system": CONFIG.data.get("agent_operating_system", detect_agent_os()),
+                "agent_operating_system": detect_agent_os(),
                 "last_seen": int(time.time())
             }
             await sio.emit("agent_heartbeat", payload)
@@ -962,7 +1052,7 @@ async def send_agent_details():
                 "storage": collect_storage(),
                 "network": collect_network(),
             }
-            url = CONFIG.data.get("borealis_server_url", "http://localhost:5000") + "/api/agent/details"
+            url = get_server_url().rstrip('/') + "/api/agent/details"
             payload = {
                 "agent_id": AGENT_ID,
                 "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
@@ -985,7 +1075,7 @@ async def send_agent_details_once():
             "storage": collect_storage(),
             "network": collect_network(),
         }
-        url = CONFIG.data.get("borealis_server_url", "http://localhost:5000") + "/api/agent/details"
+        url = get_server_url().rstrip('/') + "/api/agent/details"
         payload = {
             "agent_id": AGENT_ID,
             "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
@@ -1008,7 +1098,7 @@ async def connect():
         await sio.emit("agent_heartbeat", {
             "agent_id": AGENT_ID,
             "hostname": socket.gethostname(),
-            "agent_operating_system": CONFIG.data.get("agent_operating_system", detect_agent_os()),
+            "agent_operating_system": detect_agent_os(),
             "last_seen": int(time.time())
         })
     except Exception as e:
@@ -1285,7 +1375,7 @@ async def connect_loop():
     retry=5
     while True:
         try:
-            url=CONFIG.data.get('borealis_server_url',"http://localhost:5000")
+            url=get_server_url()
             print(f"[INFO] Connecting Agent to {url}...")
             _log_agent(f'Connecting to {url}...')
             await sio.connect(url,transports=['websocket'])
@@ -1316,7 +1406,7 @@ if __name__=='__main__':
     # Initialize roles context for role tasks
     # Initialize role manager and hot-load roles from Roles/
     try:
-        hooks = {'send_service_control': send_service_control}
+        hooks = {'send_service_control': send_service_control, 'get_server_url': get_server_url}
         if not SYSTEM_SERVICE_MODE:
             # Load interactive-context roles (tray/UI, current-user execution, screenshot, etc.)
             ROLE_MANAGER = RoleManager(

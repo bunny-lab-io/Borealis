@@ -69,9 +69,9 @@ All runtime logs live under `Logs/<ServiceName>` relative to the project root (`
   - This avoids 0x1/0x2 Task Scheduler errors on hosts where WorkingDirectory is ignored.
 - UserHelper (interactive) is still a direct task action to `pythonw.exe "Agent\\Borealis\\agent.py" --config user`.
 - Config files and inheritance:
-  - Base config lives at `<ProjectRoot>\\agent_settings.json`.
-  - On first run per-suffix, the agent seeds: `agent_settings_svc.json` (SYSTEM), `agent_settings_user.json` (interactive) from the base.
-  - Set `borealis_server_url` in the base file so both inherit the same server endpoint.
+- Base config now lives at `<ProjectRoot>\\Agent\\Borealis\\Settings\\agent_settings.json`.
+- On first run per-suffix, the agent seeds: `Agent\\Borealis\\Settings\\agent_settings_svc.json` (SYSTEM) and `Agent\\Borealis\\Settings\\agent_settings_user.json` (interactive) from the base when present.
+- Server URL is stored in `<ProjectRoot>\\Agent\\Borealis\\Settings\\server_url.txt`. The deployment script prompts for it on install/repair; press Enter to accept the default `http://localhost:5000`.
 - Logging:
   - Early bootstrap log: `<ProjectRoot>\\Logs\\Agent\\bootstrap.log` (helps verify launch + mode).
   - Main logs: `<ProjectRoot>\\Logs\\Agent\\agent.log`, `agent.error.log`.
@@ -85,12 +85,12 @@ All runtime logs live under `Logs/<ServiceName>` relative to the project root (`
 - Launch/repair agent (elevated PowerShell): `.\\Borealis.ps1 -Agent -AgentAction install`.
 - Manual short-run agent checks (non-blocking):
   - `Start-Process .\\Agent\\Scripts\\pythonw.exe -ArgumentList '".\\Agent\\Borealis\\agent.py" --system-service --config svc'`
-  - Verify logs under `Logs\\Agent` and presence of `agent_settings_svc.json`.
+  - Verify logs under `Logs\\Agent` and presence of `Agent\\Borealis\\Settings\\agent_settings_svc.json` and `Agent\\Borealis\\Settings\\server_url.txt`.
 
 ## Troubleshooting Checklist
 - Agent task “Ready” with 0x1: ensure the SYSTEM task uses `launch_service.ps1` and that WorkingDirectory is `Agent\\Borealis`.
 - No logs/configs created: verify venv exists under `Agent\\Scripts` and that wrapper points at the right paths.
-- Agent connects but Devices empty: check `agent.error.log` for aiohttp errors and confirm `borealis_server_url` is reachable; device details post occurs once on connect and then every ~5 minutes.
+- Agent connects but Devices empty: check `agent.error.log` for aiohttp errors and confirm the URL in `Agent\\Borealis\\Settings\\server_url.txt` is reachable; device details post occurs once on connect and then every ~5 minutes.
 - Quick jobs “Running” forever: ensure SYSTEM and UserHelper agents are both running; check `system_last.ps1` and wrapper logs for PowerShell errors.
 ## State & Persistence
 `database.db` currently stores device inventory, runtime facts, and job history. Workflow and scheduling metadata are not yet persisted, and no internal scheduler exists beyond WebUI prototypes. Planned scheduling work will need schema updates and migration guidance once implemented.
