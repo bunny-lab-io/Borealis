@@ -473,20 +473,35 @@ def _settings_dir():
 
 def get_server_url() -> str:
     """Return the Borealis server URL from env or Agent/Borealis/Settings/server_url.txt.
-    Fallback to http://localhost:5000 if missing/empty.
+    - Strips UTF-8 BOM and whitespace
+    - Adds http:// if scheme is missing
+    - Falls back to http://localhost:5000 when missing/invalid
     """
+    def _sanitize(val: str) -> str:
+        try:
+            s = (val or '').strip().replace('\ufeff', '')
+            if not s:
+                return ''
+            if not (s.lower().startswith('http://') or s.lower().startswith('https://') or s.lower().startswith('ws://') or s.lower().startswith('wss://')):
+                s = 'http://' + s
+            # Remove trailing slash for consistency
+            return s.rstrip('/')
+        except Exception:
+            return ''
+
     try:
         env_url = os.environ.get('BOREALIS_SERVER_URL')
-        if env_url and env_url.strip():
-            return env_url.strip()
+        if env_url and _sanitize(env_url):
+            return _sanitize(env_url)
         # New location
         path = os.path.join(_settings_dir(), 'server_url.txt')
         if os.path.isfile(path):
             try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    txt = (f.read() or '').strip()
-                if txt:
-                    return txt
+                with open(path, 'r', encoding='utf-8-sig') as f:
+                    txt = f.read()
+                s = _sanitize(txt)
+                if s:
+                    return s
             except Exception:
                 pass
         # Prior interim location (Agent/Settings) migration support
@@ -494,17 +509,18 @@ def get_server_url() -> str:
             project_root = _find_project_root()
             old_path = os.path.join(project_root, 'Agent', 'Settings', 'server_url.txt')
             if os.path.isfile(old_path):
-                with open(old_path, 'r', encoding='utf-8') as f:
-                    txt = (f.read() or '').strip()
-                if txt:
+                with open(old_path, 'r', encoding='utf-8-sig') as f:
+                    txt = f.read()
+                s = _sanitize(txt)
+                if s:
                     # Best-effort copy forward to new location so future reads use it
                     try:
                         os.makedirs(_settings_dir(), exist_ok=True)
                         with open(path, 'w', encoding='utf-8') as wf:
-                            wf.write(txt)
+                            wf.write(s)
                     except Exception:
                         pass
-                    return txt
+                    return s
         except Exception:
             pass
     except Exception:

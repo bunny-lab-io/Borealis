@@ -503,7 +503,10 @@ function InstallOrUpdate-BorealisAgent {
         if (-not $inputUrl) { $inputUrl = $currentUrl }
         $inputUrl = $inputUrl.Trim()
         if (-not $inputUrl) { $inputUrl = $defaultUrl }
-        $inputUrl | Out-File -FilePath $serverUrlPath -Encoding utf8 -Force
+        
+        # Write UTF-8 without BOM to avoid BOM being read into the URL
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($serverUrlPath, $inputUrl, $utf8NoBom)
     }
 
     Write-Host "`nConfiguring Borealis Agent (tasks)..." -ForegroundColor Blue
