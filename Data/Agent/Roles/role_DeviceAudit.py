@@ -344,9 +344,9 @@ def collect_network():
                     "try { "
                     "$ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | "
                     "Where-Object { $_.IPAddress -and $_.IPAddress -notmatch '^169\\.254\\.' -and $_.IPAddress -ne '127.0.0.1' }; "
-                    "$ad = Get-NetAdapter | ForEach-Object { $_ | Select-Object -Property InterfaceAlias, MacAddress }; "
-                    "$map = @{}; foreach($a in $ad){ $map[$a.InterfaceAlias] = $a.MacAddress }; "
-                    "$out = @(); foreach($e in $ip){ $mac = $map[$e.InterfaceAlias]; $out += [pscustomobject]@{ InterfaceAlias=$e.InterfaceAlias; IPAddress=$e.IPAddress; MacAddress=$mac } } "
+                    "$ad = Get-NetAdapter | ForEach-Object { $_ | Select-Object -Property InterfaceAlias, MacAddress, LinkSpeed }; "
+                    "$map = @{}; foreach($a in $ad){ $map[$a.InterfaceAlias] = @{ Mac=$a.MacAddress; LinkSpeed=('' + $a.LinkSpeed).Trim() } }; "
+                    "$out = @(); foreach($e in $ip){ $m = $map[$e.InterfaceAlias]; $mac = $m.Mac; $ls = $m.LinkSpeed; $out += [pscustomobject]@{ InterfaceAlias=$e.InterfaceAlias; IPAddress=$e.IPAddress; MacAddress=$mac; LinkSpeed=$ls } } "
                     "$out | ConvertTo-Json -Depth 3 } catch { '' }"
                 )
                 data = _ps_json(ps_cmd, timeout=60)
@@ -357,9 +357,10 @@ def collect_network():
                     alias = e.get('InterfaceAlias') or 'unknown'
                     ip = e.get('IPAddress') or ''
                     mac = e.get('MacAddress') or 'unknown'
+                    link = e.get('LinkSpeed') or ''
                     if not ip:
                         continue
-                    item = tmp.setdefault(alias, {'adapter': alias, 'ips': [], 'mac': mac})
+                    item = tmp.setdefault(alias, {'adapter': alias, 'ips': [], 'mac': mac, 'link_speed': link})
                     if ip not in item['ips']:
                         item['ips'].append(ip)
                 if tmp:
@@ -407,6 +408,88 @@ def collect_network():
         pass
     return adapters
 
+
+def collect_cpu() -> dict:
+    """Collect CPU model, cores, and base clock (best-effort cross-platform)."""
+    out: dict = {}
+    try:
+        plat = platform.system().lower()
+        if plat == 'windows':
+            try:
+                ps_cmd = (
+                    "Get-CimInstance Win32_Processor | "
+                    "Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed | ConvertTo-Json"
+                )
+                data = _ps_json(ps_cmd, timeout=15)
+                if isinstance(data, dict):
+                    data = [data]
+                name = ''
+                phys = 0
+                logi = 0
+                mhz = 0
+                for idx, cpu in enumerate(data or []):
+                    if idx == 0:
+                        name = str(cpu.get('Name') or '')
+                        try:
+                            mhz = int(cpu.get('MaxClockSpeed') or 0)
+                        except Exception:
+                            mhz = 0
+                    try:
+                        phys += int(cpu.get('NumberOfCores') or 0)
+                    except Exception:
+                        pass
+                    try:
+                        logi += int(cpu.get('NumberOfLogicalProcessors') or 0)
+                    except Exception:
+                        pass
+                out = {
+                    'name': name.strip(),
+                    'physical_cores': phys or None,
+                    'logical_cores': logi or None,
+                    'base_clock_ghz': (float(mhz) / 1000.0) if mhz else None,
+                }
+                return out
+            except Exception:
+                pass
+        elif plat == 'darwin':
+            try:
+                name = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True, timeout=5).stdout.strip()
+            except Exception:
+                name = ''
+            try:
+                cores = int(subprocess.run(["sysctl", "-n", "hw.ncpu"], capture_output=True, text=True, timeout=5).stdout.strip() or '0')
+            except Exception:
+                cores = 0
+            out = {'name': name, 'logical_cores': cores or None}
+            return out
+        else:
+            # Linux
+            try:
+                brand = ''
+                cores = 0
+                with open('/proc/cpuinfo', 'r', encoding='utf-8', errors='ignore') as fh:
+                    for line in fh:
+                        if not brand and 'model name' in line:
+                            brand = line.split(':', 1)[-1].strip()
+                        if 'processor' in line:
+                            cores += 1
+                out = {'name': brand, 'logical_cores': cores or None}
+                return out
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # psutil fallback
+    try:
+        if psutil:
+            return {
+                'name': platform.processor() or '',
+                'physical_cores': psutil.cpu_count(logical=False) if hasattr(psutil, 'cpu_count') else None,
+                'logical_cores': psutil.cpu_count(logical=True) if hasattr(psutil, 'cpu_count') else None,
+            }
+    except Exception:
+        pass
+    return out or {}
 
 def detect_device_type():
     try:
@@ -642,6 +725,48 @@ def _build_details_fallback() -> dict:
         last_user = _collect_last_user_registry()
         if last_user:
             summary['last_user'] = last_user
+    except Exception:
+        pass
+
+    # CPU information (summary + display string)
+    try:
+        cpu = collect_cpu()
+        if cpu:
+            summary['cpu'] = cpu
+            cores = cpu.get('logical_cores') or cpu.get('physical_cores')
+            ghz = cpu.get('base_clock_ghz')
+            name = (cpu.get('name') or '').strip()
+            parts = []
+            if name:
+                parts.append(name)
+            if ghz:
+                try:
+                    parts.append(f"({float(ghz):.1f}GHz)")
+                except Exception:
+                    pass
+            if cores:
+                parts.append(f"@ {int(cores)} Cores")
+            if parts:
+                summary['processor'] = ' '.join(parts)
+    except Exception:
+        pass
+
+    # Total RAM (bytes) for quick UI metrics
+    try:
+        total = 0
+        mem_list = collect_memory()
+        for m in (mem_list or []):
+            try:
+                total += int(m.get('capacity') or 0)
+            except Exception:
+                pass
+        if not total and psutil:
+            try:
+                total = int(psutil.virtual_memory().total)
+            except Exception:
+                pass
+        if total:
+            summary['total_ram'] = total
     except Exception:
         pass
 

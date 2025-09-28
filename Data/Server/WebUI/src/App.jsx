@@ -914,9 +914,22 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             </Menu>
           </Toolbar>
         </AppBar>
-        <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
+        <Box sx={{ display: "flex", flexGrow: 1, overflow: "auto", minHeight: 0 }}>
           <NavigationSidebar currentPage={currentPage} onNavigate={setCurrentPage} isAdmin={isAdmin} />
-          <Box sx={{ flexGrow: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <Box
+            sx={{
+              flexGrow: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'auto',
+              minHeight: 0,
+              // Ensure primary page container (usually a Paper with m:2) fills to the bottom
+              '& > *': {
+                alignSelf: 'stretch',
+                minHeight: 'calc(100% - 32px)' // account for typical m:2 top+bottom margins
+              }
+            }}
+          >
             {renderMainContent()}
           </Box>
         </Box>

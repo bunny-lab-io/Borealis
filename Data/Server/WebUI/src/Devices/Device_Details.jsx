@@ -24,6 +24,10 @@ import {
   DialogContent,
   DialogActions
 } from "@mui/material";
+import StorageRoundedIcon from "@mui/icons-material/StorageRounded";
+import MemoryRoundedIcon from "@mui/icons-material/MemoryRounded";
+import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
+import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import { ClearDeviceActivityDialog } from "../Dialogs.jsx";
 import Prism from "prismjs";
@@ -226,9 +230,28 @@ export default function DeviceDetails({ device, onBack }) {
   }, [details.software, softwareSearch, softwareOrderBy, softwareOrder]);
 
   const summary = details.summary || {};
+  // Build a best-effort CPU display from summary fields
+  const cpuInfo = useMemo(() => {
+    const cpu = summary.cpu || {};
+    const cores = cpu.logical_cores || cpu.cores || cpu.physical_cores;
+    let ghz = cpu.base_clock_ghz;
+    if (!ghz && typeof (summary.processor || '') === 'string') {
+      const m = String(summary.processor).match(/\(([^)]*?)ghz\)/i);
+      if (m && m[1]) {
+        const n = parseFloat(m[1]);
+        if (!Number.isNaN(n)) ghz = n;
+      }
+    }
+    const name = (cpu.name || '').trim();
+    const fromProcessor = (summary.processor || '').trim();
+    const display = fromProcessor || [name, ghz ? `(${Number(ghz).toFixed(1)}GHz)` : null, cores ? `@ ${cores} Cores` : null].filter(Boolean).join(' ');
+    return { cores, ghz, name, display };
+  }, [summary]);
+
   const summaryItems = [
     { label: "Hostname", value: summary.hostname || agent.hostname || device?.hostname || "unknown" },
     { label: "Operating System", value: summary.operating_system || agent.agent_operating_system || "unknown" },
+    { label: "Processor", value: cpuInfo.display || "unknown" },
     { label: "Device Type", value: summary.device_type || "unknown" },
     { label: "Last User", value: (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -246,42 +269,206 @@ export default function DeviceDetails({ device, onBack }) {
     { label: "Last Seen", value: formatLastSeen(agent.last_seen || device?.lastSeen) }
   ];
 
-  const renderSummary = () => (
-    <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
-      <Table size="small">
-        <TableBody>
-          <TableRow>
-            <TableCell sx={{ fontWeight: 500 }}>Description</TableCell>
-            <TableCell>
-              <TextField
-                size="small"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                onBlur={saveDescription}
-                placeholder="Enter description"
-                sx={{
-                  input: { color: "#fff" },
-                  "& .MuiOutlinedInput-root": {
-                    "& fieldset": { borderColor: "#555" },
-                    "&:hover fieldset": { borderColor: "#888" }
-                  }
-                }}
-              />
-            </TableCell>
-          </TableRow>
-          {summaryItems.map((item) => (
-            <TableRow key={item.label}>
-              <TableCell sx={{ fontWeight: 500 }}>{item.label}</TableCell>
-              <TableCell>{item.value}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </Box>
+  const MetricCard = ({ icon, title, main, sub, color }) => {
+    const edgeColor = color || '#232323';
+    const parseHex = (hex) => {
+      const v = String(hex || '').replace('#', '');
+      const n = parseInt(v.length === 3 ? v.split('').map(c => c + c).join('') : v, 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    };
+    const hexToRgba = (hex, alpha = 1) => {
+      try { const { r, g, b } = parseHex(hex); return `rgba(${r}, ${g}, ${b}, ${alpha})`; } catch { return `rgba(88,166,255, ${alpha})`; }
+    };
+    const lightenToRgba = (hex, p = 0.5, alpha = 1) => {
+      try {
+        const { r, g, b } = parseHex(hex);
+        const mix = (c) => Math.round(c + (255 - c) * p);
+        const R = mix(r), G = mix(g), B = mix(b);
+        return `rgba(${R}, ${G}, ${B}, ${alpha})`;
+      } catch { return hexToRgba('#58a6ff', alpha); }
+    };
+    return (
+      <Paper elevation={0} sx={{
+        px: 2, py: 1.5, borderRadius: 2, position: 'relative',
+        color: '#fff', minWidth: 260,
+        border: '1px solid #2f2f2f',
+        // Base color with subtle left-to-right Borealis-blue gradient overlay
+        background: `linear-gradient(90deg, rgba(88,166,255,0.12) 0%, rgba(88,166,255,0.06) 55%, rgba(88,166,255,0) 100%), ${edgeColor}`,
+        boxShadow: `inset 0 0 0 1px ${lightenToRgba(edgeColor, 0.35, 0.6)}`
+      }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          {icon}
+          <Typography variant="caption" sx={{ opacity: 0.95, fontWeight: 700 }}>{title}</Typography>
+        </Box>
+      <Typography variant="h6" sx={{ lineHeight: 1.2, mb: 1 }}>{main}</Typography>
+      <Box sx={{ flexGrow: 1, minHeight: 12 }} />
+      <Box sx={{ minHeight: 8 }} />
+      {sub ? <Typography variant="body2" sx={{ opacity: 0.85 }}>{sub}</Typography> : null}
+      </Paper>
+    );
+  };
+
+  const Island = ({ title, children, sx }) => (
+    <Paper elevation={0} sx={{ p: 1.5, borderRadius: 2, bgcolor: '#1c1c1c', border: '1px solid #2a2a2a', mb: 1.5, ...(sx || {}) }}>
+      <Typography variant="caption" sx={{ color: '#58a6ff', fontWeight: 400, fontSize: '14px', letterSpacing: 0.2, display: 'block', mb: 1 }}>{title}</Typography>
+      {children}
+    </Paper>
   );
 
+  const renderSummary = () => {
+    // Derive metric values
+    // CPU tile: model as main, speed as sub (like screenshot)
+    const cpuMain = (cpuInfo.name || (summary.processor || '') || '').split('\n')[0] || 'Unknown CPU';
+    const cpuSub = cpuInfo.ghz || cpuInfo.cores
+      ? (
+          <span>
+            {cpuInfo.ghz ? `${Number(cpuInfo.ghz).toFixed(2)}GHz ` : ''}
+            {cpuInfo.cores ? <span style={{ opacity: 0.75 }}>({cpuInfo.cores}-Cores)</span> : null}
+          </span>
+        )
+      : '';
+
+    // MEMORY: total RAM
+    let totalRam = summary.total_ram;
+    if (!totalRam && Array.isArray(details.memory)) {
+      try { totalRam = details.memory.reduce((a, m) => a + (Number(m.capacity || 0) || 0), 0); } catch {}
+    }
+    const memVal = totalRam ? `${formatBytes(totalRam)}` : 'Unknown';
+    // RAM speed best-effort: use max speed among modules
+    let memSpeed = '';
+    try {
+      const speeds = (details.memory || [])
+        .map(m => parseInt(String(m.speed || '').replace(/[^0-9]/g, ''), 10))
+        .filter(v => !Number.isNaN(v) && v > 0);
+      if (speeds.length) memSpeed = `Speed: ${Math.max(...speeds)} MT/s`;
+    } catch {}
+
+    // STORAGE: OS drive (Windows C: if available)
+    let osDrive = null;
+    if (Array.isArray(details.storage)) {
+      osDrive = details.storage.find((d) => String(d.drive || '').toUpperCase().startsWith('C:')) || details.storage[0] || null;
+    }
+    const storageMain = osDrive && osDrive.total != null ? `${formatBytes(osDrive.total)}` : 'Unknown';
+    const storageSub = (osDrive && osDrive.used != null && osDrive.total != null)
+      ? `${formatBytes(osDrive.used)} of ${formatBytes(osDrive.total)} used`
+      : (osDrive && osDrive.free != null && osDrive.total != null)
+        ? `${formatBytes(osDrive.total - osDrive.free)} of ${formatBytes(osDrive.total)} used`
+        : '';
+
+    // NETWORK: Speed of adapter with internal IP or first
+    const primaryIp = (summary.internal_ip || '').trim();
+    let nic = null;
+    if (Array.isArray(details.network)) {
+      nic = details.network.find((n) => (n.ips || []).includes(primaryIp)) || details.network[0] || null;
+    }
+    function normalizeSpeed(val) {
+      const s = String(val || '').trim();
+      if (!s) return 'unknown';
+      const low = s.toLowerCase();
+      if (low.includes('gbps') || low.includes('mbps')) return s;
+      const m = low.match(/(\d+\.?\d*)\s*([gmk]?)(bps)/);
+      if (!m) return s;
+      let num = parseFloat(m[1]);
+      const unit = m[2];
+      if (unit === 'g') return `${num} Gbps`;
+      if (unit === 'm') return `${num} Mbps`;
+      if (unit === 'k') return `${(num/1000).toFixed(1)} Mbps`;
+      // raw bps
+      if (num >= 1e9) return `${(num/1e9).toFixed(1)} Gbps`;
+      if (num >= 1e6) return `${(num/1e6).toFixed(0)} Mbps`;
+      return s;
+    }
+    const netVal = nic ? normalizeSpeed(nic.link_speed || nic.speed) : 'Unknown';
+
+    return (
+      <Box>
+        {/* Metrics row at the very top */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat( auto-fit, minmax(260px, 1fr) )', gap: 1.5, mb: 2 }}>
+          <MetricCard
+            icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 32, opacity: 0.95 }} />}
+            title="Processor"
+            main={cpuMain}
+            sub={cpuSub}
+            color="#132332"  
+          />
+          <MetricCard
+            icon={<MemoryRoundedIcon sx={{ fontSize: 32, opacity: 0.95 }} />}
+            title="Installed RAM"
+            main={memVal}
+            sub={memSpeed || ' '}
+            color="#291a2e"
+          />
+          <MetricCard
+            icon={<StorageRoundedIcon sx={{ fontSize: 32, opacity: 0.95 }} />}
+            title="Storage"
+            main={storageMain}
+            sub={storageSub || ' '}
+            color="#142616"
+          />
+          <MetricCard
+            icon={<SpeedRoundedIcon sx={{ fontSize: 32, opacity: 0.95 }} />}
+            title="Network"
+            main={netVal}
+            sub={(nic && nic.adapter) ? nic.adapter : ' '}
+            color="#2b1a18"
+          />
+        </Box>
+        {/* Split pane: three-column layout (Summary | Storage | Memory/Network) */}
+        <Box sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', md: '1.2fr 1fr 1fr' },
+          gap: 2
+        }}>
+          {/* Left column: Summary table */}
+          <Island title="Device Summary">
+            <Box>
+              <Table size="small">
+                <TableBody>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 500 }}>Description</TableCell>
+                    <TableCell>
+                      <TextField
+                        size="small"
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        onBlur={saveDescription}
+                        placeholder="Enter description"
+                        sx={{
+                          input: { color: '#fff' },
+                          '& .MuiOutlinedInput-root': {
+                            '& fieldset': { borderColor: '#555' },
+                            '&:hover fieldset': { borderColor: '#888' }
+                          }
+                        }}
+                      />
+                    </TableCell>
+                  </TableRow>
+                  {summaryItems.map((item) => (
+                    <TableRow key={item.label}>
+                      <TableCell sx={{ fontWeight: 500 }}>{item.label}</TableCell>
+                      <TableCell>{item.value}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Box>
+          </Island>
+
+          {/* Middle column: Storage */}
+          <Island title="Storage">{renderStorage()}</Island>
+
+          {/* Right column: Memory + Network */}
+          <Box>
+            <Island title="Memory">{renderMemory()}</Island>
+            <Island title="Network">{renderNetwork()}</Island>
+          </Box>
+        </Box>
+      </Box>
+    );
+  };
+
   const placeholderTable = (headers) => (
-    <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+    <Box>
       <Table size="small">
         <TableHead>
           <TableRow>
@@ -306,8 +493,8 @@ export default function DeviceDetails({ device, onBack }) {
       return placeholderTable(["Software Name", "Version", "Action"]);
 
     return (
-      <Box>
-        <Box sx={{ mb: 1 }}>
+      <Box sx={{ width: '100%' }}>
+        <Box sx={{ mb: 1, width: '100%' }}>
           <TextField
             size="small"
             placeholder="Search software..."
@@ -322,8 +509,8 @@ export default function DeviceDetails({ device, onBack }) {
             }}
           />
         </Box>
-        <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
-          <Table size="small">
+        <Box sx={{ width: '100%' }}>
+          <Table size="small" sx={{ width: '100%' }}>
             <TableHead>
               <TableRow>
                 <TableCell sortDirection={softwareOrderBy === "name" ? softwareOrder : false}>
@@ -366,7 +553,7 @@ export default function DeviceDetails({ device, onBack }) {
     const rows = details.memory || [];
     if (!rows.length) return placeholderTable(["Slot", "Speed", "Serial Number", "Capacity"]);
     return (
-      <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+      <Box>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -440,80 +627,54 @@ export default function DeviceDetails({ device, onBack }) {
       };
     });
 
-    if (!rows.length)
-      return placeholderTable([
-        "Drive Letter",
-        "Disk Type",
-        "Used",
-        "Free %",
-        "Free GB",
-        "Total Size",
-        "Usage",
-      ]);
+    if (!rows.length) {
+      return placeholderTable(["Drive", "Type", "Capacity"]);
+    }
+
+    const fmtPct = (v) => (v !== undefined && !Number.isNaN(v) ? `${v.toFixed(0)}%` : "unknown");
 
     return (
-      <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Drive Letter</TableCell>
-              <TableCell>Disk Type</TableCell>
-              <TableCell>Used</TableCell>
-              <TableCell>Free %</TableCell>
-              <TableCell>Free GB</TableCell>
-              <TableCell>Total Size</TableCell>
-              <TableCell>Usage</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {rows.map((d, i) => (
-              <TableRow key={`${d.drive}-${i}`}>
-                <TableCell>{d.drive}</TableCell>
-                <TableCell>{d.disk_type}</TableCell>
-                <TableCell>
-                  {d.used !== undefined && !Number.isNaN(d.used)
-                    ? formatBytes(d.used)
-                    : "unknown"}
-                </TableCell>
-                <TableCell>
-                  {d.freePct !== undefined && !Number.isNaN(d.freePct)
-                    ? `${d.freePct.toFixed(1)}%`
-                    : "unknown"}
-                </TableCell>
-                <TableCell>
-                  {d.freeBytes !== undefined && !Number.isNaN(d.freeBytes)
-                    ? formatBytes(d.freeBytes)
-                    : "unknown"}
-                </TableCell>
-                <TableCell>
-                  {d.total !== undefined && !Number.isNaN(d.total)
-                    ? formatBytes(d.total)
-                    : "unknown"}
-                </TableCell>
-                <TableCell>
-                  <Box sx={{ display: "flex", alignItems: "center" }}>
-                    <Box sx={{ flexGrow: 1, mr: 1 }}>
-                      <LinearProgress
-                        variant="determinate"
-                        value={d.usage ?? 0}
-                        sx={{
-                          height: 10,
-                          bgcolor: "#333",
-                          "& .MuiLinearProgress-bar": { bgcolor: "#00d18c" }
-                        }}
-                      />
-                    </Box>
-                    <Typography variant="body2">
-                      {d.usage !== undefined && !Number.isNaN(d.usage)
-                        ? `${d.usage.toFixed(1)}%`
-                        : "unknown"}
-                    </Typography>
-                  </Box>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      <Box>
+        {rows.map((d, i) => {
+          const usage = d.usage ?? (d.total ? ((d.used || 0) / d.total) * 100 : 0);
+          const used = d.used;
+          const free = d.freeBytes;
+          const total = d.total;
+          return (
+            <Box key={`${d.drive}-${i}`} sx={{ p: 1, borderBottom: '1px solid #2a2a2a', '&:last-child': { borderBottom: 'none' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+                  <Box sx={{ width: 8, height: 8, bgcolor: '#58a6ff', borderRadius: 0.5 }} />
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{`Drive ${String(d.drive || '').replace('\\', '')}`}</Typography>
+                  <Typography variant="caption" sx={{ opacity: 0.7 }}>{d.disk_type || 'Fixed Disk'}</Typography>
+                </Box>
+                <Typography variant="body2" sx={{ opacity: 0.9 }}>{total !== undefined ? formatBytes(total) : 'unknown'}</Typography>
+              </Box>
+              <Box sx={{
+                position: 'relative', height: 8, borderRadius: 1,
+                bgcolor: '#2b2b2b',
+                background: 'linear-gradient(180deg, #323232 0%, #2a2a2a 100%)',
+                boxShadow: 'inset 0 0 0 1px #3a3a3a, inset 0 1px 0 rgba(255,255,255,0.06)'
+              }}>
+                <Box sx={{
+                  position: 'absolute', left: 0, top: 0, bottom: 0,
+                  width: `${Math.max(0, Math.min(100, usage || 0)).toFixed(0)}%`,
+                  borderRadius: 1,
+                  background: 'linear-gradient(90deg, rgba(0,209,140,0.95) 0%, rgba(0,209,140,0.80) 45%, rgba(0,209,140,0.70) 100%)',
+                  boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.15), 0 0 6px rgba(0,209,140,0.25)'
+                }} />
+              </Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.75 }}>
+                <Typography variant="caption" sx={{ opacity: 0.85 }}>
+                  {used !== undefined ? `${formatBytes(used)} - ${fmtPct(usage)} in use` : 'unknown'}
+                </Typography>
+                <Typography variant="caption" sx={{ opacity: 0.85 }}>
+                  {free !== undefined && total !== undefined ? `${formatBytes(free)} - ${fmtPct(100 - (usage || 0))} remaining` : ''}
+                </Typography>
+              </Box>
+            </Box>
+          );
+        })}
       </Box>
     );
   };
@@ -522,7 +683,7 @@ export default function DeviceDetails({ device, onBack }) {
     const rows = details.network || [];
     if (!rows.length) return placeholderTable(["Adapter", "IP Address", "MAC Address"]);
     return (
-      <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+      <Box>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -598,7 +759,7 @@ export default function DeviceDetails({ device, onBack }) {
   }, [historyRows, historyOrderBy, historyOrder]);
 
   const renderHistory = () => (
-    <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+    <Box>
       <Table size="small">
         <TableHead>
           <TableRow>
@@ -681,10 +842,7 @@ export default function DeviceDetails({ device, onBack }) {
 
   const tabs = [
     { label: "Summary", content: renderSummary() },
-    { label: "Software", content: renderSoftware() },
-    { label: "Memory", content: renderMemory() },
-    { label: "Storage", content: renderStorage() },
-    { label: "Network", content: renderNetwork() },
+    { label: "Installed Software", content: renderSoftware() },
     { label: "Activity History", content: renderHistory() }
   ];
   // Use the snapshotted status so it stays static while on this page
