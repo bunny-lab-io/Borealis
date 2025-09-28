@@ -18,9 +18,10 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/DeleteOutline";
+import EditIcon from "@mui/icons-material/Edit";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import ViewColumnIcon from "@mui/icons-material/ViewColumn";
-import { CreateSiteDialog, ConfirmDeleteDialog } from "../Dialogs.jsx";
+import { CreateSiteDialog, ConfirmDeleteDialog, RenameSiteDialog } from "../Dialogs.jsx";
 
 export default function SiteList({ onOpenDevicesForSite }) {
   const [rows, setRows] = useState([]); // {id, name, description, device_count}
@@ -51,6 +52,8 @@ export default function SiteList({ onOpenDevicesForSite }) {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
 
   const fetchSites = useCallback(async () => {
     try {
@@ -148,6 +151,24 @@ export default function SiteList({ onOpenDevicesForSite }) {
       <Box sx={{ p: 2, pb: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>Sites</Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<EditIcon />}
+            disabled={selectedIds.size !== 1}
+            onClick={() => {
+              // Prefill with the currently selected site's name
+              const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
+              if (selId != null) {
+                const site = rows.find((r) => r.id === selId);
+                setRenameValue(site?.name || "");
+                setRenameOpen(true);
+              }
+            }}
+            sx={{ color: selectedIds.size === 1 ? '#58a6ff' : '#666', borderColor: selectedIds.size === 1 ? '#58a6ff' : '#333', textTransform: 'none' }}
+          >
+            Rename
+          </Button>
           <Button
             variant="outlined"
             size="small"
@@ -327,6 +348,36 @@ export default function SiteList({ onOpenDevicesForSite }) {
           setDeleteOpen(false);
           setSelectedIds(new Set());
           await fetchSites();
+        }}
+      />
+
+      {/* Rename site dialog */}
+      <RenameSiteDialog
+        open={renameOpen}
+        value={renameValue}
+        onChange={setRenameValue}
+        onCancel={() => setRenameOpen(false)}
+        onSave={async () => {
+          const newName = (renameValue || '').trim();
+          if (!newName) return;
+          const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
+          if (selId == null) return;
+          try {
+            const res = await fetch('/api/sites/rename', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: selId, new_name: newName })
+            });
+            if (!res.ok) {
+              // Keep dialog open on error; optionally log
+              try { const err = await res.json(); console.warn('Rename failed', err); } catch {}
+              return;
+            }
+            setRenameOpen(false);
+            await fetchSites();
+          } catch (e) {
+            console.warn('Rename error', e);
+          }
         }}
       />
     </Paper>

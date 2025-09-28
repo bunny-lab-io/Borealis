@@ -479,3 +479,36 @@ export function CreateSiteDialog({ open, onCancel, onCreate }) {
     </Dialog>
   );
 }
+
+export function RenameSiteDialog({ open, value, onChange, onCancel, onSave }) {
+  return (
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+      <DialogTitle>Rename Site</DialogTitle>
+      <DialogContent>
+        <TextField
+          autoFocus
+          fullWidth
+          margin="dense"
+          label="Site Name"
+          variant="outlined"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "#2a2a2a",
+              color: "#ccc",
+              "& fieldset": { borderColor: "#444" },
+              "&:hover fieldset": { borderColor: "#666" }
+            },
+            label: { color: "#aaa" },
+            mt: 1
+          }}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}

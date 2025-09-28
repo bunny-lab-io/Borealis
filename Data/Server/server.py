@@ -1427,6 +1427,49 @@ def assign_devices_to_site():
         return jsonify({"error": str(e)}), 500
 
 
+# Rename a site (update name only)
+@app.route("/api/sites/rename", methods=["POST"])
+def rename_site():
+    payload = request.get_json(silent=True) or {}
+    site_id = payload.get("id")
+    new_name = (payload.get("new_name") or "").strip()
+    try:
+        site_id = int(site_id)
+    except Exception:
+        return jsonify({"error": "invalid id"}), 400
+    if not new_name:
+        return jsonify({"error": "new_name is required"}), 400
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute("UPDATE sites SET name = ? WHERE id = ?", (new_name, site_id))
+        if cur.rowcount == 0:
+            conn.close()
+            return jsonify({"error": "site not found"}), 404
+        conn.commit()
+        cur.execute(
+            """
+            SELECT s.id, s.name, s.description, s.created_at,
+                   COALESCE(ds.cnt, 0) AS device_count
+            FROM sites s
+            LEFT JOIN (
+                SELECT site_id, COUNT(*) AS cnt
+                FROM device_sites
+                GROUP BY site_id
+            ) ds ON ds.site_id = s.id
+            WHERE s.id = ?
+            """,
+            (site_id,)
+        )
+        row = cur.fetchone()
+        conn.close()
+        return jsonify(_row_to_site(row))
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "name already exists"}), 409
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ---------------------------------------------
 # Global Search (suggestions)
 # ---------------------------------------------
