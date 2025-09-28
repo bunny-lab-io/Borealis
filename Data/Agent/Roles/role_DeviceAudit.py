@@ -134,69 +134,7 @@ def _project_root():
         return os.getcwd()
 
 
-def _run_ansible_audit(ctx) -> dict:
-    try:
-        exe_dir = os.path.dirname(sys.executable)
-        candidate = os.path.join(exe_dir, 'ansible-playbook.exe' if IS_WINDOWS else 'ansible-playbook')
-        ansible_playbook = candidate if os.path.isfile(candidate) else 'ansible-playbook'
-
-        base = os.path.join(_project_root(), 'Logs', 'Agent', 'ansible')
-        os.makedirs(base, exist_ok=True)
-        out_path = os.path.join(base, 'audit.json')
-
-        # Require an external playbook; look next to this role first, then source tree as fallback
-        roles_dir = os.path.dirname(__file__)
-        pb_candidates = [
-            os.path.join(roles_dir, 'Device_Audit.yml'),
-            os.path.join(_project_root(), 'Data', 'Agent', 'Roles', 'Device_Audit.yml'),
-        ]
-        pb_path = next((p for p in pb_candidates if os.path.isfile(p)), None)
-        if not pb_path:
-            # Log helpful error and return empty
-            try:
-                with open(os.path.join(base, 'ansible.err.log'), 'w', encoding='utf-8', newline='\n') as ef:
-                    ef.write('Device_Audit.yml not found in roles directory.\n')
-                    ef.write('Searched:\n - ' + '\n - '.join(pb_candidates))
-            except Exception:
-                pass
-            return {}
-
-        out_posix = Path(out_path).as_posix()
-        py_interp = Path(sys.executable).as_posix()
-
-        env = os.environ.copy()
-        env.setdefault('PYTHONIOENCODING', 'utf-8')
-        env.setdefault('ANSIBLE_FORCE_COLOR', '0')
-
-        cmd = [
-            ansible_playbook,
-            '-i', 'localhost,',
-            '-c', 'local',
-            pb_path,
-            '-e', f'ansible_python_interpreter={py_interp}',
-            '-e', 'ansible_shell_type=powershell' if IS_WINDOWS else 'ansible_shell_type=sh',
-            '-e', 'ansible_shell_executable=powershell.exe' if IS_WINDOWS else 'ansible_shell_executable=/bin/sh',
-            '-e', f'output_file={out_posix}',
-        ]
-
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
-        if proc.returncode != 0:
-            try:
-                with open(os.path.join(base, 'ansible.err.log'), 'w', encoding='utf-8', newline='\n') as ef:
-                    ef.write(proc.stdout or '')
-                    ef.write('\n--- STDERR ---\n')
-                    ef.write(proc.stderr or '')
-            except Exception:
-                pass
-            return {}
-        try:
-            with open(out_path, 'r', encoding='utf-8') as jf:
-                details = json.load(jf)
-            return details if isinstance(details, dict) else {}
-        except Exception:
-            return {}
-    except Exception:
-        return {}
+# Removed Ansible-based audit path; Python collectors provide details directly.
 
 
 def _ps_json(cmd: str, timeout: int = 60):
@@ -722,8 +660,7 @@ class Role:
         self.ctx = ctx
         self._ext_ip = None
         self._ext_ip_ts = 0
-        self._ansible_cache = None
-        self._ansible_ts = 0
+        self._refresh_ts = 0
         self._last_details = None
         try:
             # Set OS string once
@@ -756,12 +693,10 @@ class Role:
                 refresh_sec = max(300, refresh_min * 60)
 
                 now = time.time()
-                need_refresh = (not self._last_details) or ((now - self._ansible_ts) > refresh_sec)
+                need_refresh = (not self._last_details) or ((now - self._refresh_ts) > refresh_sec)
                 if need_refresh:
-                    details = _run_ansible_audit(self.ctx)
-                    if not details:
-                        # Fallback collector when Ansible is unavailable
-                        details = _build_details_fallback()
+                    # Always collect via built-in Python collectors
+                    details = _build_details_fallback()
                     # Best-effort fill of missing/renamed fields so UI is happy
                     try:
                         details = self._normalize_details(details)
@@ -769,7 +704,7 @@ class Role:
                         pass
                     if details:
                         self._last_details = details
-                        self._ansible_ts = now
+                        self._refresh_ts = now
 
                 # Always post the latest available details (possibly cached)
                 details_to_send = self._last_details or {'summary': collect_summary(self.ctx.config)}
