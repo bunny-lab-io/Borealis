@@ -660,14 +660,26 @@ async def send_heartbeat():
                 "last_seen": int(time.time())
             }
             await sio.emit("agent_heartbeat", payload)
-            # Also report collector status alive ping with last_user
-            import getpass
-            await sio.emit('collector_status', {
-                'agent_id': AGENT_ID,
-                'hostname': socket.gethostname(),
-                'active': True,
-                'last_user': f"{os.environ.get('USERDOMAIN') or socket.gethostname()}\\{getpass.getuser()}"
-            })
+            # Also report collector status alive ping.
+            # To avoid clobbering last_user with SYSTEM/machine accounts,
+            # only include last_user from the interactive agent.
+            try:
+                if not SYSTEM_SERVICE_MODE:
+                    import getpass
+                    await sio.emit('collector_status', {
+                        'agent_id': AGENT_ID,
+                        'hostname': socket.gethostname(),
+                        'active': True,
+                        'last_user': f"{os.environ.get('USERDOMAIN') or socket.gethostname()}\\{getpass.getuser()}"
+                    })
+                else:
+                    await sio.emit('collector_status', {
+                        'agent_id': AGENT_ID,
+                        'hostname': socket.gethostname(),
+                        'active': True,
+                    })
+            except Exception:
+                pass
         except Exception as e:
             print(f"[WARN] heartbeat emit failed: {e}")
         # Send periodic heartbeats every 60 seconds
@@ -1003,15 +1015,22 @@ async def connect():
         print(f"[WARN] initial heartbeat failed: {e}")
         _log_agent(f'Initial heartbeat failed: {e}', fname='agent.error.log')
 
-    # Let server know collector is active and who the user is
+    # Let server know collector is active; send last_user only from interactive agent
     try:
-        import getpass
-        await sio.emit('collector_status', {
-            'agent_id': AGENT_ID,
-            'hostname': socket.gethostname(),
-            'active': True,
-            'last_user': f"{os.environ.get('USERDOMAIN') or socket.gethostname()}\\{getpass.getuser()}"
-        })
+        if not SYSTEM_SERVICE_MODE:
+            import getpass
+            await sio.emit('collector_status', {
+                'agent_id': AGENT_ID,
+                'hostname': socket.gethostname(),
+                'active': True,
+                'last_user': f"{os.environ.get('USERDOMAIN') or socket.gethostname()}\\{getpass.getuser()}"
+            })
+        else:
+            await sio.emit('collector_status', {
+                'agent_id': AGENT_ID,
+                'hostname': socket.gethostname(),
+                'active': True,
+            })
     except Exception:
         pass
 

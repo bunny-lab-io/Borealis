@@ -2243,20 +2243,65 @@ def handle_quick_job_result(data):
 
 @socketio.on("collector_status")
 def handle_collector_status(data):
-    """Collector agent reports activity and optional last_user."""
+    """Collector agent reports activity and optional last_user.
+
+    To avoid flapping of summary.last_user between the SYSTEM service and the
+    interactive user helper, we only accept last_user updates that look like a
+    real interactive user and, by preference, only from the interactive agent
+    (agent_id ending with "-script"). Machine accounts (..$) and built-in
+    service principals (SYSTEM/LOCAL SERVICE/NETWORK SERVICE) are ignored.
+    """
     agent_id = (data or {}).get('agent_id')
     hostname = (data or {}).get('hostname')
     active = bool((data or {}).get('active'))
     last_user = (data or {}).get('last_user')
     if not agent_id:
         return
+
     rec = registered_agents.setdefault(agent_id, {})
     rec['agent_id'] = agent_id
     if hostname:
         rec['hostname'] = hostname
     if active:
         rec['collector_active_ts'] = time.time()
-    if last_user and (hostname or rec.get('hostname')):
+
+    # Helper: decide if a reported user string is a real interactive user
+    def _is_valid_interactive_user(s: str) -> bool:
+        try:
+            if not s:
+                return False
+            t = str(s).strip()
+            if not t:
+                return False
+            # Reject machine accounts and well-known service identities
+            upper = t.upper()
+            if t.endswith('$'):
+                return False
+            if any(x in upper for x in ('NT AUTHORITY\\', 'NT SERVICE\\')):
+                return False
+            if upper.endswith('\\SYSTEM') or upper.endswith('\\LOCAL SERVICE') or upper.endswith('\\NETWORK SERVICE') or upper == 'ANONYMOUS LOGON':
+                return False
+            # Looks acceptable (DOMAIN\\user or user)
+            return True
+        except Exception:
+            return False
+
+    # Prefer interactive/script agent as the source of truth for last_user
+    is_script_agent = False
+    try:
+        is_script_agent = bool((isinstance(agent_id, str) and agent_id.lower().endswith('-script')) or rec.get('is_script_agent'))
+    except Exception:
+        is_script_agent = False
+
+    # If we have a usable last_user and a hostname, persist it
+    if last_user and _is_valid_interactive_user(last_user) and (hostname or rec.get('hostname')):
+        # If this event is coming from the SYSTEM service agent, ignore it to
+        # prevent clobbering the interactive user's value.
+        try:
+            if isinstance(agent_id, str) and ('-svc-' in agent_id.lower() or agent_id.lower().endswith('-svc')) and not is_script_agent:
+                return
+        except Exception:
+            pass
         try:
             host = hostname or rec.get('hostname')
             conn = _db_conn()
