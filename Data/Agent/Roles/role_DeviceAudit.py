@@ -781,5 +781,41 @@ class Role:
         except Exception:
             pass
 
+        # Last reboot (UTC string) if missing/unknown
+        try:
+            val = (summary.get('last_reboot') or '').strip()
+            if not val or val.lower() == 'unknown':
+                if psutil and hasattr(psutil, 'boot_time'):
+                    from datetime import datetime, timezone
+                    summary['last_reboot'] = datetime.fromtimestamp(psutil.boot_time(), timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                elif IS_WINDOWS:
+                    ps = (
+                        "$b=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime; "
+                        "(Get-Date $b).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')"
+                    )
+                    out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=10)
+                    s = (out.stdout or '').strip()
+                    if s:
+                        summary['last_reboot'] = s.splitlines()[0].strip()
+        except Exception:
+            pass
+
+        # Last user fix-up: compute if missing/unknown or contains machine account entries
+        try:
+            lu = (summary.get('last_user') or '').strip()
+            def _contains_machine_accounts(s: str) -> bool:
+                try:
+                    for part in s.split(','):
+                        if part.strip().endswith('$'):
+                            return True
+                except Exception:
+                    pass
+                return False
+            if (not lu) or (lu.lower() == 'unknown') or _contains_machine_accounts(lu):
+                lu2 = _collect_last_user_string().strip()
+                summary['last_user'] = lu2 if lu2 else 'No Users Logged In'
+        except Exception:
+            pass
+
         details['summary'] = summary
         return details
