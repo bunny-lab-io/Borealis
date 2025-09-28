@@ -156,56 +156,40 @@
       ansible.builtin.set_fact:
         device_details: "{{ device_details | combine({'summary': (device_details.summary | combine({'external_ip': (external_ip_raw.stdout | default('') | trim) })) }) }}"
 
-    - name: Collect currently logged-in users (interactive + RDP)
+    - name: Collect last logged-on user from registry (SAM/UPN)
       ansible.builtin.shell: |
         $ErrorActionPreference = 'SilentlyContinue'
-        function Get-InteractiveUsers {
-          $users = @()
-          try {
-            $ls = Get-CimInstance Win32_LogonSession | Where-Object { $_.LogonType -in 2,10 }
-            foreach ($sess in $ls) {
-              $accs = Get-CimAssociatedInstance -InputObject $sess -Association Win32_LoggedOnUser -ResultClassName Win32_Account
-              foreach ($a in $accs) {
-                if (-not $a -or -not $a.Name) { continue }
-                $nm = [string]$a.Name
-                $dm = [string]$a.Domain
-                if ($nm -match '\$$') { continue }
-                if ($dm -eq 'NT AUTHORITY' -or $dm -eq 'NT SERVICE') { continue }
-                if ($nm -like 'DWM-*' -or $nm -like 'UMFD-*') { continue }
-                if ($dm) { $users += ("{0}\\{1}" -f $dm,$nm) } else { $users += $nm }
-              }
-            }
-          } catch {}
-          $users | Sort-Object -Unique
+        function Normalize-Sam([string]$s) {
+          if ([string]::IsNullOrWhiteSpace($s)) { return '' }
+          if ($s -match '\$$') { return '' } # exclude machine accounts
+          if ($s -like 'DWM-*' -or $s -like 'UMFD-*') { return '' }
+          if ($s -eq 'SYSTEM' -or $s -eq 'LOCAL SERVICE' -or $s -eq 'NETWORK SERVICE' -or $s -eq 'ANONYMOUS LOGON') { return '' }
+          return $s
         }
 
-        function Get-QuserUsers {
-          $list=@()
-          try {
-            $q = (quser 2>$null) -split "`r?`n"
-            foreach ($line in $q) {
-              if (-not $line) { continue }
-              if ($line -match '^USERNAME') { continue }
-              $s = ($line -replace '^>','').Trim()
-              if (-not $s) { continue }
-              $parts = $s -split '\s+'
-              if ($parts.Length -lt 1) { continue }
+        $regPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI'
+        $sam = ''
+        $upn = ''
+        try { $sam = (Get-ItemProperty -Path $regPath -Name 'LastLoggedOnSAMUser' -ErrorAction Stop).LastLoggedOnSAMUser } catch {}
+        try { $upn = (Get-ItemProperty -Path $regPath -Name 'LastLoggedOnUser' -ErrorAction Stop).LastLoggedOnUser } catch {}
+
+        $user = Normalize-Sam $sam
+        if (-not $user) {
+          $user = Normalize-Sam $upn
+          if ($user -and $user -like '*@*') {
+            # Convert UPN to DOMAIN\user using machine domain (best effort)
+            $domDns = (Get-WmiObject Win32_ComputerSystem).Domain
+            $domShort = ''
+            if ($domDns) { $domShort = ($domDns -split '\.')[0].ToUpper() }
+            $parts = $user -split '@'
+            if ($parts.Length -ge 1) {
               $u = $parts[0]
-              if (-not $u) { continue }
-              if ($u -match '\$$') { continue }
-              if ($u -like 'DWM-*' -or $u -like 'UMFD-*') { continue }
-              $list += $u
+              if ($domShort) { $user = "$domShort\$u" }
             }
-          } catch {}
-          $list | Sort-Object -Unique
+          }
         }
 
-        $u1 = Get-InteractiveUsers
-        $u2 = Get-QuserUsers
-        $combined = @()
-        foreach ($u in $u1) { if ($combined -notcontains $u) { $combined += $u } }
-        foreach ($u in $u2) { if ($combined -notcontains $u) { $combined += $u } }
-        if ($combined.Count -eq 0) { 'No Users Logged In' } else { $combined -join ', ' }
+        if ($user) { $user } else { 'No Users Logged In' }
       register: last_user_raw
       changed_when: false
 

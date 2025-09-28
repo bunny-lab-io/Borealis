@@ -495,6 +495,83 @@ else { 'Workstation' }
         return ''
 
 
+def _collect_last_user_registry() -> str:
+    if not IS_WINDOWS:
+        return ''
+    # Registry-first approach: LogonUI LastLoggedOnSAMUser / LastLoggedOnUser
+    try:
+        ps = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+function Normalize-Sam([string]$s) {
+  if ([string]::IsNullOrWhiteSpace($s)) { return '' }
+  if ($s -match '\$$') { return '' }
+  if ($s -like 'DWM-*' -or $s -like 'UMFD-*') { return '' }
+  if ($s -eq 'SYSTEM' -or $s -eq 'LOCAL SERVICE' -or $s -eq 'NETWORK SERVICE' -or $s -eq 'ANONYMOUS LOGON') { return '' }
+  return $s
+}
+$regPath = 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI'
+$sam = ''; $upn = ''
+try { $sam = (Get-ItemProperty -Path $regPath -Name 'LastLoggedOnSAMUser' -ErrorAction Stop).LastLoggedOnSAMUser } catch {}
+try { $upn = (Get-ItemProperty -Path $regPath -Name 'LastLoggedOnUser' -ErrorAction Stop).LastLoggedOnUser } catch {}
+$user = Normalize-Sam $sam
+if (-not $user) {
+  $user = Normalize-Sam $upn
+  if ($user -and $user -like '*@*') {
+    $domDns = (Get-WmiObject Win32_ComputerSystem).Domain
+    $domShort = ''
+    if ($domDns) { $domShort = ($domDns -split '\\.')[0].ToUpper() }
+    $parts = $user -split '@'
+    if ($parts.Length -ge 1) {
+      $u = $parts[0]
+      if ($domShort) { $user = "$domShort\\$u" }
+    }
+  }
+}
+if ($user) { $user } else { '' }
+"""
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=10)
+        s = (out.stdout or '').strip()
+        if s:
+            return s.splitlines()[0].strip()
+    except Exception:
+        pass
+    # Fallback to Python winreg lookup
+    try:
+        import winreg  # type: ignore
+        key_path = r"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI"
+        def _qval(name):
+            try:
+                k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_READ | getattr(winreg, 'KEY_WOW64_64KEY', 0))
+                try:
+                    val, _ = winreg.QueryValueEx(k, name)
+                finally:
+                    winreg.CloseKey(k)
+                return str(val or '').strip()
+            except Exception:
+                return ''
+        sam = _qval('LastLoggedOnSAMUser')
+        upn = _qval('LastLoggedOnUser')
+        def _ok(s: str) -> bool:
+            if not s:
+                return False
+            su = s.upper()
+            return not (s.endswith('$') or su in ('SYSTEM','LOCAL SERVICE','NETWORK SERVICE','ANONYMOUS LOGON') or s.startswith('DWM-') or s.startswith('UMFD-'))
+        if _ok(sam):
+            return sam
+        if _ok(upn):
+            if '@' in upn:
+                try:
+                    user, dom = upn.split('@', 1)
+                    dom_short = (dom.split('.')[0] or dom).upper()
+                    return f"{dom_short}\\{user}"
+                except Exception:
+                    pass
+            return upn
+    except Exception:
+        pass
+    return ''
+
+
 def _collect_last_user_string() -> str:
     if not IS_WINDOWS:
         return ''
@@ -624,7 +701,7 @@ def _build_details_fallback() -> dict:
         pass
     # Last user(s)
     try:
-        last_user = _collect_last_user_string()
+        last_user = _collect_last_user_registry()
         if last_user:
             summary['last_user'] = last_user
     except Exception:
@@ -812,7 +889,7 @@ class Role:
                     pass
                 return False
             if (not lu) or (lu.lower() == 'unknown') or _contains_machine_accounts(lu):
-                lu2 = _collect_last_user_string().strip()
+                lu2 = _collect_last_user_registry().strip()
                 summary['last_user'] = lu2 if lu2 else 'No Users Logged In'
         except Exception:
             pass
