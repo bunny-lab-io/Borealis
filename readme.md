@@ -5,11 +5,11 @@ Whether you want to automate data flows, control a computer, extract data from i
 
 Borealis began as a visual node-graph builder. It is now evolving into a centralized remote management and automation platform that still embraces visual workflows, while prioritizing fleet orchestration, inventory, and scripted automations at-scale. Items marked (*roadmap*) indicate forward-looking capabilities under active design.
 
-![Device List](Data/Repository_Resources/Device_List.png)
+![Device List](Data/Repository_Resources/borealis_device_list.png)
 
-![Script Editor](Data/Repository_Resources/Script_Editor.png)
+![Script Editor](Data/Repository_Resources/borealis_device_details.png)
 
-[![Workflow Editor Demonstration](Data/Repository_Resources/Workflow_Editor.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
+[![Workflow Editor Demonstration](Data/Repository_Resources/borealis_flow_editor.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
 
 ## 🚀 What Is Borealis?
 
