@@ -1,7 +1,7 @@
-- hosts: all
+ - hosts: all
   gather_facts: false
   tasks:
-    - name: Collect summary via PowerShell
+    - name: Collect summary via PowerShell (hostname, OS, uptime, last reboot)
       ansible.builtin.shell: |
         $ErrorActionPreference = 'Stop'
         $hostname = $env:COMPUTERNAME
@@ -14,8 +14,16 @@
         $os      = ($product + ' ' + $display).Trim()
         $boot    = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
         $uptime  = [int]((Get-Date) - $boot).TotalSeconds
-        $epoch   = [int](((Get-Date $boot).ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds)
-        $out = [pscustomobject]@{ hostname=$hostname; os=$os; username=$username; domain=$domain; uptime_sec=$uptime; last_reboot=$epoch }
+        # Produce Last Reboot as UTC string to match UI expectations (YYYY-MM-DD HH:MM:SS)
+        $bootUtc = (Get-Date $boot).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        $out = [pscustomobject]@{
+          hostname=$hostname;
+          operating_system=$os;
+          username=$username;
+          domain=$domain;
+          uptime_sec=$uptime;
+          last_reboot=$bootUtc
+        }
         $out | ConvertTo-Json -Depth 4
       register: summary_raw
       changed_when: false
@@ -108,13 +116,105 @@
           storage: "{{ _storage }}"
           network: "{{ _network }}"
 
-    - name: Derive internal IP
+    - name: Derive internal IP from adapter list
       ansible.builtin.set_fact:
-        device_details: "{{ device_details | combine({'summary': (device_details.summary | combine({'internal_ip': ( (_network | map(attribute='ips') | list | first | default([])) | first | default('') ) })) }) }}"
+        device_details: "{{ device_details | combine({'summary': (device_details.summary | combine({'internal_ip': (_network | map(attribute='ips') | list | flatten | select('match','^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)') | list | first | default('')) })) }) }}"
+
+    - name: Detect device type (Server/Workstation/Virtual Machine)
+      ansible.builtin.shell: |
+        $ErrorActionPreference = 'SilentlyContinue'
+        function _getCim($cls){ try { return Get-CimInstance $cls -ErrorAction Stop } catch { try { return Get-WmiObject -Class $cls -ErrorAction Stop } catch { return $null } } }
+        $os = _getCim 'Win32_OperatingSystem'
+        $cs = _getCim 'Win32_ComputerSystem'
+        $caption = ""; if ($os) { $caption = [string]$os.Caption }
+        $model = ""; if ($cs) { $model = [string]$cs.Model }
+        $manu  = ""; if ($cs) { $manu = [string]$cs.Manufacturer }
+        $virt = $false
+        if ($model -match 'Virtual' -or $manu -match 'Microsoft Corporation' -and $model -match 'Virtual Machine' -or $manu -match 'VMware' -or $manu -match 'innotek' -or $manu -match 'VirtualBox' -or $manu -match 'QEMU' -or $manu -match 'Xen' -or $manu -match 'Parallels') { $virt = $true }
+        if ($virt) { 'Virtual Machine' }
+        elseif ($caption -match 'Server') { 'Server' }
+        else { 'Workstation' }
+      register: device_type_raw
+      changed_when: false
+
+    - name: Attach device type to summary
+      ansible.builtin.set_fact:
+        device_details: "{{ device_details | combine({'summary': (device_details.summary | combine({'device_type': (device_type_raw.stdout | default('') | trim) })) }) }}"
+
+    - name: Collect external IP (best-effort)
+      ansible.builtin.shell: |
+        $ErrorActionPreference = 'SilentlyContinue'
+        $ip = ''
+        try { $ip = (Invoke-RestMethod -Uri 'https://api.ipify.org?format=json' -TimeoutSec 3).ip } catch {}
+        if (-not $ip) { try { $ip = (Invoke-WebRequest -Uri 'https://checkip.amazonaws.com' -TimeoutSec 3).Content.Trim() } catch {} }
+        if (-not $ip) { try { $ip = (Invoke-WebRequest -Uri 'https://ifconfig.me/ip' -TimeoutSec 3).Content.Trim() } catch {} }
+        $ip
+      register: external_ip_raw
+      changed_when: false
+
+    - name: Attach external IP to summary
+      ansible.builtin.set_fact:
+        device_details: "{{ device_details | combine({'summary': (device_details.summary | combine({'external_ip': (external_ip_raw.stdout | default('') | trim) })) }) }}"
+
+    - name: Collect currently logged-in users (interactive + RDP)
+      ansible.builtin.shell: |
+        $ErrorActionPreference = 'SilentlyContinue'
+        function Get-InteractiveUsers {
+          $users = @()
+          try {
+            $ls = Get-CimInstance Win32_LogonSession | Where-Object { $_.LogonType -in 2,10 }
+            foreach ($sess in $ls) {
+              $accs = Get-CimAssociatedInstance -InputObject $sess -Association Win32_LoggedOnUser -ResultClassName Win32_Account
+              foreach ($a in $accs) {
+                if (-not $a -or -not $a.Name) { continue }
+                $nm = [string]$a.Name
+                $dm = [string]$a.Domain
+                if ($nm -match '\$$') { continue }
+                if ($dm -eq 'NT AUTHORITY' -or $dm -eq 'NT SERVICE') { continue }
+                if ($nm -like 'DWM-*' -or $nm -like 'UMFD-*') { continue }
+                if ($dm) { $users += ("{0}\\{1}" -f $dm,$nm) } else { $users += $nm }
+              }
+            }
+          } catch {}
+          $users | Sort-Object -Unique
+        }
+
+        function Get-QuserUsers {
+          $list=@()
+          try {
+            $q = (quser 2>$null) -split "`r?`n"
+            foreach ($line in $q) {
+              if (-not $line) { continue }
+              if ($line -match '^USERNAME') { continue }
+              $s = ($line -replace '^>','').Trim()
+              if (-not $s) { continue }
+              $parts = $s -split '\s+'
+              if ($parts.Length -lt 1) { continue }
+              $u = $parts[0]
+              if (-not $u) { continue }
+              if ($u -match '\$$') { continue }
+              if ($u -like 'DWM-*' -or $u -like 'UMFD-*') { continue }
+              $list += $u
+            }
+          } catch {}
+          $list | Sort-Object -Unique
+        }
+
+        $u1 = Get-InteractiveUsers
+        $u2 = Get-QuserUsers
+        $combined = @()
+        foreach ($u in $u1) { if ($combined -notcontains $u) { $combined += $u } }
+        foreach ($u in $u2) { if ($combined -notcontains $u) { $combined += $u } }
+        if ($combined.Count -eq 0) { 'No Users Logged In' } else { $combined -join ', ' }
+      register: last_user_raw
+      changed_when: false
+
+    - name: Attach last_user string to summary
+      ansible.builtin.set_fact:
+        device_details: "{{ device_details | combine({'summary': (device_details.summary | combine({'last_user': (last_user_raw.stdout | default('') | trim) })) }) }}"
 
     - name: Write device details JSON
       ansible.builtin.copy:
         content: "{{ device_details | to_nice_json }}"
         dest: "{{ output_file }}"
       run_once: true
-
