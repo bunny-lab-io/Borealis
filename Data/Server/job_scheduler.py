@@ -133,9 +133,21 @@ class JobScheduler:
     # ---------- Helpers for dispatching scripts ----------
     def _scripts_root(self) -> str:
         import os
+        # Unified Assemblies root; script paths should include top-level
+        # folder such as "Scripts" or "Ansible Playbooks".
         return os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "Scripts")
+            os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies")
         )
+
+    def _is_valid_scripts_relpath(self, rel_path: str) -> bool:
+        try:
+            p = (rel_path or "").replace("\\", "/").lstrip("/")
+            if not p:
+                return False
+            top = p.split("/", 1)[0]
+            return top in ("Scripts",)
+        except Exception:
+            return False
 
     def _detect_script_type(self, filename: str) -> str:
         fn = (filename or "").lower()
@@ -158,7 +170,7 @@ class JobScheduler:
             import os
             path_norm = (rel_path or "").replace("\\", "/")
             abs_path = os.path.abspath(os.path.join(scripts_root, path_norm))
-            if not abs_path.startswith(scripts_root) or not os.path.isfile(abs_path):
+            if (not abs_path.startswith(scripts_root)) or (not self._is_valid_scripts_relpath(path_norm)) or (not os.path.isfile(abs_path)):
                 return
             stype = self._detect_script_type(abs_path)
             # For now, only PowerShell is supported by agents for scheduled jobs

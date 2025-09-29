@@ -34,7 +34,6 @@ import Editor from "react-simple-code-editor";
 
 // ---------- helpers ----------
 const TYPE_OPTIONS = [
-  { key: "ansible", label: "Ansible Playbook", ext: ".yml", prism: "yaml" },
   { key: "powershell", label: "Powershell Script", ext: ".ps1", prism: "powershell" },
   { key: "batch", label: "Batch Script", ext: ".bat", prism: "batch" },
   { key: "bash", label: "Bash Script", ext: ".sh", prism: "bash" }
@@ -45,18 +44,18 @@ const TYPES = keyBy(TYPE_OPTIONS);
 
 function typeFromFilename(name = "") {
   const n = name.toLowerCase();
-  if (n.endsWith(".yml")) return "ansible";
   if (n.endsWith(".ps1")) return "powershell";
   if (n.endsWith(".bat")) return "batch";
   if (n.endsWith(".sh")) return "bash";
-  return "ansible"; // default
+  // Default editor type
+  return "powershell";
 }
 
 function ensureExt(baseName, typeKey) {
   if (!baseName) return baseName;
   // If user already provided any extension, keep it.
   if (/\.[^./\\]+$/i.test(baseName)) return baseName;
-  const t = TYPES[typeKey] || TYPES.ansible;
+  const t = TYPES[typeKey] || TYPES.powershell;
   return baseName + t.ext;
 }
 
@@ -258,7 +257,7 @@ export default function ScriptEditor() {
   const [currentPath, setCurrentPath] = useState("");
   const [currentFolder, setCurrentFolder] = useState("");
   const [fileName, setFileName] = useState("");
-  const [type, setType] = useState("ansible");
+  const [type, setType] = useState("powershell");
   const [code, setCode] = useState("");
 
   // Dialog state
@@ -268,7 +267,7 @@ export default function ScriptEditor() {
   const [folderDialogMode, setFolderDialogMode] = useState("rename");
   const [newScriptOpen, setNewScriptOpen] = useState(false);
   const [newScriptName, setNewScriptName] = useState("");
-  const [newScriptType, setNewScriptType] = useState("ansible");
+  const [newScriptType, setNewScriptType] = useState("powershell");
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const prismLang = useMemo(() => (TYPES[type]?.prism || "yaml"), [type]);
@@ -401,7 +400,7 @@ export default function ScriptEditor() {
     if (!selectedNode) return;
     setContextMenu(null);
     setNewScriptName("");
-    setNewScriptType("ansible");
+    setNewScriptType("powershell");
     setNewScriptOpen(true);
   };
 

@@ -27,6 +27,5 @@ sounddevice
 numpy
 pywin32; platform_system == "Windows"
 
-# Ansible-based inventory collection (Windows local-only)
-# Note: ansible-core is heavy; enable via config flag in DeviceAudit role
+# Ansible Libraries
 ansible-core
