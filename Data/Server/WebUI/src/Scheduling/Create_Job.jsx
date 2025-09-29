@@ -87,6 +87,11 @@ function buildScriptTree(scripts, folders) {
   return { root: [rootNode], map };
 }
 
+// --- Ansible tree helpers (reuse scripts tree builder) ---
+function buildAnsibleTree(playbooks, folders) {
+  return buildScriptTree(playbooks, folders);
+}
+
 // --- Workflows tree helpers (reuse approach from Workflow_List) ---
 function buildWorkflowTree(workflows, folders) {
   const map = {};
@@ -177,6 +182,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [compTab, setCompTab] = useState("scripts");
   const [scriptTree, setScriptTree] = useState([]); const [scriptMap, setScriptMap] = useState({});
   const [workflowTree, setWorkflowTree] = useState([]); const [workflowMap, setWorkflowMap] = useState({});
+  const [ansibleTree, setAnsibleTree] = useState([]); const [ansibleMap, setAnsibleMap] = useState({});
   const [selectedNodeId, setSelectedNodeId] = useState("");
 
   const [addTargetOpen, setAddTargetOpen] = useState(false);
@@ -382,10 +388,19 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         setWorkflowTree(root); setWorkflowMap(map);
       } else { setWorkflowTree([]); setWorkflowMap({}); }
     } catch { setWorkflowTree([]); setWorkflowMap({}); }
+    try {
+      // ansible playbooks
+      const aResp = await fetch("/api/assembly/list?island=ansible");
+      if (aResp.ok) {
+        const aData = await aResp.json();
+        const { root, map } = buildAnsibleTree(aData.items || [], aData.folders || []);
+        setAnsibleTree(root); setAnsibleMap(map);
+      } else { setAnsibleTree([]); setAnsibleMap({}); }
+    } catch { setAnsibleTree([]); setAnsibleMap({}); }
   };
 
   const addSelectedComponent = () => {
-    const map = compTab === "scripts" ? scriptMap : workflowMap;
+    const map = compTab === "scripts" ? scriptMap : (compTab === "ansible" ? ansibleMap : workflowMap);
     const node = map[selectedNodeId];
     if (!node || node.isFolder) return false;
     if (compTab === "scripts" && node.script) {
@@ -393,6 +408,13 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         ...prev,
         // Store path relative to Assemblies root with 'Scripts/' prefix for scheduler compatibility
         { type: "script", path: (node.path.startsWith('Scripts/') ? node.path : `Scripts/${node.path}`), name: node.fileName || node.label, description: node.path }
+      ]);
+      setSelectedNodeId("");
+      return true;
+    } else if (compTab === "ansible" && node.script) {
+      setComponents((prev) => [
+        ...prev,
+        { type: "ansible", path: node.path, name: node.fileName || node.label, description: node.path }
       ]);
       setSelectedNodeId("");
       return true;
@@ -453,7 +475,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const tabDefs = useMemo(() => {
     const base = [
       { key: "name", label: "Job Name" },
-      { key: "components", label: "Scripts/Workflows" },
+      { key: "components", label: "Assemblies" },
       { key: "targets", label: "Targets" },
       { key: "schedule", label: "Schedule" },
       { key: "context", label: "Execution Context" }
@@ -520,16 +542,16 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         {tab === 1 && (
           <Box>
             <SectionHeader
-              title="Components"
+              title="Assemblies"
               action={(
                 <Button size="small" startIcon={<AddIcon />} onClick={openAddComponent}
                   sx={{ color: "#58a6ff", borderColor: "#58a6ff" }} variant="outlined">
-                  Add Component
+                  Add Assembly
                 </Button>
               )}
             />
             {components.length === 0 && (
-              <Typography variant="body2" sx={{ color: "#888" }}>No components added yet.</Typography>
+              <Typography variant="body2" sx={{ color: "#888" }}>No assemblies added yet.</Typography>
             )}
             {components.map((c, idx) => (
               <ComponentCard key={`${c.type}-${c.path}-${idx}`} comp={c}
@@ -537,7 +559,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
               />
             ))}
             {components.length === 0 && (
-              <Typography variant="caption" sx={{ color: "#ff6666" }}>At least one component is required.</Typography>
+              <Typography variant="caption" sx={{ color: "#ff6666" }}>At least one assembly is required.</Typography>
             )}
           </Box>
         )}
@@ -731,12 +753,16 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
       <Dialog open={addCompOpen} onClose={() => setAddCompOpen(false)} fullWidth maxWidth="md"
         PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
       >
-        <DialogTitle>Select a Script or Workflow</DialogTitle>
+        <DialogTitle>Select an Assembly</DialogTitle>
         <DialogContent>
           <Box sx={{ display: "flex", gap: 2, mb: 1 }}>
             <Button size="small" variant={compTab === "scripts" ? "outlined" : "text"} onClick={() => setCompTab("scripts")}
               sx={{ textTransform: "none", color: "#58a6ff", borderColor: "#58a6ff" }}>
               Scripts
+            </Button>
+            <Button size="small" variant={compTab === "ansible" ? "outlined" : "text"} onClick={() => setCompTab("ansible")}
+              sx={{ textTransform: "none", color: "#58a6ff", borderColor: "#58a6ff" }}>
+              Ansible
             </Button>
             <Button size="small" variant={compTab === "workflows" ? "outlined" : "text"} onClick={() => setCompTab("workflows")}
               sx={{ textTransform: "none", color: "#58a6ff", borderColor: "#58a6ff" }}>
@@ -771,6 +797,22 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
                   </TreeItem>
                 ))) : (
                   <Typography variant="body2" sx={{ color: "#888", p: 1 }}>No workflows found.</Typography>
+                )}
+              </SimpleTreeView>
+            </Paper>
+          )}
+          {compTab === "ansible" && (
+            <Paper sx={{ p: 1, bgcolor: "#1e1e1e", maxHeight: 400, overflow: "auto" }}>
+              <SimpleTreeView onItemSelectionToggle={(_, id) => {
+                  const n = ansibleMap[id];
+                  if (n && !n.isFolder) setSelectedNodeId(id);
+                }}>
+                {ansibleTree.length ? (ansibleTree.map((n) => (
+                  <TreeItem key={n.id} itemId={n.id} label={n.label}>
+                    {n.children && n.children.length ? renderTreeNodes(n.children, ansibleMap) : null}
+                  </TreeItem>
+                ))) : (
+                  <Typography variant="body2" sx={{ color: "#888", p: 1 }}>No playbooks found.</Typography>
                 )}
               </SimpleTreeView>
             </Paper>

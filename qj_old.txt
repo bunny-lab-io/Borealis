@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   Dialog,
   DialogTitle,
@@ -198,17 +198,13 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
               {selectedPath || (mode === 'ansible' ? 'No playbook selected' : 'No script selected')}
             </Typography>
             <Box sx={{ mt: 2 }}>
-              {mode !== 'ansible' && (
-                <>
-                  <FormControlLabel
-                    control={<Checkbox size="small" checked={runAsCurrentUser} onChange={(e) => setRunAsCurrentUser(e.target.checked)} />}
-                    label={<Typography variant="body2">Run as currently logged-in user</Typography>}
-                  />
-                  <Typography variant="caption" sx={{ color: "#888" }}>
-                    Unchecked = Run-As BUILTIN\SYSTEM
-                  </Typography>
-                </>
-              )}
+              <FormControlLabel
+                control={<Checkbox size="small" checked={runAsCurrentUser} onChange={(e) => setRunAsCurrentUser(e.target.checked)} />}
+                label={<Typography variant="body2">Run as currently logged-in user</Typography>}
+              />
+              <Typography variant="caption" sx={{ color: "#888" }}>
+                Unchecked = Run-As BUILTIN\SYSTEM
+              </Typography>
             </Box>
             {error && (
               <Typography variant="body2" sx={{ color: "#ff4f4f", mt: 1 }}>{error}</Typography>

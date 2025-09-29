@@ -133,7 +133,11 @@ export default function DeviceDetails({ device, onBack }) {
     }
   }, [device]);
 
+  
+
   useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  // No explicit live recap tab; recaps are recorded into Activity History
 
   const clearHistory = async () => {
     if (!device?.hostname) return;
@@ -771,13 +775,10 @@ export default function DeviceDetails({ device, onBack }) {
       <Table size="small">
         <TableHead>
           <TableRow>
+            <TableCell>Assembly</TableCell>
             <TableCell sortDirection={historyOrderBy === "script_name" ? historyOrder : false}>
-              <TableSortLabel
-                active={historyOrderBy === "script_name"}
-                direction={historyOrderBy === "script_name" ? historyOrder : "asc"}
-                onClick={() => handleHistorySort("script_name")}
-              >
-                Script Executed
+              <TableSortLabel active={historyOrderBy === "script_name"} direction={historyOrderBy === "script_name" ? historyOrder : "asc"} onClick={() => handleHistorySort("script_name")}>
+                Task
               </TableSortLabel>
             </TableCell>
             <TableCell sortDirection={historyOrderBy === "ran_at" ? historyOrder : false}>
@@ -806,6 +807,7 @@ export default function DeviceDetails({ device, onBack }) {
         <TableBody>
           {sortedHistory.map((r) => (
             <TableRow key={r.id}>
+              <TableCell>{(r.script_type || '').toLowerCase() === 'ansible' ? 'Ansible Playbook' : 'Script'}</TableCell>
               <TableCell>{r.script_name}</TableCell>
               <TableCell>{formatTimestamp(r.ran_at)}</TableCell>
               <TableCell>
@@ -839,14 +841,14 @@ export default function DeviceDetails({ device, onBack }) {
             </TableRow>
           ))}
           {sortedHistory.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={4} sx={{ color: "#888" }}>No activity yet.</TableCell>
-            </TableRow>
+            <TableRow><TableCell colSpan={5} sx={{ color: "#888" }}>No activity yet.</TableCell></TableRow>
           )}
         </TableBody>
       </Table>
     </Box>
   );
+
+  
 
   const tabs = [
     { label: "Summary", content: renderSummary() },
@@ -958,6 +960,8 @@ export default function DeviceDetails({ device, onBack }) {
           <Button onClick={() => setOutputOpen(false)} sx={{ color: "#58a6ff" }}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Recap dialog removed; recaps flow into Activity History stdout */}
 
         <ClearDeviceActivityDialog
           open={clearDialogOpen}

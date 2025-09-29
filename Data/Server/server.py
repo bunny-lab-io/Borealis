@@ -1458,6 +1458,36 @@ def init_db():
         """
     )
 
+    # Ansible play recap storage (one row per playbook run/session)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ansible_play_recaps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT UNIQUE NOT NULL,
+            hostname TEXT,
+            agent_id TEXT,
+            playbook_path TEXT,
+            playbook_name TEXT,
+            scheduled_job_id INTEGER,
+            scheduled_run_id INTEGER,
+            activity_job_id INTEGER,
+            status TEXT,
+            recap_text TEXT,
+            recap_json TEXT,
+            started_ts INTEGER,
+            finished_ts INTEGER,
+            created_at INTEGER,
+            updated_at INTEGER
+        )
+        """
+    )
+    try:
+        # Helpful lookups for device views and run correlation
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ansible_recaps_host_created ON ansible_play_recaps(hostname, created_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ansible_recaps_status ON ansible_play_recaps(status)")
+    except Exception:
+        pass
+
     conn.commit()
     # Scheduled jobs table
     cur.execute(
@@ -2512,6 +2542,55 @@ def scripts_quick_run():
     return jsonify({"results": results})
 
 
+@app.route("/api/ansible/quick_run", methods=["POST"])
+def ansible_quick_run():
+    """Queue an Ansible Playbook Quick Job via WebSocket to targeted agents.
+
+    Payload: { playbook_path: str, hostnames: [str] }
+    The playbook_path is relative to the Ansible island (e.g., "folder/play.yml").
+    """
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("playbook_path") or "").strip()
+    hostnames = data.get("hostnames") or []
+    if not rel_path or not isinstance(hostnames, list) or not hostnames:
+        return jsonify({"error": "Missing playbook_path or hostnames[]"}), 400
+    try:
+        root, abs_path, _ = _resolve_assembly_path('ansible', rel_path)
+        if not os.path.isfile(abs_path):
+            return jsonify({"error": "Playbook not found"}), 404
+        try:
+            with open(abs_path, 'r', encoding='utf-8', errors='replace') as fh:
+                content = fh.read()
+        except Exception as e:
+            return jsonify({"error": f"Failed to read playbook: {e}"}), 500
+
+        results = []
+        for host in hostnames:
+            run_id = None
+            try:
+                import uuid as _uuid
+                run_id = _uuid.uuid4().hex
+            except Exception:
+                run_id = str(int(time.time() * 1000))
+            payload = {
+                "run_id": run_id,
+                "target_hostname": str(host),
+                "playbook_name": os.path.basename(abs_path),
+                "playbook_content": content,
+                "connection": "local",
+            }
+            try:
+                socketio.emit("ansible_playbook_run", payload)
+            except Exception:
+                pass
+            results.append({"hostname": host, "run_id": run_id, "status": "Queued"})
+        return jsonify({"results": results})
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
 def device_activity(hostname: str):
     try:
@@ -2596,6 +2675,309 @@ def handle_quick_job_result(data):
         conn.close()
     except Exception as e:
         print(f"[ERROR] quick_job_result DB update failed for job {job_id}: {e}")
+
+
+# ---------------------------------------------
+# Ansible Runtime API (Play Recaps)
+# ---------------------------------------------
+def _json_dump_safe(obj) -> str:
+    try:
+        if isinstance(obj, str):
+            # Accept pre-serialized JSON strings as-is
+            json.loads(obj)
+            return obj
+        return json.dumps(obj or {})
+    except Exception:
+        return json.dumps({})
+
+
+@app.route("/api/ansible/recap/report", methods=["POST"])
+def api_ansible_recap_report():
+    """Create or update an Ansible recap row for a running/finished playbook.
+
+    Expects JSON body with fields:
+      run_id: str (required) – unique id for this playbook run (uuid recommended)
+      hostname: str (optional)
+      agent_id: str (optional)
+      playbook_path: str (optional)
+      playbook_name: str (optional)
+      scheduled_job_id: int (optional)
+      scheduled_run_id: int (optional)
+      activity_job_id: int (optional)
+      status: str (Running|Success|Failed|Cancelled) (optional)
+      recap_text: str (optional)
+      recap_json: object or str (optional)
+      started_ts: int (optional)
+      finished_ts: int (optional)
+    """
+    data = request.get_json(silent=True) or {}
+    run_id = (data.get("run_id") or "").strip()
+    if not run_id:
+        return jsonify({"error": "run_id is required"}), 400
+
+    now = _now_ts()
+    hostname = (data.get("hostname") or "").strip()
+    agent_id = (data.get("agent_id") or "").strip()
+    playbook_path = (data.get("playbook_path") or "").strip()
+    playbook_name = (data.get("playbook_name") or "").strip() or (os.path.basename(playbook_path) if playbook_path else "")
+    status = (data.get("status") or "").strip()
+    recap_text = data.get("recap_text")
+    recap_json = data.get("recap_json")
+
+    # IDs to correlate with other subsystems (optional)
+    try:
+        scheduled_job_id = int(data.get("scheduled_job_id")) if data.get("scheduled_job_id") is not None else None
+    except Exception:
+        scheduled_job_id = None
+    try:
+        scheduled_run_id = int(data.get("scheduled_run_id")) if data.get("scheduled_run_id") is not None else None
+    except Exception:
+        scheduled_run_id = None
+    try:
+        activity_job_id = int(data.get("activity_job_id")) if data.get("activity_job_id") is not None else None
+    except Exception:
+        activity_job_id = None
+
+    try:
+        started_ts = int(data.get("started_ts")) if data.get("started_ts") is not None else None
+    except Exception:
+        started_ts = None
+    try:
+        finished_ts = int(data.get("finished_ts")) if data.get("finished_ts") is not None else None
+    except Exception:
+        finished_ts = None
+
+    recap_json_str = _json_dump_safe(recap_json) if recap_json is not None else None
+
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+
+        # Attempt update by run_id first
+        cur.execute(
+            "SELECT id FROM ansible_play_recaps WHERE run_id = ?",
+            (run_id,)
+        )
+        row = cur.fetchone()
+        if row:
+            recap_id = int(row[0])
+            cur.execute(
+                """
+                UPDATE ansible_play_recaps
+                SET hostname = COALESCE(?, hostname),
+                    agent_id = COALESCE(?, agent_id),
+                    playbook_path = COALESCE(?, playbook_path),
+                    playbook_name = COALESCE(?, playbook_name),
+                    scheduled_job_id = COALESCE(?, scheduled_job_id),
+                    scheduled_run_id = COALESCE(?, scheduled_run_id),
+                    activity_job_id = COALESCE(?, activity_job_id),
+                    status = COALESCE(?, status),
+                    recap_text = CASE WHEN ? IS NOT NULL THEN ? ELSE recap_text END,
+                    recap_json = CASE WHEN ? IS NOT NULL THEN ? ELSE recap_json END,
+                    started_ts = COALESCE(?, started_ts),
+                    finished_ts = COALESCE(?, finished_ts),
+                    updated_at = ?
+                WHERE run_id = ?
+                """,
+                (
+                    hostname or None,
+                    agent_id or None,
+                    playbook_path or None,
+                    playbook_name or None,
+                    scheduled_job_id,
+                    scheduled_run_id,
+                    activity_job_id,
+                    status or None,
+                    recap_text, recap_text,
+                    recap_json_str, recap_json_str,
+                    started_ts,
+                    finished_ts,
+                    now,
+                    run_id,
+                )
+            )
+            conn.commit()
+        else:
+            cur.execute(
+                """
+                INSERT INTO ansible_play_recaps (
+                    run_id, hostname, agent_id, playbook_path, playbook_name,
+                    scheduled_job_id, scheduled_run_id, activity_job_id,
+                    status, recap_text, recap_json, started_ts, finished_ts,
+                    created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    run_id,
+                    hostname or None,
+                    agent_id or None,
+                    playbook_path or None,
+                    playbook_name or None,
+                    scheduled_job_id,
+                    scheduled_run_id,
+                    activity_job_id,
+                    status or None,
+                    recap_text if recap_text is not None else None,
+                    recap_json_str,
+                    started_ts,
+                    finished_ts,
+                    now,
+                    now,
+                )
+            )
+            recap_id = cur.lastrowid
+            conn.commit()
+
+        # If linked to an activity_history row, mirror status/stdout for Activity tab UX
+        try:
+            if activity_job_id:
+                cur.execute(
+                    "UPDATE activity_history SET status = COALESCE(?, status), stdout = CASE WHEN ? IS NOT NULL THEN ? ELSE stdout END WHERE id = ?",
+                    (status or None, recap_text, recap_text, activity_job_id)
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+        # Return the latest row
+        cur.execute(
+            "SELECT id, run_id, hostname, agent_id, playbook_path, playbook_name, scheduled_job_id, scheduled_run_id, activity_job_id, status, recap_text, recap_json, started_ts, finished_ts, created_at, updated_at FROM ansible_play_recaps WHERE id=?",
+            (recap_id,)
+        )
+        row = cur.fetchone()
+        conn.close()
+
+        # Broadcast to connected clients for live updates
+        try:
+            payload = {
+                "id": row[0],
+                "run_id": row[1],
+                "hostname": row[2] or "",
+                "agent_id": row[3] or "",
+                "playbook_path": row[4] or "",
+                "playbook_name": row[5] or "",
+                "scheduled_job_id": row[6],
+                "scheduled_run_id": row[7],
+                "activity_job_id": row[8],
+                "status": row[9] or "",
+                "recap_text": row[10] or "",
+                "recap_json": json.loads(row[11]) if (row[11] or "").strip() else None,
+                "started_ts": row[12],
+                "finished_ts": row[13],
+                "created_at": row[14],
+                "updated_at": row[15],
+            }
+            socketio.emit("ansible_recap_update", payload)
+        except Exception:
+            pass
+
+        return jsonify({
+            "id": row[0],
+            "run_id": row[1],
+            "hostname": row[2] or "",
+            "agent_id": row[3] or "",
+            "playbook_path": row[4] or "",
+            "playbook_name": row[5] or "",
+            "scheduled_job_id": row[6],
+            "scheduled_run_id": row[7],
+            "activity_job_id": row[8],
+            "status": row[9] or "",
+            "recap_text": row[10] or "",
+            "recap_json": json.loads(row[11]) if (row[11] or "").strip() else None,
+            "started_ts": row[12],
+            "finished_ts": row[13],
+            "created_at": row[14],
+            "updated_at": row[15],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ansible/recaps", methods=["GET"])
+def api_ansible_recaps_list():
+    """List Ansible play recaps. Optional query params: hostname, limit (default 50)"""
+    hostname = (request.args.get("hostname") or "").strip()
+    try:
+        limit = int(request.args.get("limit") or 50)
+    except Exception:
+        limit = 50
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        if hostname:
+            cur.execute(
+                """
+                SELECT id, run_id, hostname, playbook_name, status, created_at, updated_at, started_ts, finished_ts
+                FROM ansible_play_recaps
+                WHERE hostname = ?
+                ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+                LIMIT ?
+                """,
+                (hostname, limit)
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, run_id, hostname, playbook_name, status, created_at, updated_at, started_ts, finished_ts
+                FROM ansible_play_recaps
+                ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,)
+            )
+        rows = cur.fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            out.append({
+                "id": r[0],
+                "run_id": r[1],
+                "hostname": r[2] or "",
+                "playbook_name": r[3] or "",
+                "status": r[4] or "",
+                "created_at": r[5],
+                "updated_at": r[6],
+                "started_ts": r[7],
+                "finished_ts": r[8],
+            })
+        return jsonify({"recaps": out})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ansible/recap/<int:recap_id>", methods=["GET"])
+def api_ansible_recap_get(recap_id: int):
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, run_id, hostname, agent_id, playbook_path, playbook_name, scheduled_job_id, scheduled_run_id, activity_job_id, status, recap_text, recap_json, started_ts, finished_ts, created_at, updated_at FROM ansible_play_recaps WHERE id=?",
+            (recap_id,)
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify({
+            "id": row[0],
+            "run_id": row[1],
+            "hostname": row[2] or "",
+            "agent_id": row[3] or "",
+            "playbook_path": row[4] or "",
+            "playbook_name": row[5] or "",
+            "scheduled_job_id": row[6],
+            "scheduled_run_id": row[7],
+            "activity_job_id": row[8],
+            "status": row[9] or "",
+            "recap_text": row[10] or "",
+            "recap_json": json.loads(row[11]) if (row[11] or "").strip() else None,
+            "started_ts": row[12],
+            "finished_ts": row[13],
+            "created_at": row[14],
+            "updated_at": row[15],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @socketio.on("collector_status")
@@ -2991,6 +3373,21 @@ def handle_agent_window_list(data):
     """
     # Relay the list to all interested clients
     socketio.emit("agent_window_list", data)
+
+# Relay Ansible control messages from UI to agents
+@socketio.on("ansible_playbook_cancel")
+def relay_ansible_cancel(data):
+    try:
+        socketio.emit("ansible_playbook_cancel", data)
+    except Exception:
+        pass
+
+@socketio.on("ansible_playbook_run")
+def relay_ansible_run(data):
+    try:
+        socketio.emit("ansible_playbook_run", data)
+    except Exception:
+        pass
 
 # ---------------------------------------------
 # Server Launch

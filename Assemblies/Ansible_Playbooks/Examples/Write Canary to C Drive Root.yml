@@ -1,0 +1,11 @@
+---
+- name: Create Canary.txt on local Windows machine
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  tasks:
+    - name: Write Canary.txt to C:\
+      ansible.windows.win_copy:
+        content: "This is a canary file created by Ansible."
+        dest: C:\Canary.txt

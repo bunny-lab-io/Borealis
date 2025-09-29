@@ -161,6 +161,70 @@ class JobScheduler:
             return "bash"
         return "unknown"
 
+    def _ansible_root(self) -> str:
+        import os
+        return os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Ansible_Playbooks")
+        )
+
+    def _dispatch_ansible(self, hostname: str, rel_path: str, scheduled_job_id: int, scheduled_run_id: int) -> None:
+        try:
+            import os, json, uuid
+            ans_root = self._ansible_root()
+            rel_norm = (rel_path or "").replace("\\", "/").lstrip("/")
+            abs_path = os.path.abspath(os.path.join(ans_root, rel_norm))
+            if (not abs_path.startswith(ans_root)) or (not os.path.isfile(abs_path)):
+                return
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
+                    content = fh.read()
+            except Exception:
+                return
+
+            # Record in activity_history for UI parity
+            now = _now_ts()
+            act_id = None
+            conn = self._conn()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO activity_history(hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr)
+                    VALUES(?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        str(hostname),
+                        rel_norm,
+                        os.path.basename(abs_path),
+                        "ansible",
+                        now,
+                        "Running",
+                        "",
+                        "",
+                    ),
+                )
+                act_id = cur.lastrowid
+                conn.commit()
+            finally:
+                conn.close()
+
+            payload = {
+                "run_id": uuid.uuid4().hex,
+                "target_hostname": str(hostname),
+                "playbook_name": os.path.basename(abs_path),
+                "playbook_content": content,
+                "activity_job_id": act_id,
+                "scheduled_job_id": int(scheduled_job_id),
+                "scheduled_run_id": int(scheduled_run_id),
+                "connection": "local",
+            }
+            try:
+                self.socketio.emit("ansible_playbook_run", payload)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _dispatch_script(self, hostname: str, rel_path: str, run_mode: str) -> None:
         """Emit a quick_job_run event to agents for the given script/host.
         Mirrors /api/scripts/quick_run behavior for scheduled jobs.
@@ -457,12 +521,18 @@ class JobScheduler:
                 except Exception:
                     comps = []
                 script_paths = []
+                ansible_paths = []
                 for c in comps:
                     try:
-                        if (c or {}).get("type") == "script":
+                        ctype = (c or {}).get("type")
+                        if ctype == "script":
                             p = (c.get("path") or c.get("script_path") or "").strip()
                             if p:
                                 script_paths.append(p)
+                        elif ctype == "ansible":
+                            p = (c.get("path") or "").strip()
+                            if p:
+                                ansible_paths.append(p)
                     except Exception:
                         continue
                 run_mode = (execution_context or "system").strip().lower()
@@ -549,11 +619,18 @@ class JobScheduler:
                                 "INSERT INTO scheduled_job_runs (job_id, target_hostname, scheduled_ts, started_ts, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
                                 (job_id, host, occ, ts_now, "Running", ts_now, ts_now),
                             )
+                            run_row_id = c2.lastrowid or 0
                             conn2.commit()
                             # Dispatch all script components for this job to the target host
                             for sp in script_paths:
                                 try:
                                     self._dispatch_script(host, sp, run_mode)
+                                except Exception:
+                                    continue
+                            # Dispatch ansible playbooks for this job to the target host
+                            for ap in ansible_paths:
+                                try:
+                                    self._dispatch_ansible(host, ap, job_id, run_row_id)
                                 except Exception:
                                     continue
                         except Exception:
