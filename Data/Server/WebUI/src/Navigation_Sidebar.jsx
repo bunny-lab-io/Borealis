@@ -235,9 +235,9 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             </Typography>
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-            <NavItem icon={<JobsIcon fontSize="small" />} label="Scheduled Jobs" pageKey="jobs" />
             <NavItem icon={<AssembliesIcon fontSize="small" />} label="Assemblies" pageKey="assemblies" />
             <NavItem icon={<CommunityIcon fontSize="small" />} label="Community Content" pageKey="community" />
+            <NavItem icon={<JobsIcon fontSize="small" />} label="Scheduled Jobs" pageKey="jobs" />
           </AccordionDetails>
         </Accordion>
           );

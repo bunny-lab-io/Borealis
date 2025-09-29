@@ -373,13 +373,30 @@ function WorkflowsIsland({ onOpenWorkflow }) {
   );
 }
 
-// ---------------- Generic Scripts-like Island (used for Scripts and Ansible) -----------------
+// ---------------- Generic Scripts-like Islands (used for Scripts and Ansible) -----------------
 function buildFileTree(rootLabel, items, folders) {
+  // Some backends (e.g. /api/scripts) return paths relative to
+  // the Assemblies root, which prefixes items with a top-level
+  // folder like "Scripts". Others (e.g. /api/ansible) already
+  // return paths relative to their specific root. Normalize by
+  // stripping a matching top-level segment so the UI shows
+  // "Scripts/<...>" rather than "Scripts/Scripts/<...>".
+  const normalize = (p) => {
+    const candidates = [
+      String(rootLabel || "").trim(),
+      String(rootLabel || "").replace(/\s+/g, "_")
+    ].filter(Boolean);
+    const parts = String(p || "").replace(/\\/g, "/").split("/").filter(Boolean);
+    if (parts.length && candidates.includes(parts[0])) parts.shift();
+    return parts;
+  };
+
   const map = {};
   const rootNode = { id: "root", label: rootLabel, path: "", isFolder: true, children: [] };
   map[rootNode.id] = rootNode;
+
   (folders || []).forEach((f) => {
-    const parts = (f || "").split("/");
+    const parts = normalize(f);
     let children = rootNode.children;
     let parentPath = "";
     parts.forEach((part) => {
@@ -394,8 +411,9 @@ function buildFileTree(rootLabel, items, folders) {
       parentPath = path;
     });
   });
+
   (items || []).forEach((s) => {
-    const parts = (s.rel_path || "").split("/");
+    const parts = normalize(s?.rel_path);
     let children = rootNode.children;
     let parentPath = "";
     parts.forEach((part, idx) => {
@@ -714,7 +732,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
     <Paper sx={{ m: 2, p: 0, bgcolor: '#1e1e1e' }} elevation={2}>
       <Box sx={{ p: 2, pb: 1 }}>
         <Typography variant="h6" sx={{ color: '#58a6ff', mb: 0 }}>Assemblies</Typography>
-        <Typography variant="body2" sx={{ color: '#aaa' }}>Collections of components used to perform various actions upon targeted devices.</Typography>
+        <Typography variant="body2" sx={{ color: '#aaa' }}>Collections of various types of components used to perform various automations upon targeted devices.</Typography>
       </Box>
       <Box sx={{ px: 2, pb: 2 }}>
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.2fr 1fr 1fr' }, gap: 2 }}>
