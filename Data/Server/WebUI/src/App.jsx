@@ -35,8 +35,8 @@ import Login from "./Login.jsx";
 import SiteList from "./Sites/Site_List";
 import DeviceList from "./Devices/Device_List";
 import DeviceDetails from "./Devices/Device_Details";
-import WorkflowList from "./Workflows/Workflow_List";
-import ScriptEditor from "./Scripting/Script_Editor";
+import AssemblyList from "./Assemblies/Assembly_List";
+import ScriptEditor from "./Assemblies/Script_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
 import CreateJob from "./Scheduling/Create_Job.jsx";
 import UserManagement from "./Admin/User_Management.jsx";
@@ -106,6 +106,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   const [userDisplayName, setUserDisplayName] = useState(null);
   const [editingJob, setEditingJob] = useState(null);
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
+  const [scriptToEdit, setScriptToEdit] = useState(null); // { path, mode: 'scripts'|'ansible' }
       const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
 
       // Top-bar search state
@@ -151,7 +152,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   // Build breadcrumb items for current view
   const breadcrumbs = React.useMemo(() => {
     const items = [];
-    switch (currentPage) {
+      switch (currentPage) {
       case "sites":
         items.push({ label: "Sites", page: "sites" });
         items.push({ label: "Site List", page: "sites" });
@@ -186,6 +187,15 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "scripts":
         items.push({ label: "Automation", page: "jobs" });
         items.push({ label: "Scripts", page: "scripts" });
+        break;
+      case "ansible_editor":
+        items.push({ label: "Automation", page: "jobs" });
+        items.push({ label: "Ansible Playbooks", page: "assemblies" });
+        items.push({ label: "Playbook Editor" });
+        break;
+      case "assemblies":
+        items.push({ label: "Automation", page: "jobs" });
+        items.push({ label: "Assemblies", page: "assemblies" });
         break;
       case "community":
         items.push({ label: "Automation", page: "jobs" });
@@ -595,63 +605,81 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
       case "workflows":
         return (
-          <WorkflowList
+          <AssemblyList
             onOpenWorkflow={async (workflow, folderPath, name) => {
               const newId = "flow_" + Date.now();
               if (workflow && workflow.rel_path) {
-                const folder = workflow.rel_path
-                  .split("/")
-                  .slice(0, -1)
-                  .join("/");
+                const folder = workflow.rel_path.split("/").slice(0, -1).join("/");
                 try {
-                  const resp = await fetch(
-                    `/api/storage/load_workflow?path=${encodeURIComponent(
-                      workflow.rel_path
-                    )}`
-                  );
+                  const resp = await fetch(`/api/storage/load_workflow?path=${encodeURIComponent(workflow.rel_path)}`);
                   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                   const data = await resp.json();
-                  setTabs([
-                    {
-                      id: newId,
-                      tab_name:
-                        data.tab_name || workflow.name || workflow.file_name || "Workflow",
-                      nodes: data.nodes || [],
-                      edges: data.edges || [],
-                      folderPath: folder
-                    }
-                  ]);
+                  setTabs([{ id: newId, tab_name: data.tab_name || workflow.name || workflow.file_name || "Workflow", nodes: data.nodes || [], edges: data.edges || [], folderPath: folder }]);
                 } catch (err) {
                   console.error("Failed to load workflow:", err);
-                  setTabs([
-                    {
-                      id: newId,
-                      tab_name: workflow?.name || "Workflow",
-                      nodes: [],
-                      edges: [],
-                      folderPath: folder
-                    }
-                  ]);
+                  setTabs([{ id: newId, tab_name: workflow?.name || "Workflow", nodes: [], edges: [], folderPath: folder }]);
                 }
               } else {
-                setTabs([
-                  {
-                    id: newId,
-                    tab_name: name || "Flow",
-                    nodes: [],
-                    edges: [],
-                    folderPath: folderPath || ""
-                  }
-                ]);
+                setTabs([{ id: newId, tab_name: name || "Flow", nodes: [], edges: [], folderPath: folderPath || "" }]);
               }
               setActiveTabId(newId);
               setCurrentPage("workflow-editor");
+            }}
+            onOpenScript={(rel, mode) => {
+              setScriptToEdit({ path: rel, mode });
+              setCurrentPage(mode === 'ansible' ? 'ansible_editor' : 'scripts');
+            }}
+          />
+        );
+
+      case "assemblies":
+        return (
+          <AssemblyList
+            onOpenWorkflow={async (workflow, folderPath, name) => {
+              const newId = "flow_" + Date.now();
+              if (workflow && workflow.rel_path) {
+                const folder = workflow.rel_path.split("/").slice(0, -1).join("/");
+                try {
+                  const resp = await fetch(`/api/storage/load_workflow?path=${encodeURIComponent(workflow.rel_path)}`);
+                  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                  const data = await resp.json();
+                  setTabs([{ id: newId, tab_name: data.tab_name || workflow.name || workflow.file_name || "Workflow", nodes: data.nodes || [], edges: data.edges || [], folderPath: folder }]);
+                } catch (err) {
+                  console.error("Failed to load workflow:", err);
+                  setTabs([{ id: newId, tab_name: workflow?.name || "Workflow", nodes: [], edges: [], folderPath: folder }]);
+                }
+              } else {
+                setTabs([{ id: newId, tab_name: name || "Flow", nodes: [], edges: [], folderPath: folderPath || "" }]);
+              }
+              setActiveTabId(newId);
+              setCurrentPage("workflow-editor");
+            }}
+            onOpenScript={(rel, mode) => {
+              setScriptToEdit({ path: rel, mode });
+              setCurrentPage(mode === 'ansible' ? 'ansible_editor' : 'scripts');
             }}
           />
         );
 
       case "scripts":
-        return <ScriptEditor />;
+        return (
+          <ScriptEditor
+            mode="scripts"
+            initialPath={scriptToEdit?.mode === 'scripts' ? (scriptToEdit?.path || '') : ''}
+            onConsumedInitialPath={() => setScriptToEdit(null)}
+            onSaved={() => setCurrentPage('assemblies')}
+          />
+        );
+
+      case "ansible_editor":
+        return (
+          <ScriptEditor
+            mode="ansible"
+            initialPath={scriptToEdit?.mode === 'ansible' ? (scriptToEdit?.path || '') : ''}
+            onConsumedInitialPath={() => setScriptToEdit(null)}
+            onSaved={() => setCurrentPage('assemblies')}
+          />
+        );
 
       case "admin_users":
         return <UserManagement isAdmin={isAdmin} />;

@@ -18,7 +18,8 @@ import {
   Work as JobsIcon,
   Polyline as WorkflowsIcon,
   Code as ScriptIcon,
-  PeopleOutline as CommunityIcon
+  PeopleOutline as CommunityIcon,
+  Apps as AssembliesIcon
 } from "@mui/icons-material";
 import { LocationCity as SitesIcon } from "@mui/icons-material";
 import { ManageAccounts as AdminUsersIcon, Dns as ServerInfoIcon } from "@mui/icons-material";
@@ -197,7 +198,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
 
         {/* Automation */}
         {(() => {
-          const groupActive = ["jobs", "scripts", "workflows", "community"].includes(currentPage);
+          const groupActive = ["jobs", "assemblies", "community"].includes(currentPage);
           return (
         <Accordion
           expanded={expandedNav.automation}
@@ -235,8 +236,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
             <NavItem icon={<JobsIcon fontSize="small" />} label="Scheduled Jobs" pageKey="jobs" />
-            <NavItem icon={<ScriptIcon fontSize="small" />} label="Scripts" pageKey="scripts" />
-            <NavItem icon={<WorkflowsIcon fontSize="small" />} label="Workflows" pageKey="workflows" />
+            <NavItem icon={<AssembliesIcon fontSize="small" />} label="Assemblies" pageKey="assemblies" />
             <NavItem icon={<CommunityIcon fontSize="small" />} label="Community Content" pageKey="community" />
           </AccordionDetails>
         </Accordion>

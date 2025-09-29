@@ -1016,6 +1016,223 @@ def delete_script_file():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ---------------------------------------------
+# Ansible Playbooks Storage API Endpoints
+# ---------------------------------------------
+def _ansible_root() -> str:
+    return os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Ansible_Playbooks")
+    )
+
+
+def _is_valid_ansible_relpath(rel_path: str) -> bool:
+    try:
+        p = (rel_path or "").replace("\\", "/").lstrip("/")
+        # allow any subpath; prevent empty
+        return bool(p)
+    except Exception:
+        return False
+
+
+@app.route("/api/ansible/list", methods=["GET"])
+def list_ansible():
+    """Scan <ProjectRoot>/Assemblies/Ansible_Playbooks for .yml playbooks and return list + folders."""
+    root = _ansible_root()
+    results: List[Dict] = []
+    folders: List[str] = []
+    if not os.path.isdir(root):
+        os.makedirs(root, exist_ok=True)
+        return jsonify({ "root": root, "items": [], "folders": [] }), 200
+    for r, dirs, files in os.walk(root):
+        rel_root = os.path.relpath(r, root)
+        if rel_root != ".":
+            folders.append(rel_root.replace(os.sep, "/"))
+        for fname in files:
+            if not fname.lower().endswith(".yml"):
+                continue
+            full_path = os.path.join(r, fname)
+            rel_path = os.path.relpath(full_path, root).replace(os.sep, "/")
+            try:
+                mtime = os.path.getmtime(full_path)
+            except Exception:
+                mtime = 0.0
+            results.append({
+                "file_name": fname,
+                "rel_path": rel_path,
+                "type": "ansible",
+                "last_edited": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime)),
+                "last_edited_epoch": mtime
+            })
+    results.sort(key=lambda x: x.get("last_edited_epoch", 0.0), reverse=True)
+    return jsonify({ "root": root, "items": results, "folders": folders })
+
+
+@app.route("/api/ansible/load", methods=["GET"])
+def load_ansible():
+    rel_path = request.args.get("path", "")
+    root = _ansible_root()
+    abs_path = os.path.abspath(os.path.join(root, rel_path))
+    if (not abs_path.startswith(root)) or (not _is_valid_ansible_relpath(rel_path)) or (not os.path.isfile(abs_path)):
+        return jsonify({"error": "Playbook not found"}), 404
+    try:
+        with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+        return jsonify({
+            "file_name": os.path.basename(abs_path),
+            "rel_path": os.path.relpath(abs_path, root).replace(os.sep, "/"),
+            "type": "ansible",
+            "content": content
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ansible/save", methods=["POST"])
+def save_ansible():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    name = (data.get("name") or "").strip()
+    content = data.get("content")
+    if content is None:
+        return jsonify({"error": "Missing content"}), 400
+    root = _ansible_root()
+    os.makedirs(root, exist_ok=True)
+    if rel_path:
+        base, ext = os.path.splitext(rel_path)
+        if not ext:
+            rel_path = base + ".yml"
+        abs_path = os.path.abspath(os.path.join(root, rel_path))
+    else:
+        if not name:
+            return jsonify({"error": "Missing name"}), 400
+        ext = os.path.splitext(name)[1]
+        if not ext:
+            name = os.path.splitext(name)[0] + ".yml"
+        abs_path = os.path.abspath(os.path.join(root, os.path.basename(name)))
+    if not abs_path.startswith(root):
+        return jsonify({"error": "Invalid path"}), 400
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    try:
+        with open(abs_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(str(content))
+        rel_new = os.path.relpath(abs_path, root).replace(os.sep, "/")
+        return jsonify({"status": "ok", "rel_path": rel_new})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ansible/rename_file", methods=["POST"])
+def rename_ansible_file():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    new_name = (data.get("new_name") or "").strip()
+    root = _ansible_root()
+    old_abs = os.path.abspath(os.path.join(root, rel_path))
+    if not old_abs.startswith(root) or not os.path.isfile(old_abs):
+        return jsonify({"error": "File not found"}), 404
+    if not new_name:
+        return jsonify({"error": "Invalid new_name"}), 400
+    if not os.path.splitext(new_name)[1]:
+        new_name = os.path.splitext(new_name)[0] + ".yml"
+    new_abs = os.path.join(os.path.dirname(old_abs), os.path.basename(new_name))
+    try:
+        os.rename(old_abs, new_abs)
+        rel_new = os.path.relpath(new_abs, root).replace(os.sep, "/")
+        return jsonify({"status": "ok", "rel_path": rel_new})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ansible/move_file", methods=["POST"])
+def move_ansible_file():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    new_rel = (data.get("new_path") or "").strip()
+    root = _ansible_root()
+    old_abs = os.path.abspath(os.path.join(root, rel_path))
+    new_abs = os.path.abspath(os.path.join(root, new_rel))
+    if not old_abs.startswith(root) or not os.path.isfile(old_abs):
+        return jsonify({"error": "File not found"}), 404
+    if (not new_abs.startswith(root)) or (not _is_valid_ansible_relpath(new_rel)):
+        return jsonify({"error": "Invalid destination"}), 400
+    os.makedirs(os.path.dirname(new_abs), exist_ok=True)
+    try:
+        shutil.move(old_abs, new_abs)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ansible/delete_file", methods=["POST"])
+def delete_ansible_file():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    root = _ansible_root()
+    abs_path = os.path.abspath(os.path.join(root, rel_path))
+    if (not abs_path.startswith(root)) or (not _is_valid_ansible_relpath(rel_path)) or (not os.path.isfile(abs_path)):
+        return jsonify({"error": "File not found"}), 404
+    try:
+        os.remove(abs_path)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ansible/create_folder", methods=["POST"])
+def ansible_create_folder():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    root = _ansible_root()
+    rel_path = (rel_path or "").replace("\\", "/").strip("/")
+    abs_path = os.path.abspath(os.path.join(root, rel_path))
+    if not abs_path.startswith(root):
+        return jsonify({"error": "Invalid path"}), 400
+    try:
+        os.makedirs(abs_path, exist_ok=True)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ansible/delete_folder", methods=["POST"])
+def ansible_delete_folder():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    root = _ansible_root()
+    abs_path = os.path.abspath(os.path.join(root, rel_path))
+    if (not abs_path.startswith(root)) or (not _is_valid_ansible_relpath(rel_path)) or (not os.path.isdir(abs_path)):
+        return jsonify({"error": "Folder not found"}), 404
+    rel_norm = (rel_path or "").replace("\\", "/").strip("/")
+    if rel_norm in ("",):
+        return jsonify({"error": "Cannot delete top-level folder"}), 400
+    try:
+        shutil.rmtree(abs_path)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ansible/rename_folder", methods=["POST"])
+def ansible_rename_folder():
+    data = request.get_json(silent=True) or {}
+    rel_path = (data.get("path") or "").strip()
+    new_name = (data.get("new_name") or "").strip()
+    root = _ansible_root()
+    old_abs = os.path.abspath(os.path.join(root, rel_path))
+    if not old_abs.startswith(root) or not os.path.isdir(old_abs):
+        return jsonify({"error": "Folder not found"}), 404
+    if not new_name:
+        return jsonify({"error": "Invalid new_name"}), 400
+    rel_norm = (rel_path or "").replace("\\", "/").strip("/")
+    if rel_norm in ("",):
+        return jsonify({"error": "Cannot rename top-level folder"}), 400
+    new_abs = os.path.join(os.path.dirname(old_abs), new_name)
+    try:
+        os.rename(old_abs, new_abs)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/scripts/create_folder", methods=["POST"])
 def scripts_create_folder():
