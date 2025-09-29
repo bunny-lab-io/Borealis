@@ -13,16 +13,48 @@ import {
   ConfirmDeleteDialog
 } from "../Dialogs";
 
-// Generic Island wrapper to mimic Device_Details styling
-const Island = ({ title, description, icon, children, sx }) => (
-  <Paper elevation={0} sx={{ p: 1.5, borderRadius: 2, bgcolor: '#1c1c1c', border: '1px solid #2a2a2a', mb: 1.5, ...(sx || {}) }}>
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-      {icon ? <Box sx={{ color: '#58a6ff', display: 'flex', alignItems: 'center' }}>{icon}</Box> : null}
-      <Typography variant="caption" sx={{ color: '#58a6ff', fontWeight: 400, fontSize: '14px', letterSpacing: 0.2 }}>{title}</Typography>
+// Generic Island wrapper with large icon, stacked title/description, and actions on the right
+const Island = ({ title, description, icon, actions, children, sx }) => (
+  <Paper
+    elevation={0}
+    sx={{ p: 1.5, borderRadius: 2, bgcolor: '#1c1c1c', border: '1px solid #2a2a2a', mb: 1.5, ...(sx || {}) }}
+  >
+    <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mb: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+        {icon ? (
+          <Box
+            sx={{
+              color: '#58a6ff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minWidth: 48,
+              mr: 1.0,
+            }}
+          >
+            {icon}
+          </Box>
+        ) : null}
+        <Box>
+          <Typography
+            variant="caption"
+            sx={{ color: '#58a6ff', fontWeight: 400, fontSize: '14px', letterSpacing: 0.2 }}
+          >
+            {title}
+          </Typography>
+          {description ? (
+            <Typography variant="body2" sx={{ color: '#aaa' }}>
+              {description}
+            </Typography>
+          ) : null}
+        </Box>
+      </Box>
+      {actions ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {actions}
+        </Box>
+      ) : null}
     </Box>
-    {description ? (
-      <Typography variant="body2" sx={{ color: '#aaa', mb: 1 }}>{description}</Typography>
-    ) : null}
     {children}
   </Paper>
 );
@@ -275,7 +307,26 @@ function WorkflowsIsland({ onOpenWorkflow }) {
   const rootChildIds = tree[0]?.children?.map((c) => c.id) || [];
 
   return (
-    <Island title="Workflows" description="Node-Based Automation Pipelines" icon={<WorkflowsIcon fontSize="small" /> }>
+    <Island
+      title="Workflows"
+      description="Node-Based Automation Pipelines"
+      icon={<WorkflowsIcon sx={{ fontSize: 40 }} />}
+      actions={
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={() => { setSelectedNode({ id: 'root', path: '', isFolder: true }); setNewWorkflowName(''); setNewWorkflowOpen(true); }}
+          sx={{
+            color: '#58a6ff',
+            borderColor: '#2f81f7',
+            textTransform: 'none',
+            '&:hover': { borderColor: '#58a6ff' }
+          }}
+        >
+          New Workflow
+        </Button>
+      }
+    >
       <Box
         sx={{ p: 1 }}
         onDragOver={(e) => { if (dragNode) e.preventDefault(); }}
@@ -573,12 +624,21 @@ function ScriptsLikeIsland({
   const rootChildIds = tree[0]?.children?.map((c) => c.id) || [];
 
   return (
-    <Island title={title} description={description} icon={title === 'Scripts' ? <ScriptIcon fontSize="small" /> : <BookIcon fontSize="small" /> }>
-      <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
-        <Button size="small" onClick={() => { setNewItemName(""); setNewItemOpen(true); }} sx={{ color: '#58a6ff', textTransform: 'none' }}>
+    <Island
+      title={title}
+      description={description}
+      icon={title === 'Scripts' ? <ScriptIcon sx={{ fontSize: 40 }} /> : <BookIcon sx={{ fontSize: 40 }} />}
+      actions={
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={() => { setNewItemName(''); setNewItemOpen(true); }}
+          sx={{ color: '#58a6ff', borderColor: '#2f81f7', textTransform: 'none', '&:hover': { borderColor: '#58a6ff' } }}
+        >
           {newItemLabel}
         </Button>
-      </Box>
+      }
+    >
       <Box
         sx={{ p: 1 }}
         onDragOver={(e) => { if (dragNode) e.preventDefault(); }}
