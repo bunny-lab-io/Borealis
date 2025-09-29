@@ -527,10 +527,16 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         }
       };
       try {
-        await fetch("/api/storage/save_workflow", {
+        const body = {
+          island: 'workflows',
+          kind: 'file',
+          path: payload.path,
+          content: payload.workflow
+        };
+        await fetch("/api/assembly/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(body)
         });
         setTabs((prev) =>
           prev.map((t) => (t.id === activeTabId ? { ...t, tab_name: name } : t))
@@ -611,7 +617,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
               if (workflow && workflow.rel_path) {
                 const folder = workflow.rel_path.split("/").slice(0, -1).join("/");
                 try {
-                  const resp = await fetch(`/api/storage/load_workflow?path=${encodeURIComponent(workflow.rel_path)}`);
+                  const resp = await fetch(`/api/assembly/load?island=workflows&path=${encodeURIComponent(workflow.rel_path)}`);
                   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                   const data = await resp.json();
                   setTabs([{ id: newId, tab_name: data.tab_name || workflow.name || workflow.file_name || "Workflow", nodes: data.nodes || [], edges: data.edges || [], folderPath: folder }]);
@@ -640,7 +646,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
               if (workflow && workflow.rel_path) {
                 const folder = workflow.rel_path.split("/").slice(0, -1).join("/");
                 try {
-                  const resp = await fetch(`/api/storage/load_workflow?path=${encodeURIComponent(workflow.rel_path)}`);
+                  const resp = await fetch(`/api/assembly/load?island=workflows&path=${encodeURIComponent(workflow.rel_path)}`);
                   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                   const data = await resp.json();
                   setTabs([{ id: newId, tab_name: data.tab_name || workflow.name || workflow.file_name || "Workflow", nodes: data.nodes || [], edges: data.edges || [], folderPath: folder }]);

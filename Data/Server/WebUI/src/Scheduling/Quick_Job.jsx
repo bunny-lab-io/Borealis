@@ -83,10 +83,10 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
 
   const loadTree = useCallback(async () => {
     try {
-      const resp = await fetch("/api/scripts/list");
+      const resp = await fetch("/api/assembly/list?island=scripts");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      const { root, map } = buildTree(data.scripts || [], data.folders || []);
+      const { root, map } = buildTree(data.items || [], data.folders || []);
       setTree(root);
       setNodeMap(map);
     } catch (err) {
@@ -140,10 +140,12 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
     setRunning(true);
     setError("");
     try {
+      // quick_run expects a path relative to Assemblies root with 'Scripts/' prefix
+      const script_path = selectedPath.startsWith('Scripts/') ? selectedPath : `Scripts/${selectedPath}`;
       const resp = await fetch("/api/scripts/quick_run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ script_path: selectedPath, hostnames, run_mode: runAsCurrentUser ? "current_user" : "system" })
+        body: JSON.stringify({ script_path, hostnames, run_mode: runAsCurrentUser ? "current_user" : "system" })
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);

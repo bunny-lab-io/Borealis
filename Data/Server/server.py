@@ -15,7 +15,7 @@ import time
 import os  # To Read Production ReactJS Server Folder
 import json  # For reading workflow JSON files
 import shutil  # For moving workflow files and folders
-from typing import List, Dict
+from typing import List, Dict, Tuple, Optional
 import sqlite3
 import io
 
@@ -505,99 +505,7 @@ def ocr_endpoint():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# New storage management endpoints
-
-@app.route("/api/storage/move_workflow", methods=["POST"])
-def move_workflow():
-    data = request.get_json(silent=True) or {}
-    rel_path = (data.get("path") or "").strip()
-    new_rel = (data.get("new_path") or "").strip()
-    workflows_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Workflows")
-    )
-    old_abs = os.path.abspath(os.path.join(workflows_root, rel_path))
-    new_abs = os.path.abspath(os.path.join(workflows_root, new_rel))
-    if not old_abs.startswith(workflows_root) or not os.path.isfile(old_abs):
-        return jsonify({"error": "Workflow not found"}), 404
-    if not new_abs.startswith(workflows_root):
-        return jsonify({"error": "Invalid destination"}), 400
-    os.makedirs(os.path.dirname(new_abs), exist_ok=True)
-    try:
-        shutil.move(old_abs, new_abs)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/storage/delete_workflow", methods=["POST"])
-def delete_workflow():
-    data = request.get_json(silent=True) or {}
-    rel_path = (data.get("path") or "").strip()
-    workflows_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Workflows")
-    )
-    abs_path = os.path.abspath(os.path.join(workflows_root, rel_path))
-    if not abs_path.startswith(workflows_root) or not os.path.isfile(abs_path):
-        return jsonify({"error": "Workflow not found"}), 404
-    try:
-        os.remove(abs_path)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/storage/delete_folder", methods=["POST"])
-def delete_folder():
-    data = request.get_json(silent=True) or {}
-    rel_path = (data.get("path") or "").strip()
-    workflows_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Workflows")
-    )
-    abs_path = os.path.abspath(os.path.join(workflows_root, rel_path))
-    if not abs_path.startswith(workflows_root) or not os.path.isdir(abs_path):
-        return jsonify({"error": "Folder not found"}), 404
-    try:
-        shutil.rmtree(abs_path)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/storage/create_folder", methods=["POST"])
-def create_folder():
-    data = request.get_json(silent=True) or {}
-    rel_path = (data.get("path") or "").strip()
-    workflows_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Workflows")
-    )
-    abs_path = os.path.abspath(os.path.join(workflows_root, rel_path))
-    if not abs_path.startswith(workflows_root):
-        return jsonify({"error": "Invalid path"}), 400
-    try:
-        os.makedirs(abs_path, exist_ok=True)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/storage/rename_folder", methods=["POST"])
-def rename_folder():
-    data = request.get_json(silent=True) or {}
-    rel_path = (data.get("path") or "").strip()
-    new_name = (data.get("new_name") or "").strip()
-    workflows_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Workflows")
-    )
-    old_abs = os.path.abspath(os.path.join(workflows_root, rel_path))
-    if not old_abs.startswith(workflows_root) or not os.path.isdir(old_abs):
-        return jsonify({"error": "Folder not found"}), 404
-    if not new_name:
-        return jsonify({"error": "Invalid new_name"}), 400
-    new_abs = os.path.join(os.path.dirname(old_abs), new_name)
-    try:
-        os.rename(old_abs, new_abs)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+# unified assembly endpoints supersede prior storage workflow endpoints
 
 # ---------------------------------------------
 # Borealis Storage API Endpoints
@@ -625,153 +533,381 @@ def _extract_tab_name(obj: Dict) -> str:
             return val.strip()
     return ""
 
-@app.route("/api/storage/load_workflows", methods=["GET"])
-def load_workflows():
-    """
-    Scan <ProjectRoot>/Assemblies/Workflows for *.json files and return a table-friendly list.
-    """
-    # Resolve <ProjectRoot>/Assemblies/Workflows relative to this file at <ProjectRoot>/Data/server.py
-    workflows_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Workflows")
+# unified assembly endpoints provide listing instead
+
+
+# superseded by /api/assembly/load
+
+
+# superseded by /api/assembly/create and /api/assembly/edit
+
+
+# superseded by /api/assembly/rename
+
+
+# ---------------------------------------------
+# Unified Assembly API (Workflows, Scripts, Playbooks)
+# ---------------------------------------------
+
+def _assemblies_root() -> str:
+    return os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies")
     )
-    results: List[Dict] = []
-    folders: List[str] = []
-
-    if not os.path.isdir(workflows_root):
-        return jsonify({
-            "root": workflows_root,
-            "workflows": [],
-            "warning": "Workflows directory not found."
-        }), 200
-
-    for root, dirs, files in os.walk(workflows_root):
-        rel_root = os.path.relpath(root, workflows_root)
-        if rel_root != ".":
-            folders.append(rel_root.replace(os.sep, "/"))
-        for fname in files:
-            if not fname.lower().endswith(".json"):
-                continue
-
-            full_path = os.path.join(root, fname)
-            rel_path = os.path.relpath(full_path, workflows_root)
-
-            parts = rel_path.split(os.sep)
-            folder_parts = parts[:-1]
-            breadcrumb_prefix = " > ".join(folder_parts) if folder_parts else ""
-            display_name = f"{breadcrumb_prefix} > {fname}" if breadcrumb_prefix else fname
-
-            obj = _safe_read_json(full_path)
-            tab_name = _extract_tab_name(obj)
-
-            try:
-                mtime = os.path.getmtime(full_path)
-            except Exception:
-                mtime = 0.0
-            last_edited_str = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime))
-
-            results.append({
-                "name": display_name,
-                "breadcrumb_prefix": breadcrumb_prefix,
-                "file_name": fname,
-                "rel_path": rel_path.replace(os.sep, "/"),
-                "tab_name": tab_name,
-                "description": "",
-                "category": "",
-                "last_edited": last_edited_str,
-                "last_edited_epoch": mtime
-            })
-
-    results.sort(key=lambda x: x.get("last_edited_epoch", 0.0), reverse=True)
-
-    return jsonify({
-        "root": workflows_root,
-        "workflows": results,
-        "folders": folders
-    })
 
 
-@app.route("/api/storage/load_workflow", methods=["GET"])
-def load_workflow():
-    """Load a single workflow JSON by its relative path."""
-    rel_path = request.args.get("path", "")
-    workflows_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Workflows")
-    )
-    abs_path = os.path.abspath(os.path.join(workflows_root, rel_path))
-
-    if not abs_path.startswith(workflows_root) or not os.path.isfile(abs_path):
-        return jsonify({"error": "Workflow not found"}), 404
-
-    obj = _safe_read_json(abs_path)
-    return jsonify(obj)
+_ISLAND_DIR_MAP = {
+    # normalized -> directory name
+    "workflows": "Workflows",
+    "workflow": "Workflows",
+    "scripts": "Scripts",
+    "script": "Scripts",
+    "ansible": "Ansible_Playbooks",
+    "ansible_playbooks": "Ansible_Playbooks",
+    "ansible-playbooks": "Ansible_Playbooks",
+    "playbooks": "Ansible_Playbooks",
+}
 
 
-@app.route("/api/storage/save_workflow", methods=["POST"])
-def save_workflow():
+def _normalize_relpath(p: str) -> str:
+    return (p or "").replace("\\", "/").strip("/")
+
+
+def _resolve_island_root(island: str) -> Optional[str]:
+    key = (island or "").strip().lower()
+    sub = _ISLAND_DIR_MAP.get(key)
+    if not sub:
+        return None
+    root = os.path.join(_assemblies_root(), sub)
+    return os.path.abspath(root)
+
+
+def _resolve_assembly_path(island: str, rel_path: str) -> Tuple[str, str, str]:
+    root = _resolve_island_root(island)
+    if not root:
+        raise ValueError("invalid island")
+    rel_norm = _normalize_relpath(rel_path)
+    abs_path = os.path.abspath(os.path.join(root, rel_norm))
+    if not abs_path.startswith(root):
+        raise ValueError("invalid path")
+    return root, abs_path, rel_norm
+
+
+def _default_ext_for_island(island: str, item_type: str = "") -> str:
+    isl = (island or "").lower().strip()
+    if isl in ("workflows", "workflow"):
+        return ".json"
+    if isl in ("ansible", "ansible_playbooks", "ansible-playbooks", "playbooks"):
+        return ".yml"
+    # scripts: use hint or default to .ps1
+    t = (item_type or "").lower().strip()
+    if t == "bash":
+        return ".sh"
+    if t == "batch":
+        return ".bat"
+    if t == "powershell":
+        return ".ps1"
+    return ".ps1"
+
+
+@app.route("/api/assembly/create", methods=["POST"])
+def assembly_create():
     data = request.get_json(silent=True) or {}
-    rel_path = (data.get("path") or "").strip()
-    name = (data.get("name") or "").strip()
-    workflow = data.get("workflow")
-    if not isinstance(workflow, dict):
-        return jsonify({"error": "Invalid payload"}), 400
-
-    workflows_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Workflows")
-    )
-    os.makedirs(workflows_root, exist_ok=True)
-
-    if rel_path:
-        if not rel_path.lower().endswith(".json"):
-            rel_path += ".json"
-        abs_path = os.path.abspath(os.path.join(workflows_root, rel_path))
-    else:
-        if not name:
-            return jsonify({"error": "Invalid payload"}), 400
-        if not name.lower().endswith(".json"):
-            name += ".json"
-        abs_path = os.path.abspath(os.path.join(workflows_root, os.path.basename(name)))
-
-    if not abs_path.startswith(workflows_root):
-        return jsonify({"error": "Invalid path"}), 400
-
-    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    island = (data.get("island") or "").strip()
+    kind = (data.get("kind") or "").strip().lower()  # file | folder
+    path = (data.get("path") or "").strip()
+    content = data.get("content")
+    item_type = (data.get("type") or "").strip().lower()  # optional hint for scripts
     try:
-        with open(abs_path, "w", encoding="utf-8") as fh:
-            json.dump(workflow, fh, indent=2)
-        return jsonify({"status": "ok"})
+        root, abs_path, rel_norm = _resolve_assembly_path(island, path)
+        if not rel_norm:
+            return jsonify({"error": "path required"}), 400
+        if kind == "folder":
+            os.makedirs(abs_path, exist_ok=True)
+            return jsonify({"status": "ok"})
+        elif kind == "file":
+            base, ext = os.path.splitext(abs_path)
+            if not ext:
+                abs_path = base + _default_ext_for_island(island, item_type)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            # Workflows expect JSON; others raw text
+            if (island or "").lower() in ("workflows", "workflow"):
+                obj = content
+                if isinstance(obj, str):
+                    try:
+                        obj = json.loads(obj)
+                    except Exception:
+                        obj = {}
+                if not isinstance(obj, dict):
+                    obj = {}
+                # seed tab_name based on filename when empty
+                base_name = os.path.splitext(os.path.basename(abs_path))[0]
+                if "tab_name" not in obj:
+                    obj["tab_name"] = base_name
+                with open(abs_path, "w", encoding="utf-8") as fh:
+                    json.dump(obj, fh, indent=2)
+            else:
+                with open(abs_path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(str(content or ""))
+            rel_new = os.path.relpath(abs_path, root).replace(os.sep, "/")
+            return jsonify({"status": "ok", "rel_path": rel_new})
+        else:
+            return jsonify({"error": "invalid kind"}), 400
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/storage/rename_workflow", methods=["POST"])
-def rename_workflow():
+@app.route("/api/assembly/edit", methods=["POST"])
+def assembly_edit():
     data = request.get_json(silent=True) or {}
-    rel_path = (data.get("path") or "").strip()
-    new_name = (data.get("new_name") or "").strip()
-    workflows_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Workflows")
-    )
-    old_abs = os.path.abspath(os.path.join(workflows_root, rel_path))
-    if not old_abs.startswith(workflows_root) or not os.path.isfile(old_abs):
-        return jsonify({"error": "Workflow not found"}), 404
-    if not new_name:
-        return jsonify({"error": "Invalid new_name"}), 400
-    if not new_name.lower().endswith(".json"):
-        new_name += ".json"
-    new_abs = os.path.join(os.path.dirname(old_abs), os.path.basename(new_name))
-    base_name = os.path.splitext(os.path.basename(new_abs))[0]
+    island = (data.get("island") or "").strip()
+    path = (data.get("path") or "").strip()
+    content = data.get("content")
     try:
+        root, abs_path, _ = _resolve_assembly_path(island, path)
+        if not os.path.isfile(abs_path):
+            return jsonify({"error": "file not found"}), 404
+        if (island or "").lower() in ("workflows", "workflow"):
+            obj = content
+            if isinstance(obj, str):
+                obj = json.loads(obj)
+            if not isinstance(obj, dict):
+                return jsonify({"error": "invalid content for workflow"}), 400
+            with open(abs_path, "w", encoding="utf-8") as fh:
+                json.dump(obj, fh, indent=2)
+        else:
+            with open(abs_path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(str(content or ""))
+        return jsonify({"status": "ok"})
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/assembly/rename", methods=["POST"])
+def assembly_rename():
+    data = request.get_json(silent=True) or {}
+    island = (data.get("island") or "").strip()
+    kind = (data.get("kind") or "").strip().lower()
+    path = (data.get("path") or "").strip()
+    new_name = (data.get("new_name") or "").strip()
+    item_type = (data.get("type") or "").strip().lower()
+    if not new_name:
+        return jsonify({"error": "new_name required"}), 400
+    try:
+        root, old_abs, _ = _resolve_assembly_path(island, path)
+        if kind == "folder":
+            if not os.path.isdir(old_abs):
+                return jsonify({"error": "folder not found"}), 404
+            new_abs = os.path.join(os.path.dirname(old_abs), new_name)
+        elif kind == "file":
+            if not os.path.isfile(old_abs):
+                return jsonify({"error": "file not found"}), 404
+            base, ext = os.path.splitext(new_name)
+            if not ext:
+                new_name = base + _default_ext_for_island(island, item_type)
+            new_abs = os.path.join(os.path.dirname(old_abs), os.path.basename(new_name))
+        else:
+            return jsonify({"error": "invalid kind"}), 400
+
+        if not os.path.abspath(new_abs).startswith(root):
+            return jsonify({"error": "invalid destination"}), 400
+
         os.rename(old_abs, new_abs)
-        obj = _safe_read_json(new_abs)
-        for k in ["tabName", "tab_name", "name", "title"]:
-            if k in obj:
-                obj[k] = base_name
-        if "tab_name" not in obj:
-            obj["tab_name"] = base_name
-        with open(new_abs, "w", encoding="utf-8") as fh:
-            json.dump(obj, fh, indent=2)
-        rel_new = os.path.relpath(new_abs, workflows_root).replace(os.sep, "/")
+
+        # If a workflow file is renamed, update internal name fields
+        if kind == "file" and (island or "").lower() in ("workflows", "workflow"):
+            try:
+                obj = _safe_read_json(new_abs)
+                base_name = os.path.splitext(os.path.basename(new_abs))[0]
+                for k in ["tabName", "tab_name", "name", "title"]:
+                    if k in obj:
+                        obj[k] = base_name
+                if "tab_name" not in obj:
+                    obj["tab_name"] = base_name
+                with open(new_abs, "w", encoding="utf-8") as fh:
+                    json.dump(obj, fh, indent=2)
+            except Exception:
+                pass
+
+        rel_new = os.path.relpath(new_abs, root).replace(os.sep, "/")
         return jsonify({"status": "ok", "rel_path": rel_new})
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/assembly/move", methods=["POST"])
+def assembly_move():
+    data = request.get_json(silent=True) or {}
+    island = (data.get("island") or "").strip()
+    path = (data.get("path") or "").strip()
+    new_path = (data.get("new_path") or "").strip()
+    kind = (data.get("kind") or "").strip().lower()  # optional; used for existence checks
+    try:
+        root, old_abs, _ = _resolve_assembly_path(island, path)
+        _, new_abs, _ = _resolve_assembly_path(island, new_path)
+        if kind == "folder":
+            if not os.path.isdir(old_abs):
+                return jsonify({"error": "folder not found"}), 404
+        else:
+            if not os.path.isfile(old_abs):
+                return jsonify({"error": "file not found"}), 404
+        os.makedirs(os.path.dirname(new_abs), exist_ok=True)
+        shutil.move(old_abs, new_abs)
+        return jsonify({"status": "ok"})
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/assembly/delete", methods=["POST"])
+def assembly_delete():
+    data = request.get_json(silent=True) or {}
+    island = (data.get("island") or "").strip()
+    kind = (data.get("kind") or "").strip().lower()
+    path = (data.get("path") or "").strip()
+    try:
+        root, abs_path, rel_norm = _resolve_assembly_path(island, path)
+        if not rel_norm:
+            return jsonify({"error": "cannot delete root"}), 400
+        if kind == "folder":
+            if not os.path.isdir(abs_path):
+                return jsonify({"error": "folder not found"}), 404
+            shutil.rmtree(abs_path)
+        elif kind == "file":
+            if not os.path.isfile(abs_path):
+                return jsonify({"error": "file not found"}), 404
+            os.remove(abs_path)
+        else:
+            return jsonify({"error": "invalid kind"}), 400
+        return jsonify({"status": "ok"})
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/assembly/list", methods=["GET"])
+def assembly_list():
+    """List files and folders for a given island (workflows|scripts|ansible)."""
+    island = (request.args.get("island") or "").strip()
+    try:
+        root = _resolve_island_root(island)
+        if not root:
+            return jsonify({"error": "invalid island"}), 400
+        os.makedirs(root, exist_ok=True)
+
+        items: List[Dict] = []
+        folders: List[str] = []
+
+        isl = (island or "").lower()
+        if isl in ("workflows", "workflow"):
+            exts = (".json",)
+            for r, dirs, files in os.walk(root):
+                rel_root = os.path.relpath(r, root)
+                if rel_root != ".":
+                    folders.append(rel_root.replace(os.sep, "/"))
+                for fname in files:
+                    if not fname.lower().endswith(exts):
+                        continue
+                    fp = os.path.join(r, fname)
+                    rel_path = os.path.relpath(fp, root).replace(os.sep, "/")
+                    try:
+                        mtime = os.path.getmtime(fp)
+                    except Exception:
+                        mtime = 0.0
+                    obj = _safe_read_json(fp)
+                    tab = _extract_tab_name(obj)
+                    items.append({
+                        "file_name": fname,
+                        "rel_path": rel_path,
+                        "type": "workflow",
+                        "tab_name": tab,
+                        "last_edited": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime)),
+                        "last_edited_epoch": mtime
+                    })
+        elif isl in ("scripts", "script"):
+            exts = (".ps1", ".bat", ".sh")
+            for r, dirs, files in os.walk(root):
+                rel_root = os.path.relpath(r, root)
+                if rel_root != ".":
+                    folders.append(rel_root.replace(os.sep, "/"))
+                for fname in files:
+                    if not fname.lower().endswith(exts):
+                        continue
+                    fp = os.path.join(r, fname)
+                    rel_path = os.path.relpath(fp, root).replace(os.sep, "/")
+                    try:
+                        mtime = os.path.getmtime(fp)
+                    except Exception:
+                        mtime = 0.0
+                    items.append({
+                        "file_name": fname,
+                        "rel_path": rel_path,
+                        "type": _detect_script_type(fname),
+                        "last_edited": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime)),
+                        "last_edited_epoch": mtime
+                    })
+        else:  # ansible
+            exts = (".yml",)
+            for r, dirs, files in os.walk(root):
+                rel_root = os.path.relpath(r, root)
+                if rel_root != ".":
+                    folders.append(rel_root.replace(os.sep, "/"))
+                for fname in files:
+                    if not fname.lower().endswith(exts):
+                        continue
+                    fp = os.path.join(r, fname)
+                    rel_path = os.path.relpath(fp, root).replace(os.sep, "/")
+                    try:
+                        mtime = os.path.getmtime(fp)
+                    except Exception:
+                        mtime = 0.0
+                    items.append({
+                        "file_name": fname,
+                        "rel_path": rel_path,
+                        "type": "ansible",
+                        "last_edited": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime)),
+                        "last_edited_epoch": mtime
+                    })
+
+        items.sort(key=lambda x: x.get("last_edited_epoch", 0.0), reverse=True)
+        return jsonify({"root": root, "items": items, "folders": folders})
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/assembly/load", methods=["GET"])
+def assembly_load():
+    """Load a file for a given island. Returns workflow JSON for workflows, and text content for others."""
+    island = (request.args.get("island") or "").strip()
+    rel_path = (request.args.get("path") or "").strip()
+    try:
+        root, abs_path, _ = _resolve_assembly_path(island, rel_path)
+        if not os.path.isfile(abs_path):
+            return jsonify({"error": "file not found"}), 404
+        isl = (island or "").lower()
+        if isl in ("workflows", "workflow"):
+            obj = _safe_read_json(abs_path)
+            return jsonify(obj)
+        else:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+            return jsonify({
+                "file_name": os.path.basename(abs_path),
+                "rel_path": os.path.relpath(abs_path, root).replace(os.sep, "/"),
+                "type": ("ansible" if isl.startswith("ansible") else _detect_script_type(abs_path)),
+                "content": content
+            })
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -827,6 +963,9 @@ def _ext_for_type(script_type: str) -> str:
     return ""
 
 
+"""
+Legacy scripts endpoints removed in favor of unified assembly APIs.
+"""
 @app.route("/api/scripts/list", methods=["GET"])
 def list_scripts():
     """Scan <ProjectRoot>/Assemblies/Scripts for script files and return list + folders."""
@@ -878,11 +1017,7 @@ def list_scripts():
 
     results.sort(key=lambda x: x.get("last_edited_epoch", 0.0), reverse=True)
 
-    return jsonify({
-        "root": scripts_root,
-        "scripts": results,
-        "folders": folders
-    })
+    return jsonify({"error": "deprecated; use /api/assembly/list?island=scripts"}), 410
 
 
 @app.route("/api/scripts/load", methods=["GET"])
@@ -895,12 +1030,7 @@ def load_script():
     try:
         with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
             content = fh.read()
-        return jsonify({
-            "file_name": os.path.basename(abs_path),
-            "rel_path": os.path.relpath(abs_path, scripts_root).replace(os.sep, "/"),
-            "type": _detect_script_type(abs_path),
-            "content": content
-        })
+        return jsonify({"error": "deprecated; use /api/assembly/load?island=scripts&path=..."}), 410
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -947,13 +1077,7 @@ def save_script():
         return jsonify({"error": "Invalid path"}), 400
 
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-    try:
-        with open(abs_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(str(content))
-        rel_new = os.path.relpath(abs_path, scripts_root).replace(os.sep, "/")
-        return jsonify({"status": "ok", "rel_path": rel_new})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/create or /api/assembly/edit"}), 410
 
 
 @app.route("/api/scripts/rename_file", methods=["POST"])
@@ -974,12 +1098,7 @@ def rename_script_file():
         if desired_ext:
             new_name = os.path.splitext(new_name)[0] + desired_ext
     new_abs = os.path.join(os.path.dirname(old_abs), os.path.basename(new_name))
-    try:
-        os.rename(old_abs, new_abs)
-        rel_new = os.path.relpath(new_abs, scripts_root).replace(os.sep, "/")
-        return jsonify({"status": "ok", "rel_path": rel_new})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/rename"}), 410
 
 
 @app.route("/api/scripts/move_file", methods=["POST"])
@@ -995,11 +1114,7 @@ def move_script_file():
     if (not new_abs.startswith(scripts_root)) or (not _is_valid_scripts_relpath(new_rel)):
         return jsonify({"error": "Invalid destination"}), 400
     os.makedirs(os.path.dirname(new_abs), exist_ok=True)
-    try:
-        shutil.move(old_abs, new_abs)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/move"}), 410
 
 
 @app.route("/api/scripts/delete_file", methods=["POST"])
@@ -1010,11 +1125,7 @@ def delete_script_file():
     abs_path = os.path.abspath(os.path.join(scripts_root, rel_path))
     if (not abs_path.startswith(scripts_root)) or (not _is_valid_scripts_relpath(rel_path)) or (not os.path.isfile(abs_path)):
         return jsonify({"error": "File not found"}), 404
-    try:
-        os.remove(abs_path)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/delete"}), 410
 
 # ---------------------------------------------
 # Ansible Playbooks Storage API Endpoints
@@ -1063,8 +1174,7 @@ def list_ansible():
                 "last_edited": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime)),
                 "last_edited_epoch": mtime
             })
-    results.sort(key=lambda x: x.get("last_edited_epoch", 0.0), reverse=True)
-    return jsonify({ "root": root, "items": results, "folders": folders })
+    return jsonify({"error": "deprecated; use /api/assembly/list?island=ansible"}), 410
 
 
 @app.route("/api/ansible/load", methods=["GET"])
@@ -1077,12 +1187,7 @@ def load_ansible():
     try:
         with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
             content = fh.read()
-        return jsonify({
-            "file_name": os.path.basename(abs_path),
-            "rel_path": os.path.relpath(abs_path, root).replace(os.sep, "/"),
-            "type": "ansible",
-            "content": content
-        })
+        return jsonify({"error": "deprecated; use /api/assembly/load?island=ansible&path=..."}), 410
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1112,13 +1217,7 @@ def save_ansible():
     if not abs_path.startswith(root):
         return jsonify({"error": "Invalid path"}), 400
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-    try:
-        with open(abs_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(str(content))
-        rel_new = os.path.relpath(abs_path, root).replace(os.sep, "/")
-        return jsonify({"status": "ok", "rel_path": rel_new})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/create or /api/assembly/edit"}), 410
 
 
 @app.route("/api/ansible/rename_file", methods=["POST"])
@@ -1135,12 +1234,7 @@ def rename_ansible_file():
     if not os.path.splitext(new_name)[1]:
         new_name = os.path.splitext(new_name)[0] + ".yml"
     new_abs = os.path.join(os.path.dirname(old_abs), os.path.basename(new_name))
-    try:
-        os.rename(old_abs, new_abs)
-        rel_new = os.path.relpath(new_abs, root).replace(os.sep, "/")
-        return jsonify({"status": "ok", "rel_path": rel_new})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/rename"}), 410
 
 
 @app.route("/api/ansible/move_file", methods=["POST"])
@@ -1156,11 +1250,7 @@ def move_ansible_file():
     if (not new_abs.startswith(root)) or (not _is_valid_ansible_relpath(new_rel)):
         return jsonify({"error": "Invalid destination"}), 400
     os.makedirs(os.path.dirname(new_abs), exist_ok=True)
-    try:
-        shutil.move(old_abs, new_abs)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/move"}), 410
 
 
 @app.route("/api/ansible/delete_file", methods=["POST"])
@@ -1171,11 +1261,7 @@ def delete_ansible_file():
     abs_path = os.path.abspath(os.path.join(root, rel_path))
     if (not abs_path.startswith(root)) or (not _is_valid_ansible_relpath(rel_path)) or (not os.path.isfile(abs_path)):
         return jsonify({"error": "File not found"}), 404
-    try:
-        os.remove(abs_path)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/delete"}), 410
 
 
 @app.route("/api/ansible/create_folder", methods=["POST"])
@@ -1187,11 +1273,7 @@ def ansible_create_folder():
     abs_path = os.path.abspath(os.path.join(root, rel_path))
     if not abs_path.startswith(root):
         return jsonify({"error": "Invalid path"}), 400
-    try:
-        os.makedirs(abs_path, exist_ok=True)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/create"}), 410
 
 
 @app.route("/api/ansible/delete_folder", methods=["POST"])
@@ -1205,11 +1287,7 @@ def ansible_delete_folder():
     rel_norm = (rel_path or "").replace("\\", "/").strip("/")
     if rel_norm in ("",):
         return jsonify({"error": "Cannot delete top-level folder"}), 400
-    try:
-        shutil.rmtree(abs_path)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/delete"}), 410
 
 
 @app.route("/api/ansible/rename_folder", methods=["POST"])
@@ -1227,11 +1305,7 @@ def ansible_rename_folder():
     if rel_norm in ("",):
         return jsonify({"error": "Cannot rename top-level folder"}), 400
     new_abs = os.path.join(os.path.dirname(old_abs), new_name)
-    try:
-        os.rename(old_abs, new_abs)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/rename"}), 410
 
 
 @app.route("/api/scripts/create_folder", methods=["POST"])
@@ -1246,11 +1320,7 @@ def scripts_create_folder():
     abs_path = os.path.abspath(os.path.join(scripts_root, rel_path))
     if not abs_path.startswith(scripts_root):
         return jsonify({"error": "Invalid path"}), 400
-    try:
-        os.makedirs(abs_path, exist_ok=True)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/create"}), 410
 
 
 @app.route("/api/scripts/delete_folder", methods=["POST"])
@@ -1264,11 +1334,7 @@ def scripts_delete_folder():
     rel_norm = (rel_path or "").replace("\\", "/").strip("/")
     if rel_norm in ("Scripts", "Ansible Playbooks"):
         return jsonify({"error": "Cannot delete top-level folder"}), 400
-    try:
-        shutil.rmtree(abs_path)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/delete"}), 410
 
 
 @app.route("/api/scripts/rename_folder", methods=["POST"])
@@ -1286,11 +1352,7 @@ def scripts_rename_folder():
     if rel_norm in ("Scripts", "Ansible Playbooks"):
         return jsonify({"error": "Cannot rename top-level folder"}), 400
     new_abs = os.path.join(os.path.dirname(old_abs), new_name)
-    try:
-        os.rename(old_abs, new_abs)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "deprecated; use /api/assembly/rename"}), 410
 
 # ---------------------------------------------
 # Borealis Agent API Endpoints

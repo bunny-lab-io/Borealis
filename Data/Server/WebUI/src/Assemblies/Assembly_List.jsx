@@ -133,10 +133,10 @@ function WorkflowsIsland({ onOpenWorkflow }) {
     }
     const newPath = target.path ? `${target.path}/${dragNode.fileName}` : dragNode.fileName;
     try {
-      await fetch("/api/storage/move_workflow", {
+      await fetch("/api/assembly/move", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: dragNode.path, new_path: newPath })
+        body: JSON.stringify({ island: 'workflows', kind: 'file', path: dragNode.path, new_path: newPath })
       });
       loadTree();
     } catch (err) {
@@ -147,10 +147,10 @@ function WorkflowsIsland({ onOpenWorkflow }) {
 
   const loadTree = useCallback(async () => {
     try {
-      const resp = await fetch("/api/storage/load_workflows");
+      const resp = await fetch(`/api/assembly/list?island=workflows`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      const { root, map } = buildWorkflowTree(data.workflows || [], data.folders || []);
+      const { root, map } = buildWorkflowTree(data.items || [], data.folders || []);
       setTree(root);
       setNodeMap(map);
     } catch (err) {
@@ -211,10 +211,10 @@ function WorkflowsIsland({ onOpenWorkflow }) {
   const saveRenameWorkflow = async () => {
     if (!selectedNode) return;
     try {
-      await fetch("/api/storage/rename_workflow", {
+      await fetch("/api/assembly/rename", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: selectedNode.path, new_name: renameValue })
+        body: JSON.stringify({ island: 'workflows', kind: 'file', path: selectedNode.path, new_name: renameValue })
       });
       loadTree();
     } catch (err) {
@@ -226,18 +226,18 @@ function WorkflowsIsland({ onOpenWorkflow }) {
   const saveRenameFolder = async () => {
     try {
       if (folderDialogMode === "rename" && selectedNode) {
-        await fetch("/api/storage/rename_folder", {
+        await fetch("/api/assembly/rename", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: selectedNode.path, new_name: renameValue })
+          body: JSON.stringify({ island: 'workflows', kind: 'folder', path: selectedNode.path, new_name: renameValue })
         });
       } else {
         const basePath = selectedNode ? selectedNode.path : "";
         const newPath = basePath ? `${basePath}/${renameValue}` : renameValue;
-        await fetch("/api/storage/create_folder", {
+        await fetch("/api/assembly/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: newPath })
+          body: JSON.stringify({ island: 'workflows', kind: 'folder', path: newPath })
         });
       }
       loadTree();
@@ -258,16 +258,16 @@ function WorkflowsIsland({ onOpenWorkflow }) {
     if (!selectedNode) return;
     try {
       if (selectedNode.isFolder) {
-        await fetch("/api/storage/delete_folder", {
+        await fetch("/api/assembly/delete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: selectedNode.path })
+          body: JSON.stringify({ island: 'workflows', kind: 'folder', path: selectedNode.path })
         });
       } else {
-        await fetch("/api/storage/delete_workflow", {
+        await fetch("/api/assembly/delete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: selectedNode.path })
+          body: JSON.stringify({ island: 'workflows', kind: 'file', path: selectedNode.path })
         });
       }
       loadTree();
@@ -464,12 +464,17 @@ function ScriptsLikeIsland({
   const apiRef = useTreeViewApiRef();
   const [dragNode, setDragNode] = useState(null);
 
+  const island = React.useMemo(() => {
+    const b = String(baseApi || '').toLowerCase();
+    return b.endsWith('/api/ansible') ? 'ansible' : 'scripts';
+  }, [baseApi]);
+
   const loadTree = useCallback(async () => {
     try {
-      const resp = await fetch(`${baseApi}/list`);
+      const resp = await fetch(`/api/assembly/list?island=${encodeURIComponent(island)}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      const { root, map } = buildFileTree(rootLabel, data.scripts || data.items || [], data.folders || []);
+      const { root, map } = buildFileTree(rootLabel, data.items || [], data.folders || []);
       setTree(root);
       setNodeMap(map);
     } catch (err) {
@@ -477,7 +482,7 @@ function ScriptsLikeIsland({
       setTree([]);
       setNodeMap({});
     }
-  }, [baseApi, title, rootLabel]);
+  }, [island, title, rootLabel]);
 
   useEffect(() => { loadTree(); }, [loadTree]);
 
@@ -497,10 +502,10 @@ function ScriptsLikeIsland({
     }
     const newPath = target.path ? `${target.path}/${dragNode.fileName}` : dragNode.fileName;
     try {
-      await fetch(`${baseApi}/move_file`, {
+      await fetch(`/api/assembly/move`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: dragNode.path, new_path: newPath })
+        body: JSON.stringify({ island, kind: 'file', path: dragNode.path, new_path: newPath })
       });
       loadTree();
     } catch (err) {
@@ -519,10 +524,13 @@ function ScriptsLikeIsland({
 
   const saveRenameFile = async () => {
     try {
-      const res = await fetch(`${baseApi}/rename_file`, {
+      const payload = { island, kind: 'file', path: selectedNode.path, new_name: renameValue };
+      // preserve extension for scripts when no extension provided
+      if (selectedNode?.meta?.type) payload.type = selectedNode.meta.type;
+      const res = await fetch(`/api/assembly/rename`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: selectedNode.path, new_name: renameValue })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
@@ -537,18 +545,18 @@ function ScriptsLikeIsland({
   const saveRenameFolder = async () => {
     try {
       if (folderDialogMode === "rename" && selectedNode) {
-        await fetch(`${baseApi}/rename_folder`, {
+        await fetch(`/api/assembly/rename`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: selectedNode.path, new_name: renameValue })
+          body: JSON.stringify({ island, kind: 'folder', path: selectedNode.path, new_name: renameValue })
         });
       } else {
         const basePath = selectedNode ? selectedNode.path : "";
         const newPath = basePath ? `${basePath}/${renameValue}` : renameValue;
-        await fetch(`${baseApi}/create_folder`, {
+        await fetch(`/api/assembly/create`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: newPath })
+          body: JSON.stringify({ island, kind: 'folder', path: newPath })
         });
       }
       setRenameFolderOpen(false);
@@ -563,16 +571,16 @@ function ScriptsLikeIsland({
     if (!selectedNode) return;
     try {
       if (selectedNode.isFolder) {
-        await fetch(`${baseApi}/delete_folder`, {
+        await fetch(`/api/assembly/delete`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: selectedNode.path })
+          body: JSON.stringify({ island, kind: 'folder', path: selectedNode.path })
         });
       } else {
-        await fetch(`${baseApi}/delete_file`, {
+        await fetch(`/api/assembly/delete`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: selectedNode.path })
+          body: JSON.stringify({ island, kind: 'file', path: selectedNode.path })
         });
       }
       setDeleteOpen(false);
@@ -593,11 +601,11 @@ function ScriptsLikeIsland({
         else name += '.ps1';
       }
       const newPath = folder ? `${folder}/${name}` : name;
-      // create empty file by saving blank content
-      const res = await fetch(`${baseApi}/save`, {
+      // create empty file via unified API
+      const res = await fetch(`/api/assembly/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newPath, content: "" })
+        body: JSON.stringify({ island, kind: 'file', path: newPath, content: "", type: island === 'ansible' ? 'ansible' : 'powershell' })
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));

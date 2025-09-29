@@ -87,7 +87,6 @@ function NewItemDialog({ open, name, type, typeOptions, onChangeName, onChangeTy
 
 export default function ScriptEditor({ mode = "scripts", initialPath = "", onConsumedInitialPath, onSaved }) {
   const isAnsible = mode === "ansible";
-  const baseApi = isAnsible ? "/api/ansible" : "/api/scripts";
   const TYPE_OPTIONS = useMemo(() => (isAnsible ? TYPE_OPTIONS_ALL.filter(o => o.key === 'ansible') : TYPE_OPTIONS_ALL.filter(o => o.key !== 'ansible')), [isAnsible]);
 
   const [currentPath, setCurrentPath] = useState("");
@@ -128,18 +127,36 @@ export default function ScriptEditor({ mode = "scripts", initialPath = "", onCon
       setNewOpen(true);
       return;
     }
-    const normalizedName = currentPath ? undefined : ensureExt(fileName, type);
-    const payload = { path: currentPath || undefined, name: normalizedName, content: code, type };
+    const island = isAnsible ? 'ansible' : 'scripts';
+    const normalizedName = currentPath ? currentPath : ensureExt(fileName, type);
     try {
-      const resp = await fetch(`${baseApi}/save`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
-      if (data.rel_path) {
-        setCurrentPath(data.rel_path);
-        const fname = data.rel_path.split('/').pop();
-        setFileName(fname);
-        setType(typeFromFilename(fname));
+      // If we already have a path, edit; otherwise create
+      if (currentPath) {
+        const resp = await fetch(`/api/assembly/edit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ island, path: currentPath, content: code })
+        });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          throw new Error(data?.error || `HTTP ${resp.status}`);
+        }
         onSaved && onSaved();
+      } else {
+        const resp = await fetch(`/api/assembly/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ island, kind: 'file', path: normalizedName, content: code, type })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+        if (data.rel_path) {
+          setCurrentPath(data.rel_path);
+          const fname = data.rel_path.split('/').pop();
+          setFileName(fname);
+          setType(typeFromFilename(fname));
+          onSaved && onSaved();
+        }
       }
     } catch (err) {
       console.error("Failed to save:", err);
@@ -148,8 +165,9 @@ export default function ScriptEditor({ mode = "scripts", initialPath = "", onCon
 
   const saveRenameFile = async () => {
     try {
+      const island = isAnsible ? 'ansible' : 'scripts';
       const finalName = ensureExt(renameValue, type);
-      const res = await fetch(`${baseApi}/rename_file`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: currentPath, new_name: finalName, type }) });
+      const res = await fetch(`/api/assembly/rename`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ island, kind: 'file', path: currentPath, new_name: finalName, type }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       setCurrentPath(data.rel_path || currentPath);
@@ -201,4 +219,3 @@ export default function ScriptEditor({ mode = "scripts", initialPath = "", onCon
     </Box>
   );
 }
-

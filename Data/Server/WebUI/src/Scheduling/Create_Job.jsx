@@ -366,19 +366,19 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
     setAddCompOpen(true);
     try {
       // scripts
-      const sResp = await fetch("/api/scripts/list");
+      const sResp = await fetch("/api/assembly/list?island=scripts");
       if (sResp.ok) {
         const sData = await sResp.json();
-        const { root, map } = buildScriptTree(sData.scripts || [], sData.folders || []);
+        const { root, map } = buildScriptTree(sData.items || [], sData.folders || []);
         setScriptTree(root); setScriptMap(map);
       } else { setScriptTree([]); setScriptMap({}); }
     } catch { setScriptTree([]); setScriptMap({}); }
     try {
       // workflows
-      const wResp = await fetch("/api/storage/load_workflows");
+      const wResp = await fetch("/api/assembly/list?island=workflows");
       if (wResp.ok) {
         const wData = await wResp.json();
-        const { root, map } = buildWorkflowTree(wData.workflows || [], wData.folders || []);
+        const { root, map } = buildWorkflowTree(wData.items || [], wData.folders || []);
         setWorkflowTree(root); setWorkflowMap(map);
       } else { setWorkflowTree([]); setWorkflowMap({}); }
     } catch { setWorkflowTree([]); setWorkflowMap({}); }
@@ -391,7 +391,8 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
     if (compTab === "scripts" && node.script) {
       setComponents((prev) => [
         ...prev,
-        { type: "script", path: node.path, name: node.fileName || node.label, description: node.path }
+        // Store path relative to Assemblies root with 'Scripts/' prefix for scheduler compatibility
+        { type: "script", path: (node.path.startsWith('Scripts/') ? node.path : `Scripts/${node.path}`), name: node.fileName || node.label, description: node.path }
       ]);
       setSelectedNodeId("");
       return true;
