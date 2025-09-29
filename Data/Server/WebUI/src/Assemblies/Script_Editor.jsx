@@ -101,11 +101,13 @@ export default function ScriptEditor({ mode = "scripts", initialPath = "", onCon
   const [newType, setNewType] = useState(isAnsible ? "ansible" : "powershell");
   const [deleteOpen, setDeleteOpen] = useState(false);
 
+  const island = useMemo(() => (isAnsible ? 'ansible' : 'scripts'), [isAnsible]);
+
   useEffect(() => {
     (async () => {
       if (!initialPath) return;
       try {
-        const resp = await fetch(`${baseApi}/load?path=${encodeURIComponent(initialPath)}`);
+        const resp = await fetch(`/api/assembly/load?island=${encodeURIComponent(island)}&path=${encodeURIComponent(initialPath)}`);
         if (resp.ok) {
           const data = await resp.json();
           setCurrentPath(data.rel_path || initialPath);
@@ -118,7 +120,7 @@ export default function ScriptEditor({ mode = "scripts", initialPath = "", onCon
       if (onConsumedInitialPath) onConsumedInitialPath();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialPath, baseApi]);
+  }, [initialPath, island]);
 
   const saveFile = async () => {
     if (!currentPath && !fileName) {
