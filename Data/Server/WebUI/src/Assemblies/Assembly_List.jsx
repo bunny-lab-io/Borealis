@@ -651,14 +651,15 @@ function ScriptsLikeIsland({
 
 export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
   return (
-    <Paper sx={{ m: 2, p: 2, bgcolor: '#1e1e1e' }} elevation={2}>
-      <Box sx={{ mb: 2 }}>
-        <Typography variant="h5" sx={{ color: '#e6edf3', mb: 0.5 }}>Assemblies</Typography>
+    <Paper sx={{ m: 2, p: 0, bgcolor: '#1e1e1e' }} elevation={2}>
+      <Box sx={{ p: 2, pb: 1 }}>
+        <Typography variant="h6" sx={{ color: '#58a6ff', mb: 0 }}>Assemblies</Typography>
         <Typography variant="body2" sx={{ color: '#aaa' }}>Collections of components used to perform various actions upon targeted devices.</Typography>
       </Box>
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.2fr 1fr 1fr' }, gap: 2 }}>
-        {/* Left: Workflows */}
-        <WorkflowsIsland onOpenWorkflow={onOpenWorkflow} />
+      <Box sx={{ px: 2, pb: 2 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.2fr 1fr 1fr' }, gap: 2 }}>
+          {/* Left: Workflows */}
+          <WorkflowsIsland onOpenWorkflow={onOpenWorkflow} />
 
         {/* Middle: Scripts */}
         <ScriptsLikeIsland
@@ -679,6 +680,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
           newItemLabel="New Playbook"
           onEdit={(rel) => onOpenScript && onOpenScript(rel, 'ansible')}
         />
+        </Box>
       </Box>
     </Paper>
   );
