@@ -826,6 +826,24 @@ export default function DeviceDetails({ device, onBack }) {
               </TableCell>
               <TableCell>
                 <Box sx={{ display: "flex", gap: 1 }}>
+                  {(String(r.script_type || '').toLowerCase() === 'ansible' && String(r.status||'') === 'Running') ? (
+                    <Button size="small" sx={{ color: "#ff6666", textTransform: "none", minWidth: 0, p: 0 }}
+                      onClick={async () => {
+                        try {
+                          const resp = await fetch(`/api/ansible/run_for_activity/${encodeURIComponent(r.id)}`);
+                          const data = await resp.json();
+                          if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+                          const run_id = data.run_id;
+                          if (run_id) {
+                            try { const s = window.BorealisSocket; s && s.emit('ansible_playbook_cancel', { run_id }); } catch {}
+                          } else {
+                            alert('Unable to locate run id for this playbook run.');
+                          }
+                        } catch (e) {
+                          alert(String(e.message || e));
+                        }
+                      }}>Cancel</Button>
+                  ) : null}
                   {r.has_stdout ? (
                     <Button size="small" onClick={() => handleViewOutput(r, 'stdout')} sx={{ color: "#58a6ff", textTransform: "none", minWidth: 0, p: 0 }}>
                       StdOut

@@ -2566,7 +2566,34 @@ def ansible_quick_run():
 
         results = []
         for host in hostnames:
-            run_id = None
+            # Create activity_history row so UI shows running state and can receive recap mirror
+            job_id = None
+            try:
+                conn2 = _db_conn()
+                cur2 = conn2.cursor()
+                now_ts = int(time.time())
+                cur2.execute(
+                    """
+                    INSERT INTO activity_history(hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr)
+                    VALUES(?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        str(host),
+                        rel_path.replace(os.sep, "/"),
+                        os.path.basename(abs_path),
+                        "ansible",
+                        now_ts,
+                        "Running",
+                        "",
+                        "",
+                    ),
+                )
+                job_id = cur2.lastrowid
+                conn2.commit()
+                conn2.close()
+            except Exception:
+                job_id = None
+
             try:
                 import uuid as _uuid
                 run_id = _uuid.uuid4().hex
@@ -2578,12 +2605,13 @@ def ansible_quick_run():
                 "playbook_name": os.path.basename(abs_path),
                 "playbook_content": content,
                 "connection": "local",
+                "activity_job_id": job_id,
             }
             try:
                 socketio.emit("ansible_playbook_run", payload)
             except Exception:
                 pass
-            results.append({"hostname": host, "run_id": run_id, "status": "Queued"})
+            results.append({"hostname": host, "run_id": run_id, "status": "Queued", "activity_job_id": job_id})
         return jsonify({"results": results})
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
@@ -2839,6 +2867,26 @@ def api_ansible_recap_report():
         except Exception:
             pass
 
+        # Reflect into scheduled_job_runs if linked
+        try:
+            if scheduled_job_id and scheduled_run_id:
+                st = (status or '').strip()
+                ts_now = now
+                # If Running, update status/started_ts if needed; otherwise mark finished + status
+                if st.lower() == 'running':
+                    cur.execute(
+                        "UPDATE scheduled_job_runs SET status='Running', updated_at=?, started_ts=COALESCE(started_ts, ?) WHERE id=? AND job_id=?",
+                        (ts_now, started_ts or ts_now, int(scheduled_run_id), int(scheduled_job_id))
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE scheduled_job_runs SET status=?, finished_ts=COALESCE(?, finished_ts, ?), updated_at=? WHERE id=? AND job_id=?",
+                        (st or 'Success', finished_ts, ts_now, ts_now, int(scheduled_run_id), int(scheduled_job_id))
+                    )
+                conn.commit()
+        except Exception:
+            pass
+
         # Return the latest row
         cur.execute(
             "SELECT id, run_id, hostname, agent_id, playbook_path, playbook_name, scheduled_job_id, scheduled_run_id, activity_job_id, status, recap_text, recap_json, started_ts, finished_ts, created_at, updated_at FROM ansible_play_recaps WHERE id=?",
@@ -2976,6 +3024,31 @@ def api_ansible_recap_get(recap_id: int):
             "created_at": row[14],
             "updated_at": row[15],
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ansible/run_for_activity/<int:activity_id>", methods=["GET"])
+def api_ansible_run_for_activity(activity_id: int):
+    """Return the latest run_id/status for a recap row linked to an activity_history id."""
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT run_id, status
+            FROM ansible_play_recaps
+            WHERE activity_job_id = ?
+            ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+            LIMIT 1
+            """,
+            (activity_id,)
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify({"run_id": row[0], "status": row[1] or ""})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

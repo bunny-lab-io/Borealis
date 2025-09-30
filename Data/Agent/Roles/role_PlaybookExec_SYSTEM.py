@@ -20,12 +20,27 @@ def _project_root():
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 
+def _agent_root():
+    # Resolve Agent root at runtime.
+    # Typical runtime: <ProjectRoot>/Agent/Borealis/Roles/<this_file>
+    try:
+        here = os.path.abspath(os.path.dirname(__file__))
+        # Agent/Borealis/Roles -> Agent
+        return os.path.abspath(os.path.join(here, '..', '..', '..'))
+    except Exception:
+        return os.path.abspath(os.path.join(_project_root(), 'Agent'))
+
+
 def _scripts_bin():
-    # Return the venv Scripts (Windows) or bin (POSIX) path
-    base = os.path.join(_project_root(), 'Agent', 'Scripts')
-    if os.path.isdir(base):
-        return base
-    # Fallback to PATH
+    # Return the venv Scripts (Windows) or bin (POSIX) path adjacent to Borealis
+    agent_root = _agent_root()
+    candidates = [
+        os.path.join(agent_root, 'Scripts'),  # Windows venv
+        os.path.join(agent_root, 'bin'),      # POSIX venv
+    ]
+    for base in candidates:
+        if os.path.isdir(base):
+            return base
     return None
 
 
@@ -38,11 +53,49 @@ def _ansible_playbook_cmd():
             return cand
     return exe
 
+def _ansible_galaxy_cmd():
+    exe = 'ansible-galaxy.exe' if os.name == 'nt' else 'ansible-galaxy'
+    sdir = _scripts_bin()
+    if sdir:
+        cand = os.path.join(sdir, exe)
+        if os.path.isfile(cand):
+            return cand
+    return exe
+
+def _collections_dir():
+    base = os.path.join(_project_root(), 'Agent', 'Borealis', 'AnsibleCollections')
+    try:
+        os.makedirs(base, exist_ok=True)
+    except Exception:
+        pass
+    return base
+
+def _venv_python():
+    try:
+        sdir = _scripts_bin()
+        if not sdir:
+            return None
+        cand = os.path.join(sdir, 'python.exe' if os.name == 'nt' else 'python3')
+        return cand if os.path.isfile(cand) else None
+    except Exception:
+        return None
+
 
 class Role:
     def __init__(self, ctx):
         self.ctx = ctx
         self._runs = {}  # run_id -> { proc, task, cancel }
+
+    def _log_local(self, msg: str, error: bool = False):
+        try:
+            base = os.path.join(_project_root(), 'Logs', 'Agent')
+            os.makedirs(base, exist_ok=True)
+            fn = 'agent.error.log' if error else 'agent.log'
+            ts = time.strftime('%Y-%m-%d %H:%M:%S')
+            with open(os.path.join(base, fn), 'a', encoding='utf-8') as fh:
+                fh.write(f'[{ts}] [PlaybookExec] {msg}\n')
+        except Exception:
+            pass
 
     def _server_base(self) -> str:
         try:
@@ -62,8 +115,9 @@ class Role:
                 async with sess.post(url, json=payload) as resp:
                     # best-effort; ignore body
                     await resp.read()
+            self._log_local(f"Posted recap: run_id={payload.get('run_id')} status={payload.get('status')} bytes={len((payload.get('recap_text') or '').encode('utf-8'))}")
         except Exception:
-            pass
+            self._log_local(f"Failed to post recap for run_id={payload.get('run_id')}", error=True)
 
     async def _run_playbook_runner(self, run_id: str, playbook_content: str, playbook_name: str = '', activity_job_id=None, connection: str = 'local'):
         try:
@@ -205,7 +259,16 @@ class Role:
         conn = (connection or 'local').strip().lower()
         if conn not in ('local', 'winrm', 'psrp'):
             conn = 'local'
+        # Best-effort: if playbook uses ansible.windows, prefer psrp when connection left as local
+        if conn == 'local':
+            try:
+                if 'ansible.windows' in (playbook_content or ''):
+                    conn = 'psrp'
+            except Exception:
+                pass
+
         cmd = [_ansible_playbook_cmd(), path, '-i', 'localhost,', '-c', conn]
+        self._log_local(f"Launching ansible-playbook: conn={conn} cmd={' '.join(cmd)}")
         # Ensure clean, plain output and correct interpreter for localhost
         env = os.environ.copy()
         env.setdefault('ANSIBLE_FORCE_COLOR', '0')
@@ -214,6 +277,11 @@ class Role:
         env.setdefault('ANSIBLE_STDOUT_CALLBACK', 'default')
         # Help Ansible pick the correct python for localhost
         env.setdefault('ANSIBLE_LOCALHOST_WARNING', '0')
+        # Ensure collections path is discoverable
+        env.setdefault('ANSIBLE_COLLECTIONS_PATHS', _collections_dir())
+        vp = _venv_python()
+        if vp:
+            env.setdefault('ANSIBLE_PYTHON_INTERPRETER', vp)
 
         creationflags = 0
         if os.name == 'nt':
@@ -222,6 +290,17 @@ class Role:
 
         proc = None
         try:
+            # Best-effort collection install for windows modules
+            try:
+                if 'ansible.windows' in (playbook_content or ''):
+                    galaxy = _ansible_galaxy_cmd()
+                    coll_dir = _collections_dir()
+                    creation = 0x08000000 if os.name == 'nt' else 0
+                    self._log_local("Ensuring ansible.windows collection is installed for this agent")
+                    subprocess.run([galaxy, 'collection', 'install', 'ansible.windows', '-p', coll_dir], timeout=120, creationflags=creation)
+            except Exception:
+                self._log_local("Collection install failed (continuing)")
+
             # Prefer ansible-runner when available and enabled
             try:
                 if os.environ.get('BOREALIS_USE_ANSIBLE_RUNNER', '0').lower() not in ('0', 'false', 'no'):
@@ -240,6 +319,7 @@ class Role:
                 creationflags=creationflags,
             )
         except Exception as e:
+            self._log_local(f"Failed to launch ansible-playbook: {e}", error=True)
             await self._post_recap({
                 'run_id': run_id,
                 'hostname': hostname,
@@ -310,6 +390,7 @@ class Role:
                 pass
 
         rc = proc.returncode if proc else -1
+        self._log_local(f"ansible-playbook finished rc={rc}")
         status = 'Success' if rc == 0 else ('Cancelled' if self._runs.get(run_id, {}).get('cancel') else 'Failed')
 
         # Final recap text
