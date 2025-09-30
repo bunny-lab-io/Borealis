@@ -109,6 +109,54 @@ Windows is the reference environment today. `Borealis.ps1` owns the full deploym
 Security and authentication are intentionally deferred. There is currently no agent/server handshake, credential model, or ACL on powerful endpoints, so deployments must remain in controlled environments. A future milestone will introduce mutual registration, scoped API tokens, and hardened remote execution surfaces; until then, prioritize resilience and modularity while acknowledging the risk.
 
 
+## Ansible Support (Unfinished — Do Not Use)
+
+Important: The Ansible integration is not production‑ready. Do not rely on it for jobs, quick jobs, or troubleshooting. The current implementation is a work‑in‑progress and will change.
+
+- Status
+  - Agent and server contain early scaffolding for running playbooks and posting recap‑style output, but behavior is not reliable across Windows hosts.
+  - Expect playbooks to stall, fail silently, or never deliver recaps/cancel events. Cancellation controls and live output are not guaranteed to function.
+  - Packaging of Ansible dependencies and Windows collections is incomplete. Connection modes (local/PSRP/WinRM) are not fully exposed or managed.
+
+- Known blockers (Windows)
+  - ansible.windows.* modules require remoting (PSRP/WinRM) and typically cannot run with `connection: local` on the controller.
+  - The SYSTEM service context is a poor fit for loopback remoting without explicit credentials/policy; this leads to no‑ops and “forever running” jobs.
+  - Collection availability (e.g., `ansible.windows`) and interpreter/paths vary and are not yet normalized across agent installs.
+
+- Near‑term guidance
+  - Assume all Ansible and playbook‑related features are disabled for operational purposes.
+  - Do not file bug reports for Ansible behavior; it is intentionally unfinished and unsupported at this time.
+
+- Future direction (not started)
+  - Database‑fed credential management (per device/site/global), stored securely and surfaced to playbook runs.
+  - First‑class selection of connection types (local | PSRP | WinRM) from the UI and scheduler, with per‑run credential binding.
+  - Reliable live output and cancel semantics; hardened recap ingestion and history.
+  - Verified packaging of required Ansible components and Windows collections inside the agent venv.
+
+
+## Current State Highlights
+
+This section summarizes what is considered usable vs. experimental today.
+
+- Stable/Usable
+  - Agent heartbeat, reconnect logic (ongoing hardening), and device registration.
+  - Device inventory collection (SYSTEM role) with periodic updates.
+  - Script execution roles:
+    - Current user (interactive PowerShell)
+    - SYSTEM (PowerShell via ephemeral Scheduled Tasks)
+  - Screenshot capture role with Socket.IO updates.
+  - Unified SQLite database (`database.db`) for users, sites, device details, scheduled jobs, and activity history.
+  - Web UI for device list/details, scheduling basics, assemblies (scripts/workflows) management.
+
+- Experimental/WIP
+  - Scheduling matrix beyond basic intervals and immediate/once semantics.
+  - Long‑running agent stability under multi‑day workloads (memory/keepalive are being improved).
+  - Any Ansible‑related feature (see above) — not supported.
+
+- Terminology
+  - “Assemblies” consolidates Scripts/Workflows (and future Playbooks) in the UI. Treat Playbooks as non‑functional until Ansible support matures.
+
+
 
 
 
