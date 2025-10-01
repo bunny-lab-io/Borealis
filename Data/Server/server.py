@@ -5,6 +5,7 @@ import eventlet
 eventlet.monkey_patch()
 
 import requests
+import base64
 from flask import Flask, request, jsonify, Response, send_from_directory, make_response, session
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
@@ -18,6 +19,12 @@ import shutil  # For moving workflow files and folders
 from typing import List, Dict, Tuple, Optional
 import sqlite3
 import io
+from datetime import datetime, timezone
+
+try:
+    from cryptography.fernet import Fernet  # type: ignore
+except Exception:
+    Fernet = None  # optional; we will fall back to reversible base64 if missing
 
 # Borealis Python API Endpoints
 from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
@@ -1368,6 +1375,87 @@ latest_images: Dict[str, Dict] = {}
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "database.db"))
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
+# --- Simple at-rest secret handling for service account passwords ---
+_SERVER_SECRET_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), 'server_secret.key'))
+
+
+def _load_or_create_secret_key() -> Optional[bytes]:
+    try:
+        # Prefer explicit env var (base64-encoded)
+        key_env = os.environ.get('BOREALIS_SECRET_KEY')
+        if key_env:
+            try:
+                return base64.urlsafe_b64decode(key_env.encode('utf-8'))
+            except Exception:
+                # If env holds raw Fernet key already
+                try:
+                    b = key_env.encode('utf-8')
+                    # Basic format check for Fernet keys (urlsafe base64 32 bytes -> 44 chars)
+                    if len(b) in (32, 44):
+                        return b
+                except Exception:
+                    pass
+        # Else manage a local key file alongside server.py
+        if os.path.isfile(_SERVER_SECRET_PATH):
+            with open(_SERVER_SECRET_PATH, 'rb') as fh:
+                return fh.read().strip()
+        # Create when cryptography is available
+        if Fernet is not None:
+            k = Fernet.generate_key()
+            try:
+                with open(_SERVER_SECRET_PATH, 'wb') as fh:
+                    fh.write(k)
+            except Exception:
+                pass
+            return k
+    except Exception:
+        pass
+    return None
+
+
+_SECRET_KEY_BYTES = _load_or_create_secret_key()
+
+
+def _encrypt_secret(plaintext: str) -> bytes:
+    try:
+        if Fernet is not None and _SECRET_KEY_BYTES:
+            f = Fernet(_SECRET_KEY_BYTES)
+            return f.encrypt((plaintext or '').encode('utf-8'))
+    except Exception:
+        pass
+    # Fallback: reversible base64 (not secure). Kept to avoid blocking dev if crypto missing.
+    try:
+        return base64.b64encode((plaintext or '').encode('utf-8'))
+    except Exception:
+        return (plaintext or '').encode('utf-8')
+
+
+def _decrypt_secret(blob: Optional[bytes]) -> str:
+    if blob is None:
+        return ''
+    try:
+        data = bytes(blob)
+    except Exception:
+        try:
+            data = (blob or b'')  # type: ignore
+        except Exception:
+            data = b''
+    # Try Fernet first
+    try:
+        if Fernet is not None and _SECRET_KEY_BYTES:
+            f = Fernet(_SECRET_KEY_BYTES)
+            return f.decrypt(data).decode('utf-8', errors='replace')
+    except Exception:
+        pass
+    # Fall back to base64 decode
+    try:
+        return base64.b64decode(data).decode('utf-8', errors='replace')
+    except Exception:
+        try:
+            return data.decode('utf-8', errors='replace')
+        except Exception:
+            return ''
+
 
 def init_db():
     """Initialize all required tables in the unified database."""
@@ -1487,6 +1575,21 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ansible_recaps_status ON ansible_play_recaps(status)")
     except Exception:
         pass
+
+    # Per-agent local service account credentials for Ansible WinRM loopback
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_service_account (
+          agent_id            TEXT PRIMARY KEY,
+          username            TEXT NOT NULL,
+          password_hash       BLOB,
+          password_encrypted  BLOB NOT NULL,
+          last_rotated_utc    TEXT NOT NULL,
+          version             INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    conn.commit()
 
     conn.commit()
     # Scheduled jobs table
@@ -2604,7 +2707,7 @@ def ansible_quick_run():
                 "target_hostname": str(host),
                 "playbook_name": os.path.basename(abs_path),
                 "playbook_content": content,
-                "connection": "local",
+                "connection": "winrm",
                 "activity_job_id": job_id,
             }
             try:
@@ -2717,6 +2820,129 @@ def _json_dump_safe(obj) -> str:
         return json.dumps(obj or {})
     except Exception:
         return json.dumps({})
+
+
+# ---------------------------------------------
+# Agent Service Account (WinRM localhost) APIs
+# ---------------------------------------------
+def _now_iso_utc() -> str:
+    try:
+        return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    except Exception:
+        return datetime.utcnow().isoformat() + 'Z'
+
+
+def _gen_strong_password(length: int = 24) -> str:
+    import secrets, string as _s
+    length = max(12, int(length or 24))
+    # ensure at least one from each class
+    classes = [
+        _s.ascii_lowercase,
+        _s.ascii_uppercase,
+        _s.digits,
+        '!@#$%^&*()-_=+[]{}<>.?',
+    ]
+    chars = ''.join(classes)
+    pw = [secrets.choice(c) for c in classes]
+    pw += [secrets.choice(chars) for _ in range(length - len(pw))]
+    secrets.SystemRandom().shuffle(pw)
+    return ''.join(pw)
+
+
+def _service_acct_get(conn, agent_id: str):
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT agent_id, username, password_encrypted, last_rotated_utc, version FROM agent_service_account WHERE agent_id=?",
+        (agent_id,)
+    )
+    return cur.fetchone()
+
+
+def _service_acct_set(conn, agent_id: str, username: str, plaintext_password: str):
+    enc = _encrypt_secret(plaintext_password)
+    now_utc = _now_iso_utc()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO agent_service_account(agent_id, username, password_hash, password_encrypted, last_rotated_utc, version)
+        VALUES(?,?,?,?,?,1)
+        ON CONFLICT(agent_id) DO UPDATE SET
+            username=excluded.username,
+            password_hash=excluded.password_hash,
+            password_encrypted=excluded.password_encrypted,
+            last_rotated_utc=excluded.last_rotated_utc
+        """,
+        (agent_id, username, None, enc, now_utc)
+    )
+    conn.commit()
+    return {
+        'username': username,
+        'password': plaintext_password,
+        'last_rotated_utc': now_utc,
+    }
+
+
+@app.route('/api/agent/checkin', methods=['POST'])
+def api_agent_checkin():
+    payload = request.get_json(silent=True) or {}
+    agent_id = (payload.get('agent_id') or '').strip()
+    if not agent_id:
+        return jsonify({'error': 'agent_id required'}), 400
+    username = (payload.get('username') or '.\\svcBorealisAnsibleRunner').strip()
+    # Optional hostname here for future auditing/joins
+    # Upsert service account, creating new creds if missing
+    try:
+        conn = _db_conn()
+        row = _service_acct_get(conn, agent_id)
+        if not row:
+            pw = _gen_strong_password()
+            out = _service_acct_set(conn, agent_id, username, pw)
+        else:
+            # row: agent_id, username, password_encrypted, last_rotated_utc, version
+            try:
+                plain = _decrypt_secret(row[2])
+            except Exception:
+                plain = ''
+            if not plain:
+                plain = _gen_strong_password()
+                out = _service_acct_set(conn, agent_id, row[1] or username, plain)
+            else:
+                out = {
+                    'username': row[1] or username,
+                    'password': plain,
+                    'last_rotated_utc': row[3] or _now_iso_utc(),
+                }
+        conn.close()
+        return jsonify({
+            'username': out['username'],
+            'password': out['password'],
+            'policy': { 'force_rotation_minutes': 43200 }
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agent/service-account/rotate', methods=['POST'])
+def api_agent_service_account_rotate():
+    payload = request.get_json(silent=True) or {}
+    agent_id = (payload.get('agent_id') or '').strip()
+    if not agent_id:
+        return jsonify({'error': 'agent_id required'}), 400
+    username = (payload.get('username') or '.\\svcBorealisAnsibleRunner').strip()
+    try:
+        conn = _db_conn()
+        row = _service_acct_get(conn, agent_id)
+        user_eff = row[1] if row else username
+        pw_new = _gen_strong_password()
+        out = _service_acct_set(conn, agent_id, user_eff, pw_new)
+        conn.close()
+        return jsonify({
+            'username': out['username'],
+            'password': out['password'],
+            'policy': { 'force_rotation_minutes': 43200 }
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route("/api/ansible/recap/report", methods=["POST"])
