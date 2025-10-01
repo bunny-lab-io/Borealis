@@ -10,6 +10,7 @@ requests
 flask_socketio
 flask-cors
 eventlet
+cryptography
 
 # GUI-related dependencies (Qt for GUI components)
 Qt.py

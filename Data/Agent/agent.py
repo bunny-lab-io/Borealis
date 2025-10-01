@@ -1142,6 +1142,20 @@ async def connect():
 
     await sio.emit('request_config', {"agent_id": AGENT_ID})
     # Inventory details posting is managed by the DeviceAudit role (SYSTEM). No one-shot post here.
+    # Fire-and-forget service account check-in so server can provision WinRM credentials
+    try:
+        async def _svc_checkin_once():
+            try:
+                url = get_server_url().rstrip('/') + "/api/agent/checkin"
+                payload = {"agent_id": AGENT_ID, "hostname": socket.gethostname(), "username": ".\\svcBorealisAnsibleRunner"}
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    await session.post(url, json=payload)
+            except Exception:
+                pass
+        asyncio.create_task(_svc_checkin_once())
+    except Exception:
+        pass
 
 @sio.event
 async def disconnect():

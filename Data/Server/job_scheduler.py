@@ -216,7 +216,7 @@ class JobScheduler:
                 "activity_job_id": act_id,
                 "scheduled_job_id": int(scheduled_job_id),
                 "scheduled_run_id": int(scheduled_run_id),
-                "connection": "local",
+                "connection": "winrm",
             }
             try:
                 self.socketio.emit("ansible_playbook_run", payload)

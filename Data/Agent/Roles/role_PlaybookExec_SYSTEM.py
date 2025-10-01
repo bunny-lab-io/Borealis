@@ -8,6 +8,11 @@ import json
 import socket
 import subprocess
 
+try:
+    import winrm  # type: ignore
+except Exception:
+    winrm = None
+
 
 ROLE_NAME = 'playbook_exec_system'
 ROLE_CONTEXTS = ['system']
@@ -85,6 +90,7 @@ class Role:
     def __init__(self, ctx):
         self.ctx = ctx
         self._runs = {}  # run_id -> { proc, task, cancel }
+        self._svc_creds = None  # cache per-process: {username, password}
 
     def _log_local(self, msg: str, error: bool = False):
         try:
@@ -105,6 +111,131 @@ class Role:
         except Exception:
             pass
         return 'http://localhost:5000'
+
+    async def _fetch_service_creds(self) -> dict:
+        if self._svc_creds and isinstance(self._svc_creds, dict):
+            return self._svc_creds
+        try:
+            import aiohttp
+            url = self._server_base().rstrip('/') + '/api/agent/checkin'
+            payload = {
+                'agent_id': self.ctx.agent_id,
+                'hostname': socket.gethostname(),
+                'username': '.\\svcBorealisAnsibleRunner',
+            }
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                async with sess.post(url, json=payload) as resp:
+                    js = await resp.json()
+            u = (js or {}).get('username') or '.\\svcBorealisAnsibleRunner'
+            p = (js or {}).get('password') or ''
+            self._svc_creds = {'username': u, 'password': p}
+            return self._svc_creds
+        except Exception:
+            return {'username': '.\\svcBorealisAnsibleRunner', 'password': ''}
+
+    def _normalize_playbook_content(self, content: str) -> str:
+        try:
+            # Heuristic fixes to honor our WinRM localhost inventory:
+            # - Replace hosts: localhost -> hosts: local (group name used by inventory)
+            # - Remove explicit "connection: local" if present
+            lines = (content or '').splitlines()
+            out = []
+            for ln in lines:
+                s = ln.strip().lower()
+                if s.startswith('connection:') and 'local' in s:
+                    continue
+                if s.startswith('hosts:') and ('localhost' in s or '127.0.0.1' in s):
+                    indent = ln.split('h')[0]
+                    out.append(f"{indent}hosts: local")
+                    continue
+                out.append(ln)
+            return '\n'.join(out) + ('\n' if not content.endswith('\n') else '')
+        except Exception:
+            return content
+
+    async def _rotate_service_creds(self) -> dict:
+        try:
+            import aiohttp
+            url = self._server_base().rstrip('/') + '/api/agent/service-account/rotate'
+            payload = {
+                'agent_id': self.ctx.agent_id,
+                'reason': 'bad_credentials',
+            }
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                async with sess.post(url, json=payload) as resp:
+                    js = await resp.json()
+            u = (js or {}).get('username') or '.\\svcBorealisAnsibleRunner'
+            p = (js or {}).get('password') or ''
+            self._svc_creds = {'username': u, 'password': p}
+            return self._svc_creds
+        except Exception:
+            return await self._fetch_service_creds()
+
+    def _ps_module_path(self) -> str:
+        # Place PS module under Roles so it's deployed with the agent
+        try:
+            here = os.path.abspath(os.path.dirname(__file__))
+            p = os.path.join(here, 'Borealis.WinRM.Localhost.psm1')
+            return p
+        except Exception:
+            return ''
+
+    def _ensure_winrm_and_user(self, username: str, password: str):
+        if os.name != 'nt':
+            return
+        mod = self._ps_module_path()
+        if not os.path.isfile(mod):
+            # best effort with inline commands
+            try:
+                subprocess.run(['powershell', '-NoProfile', '-Command', 'Set-Service WinRM -StartupType Automatic; Start-Service WinRM'], timeout=30)
+            except Exception:
+                pass
+            return
+        ps = f"""
+Import-Module -Name '{mod}' -Force
+Ensure-LocalhostWinRMHttps
+Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}'
+"""
+        try:
+            subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], timeout=90)
+        except Exception:
+            pass
+
+    def _write_winrm_inventory(self, base_dir: str, username: str, password: str) -> str:
+        inv_dir = os.path.join(base_dir, 'inventory')
+        os.makedirs(inv_dir, exist_ok=True)
+        hosts = os.path.join(inv_dir, 'hosts')
+        try:
+            content = (
+                "[local]\n" \
+                "localhost\n\n" \
+                "[local:vars]\n" \
+                "ansible_connection=winrm\n" \
+                "ansible_host=127.0.0.1\n" \
+                "ansible_port=5986\n" \
+                "ansible_winrm_scheme=https\n" \
+                "ansible_winrm_transport=ntlm\n" \
+                f"ansible_user={username}\n" \
+                f"ansible_password={password}\n" \
+                "ansible_winrm_server_cert_validation=ignore\n"
+            )
+            with open(hosts, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write(content)
+        except Exception:
+            pass
+        return hosts
+
+    def _winrm_preflight(self, username: str, password: str) -> bool:
+        if os.name != 'nt' or winrm is None:
+            return True
+        try:
+            s = winrm.Session('https://127.0.0.1:5986', auth=(username, password), transport='ntlm', server_cert_validation='ignore')
+            r = s.run_cmd('whoami')
+            return r.status_code == 0
+        except Exception:
+            return False
 
     async def _post_recap(self, payload: dict):
         try:
@@ -138,9 +269,24 @@ class Role:
         play_rel = 'playbook.yml'
         play_abs = os.path.join(project, play_rel)
         with open(play_abs, 'w', encoding='utf-8', newline='\n') as fh:
-            fh.write(playbook_content or '')
-        with open(os.path.join(inventory_dir, 'hosts'), 'w', encoding='utf-8', newline='\n') as fh:
-            fh.write('localhost,\n')
+            fh.write(self._normalize_playbook_content(playbook_content or ''))
+        # WinRM service account credentials
+        creds = await self._fetch_service_creds()
+        user = creds.get('username') or '.\\svcBorealisAnsibleRunner'
+        pwd = creds.get('password') or ''
+        # Converge endpoint state (listener + user)
+        self._ensure_winrm_and_user(user, pwd)
+        # Preflight auth and auto-rotate if needed
+        pre_ok = self._winrm_preflight(user, pwd)
+        if not pre_ok:
+            # rotate and retry once
+            creds = await self._rotate_service_creds()
+            user = creds.get('username') or user
+            pwd = creds.get('password') or ''
+            self._ensure_winrm_and_user(user, pwd)
+        # Write inventory for winrm localhost
+        inv_file = self._write_winrm_inventory(pd, user, pwd)
+
         # Set connection via envvars
         with open(os.path.join(env_dir, 'envvars'), 'w', encoding='utf-8', newline='\n') as fh:
             json.dump({ 'ANSIBLE_FORCE_COLOR': '0', 'ANSIBLE_STDOUT_CALLBACK': 'default' }, fh)
@@ -188,17 +334,25 @@ class Role:
             except Exception:
                 return False
 
+        auth_failed = False
         try:
-            ansible_runner.interface.run(
+            r = ansible_runner.interface.run(
                 private_data_dir=pd,
                 playbook=play_rel,
-                inventory=os.path.join(inventory_dir, 'hosts'),
+                inventory=inv_file,
                 quiet=True,
                 event_handler=_on_event,
                 cancel_callback=_cancel_cb,
                 extravars={}
             )
             status = 'Cancelled' if _cancel_cb() else 'Success'
+            try:
+                # Some auth failures bubble up in events only; inspect last few lines
+                tail = '\n'.join(lines[-50:]).lower()
+                if ('access is denied' in tail) or ('unauthorized' in tail) or ('cannot process the request' in tail):
+                    auth_failed = True
+            except Exception:
+                pass
         except Exception:
             status = 'Failed'
 
@@ -231,6 +385,18 @@ class Role:
             'recap_json': recap_json,
             'finished_ts': int(time.time()),
         })
+        # If authentication failed on first pass, rotate password and try once more
+        if auth_failed:
+            try:
+                newc = await self._rotate_service_creds()
+                user2 = newc.get('username') or user
+                pwd2 = newc.get('password') or ''
+                self._ensure_winrm_and_user(user2, pwd2)
+                # Recurse once with updated creds
+                await self._run_playbook_runner(run_id, playbook_content, playbook_name=playbook_name, activity_job_id=activity_job_id, connection=connection)
+                return True
+            except Exception:
+                pass
         return True
 
     async def _run_playbook(self, run_id: str, playbook_content: str, playbook_name: str = '', activity_job_id=None, connection: str = 'local'):
@@ -239,7 +405,7 @@ class Role:
         os.makedirs(tmp_dir, exist_ok=True)
         fd, path = tempfile.mkstemp(prefix='pb_', suffix='.yml', dir=tmp_dir, text=True)
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as fh:
-            fh.write(playbook_content or '')
+            fh.write(self._normalize_playbook_content(playbook_content or ''))
 
         hostname = socket.gethostname()
         agent_id = self.ctx.agent_id
@@ -256,19 +422,33 @@ class Role:
             'started_ts': started,
         })
 
+        # Prefer WinRM localhost via inventory when on Windows; otherwise fallback to provided connection
+        inv_file_cli = None
         conn = (connection or 'local').strip().lower()
-        if conn not in ('local', 'winrm', 'psrp'):
-            conn = 'local'
-        # Best-effort: if playbook uses ansible.windows, prefer psrp when connection left as local
-        if conn == 'local':
+        if os.name == 'nt':
             try:
-                if 'ansible.windows' in (playbook_content or ''):
-                    conn = 'psrp'
+                creds = await self._fetch_service_creds()
+                user = creds.get('username') or '.\\svcBorealisAnsibleRunner'
+                pwd = creds.get('password') or ''
+                self._ensure_winrm_and_user(user, pwd)
+                if not self._winrm_preflight(user, pwd):
+                    creds = await self._rotate_service_creds()
+                    user = creds.get('username') or user
+                    pwd = creds.get('password') or ''
+                    self._ensure_winrm_and_user(user, pwd)
+                # Create temp inventory adjacent to playbook
+                inv_file_cli = self._write_winrm_inventory(os.path.dirname(path), user, pwd)
             except Exception:
-                pass
-
-        cmd = [_ansible_playbook_cmd(), path, '-i', 'localhost,', '-c', conn]
-        self._log_local(f"Launching ansible-playbook: conn={conn} cmd={' '.join(cmd)}")
+                inv_file_cli = None
+        # Build CLI; if inv_file_cli present, omit -c and use '-i invfile'
+        if inv_file_cli and os.path.isfile(inv_file_cli):
+            cmd = [_ansible_playbook_cmd(), path, '-i', inv_file_cli]
+            self._log_local(f"Launching ansible-playbook with WinRM inventory: {' '.join(cmd)}")
+        else:
+            if conn not in ('local', 'winrm', 'psrp'):
+                conn = 'local'
+            cmd = [_ansible_playbook_cmd(), path, '-i', 'localhost,', '-c', conn]
+            self._log_local(f"Launching ansible-playbook: conn={conn} cmd={' '.join(cmd)}")
         # Ensure clean, plain output and correct interpreter for localhost
         env = os.environ.copy()
         env.setdefault('ANSIBLE_FORCE_COLOR', '0')
@@ -301,9 +481,9 @@ class Role:
             except Exception:
                 self._log_local("Collection install failed (continuing)")
 
-            # Prefer ansible-runner when available and enabled
+            # Prefer ansible-runner when available (default on). Set BOREALIS_USE_ANSIBLE_RUNNER=0 to disable.
             try:
-                if os.environ.get('BOREALIS_USE_ANSIBLE_RUNNER', '0').lower() not in ('0', 'false', 'no'):
+                if os.environ.get('BOREALIS_USE_ANSIBLE_RUNNER', '1').lower() not in ('0', 'false', 'no'):
                     used = await self._run_playbook_runner(run_id, playbook_content, playbook_name=playbook_name, activity_job_id=activity_job_id, connection=connection)
                     if used:
                         return
