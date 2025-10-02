@@ -14,7 +14,7 @@ def project_paths():
     venv_root = os.path.abspath(os.path.join(venv_scripts, os.pardir))
     project_root = os.path.abspath(os.path.join(venv_root, os.pardir))
     borealis_dir = os.path.join(venv_root, "Borealis")
-    logs_dir = os.path.join(project_root, "Logs")
+    logs_dir = os.path.join(project_root, "Logs", "Agent")
     temp_dir = os.path.join(project_root, "Temp")
     return {
         "project_root": project_root,
@@ -35,7 +35,9 @@ def ensure_dirs(paths):
 
 def log_write(paths, name, text):
     try:
-        p = os.path.join(paths["logs_dir"], name)
+        # Centralize into Agent logs; default to install.log when unspecified
+        fn = name or "install.log"
+        p = os.path.join(paths["logs_dir"], fn)
         with open(p, "a", encoding="utf-8") as f:
             f.write(f"{_now()} {text}\n")
     except Exception:

@@ -1,4 +1,35 @@
 # Borealis Agents
+## Logging Policy (Centralized, Rotated)
+- **Log Locations**
+  - Agent: `<ProjectRoot>/Logs/Agent/<service>.log`
+  - Server: `<ProjectRoot>/Logs/Server/<service>.log`
+- **General-Purpose Logs**
+  - Agent: `agent.log`
+  - Server: `server.log`
+- **Dedicated Logs**
+  - Subsystems with significant surface area must use their own `<service>.log`
+    - Examples: `ansible.log`, `webrtc.log`, `scheduler.log`
+- **Installation / Bootstrap Logs**
+  - Agent install: `Logs/Agent/install.log`
+  - Server install: `Logs/Server/install.log`
+- **Rotation Policy**
+  - All log writers must rotate daily.
+  - On day rollover, rename:
+    - `<service>.log` → `<service>.log.YYYY-MM-DD`
+  - Append only to the current day’s log.
+  - **Do not** auto-delete rotated logs.
+- **Restrictions**
+  - Logs must **only** be written under the project root.
+  - Never write logs to:
+    - `ProgramData`
+    - `AppData`
+    - User profiles
+    - System temp directories
+  - No alternative log fan-out (e.g., per-component folders) unless explicitly coordinated.  
+    Prefer single log files per service.
+- **Convergence**
+  - This policy applies to all new contributions.
+  - When modifying existing code, migrate ad-hoc logging into this pattern.
 
 ## Overview
 Borealis pairs a no-code workflow canvas with a rapidly evolving remote management stack. The long-term goal is to orchestrate scripts, schedules, and workflows against distributed agents while keeping everything self-contained and portable.
@@ -155,6 +186,7 @@ This section summarizes what is considered usable vs. experimental today.
 
 - Terminology
   - “Assemblies” consolidates Scripts/Workflows (and future Playbooks) in the UI. Treat Playbooks as non‑functional until Ansible support matures.
+
 
 
 

@@ -22,19 +22,20 @@ function Ensure-LocalhostWinRMHttps {
     }
     $thumb = if ($cert) { $cert.Thumbprint } else { '' }
 
-    # Create listener only if not present
+    # Ensure HTTPS listener exists; use Address='*' then restrict via IPv4Filter
     try {
-        $listener = Get-WSManInstance -ResourceURI winrm/config/listener -Enumerate -ErrorAction SilentlyContinue |
-            Where-Object { $_.Transport -eq 'HTTPS' -and $_.Address -eq '127.0.0.1' -and $_.Port -eq '5986' }
-    } catch { $listener = $null }
-    if (-not $listener -and $thumb) {
-        $cmd = "winrm create winrm/config/Listener?Address=127.0.0.1+Transport=HTTPS @{Hostname=`"$DnsName`"; CertificateThumbprint=`"$thumb`"; Port=`"5986`"}"
+        $https = Get-WSManInstance -ResourceURI winrm/config/listener -Enumerate -ErrorAction SilentlyContinue |
+            Where-Object { $_.Transport -eq 'HTTPS' }
+    } catch { $https = $null }
+    if ((-not $https) -and $thumb) {
+        $cmd = "winrm create winrm/config/Listener?Address=*+Transport=HTTPS @{Hostname=`"$DnsName`"; CertificateThumbprint=`"$thumb`"}"
         cmd /c $cmd | Out-Null
     }
 
     # Harden auth and encryption
     try { winrm set winrm/config/service/auth @{Basic="false"; Kerberos="true"; Negotiate="true"; CredSSP="false"} | Out-Null } catch {}
     try { winrm set winrm/config/service @{AllowUnencrypted="false"} | Out-Null } catch {}
+    try { winrm set winrm/config/service @{IPv4Filter="127.0.0.1"} | Out-Null } catch {}
 }
 
 function Ensure-BorealisServiceUser {
@@ -43,7 +44,8 @@ function Ensure-BorealisServiceUser {
         [Parameter(Mandatory)][string]$UserName,
         [Parameter(Mandatory)][string]$PlaintextPassword
     )
-    $localName = $UserName -replace '^\.\\',''
+    $localName = $UserName
+    if ($localName.StartsWith('.\')) { $localName = $localName.Substring(2) }
     $secure = ConvertTo-SecureString $PlaintextPassword -AsPlainText -Force
     $u = Get-LocalUser -Name $localName -ErrorAction SilentlyContinue
     if (-not $u) {
@@ -96,4 +98,3 @@ ansible_winrm_server_cert_validation=ignore
 }
 
 Export-ModuleMember -Function Ensure-LocalhostWinRMHttps,Ensure-BorealisServiceUser,Write-LocalInventory
-

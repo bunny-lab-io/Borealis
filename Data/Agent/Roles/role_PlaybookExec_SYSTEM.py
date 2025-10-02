@@ -91,6 +91,11 @@ class Role:
         self.ctx = ctx
         self._runs = {}  # run_id -> { proc, task, cancel }
         self._svc_creds = None  # cache per-process: {username, password}
+        try:
+            os.makedirs(self._ansible_log_dir(), exist_ok=True)
+            self._ansible_log(f"[init] PlaybookExec role init agent_id={ctx.agent_id}")
+        except Exception:
+            pass
 
     def _log_local(self, msg: str, error: bool = False):
         try:
@@ -112,6 +117,34 @@ class Role:
             pass
         return 'http://localhost:5000'
 
+    def _ansible_log(self, msg: str, error: bool = False, run_id: str = None):
+        try:
+            d = os.path.join(_project_root(), 'Logs', 'Agent')
+            ts = time.strftime('%Y-%m-%d %H:%M:%S')
+            path = os.path.join(d, 'ansible.log')
+            try:
+                os.makedirs(d, exist_ok=True)
+            except Exception:
+                pass
+            # rotate daily
+            try:
+                if os.path.isfile(path):
+                    import datetime as _dt
+                    dt = _dt.datetime.fromtimestamp(os.path.getmtime(path))
+                    if dt.date() != _dt.datetime.now().date():
+                        base, ext = os.path.splitext(path)
+                        os.replace(path, f"{base}.{dt.strftime('%Y-%m-%d')}{ext}")
+            except Exception:
+                pass
+            with open(path, 'a', encoding='utf-8') as fh:
+                fh.write(f'[{ts}] {msg}\n')
+            if run_id:
+                rp = os.path.join(d, f'run_{run_id}.log')
+                with open(rp, 'a', encoding='utf-8') as rf:
+                    rf.write(f'[{ts}] {msg}\n')
+        except Exception:
+            pass
+
     async def _fetch_service_creds(self) -> dict:
         if self._svc_creds and isinstance(self._svc_creds, dict):
             return self._svc_creds
@@ -123,6 +156,7 @@ class Role:
                 'hostname': socket.gethostname(),
                 'username': '.\\svcBorealisAnsibleRunner',
             }
+            self._ansible_log(f"[checkin] POST {url} agent_id={self.ctx.agent_id}")
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as sess:
                 async with sess.post(url, json=payload) as resp:
@@ -130,8 +164,10 @@ class Role:
             u = (js or {}).get('username') or '.\\svcBorealisAnsibleRunner'
             p = (js or {}).get('password') or ''
             self._svc_creds = {'username': u, 'password': p}
+            self._ansible_log(f"[checkin] received user={u} pw_len={len(p)}")
             return self._svc_creds
         except Exception:
+            self._ansible_log(f"[checkin] failed agent_id={self.ctx.agent_id}", error=True)
             return {'username': '.\\svcBorealisAnsibleRunner', 'password': ''}
 
     def _normalize_playbook_content(self, content: str) -> str:
@@ -162,6 +198,7 @@ class Role:
                 'agent_id': self.ctx.agent_id,
                 'reason': 'bad_credentials',
             }
+            self._ansible_log(f"[rotate] POST {url} agent_id={self.ctx.agent_id}")
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as sess:
                 async with sess.post(url, json=payload) as resp:
@@ -169,8 +206,10 @@ class Role:
             u = (js or {}).get('username') or '.\\svcBorealisAnsibleRunner'
             p = (js or {}).get('password') or ''
             self._svc_creds = {'username': u, 'password': p}
+            self._ansible_log(f"[rotate] received user={u} pw_len={len(p)}")
             return self._svc_creds
         except Exception:
+            self._ansible_log(f"[rotate] failed agent_id={self.ctx.agent_id}", error=True)
             return await self._fetch_service_creds()
 
     def _ps_module_path(self) -> str:
@@ -186,22 +225,66 @@ class Role:
         if os.name != 'nt':
             return
         mod = self._ps_module_path()
+        log_dir = os.path.join(_project_root(), 'Logs', 'Agent')
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except Exception:
+            pass
         if not os.path.isfile(mod):
             # best effort with inline commands
             try:
-                subprocess.run(['powershell', '-NoProfile', '-Command', 'Set-Service WinRM -StartupType Automatic; Start-Service WinRM'], timeout=30)
-            except Exception:
-                pass
+                r = subprocess.run(['powershell', '-NoProfile', '-Command', 'Set-Service WinRM -StartupType Automatic; Start-Service WinRM; (Get-Service WinRM).Status'], capture_output=True, text=True, timeout=60)
+                self._ansible_log(f"[ensure] basic winrm start rc={r.returncode} out={r.stdout} err={r.stderr}", error=r.returncode!=0)
+            except Exception as e:
+                self._ansible_log(f"[ensure] winrm start exception: {e}", error=True)
             return
-        ps = f"""
-Import-Module -Name '{mod}' -Force
-Ensure-LocalhostWinRMHttps
-Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}'
+        # Robust execution via temp PS file
+        tmp_dir = os.path.join(_project_root(), 'Temp')
+        os.makedirs(tmp_dir, exist_ok=True)
+        ps_path = os.path.join(tmp_dir, f"ansible_bootstrap_{int(time.time())}.ps1")
+        ensure_log = os.path.join(log_dir, f"ensure_winrm_{int(time.time())}.log")
+        ps_content = f"""
+$ErrorActionPreference='Continue'
+try {{
+  Import-Module -Name '{mod}' -Force
+  'Imported module: {mod}' | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
+  $user = '{username}'
+  $pw = '{password}'
+  Ensure-LocalhostWinRMHttps | Out-Null
+  'Ensured WinRM HTTPS listener on 127.0.0.1:5986' | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
+  Ensure-BorealisServiceUser -UserName $user -PlaintextPassword $pw | Out-Null
+  'Ensured service user: ' + $user | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
+  # Fallback path if LocalAccounts cmdlets unavailable
+  try {{
+    $ln = $user; if ($ln.StartsWith('.\\')) { $ln = $ln.Substring(2) }
+    $exists = Get-LocalUser -Name $ln -ErrorAction SilentlyContinue
+    if (-not $exists) {{
+      'Fallback: Using NET USER to create account' | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
+      cmd /c "net user $ln `"$pw`" /ADD /Y" | Out-Null
+      cmd /c "net localgroup Administrators $ln /ADD" | Out-Null
+    }}
+  }} catch {{
+    'Fallback path failed: ' + $_ | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
+  }}
+  try {{ (Get-WSManInstance -ResourceURI winrm/config/listener -Enumerate) | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8 }} catch {{}}
+  try {{ $ln2=$user; if ($ln2.StartsWith('.\\')) { $ln2=$ln2.Substring(2) }; Get-LocalUser | Where-Object {{$_.Name -eq $ln2}} | Format-List * | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8 }} catch {{}}
+  try {{ whoami | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8 }} catch {{}}
+  exit 0
+}} catch {{
+  $_ | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
+  exit 1
+}}
 """
         try:
-            subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], timeout=90)
-        except Exception:
-            pass
+            with open(ps_path, 'w', encoding='utf-8') as fh:
+                fh.write(ps_content)
+        except Exception as e:
+            self._ansible_log(f"[ensure] write PS failed: {e}", error=True)
+        try:
+            r = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps_path], capture_output=True, text=True, timeout=180)
+            self._ansible_log(f"[ensure] bootstrap rc={r.returncode} out_len={len(r.stdout or '')} err_len={len(r.stderr or '')}", error=r.returncode!=0)
+        except Exception as e:
+            self._ansible_log(f"[ensure] bootstrap exception: {e}", error=True)
 
     def _write_winrm_inventory(self, base_dir: str, username: str, password: str) -> str:
         inv_dir = os.path.join(base_dir, 'inventory')
@@ -233,8 +316,16 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
         try:
             s = winrm.Session('https://127.0.0.1:5986', auth=(username, password), transport='ntlm', server_cert_validation='ignore')
             r = s.run_cmd('whoami')
-            return r.status_code == 0
+            ok = (r.status_code == 0)
+            try:
+                so = getattr(r, 'std_out', b'')
+                se = getattr(r, 'std_err', b'')
+                self._ansible_log(f"[preflight] rc={r.status_code} out={so[:120]!r} err={se[:120]!r}")
+            except Exception:
+                pass
+            return ok
         except Exception:
+            self._ansible_log(f"[preflight] exception during winrm session", error=True)
             return False
 
     async def _post_recap(self, payload: dict):
@@ -253,7 +344,8 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
     async def _run_playbook_runner(self, run_id: str, playbook_content: str, playbook_name: str = '', activity_job_id=None, connection: str = 'local'):
         try:
             import ansible_runner  # type: ignore
-        except Exception:
+        except Exception as e:
+            self._ansible_log(f"[runner] ansible_runner import failed: {e}")
             return False
 
         tmp_dir = os.path.join(_project_root(), 'Temp')
@@ -268,8 +360,10 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
 
         play_rel = 'playbook.yml'
         play_abs = os.path.join(project, play_rel)
+        _norm = self._normalize_playbook_content(playbook_content or '')
         with open(play_abs, 'w', encoding='utf-8', newline='\n') as fh:
-            fh.write(self._normalize_playbook_content(playbook_content or ''))
+            fh.write(_norm)
+        self._ansible_log(f"[runner] prepared playbook={play_abs} bytes={len(_norm.encode('utf-8'))}")
         # WinRM service account credentials
         creds = await self._fetch_service_creds()
         user = creds.get('username') or '.\\svcBorealisAnsibleRunner'
@@ -286,6 +380,7 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
             self._ensure_winrm_and_user(user, pwd)
         # Write inventory for winrm localhost
         inv_file = self._write_winrm_inventory(pd, user, pwd)
+        self._ansible_log(f"[runner] inventory={inv_file} user={user}")
 
         # Set connection via envvars
         with open(os.path.join(env_dir, 'envvars'), 'w', encoding='utf-8', newline='\n') as fh:
@@ -345,16 +440,22 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
                 cancel_callback=_cancel_cb,
                 extravars={}
             )
+            try:
+                self._ansible_log(f"[runner] finished status={getattr(r,'status',None)} rc={getattr(r,'rc',None)}")
+            except Exception:
+                pass
             status = 'Cancelled' if _cancel_cb() else 'Success'
             try:
                 # Some auth failures bubble up in events only; inspect last few lines
                 tail = '\n'.join(lines[-50:]).lower()
                 if ('access is denied' in tail) or ('unauthorized' in tail) or ('cannot process the request' in tail):
                     auth_failed = True
+                    self._ansible_log("[runner] detected auth failure in output", error=True)
             except Exception:
                 pass
         except Exception:
             status = 'Failed'
+            self._ansible_log("[runner] exception in ansible-runner", error=True)
 
         # Synthesize recap text from recap_json if available
         recap_text = ''
@@ -385,6 +486,7 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
             'recap_json': recap_json,
             'finished_ts': int(time.time()),
         })
+        self._ansible_log(f"[runner] recap posted status={status}")
         # If authentication failed on first pass, rotate password and try once more
         if auth_failed:
             try:
@@ -396,6 +498,7 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
                 await self._run_playbook_runner(run_id, playbook_content, playbook_name=playbook_name, activity_job_id=activity_job_id, connection=connection)
                 return True
             except Exception:
+                self._ansible_log("[runner] rotate+retry failed", error=True)
                 pass
         return True
 
@@ -404,8 +507,10 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
         tmp_dir = os.path.join(_project_root(), 'Temp')
         os.makedirs(tmp_dir, exist_ok=True)
         fd, path = tempfile.mkstemp(prefix='pb_', suffix='.yml', dir=tmp_dir, text=True)
+        _norm2 = self._normalize_playbook_content(playbook_content or '')
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as fh:
-            fh.write(self._normalize_playbook_content(playbook_content or ''))
+            fh.write(_norm2)
+        self._ansible_log(f"[cli] prepared playbook={path} bytes={len(_norm2.encode('utf-8'))}")
 
         hostname = socket.gethostname()
         agent_id = self.ctx.agent_id
@@ -440,15 +545,34 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
                 inv_file_cli = self._write_winrm_inventory(os.path.dirname(path), user, pwd)
             except Exception:
                 inv_file_cli = None
-        # Build CLI; if inv_file_cli present, omit -c and use '-i invfile'
+        # Build CLI; resolve ansible-playbook or fallback to python -m ansible.cli.playbook
+        ap = _ansible_playbook_cmd()
+        use_module = False
+        if os.path.dirname(ap) and not os.path.isfile(ap):
+            # If we got a path but it doesn't exist, switch to module mode
+            use_module = True
+        elif not os.path.dirname(ap):
+            # bare command; verify existence in PATH
+            from shutil import which
+            if which(ap) is None:
+                use_module = True
+        if use_module:
+            py = _venv_python() or sys.executable
+            base_cmd = [py, '-m', 'ansible.cli.playbook']
+            self._ansible_log(f"[cli] ansible-playbook not found; using python -m ansible.cli.playbook via {py}")
+        else:
+            base_cmd = [ap]
+
         if inv_file_cli and os.path.isfile(inv_file_cli):
-            cmd = [_ansible_playbook_cmd(), path, '-i', inv_file_cli]
+            cmd = base_cmd + [path, '-i', inv_file_cli]
             self._log_local(f"Launching ansible-playbook with WinRM inventory: {' '.join(cmd)}")
+            self._ansible_log(f"[cli] cmd={' '.join(cmd)} inv={inv_file_cli}")
         else:
             if conn not in ('local', 'winrm', 'psrp'):
                 conn = 'local'
-            cmd = [_ansible_playbook_cmd(), path, '-i', 'localhost,', '-c', conn]
+            cmd = base_cmd + [path, '-i', 'localhost,', '-c', conn]
             self._log_local(f"Launching ansible-playbook: conn={conn} cmd={' '.join(cmd)}")
+            self._ansible_log(f"[cli] cmd={' '.join(cmd)}")
         # Ensure clean, plain output and correct interpreter for localhost
         env = os.environ.copy()
         env.setdefault('ANSIBLE_FORCE_COLOR', '0')
@@ -500,6 +624,7 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
             )
         except Exception as e:
             self._log_local(f"Failed to launch ansible-playbook: {e}", error=True)
+            self._ansible_log(f"[cli] failed to launch: {e}", error=True)
             await self._post_recap({
                 'run_id': run_id,
                 'hostname': hostname,
@@ -554,6 +679,7 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
                 except Exception:
                     line = str(bs)
                 lines.append(line)
+                self._ansible_log(f"[cli] {line}")
                 if len(lines) > 5000:
                     lines = lines[-2500:]
                 # Detect recap section
@@ -593,6 +719,34 @@ Ensure-BorealisServiceUser -UserName '{username}' -PlaintextPassword '{password}
 
     def register_events(self):
         sio = self.ctx.sio
+
+        # Proactive bootstrap: converge WinRM + service user at role load (SYSTEM only)
+        async def _bootstrap_once():
+            try:
+                if os.name != 'nt':
+                    return
+                creds = await self._fetch_service_creds()
+                user = creds.get('username') or '.\\svcBorealisAnsibleRunner'
+                pwd = creds.get('password') or ''
+                self._ansible_log(f"[bootstrap] ensure winrm+user user={user} pw_len={len(pwd)}")
+                self._ensure_winrm_and_user(user, pwd)
+                ok = self._winrm_preflight(user, pwd)
+                self._ansible_log(f"[bootstrap] preflight_ok={ok}")
+                if not ok:
+                    self._ansible_log("[bootstrap] preflight failed; rotating creds", error=True)
+                    creds = await self._rotate_service_creds()
+                    user = creds.get('username') or user
+                    pwd = creds.get('password') or ''
+                    self._ensure_winrm_and_user(user, pwd)
+                    ok2 = self._winrm_preflight(user, pwd)
+                    self._ansible_log(f"[bootstrap] preflight_ok_after_rotate={ok2}")
+            except Exception:
+                self._ansible_log("[bootstrap] exception", error=True)
+
+        try:
+            asyncio.create_task(_bootstrap_once())
+        except Exception:
+            pass
 
         @sio.on('ansible_playbook_run')
         async def _on_ansible_playbook_run(payload):

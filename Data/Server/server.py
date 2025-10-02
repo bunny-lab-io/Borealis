@@ -26,6 +26,49 @@ try:
 except Exception:
     Fernet = None  # optional; we will fall back to reversible base64 if missing
 
+# Centralized logging (Server)
+def _server_logs_root() -> str:
+    try:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'Logs', 'Server'))
+    except Exception:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Logs', 'Server'))
+
+
+def _rotate_daily(path: str):
+    try:
+        import datetime as _dt
+        if os.path.isfile(path):
+            mtime = os.path.getmtime(path)
+            dt = _dt.datetime.fromtimestamp(mtime)
+            today = _dt.datetime.now().date()
+            if dt.date() != today:
+                base, ext = os.path.splitext(path)
+                suffix = dt.strftime('%Y-%m-%d')
+                newp = f"{base}.{suffix}{ext}"
+                try:
+                    os.replace(path, newp)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _write_service_log(service: str, msg: str):
+    try:
+        base = _server_logs_root()
+        os.makedirs(base, exist_ok=True)
+        path = os.path.join(base, f"{service}.log")
+        _rotate_daily(path)
+        ts = time.strftime('%Y-%m-%d %H:%M:%S')
+        with open(path, 'a', encoding='utf-8') as fh:
+            fh.write(f'[{ts}] {msg}\n')
+    except Exception:
+        pass
+
+
+def _ansible_log_server(msg: str):
+    _write_service_log('ansible', msg)
+
 # Borealis Python API Endpoints
 from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
 from Python_API_Endpoints.script_engines import run_powershell_script
@@ -2897,6 +2940,7 @@ def api_agent_checkin():
         if not row:
             pw = _gen_strong_password()
             out = _service_acct_set(conn, agent_id, username, pw)
+            _ansible_log_server(f"[checkin] created creds agent_id={agent_id} user={out['username']} rotated={out['last_rotated_utc']}")
         else:
             # row: agent_id, username, password_encrypted, last_rotated_utc, version
             try:
@@ -2913,12 +2957,14 @@ def api_agent_checkin():
                     'last_rotated_utc': row[3] or _now_iso_utc(),
                 }
         conn.close()
+        _ansible_log_server(f"[checkin] return creds agent_id={agent_id} user={out['username']}")
         return jsonify({
             'username': out['username'],
             'password': out['password'],
             'policy': { 'force_rotation_minutes': 43200 }
         })
     except Exception as e:
+        _ansible_log_server(f"[checkin] error agent_id={agent_id} err={e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -2936,12 +2982,14 @@ def api_agent_service_account_rotate():
         pw_new = _gen_strong_password()
         out = _service_acct_set(conn, agent_id, user_eff, pw_new)
         conn.close()
+        _ansible_log_server(f"[rotate] rotated agent_id={agent_id} user={out['username']} at={out['last_rotated_utc']}")
         return jsonify({
             'username': out['username'],
             'password': out['password'],
             'policy': { 'force_rotation_minutes': 43200 }
         })
     except Exception as e:
+        _ansible_log_server(f"[rotate] error agent_id={agent_id} err={e}")
         return jsonify({'error': str(e)}), 500
 
 

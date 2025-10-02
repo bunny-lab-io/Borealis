@@ -29,13 +29,42 @@ import aiohttp
 
 import socketio
 
-# Early bootstrap logging (path relative to this file)
+# Centralized logging helpers (Agent)
+def _agent_logs_root() -> str:
+    try:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'Logs', 'Agent'))
+    except Exception:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Logs', 'Agent'))
+
+
+def _rotate_daily(path: str):
+    try:
+        import datetime as _dt
+        if os.path.isfile(path):
+            mtime = os.path.getmtime(path)
+            dt = _dt.datetime.fromtimestamp(mtime)
+            today = _dt.datetime.now().date()
+            if dt.date() != today:
+                base, ext = os.path.splitext(path)
+                suffix = dt.strftime('%Y-%m-%d')
+                newp = f"{base}.{suffix}{ext}"
+                try:
+                    os.replace(path, newp)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+# Early bootstrap logging (goes to agent.log)
 def _bootstrap_log(msg: str):
     try:
-        base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'Logs', 'Agent'))
+        base = _agent_logs_root()
         os.makedirs(base, exist_ok=True)
+        path = os.path.join(base, 'agent.log')
+        _rotate_daily(path)
         ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        with open(os.path.join(base, 'bootstrap.log'), 'a', encoding='utf-8') as fh:
+        with open(path, 'a', encoding='utf-8') as fh:
             fh.write(f'[{ts}] {msg}\n')
     except Exception:
         pass
@@ -116,11 +145,12 @@ def _find_project_root():
 # Simple file logger under Logs/Agent
 def _log_agent(message: str, fname: str = 'agent.log'):
     try:
-        root = _find_project_root()
-        log_dir = os.path.join(root, 'Logs', 'Agent')
+        log_dir = _agent_logs_root()
         os.makedirs(log_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        with open(os.path.join(log_dir, fname), 'a', encoding='utf-8') as fh:
+        path = os.path.join(log_dir, fname)
+        _rotate_daily(path)
+        with open(path, 'a', encoding='utf-8') as fh:
             fh.write(f'[{ts}] {message}\n')
     except Exception:
         pass
@@ -1420,6 +1450,7 @@ if __name__=='__main__':
         _bootstrap_log('enter __main__')
     except Exception:
         pass
+    # Ansible logs are rotated daily on write; no explicit clearing on startup
     if SYSTEM_SERVICE_MODE:
         loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
     else:
@@ -1553,3 +1584,15 @@ if __name__=='__main__':
         print("[FATAL] Agent exited unexpectedly.")
 
 # (moved earlier so async tasks can log immediately)
+# ---- Ansible log helpers (Agent) ----
+def _ansible_log_agent(msg: str):
+    try:
+        d = _agent_logs_root()
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, 'ansible.log')
+        _rotate_daily(path)
+        ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(path, 'a', encoding='utf-8') as fh:
+            fh.write(f'[{ts}] {msg}\n')
+    except Exception:
+        pass

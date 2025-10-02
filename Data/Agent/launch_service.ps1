@@ -9,10 +9,11 @@ try {
     $scriptDir = Split-Path -Path $PSCommandPath -Parent
     Set-Location -Path $scriptDir
 
-    # Ensure a place for wrapper/stdout logs
-    $pd = Join-Path $env:ProgramData 'Borealis'
-    if (-not (Test-Path $pd)) { New-Item -ItemType Directory -Path $pd -Force | Out-Null }
-    $wrapperLog = Join-Path $pd 'svc.wrapper.log'
+    # Centralized logs under <ProjectRoot>\Logs\Agent
+    $projRoot  = Resolve-Path (Join-Path $scriptDir '..\..')
+    $logsAgent = Join-Path $projRoot 'Logs\Agent'
+    if (-not (Test-Path $logsAgent)) { New-Item -ItemType Directory -Path $logsAgent -Force | Out-Null }
+    $wrapperLog = Join-Path $logsAgent 'service_wrapper.log'
 
     $venvBin = Join-Path $scriptDir '..\Scripts'
     $pyw     = Join-Path $venvBin 'pythonw.exe'
@@ -27,7 +28,7 @@ try {
 
     # Launch and keep the task in Running state by waiting on the child
     $p = Start-Process -FilePath $exe -ArgumentList $args -WindowStyle Hidden -PassThru -WorkingDirectory $scriptDir `
-         -RedirectStandardOutput (Join-Path $pd 'svc.out.log') -RedirectStandardError (Join-Path $pd 'svc.err.log')
+         -RedirectStandardOutput (Join-Path $logsAgent 'service.out.log') -RedirectStandardError (Join-Path $logsAgent 'service.err.log')
     try { Wait-Process -Id $p.Id } catch {}
 } catch {
     try {
