@@ -342,8 +342,8 @@ try {{
             except Exception:
                 pass
             return ok
-        except Exception:
-            self._ansible_log(f"[preflight] exception during winrm session", error=True)
+        except Exception as exc:
+            self._ansible_log(f"[preflight] exception during winrm session: {exc}", error=True)
             return False
 
     async def _post_recap(self, payload: dict):
@@ -596,6 +596,9 @@ try {{
         env.setdefault('ANSIBLE_FORCE_COLOR', '0')
         env.setdefault('ANSIBLE_NOCOLOR', '1')
         env.setdefault('PYTHONIOENCODING', 'utf-8')
+        env.setdefault('PYTHONUTF8', '1')
+        if os.name == 'nt':
+            env.setdefault('LANG', 'en_US.UTF-8')
         env.setdefault('ANSIBLE_STDOUT_CALLBACK', 'default')
         # Help Ansible pick the correct python for localhost
         env.setdefault('ANSIBLE_LOCALHOST_WARNING', '0')
@@ -625,10 +628,14 @@ try {{
 
             # Prefer ansible-runner when available (default on). Set BOREALIS_USE_ANSIBLE_RUNNER=0 to disable.
             try:
-                if os.environ.get('BOREALIS_USE_ANSIBLE_RUNNER', '1').lower() not in ('0', 'false', 'no'):
-                    used = await self._run_playbook_runner(run_id, playbook_content, playbook_name=playbook_name, activity_job_id=activity_job_id, connection=connection)
-                    if used:
-                        return
+                runner_pref = (os.environ.get('BOREALIS_USE_ANSIBLE_RUNNER', '1') or '1').strip().lower()
+                if runner_pref not in ('0', 'false', 'no'):
+                    if os.name == 'nt' and runner_pref not in ('force',):
+                        self._ansible_log('[runner] skipping ansible-runner on Windows platform')
+                    else:
+                        used = await self._run_playbook_runner(run_id, playbook_content, playbook_name=playbook_name, activity_job_id=activity_job_id, connection=connection)
+                        if used:
+                            return
             except Exception:
                 pass
 
@@ -762,9 +769,13 @@ try {{
                 self._ansible_log("[bootstrap] exception", error=True)
 
         try:
-            asyncio.create_task(_bootstrap_once())
-        except Exception:
-            pass
+            loop = getattr(self.ctx, 'loop', None)
+            if loop and not loop.is_closed():
+                loop.create_task(_bootstrap_once())
+            else:
+                self._ansible_log('[bootstrap] unable to schedule proactive task; no event loop available')
+        except Exception as exc:
+            self._ansible_log(f"[bootstrap] failed to schedule coroutine: {exc}", error=True)
 
         @sio.on('ansible_playbook_run')
         async def _on_ansible_playbook_run(payload):
