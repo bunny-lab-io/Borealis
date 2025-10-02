@@ -32,7 +32,8 @@ import socketio
 # Centralized logging helpers (Agent)
 def _agent_logs_root() -> str:
     try:
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'Logs', 'Agent'))
+        root = _find_project_root()
+        return os.path.abspath(os.path.join(root, 'Logs', 'Agent'))
     except Exception:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Logs', 'Agent'))
 

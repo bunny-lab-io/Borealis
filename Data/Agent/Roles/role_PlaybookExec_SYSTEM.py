@@ -20,6 +20,17 @@ ROLE_CONTEXTS = ['system']
 
 def _project_root():
     try:
+        cur = os.path.abspath(os.path.dirname(__file__))
+        for _ in range(8):
+            if (
+                os.path.exists(os.path.join(cur, 'Borealis.ps1'))
+                or os.path.isdir(os.path.join(cur, '.git'))
+            ):
+                return cur
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     except Exception:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -244,8 +255,7 @@ class Role:
         os.makedirs(tmp_dir, exist_ok=True)
         ps_path = os.path.join(tmp_dir, f"ansible_bootstrap_{int(time.time())}.ps1")
         ensure_log = os.path.join(log_dir, f"ensure_winrm_{int(time.time())}.log")
-        ps_content = f"""
-$ErrorActionPreference='Continue'
+        ps_template = r"""$ErrorActionPreference='Continue'
 try {{
   Import-Module -Name '{mod}' -Force
   'Imported module: {mod}' | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
@@ -255,20 +265,24 @@ try {{
   'Ensured WinRM HTTPS listener on 127.0.0.1:5986' | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
   Ensure-BorealisServiceUser -UserName $user -PlaintextPassword $pw | Out-Null
   'Ensured service user: ' + $user | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
-  # Fallback path if LocalAccounts cmdlets unavailable
   try {{
-    $ln = $user; if ($ln.StartsWith('.\\')) { $ln = $ln.Substring(2) }
+    $ln = $user
+    if ($ln.StartsWith('.\')) {{ $ln = $ln.Substring(2) }}
     $exists = Get-LocalUser -Name $ln -ErrorAction SilentlyContinue
     if (-not $exists) {{
       'Fallback: Using NET USER to create account' | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
-      cmd /c "net user $ln `"$pw`" /ADD /Y" | Out-Null
+      cmd /c "net user $ln `"{password}`" /ADD /Y" | Out-Null
       cmd /c "net localgroup Administrators $ln /ADD" | Out-Null
     }}
   }} catch {{
     'Fallback path failed: ' + $_ | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
   }}
   try {{ (Get-WSManInstance -ResourceURI winrm/config/listener -Enumerate) | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8 }} catch {{}}
-  try {{ $ln2=$user; if ($ln2.StartsWith('.\\')) { $ln2=$ln2.Substring(2) }; Get-LocalUser | Where-Object {{$_.Name -eq $ln2}} | Format-List * | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8 }} catch {{}}
+  try {{
+    $ln2 = $user
+    if ($ln2.StartsWith('.\')) {{ $ln2 = $ln2.Substring(2) }}
+    Get-LocalUser | Where-Object {{ $_.Name -eq $ln2 }} | Format-List * | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8
+  }} catch {{}}
   try {{ whoami | Out-File -FilePath '{ensure_log}' -Append -Encoding UTF8 }} catch {{}}
   exit 0
 }} catch {{
@@ -276,6 +290,9 @@ try {{
   exit 1
 }}
 """
+        safe_mod = mod.replace("'", "''")
+        safe_log = ensure_log.replace("'", "''")
+        ps_content = ps_template.format(mod=safe_mod, ensure_log=safe_log, username=username.replace("'", "''"), password=password.replace("'", "''"))
         try:
             with open(ps_path, 'w', encoding='utf-8') as fh:
                 fh.write(ps_content)
