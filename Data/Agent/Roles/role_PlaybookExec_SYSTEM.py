@@ -92,7 +92,8 @@ class Role:
         self._runs = {}  # run_id -> { proc, task, cancel }
         self._svc_creds = None  # cache per-process: {username, password}
         try:
-            os.makedirs(self._ansible_log_dir(), exist_ok=True)
+            base = os.path.join(_project_root(), 'Logs', 'Agent')
+            os.makedirs(base, exist_ok=True)
             self._ansible_log(f"[init] PlaybookExec role init agent_id={ctx.agent_id}")
         except Exception:
             pass

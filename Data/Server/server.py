@@ -2699,15 +2699,18 @@ def ansible_quick_run():
     rel_path = (data.get("playbook_path") or "").strip()
     hostnames = data.get("hostnames") or []
     if not rel_path or not isinstance(hostnames, list) or not hostnames:
+        _ansible_log_server(f"[quick_run] invalid payload rel_path='{rel_path}' hostnames={hostnames}")
         return jsonify({"error": "Missing playbook_path or hostnames[]"}), 400
     try:
         root, abs_path, _ = _resolve_assembly_path('ansible', rel_path)
         if not os.path.isfile(abs_path):
+            _ansible_log_server(f"[quick_run] playbook not found path={abs_path}")
             return jsonify({"error": "Playbook not found"}), 404
         try:
             with open(abs_path, 'r', encoding='utf-8', errors='replace') as fh:
                 content = fh.read()
         except Exception as e:
+            _ansible_log_server(f"[quick_run] read error: {e}")
             return jsonify({"error": f"Failed to read playbook: {e}"}), 500
 
         results = []
@@ -2754,9 +2757,10 @@ def ansible_quick_run():
                 "activity_job_id": job_id,
             }
             try:
+                _ansible_log_server(f"[quick_run] emit ansible_playbook_run host='{host}' run_id={run_id} job_id={job_id} path={rel_path}")
                 socketio.emit("ansible_playbook_run", payload)
-            except Exception:
-                pass
+            except Exception as ex:
+                _ansible_log_server(f"[quick_run] emit failed host='{host}' run_id={run_id} err={ex}")
             results.append({"hostname": host, "run_id": run_id, "status": "Queued", "activity_job_id": job_id})
         return jsonify({"results": results})
     except ValueError as ve:
