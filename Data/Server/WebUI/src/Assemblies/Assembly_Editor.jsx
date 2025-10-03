@@ -66,26 +66,29 @@ const INPUT_BASE_SX = {
     "&:hover fieldset": { borderColor: "#3a4657" },
     "&.Mui-focused fieldset": { borderColor: "#58a6ff" }
   },
+
   "& .MuiOutlinedInput-input": {
     padding: "9px 12px",
-    fontSize: "0.95rem"
+    fontSize: "0.95rem",
+    lineHeight: 1.4
   },
+
   "& .MuiOutlinedInput-inputMultiline": {
     padding: "9px 12px"
   },
-  "& .MuiInputLabel-root": { color: "#9ba3b4" },
+
+  "& .MuiInputLabel-root": {
+    color: "#9ba3b4",
+    transform: "translate(12px, 11px) scale(0.8)"        // label at rest (inside field)
+  },
   "& .MuiInputLabel-root.Mui-focused": { color: "#58a6ff" },
-  "& input[type=number]": {
-    MozAppearance: "textfield"
+  "& .MuiInputLabel-root.MuiInputLabel-shrink": {
+    transform: "translate(12px, -6px) scale(0.75)"      // floated label position
   },
-  "& input[type=number]::-webkit-outer-spin-button": {
-    WebkitAppearance: "none",
-    margin: 0
-  },
-  "& input[type=number]::-webkit-inner-spin-button": {
-    WebkitAppearance: "none",
-    margin: 0
-  }
+
+  "& input[type=number]": { MozAppearance: "textfield" },
+  "& input[type=number]::-webkit-outer-spin-button": { WebkitAppearance: "none", margin: 0 },
+  "& input[type=number]::-webkit-inner-spin-button": { WebkitAppearance: "none", margin: 0 }
 };
 
 const SELECT_BASE_SX = {
@@ -914,7 +917,7 @@ export default function AssemblyEditor({
                       >
                         <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 28%" }, minWidth: { lg: 220 } }}>
                           <Tooltip
-                            title="This is the name of the variable you will be referencing inside of the script.  Within the script you will reference this variable with a prefixed \"$env:<variable>\".  For example, a variable named \"message\" would be written in the script as \"$env:message\"."
+                            title="This is the name of the variable you will be referencing inside of the script via $env:<variable>."
                             arrow
                             placement="top-start"
                           >
@@ -944,22 +947,7 @@ export default function AssemblyEditor({
                             />
                           </Tooltip>
                         </Box>
-                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 28%" }, minWidth: { lg: 220 } }}>
-                          <Tooltip
-                            title="Instruct the operator in why this variable exists and how to set it appropriately."
-                            arrow
-                            placement="top-start"
-                          >
-                            <TextField
-                              label="Description"
-                              value={variable.description}
-                              onChange={(e) => updateVariable(variable.id, { description: e.target.value })}
-                              fullWidth
-                              variant="outlined"
-                              sx={INPUT_BASE_SX}
-                            />
-                          </Tooltip>
-                        </Box>
+
                         <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 18%" }, minWidth: { lg: 160 } }}>
                           <Tooltip
                             title="This defines the type of variable data the script should expect."
@@ -1028,6 +1016,22 @@ export default function AssemblyEditor({
                             </Tooltip>
                           )}
                         </Box>
+                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 28%" }, minWidth: { lg: 220 } }}>
+                          <Tooltip
+                            title="Instruct the operator in why this variable exists and how to set it appropriately."
+                            arrow
+                            placement="top-start"
+                          >
+                            <TextField
+                              label="Description"
+                              value={variable.description}
+                              onChange={(e) => updateVariable(variable.id, { description: e.target.value })}
+                              fullWidth
+                              variant="outlined"
+                              sx={INPUT_BASE_SX}
+                            />
+                          </Tooltip>
+                        </Box>
                         <Box
                           sx={{
                             flex: { xs: "1 1 100%", lg: "0 0 auto" },
@@ -1051,25 +1055,33 @@ export default function AssemblyEditor({
                           gap: { xs: 2, lg: 1.5 }
                         }}
                       >
-                        <Box
-                          sx={{
-                            flex: { xs: "1 1 100%", lg: "0 1 50%" },
-                            minWidth: { lg: 220 },
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 1.5
-                          }}
+                      <Box
+                        sx={{
+                          flex: { xs: "1 1 100%", lg: "0 1 50%" },
+                          minWidth: { lg: 220 },
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1.5
+                        }}
+                      >
+                        <Typography
+                          variant="caption"
+                          sx={{ color: "#9ba3b4", fontSize: "0.75rem", ml: 0.5}} /* Left-Hand Spacing for the "Required" label to the left of the checkbox */
                         >
-                          <Typography variant="caption" sx={{ color: "#9ba3b4", fontSize: "0.75rem" }}>
-                            Required
-                          </Typography>
-                          <Checkbox
-                            checked={Boolean(variable.required)}
-                            onChange={(e) => updateVariable(variable.id, { required: e.target.checked })}
-                            sx={{ color: "#58a6ff", p: 0.5 }}
-                            inputProps={{ "aria-label": "Required" }}
-                          />
-                        </Box>
+                          Required
+                        </Typography>
+                        <Checkbox
+                          checked={Boolean(variable.required)}
+                          onChange={(e) =>
+                            updateVariable(variable.id, { required: e.target.checked })
+                          }
+                          sx={{
+                            color: "#58a6ff",
+                            p: 0.5,
+                          }}
+                          inputProps={{ "aria-label": "Required" }}
+                        />
+                      </Box>
                       </Box>
                     </Box>
                   </Paper>
