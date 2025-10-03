@@ -47,9 +47,8 @@ const VARIABLE_TYPE_OPTIONS = [
 ];
 
 const BACKGROUND_COLORS = {
-  field: "#2A2A2A", /* Background for text inputs, inline editors, and script content */
+  field: "#2A2A2A", /* Shared surface color for text fields, dropdown inputs, and script editors */
   sectionCard: "#2E2E2E", /* Background for section container cards */
-  menu: "#202734", /* Background for dropdown menus and code editor frames */
   menuSelected: "rgba(88,166,255,0.16)", /* Background for selected dropdown items */
   menuSelectedHover: "rgba(88,166,255,0.24)", /* Background for hovered selected dropdown items */
   primaryActionSaving: "rgba(88,166,255,0.12)", /* Background for primary action button while saving */
@@ -114,7 +113,7 @@ const SECTION_CARD_SX = {
 const MENU_PROPS = {
   PaperProps: {
     sx: {
-      bgcolor: BACKGROUND_COLORS.menu,
+      bgcolor: BACKGROUND_COLORS.field,
       color: "#e6edf3",
       border: "1px solid #2b3544",
       "& .MuiMenuItem-root.Mui-selected": {
@@ -698,7 +697,7 @@ export default function AssemblyEditor({
                   textTransform: "none",
                   backgroundColor: saving
                     ? BACKGROUND_COLORS.primaryActionSaving
-                    : BACKGROUND_COLORS.menu,
+                    : BACKGROUND_COLORS.field,
                   "&:hover": {
                     borderColor: "#7db7ff",
                     backgroundColor: BACKGROUND_COLORS.primaryActionHover
@@ -732,10 +731,10 @@ export default function AssemblyEditor({
                 minRows={3}
                 fullWidth
                 variant="outlined"
-                  sx={{
-                ...INPUT_BASE_SX,
-                "& .MuiOutlinedInput-inputMultiline": {padding: "4px 8px"}
-              }}
+                sx={{
+                  ...INPUT_BASE_SX,
+                  "& .MuiOutlinedInput-inputMultiline": { padding: "4px 8px" }
+                }}
               />
             </Grid>
             <Grid item xs={12} md={6}>
@@ -773,9 +772,7 @@ export default function AssemblyEditor({
             <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
               Script Content
             </Typography>
-            <Box
-              sx={{ border: "1px solid #2b3544", borderRadius: 1, background: BACKGROUND_COLORS.menu }}
-            >
+            <Box sx={{ border: "1px solid #2b3544", borderRadius: 1, background: BACKGROUND_COLORS.field }}>
               <Editor
                 value={assembly.script}
                 onValueChange={(value) => updateAssembly({ script: value })}
@@ -1022,7 +1019,7 @@ export default function AssemblyEditor({
                     key={file.id}
                     sx={{
                       p: 1.5,
-                      bgcolor: BACKGROUND_COLORS.menu,
+                      bgcolor: BACKGROUND_COLORS.field,
                       border: "1px solid #2b3544",
                       display: "flex",
                       alignItems: "center",
