@@ -904,7 +904,7 @@ export default function AssemblyEditor({
               Environment Variables
             </Typography>
             <Typography variant="body2" sx={{ color: "#9ba3b4", mb: 2 }}>
-              Variables are dynamically passed into the script as environment variables at runtime.
+              Variables are dynamically passed into the script as environment variables at runtime.  They are written like <b>$env:variableName</b> in the script editor.
             </Typography>
             {(assembly.variables || []).length ? (
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
