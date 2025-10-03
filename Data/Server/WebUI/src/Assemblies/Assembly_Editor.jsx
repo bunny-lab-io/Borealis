@@ -902,8 +902,15 @@ export default function AssemblyEditor({
                     key={variable.id}
                     sx={{ p: 2, bgcolor: BACKGROUND_COLORS.field, border: "1px solid #2b3544", borderRadius: 1 }}
                   >
-                    <Grid container spacing={2} alignItems="center">
-                      <Grid item xs={12} md={3}>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        gap: 2
+                      }}
+                    >
+                      <Box sx={{ flex: { xs: "1 1 100%", md: "0 1 23%" } }}>
                         <TextField
                           label="Variable Name"
                           value={variable.name}
@@ -912,8 +919,8 @@ export default function AssemblyEditor({
                           variant="outlined"
                           sx={INPUT_BASE_SX}
                         />
-                      </Grid>
-                      <Grid item xs={12} md={3}>
+                      </Box>
+                      <Box sx={{ flex: { xs: "1 1 100%", md: "0 1 18%" } }}>
                         <TextField
                           label="Display Label"
                           value={variable.label}
@@ -922,8 +929,8 @@ export default function AssemblyEditor({
                           variant="outlined"
                           sx={INPUT_BASE_SX}
                         />
-                      </Grid>
-                      <Grid item xs={12} md={2}>
+                      </Box>
+                      <Box sx={{ flex: { xs: "1 1 100%", md: "0 1 18%" } }}>
                         <TextField
                           select
                           fullWidth
@@ -937,8 +944,14 @@ export default function AssemblyEditor({
                             <MenuItem key={opt.key} value={opt.key}>{opt.label}</MenuItem>
                           ))}
                         </TextField>
-                      </Grid>
-                      <Grid item xs={12} md={3}>
+                      </Box>
+                      <Box
+                        sx={{
+                          flex: { xs: "1 1 100%", md: "0 1 27%" },
+                          display: "flex",
+                          alignItems: "center"
+                        }}
+                      >
                         {variable.type === "boolean" ? (
                           <FormControlLabel
                             control={
@@ -949,6 +962,11 @@ export default function AssemblyEditor({
                               />
                             }
                             label="Default Value"
+                            sx={{
+                              color: "#9ba3b4",
+                              m: 0,
+                              "& .MuiFormControlLabel-label": { fontSize: "0.95rem" }
+                            }}
                           />
                         ) : (
                           <TextField
@@ -960,8 +978,15 @@ export default function AssemblyEditor({
                             sx={INPUT_BASE_SX}
                           />
                         )}
-                      </Grid>
-                      <Grid item xs={12} md={1} sx={{ display: "flex", justifyContent: "center" }}>
+                      </Box>
+                      <Box
+                        sx={{
+                          flex: { xs: "1 1 100%", md: "0 0 6%" },
+                          display: "flex",
+                          justifyContent: "center",
+                          alignItems: "center"
+                        }}
+                      >
                         <Tooltip title="Required">
                           <Checkbox
                             checked={Boolean(variable.required)}
@@ -969,25 +994,23 @@ export default function AssemblyEditor({
                             sx={{ color: "#58a6ff" }}
                           />
                         </Tooltip>
-                      </Grid>
-                      <Grid item xs={12}>
+                      </Box>
+                      <Box sx={{ flex: { xs: "1 1 100%", md: "1 1 0%" }, minWidth: { md: 120 } }}>
                         <TextField
                           label="Description"
                           value={variable.description}
                           onChange={(e) => updateVariable(variable.id, { description: e.target.value })}
                           fullWidth
-                          multiline
-                          minRows={2}
                           variant="outlined"
                           sx={INPUT_BASE_SX}
                         />
-                      </Grid>
-                      <Grid item xs={12} sx={{ display: "flex", justifyContent: "flex-end" }}>
+                      </Box>
+                      <Box sx={{ flex: "1 1 100%", display: "flex", justifyContent: "flex-end" }}>
                         <IconButton onClick={() => removeVariable(variable.id)} sx={{ color: "#ff6b6b" }}>
                           <DeleteIcon />
                         </IconButton>
-                      </Grid>
-                    </Grid>
+                      </Box>
+                    </Box>
                   </Paper>
                 ))}
               </Box>
