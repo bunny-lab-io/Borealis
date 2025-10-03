@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "name": "Write Canary File to C Drive",
+  "description": "Writes a simple text file to the C:\\ drive of the computer.  Requires SYSTEM level execution context to work.",
+  "category": "script",
+  "type": "powershell",
+  "script": "# Define the file path\n$filePath = \"C:\\Canary.txt\"\n\n# Write some content into the file\n$env:canaryMessage | Out-File -FilePath $filePath -Encoding UTF8\n",
+  "timeout_seconds": 3600,
+  "sites": {
+    "mode": "all",
+    "values": []
+  },
+  "variables": [
+    {
+      "name": "canaryMessage",
+      "label": "Canary Message",
+      "type": "string",
+      "default": "Hello world!",
+      "required": true,
+      "description": "This is the text that will be written into the canary file."
+    }
+  ],
+  "files": []
+}

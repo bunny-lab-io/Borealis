@@ -624,19 +624,84 @@ export default function AssemblyEditor({
         flex: 1,
         height: "100%",
         overflow: "hidden",
+        ml: -0.95,
+        mt: -0.95,
         bgcolor: PAGE_BACKGROUND
       }}
     >
       <Box sx={{ flex: 1, overflow: "auto", p: { xs: 2, md: 3 } }}>
         <Paper sx={{ p: { xs: 2.5, md: 3 }, ...SECTION_CARD_SX, minHeight: "100%" }} elevation={0}>
-          <Box sx={{ mb: 3 }}>
-            <Typography variant="h5" sx={{ color: "#58a6ff", fontWeight: 500, mb: 0.5 }}>
-              Assembly Editor
-            </Typography>
-            <Typography variant="body2" sx={{ color: "#9ba3b4" }}>
-              Create and edit variables, scripts, and other fields related to assemblies.
-            </Typography>
+          
+      <Grid container alignItems="center" justifyContent="space-between" sx={{ mb: 3 }}>
+        {/* Left half */}
+        <Grid item xs={12} sm={6}>
+          <Box>
+            <Typography variant="h6" sx={{ color: '#58a6ff', mb: 0 }}>Assembly Editor</Typography>
+            <Typography variant="body2" sx={{ color: '#aaa' }}>Create and edit variables, scripts, and other fields related to assemblies.</Typography>
           </Box>
+        </Grid>
+
+        {/* Right half */}
+        <Grid item xs={12} sm={6}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1.5,
+              flexWrap: "wrap",
+              justifyContent: { xs: "flex-start", sm: "flex-end" },
+              mt: { xs: 2, sm: 0 }
+            }}
+          >
+            {currentPath ? (
+              <Tooltip title="Rename File">
+                <Button
+                  size="small"
+                  onClick={() => { setRenameValue(fileName); setRenameOpen(true); }}
+                  sx={{ color: "#58a6ff", textTransform: "none" }}
+                >
+                  Rename
+                </Button>
+              </Tooltip>
+            ) : null}
+            {currentPath ? (
+              <Tooltip title="Delete Assembly">
+                <Button
+                  size="small"
+                  onClick={() => setDeleteOpen(true)}
+                  sx={{ color: "#ff6b6b", textTransform: "none" }}
+                >
+                  Delete
+                </Button>
+              </Tooltip>
+            ) : null}
+            <Button
+              variant="outlined"
+              onClick={saveAssembly}
+              disabled={saving}
+              sx={{
+                color: "#58a6ff",
+                borderColor: "#58a6ff",
+                textTransform: "none",
+                backgroundColor: saving
+                  ? BACKGROUND_COLORS.primaryActionSaving
+                  : BACKGROUND_COLORS.field,
+                "&:hover": {
+                  borderColor: "#7db7ff",
+                  backgroundColor: BACKGROUND_COLORS.primaryActionHover
+                },
+                "&.Mui-disabled": {
+                  color: "#3c4452",
+                  borderColor: "#2b3544"
+                }
+              }}
+            >
+              {saving ? "Saving..." : "Save Assembly"}
+            </Button>
+          </Box>
+        </Grid>
+      </Grid>
+
 
           <Box
             sx={{
@@ -652,63 +717,6 @@ export default function AssemblyEditor({
               <Typography variant="caption" sx={SECTION_TITLE_SX}>
                 Overview
               </Typography>
-            </Box>
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 1.5,
-                flexWrap: "wrap",
-                justifyContent: "flex-end",
-                ml: { xs: 0, sm: "auto" },
-                alignSelf: "flex-start"
-              }}
-            >
-              {currentPath ? (
-                <Tooltip title="Rename File">
-                  <Button
-                    size="small"
-                    onClick={() => { setRenameValue(fileName); setRenameOpen(true); }}
-                    sx={{ color: "#58a6ff", textTransform: "none" }}
-                  >
-                    Rename
-                  </Button>
-                </Tooltip>
-              ) : null}
-              {currentPath ? (
-                <Tooltip title="Delete Assembly">
-                  <Button
-                    size="small"
-                    onClick={() => setDeleteOpen(true)}
-                    sx={{ color: "#ff6b6b", textTransform: "none" }}
-                  >
-                    Delete
-                  </Button>
-                </Tooltip>
-              ) : null}
-              <Button
-                variant="outlined"
-                onClick={saveAssembly}
-                disabled={saving}
-                sx={{
-                  color: "#58a6ff",
-                  borderColor: "#58a6ff",
-                  textTransform: "none",
-                  backgroundColor: saving
-                    ? BACKGROUND_COLORS.primaryActionSaving
-                    : BACKGROUND_COLORS.field,
-                  "&:hover": {
-                    borderColor: "#7db7ff",
-                    backgroundColor: BACKGROUND_COLORS.primaryActionHover
-                  },
-                  "&.Mui-disabled": {
-                    color: "#3c4452",
-                    borderColor: "#2b3544"
-                  }
-                }}
-              >
-                {saving ? "Saving..." : "Save Assembly"}
-              </Button>
             </Box>
           </Box>
 
@@ -1137,6 +1145,7 @@ export default function AssemblyEditor({
                 No files uploaded yet.
               </Typography>
             )}
+            
             <Button
               component="label"
               startIcon={<UploadFileIcon />}
@@ -1163,5 +1172,6 @@ export default function AssemblyEditor({
         onConfirm={deleteAssembly}
       />
     </Box>
+    
   );
 }
