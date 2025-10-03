@@ -7,12 +7,15 @@ import time
 import json
 import socket
 import subprocess
+from typing import Optional
 
 try:
     import winrm  # type: ignore
 except Exception:
     winrm = None
 
+DEFAULT_SERVICE_ACCOUNT = '.\\svcBorealis'
+LEGACY_SERVICE_ACCOUNTS = {'.\\svcBorealisAnsibleRunner', 'svcBorealisAnsibleRunner'}
 
 ROLE_NAME = 'playbook_exec_system'
 ROLE_CONTEXTS = ['system']
@@ -166,21 +169,24 @@ class Role:
             payload = {
                 'agent_id': self.ctx.agent_id,
                 'hostname': socket.gethostname(),
-                'username': '.\\svcBorealisAnsibleRunner',
+                'username': DEFAULT_SERVICE_ACCOUNT,
             }
             self._ansible_log(f"[checkin] POST {url} agent_id={self.ctx.agent_id}")
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as sess:
                 async with sess.post(url, json=payload) as resp:
                     js = await resp.json()
-            u = (js or {}).get('username') or '.\\svcBorealisAnsibleRunner'
+            u = (js or {}).get('username') or DEFAULT_SERVICE_ACCOUNT
             p = (js or {}).get('password') or ''
+            if u in LEGACY_SERVICE_ACCOUNTS:
+                self._ansible_log(f"[checkin] legacy service username {u!r}; requesting rotate", error=True)
+                return await self._rotate_service_creds(reason='legacy_username', force_username=DEFAULT_SERVICE_ACCOUNT)
             self._svc_creds = {'username': u, 'password': p}
             self._ansible_log(f"[checkin] received user={u} pw_len={len(p)}")
             return self._svc_creds
         except Exception:
             self._ansible_log(f"[checkin] failed agent_id={self.ctx.agent_id}", error=True)
-            return {'username': '.\\svcBorealisAnsibleRunner', 'password': ''}
+            return {'username': DEFAULT_SERVICE_ACCOUNT, 'password': ''}
 
     def _normalize_playbook_content(self, content: str) -> str:
         try:
@@ -202,21 +208,28 @@ class Role:
         except Exception:
             return content
 
-    async def _rotate_service_creds(self) -> dict:
+    async def _rotate_service_creds(self, reason: str = 'bad_credentials', force_username: Optional[str] = None) -> dict:
         try:
             import aiohttp
             url = self._server_base().rstrip('/') + '/api/agent/service-account/rotate'
             payload = {
                 'agent_id': self.ctx.agent_id,
-                'reason': 'bad_credentials',
+                'reason': reason,
             }
+            if force_username:
+                payload['username'] = force_username
             self._ansible_log(f"[rotate] POST {url} agent_id={self.ctx.agent_id}")
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as sess:
                 async with sess.post(url, json=payload) as resp:
                     js = await resp.json()
-            u = (js or {}).get('username') or '.\\svcBorealisAnsibleRunner'
+            u = (js or {}).get('username') or force_username or DEFAULT_SERVICE_ACCOUNT
             p = (js or {}).get('password') or ''
+            if u in LEGACY_SERVICE_ACCOUNTS and force_username != DEFAULT_SERVICE_ACCOUNT:
+                self._ansible_log(f"[rotate] legacy username {u!r} returned; retrying with default", error=True)
+                return await self._rotate_service_creds(reason='legacy_username', force_username=DEFAULT_SERVICE_ACCOUNT)
+            if u in LEGACY_SERVICE_ACCOUNTS:
+                u = DEFAULT_SERVICE_ACCOUNT
             self._svc_creds = {'username': u, 'password': p}
             self._ansible_log(f"[rotate] received user={u} pw_len={len(p)}")
             return self._svc_creds
@@ -384,7 +397,7 @@ try {{
         self._ansible_log(f"[runner] prepared playbook={play_abs} bytes={len(_norm.encode('utf-8'))}")
         # WinRM service account credentials
         creds = await self._fetch_service_creds()
-        user = creds.get('username') or '.\\svcBorealisAnsibleRunner'
+        user = creds.get('username') or DEFAULT_SERVICE_ACCOUNT
         pwd = creds.get('password') or ''
         # Converge endpoint state (listener + user)
         self._ensure_winrm_and_user(user, pwd)
@@ -392,7 +405,7 @@ try {{
         pre_ok = self._winrm_preflight(user, pwd)
         if not pre_ok:
             # rotate and retry once
-            creds = await self._rotate_service_creds()
+            creds = await self._rotate_service_creds(reason='winrm_preflight_failure')
             user = creds.get('username') or user
             pwd = creds.get('password') or ''
             self._ensure_winrm_and_user(user, pwd)
@@ -508,7 +521,7 @@ try {{
         # If authentication failed on first pass, rotate password and try once more
         if auth_failed:
             try:
-                newc = await self._rotate_service_creds()
+                newc = await self._rotate_service_creds(reason='auth_failed_retry')
                 user2 = newc.get('username') or user
                 pwd2 = newc.get('password') or ''
                 self._ensure_winrm_and_user(user2, pwd2)
@@ -551,11 +564,11 @@ try {{
         if os.name == 'nt':
             try:
                 creds = await self._fetch_service_creds()
-                user = creds.get('username') or '.\\svcBorealisAnsibleRunner'
+                user = creds.get('username') or DEFAULT_SERVICE_ACCOUNT
                 pwd = creds.get('password') or ''
                 self._ensure_winrm_and_user(user, pwd)
                 if not self._winrm_preflight(user, pwd):
-                    creds = await self._rotate_service_creds()
+                    creds = await self._rotate_service_creds(reason='winrm_preflight_failure')
                     user = creds.get('username') or user
                     pwd = creds.get('password') or ''
                     self._ensure_winrm_and_user(user, pwd)
@@ -576,7 +589,7 @@ try {{
                 use_module = True
         if use_module:
             py = _venv_python() or sys.executable
-            base_cmd = [py, '-m', 'ansible.cli.playbook']
+            base_cmd = [py, '-X', 'utf8', '-m', 'ansible.cli.playbook']
             self._ansible_log(f"[cli] ansible-playbook not found; using python -m ansible.cli.playbook via {py}")
         else:
             base_cmd = [ap]
@@ -593,20 +606,22 @@ try {{
             self._ansible_log(f"[cli] cmd={' '.join(cmd)}")
         # Ensure clean, plain output and correct interpreter for localhost
         env = os.environ.copy()
-        env.setdefault('ANSIBLE_FORCE_COLOR', '0')
-        env.setdefault('ANSIBLE_NOCOLOR', '1')
-        env.setdefault('PYTHONIOENCODING', 'utf-8')
-        env.setdefault('PYTHONUTF8', '1')
+        env['ANSIBLE_FORCE_COLOR'] = '0'
+        env['ANSIBLE_NOCOLOR'] = '1'
+        env['PYTHONIOENCODING'] = 'utf-8'
+        env['PYTHONUTF8'] = '1'
+        env['ANSIBLE_STDOUT_CALLBACK'] = 'default'
+        env['ANSIBLE_LOCALHOST_WARNING'] = '0'
+        env['ANSIBLE_COLLECTIONS_PATHS'] = _collections_dir()
         if os.name == 'nt':
-            env.setdefault('LANG', 'en_US.UTF-8')
-        env.setdefault('ANSIBLE_STDOUT_CALLBACK', 'default')
-        # Help Ansible pick the correct python for localhost
-        env.setdefault('ANSIBLE_LOCALHOST_WARNING', '0')
-        # Ensure collections path is discoverable
-        env.setdefault('ANSIBLE_COLLECTIONS_PATHS', _collections_dir())
+            env['LANG'] = 'en_US.UTF-8'
+            env['LC_ALL'] = 'en_US.UTF-8'
+            env['LC_CTYPE'] = 'en_US.UTF-8'
         vp = _venv_python()
         if vp:
             env.setdefault('ANSIBLE_PYTHON_INTERPRETER', vp)
+
+        self._ansible_log(f"[cli] locale env overrides: PYTHONUTF8={env.get('PYTHONUTF8')} LANG={env.get('LANG')} LC_ALL={env.get('LC_ALL')} LC_CTYPE={env.get('LC_CTYPE')}")
 
         creationflags = 0
         if os.name == 'nt':
@@ -751,7 +766,7 @@ try {{
                 if os.name != 'nt':
                     return
                 creds = await self._fetch_service_creds()
-                user = creds.get('username') or '.\\svcBorealisAnsibleRunner'
+                user = creds.get('username') or DEFAULT_SERVICE_ACCOUNT
                 pwd = creds.get('password') or ''
                 self._ansible_log(f"[bootstrap] ensure winrm+user user={user} pw_len={len(pwd)}")
                 self._ensure_winrm_and_user(user, pwd)
@@ -759,7 +774,7 @@ try {{
                 self._ansible_log(f"[bootstrap] preflight_ok={ok}")
                 if not ok:
                     self._ansible_log("[bootstrap] preflight failed; rotating creds", error=True)
-                    creds = await self._rotate_service_creds()
+                    creds = await self._rotate_service_creds(reason='bootstrap_preflight_failed')
                     user = creds.get('username') or user
                     pwd = creds.get('password') or ''
                     self._ensure_winrm_and_user(user, pwd)

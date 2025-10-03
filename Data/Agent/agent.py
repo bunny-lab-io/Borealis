@@ -1178,7 +1178,7 @@ async def connect():
         async def _svc_checkin_once():
             try:
                 url = get_server_url().rstrip('/') + "/api/agent/checkin"
-                payload = {"agent_id": AGENT_ID, "hostname": socket.gethostname(), "username": ".\\svcBorealisAnsibleRunner"}
+                payload = {"agent_id": AGENT_ID, "hostname": socket.gethostname(), "username": ".\\svcBorealis"}
                 timeout = aiohttp.ClientTimeout(total=10)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     await session.post(url, json=payload)

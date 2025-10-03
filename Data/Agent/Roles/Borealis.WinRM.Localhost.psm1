@@ -35,7 +35,10 @@ function Ensure-LocalhostWinRMHttps {
     # Harden auth and encryption
     try { winrm set winrm/config/service/auth @{Basic="false"; Kerberos="true"; Negotiate="true"; CredSSP="false"} | Out-Null } catch {}
     try { winrm set winrm/config/service @{AllowUnencrypted="false"} | Out-Null } catch {}
+    try { winrm set winrm/config/service @{AllowFreshCredentialsWhenNTLMOnly="true"} | Out-Null } catch {}
+    try { winrm set winrm/config/service @{AllowCredSspAuthentication="false"} | Out-Null } catch {}
     try { winrm set winrm/config/service @{IPv4Filter="127.0.0.1"} | Out-Null } catch {}
+    try { New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'LocalAccountTokenFilterPolicy' -PropertyType DWord -Value 1 -Force | Out-Null } catch {}
 }
 
 function Ensure-BorealisServiceUser {
@@ -62,6 +65,18 @@ function Ensure-BorealisServiceUser {
             Add-LocalGroupMember -Group "Administrators" -Member $localName -ErrorAction SilentlyContinue
         }
     } catch {}
+    $legacy = 'svcBorealisAnsibleRunner'
+    if ($localName -ne $legacy) {
+        try {
+            $legacyUser = Get-LocalUser -Name $legacy -ErrorAction SilentlyContinue
+            if ($legacyUser) {
+                try { Remove-LocalGroupMember -Group "Administrators" -Member $legacy -ErrorAction SilentlyContinue } catch {}
+                try { Disable-LocalUser -Name $legacy -ErrorAction SilentlyContinue } catch {}
+                try { Remove-LocalUser -Name $legacy -ErrorAction SilentlyContinue } catch {}
+                try { cmd /c "net user $legacy /DELETE" | Out-Null } catch {}
+            }
+        } catch {}
+    }
 }
 
 function Write-LocalInventory {

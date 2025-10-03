@@ -121,6 +121,40 @@ function Write-AgentLog {
     "[$ts] $Message" | Out-File -FilePath $path -Append -Encoding UTF8
 }
 
+$script:Utf8CodePageChanged = $false
+
+function Ensure-SystemUtf8CodePage {
+    param([string]$LogName = 'Install.log')
+
+    $codePageKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage'
+    $target = '65001'
+    try {
+        $props = Get-ItemProperty -Path $codePageKey -ErrorAction Stop
+        $currentAcp = ($props.ACP | ForEach-Object { $_.ToString() })
+        $currentOem = ($props.OEMCP | ForEach-Object { $_.ToString() })
+        Write-AgentLog -FileName $LogName -Message ("[UTF8] Detected ACP={0} OEMCP={1}" -f $currentAcp,$currentOem)
+    } catch {
+        Write-AgentLog -FileName $LogName -Message ("[UTF8] Failed to read code page info: {0}" -f $_.Exception.Message)
+        return
+    }
+
+    if ($currentAcp -eq $target -and $currentOem -eq $target) {
+        Write-AgentLog -FileName $LogName -Message '[UTF8] System code pages already set to 65001 (UTF-8).'
+        return
+    }
+
+    Write-AgentLog -FileName $LogName -Message '[UTF8] Updating system code pages to UTF-8 (65001). Requires reboot to finalize.'
+    try {
+        Set-ItemProperty -Path $codePageKey -Name 'ACP' -Value $target -Force
+        Set-ItemProperty -Path $codePageKey -Name 'OEMCP' -Value $target -Force
+        try { Set-ItemProperty -Path $codePageKey -Name 'MACCP' -Value $target -Force } catch {}
+        $script:Utf8CodePageChanged = $true
+        Write-AgentLog -FileName $LogName -Message '[UTF8] Code page registry values updated successfully.'
+    } catch {
+        Write-AgentLog -FileName $LogName -Message ("[UTF8] Failed to update code pages: {0}" -f $_.Exception.Message)
+    }
+}
+
 # Forcefully remove legacy and current Borealis services and tasks
 function Remove-BorealisServicesAndTasks {
     param([string]$LogName)
@@ -428,6 +462,7 @@ function InstallOrUpdate-BorealisAgent {
     $env:PATH = '{0};{1}' -f (Split-Path $pythonExe), $env:PATH
     Write-Host "Cleaning previous agent tasks/processes..." -ForegroundColor Yellow
     Remove-BorealisServicesAndTasks -LogName 'Install.log'
+    Ensure-SystemUtf8CodePage -LogName 'Install.log'
     Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
 
     # Resolve all paths relative to the script directory to avoid CWD issues
@@ -479,6 +514,27 @@ function InstallOrUpdate-BorealisAgent {
         if (Test-Path $agentRequirements) {
             & $venvPython -m pip install --disable-pip-version-check -q -r $agentRequirements | Out-Null
         }
+
+        $stubSource = Join-Path $agentSourceRoot 'fcntl_stub.py'
+        if (Test-Path $stubSource) {
+            $stubDest = Join-Path $venvFolderPath 'Lib\site-packages\fcntl.py'
+            Write-AgentLog -FileName 'Install.log' -Message '[UTF8] Ensuring Windows fcntl shim is installed.'
+            Copy-Item $stubSource $stubDest -Force
+        }
+
+        $termiosSource = Join-Path $agentSourceRoot 'termios_stub.py'
+        if (Test-Path $termiosSource) {
+            $termiosDest = Join-Path $venvFolderPath 'Lib\site-packages\termios.py'
+            Write-AgentLog -FileName 'Install.log' -Message '[UTF8] Ensuring Windows termios shim is installed.'
+            Copy-Item $termiosSource $termiosDest -Force
+        }
+
+        $siteCustomSource = Join-Path $agentSourceRoot 'sitecustomize.py'
+        if (Test-Path $siteCustomSource) {
+            $siteCustomDest = Join-Path $venvFolderPath 'Lib\site-packages\sitecustomize.py'
+            Write-AgentLog -FileName 'Install.log' -Message '[UTF8] Ensuring sitecustomize shim is installed.'
+            Copy-Item $siteCustomSource $siteCustomDest -Force
+        }
     }
 
     Run-Step "Configure Agent Settings" {
@@ -512,6 +568,11 @@ function InstallOrUpdate-BorealisAgent {
     Write-Host "`nConfiguring Borealis Agent (tasks)..." -ForegroundColor Blue
     Write-Host "===================================================================================="
     Ensure-AgentTasks -ScriptRoot $scriptDir
+    if ($script:Utf8CodePageChanged) {
+        $msg = 'System code pages set to UTF-8. A reboot is required before Ansible can run.'
+        Write-AgentLog -FileName 'Install.log' -Message ("[UTF8] {0}" -f $msg)
+        Write-Host "`n$msg" -ForegroundColor Yellow
+    }
 }
 
 # ---------------------- Main ----------------------

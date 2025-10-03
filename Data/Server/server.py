@@ -69,6 +69,9 @@ def _write_service_log(service: str, msg: str):
 def _ansible_log_server(msg: str):
     _write_service_log('ansible', msg)
 
+DEFAULT_SERVICE_ACCOUNT = '.\\svcBorealis'
+LEGACY_SERVICE_ACCOUNTS = {'.\\svcBorealisAnsibleRunner', 'svcBorealisAnsibleRunner'}
+
 # Borealis Python API Endpoints
 from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
 from Python_API_Endpoints.script_engines import run_powershell_script
@@ -2906,6 +2909,9 @@ def _service_acct_get(conn, agent_id: str):
 
 
 def _service_acct_set(conn, agent_id: str, username: str, plaintext_password: str):
+    username = (username or '').strip()
+    if not username or username in LEGACY_SERVICE_ACCOUNTS:
+        username = DEFAULT_SERVICE_ACCOUNT
     enc = _encrypt_secret(plaintext_password)
     now_utc = _now_iso_utc()
     cur = conn.cursor()
@@ -2929,15 +2935,17 @@ def _service_acct_set(conn, agent_id: str, username: str, plaintext_password: st
     }
 
 
+
 @app.route('/api/agent/checkin', methods=['POST'])
 def api_agent_checkin():
     payload = request.get_json(silent=True) or {}
     agent_id = (payload.get('agent_id') or '').strip()
     if not agent_id:
         return jsonify({'error': 'agent_id required'}), 400
-    username = (payload.get('username') or '.\\svcBorealisAnsibleRunner').strip()
-    # Optional hostname here for future auditing/joins
-    # Upsert service account, creating new creds if missing
+    raw_username = (payload.get('username') or '').strip()
+    username = raw_username or DEFAULT_SERVICE_ACCOUNT
+    if username in LEGACY_SERVICE_ACCOUNTS:
+        username = DEFAULT_SERVICE_ACCOUNT
     try:
         conn = _db_conn()
         row = _service_acct_get(conn, agent_id)
@@ -2946,17 +2954,25 @@ def api_agent_checkin():
             out = _service_acct_set(conn, agent_id, username, pw)
             _ansible_log_server(f"[checkin] created creds agent_id={agent_id} user={out['username']} rotated={out['last_rotated_utc']}")
         else:
-            # row: agent_id, username, password_encrypted, last_rotated_utc, version
+            stored_username = (row[1] or '').strip()
             try:
                 plain = _decrypt_secret(row[2])
             except Exception:
                 plain = ''
-            if not plain:
+            if stored_username in LEGACY_SERVICE_ACCOUNTS:
+                if not plain:
+                    plain = _gen_strong_password()
+                out = _service_acct_set(conn, agent_id, DEFAULT_SERVICE_ACCOUNT, plain)
+                _ansible_log_server(f"[checkin] upgraded legacy service user for agent_id={agent_id} -> {out['username']}")
+            elif not plain:
                 plain = _gen_strong_password()
-                out = _service_acct_set(conn, agent_id, row[1] or username, plain)
+                out = _service_acct_set(conn, agent_id, stored_username or username, plain)
             else:
+                eff_user = stored_username or username
+                if eff_user in LEGACY_SERVICE_ACCOUNTS:
+                    eff_user = DEFAULT_SERVICE_ACCOUNT
                 out = {
-                    'username': row[1] or username,
+                    'username': eff_user,
                     'password': plain,
                     'last_rotated_utc': row[3] or _now_iso_utc(),
                 }
@@ -2978,11 +2994,17 @@ def api_agent_service_account_rotate():
     agent_id = (payload.get('agent_id') or '').strip()
     if not agent_id:
         return jsonify({'error': 'agent_id required'}), 400
-    username = (payload.get('username') or '.\\svcBorealisAnsibleRunner').strip()
+    requested_username = (payload.get('username') or '').strip()
     try:
         conn = _db_conn()
         row = _service_acct_get(conn, agent_id)
-        user_eff = row[1] if row else username
+        stored_username = ''
+        if row:
+            stored_username = (row[1] or '').strip()
+        user_eff = requested_username or stored_username or DEFAULT_SERVICE_ACCOUNT
+        if user_eff in LEGACY_SERVICE_ACCOUNTS:
+            user_eff = DEFAULT_SERVICE_ACCOUNT
+            _ansible_log_server(f"[rotate] upgrading legacy service user for agent_id={agent_id}")
         pw_new = _gen_strong_password()
         out = _service_acct_set(conn, agent_id, user_eff, pw_new)
         conn.close()
@@ -2995,7 +3017,6 @@ def api_agent_service_account_rotate():
     except Exception as e:
         _ansible_log_server(f"[rotate] error agent_id={agent_id} err={e}")
         return jsonify({'error': str(e)}), 500
-
 
 @app.route("/api/ansible/recap/report", methods=["POST"])
 def api_ansible_recap_report():
