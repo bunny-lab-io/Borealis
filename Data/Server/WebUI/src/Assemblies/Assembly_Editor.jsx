@@ -48,23 +48,34 @@ const VARIABLE_TYPE_OPTIONS = [
 
 const INPUT_BASE_SX = {
   "& .MuiOutlinedInput-root": {
-    bgcolor: "#1f2329",
+    bgcolor: "#202734",
     color: "#e6edf3",
     borderRadius: 1,
-    minHeight: 42,
-    "& fieldset": { borderColor: "#2d333b" },
-    "&:hover fieldset": { borderColor: "#3b4a5c" },
+    minHeight: 40,
+    "& fieldset": { borderColor: "#2b3544" },
+    "&:hover fieldset": { borderColor: "#3a4657" },
     "&.Mui-focused fieldset": { borderColor: "#58a6ff" }
   },
   "& .MuiOutlinedInput-input": {
-    padding: "10px 12px",
+    padding: "9px 12px",
     fontSize: "0.95rem"
   },
   "& .MuiOutlinedInput-inputMultiline": {
-    padding: "10px 12px"
+    padding: "9px 12px"
   },
   "& .MuiInputLabel-root": { color: "#9ba3b4" },
-  "& .MuiInputLabel-root.Mui-focused": { color: "#58a6ff" }
+  "& .MuiInputLabel-root.Mui-focused": { color: "#58a6ff" },
+  "& input[type=number]": {
+    MozAppearance: "textfield"
+  },
+  "& input[type=number]::-webkit-outer-spin-button": {
+    WebkitAppearance: "none",
+    margin: 0
+  },
+  "& input[type=number]::-webkit-inner-spin-button": {
+    WebkitAppearance: "none",
+    margin: 0
+  }
 };
 
 const SELECT_BASE_SX = {
@@ -78,23 +89,23 @@ const SELECT_BASE_SX = {
 
 const SECTION_TITLE_SX = {
   color: "#58a6ff",
-  fontWeight: 500,
+  fontWeight: 400,
   fontSize: "14px",
   letterSpacing: 0.2
 };
 
 const SECTION_CARD_SX = {
-  bgcolor: "#161b22",
+  bgcolor: "#1a202b",
   borderRadius: 2,
-  border: "1px solid #1f2a37"
+  border: "1px solid #262f3d"
 };
 
 const MENU_PROPS = {
   PaperProps: {
     sx: {
-      bgcolor: "#1f2329",
+      bgcolor: "#202734",
       color: "#e6edf3",
-      border: "1px solid #2d333b",
+      border: "1px solid #2b3544",
       "& .MuiMenuItem-root.Mui-selected": {
         bgcolor: "rgba(88,166,255,0.16)"
       },
@@ -110,6 +121,8 @@ function keyBy(arr) {
 }
 
 const TYPE_MAP = keyBy(TYPE_OPTIONS_ALL);
+
+const PAGE_BACKGROUND = "#0d1117";
 
 function highlightedHtml(code, prismLang) {
   try {
@@ -595,9 +608,18 @@ export default function AssemblyEditor({
     : [];
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", flex: 1, height: "100%", overflow: "hidden" }}>
-      <Box sx={{ flex: 1, overflow: "auto", p: 2 }}>
-        <Paper sx={{ p: 3, ...SECTION_CARD_SX, minHeight: "100%" }} elevation={0}>
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        height: "100%",
+        overflow: "hidden",
+        bgcolor: PAGE_BACKGROUND
+      }}
+    >
+      <Box sx={{ flex: 1, overflow: "auto", p: { xs: 2, md: 3 } }}>
+        <Paper sx={{ p: { xs: 2.5, md: 3 }, ...SECTION_CARD_SX, minHeight: "100%" }} elevation={0}>
           <Box sx={{ mb: 3 }}>
             <Typography variant="h5" sx={{ color: "#58a6ff", fontWeight: 500, mb: 0.5 }}>
               Assembly Editor
@@ -607,7 +629,7 @@ export default function AssemblyEditor({
             </Typography>
           </Box>
 
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3, flexWrap: "wrap" }}>
             <Box sx={{ flex: 1 }}>
               <Typography variant="caption" sx={SECTION_TITLE_SX}>
                 Assembly Details
@@ -643,14 +665,14 @@ export default function AssemblyEditor({
                 color: "#58a6ff",
                 borderColor: "#58a6ff",
                 textTransform: "none",
-                backgroundColor: saving ? "rgba(88,166,255,0.12)" : "#1f2329",
+                backgroundColor: saving ? "rgba(88,166,255,0.12)" : "#202734",
                 "&:hover": {
                   borderColor: "#7db7ff",
                   backgroundColor: "rgba(88,166,255,0.18)"
                 },
                 "&.Mui-disabled": {
                   color: "#3c4452",
-                  borderColor: "#2d333b"
+                  borderColor: "#2b3544"
                 }
               }}
             >
@@ -714,7 +736,7 @@ export default function AssemblyEditor({
             <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
               Script Content
             </Typography>
-            <Box sx={{ border: "1px solid #2d333b", borderRadius: 1, background: "#1f2329" }}>
+            <Box sx={{ border: "1px solid #2b3544", borderRadius: 1, background: "#202734" }}>
               <Editor
                 value={assembly.script}
                 onValueChange={(value) => updateAssembly({ script: value })}
@@ -725,7 +747,7 @@ export default function AssemblyEditor({
                   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
                   fontSize: 14,
                   color: "#e6edf3",
-                  background: "#1f2329",
+                  background: "#202734",
                   outline: "none",
                   minHeight: 320,
                   lineHeight: 1.45,
@@ -739,11 +761,12 @@ export default function AssemblyEditor({
             <Grid item xs={12} md={6}>
               <TextField
                 label="Timeout (seconds)"
-                type="number"
+                type="text"
+                inputMode="numeric"
                 value={assembly.timeoutSeconds}
                 onChange={(e) => {
-                  const val = Number(e.target.value);
-                  updateAssembly({ timeoutSeconds: Number.isNaN(val) ? 0 : val });
+                  const nextValue = e.target.value.replace(/[^0-9]/g, "");
+                  updateAssembly({ timeoutSeconds: nextValue ? Number(nextValue) : 0 });
                 }}
                 fullWidth
                 variant="outlined"
@@ -752,68 +775,74 @@ export default function AssemblyEditor({
               />
             </Grid>
             <Grid item xs={12} md={6}>
-              <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
-                Sites
-              </Typography>
-              <TextField
-                select
-                fullWidth
-                label="Site Scope"
-                value={siteScopeValue}
-                onChange={(e) => updateSitesMode(e.target.value)}
-                sx={{ ...SELECT_BASE_SX, mb: siteScopeValue === "specific" ? 2 : 0 }}
-                SelectProps={{ MenuProps: MENU_PROPS }}
+              <Box
+                sx={{
+                  display: "flex",
+                  flexDirection: { xs: "column", sm: "row" },
+                  gap: 2,
+                  alignItems: "flex-start"
+                }}
               >
-                <MenuItem value="all">All Sites</MenuItem>
-                <MenuItem value="specific">Specific Sites</MenuItem>
-              </TextField>
-              {siteScopeValue === "specific" ? (
                 <TextField
                   select
                   fullWidth
-                  label="Allowed Sites"
-                  value={selectedSiteValues}
-                  onChange={(e) => updateSelectedSites(Array.isArray(e.target.value) ? e.target.value : [])}
-                  sx={SELECT_BASE_SX}
-                  SelectProps={{
-                    multiple: true,
-                    renderValue: (selected) => {
-                      if (!selected || selected.length === 0) {
-                        return <Typography sx={{ color: "#6b7687" }}>Select sites</Typography>;
-                      }
-                      const names = selected.map((val) => siteOptionMap.get(String(val))?.name || String(val));
-                      return names.join(", ");
-                    },
-                    MenuProps: MENU_PROPS
-                  }}
+                  label="Site Scope"
+                  value={siteScopeValue}
+                  onChange={(e) => updateSitesMode(e.target.value)}
+                  sx={{ ...SELECT_BASE_SX, flex: 1 }}
+                  SelectProps={{ MenuProps: MENU_PROPS }}
                 >
-                  {siteLoading ? (
-                    <MenuItem disabled>
-                      <ListItemText primary="Loading sites..." />
-                    </MenuItem>
-                  ) : siteOptions.length ? (
-                    siteOptions.map((site) => {
-                      const value = String(site.id);
-                      const checked = selectedSiteValues.includes(value);
-                      return (
-                        <MenuItem key={value} value={value} sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
-                          <Checkbox checked={checked} sx={{ color: "#58a6ff", mr: 1 }} />
-                          <ListItemText
-                            primary={site.name}
-                            secondary={site.description ? site.description : undefined}
-                            primaryTypographyProps={{ sx: { color: "#e6edf3" } }}
-                            secondaryTypographyProps={{ sx: { color: "#7f8794" } }}
-                          />
-                        </MenuItem>
-                      );
-                    })
-                  ) : (
-                    <MenuItem disabled>
-                      <ListItemText primary="No sites available" />
-                    </MenuItem>
-                  )}
+                  <MenuItem value="all">All Sites</MenuItem>
+                  <MenuItem value="specific">Specific Sites</MenuItem>
                 </TextField>
-              ) : null}
+                {siteScopeValue === "specific" ? (
+                  <TextField
+                    select
+                    fullWidth
+                    label="Allowed Sites"
+                    value={selectedSiteValues}
+                    onChange={(e) => updateSelectedSites(Array.isArray(e.target.value) ? e.target.value : [])}
+                    sx={{ ...SELECT_BASE_SX, flex: 1 }}
+                    SelectProps={{
+                      multiple: true,
+                      renderValue: (selected) => {
+                        if (!selected || selected.length === 0) {
+                          return <Typography sx={{ color: "#6b7687" }}>Select sites</Typography>;
+                        }
+                        const names = selected.map((val) => siteOptionMap.get(String(val))?.name || String(val));
+                        return names.join(", ");
+                      },
+                      MenuProps: MENU_PROPS
+                    }}
+                  >
+                    {siteLoading ? (
+                      <MenuItem disabled>
+                        <ListItemText primary="Loading sites..." />
+                      </MenuItem>
+                    ) : siteOptions.length ? (
+                      siteOptions.map((site) => {
+                        const value = String(site.id);
+                        const checked = selectedSiteValues.includes(value);
+                        return (
+                          <MenuItem key={value} value={value} sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
+                            <Checkbox checked={checked} sx={{ color: "#58a6ff", mr: 1 }} />
+                            <ListItemText
+                              primary={site.name}
+                              secondary={site.description ? site.description : undefined}
+                              primaryTypographyProps={{ sx: { color: "#e6edf3" } }}
+                              secondaryTypographyProps={{ sx: { color: "#7f8794" } }}
+                            />
+                          </MenuItem>
+                        );
+                      })
+                    ) : (
+                      <MenuItem disabled>
+                        <ListItemText primary="No sites available" />
+                      </MenuItem>
+                    )}
+                  </TextField>
+                ) : null}
+              </Box>
             </Grid>
           </Grid>
 
@@ -829,7 +858,7 @@ export default function AssemblyEditor({
                 {assembly.variables.map((variable) => (
                   <Paper
                     key={variable.id}
-                    sx={{ p: 2, bgcolor: "#1f2329", border: "1px solid #2d333b", borderRadius: 1 }}
+                    sx={{ p: 2, bgcolor: "#202734", border: "1px solid #2b3544", borderRadius: 1 }}
                   >
                     <Grid container spacing={2} alignItems="center">
                       <Grid item xs={12} md={3}>
@@ -948,8 +977,8 @@ export default function AssemblyEditor({
                     key={file.id}
                     sx={{
                       p: 1.5,
-                      bgcolor: "#1f2329",
-                      border: "1px solid #2d333b",
+                      bgcolor: "#202734",
+                      border: "1px solid #2b3544",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between"
