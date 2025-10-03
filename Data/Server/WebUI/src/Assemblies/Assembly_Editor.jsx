@@ -901,7 +901,7 @@ export default function AssemblyEditor({
 
           <Box sx={{ mt: 3 }}>
             <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
-              Variables
+              Environment Variables
             </Typography>
             <Typography variant="body2" sx={{ color: "#9ba3b4", mb: 2 }}>
               Variables are dynamically passed into the script as environment variables at runtime.
