@@ -2843,9 +2843,18 @@ def scripts_quick_run():
         return jsonify({"error": f"Unsupported script type '{script_type}'. Only powershell is supported for Quick Job currently."}), 400
 
     content = doc.get("script") or ""
-    variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
+    doc_variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
+
+    def _env_string(value: Any) -> str:
+        if isinstance(value, bool):
+            return "True" if value else "False"
+        if value is None:
+            return ""
+        return str(value)
+
     env_map: Dict[str, str] = {}
-    for var in variables:
+    doc_names: Dict[str, bool] = {}
+    for var in doc_variables:
         if not isinstance(var, dict):
             continue
         name = str(var.get("name") or "").strip()
@@ -2853,13 +2862,40 @@ def scripts_quick_run():
             continue
         env_key = re.sub(r"[^A-Za-z0-9_]", "_", name.upper())
         default_val = var.get("default")
-        if isinstance(default_val, bool):
-            env_val = "True" if default_val else "False"
-        elif default_val is None:
-            env_val = ""
+        if default_val is None and "defaultValue" in var:
+            default_val = var.get("defaultValue")
+        if default_val is None and "default_value" in var:
+            default_val = var.get("default_value")
+        env_map[env_key] = _env_string(default_val)
+        doc_names[name] = True
+
+    overrides_raw = data.get("variable_values")
+    overrides: Dict[str, Any] = {}
+    if isinstance(overrides_raw, dict):
+        for key, val in overrides_raw.items():
+            name = str(key or "").strip()
+            if not name:
+                continue
+            overrides[name] = val
+            env_key = re.sub(r"[^A-Za-z0-9_]", "_", name.upper())
+            env_map[env_key] = _env_string(val)
+
+    variables: List[Dict[str, Any]] = []
+    for var in doc_variables:
+        if not isinstance(var, dict):
+            continue
+        name = str(var.get("name") or "").strip()
+        if not name:
+            continue
+        if name in overrides:
+            new_var = dict(var)
+            new_var["value"] = overrides[name]
+            variables.append(new_var)
         else:
-            env_val = str(default_val)
-        env_map[env_key] = env_val
+            variables.append(var)
+    for name, val in overrides.items():
+        if name not in doc_names:
+            variables.append({"name": name, "value": val})
     timeout_seconds = 0
     try:
         timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))

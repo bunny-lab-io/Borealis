@@ -124,7 +124,126 @@ function buildWorkflowTree(workflows, folders) {
   return { root: [rootNode], map };
 }
 
-function ComponentCard({ comp, onRemove }) {
+function normalizeVariableDefinitions(vars = []) {
+  return (Array.isArray(vars) ? vars : [])
+    .map((raw) => {
+      if (!raw || typeof raw !== "object") return null;
+      const name = typeof raw.name === "string" ? raw.name.trim() : typeof raw.key === "string" ? raw.key.trim() : "";
+      if (!name) return null;
+      const label = typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : name;
+      const type = typeof raw.type === "string" ? raw.type.toLowerCase() : "string";
+      const required = Boolean(raw.required);
+      const description = typeof raw.description === "string" ? raw.description : "";
+      let defaultValue = "";
+      if (Object.prototype.hasOwnProperty.call(raw, "default")) defaultValue = raw.default;
+      else if (Object.prototype.hasOwnProperty.call(raw, "defaultValue")) defaultValue = raw.defaultValue;
+      else if (Object.prototype.hasOwnProperty.call(raw, "default_value")) defaultValue = raw.default_value;
+      return { name, label, type, required, description, default: defaultValue };
+    })
+    .filter(Boolean);
+}
+
+function coerceVariableValue(type, value) {
+  if (type === "boolean") {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value !== 0;
+    if (value == null) return false;
+    const str = String(value).trim().toLowerCase();
+    if (!str) return false;
+    return ["true", "1", "yes", "on"].includes(str);
+  }
+  if (type === "number") {
+    if (value == null || value === "") return "";
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? String(parsed) : "";
+  }
+  return value == null ? "" : String(value);
+}
+
+function mergeComponentVariables(docVars = [], storedVars = [], storedValueMap = {}) {
+  const definitions = normalizeVariableDefinitions(docVars);
+  const overrides = {};
+  const storedMeta = {};
+  (Array.isArray(storedVars) ? storedVars : []).forEach((raw) => {
+    if (!raw || typeof raw !== "object") return;
+    const name = typeof raw.name === "string" ? raw.name.trim() : "";
+    if (!name) return;
+    if (Object.prototype.hasOwnProperty.call(raw, "value")) overrides[name] = raw.value;
+    else if (Object.prototype.hasOwnProperty.call(raw, "default")) overrides[name] = raw.default;
+    storedMeta[name] = {
+      label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : name,
+      type: typeof raw.type === "string" ? raw.type.toLowerCase() : undefined,
+      required: Boolean(raw.required),
+      description: typeof raw.description === "string" ? raw.description : "",
+      default: Object.prototype.hasOwnProperty.call(raw, "default") ? raw.default : ""
+    };
+  });
+  if (storedValueMap && typeof storedValueMap === "object") {
+    Object.entries(storedValueMap).forEach(([key, val]) => {
+      const name = typeof key === "string" ? key.trim() : "";
+      if (name) overrides[name] = val;
+    });
+  }
+
+  const used = new Set();
+  const merged = definitions.map((def) => {
+    const override = Object.prototype.hasOwnProperty.call(overrides, def.name) ? overrides[def.name] : undefined;
+    used.add(def.name);
+    return {
+      ...def,
+      value: override !== undefined ? coerceVariableValue(def.type, override) : coerceVariableValue(def.type, def.default)
+    };
+  });
+
+  (Array.isArray(storedVars) ? storedVars : []).forEach((raw) => {
+    if (!raw || typeof raw !== "object") return;
+    const name = typeof raw.name === "string" ? raw.name.trim() : "";
+    if (!name || used.has(name)) return;
+    const meta = storedMeta[name] || {};
+    const type = meta.type || (typeof overrides[name] === "boolean" ? "boolean" : typeof overrides[name] === "number" ? "number" : "string");
+    const defaultValue = Object.prototype.hasOwnProperty.call(meta, "default") ? meta.default : "";
+    const override = Object.prototype.hasOwnProperty.call(overrides, name)
+      ? overrides[name]
+      : Object.prototype.hasOwnProperty.call(raw, "value")
+        ? raw.value
+        : defaultValue;
+    merged.push({
+      name,
+      label: meta.label || name,
+      type,
+      required: Boolean(meta.required),
+      description: meta.description || "",
+      default: defaultValue,
+      value: coerceVariableValue(type, override)
+    });
+    used.add(name);
+  });
+
+  Object.entries(overrides).forEach(([nameRaw, val]) => {
+    const name = typeof nameRaw === "string" ? nameRaw.trim() : "";
+    if (!name || used.has(name)) return;
+    const type = typeof val === "boolean" ? "boolean" : typeof val === "number" ? "number" : "string";
+    merged.push({
+      name,
+      label: name,
+      type,
+      required: false,
+      description: "",
+      default: "",
+      value: coerceVariableValue(type, val)
+    });
+    used.add(name);
+  });
+
+  return merged;
+}
+
+function ComponentCard({ comp, onRemove, onVariableChange, errors = {} }) {
+  const variables = Array.isArray(comp.variables)
+    ? comp.variables.filter((v) => v && typeof v.name === "string" && v.name)
+    : [];
+  const description = comp.description || comp.path || "";
   return (
     <Paper sx={{ bgcolor: "#2a2a2a", border: "1px solid #3a3a3a", p: 1.2, mb: 1.2, borderRadius: 1 }}>
       <Box sx={{ display: "flex", gap: 2 }}>
@@ -133,30 +252,65 @@ function ComponentCard({ comp, onRemove }) {
             {comp.type === "script" ? comp.name : comp.name}
           </Typography>
           <Typography variant="body2" sx={{ color: "#aaa" }}>
-            {comp.description || (comp.type === "script" ? comp.path : comp.path)}
+            {description}
           </Typography>
         </Box>
         <Divider orientation="vertical" flexItem sx={{ borderColor: "#333" }} />
         <Box sx={{ flex: 1 }}>
-          <Typography variant="subtitle2" sx={{ color: "#ccc", mb: 1 }}>Variables (placeholder)</Typography>
-          <FormControlLabel control={<Checkbox size="small" />} label={<Typography variant="body2">Example toggle</Typography>} />
-          <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
-            <TextField size="small" label="Param A" variant="outlined" fullWidth
-              InputLabelProps={{ shrink: true }}
-              sx={{
-                "& .MuiOutlinedInput-root": { bgcolor: "#1b1b1b" },
-                "& .MuiInputLabel-root": { color: "#aaa" },
-                "& .MuiInputBase-input": { color: "#e6edf3" }
-              }}
-            />
-            <Select size="small" value={"install"} sx={{ minWidth: 160 }}>
-              <MenuItem value="install">Install/Update existing installation</MenuItem>
-              <MenuItem value="uninstall">Uninstall</MenuItem>
-            </Select>
-          </Box>
+          <Typography variant="subtitle2" sx={{ color: "#ccc", mb: 1 }}>Variables</Typography>
+          {variables.length ? (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+              {variables.map((variable) => (
+                <Box key={variable.name}>
+                  {variable.type === "boolean" ? (
+                    <>
+                      <FormControlLabel
+                        control={(
+                          <Checkbox
+                            size="small"
+                            checked={Boolean(variable.value)}
+                            onChange={(e) => onVariableChange(comp.localId, variable.name, e.target.checked)}
+                          />
+                        )}
+                        label={
+                          <Typography variant="body2">
+                            {variable.label}
+                            {variable.required ? " *" : ""}
+                          </Typography>
+                        }
+                      />
+                      {variable.description ? (
+                        <Typography variant="caption" sx={{ color: "#888", ml: 3 }}>
+                          {variable.description}
+                        </Typography>
+                      ) : null}
+                    </>
+                  ) : (
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label={`${variable.label}${variable.required ? " *" : ""}`}
+                      type={variable.type === "number" ? "number" : variable.type === "credential" ? "password" : "text"}
+                      value={variable.value ?? ""}
+                      onChange={(e) => onVariableChange(comp.localId, variable.name, e.target.value)}
+                      InputLabelProps={{ shrink: true }}
+                      sx={{
+                        "& .MuiOutlinedInput-root": { bgcolor: "#1b1b1b", color: "#e6edf3" },
+                        "& .MuiInputBase-input": { color: "#e6edf3" }
+                      }}
+                      error={Boolean(errors[variable.name])}
+                      helperText={errors[variable.name] || variable.description || ""}
+                    />
+                  )}
+                </Box>
+              ))}
+            </Box>
+          ) : (
+            <Typography variant="body2" sx={{ color: "#888" }}>No variables defined for this assembly.</Typography>
+          )}
         </Box>
         <Box>
-          <IconButton onClick={onRemove} size="small" sx={{ color: "#ff6666" }}>
+          <IconButton onClick={() => onRemove(comp.localId)} size="small" sx={{ color: "#ff6666" }}>
             <DeleteIcon fontSize="small" />
           </IconButton>
         </Box>
@@ -189,6 +343,134 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [availableDevices, setAvailableDevices] = useState([]); // [{hostname, display, online}]
   const [selectedTargets, setSelectedTargets] = useState({}); // map hostname->bool
   const [deviceSearch, setDeviceSearch] = useState("");
+  const [componentVarErrors, setComponentVarErrors] = useState({});
+
+  const generateLocalId = useCallback(
+    () => `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    []
+  );
+
+  const normalizeComponentPath = useCallback((type, rawPath) => {
+    const trimmed = (rawPath || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
+    if (!trimmed) return "";
+    if (type === "script") {
+      return trimmed.startsWith("Scripts/") ? trimmed : `Scripts/${trimmed}`;
+    }
+    return trimmed;
+  }, []);
+
+  const fetchAssemblyDoc = useCallback(async (type, rawPath) => {
+    const normalizedPath = normalizeComponentPath(type, rawPath);
+    if (!normalizedPath) return { doc: null, normalizedPath: "" };
+    try {
+      const island = type === "ansible" ? "ansible" : "scripts";
+      const resp = await fetch(`/api/assembly/load?island=${island}&path=${encodeURIComponent(normalizedPath)}`);
+      if (!resp.ok) {
+        return { doc: null, normalizedPath };
+      }
+      const data = await resp.json();
+      return { doc: data, normalizedPath };
+    } catch {
+      return { doc: null, normalizedPath };
+    }
+  }, [normalizeComponentPath]);
+
+  const hydrateExistingComponents = useCallback(async (rawComponents = []) => {
+    const results = [];
+    for (const raw of rawComponents) {
+      if (!raw || typeof raw !== "object") continue;
+      const typeRaw = raw.type || raw.component_type || "script";
+      if (typeRaw === "workflow") {
+        results.push({
+          ...raw,
+          type: "workflow",
+          variables: Array.isArray(raw.variables) ? raw.variables : [],
+          localId: generateLocalId()
+        });
+        continue;
+      }
+      const type = typeRaw === "ansible" ? "ansible" : "script";
+      const basePath = raw.path || raw.script_path || raw.rel_path || "";
+      const { doc, normalizedPath } = await fetchAssemblyDoc(type, basePath);
+      const assembly = doc?.assembly || {};
+      const docVars = assembly?.variables || doc?.variables || [];
+      const mergedVariables = mergeComponentVariables(docVars, raw.variables, raw.variable_values);
+      results.push({
+        ...raw,
+        type,
+        path: normalizedPath || basePath,
+        name: raw.name || assembly?.name || raw.file_name || raw.tab_name || normalizedPath || basePath,
+        description: raw.description || assembly?.description || normalizedPath || basePath,
+        variables: mergedVariables,
+        localId: generateLocalId()
+      });
+    }
+    return results;
+  }, [fetchAssemblyDoc, generateLocalId]);
+
+  const sanitizeComponentsForSave = useCallback((items) => {
+    return (Array.isArray(items) ? items : []).map((comp) => {
+      if (!comp || typeof comp !== "object") return comp;
+      const { localId, ...rest } = comp;
+      const sanitized = { ...rest };
+      if (Array.isArray(comp.variables)) {
+        const valuesMap = {};
+        sanitized.variables = comp.variables
+          .filter((v) => v && typeof v.name === "string" && v.name)
+          .map((v) => {
+            const entry = {
+              name: v.name,
+              label: v.label || v.name,
+              type: v.type || "string",
+              required: Boolean(v.required),
+              description: v.description || ""
+            };
+            if (Object.prototype.hasOwnProperty.call(v, "default")) entry.default = v.default;
+            if (Object.prototype.hasOwnProperty.call(v, "value")) {
+              entry.value = v.value;
+              valuesMap[v.name] = v.value;
+            }
+            return entry;
+          });
+        if (!sanitized.variables.length) sanitized.variables = [];
+        if (Object.keys(valuesMap).length) sanitized.variable_values = valuesMap;
+        else delete sanitized.variable_values;
+      }
+      return sanitized;
+    });
+  }, []);
+
+  const updateComponentVariable = useCallback((localId, name, value) => {
+    if (!localId || !name) return;
+    setComponents((prev) => prev.map((comp) => {
+      if (!comp || comp.localId !== localId) return comp;
+      const vars = Array.isArray(comp.variables) ? comp.variables : [];
+      const nextVars = vars.map((variable) => {
+        if (!variable || variable.name !== name) return variable;
+        return { ...variable, value: coerceVariableValue(variable.type || "string", value) };
+      });
+      return { ...comp, variables: nextVars };
+    }));
+    setComponentVarErrors((prev) => {
+      if (!prev[localId] || !prev[localId][name]) return prev;
+      const next = { ...prev };
+      const compErrors = { ...next[localId] };
+      delete compErrors[name];
+      if (Object.keys(compErrors).length) next[localId] = compErrors;
+      else delete next[localId];
+      return next;
+    });
+  }, []);
+
+  const removeComponent = useCallback((localId) => {
+    setComponents((prev) => prev.filter((comp) => comp.localId !== localId));
+    setComponentVarErrors((prev) => {
+      if (!prev[localId]) return prev;
+      const next = { ...prev };
+      delete next[localId];
+      return next;
+    });
+  }, []);
 
   const isValid = useMemo(() => {
     const base = jobName.trim().length > 0 && components.length > 0 && targets.length > 0;
@@ -355,18 +637,32 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const deviceSorted = useMemo(() => deviceRows, [deviceRows]);
 
   useEffect(() => {
-    if (initialJob && initialJob.id) {
-      setJobName(initialJob.name || "");
-      const comps = Array.isArray(initialJob.components) ? initialJob.components : [];
-      setComponents(comps.length ? comps : []);
-      setTargets(Array.isArray(initialJob.targets) ? initialJob.targets : []);
-      setScheduleType(initialJob.schedule_type || initialJob.schedule?.type || "immediately");
-      setStartDateTime(initialJob.start_ts ? dayjs(Number(initialJob.start_ts) * 1000).second(0) : (initialJob.schedule?.start ? dayjs(initialJob.schedule.start).second(0) : dayjs().add(5, "minute").second(0)));
-      setStopAfterEnabled(Boolean(initialJob.duration_stop_enabled));
-      setExpiration(initialJob.expiration || "no_expire");
-      setExecContext(initialJob.execution_context || "system");
-    }
-  }, [initialJob]);
+    let canceled = false;
+    const hydrate = async () => {
+      if (initialJob && initialJob.id) {
+        setJobName(initialJob.name || "");
+        setTargets(Array.isArray(initialJob.targets) ? initialJob.targets : []);
+        setScheduleType(initialJob.schedule_type || initialJob.schedule?.type || "immediately");
+        setStartDateTime(initialJob.start_ts ? dayjs(Number(initialJob.start_ts) * 1000).second(0) : (initialJob.schedule?.start ? dayjs(initialJob.schedule.start).second(0) : dayjs().add(5, "minute").second(0)));
+        setStopAfterEnabled(Boolean(initialJob.duration_stop_enabled));
+        setExpiration(initialJob.expiration || "no_expire");
+        setExecContext(initialJob.execution_context || "system");
+        const comps = Array.isArray(initialJob.components) ? initialJob.components : [];
+        const hydrated = await hydrateExistingComponents(comps);
+        if (!canceled) {
+          setComponents(hydrated);
+          setComponentVarErrors({});
+        }
+      } else if (!initialJob) {
+        setComponents([]);
+        setComponentVarErrors({});
+      }
+    };
+    hydrate();
+    return () => {
+      canceled = true;
+    };
+  }, [initialJob, hydrateExistingComponents]);
 
   const openAddComponent = async () => {
     setAddCompOpen(true);
@@ -399,32 +695,38 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
     } catch { setAnsibleTree([]); setAnsibleMap({}); }
   };
 
-  const addSelectedComponent = () => {
+  const addSelectedComponent = useCallback(async () => {
     const map = compTab === "scripts" ? scriptMap : (compTab === "ansible" ? ansibleMap : workflowMap);
     const node = map[selectedNodeId];
     if (!node || node.isFolder) return false;
-    if (compTab === "scripts" && node.script) {
-      setComponents((prev) => [
-        ...prev,
-        // Store path relative to Assemblies root with 'Scripts/' prefix for scheduler compatibility
-        { type: "script", path: (node.path.startsWith('Scripts/') ? node.path : `Scripts/${node.path}`), name: node.fileName || node.label, description: node.path }
-      ]);
-      setSelectedNodeId("");
-      return true;
-    } else if (compTab === "ansible" && node.script) {
-      setComponents((prev) => [
-        ...prev,
-        { type: "ansible", path: node.path, name: node.fileName || node.label, description: node.path }
-      ]);
-      setSelectedNodeId("");
-      return true;
-    } else if (compTab === "workflows" && node.workflow) {
+    if (compTab === "workflows" && node.workflow) {
       alert("Workflows within Scheduled Jobs are not supported yet");
       return false;
     }
+    if (compTab === "scripts" || compTab === "ansible") {
+      const type = compTab === "scripts" ? "script" : "ansible";
+      const rawPath = node.path || node.id || "";
+      const { doc, normalizedPath } = await fetchAssemblyDoc(type, rawPath);
+      const assembly = doc?.assembly || {};
+      const docVars = assembly?.variables || doc?.variables || [];
+      const mergedVars = mergeComponentVariables(docVars, [], {});
+      setComponents((prev) => [
+        ...prev,
+        {
+          type,
+          path: normalizedPath || rawPath,
+          name: assembly?.name || node.fileName || node.label,
+          description: assembly?.description || normalizedPath || rawPath,
+          variables: mergedVars,
+          localId: generateLocalId()
+        }
+      ]);
+      setSelectedNodeId("");
+      return true;
+    }
     setSelectedNodeId("");
     return false;
-  };
+  }, [compTab, scriptMap, ansibleMap, workflowMap, selectedNodeId, fetchAssemblyDoc, generateLocalId]);
 
   const openAddTargets = async () => {
     setAddTargetOpen(true);
@@ -449,9 +751,30 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   };
 
   const handleCreate = async () => {
+    const requiredErrors = {};
+    components.forEach((comp) => {
+      if (!comp || !comp.localId) return;
+      (Array.isArray(comp.variables) ? comp.variables : []).forEach((variable) => {
+        if (!variable || !variable.name || !variable.required) return;
+        if ((variable.type || "string") === "boolean") return;
+        const value = variable.value;
+        if (value == null || value === "") {
+          if (!requiredErrors[comp.localId]) requiredErrors[comp.localId] = {};
+          requiredErrors[comp.localId][variable.name] = "Required";
+        }
+      });
+    });
+    if (Object.keys(requiredErrors).length) {
+      setComponentVarErrors(requiredErrors);
+      setTab(1);
+      alert("Please fill in all required variable values.");
+      return;
+    }
+    setComponentVarErrors({});
+    const payloadComponents = sanitizeComponentsForSave(components);
     const payload = {
       name: jobName,
-      components,
+      components: payloadComponents,
       targets,
       schedule: { type: scheduleType, start: scheduleType !== "immediately" ? (() => { try { const d = startDateTime?.toDate?.() || new Date(startDateTime); d.setSeconds(0,0); return d.toISOString(); } catch { return startDateTime; } })() : null },
       duration: { stopAfterEnabled, expiration },
@@ -553,9 +876,13 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
             {components.length === 0 && (
               <Typography variant="body2" sx={{ color: "#888" }}>No assemblies added yet.</Typography>
             )}
-            {components.map((c, idx) => (
-              <ComponentCard key={`${c.type}-${c.path}-${idx}`} comp={c}
-                onRemove={() => setComponents((prev) => prev.filter((_, i) => i !== idx))}
+            {components.map((c) => (
+              <ComponentCard
+                key={c.localId || `${c.type}-${c.path}`}
+                comp={c}
+                onRemove={removeComponent}
+                onVariableChange={updateComponentVariable}
+                errors={componentVarErrors[c.localId] || {}}
               />
             ))}
             {components.length === 0 && (
@@ -820,7 +1147,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAddCompOpen(false)} sx={{ color: "#58a6ff" }}>Close</Button>
-          <Button onClick={() => { const ok = addSelectedComponent(); if (ok) setAddCompOpen(false); }}
+          <Button onClick={async () => { const ok = await addSelectedComponent(); if (ok) setAddCompOpen(false); }}
             sx={{ color: "#58a6ff" }} disabled={!selectedNodeId}
           >Add</Button>
         </DialogActions>

@@ -25,6 +25,14 @@ def _now_ts() -> int:
     return int(time.time())
 
 
+def _env_string(value: Any) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _parse_ts(val: Any) -> Optional[int]:
     """Best effort to parse ISO-ish datetime string or numeric seconds to epoch seconds."""
     if val is None:
@@ -336,14 +344,21 @@ class JobScheduler:
         except Exception:
             pass
 
-    def _dispatch_script(self, hostname: str, rel_path: str, run_mode: str) -> None:
+    def _dispatch_script(self, hostname: str, component: Dict[str, Any], run_mode: str) -> None:
         """Emit a quick_job_run event to agents for the given script/host.
         Mirrors /api/scripts/quick_run behavior for scheduled jobs.
         """
         try:
             scripts_root = self._scripts_root()
             import os
-            path_norm = (rel_path or "").replace("\\", "/")
+            rel_path_raw = ""
+            if isinstance(component, dict):
+                rel_path_raw = str(component.get("path") or component.get("script_path") or "")
+            else:
+                rel_path_raw = str(component or "")
+            path_norm = (rel_path_raw or "").replace("\\", "/").strip()
+            if path_norm and not path_norm.startswith("Scripts/"):
+                path_norm = f"Scripts/{path_norm}"
             abs_path = os.path.abspath(os.path.join(scripts_root, path_norm))
             if (not abs_path.startswith(scripts_root)) or (not self._is_valid_scripts_relpath(path_norm)) or (not os.path.isfile(abs_path)):
                 return
@@ -353,8 +368,28 @@ class JobScheduler:
             if stype != "powershell":
                 return
             content = doc.get("script") or ""
+            doc_variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
+
+            overrides: Dict[str, Any] = {}
+            if isinstance(component, dict):
+                if isinstance(component.get("variable_values"), dict):
+                    for key, val in component.get("variable_values").items():
+                        name = str(key or "").strip()
+                        if name:
+                            overrides[name] = val
+                if isinstance(component.get("variables"), list):
+                    for var in component.get("variables"):
+                        if not isinstance(var, dict):
+                            continue
+                        name = str(var.get("name") or "").strip()
+                        if not name:
+                            continue
+                        if "value" in var:
+                            overrides[name] = var.get("value")
+
             env_map: Dict[str, str] = {}
-            for var in doc.get("variables") or []:
+            doc_names: Dict[str, bool] = {}
+            for var in doc_variables:
                 if not isinstance(var, dict):
                     continue
                 name = str(var.get("name") or "").strip()
@@ -362,13 +397,32 @@ class JobScheduler:
                     continue
                 env_key = re.sub(r"[^A-Za-z0-9_]", "_", name.upper())
                 default_val = var.get("default")
-                if isinstance(default_val, bool):
-                    env_val = "True" if default_val else "False"
-                elif default_val is None:
-                    env_val = ""
+                if default_val is None and "defaultValue" in var:
+                    default_val = var.get("defaultValue")
+                if default_val is None and "default_value" in var:
+                    default_val = var.get("default_value")
+                env_map[env_key] = _env_string(default_val)
+                doc_names[name] = True
+            for name, val in overrides.items():
+                env_key = re.sub(r"[^A-Za-z0-9_]", "_", name.upper())
+                env_map[env_key] = _env_string(val)
+
+            variables: List[Dict[str, Any]] = []
+            for var in doc_variables:
+                if not isinstance(var, dict):
+                    continue
+                name = str(var.get("name") or "").strip()
+                if not name:
+                    continue
+                if name in overrides:
+                    new_var = dict(var)
+                    new_var["value"] = overrides[name]
+                    variables.append(new_var)
                 else:
-                    env_val = str(default_val)
-                env_map[env_key] = env_val
+                    variables.append(var)
+            for name, val in overrides.items():
+                if name not in doc_names:
+                    variables.append({"name": name, "value": val})
             timeout_seconds = 0
             try:
                 timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))
@@ -411,7 +465,7 @@ class JobScheduler:
                 "script_path": path_norm,
                 "script_content": content,
                 "environment": env_map,
-                "variables": doc.get("variables") or [],
+                "variables": variables,
                 "timeout_seconds": timeout_seconds,
                 "files": doc.get("files") or [],
                 "run_mode": (run_mode or "system").strip().lower(),
@@ -653,7 +707,7 @@ class JobScheduler:
                     comps = json.loads(components_json or "[]")
                 except Exception:
                     comps = []
-                script_paths = []
+                script_components = []
                 ansible_paths = []
                 for c in comps:
                     try:
@@ -661,7 +715,9 @@ class JobScheduler:
                         if ctype == "script":
                             p = (c.get("path") or c.get("script_path") or "").strip()
                             if p:
-                                script_paths.append(p)
+                                comp_copy = dict(c)
+                                comp_copy["path"] = p
+                                script_components.append(comp_copy)
                         elif ctype == "ansible":
                             p = (c.get("path") or "").strip()
                             if p:
@@ -755,9 +811,9 @@ class JobScheduler:
                             run_row_id = c2.lastrowid or 0
                             conn2.commit()
                             # Dispatch all script components for this job to the target host
-                            for sp in script_paths:
+                            for comp in script_components:
                                 try:
-                                    self._dispatch_script(host, sp, run_mode)
+                                    self._dispatch_script(host, comp, run_mode)
                                 except Exception:
                                     continue
                             # Dispatch ansible playbooks for this job to the target host
