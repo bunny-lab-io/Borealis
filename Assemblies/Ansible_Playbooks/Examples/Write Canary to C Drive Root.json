@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "Write Canary to C Drive Root",
+  "description": "Write a basic canary file to the C:\\ drive to determine if SYSTEM-level access is functional within the script engine.",
+  "category": "script",
+  "type": "ansible",
+  "script": "---\n- name: Create Canary.txt on local Windows machine\n  hosts: localhost\n  connection: local\n  gather_facts: no\n\n  tasks:\n    - name: Write Canary.txt to C:\\\n      ansible.windows.win_copy:\n        content: \"This is a canary file created by Ansible.\"\n        dest: C:\\Canary.txt\n",
+  "timeout_seconds": 3600,
+  "sites": {
+    "mode": "all",
+    "values": []
+  },
+  "variables": [],
+  "files": []
+}

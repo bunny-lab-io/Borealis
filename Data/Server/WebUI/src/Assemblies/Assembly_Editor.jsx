@@ -48,9 +48,9 @@ const VARIABLE_TYPE_OPTIONS = [
 
 const INPUT_BASE_SX = {
   "& .MuiOutlinedInput-root": {
-    bgcolor: "#202734",
-    color: "#e6edf3",
-    borderRadius: 1,
+    bgcolor: "#2A2A2A", /* Text Field Background Color */
+    color: "#e6edf3", /* Text Color */
+    borderRadius: 1, /* Roundness of UI Elements */
     minHeight: 40,
     "& fieldset": { borderColor: "#2b3544" },
     "&:hover fieldset": { borderColor: "#3a4657" },
@@ -95,9 +95,9 @@ const SECTION_TITLE_SX = {
 };
 
 const SECTION_CARD_SX = {
-  bgcolor: "#1a202b",
+  bgcolor: "#2E2E2E", /* Color of Page Background */
   borderRadius: 2,
-  border: "1px solid #262f3d"
+  border: "1px solid #262f3d",
 };
 
 const MENU_PROPS = {
@@ -122,7 +122,7 @@ function keyBy(arr) {
 
 const TYPE_MAP = keyBy(TYPE_OPTIONS_ALL);
 
-const PAGE_BACKGROUND = "#0d1117";
+const PAGE_BACKGROUND = "#0d1117"; /* Color of Void Space Between Sidebar and Page */
 
 function highlightedHtml(code, prismLang) {
   try {
@@ -629,10 +629,10 @@ export default function AssemblyEditor({
             </Typography>
           </Box>
 
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3, flexWrap: "wrap" }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 0, flexWrap: "wrap" }}>
             <Box sx={{ flex: 1 }}>
               <Typography variant="caption" sx={SECTION_TITLE_SX}>
-                Assembly Details
+                Overview
               </Typography>
             </Box>
             {currentPath ? (
@@ -698,7 +698,10 @@ export default function AssemblyEditor({
                 minRows={3}
                 fullWidth
                 variant="outlined"
-                sx={INPUT_BASE_SX}
+                  sx={{
+                ...INPUT_BASE_SX,
+                "& .MuiOutlinedInput-inputMultiline": {padding: "4px 8px"}
+              }}
               />
             </Grid>
             <Grid item xs={12} md={6}>
@@ -747,7 +750,7 @@ export default function AssemblyEditor({
                   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
                   fontSize: 14,
                   color: "#e6edf3",
-                  background: "#202734",
+                  background: "#2A2A2A", /* Color of Script Box */
                   outline: "none",
                   minHeight: 320,
                   lineHeight: 1.45,
@@ -757,7 +760,7 @@ export default function AssemblyEditor({
             </Box>
           </Box>
 
-          <Grid container spacing={2} sx={{ mt: 3 }}>
+          <Grid container spacing={2} sx={{ mt: 4 }}>
             <Grid item xs={12} md={6}>
               <TextField
                 label="Timeout (seconds)"
@@ -858,7 +861,7 @@ export default function AssemblyEditor({
                 {assembly.variables.map((variable) => (
                   <Paper
                     key={variable.id}
-                    sx={{ p: 2, bgcolor: "#202734", border: "1px solid #2b3544", borderRadius: 1 }}
+                    sx={{ p: 2, bgcolor: "#2A2A2A", border: "1px solid #2b3544", borderRadius: 1 }}
                   >
                     <Grid container spacing={2} alignItems="center">
                       <Grid item xs={12} md={3}>
