@@ -362,9 +362,18 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const fetchAssemblyDoc = useCallback(async (type, rawPath) => {
     const normalizedPath = normalizeComponentPath(type, rawPath);
     if (!normalizedPath) return { doc: null, normalizedPath: "" };
+    const trimmed = normalizedPath.replace(/\\/g, "/").replace(/^\/+/, "").trim();
+    if (!trimmed) return { doc: null, normalizedPath: "" };
+    let requestPath = trimmed;
+    if (type === "script" && requestPath.toLowerCase().startsWith("scripts/")) {
+      requestPath = requestPath.slice("Scripts/".length);
+    } else if (type === "ansible" && requestPath.toLowerCase().startsWith("ansible_playbooks/")) {
+      requestPath = requestPath.slice("Ansible_Playbooks/".length);
+    }
+    if (!requestPath) return { doc: null, normalizedPath };
     try {
       const island = type === "ansible" ? "ansible" : "scripts";
-      const resp = await fetch(`/api/assembly/load?island=${island}&path=${encodeURIComponent(normalizedPath)}`);
+      const resp = await fetch(`/api/assembly/load?island=${island}&path=${encodeURIComponent(requestPath)}`);
       if (!resp.ok) {
         return { doc: null, normalizedPath };
       }

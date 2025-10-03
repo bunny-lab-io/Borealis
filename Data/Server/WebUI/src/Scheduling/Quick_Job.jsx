@@ -200,9 +200,20 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
       setVariableStatus({ loading: true, error: "" });
       try {
         const island = mode === "ansible" ? "ansible" : "scripts";
-        const relPath = island === "scripts"
-          ? (selectedPath.startsWith("Scripts/") ? selectedPath : `Scripts/${selectedPath}`)
-          : selectedPath;
+        const trimmed = (selectedPath || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
+        if (!trimmed) {
+          setVariables([]);
+          setVariableValues({});
+          setVariableErrors({});
+          setVariableStatus({ loading: false, error: "" });
+          return;
+        }
+        let relPath = trimmed;
+        if (island === "scripts" && relPath.toLowerCase().startsWith("scripts/")) {
+          relPath = relPath.slice("Scripts/".length);
+        } else if (island === "ansible" && relPath.toLowerCase().startsWith("ansible_playbooks/")) {
+          relPath = relPath.slice("Ansible_Playbooks/".length);
+        }
         const resp = await fetch(`/api/assembly/load?island=${island}&path=${encodeURIComponent(relPath)}`);
         if (!resp.ok) throw new Error(`Failed to load assembly (HTTP ${resp.status})`);
         const data = await resp.json();
