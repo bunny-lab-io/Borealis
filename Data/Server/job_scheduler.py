@@ -182,9 +182,10 @@ class JobScheduler:
             "category": "application" if default_type == "ansible" else "script",
             "type": default_type,
             "script": "",
+            "script_lines": [],
             "variables": [],
             "files": [],
-            "timeout_seconds": 0,
+            "timeout_seconds": 3600,
         }
         if abs_path.lower().endswith(".json") and os.path.isfile(abs_path):
             try:
@@ -202,16 +203,29 @@ class JobScheduler:
                 if typ in ("powershell", "batch", "bash", "ansible"):
                     doc["type"] = typ
                 script_val = data.get("script")
-                if isinstance(script_val, str):
+                script_lines = data.get("script_lines")
+                if isinstance(script_lines, list):
+                    try:
+                        doc["script"] = "\n".join(str(line) for line in script_lines)
+                    except Exception:
+                        doc["script"] = ""
+                elif isinstance(script_val, str):
                     doc["script"] = script_val
                 else:
                     content_val = data.get("content")
                     if isinstance(content_val, str):
                         doc["script"] = content_val
+                normalized_script = (doc["script"] or "").replace("\r\n", "\n")
+                doc["script"] = normalized_script
+                doc["script_lines"] = normalized_script.split("\n") if normalized_script else []
                 try:
-                    doc["timeout_seconds"] = max(0, int(data.get("timeout_seconds") or 0))
+                    timeout_raw = data.get("timeout_seconds", data.get("timeout"))
+                    if timeout_raw is None:
+                        doc["timeout_seconds"] = 3600
+                    else:
+                        doc["timeout_seconds"] = max(0, int(timeout_raw))
                 except Exception:
-                    doc["timeout_seconds"] = 0
+                    doc["timeout_seconds"] = 3600
                 vars_in = data.get("variables") if isinstance(data.get("variables"), list) else []
                 doc["variables"] = []
                 for v in vars_in:
@@ -252,9 +266,12 @@ class JobScheduler:
             return doc
         try:
             with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
-                doc["script"] = fh.read()
+                content = fh.read()
         except Exception:
-            doc["script"] = ""
+            content = ""
+        normalized_script = (content or "").replace("\r\n", "\n")
+        doc["script"] = normalized_script
+        doc["script_lines"] = normalized_script.split("\n") if normalized_script else []
         return doc
 
     def _ansible_root(self) -> str:

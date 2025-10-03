@@ -4,22 +4,18 @@ import {
   Paper,
   Typography,
   Button,
-  Select,
-  FormControl,
-  InputLabel,
   TextField,
   MenuItem,
   Grid,
-  RadioGroup,
   FormControlLabel,
-  Radio,
   Checkbox,
   IconButton,
   Tooltip,
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions
+  DialogActions,
+  ListItemText
 } from "@mui/material";
 import { Add as AddIcon, Delete as DeleteIcon, UploadFile as UploadFileIcon } from "@mui/icons-material";
 import Prism from "prismjs";
@@ -49,6 +45,65 @@ const VARIABLE_TYPE_OPTIONS = [
   { key: "boolean", label: "Boolean" },
   { key: "credential", label: "Credential" }
 ];
+
+const INPUT_BASE_SX = {
+  "& .MuiOutlinedInput-root": {
+    bgcolor: "#1f2329",
+    color: "#e6edf3",
+    borderRadius: 1,
+    minHeight: 42,
+    "& fieldset": { borderColor: "#2d333b" },
+    "&:hover fieldset": { borderColor: "#3b4a5c" },
+    "&.Mui-focused fieldset": { borderColor: "#58a6ff" }
+  },
+  "& .MuiOutlinedInput-input": {
+    padding: "10px 12px",
+    fontSize: "0.95rem"
+  },
+  "& .MuiOutlinedInput-inputMultiline": {
+    padding: "10px 12px"
+  },
+  "& .MuiInputLabel-root": { color: "#9ba3b4" },
+  "& .MuiInputLabel-root.Mui-focused": { color: "#58a6ff" }
+};
+
+const SELECT_BASE_SX = {
+  ...INPUT_BASE_SX,
+  "& .MuiSelect-select": {
+    padding: "10px 12px !important",
+    display: "flex",
+    alignItems: "center"
+  }
+};
+
+const SECTION_TITLE_SX = {
+  color: "#58a6ff",
+  fontWeight: 500,
+  fontSize: "14px",
+  letterSpacing: 0.2
+};
+
+const SECTION_CARD_SX = {
+  bgcolor: "#161b22",
+  borderRadius: 2,
+  border: "1px solid #1f2a37"
+};
+
+const MENU_PROPS = {
+  PaperProps: {
+    sx: {
+      bgcolor: "#1f2329",
+      color: "#e6edf3",
+      border: "1px solid #2d333b",
+      "& .MuiMenuItem-root.Mui-selected": {
+        bgcolor: "rgba(88,166,255,0.16)"
+      },
+      "& .MuiMenuItem-root.Mui-selected:hover": {
+        bgcolor: "rgba(88,166,255,0.24)"
+      }
+    }
+  }
+};
 
 function keyBy(arr) {
   return Object.fromEntries(arr.map((o) => [o.key, o]));
@@ -98,7 +153,7 @@ function defaultAssembly(defaultType = "powershell") {
     category: defaultType === "ansible" ? "application" : "script",
     type: defaultType,
     script: "",
-    timeoutSeconds: 0,
+    timeoutSeconds: 3600,
     sites: { mode: "all", values: [] },
     variables: [],
     files: []
@@ -134,9 +189,17 @@ function fromServerDocument(doc = {}, defaultType = "powershell") {
     assembly.description = doc.description || "";
     assembly.category = doc.category || assembly.category;
     assembly.type = doc.type || assembly.type;
-    assembly.script = doc.script ?? doc.content ?? "";
-    const timeout = doc.timeout_seconds ?? doc.timeout ?? 0;
-    assembly.timeoutSeconds = Number.isFinite(Number(timeout)) ? Number(timeout) : 0;
+    if (Array.isArray(doc.script_lines)) {
+      assembly.script = doc.script_lines
+        .map((line) => (line == null ? "" : String(line)))
+        .join("\n");
+    } else {
+      assembly.script = doc.script ?? doc.content ?? "";
+    }
+    const timeout = doc.timeout_seconds ?? doc.timeout ?? assembly.timeoutSeconds;
+    assembly.timeoutSeconds = Number.isFinite(Number(timeout))
+      ? Number(timeout)
+      : assembly.timeoutSeconds;
     const sites = doc.sites || {};
     assembly.sites = {
       mode: sites.mode || (Array.isArray(sites.values) && sites.values.length ? "specific" : "all"),
@@ -149,14 +212,21 @@ function fromServerDocument(doc = {}, defaultType = "powershell") {
 }
 
 function toServerDocument(assembly) {
+  const normalizedScript = typeof assembly.script === "string"
+    ? assembly.script.replace(/\r\n/g, "\n")
+    : "";
+  const scriptLines = normalizedScript ? normalizedScript.split("\n") : [];
+  const timeoutNumeric = Number(assembly.timeoutSeconds);
+  const timeoutSeconds = Number.isFinite(timeoutNumeric) ? Math.max(0, Math.round(timeoutNumeric)) : 3600;
   return {
     version: 1,
     name: assembly.name?.trim() || "",
     description: assembly.description || "",
     category: assembly.category || "script",
     type: assembly.type || "powershell",
-    script: assembly.script ?? "",
-    timeout_seconds: Number.isFinite(Number(assembly.timeoutSeconds)) ? Number(assembly.timeoutSeconds) : 0,
+    script: normalizedScript,
+    script_lines: scriptLines,
+    timeout_seconds: timeoutSeconds,
     sites: {
       mode: assembly.sites?.mode === "specific" ? "specific" : "all",
       values: Array.isArray(assembly.sites?.values)
@@ -182,7 +252,7 @@ function toServerDocument(assembly) {
 
 function RenameFileDialog({ open, value, onChange, onCancel, onSave }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#1a1f27", color: "#fff" } }}>
       <DialogTitle>Rename Assembly File</DialogTitle>
       <DialogContent>
         <TextField
@@ -193,15 +263,7 @@ function RenameFileDialog({ open, value, onChange, onCancel, onSave }) {
           variant="outlined"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#1e1e1e",
-              color: "#e6edf3",
-              "& fieldset": { borderColor: "#333" },
-              "&:hover fieldset": { borderColor: "#555" }
-            },
-            "& .MuiInputLabel-root": { color: "#aaa" }
-          }}
+          sx={INPUT_BASE_SX}
         />
       </DialogContent>
       <DialogActions>
@@ -229,12 +291,25 @@ export default function AssemblyEditor({
   const [renameValue, setRenameValue] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [siteOptions, setSiteOptions] = useState([]);
+  const [siteLoading, setSiteLoading] = useState(false);
   const contextNonceRef = useRef(null);
 
   const TYPE_OPTIONS = useMemo(
     () => (isAnsible ? TYPE_OPTIONS_ALL.filter((o) => o.key === "ansible") : TYPE_OPTIONS_ALL.filter((o) => o.key !== "ansible")),
     [isAnsible]
   );
+
+  const siteOptionMap = useMemo(() => {
+    const map = new Map();
+    siteOptions.forEach((site) => {
+      if (!site) return;
+      const id = site.id != null ? String(site.id) : "";
+      if (!id) return;
+      map.set(id, site);
+    });
+    return map;
+  }, [siteOptions]);
 
   const island = isAnsible ? "ansible" : "scripts";
 
@@ -284,20 +359,59 @@ export default function AssemblyEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialContext?.nonce]);
 
+  useEffect(() => {
+    let canceled = false;
+    const loadSites = async () => {
+      try {
+        setSiteLoading(true);
+        const resp = await fetch("/api/sites");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (canceled) return;
+        const items = Array.isArray(data?.sites) ? data.sites : [];
+        setSiteOptions(items.map((s) => ({ ...s, id: s?.id != null ? String(s.id) : "" })).filter((s) => s.id));
+      } catch (err) {
+        if (!canceled) {
+          console.error("Failed to load sites:", err);
+          setSiteOptions([]);
+        }
+      } finally {
+        if (!canceled) setSiteLoading(false);
+      }
+    };
+    loadSites();
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
   const prismLanguage = TYPE_MAP[assembly.type]?.prism || "powershell";
 
   const updateAssembly = (partial) => {
     setAssembly((prev) => ({ ...prev, ...partial }));
   };
 
-  const handleSitesChange = (modeValue, values) => {
+  const updateSitesMode = (modeValue) => {
     setAssembly((prev) => ({
       ...prev,
       sites: {
         mode: modeValue,
-        values: Array.isArray(values)
-          ? values
-          : ((values || "").split(/\r?\n/).map((v) => v.trim()).filter(Boolean))
+        values: modeValue === "specific" ? prev.sites.values || [] : []
+      }
+    }));
+  };
+
+  const updateSelectedSites = (values) => {
+    const arr = Array.isArray(values)
+      ? values
+      : typeof values === "string"
+        ? values.split(",").map((v) => v.trim()).filter(Boolean)
+        : [];
+    setAssembly((prev) => ({
+      ...prev,
+      sites: {
+        mode: "specific",
+        values: arr.map((v) => String(v))
       }
     }));
   };
@@ -475,23 +589,27 @@ export default function AssemblyEditor({
     }
   };
 
-  const siteValuesText = (assembly.sites?.values || []).join("\n");
+  const siteScopeValue = assembly.sites?.mode === "specific" ? "specific" : "all";
+  const selectedSiteValues = Array.isArray(assembly.sites?.values)
+    ? assembly.sites.values.map((v) => String(v))
+    : [];
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", flex: 1, height: "100%", overflow: "hidden" }}>
-      <Box sx={{ px: 2, pt: 2 }}>
-        <Typography variant="h5" sx={{ color: "#58a6ff", fontWeight: 500, mb: 0.5 }}>
-          Assembly Editor
-        </Typography>
-        <Typography variant="body2" sx={{ color: "#9ba3b4", mb: 2 }}>
-          Create and edit variables, scripts, and other fields related to assemblies.
-        </Typography>
-      </Box>
-      <Box sx={{ flex: 1, overflow: "auto", p: 2, pt: 0 }}>
-        <Paper sx={{ p: 2, bgcolor: "#1e1e1e", borderRadius: 2, border: "1px solid #2a2a2a" }} elevation={2}>
+      <Box sx={{ flex: 1, overflow: "auto", p: 2 }}>
+        <Paper sx={{ p: 3, ...SECTION_CARD_SX, minHeight: "100%" }} elevation={0}>
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="h5" sx={{ color: "#58a6ff", fontWeight: 500, mb: 0.5 }}>
+              Assembly Editor
+            </Typography>
+            <Typography variant="body2" sx={{ color: "#9ba3b4" }}>
+              Create and edit variables, scripts, and other fields related to assemblies.
+            </Typography>
+          </Box>
+
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3 }}>
             <Box sx={{ flex: 1 }}>
-              <Typography variant="subtitle2" sx={{ color: "#58a6ff" }}>
+              <Typography variant="caption" sx={SECTION_TITLE_SX}>
                 Assembly Details
               </Typography>
             </Box>
@@ -525,8 +643,15 @@ export default function AssemblyEditor({
                 color: "#58a6ff",
                 borderColor: "#58a6ff",
                 textTransform: "none",
-                backgroundColor: saving ? "rgba(88,166,255,0.08)" : "#1e1e1e",
-                "&:hover": { borderColor: "#7db7ff" }
+                backgroundColor: saving ? "rgba(88,166,255,0.12)" : "#1f2329",
+                "&:hover": {
+                  borderColor: "#7db7ff",
+                  backgroundColor: "rgba(88,166,255,0.18)"
+                },
+                "&.Mui-disabled": {
+                  color: "#3c4452",
+                  borderColor: "#2d333b"
+                }
               }}
             >
               {saving ? "Saving..." : "Save Assembly"}
@@ -541,16 +666,7 @@ export default function AssemblyEditor({
                 onChange={(e) => updateAssembly({ name: e.target.value })}
                 fullWidth
                 variant="outlined"
-                sx={{
-                  mb: 2,
-                  "& .MuiOutlinedInput-root": {
-                    bgcolor: "#121212",
-                    color: "#e6edf3",
-                    "& fieldset": { borderColor: "#333" },
-                    "&:hover fieldset": { borderColor: "#555" }
-                  },
-                  "& .MuiInputLabel-root": { color: "#aaa" }
-                }}
+                sx={{ ...INPUT_BASE_SX, mb: 2 }}
               />
               <TextField
                 label="Description"
@@ -560,63 +676,45 @@ export default function AssemblyEditor({
                 minRows={3}
                 fullWidth
                 variant="outlined"
-                sx={{
-                  "& .MuiOutlinedInput-root": {
-                    bgcolor: "#121212",
-                    color: "#e6edf3",
-                    "& fieldset": { borderColor: "#333" },
-                    "&:hover fieldset": { borderColor: "#555" }
-                  },
-                  "& .MuiInputLabel-root": { color: "#aaa" }
-                }}
+                sx={INPUT_BASE_SX}
               />
             </Grid>
             <Grid item xs={12} md={6}>
-              <FormControl fullWidth sx={{ mb: 2 }}>
-                <InputLabel sx={{ color: "#aaa" }}>Category</InputLabel>
-                <Select
-                  value={assembly.category}
-                  label="Category"
-                  onChange={(e) => updateAssembly({ category: e.target.value })}
-                  sx={{
-                    bgcolor: "#121212",
-                    color: "#e6edf3",
-                    "& .MuiOutlinedInput-notchedOutline": { borderColor: "#333" },
-                    "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "#555" }
-                  }}
-                >
-                  {CATEGORY_OPTIONS.map((o) => (
-                    <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              <TextField
+                select
+                fullWidth
+                label="Category"
+                value={assembly.category}
+                onChange={(e) => updateAssembly({ category: e.target.value })}
+                sx={{ ...SELECT_BASE_SX, mb: 2 }}
+                SelectProps={{ MenuProps: MENU_PROPS }}
+              >
+                {CATEGORY_OPTIONS.map((o) => (
+                  <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
+                ))}
+              </TextField>
 
-              <FormControl fullWidth>
-                <InputLabel sx={{ color: "#aaa" }}>Type</InputLabel>
-                <Select
-                  value={assembly.type}
-                  label="Type"
-                  onChange={(e) => updateAssembly({ type: e.target.value })}
-                  sx={{
-                    bgcolor: "#121212",
-                    color: "#e6edf3",
-                    "& .MuiOutlinedInput-notchedOutline": { borderColor: "#333" },
-                    "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "#555" }
-                  }}
-                >
-                  {TYPE_OPTIONS.map((o) => (
-                    <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              <TextField
+                select
+                fullWidth
+                label="Type"
+                value={assembly.type}
+                onChange={(e) => updateAssembly({ type: e.target.value })}
+                sx={SELECT_BASE_SX}
+                SelectProps={{ MenuProps: MENU_PROPS }}
+              >
+                {TYPE_OPTIONS.map((o) => (
+                  <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
+                ))}
+              </TextField>
             </Grid>
           </Grid>
 
           <Box sx={{ mt: 3 }}>
-            <Typography variant="subtitle2" sx={{ color: "#58a6ff", mb: 1 }}>
+            <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
               Script Content
             </Typography>
-            <Box sx={{ border: "1px solid #333", borderRadius: 1, background: "#121212" }}>
+            <Box sx={{ border: "1px solid #2d333b", borderRadius: 1, background: "#1f2329" }}>
               <Editor
                 value={assembly.script}
                 onValueChange={(value) => updateAssembly({ script: value })}
@@ -627,7 +725,7 @@ export default function AssemblyEditor({
                   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
                   fontSize: 14,
                   color: "#e6edf3",
-                  background: "#121212",
+                  background: "#1f2329",
                   outline: "none",
                   minHeight: 320,
                   lineHeight: 1.45,
@@ -649,57 +747,78 @@ export default function AssemblyEditor({
                 }}
                 fullWidth
                 variant="outlined"
-                sx={{
-                  "& .MuiOutlinedInput-root": {
-                    bgcolor: "#121212",
-                    color: "#e6edf3",
-                    "& fieldset": { borderColor: "#333" },
-                    "&:hover fieldset": { borderColor: "#555" }
-                  },
-                  "& .MuiInputLabel-root": { color: "#aaa" }
-                }}
+                sx={INPUT_BASE_SX}
                 helperText="Timeout this script if not completed within X seconds"
               />
             </Grid>
             <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" sx={{ color: "#58a6ff", mb: 1 }}>
+              <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
                 Sites
               </Typography>
-              <RadioGroup
-                row
-                value={assembly.sites.mode === "specific" ? "specific" : "all"}
-                onChange={(e) => handleSitesChange(e.target.value, assembly.sites.values)}
-                sx={{ color: "#e6edf3" }}
+              <TextField
+                select
+                fullWidth
+                label="Site Scope"
+                value={siteScopeValue}
+                onChange={(e) => updateSitesMode(e.target.value)}
+                sx={{ ...SELECT_BASE_SX, mb: siteScopeValue === "specific" ? 2 : 0 }}
+                SelectProps={{ MenuProps: MENU_PROPS }}
               >
-                <FormControlLabel value="all" control={<Radio sx={{ color: "#58a6ff" }} />} label="All Sites" />
-                <FormControlLabel value="specific" control={<Radio sx={{ color: "#58a6ff" }} />} label="Specific Sites" />
-              </RadioGroup>
-              {assembly.sites.mode === "specific" ? (
+                <MenuItem value="all">All Sites</MenuItem>
+                <MenuItem value="specific">Specific Sites</MenuItem>
+              </TextField>
+              {siteScopeValue === "specific" ? (
                 <TextField
-                  label="Allowed Sites (one per line)"
-                  value={siteValuesText}
-                  onChange={(e) => handleSitesChange("specific", e.target.value)}
-                  multiline
-                  minRows={3}
+                  select
                   fullWidth
-                  variant="outlined"
-                  sx={{
-                    mt: 1,
-                    "& .MuiOutlinedInput-root": {
-                      bgcolor: "#121212",
-                      color: "#e6edf3",
-                      "& fieldset": { borderColor: "#333" },
-                      "&:hover fieldset": { borderColor: "#555" }
+                  label="Allowed Sites"
+                  value={selectedSiteValues}
+                  onChange={(e) => updateSelectedSites(Array.isArray(e.target.value) ? e.target.value : [])}
+                  sx={SELECT_BASE_SX}
+                  SelectProps={{
+                    multiple: true,
+                    renderValue: (selected) => {
+                      if (!selected || selected.length === 0) {
+                        return <Typography sx={{ color: "#6b7687" }}>Select sites</Typography>;
+                      }
+                      const names = selected.map((val) => siteOptionMap.get(String(val))?.name || String(val));
+                      return names.join(", ");
                     },
-                    "& .MuiInputLabel-root": { color: "#aaa" }
+                    MenuProps: MENU_PROPS
                   }}
-                />
+                >
+                  {siteLoading ? (
+                    <MenuItem disabled>
+                      <ListItemText primary="Loading sites..." />
+                    </MenuItem>
+                  ) : siteOptions.length ? (
+                    siteOptions.map((site) => {
+                      const value = String(site.id);
+                      const checked = selectedSiteValues.includes(value);
+                      return (
+                        <MenuItem key={value} value={value} sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
+                          <Checkbox checked={checked} sx={{ color: "#58a6ff", mr: 1 }} />
+                          <ListItemText
+                            primary={site.name}
+                            secondary={site.description ? site.description : undefined}
+                            primaryTypographyProps={{ sx: { color: "#e6edf3" } }}
+                            secondaryTypographyProps={{ sx: { color: "#7f8794" } }}
+                          />
+                        </MenuItem>
+                      );
+                    })
+                  ) : (
+                    <MenuItem disabled>
+                      <ListItemText primary="No sites available" />
+                    </MenuItem>
+                  )}
+                </TextField>
               ) : null}
             </Grid>
           </Grid>
 
           <Box sx={{ mt: 4 }}>
-            <Typography variant="subtitle2" sx={{ color: "#58a6ff", mb: 1 }}>
+            <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
               Variables
             </Typography>
             <Typography variant="body2" sx={{ color: "#9ba3b4", mb: 2 }}>
@@ -710,7 +829,7 @@ export default function AssemblyEditor({
                 {assembly.variables.map((variable) => (
                   <Paper
                     key={variable.id}
-                    sx={{ p: 2, bgcolor: "#171717", border: "1px solid #2a2a2a", borderRadius: 1 }}
+                    sx={{ p: 2, bgcolor: "#1f2329", border: "1px solid #2d333b", borderRadius: 1 }}
                   >
                     <Grid container spacing={2} alignItems="center">
                       <Grid item xs={12} md={3}>
@@ -720,15 +839,7 @@ export default function AssemblyEditor({
                           onChange={(e) => updateVariable(variable.id, { name: e.target.value })}
                           fullWidth
                           variant="outlined"
-                          sx={{
-                            "& .MuiOutlinedInput-root": {
-                              bgcolor: "#121212",
-                              color: "#e6edf3",
-                              "& fieldset": { borderColor: "#333" },
-                              "&:hover fieldset": { borderColor: "#555" }
-                            },
-                            "& .MuiInputLabel-root": { color: "#aaa" }
-                          }}
+                          sx={INPUT_BASE_SX}
                         />
                       </Grid>
                       <Grid item xs={12} md={3}>
@@ -738,36 +849,23 @@ export default function AssemblyEditor({
                           onChange={(e) => updateVariable(variable.id, { label: e.target.value })}
                           fullWidth
                           variant="outlined"
-                          sx={{
-                            "& .MuiOutlinedInput-root": {
-                              bgcolor: "#121212",
-                              color: "#e6edf3",
-                              "& fieldset": { borderColor: "#333" },
-                              "&:hover fieldset": { borderColor: "#555" }
-                            },
-                            "& .MuiInputLabel-root": { color: "#aaa" }
-                          }}
+                          sx={INPUT_BASE_SX}
                         />
                       </Grid>
                       <Grid item xs={12} md={2}>
-                        <FormControl fullWidth>
-                          <InputLabel sx={{ color: "#aaa" }}>Type</InputLabel>
-                          <Select
-                            value={variable.type}
-                            label="Type"
-                            onChange={(e) => updateVariable(variable.id, { type: e.target.value })}
-                            sx={{
-                              bgcolor: "#121212",
-                              color: "#e6edf3",
-                              "& .MuiOutlinedInput-notchedOutline": { borderColor: "#333" },
-                              "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "#555" }
-                            }}
-                          >
-                            {VARIABLE_TYPE_OPTIONS.map((opt) => (
-                              <MenuItem key={opt.key} value={opt.key}>{opt.label}</MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
+                        <TextField
+                          select
+                          fullWidth
+                          label="Type"
+                          value={variable.type}
+                          onChange={(e) => updateVariable(variable.id, { type: e.target.value })}
+                          sx={SELECT_BASE_SX}
+                          SelectProps={{ MenuProps: MENU_PROPS }}
+                        >
+                          {VARIABLE_TYPE_OPTIONS.map((opt) => (
+                            <MenuItem key={opt.key} value={opt.key}>{opt.label}</MenuItem>
+                          ))}
+                        </TextField>
                       </Grid>
                       <Grid item xs={12} md={3}>
                         {variable.type === "boolean" ? (
@@ -788,15 +886,7 @@ export default function AssemblyEditor({
                             onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.value })}
                             fullWidth
                             variant="outlined"
-                            sx={{
-                              "& .MuiOutlinedInput-root": {
-                                bgcolor: "#121212",
-                                color: "#e6edf3",
-                                "& fieldset": { borderColor: "#333" },
-                                "&:hover fieldset": { borderColor: "#555" }
-                              },
-                              "& .MuiInputLabel-root": { color: "#aaa" }
-                            }}
+                            sx={INPUT_BASE_SX}
                           />
                         )}
                       </Grid>
@@ -818,15 +908,7 @@ export default function AssemblyEditor({
                           multiline
                           minRows={2}
                           variant="outlined"
-                          sx={{
-                            "& .MuiOutlinedInput-root": {
-                              bgcolor: "#121212",
-                              color: "#e6edf3",
-                              "& fieldset": { borderColor: "#333" },
-                              "&:hover fieldset": { borderColor: "#555" }
-                            },
-                            "& .MuiInputLabel-root": { color: "#aaa" }
-                          }}
+                          sx={INPUT_BASE_SX}
                         />
                       </Grid>
                       <Grid item xs={12} sx={{ display: "flex", justifyContent: "flex-end" }}>
@@ -853,7 +935,7 @@ export default function AssemblyEditor({
           </Box>
 
           <Box sx={{ mt: 4 }}>
-            <Typography variant="subtitle2" sx={{ color: "#58a6ff", mb: 1 }}>
+            <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
               Files
             </Typography>
             <Typography variant="body2" sx={{ color: "#9ba3b4", mb: 2 }}>
@@ -862,10 +944,20 @@ export default function AssemblyEditor({
             {(assembly.files || []).length ? (
               <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
                 {assembly.files.map((file) => (
-                  <Paper key={file.id} sx={{ p: 1.5, bgcolor: "#171717", border: "1px solid #2a2a2a", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <Paper
+                    key={file.id}
+                    sx={{
+                      p: 1.5,
+                      bgcolor: "#1f2329",
+                      border: "1px solid #2d333b",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between"
+                    }}
+                  >
                     <Box>
                       <Typography variant="body2" sx={{ color: "#e6edf3" }}>{file.fileName}</Typography>
-                      <Typography variant="caption" sx={{ color: "#888" }}>{formatBytes(file.size)}{file.mimeType ? ` • ${file.mimeType}` : ""}</Typography>
+                      <Typography variant="caption" sx={{ color: "#7f8794" }}>{formatBytes(file.size)}{file.mimeType ? ` • ${file.mimeType}` : ""}</Typography>
                     </Box>
                     <IconButton onClick={() => removeFile(file.id)} sx={{ color: "#ff6b6b" }}>
                       <DeleteIcon />
