@@ -66,26 +66,29 @@ const INPUT_BASE_SX = {
     "&:hover fieldset": { borderColor: "#3a4657" },
     "&.Mui-focused fieldset": { borderColor: "#58a6ff" }
   },
+
   "& .MuiOutlinedInput-input": {
     padding: "9px 12px",
-    fontSize: "0.95rem"
+    fontSize: "0.95rem",
+    lineHeight: 1.4
   },
+
   "& .MuiOutlinedInput-inputMultiline": {
     padding: "9px 12px"
   },
-  "& .MuiInputLabel-root": { color: "#9ba3b4" },
+
+  "& .MuiInputLabel-root": {
+    color: "#9ba3b4",
+    transform: "translate(12px, 11px) scale(0.8)"        // label at rest (inside field)
+  },
   "& .MuiInputLabel-root.Mui-focused": { color: "#58a6ff" },
-  "& input[type=number]": {
-    MozAppearance: "textfield"
+  "& .MuiInputLabel-root.MuiInputLabel-shrink": {
+    transform: "translate(12px, -6px) scale(0.75)"      // floated label position
   },
-  "& input[type=number]::-webkit-outer-spin-button": {
-    WebkitAppearance: "none",
-    margin: 0
-  },
-  "& input[type=number]::-webkit-inner-spin-button": {
-    WebkitAppearance: "none",
-    margin: 0
-  }
+
+  "& input[type=number]": { MozAppearance: "textfield" },
+  "& input[type=number]::-webkit-outer-spin-button": { WebkitAppearance: "none", margin: 0 },
+  "& input[type=number]::-webkit-inner-spin-button": { WebkitAppearance: "none", margin: 0 }
 };
 
 const SELECT_BASE_SX = {
@@ -621,19 +624,84 @@ export default function AssemblyEditor({
         flex: 1,
         height: "100%",
         overflow: "hidden",
+        ml: -0.95,
+        mt: -0.95,
         bgcolor: PAGE_BACKGROUND
       }}
     >
       <Box sx={{ flex: 1, overflow: "auto", p: { xs: 2, md: 3 } }}>
         <Paper sx={{ p: { xs: 2.5, md: 3 }, ...SECTION_CARD_SX, minHeight: "100%" }} elevation={0}>
-          <Box sx={{ mb: 3 }}>
-            <Typography variant="h5" sx={{ color: "#58a6ff", fontWeight: 500, mb: 0.5 }}>
-              Assembly Editor
-            </Typography>
-            <Typography variant="body2" sx={{ color: "#9ba3b4" }}>
-              Create and edit variables, scripts, and other fields related to assemblies.
-            </Typography>
+          
+      <Grid container alignItems="center" justifyContent="space-between" sx={{ mb: 3 }}>
+        {/* Left half */}
+        <Grid item xs={12} sm={6}>
+          <Box>
+            <Typography variant="h6" sx={{ color: '#58a6ff', mb: 0 }}>Assembly Editor</Typography>
+            <Typography variant="body2" sx={{ color: '#aaa' }}>Create and edit variables, scripts, and other fields related to assemblies.</Typography>
           </Box>
+        </Grid>
+
+        {/* Right half */}
+        <Grid item xs={12} sm={6}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1.5,
+              flexWrap: "wrap",
+              justifyContent: { xs: "flex-start", sm: "flex-end" },
+              mt: { xs: 2, sm: 0 }
+            }}
+          >
+            {currentPath ? (
+              <Tooltip title="Rename File">
+                <Button
+                  size="small"
+                  onClick={() => { setRenameValue(fileName); setRenameOpen(true); }}
+                  sx={{ color: "#58a6ff", textTransform: "none" }}
+                >
+                  Rename
+                </Button>
+              </Tooltip>
+            ) : null}
+            {currentPath ? (
+              <Tooltip title="Delete Assembly">
+                <Button
+                  size="small"
+                  onClick={() => setDeleteOpen(true)}
+                  sx={{ color: "#ff6b6b", textTransform: "none" }}
+                >
+                  Delete
+                </Button>
+              </Tooltip>
+            ) : null}
+            <Button
+              variant="outlined"
+              onClick={saveAssembly}
+              disabled={saving}
+              sx={{
+                color: "#58a6ff",
+                borderColor: "#58a6ff",
+                textTransform: "none",
+                backgroundColor: saving
+                  ? BACKGROUND_COLORS.primaryActionSaving
+                  : BACKGROUND_COLORS.field,
+                "&:hover": {
+                  borderColor: "#7db7ff",
+                  backgroundColor: BACKGROUND_COLORS.primaryActionHover
+                },
+                "&.Mui-disabled": {
+                  color: "#3c4452",
+                  borderColor: "#2b3544"
+                }
+              }}
+            >
+              {saving ? "Saving..." : "Save Assembly"}
+            </Button>
+          </Box>
+        </Grid>
+      </Grid>
+
 
           <Box
             sx={{
@@ -649,63 +717,6 @@ export default function AssemblyEditor({
               <Typography variant="caption" sx={SECTION_TITLE_SX}>
                 Overview
               </Typography>
-            </Box>
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 1.5,
-                flexWrap: "wrap",
-                justifyContent: "flex-end",
-                ml: { xs: 0, sm: "auto" },
-                alignSelf: "flex-start"
-              }}
-            >
-              {currentPath ? (
-                <Tooltip title="Rename File">
-                  <Button
-                    size="small"
-                    onClick={() => { setRenameValue(fileName); setRenameOpen(true); }}
-                    sx={{ color: "#58a6ff", textTransform: "none" }}
-                  >
-                    Rename
-                  </Button>
-                </Tooltip>
-              ) : null}
-              {currentPath ? (
-                <Tooltip title="Delete Assembly">
-                  <Button
-                    size="small"
-                    onClick={() => setDeleteOpen(true)}
-                    sx={{ color: "#ff6b6b", textTransform: "none" }}
-                  >
-                    Delete
-                  </Button>
-                </Tooltip>
-              ) : null}
-              <Button
-                variant="outlined"
-                onClick={saveAssembly}
-                disabled={saving}
-                sx={{
-                  color: "#58a6ff",
-                  borderColor: "#58a6ff",
-                  textTransform: "none",
-                  backgroundColor: saving
-                    ? BACKGROUND_COLORS.primaryActionSaving
-                    : BACKGROUND_COLORS.field,
-                  "&:hover": {
-                    borderColor: "#7db7ff",
-                    backgroundColor: BACKGROUND_COLORS.primaryActionHover
-                  },
-                  "&.Mui-disabled": {
-                    color: "#3c4452",
-                    borderColor: "#2b3544"
-                  }
-                }}
-              >
-                {saving ? "Saving..." : "Save Assembly"}
-              </Button>
             </Box>
           </Box>
 
@@ -902,166 +913,183 @@ export default function AssemblyEditor({
                     key={variable.id}
                     sx={{ p: 2, bgcolor: BACKGROUND_COLORS.field, border: "1px solid #2b3544", borderRadius: 1 }}
                   >
-                    <Box
-                      sx={{
-                        display: "flex",
-                        flexWrap: "wrap",
-                        alignItems: "stretch",
-                        gap: { xs: 2, lg: 1.5 },
-                        pt: 1
-                      }}
-                    >
-                      <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 30%" }, minWidth: { lg: 220 } }}>
-                        <Tooltip
-                          title="This is the name of the variable you will be referencing inside of the script.  Within the script you will reference this variable with $env:<variable>."
-                          arrow
-                          placement="top-start"
-                        >
-                          <TextField
-                            label="Variable"
-                            value={variable.name}
-                            onChange={(e) => updateVariable(variable.id, { name: e.target.value })}
-                            fullWidth
-                            variant="outlined"
-                            sx={INPUT_BASE_SX}
-                          />
-                        </Tooltip>
-                      </Box>
-                      <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 22%" }, minWidth: { lg: 180 } }}>
-                        <Tooltip
-                          title="This is the name that will be given to the variable and seen by Borealis server operators."
-                          arrow
-                          placement="top-start"
-                        >
-                          <TextField
-                            label="Display Label"
-                            value={variable.label}
-                            onChange={(e) => updateVariable(variable.id, { label: e.target.value })}
-                            fullWidth
-                            variant="outlined"
-                            sx={INPUT_BASE_SX}
-                          />
-                        </Tooltip>
-                      </Box>
-                      <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 22%" }, minWidth: { lg: 160 } }}>
-                        <Tooltip
-                          title="This defines the type of variable data the script should expect."
-                          arrow
-                          placement="top-start"
-                        >
-                          <TextField
-                            select
-                            fullWidth
-                            label="Type"
-                            value={variable.type}
-                            onChange={(e) => updateVariable(variable.id, { type: e.target.value })}
-                            sx={SELECT_BASE_SX}
-                            SelectProps={{ MenuProps: MENU_PROPS }}
-                          >
-                            {VARIABLE_TYPE_OPTIONS.map((opt) => (
-                              <MenuItem key={opt.key} value={opt.key}>{opt.label}</MenuItem>
-                            ))}
-                          </TextField>
-                        </Tooltip>
-                      </Box>
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 2, lg: 1.5 } }}>
                       <Box
                         sx={{
-                          flex: { xs: "1 1 100%", lg: "0 1 40%" },
-                          minWidth: { lg: 220 },
                           display: "flex",
-                          alignItems: "center"
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                          gap: { xs: 2, lg: 1.5 },
+                          pt: 0.5
                         }}
                       >
-                        {variable.type === "boolean" ? (
+                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 28%" }, minWidth: { lg: 220 } }}>
                           <Tooltip
-                            title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
-                            arrow
-                            placement="top-start"
-                          >
-                            <FormControlLabel
-                              control={
-                                <Checkbox
-                                  checked={Boolean(variable.defaultValue)}
-                                  onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.checked })}
-                                  sx={{ color: "#58a6ff" }}
-                                />
-                              }
-                              label="Default Value"
-                              sx={{
-                                color: "#9ba3b4",
-                                m: 0,
-                                "& .MuiFormControlLabel-label": { fontSize: "0.95rem" }
-                              }}
-                            />
-                          </Tooltip>
-                        ) : (
-                          <Tooltip
-                            title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
+                            title="This is the name of the variable you will be referencing inside of the script via $env:<variable>."
                             arrow
                             placement="top-start"
                           >
                             <TextField
-                              label="Default Value"
-                              value={variable.defaultValue ?? ""}
-                              onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.value })}
+                              label="Variable"
+                              value={variable.name}
+                              onChange={(e) => updateVariable(variable.id, { name: e.target.value })}
                               fullWidth
                               variant="outlined"
                               sx={INPUT_BASE_SX}
                             />
                           </Tooltip>
-                        )}
+                        </Box>
+                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 22%" }, minWidth: { lg: 180 } }}>
+                          <Tooltip
+                            title="This is the name that will be given to the variable and seen by Borealis server operators."
+                            arrow
+                            placement="top-start"
+                          >
+                            <TextField
+                              label="Display Label"
+                              value={variable.label}
+                              onChange={(e) => updateVariable(variable.id, { label: e.target.value })}
+                              fullWidth
+                              variant="outlined"
+                              sx={INPUT_BASE_SX}
+                            />
+                          </Tooltip>
+                        </Box>
+
+                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 18%" }, minWidth: { lg: 160 } }}>
+                          <Tooltip
+                            title="This defines the type of variable data the script should expect."
+                            arrow
+                            placement="top-start"
+                          >
+                            <TextField
+                              select
+                              fullWidth
+                              label="Type"
+                              value={variable.type}
+                              onChange={(e) => updateVariable(variable.id, { type: e.target.value })}
+                              sx={SELECT_BASE_SX}
+                              SelectProps={{ MenuProps: MENU_PROPS }}
+                            >
+                              {VARIABLE_TYPE_OPTIONS.map((opt) => (
+                                <MenuItem key={opt.key} value={opt.key}>{opt.label}</MenuItem>
+                              ))}
+                            </TextField>
+                          </Tooltip>
+                        </Box>
+                        <Box
+                          sx={{
+                            flex: { xs: "1 1 100%", lg: "0 1 24%" },
+                            minWidth: { lg: 220 },
+                            display: "flex",
+                            alignItems: "center"
+                          }}
+                        >
+                          {variable.type === "boolean" ? (
+                            <Tooltip
+                              title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
+                              arrow
+                              placement="top-start"
+                            >
+                              <FormControlLabel
+                                control={
+                                  <Checkbox
+                                    checked={Boolean(variable.defaultValue)}
+                                    onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.checked })}
+                                    sx={{ color: "#58a6ff" }}
+                                  />
+                                }
+                                label="Default Value"
+                                sx={{
+                                  color: "#9ba3b4",
+                                  m: 0,
+                                  "& .MuiFormControlLabel-label": { fontSize: "0.95rem" }
+                                }}
+                              />
+                            </Tooltip>
+                          ) : (
+                            <Tooltip
+                              title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
+                              arrow
+                              placement="top-start"
+                            >
+                              <TextField
+                                label="Default Value"
+                                value={variable.defaultValue ?? ""}
+                                onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.value })}
+                                fullWidth
+                                variant="outlined"
+                                sx={INPUT_BASE_SX}
+                              />
+                            </Tooltip>
+                          )}
+                        </Box>
+                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 28%" }, minWidth: { lg: 220 } }}>
+                          <Tooltip
+                            title="Instruct the operator in why this variable exists and how to set it appropriately."
+                            arrow
+                            placement="top-start"
+                          >
+                            <TextField
+                              label="Description"
+                              value={variable.description}
+                              onChange={(e) => updateVariable(variable.id, { description: e.target.value })}
+                              fullWidth
+                              variant="outlined"
+                              sx={INPUT_BASE_SX}
+                            />
+                          </Tooltip>
+                        </Box>
+                        <Box
+                          sx={{
+                            flex: { xs: "1 1 100%", lg: "0 0 auto" },
+                            display: "flex",
+                            justifyContent: "flex-end",
+                            alignItems: "center",
+                            ml: { lg: "auto" }
+                          }}
+                        >
+                          <Tooltip title="Remove this Variable." arrow>
+                            <IconButton onClick={() => removeVariable(variable.id)} sx={{ color: "#ff6b6b" }}>
+                              <DeleteIcon />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
                       </Box>
                       <Box
                         sx={{
-                          flex: { xs: "1 1 100%", lg: "0 0 100px" },
-                          minWidth: { lg: 100 },
                           display: "flex",
-                          flexDirection: "column",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: 0.5
+                          flexWrap: "wrap",
+                          gap: { xs: 2, lg: 1.5 }
                         }}
                       >
-                        <Typography variant="caption" sx={{ color: "#9ba3b4", fontSize: "0.75rem" }}>
+                      <Box
+                        sx={{
+                          flex: { xs: "1 1 100%", lg: "0 1 50%" },
+                          minWidth: { lg: 220 },
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1.5
+                        }}
+                      >
+                        <Typography
+                          variant="caption"
+                          sx={{ color: "#9ba3b4", fontSize: "0.75rem", ml: 0.5}} /* Left-Hand Spacing for the "Required" label to the left of the checkbox */
+                        >
                           Required
                         </Typography>
                         <Checkbox
                           checked={Boolean(variable.required)}
-                          onChange={(e) => updateVariable(variable.id, { required: e.target.checked })}
-                          sx={{ color: "#58a6ff", p: 0.5 }}
+                          onChange={(e) =>
+                            updateVariable(variable.id, { required: e.target.checked })
+                          }
+                          sx={{
+                            color: "#58a6ff",
+                            p: 0.5,
+                          }}
                           inputProps={{ "aria-label": "Required" }}
                         />
                       </Box>
-                      <Box sx={{ flex: { xs: "1 1 100%", lg: "1 1 0%" }, minWidth: { lg: 220 } }}>
-                        <Tooltip
-                          title="Instruct the operator in why this variable exists and how to set it appropriately."
-                          arrow
-                          placement="top-start"
-                        >
-                          <TextField
-                            label="Description"
-                            value={variable.description}
-                            onChange={(e) => updateVariable(variable.id, { description: e.target.value })}
-                            fullWidth
-                            variant="outlined"
-                            sx={INPUT_BASE_SX}
-                          />
-                        </Tooltip>
-                      </Box>
-                      <Box
-                        sx={{
-                          flex: { xs: "1 1 100%", lg: "0 0 auto" },
-                          display: "flex",
-                          justifyContent: "flex-end",
-                          alignItems: "center",
-                          ml: { lg: "auto" }
-                        }}
-                      >
-                        <Tooltip title="Remove this Variable." arrow>
-                          <IconButton onClick={() => removeVariable(variable.id)} sx={{ color: "#ff6b6b" }}>
-                            <DeleteIcon />
-                          </IconButton>
-                        </Tooltip>
                       </Box>
                     </Box>
                   </Paper>
@@ -1117,6 +1145,7 @@ export default function AssemblyEditor({
                 No files uploaded yet.
               </Typography>
             )}
+            
             <Button
               component="label"
               startIcon={<UploadFileIcon />}
