@@ -1172,6 +1172,5 @@ export default function AssemblyEditor({
         onConfirm={deleteAssembly}
       />
     </Box>
-    
   );
 }
