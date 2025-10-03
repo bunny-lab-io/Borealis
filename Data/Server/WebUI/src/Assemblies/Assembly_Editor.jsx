@@ -47,7 +47,7 @@ const VARIABLE_TYPE_OPTIONS = [
 ];
 
 const BACKGROUND_COLORS = {
-  field: "#2A2A2A", /* Shared surface color for text fields, dropdown inputs, and script editors */
+  field: "#1C1C1C", /* Shared surface color for text fields, dropdown inputs, and script editors */
   sectionCard: "#2E2E2E", /* Background for section container cards */
   menuSelected: "rgba(88,166,255,0.16)", /* Background for selected dropdown items */
   menuSelectedHover: "rgba(88,166,255,0.24)", /* Background for hovered selected dropdown items */
