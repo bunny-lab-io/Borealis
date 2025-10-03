@@ -5,6 +5,7 @@ import eventlet
 eventlet.monkey_patch()
 
 import requests
+import re
 import base64
 from flask import Flask, request, jsonify, Response, send_from_directory, make_response, session
 from flask_socketio import SocketIO, emit, join_room
@@ -16,7 +17,7 @@ import time
 import os  # To Read Production ReactJS Server Folder
 import json  # For reading workflow JSON files
 import shutil  # For moving workflow files and folders
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 import sqlite3
 import io
 from datetime import datetime, timezone
@@ -650,16 +651,157 @@ def _default_ext_for_island(island: str, item_type: str = "") -> str:
     if isl in ("workflows", "workflow"):
         return ".json"
     if isl in ("ansible", "ansible_playbooks", "ansible-playbooks", "playbooks"):
-        return ".yml"
-    # scripts: use hint or default to .ps1
+        return ".json"
+    if isl in ("scripts", "script"):
+        return ".json"
     t = (item_type or "").lower().strip()
     if t == "bash":
-        return ".sh"
+        return ".json"
     if t == "batch":
-        return ".bat"
+        return ".json"
     if t == "powershell":
-        return ".ps1"
-    return ".ps1"
+        return ".json"
+    return ".json"
+
+
+def _default_type_for_island(island: str, item_type: str = "") -> str:
+    isl = (island or "").lower().strip()
+    if isl in ("ansible", "ansible_playbooks", "ansible-playbooks", "playbooks"):
+        return "ansible"
+    t = (item_type or "").lower().strip()
+    if t in ("powershell", "batch", "bash", "ansible"):
+        return t
+    return "powershell"
+
+
+def _empty_assembly_document(default_type: str = "powershell") -> Dict[str, Any]:
+    return {
+        "version": 1,
+        "name": "",
+        "description": "",
+        "category": "application" if (default_type or "").lower() == "ansible" else "script",
+        "type": default_type or "powershell",
+        "script": "",
+        "script_lines": [],
+        "timeout_seconds": 3600,
+        "sites": {"mode": "all", "values": []},
+        "variables": [],
+        "files": []
+    }
+
+
+def _normalize_assembly_document(obj: Any, default_type: str, base_name: str) -> Dict[str, Any]:
+    doc = _empty_assembly_document(default_type)
+    if not isinstance(obj, dict):
+        obj = {}
+    base = (base_name or "assembly").strip()
+    doc["name"] = str(obj.get("name") or obj.get("display_name") or base)
+    doc["description"] = str(obj.get("description") or "")
+    category = str(obj.get("category") or doc["category"]).strip().lower()
+    if category in ("script", "application"):
+        doc["category"] = category
+    typ = str(obj.get("type") or obj.get("script_type") or default_type or "powershell").strip().lower()
+    if typ in ("powershell", "batch", "bash", "ansible"):
+        doc["type"] = typ
+    script_val = obj.get("script")
+    script_lines = obj.get("script_lines")
+    if isinstance(script_lines, list):
+        try:
+            doc["script"] = "\n".join(str(line) for line in script_lines)
+        except Exception:
+            doc["script"] = ""
+    elif isinstance(script_val, str):
+        doc["script"] = script_val
+    else:
+        content_val = obj.get("content")
+        if isinstance(content_val, str):
+            doc["script"] = content_val
+    normalized_script = (doc["script"] or "").replace("\r\n", "\n")
+    doc["script"] = normalized_script
+    doc["script_lines"] = normalized_script.split("\n") if normalized_script else []
+    timeout_val = obj.get("timeout_seconds", obj.get("timeout"))
+    if timeout_val is not None:
+        try:
+            doc["timeout_seconds"] = max(0, int(timeout_val))
+        except Exception:
+            pass
+    sites = obj.get("sites") if isinstance(obj.get("sites"), dict) else {}
+    values = sites.get("values") if isinstance(sites.get("values"), list) else []
+    mode = str(sites.get("mode") or ("specific" if values else "all")).strip().lower()
+    if mode not in ("all", "specific"):
+        mode = "all"
+    doc["sites"] = {
+        "mode": mode,
+        "values": [str(v).strip() for v in values if isinstance(v, (str, int, float)) and str(v).strip()]
+    }
+    vars_in = obj.get("variables") if isinstance(obj.get("variables"), list) else []
+    doc_vars: List[Dict[str, Any]] = []
+    for v in vars_in:
+        if not isinstance(v, dict):
+            continue
+        name = str(v.get("name") or v.get("key") or "").strip()
+        if not name:
+            continue
+        vtype = str(v.get("type") or "string").strip().lower()
+        if vtype not in ("string", "number", "boolean", "credential"):
+            vtype = "string"
+        default_val = v.get("default", v.get("default_value"))
+        doc_vars.append({
+            "name": name,
+            "label": str(v.get("label") or ""),
+            "type": vtype,
+            "default": default_val,
+            "required": bool(v.get("required")),
+            "description": str(v.get("description") or "")
+        })
+    doc["variables"] = doc_vars
+    files_in = obj.get("files") if isinstance(obj.get("files"), list) else []
+    doc_files: List[Dict[str, Any]] = []
+    for f in files_in:
+        if not isinstance(f, dict):
+            continue
+        fname = f.get("file_name") or f.get("name")
+        data = f.get("data")
+        if not fname or not isinstance(data, str):
+            continue
+        size_val = f.get("size")
+        try:
+            size_int = int(size_val)
+        except Exception:
+            size_int = 0
+        doc_files.append({
+            "file_name": str(fname),
+            "size": size_int,
+            "mime_type": str(f.get("mime_type") or f.get("mimeType") or ""),
+            "data": data
+        })
+    doc["files"] = doc_files
+    try:
+        doc["version"] = int(obj.get("version") or doc["version"])
+    except Exception:
+        pass
+    return doc
+
+
+def _load_assembly_document(abs_path: str, island: str, type_hint: str = "") -> Dict[str, Any]:
+    base_name = os.path.splitext(os.path.basename(abs_path))[0]
+    default_type = _default_type_for_island(island, type_hint)
+    if abs_path.lower().endswith(".json"):
+        data = _safe_read_json(abs_path)
+        return _normalize_assembly_document(data, default_type, base_name)
+    try:
+        with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+    except Exception:
+        content = ""
+    doc = _empty_assembly_document(default_type)
+    doc["name"] = base_name
+    normalized_script = (content or "").replace("\r\n", "\n")
+    doc["script"] = normalized_script
+    doc["script_lines"] = normalized_script.split("\n") if normalized_script else []
+    if default_type == "ansible":
+        doc["category"] = "application"
+    return doc
 
 
 @app.route("/api/assembly/create", methods=["POST"])
@@ -682,7 +824,7 @@ def assembly_create():
             if not ext:
                 abs_path = base + _default_ext_for_island(island, item_type)
             os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-            # Workflows expect JSON; others raw text
+            # Workflows expect JSON; scripts/ansible use assembly documents
             if (island or "").lower() in ("workflows", "workflow"):
                 obj = content
                 if isinstance(obj, str):
@@ -699,8 +841,22 @@ def assembly_create():
                 with open(abs_path, "w", encoding="utf-8") as fh:
                     json.dump(obj, fh, indent=2)
             else:
-                with open(abs_path, "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(str(content or ""))
+                obj = content
+                if isinstance(obj, str):
+                    try:
+                        obj = json.loads(obj)
+                    except Exception:
+                        obj = {}
+                if not isinstance(obj, dict):
+                    obj = {}
+                base_name = os.path.splitext(os.path.basename(abs_path))[0]
+                normalized = _normalize_assembly_document(
+                    obj,
+                    _default_type_for_island(island, item_type),
+                    base_name,
+                )
+                with open(abs_path, "w", encoding="utf-8") as fh:
+                    json.dump(normalized, fh, indent=2)
             rel_new = os.path.relpath(abs_path, root).replace(os.sep, "/")
             return jsonify({"status": "ok", "rel_path": rel_new})
         else:
@@ -721,18 +877,42 @@ def assembly_edit():
         root, abs_path, _ = _resolve_assembly_path(island, path)
         if not os.path.isfile(abs_path):
             return jsonify({"error": "file not found"}), 404
+        target_abs = abs_path
+        if not abs_path.lower().endswith(".json"):
+            base, _ = os.path.splitext(abs_path)
+            target_abs = base + _default_ext_for_island(island, data.get("type"))
         if (island or "").lower() in ("workflows", "workflow"):
             obj = content
             if isinstance(obj, str):
                 obj = json.loads(obj)
             if not isinstance(obj, dict):
                 return jsonify({"error": "invalid content for workflow"}), 400
-            with open(abs_path, "w", encoding="utf-8") as fh:
+            with open(target_abs, "w", encoding="utf-8") as fh:
                 json.dump(obj, fh, indent=2)
         else:
-            with open(abs_path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(str(content or ""))
-        return jsonify({"status": "ok"})
+            obj = content
+            if isinstance(obj, str):
+                try:
+                    obj = json.loads(obj)
+                except Exception:
+                    obj = {}
+            if not isinstance(obj, dict):
+                obj = {}
+            base_name = os.path.splitext(os.path.basename(target_abs))[0]
+            normalized = _normalize_assembly_document(
+                obj,
+                _default_type_for_island(island, obj.get("type") if isinstance(obj, dict) else ""),
+                base_name,
+            )
+            with open(target_abs, "w", encoding="utf-8") as fh:
+                json.dump(normalized, fh, indent=2)
+        if target_abs != abs_path:
+            try:
+                os.remove(abs_path)
+            except Exception:
+                pass
+        rel_new = os.path.relpath(target_abs, root).replace(os.sep, "/")
+        return jsonify({"status": "ok", "rel_path": rel_new})
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
     except Exception as e:
@@ -885,7 +1065,7 @@ def assembly_list():
                         "last_edited_epoch": mtime
                     })
         elif isl in ("scripts", "script"):
-            exts = (".ps1", ".bat", ".sh")
+            exts = (".json", ".ps1", ".bat", ".sh")
             for r, dirs, files in os.walk(root):
                 rel_root = os.path.relpath(r, root)
                 if rel_root != ".":
@@ -899,15 +1079,20 @@ def assembly_list():
                         mtime = os.path.getmtime(fp)
                     except Exception:
                         mtime = 0.0
+                    stype = _detect_script_type(fp)
+                    doc = _load_assembly_document(fp, "scripts", stype)
                     items.append({
                         "file_name": fname,
                         "rel_path": rel_path,
-                        "type": _detect_script_type(fname),
+                        "type": doc.get("type", stype),
+                        "name": doc.get("name"),
+                        "category": doc.get("category"),
+                        "description": doc.get("description"),
                         "last_edited": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime)),
                         "last_edited_epoch": mtime
                     })
         else:  # ansible
-            exts = (".yml",)
+            exts = (".json", ".yml")
             for r, dirs, files in os.walk(root):
                 rel_root = os.path.relpath(r, root)
                 if rel_root != ".":
@@ -921,10 +1106,15 @@ def assembly_list():
                         mtime = os.path.getmtime(fp)
                     except Exception:
                         mtime = 0.0
+                    stype = _detect_script_type(fp)
+                    doc = _load_assembly_document(fp, "ansible", stype)
                     items.append({
                         "file_name": fname,
                         "rel_path": rel_path,
-                        "type": "ansible",
+                        "type": doc.get("type", "ansible"),
+                        "name": doc.get("name"),
+                        "category": doc.get("category"),
+                        "description": doc.get("description"),
                         "last_edited": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime)),
                         "last_edited_epoch": mtime
                     })
@@ -951,14 +1141,16 @@ def assembly_load():
             obj = _safe_read_json(abs_path)
             return jsonify(obj)
         else:
-            with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
-                content = fh.read()
-            return jsonify({
+            doc = _load_assembly_document(abs_path, island)
+            rel = os.path.relpath(abs_path, root).replace(os.sep, "/")
+            result = {
                 "file_name": os.path.basename(abs_path),
-                "rel_path": os.path.relpath(abs_path, root).replace(os.sep, "/"),
-                "type": ("ansible" if isl.startswith("ansible") else _detect_script_type(abs_path)),
-                "content": content
-            })
+                "rel_path": rel,
+                "type": doc.get("type"),
+                "assembly": doc,
+                "content": doc.get("script")
+            }
+            return jsonify(result)
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
     except Exception as e:
@@ -991,29 +1183,33 @@ def _is_valid_scripts_relpath(rel_path: str) -> bool:
 
 
 def _detect_script_type(filename: str) -> str:
-    fn = (filename or "").lower()
-    if fn.endswith(".yml"):
-        return "ansible"
-    if fn.endswith(".ps1"):
+    fn_lower = (filename or "").lower()
+    if fn_lower.endswith(".json") and os.path.isfile(filename):
+        try:
+            obj = _safe_read_json(filename)
+            if isinstance(obj, dict):
+                typ = str(obj.get("type") or obj.get("script_type") or "").strip().lower()
+                if typ in ("powershell", "batch", "bash", "ansible"):
+                    return typ
+        except Exception:
+            pass
         return "powershell"
-    if fn.endswith(".bat"):
+    if fn_lower.endswith(".yml"):
+        return "ansible"
+    if fn_lower.endswith(".ps1"):
+        return "powershell"
+    if fn_lower.endswith(".bat"):
         return "batch"
-    if fn.endswith(".sh"):
+    if fn_lower.endswith(".sh"):
         return "bash"
     return "unknown"
 
 
 def _ext_for_type(script_type: str) -> str:
     t = (script_type or "").lower()
-    if t == "ansible":
-        return ".yml"
-    if t == "powershell":
-        return ".ps1"
-    if t == "batch":
-        return ".bat"
-    if t == "bash":
-        return ".sh"
-    return ""
+    if t in ("ansible", "powershell", "batch", "bash"):
+        return ".json"
+    return ".json"
 
 
 """
@@ -2594,14 +2790,24 @@ def set_device_description(hostname: str):
 # Quick Job Execution + Activity History
 # ---------------------------------------------
 def _detect_script_type(fn: str) -> str:
-    fn = (fn or "").lower()
-    if fn.endswith(".yml"):
-        return "ansible"
-    if fn.endswith(".ps1"):
+    fn_lower = (fn or "").lower()
+    if fn_lower.endswith(".json") and os.path.isfile(fn):
+        try:
+            obj = _safe_read_json(fn)
+            if isinstance(obj, dict):
+                typ = str(obj.get("type") or obj.get("script_type") or "").strip().lower()
+                if typ in ("powershell", "batch", "bash", "ansible"):
+                    return typ
+        except Exception:
+            pass
         return "powershell"
-    if fn.endswith(".bat"):
+    if fn_lower.endswith(".yml"):
+        return "ansible"
+    if fn_lower.endswith(".ps1"):
+        return "powershell"
+    if fn_lower.endswith(".bat"):
         return "batch"
-    if fn.endswith(".sh"):
+    if fn_lower.endswith(".sh"):
         return "bash"
     return "unknown"
 
@@ -2634,15 +2840,34 @@ def scripts_quick_run():
     if (not abs_path.startswith(scripts_root)) or (not _is_valid_scripts_relpath(rel_path)) or (not os.path.isfile(abs_path)):
         return jsonify({"error": "Script not found"}), 404
 
-    script_type = _detect_script_type(abs_path)
+    doc = _load_assembly_document(abs_path, "scripts")
+    script_type = (doc.get("type") or "powershell").lower()
     if script_type != "powershell":
         return jsonify({"error": f"Unsupported script type '{script_type}'. Only powershell is supported for Quick Job currently."}), 400
 
+    content = doc.get("script") or ""
+    variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
+    env_map: Dict[str, str] = {}
+    for var in variables:
+        if not isinstance(var, dict):
+            continue
+        name = str(var.get("name") or "").strip()
+        if not name:
+            continue
+        env_key = re.sub(r"[^A-Za-z0-9_]", "_", name.upper())
+        default_val = var.get("default")
+        if isinstance(default_val, bool):
+            env_val = "True" if default_val else "False"
+        elif default_val is None:
+            env_val = ""
+        else:
+            env_val = str(default_val)
+        env_map[env_key] = env_val
+    timeout_seconds = 0
     try:
-        with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
-            content = fh.read()
-    except Exception as e:
-        return jsonify({"error": f"Failed to read script: {e}"}), 500
+        timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))
+    except Exception:
+        timeout_seconds = 0
 
     now = int(time.time())
     results = []
@@ -2680,6 +2905,10 @@ def scripts_quick_run():
             "script_name": _safe_filename(rel_path),
             "script_path": rel_path.replace(os.sep, "/"),
             "script_content": content,
+            "environment": env_map,
+            "variables": variables,
+            "timeout_seconds": timeout_seconds,
+            "files": doc.get("files") if isinstance(doc.get("files"), list) else [],
             "run_mode": run_mode,
             "admin_user": admin_user,
             "admin_pass": admin_pass,
@@ -2709,12 +2938,10 @@ def ansible_quick_run():
         if not os.path.isfile(abs_path):
             _ansible_log_server(f"[quick_run] playbook not found path={abs_path}")
             return jsonify({"error": "Playbook not found"}), 404
-        try:
-            with open(abs_path, 'r', encoding='utf-8', errors='replace') as fh:
-                content = fh.read()
-        except Exception as e:
-            _ansible_log_server(f"[quick_run] read error: {e}")
-            return jsonify({"error": f"Failed to read playbook: {e}"}), 500
+        doc = _load_assembly_document(abs_path, 'ansible')
+        content = doc.get('script') or ''
+        variables = doc.get('variables') if isinstance(doc.get('variables'), list) else []
+        files = doc.get('files') if isinstance(doc.get('files'), list) else []
 
         results = []
         for host in hostnames:
@@ -2757,6 +2984,8 @@ def ansible_quick_run():
                 "playbook_name": os.path.basename(abs_path),
                 "playbook_content": content,
                 "connection": "winrm",
+                "variables": variables,
+                "files": files,
                 "activity_job_id": job_id,
             }
             try:

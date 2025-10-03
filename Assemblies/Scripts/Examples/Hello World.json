@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "name": "Hello World",
+  "description": "Outputs a dynamic hello world message based on the $env:Message variable.",
+  "category": "script",
+  "type": "powershell",
+  "script": "Write-Host $env:Message\n\n\n\n\n",
+  "script_lines": [
+    "Write-Host $env:Message",
+    "",
+    "",
+    "",
+    "",
+    ""
+  ],
+  "timeout_seconds": 3600,
+  "sites": {
+    "mode": "specific",
+    "values": [
+      "1"
+    ]
+  },
+  "variables": [
+    {
+      "name": "Message",
+      "label": "Variable Example",
+      "type": "string",
+      "default": "Hello World",
+      "required": false,
+      "description": "Message to Output"
+    }
+  ],
+  "files": []
+}
