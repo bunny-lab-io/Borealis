@@ -46,9 +46,20 @@ const VARIABLE_TYPE_OPTIONS = [
   { key: "credential", label: "Credential" }
 ];
 
+const BACKGROUND_COLORS = {
+  field: "#2A2A2A", /* Background for text inputs, inline editors, and script content */
+  sectionCard: "#2E2E2E", /* Background for section container cards */
+  menu: "#202734", /* Background for dropdown menus and code editor frames */
+  menuSelected: "rgba(88,166,255,0.16)", /* Background for selected dropdown items */
+  menuSelectedHover: "rgba(88,166,255,0.24)", /* Background for hovered selected dropdown items */
+  primaryActionSaving: "rgba(88,166,255,0.12)", /* Background for primary action button while saving */
+  primaryActionHover: "rgba(88,166,255,0.18)", /* Background for primary action button hover state */
+  dialog: "#1a1f27" /* Background for modal dialogs */
+};
+
 const INPUT_BASE_SX = {
   "& .MuiOutlinedInput-root": {
-    bgcolor: "#2A2A2A", /* Text Field Background Color */
+    bgcolor: BACKGROUND_COLORS.field,
     color: "#e6edf3", /* Text Color */
     borderRadius: 1, /* Roundness of UI Elements */
     minHeight: 40,
@@ -95,7 +106,7 @@ const SECTION_TITLE_SX = {
 };
 
 const SECTION_CARD_SX = {
-  bgcolor: "#2E2E2E", /* Color of Page Background */
+  bgcolor: BACKGROUND_COLORS.sectionCard,
   borderRadius: 2,
   border: "1px solid #262f3d",
 };
@@ -103,14 +114,14 @@ const SECTION_CARD_SX = {
 const MENU_PROPS = {
   PaperProps: {
     sx: {
-      bgcolor: "#202734",
+      bgcolor: BACKGROUND_COLORS.menu,
       color: "#e6edf3",
       border: "1px solid #2b3544",
       "& .MuiMenuItem-root.Mui-selected": {
-        bgcolor: "rgba(88,166,255,0.16)"
+        bgcolor: BACKGROUND_COLORS.menuSelected
       },
       "& .MuiMenuItem-root.Mui-selected:hover": {
-        bgcolor: "rgba(88,166,255,0.24)"
+        bgcolor: BACKGROUND_COLORS.menuSelectedHover
       }
     }
   }
@@ -265,7 +276,7 @@ function toServerDocument(assembly) {
 
 function RenameFileDialog({ open, value, onChange, onCancel, onSave }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#1a1f27", color: "#fff" } }}>
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: BACKGROUND_COLORS.dialog, color: "#fff" } }}>
       <DialogTitle>Rename Assembly File</DialogTitle>
       <DialogContent>
         <TextField
@@ -685,10 +696,12 @@ export default function AssemblyEditor({
                   color: "#58a6ff",
                   borderColor: "#58a6ff",
                   textTransform: "none",
-                  backgroundColor: saving ? "rgba(88,166,255,0.12)" : "#202734",
+                  backgroundColor: saving
+                    ? BACKGROUND_COLORS.primaryActionSaving
+                    : BACKGROUND_COLORS.menu,
                   "&:hover": {
                     borderColor: "#7db7ff",
-                    backgroundColor: "rgba(88,166,255,0.18)"
+                    backgroundColor: BACKGROUND_COLORS.primaryActionHover
                   },
                   "&.Mui-disabled": {
                     color: "#3c4452",
@@ -760,7 +773,9 @@ export default function AssemblyEditor({
             <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
               Script Content
             </Typography>
-            <Box sx={{ border: "1px solid #2b3544", borderRadius: 1, background: "#202734" }}>
+            <Box
+              sx={{ border: "1px solid #2b3544", borderRadius: 1, background: BACKGROUND_COLORS.menu }}
+            >
               <Editor
                 value={assembly.script}
                 onValueChange={(value) => updateAssembly({ script: value })}
@@ -771,7 +786,7 @@ export default function AssemblyEditor({
                   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
                   fontSize: 14,
                   color: "#e6edf3",
-                  background: "#2A2A2A", /* Color of Script Box */
+                  background: BACKGROUND_COLORS.field, /* Color of Script Box */
                   outline: "none",
                   minHeight: 320,
                   lineHeight: 1.45,
@@ -888,7 +903,7 @@ export default function AssemblyEditor({
                 {assembly.variables.map((variable) => (
                   <Paper
                     key={variable.id}
-                    sx={{ p: 2, bgcolor: "#2A2A2A", border: "1px solid #2b3544", borderRadius: 1 }}
+                    sx={{ p: 2, bgcolor: BACKGROUND_COLORS.field, border: "1px solid #2b3544", borderRadius: 1 }}
                   >
                     <Grid container spacing={2} alignItems="center">
                       <Grid item xs={12} md={3}>
@@ -1007,7 +1022,7 @@ export default function AssemblyEditor({
                     key={file.id}
                     sx={{
                       p: 1.5,
-                      bgcolor: "#202734",
+                      bgcolor: BACKGROUND_COLORS.menu,
                       border: "1px solid #2b3544",
                       display: "flex",
                       alignItems: "center",
