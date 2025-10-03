@@ -182,7 +182,6 @@ class JobScheduler:
             "category": "application" if default_type == "ansible" else "script",
             "type": default_type,
             "script": "",
-            "script_lines": [],
             "variables": [],
             "files": [],
             "timeout_seconds": 3600,
@@ -217,7 +216,6 @@ class JobScheduler:
                         doc["script"] = content_val
                 normalized_script = (doc["script"] or "").replace("\r\n", "\n")
                 doc["script"] = normalized_script
-                doc["script_lines"] = normalized_script.split("\n") if normalized_script else []
                 try:
                     timeout_raw = data.get("timeout_seconds", data.get("timeout"))
                     if timeout_raw is None:
@@ -271,7 +269,6 @@ class JobScheduler:
             content = ""
         normalized_script = (content or "").replace("\r\n", "\n")
         doc["script"] = normalized_script
-        doc["script_lines"] = normalized_script.split("\n") if normalized_script else []
         return doc
 
     def _ansible_root(self) -> str:
