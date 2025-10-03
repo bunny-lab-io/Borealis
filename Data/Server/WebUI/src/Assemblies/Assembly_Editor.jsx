@@ -629,55 +629,76 @@ export default function AssemblyEditor({
             </Typography>
           </Box>
 
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 0, flexWrap: "wrap" }}>
-            <Box sx={{ flex: 1 }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 2,
+              mb: 0,
+              flexWrap: "wrap"
+            }}
+          >
+            <Box sx={{ flex: "1 1 auto", minWidth: 120 }}>
               <Typography variant="caption" sx={SECTION_TITLE_SX}>
                 Overview
               </Typography>
             </Box>
-            {currentPath ? (
-              <Tooltip title="Rename File">
-                <Button
-                  size="small"
-                  onClick={() => { setRenameValue(fileName); setRenameOpen(true); }}
-                  sx={{ color: "#58a6ff", textTransform: "none" }}
-                >
-                  Rename
-                </Button>
-              </Tooltip>
-            ) : null}
-            {currentPath ? (
-              <Tooltip title="Delete Assembly">
-                <Button
-                  size="small"
-                  onClick={() => setDeleteOpen(true)}
-                  sx={{ color: "#ff6b6b", textTransform: "none" }}
-                >
-                  Delete
-                </Button>
-              </Tooltip>
-            ) : null}
-            <Button
-              variant="outlined"
-              onClick={saveAssembly}
-              disabled={saving}
+            <Box
               sx={{
-                color: "#58a6ff",
-                borderColor: "#58a6ff",
-                textTransform: "none",
-                backgroundColor: saving ? "rgba(88,166,255,0.12)" : "#202734",
-                "&:hover": {
-                  borderColor: "#7db7ff",
-                  backgroundColor: "rgba(88,166,255,0.18)"
-                },
-                "&.Mui-disabled": {
-                  color: "#3c4452",
-                  borderColor: "#2b3544"
-                }
+                display: "flex",
+                alignItems: "center",
+                gap: 1.5,
+                flexWrap: "wrap",
+                justifyContent: "flex-end",
+                ml: { xs: 0, sm: "auto" },
+                alignSelf: "flex-start"
               }}
             >
-              {saving ? "Saving..." : "Save Assembly"}
-            </Button>
+              {currentPath ? (
+                <Tooltip title="Rename File">
+                  <Button
+                    size="small"
+                    onClick={() => { setRenameValue(fileName); setRenameOpen(true); }}
+                    sx={{ color: "#58a6ff", textTransform: "none" }}
+                  >
+                    Rename
+                  </Button>
+                </Tooltip>
+              ) : null}
+              {currentPath ? (
+                <Tooltip title="Delete Assembly">
+                  <Button
+                    size="small"
+                    onClick={() => setDeleteOpen(true)}
+                    sx={{ color: "#ff6b6b", textTransform: "none" }}
+                  >
+                    Delete
+                  </Button>
+                </Tooltip>
+              ) : null}
+              <Button
+                variant="outlined"
+                onClick={saveAssembly}
+                disabled={saving}
+                sx={{
+                  color: "#58a6ff",
+                  borderColor: "#58a6ff",
+                  textTransform: "none",
+                  backgroundColor: saving ? "rgba(88,166,255,0.12)" : "#202734",
+                  "&:hover": {
+                    borderColor: "#7db7ff",
+                    backgroundColor: "rgba(88,166,255,0.18)"
+                  },
+                  "&.Mui-disabled": {
+                    color: "#3c4452",
+                    borderColor: "#2b3544"
+                  }
+                }}
+              >
+                {saving ? "Saving..." : "Save Assembly"}
+              </Button>
+            </Box>
           </Box>
 
           <Grid container spacing={2}>
@@ -792,7 +813,10 @@ export default function AssemblyEditor({
                   label="Site Scope"
                   value={siteScopeValue}
                   onChange={(e) => updateSitesMode(e.target.value)}
-                  sx={{ ...SELECT_BASE_SX, flex: 1 }}
+                  sx={{
+                    ...SELECT_BASE_SX,
+                    width: { xs: "100%", sm: 320, lg: 360 }
+                  }}
                   SelectProps={{ MenuProps: MENU_PROPS }}
                 >
                   <MenuItem value="all">All Sites</MenuItem>
@@ -805,7 +829,10 @@ export default function AssemblyEditor({
                     label="Allowed Sites"
                     value={selectedSiteValues}
                     onChange={(e) => updateSelectedSites(Array.isArray(e.target.value) ? e.target.value : [])}
-                    sx={{ ...SELECT_BASE_SX, flex: 1 }}
+                    sx={{
+                      ...SELECT_BASE_SX,
+                      width: { xs: "100%", sm: 360, lg: 420 }
+                    }}
                     SelectProps={{
                       multiple: true,
                       renderValue: (selected) => {
