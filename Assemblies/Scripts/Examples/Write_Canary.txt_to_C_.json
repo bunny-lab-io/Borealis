@@ -25,7 +25,7 @@
       "name": "Example Variable",
       "label": "Important Label",
       "type": "string",
-      "default": "Blah",
+      "default": true,
       "required": false,
       "description": "Put something into this variable!"
     }
