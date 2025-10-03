@@ -888,12 +888,12 @@ export default function AssemblyEditor({
             </Grid>
           </Grid>
 
-          <Box sx={{ mt: 4 }}>
+          <Box sx={{ mt: 3 }}>
             <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
               Variables
             </Typography>
             <Typography variant="body2" sx={{ color: "#9ba3b4", mb: 2 }}>
-              Variables are passed into the execution environment as environment variables at runtime.
+              Variables are dynamically passed into the script as environment variables at runtime.
             </Typography>
             {(assembly.variables || []).length ? (
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
