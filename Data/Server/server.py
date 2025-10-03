@@ -682,7 +682,6 @@ def _empty_assembly_document(default_type: str = "powershell") -> Dict[str, Any]
         "category": "application" if (default_type or "").lower() == "ansible" else "script",
         "type": default_type or "powershell",
         "script": "",
-        "script_lines": [],
         "timeout_seconds": 3600,
         "sites": {"mode": "all", "values": []},
         "variables": [],
@@ -718,7 +717,6 @@ def _normalize_assembly_document(obj: Any, default_type: str, base_name: str) ->
             doc["script"] = content_val
     normalized_script = (doc["script"] or "").replace("\r\n", "\n")
     doc["script"] = normalized_script
-    doc["script_lines"] = normalized_script.split("\n") if normalized_script else []
     timeout_val = obj.get("timeout_seconds", obj.get("timeout"))
     if timeout_val is not None:
         try:
@@ -798,7 +796,6 @@ def _load_assembly_document(abs_path: str, island: str, type_hint: str = "") -> 
     doc["name"] = base_name
     normalized_script = (content or "").replace("\r\n", "\n")
     doc["script"] = normalized_script
-    doc["script_lines"] = normalized_script.split("\n") if normalized_script else []
     if default_type == "ansible":
         doc["category"] = "application"
     return doc
