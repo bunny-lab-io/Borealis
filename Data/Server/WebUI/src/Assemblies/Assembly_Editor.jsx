@@ -212,13 +212,11 @@ function fromServerDocument(doc = {}, defaultType = "powershell") {
     assembly.description = doc.description || "";
     assembly.category = doc.category || assembly.category;
     assembly.type = doc.type || assembly.type;
-    if (Array.isArray(doc.script_lines)) {
-      assembly.script = doc.script_lines
-        .map((line) => (line == null ? "" : String(line)))
-        .join("\n");
-    } else {
-      assembly.script = doc.script ?? doc.content ?? "";
-    }
+    const legacyScript = Array.isArray(doc.script_lines)
+      ? doc.script_lines.map((line) => (line == null ? "" : String(line))).join("\n")
+      : "";
+    const script = doc.script ?? doc.content ?? legacyScript;
+    assembly.script = typeof script === "string" ? script : legacyScript;
     const timeout = doc.timeout_seconds ?? doc.timeout ?? assembly.timeoutSeconds;
     assembly.timeoutSeconds = Number.isFinite(Number(timeout))
       ? Number(timeout)
@@ -238,7 +236,6 @@ function toServerDocument(assembly) {
   const normalizedScript = typeof assembly.script === "string"
     ? assembly.script.replace(/\r\n/g, "\n")
     : "";
-  const scriptLines = normalizedScript ? normalizedScript.split("\n") : [];
   const timeoutNumeric = Number(assembly.timeoutSeconds);
   const timeoutSeconds = Number.isFinite(timeoutNumeric) ? Math.max(0, Math.round(timeoutNumeric)) : 3600;
   return {
@@ -248,7 +245,6 @@ function toServerDocument(assembly) {
     category: assembly.category || "script",
     type: assembly.type || "powershell",
     script: normalizedScript,
-    script_lines: scriptLines,
     timeout_seconds: timeoutSeconds,
     sites: {
       mode: assembly.sites?.mode === "specific" ? "specific" : "all",
@@ -728,12 +724,16 @@ export default function AssemblyEditor({
                 value={assembly.description}
                 onChange={(e) => updateAssembly({ description: e.target.value })}
                 multiline
-                minRows={3}
+                minRows={2}
+                maxRows={8}
                 fullWidth
                 variant="outlined"
                 sx={{
                   ...INPUT_BASE_SX,
-                  "& .MuiOutlinedInput-inputMultiline": { padding: "4px 8px" }
+                  "& .MuiOutlinedInput-inputMultiline": {
+                    padding: "6px 12px",
+                    lineHeight: 1.4
+                  }
                 }}
               />
             </Grid>
@@ -902,92 +902,177 @@ export default function AssemblyEditor({
                     key={variable.id}
                     sx={{ p: 2, bgcolor: BACKGROUND_COLORS.field, border: "1px solid #2b3544", borderRadius: 1 }}
                   >
-                    <Grid container spacing={2} alignItems="center">
-                      <Grid item xs={12} md={3}>
-                        <TextField
-                          label="Variable Name"
-                          value={variable.name}
-                          onChange={(e) => updateVariable(variable.id, { name: e.target.value })}
-                          fullWidth
-                          variant="outlined"
-                          sx={INPUT_BASE_SX}
-                        />
-                      </Grid>
-                      <Grid item xs={12} md={3}>
-                        <TextField
-                          label="Display Label"
-                          value={variable.label}
-                          onChange={(e) => updateVariable(variable.id, { label: e.target.value })}
-                          fullWidth
-                          variant="outlined"
-                          sx={INPUT_BASE_SX}
-                        />
-                      </Grid>
-                      <Grid item xs={12} md={2}>
-                        <TextField
-                          select
-                          fullWidth
-                          label="Type"
-                          value={variable.type}
-                          onChange={(e) => updateVariable(variable.id, { type: e.target.value })}
-                          sx={SELECT_BASE_SX}
-                          SelectProps={{ MenuProps: MENU_PROPS }}
-                        >
-                          {VARIABLE_TYPE_OPTIONS.map((opt) => (
-                            <MenuItem key={opt.key} value={opt.key}>{opt.label}</MenuItem>
-                          ))}
-                        </TextField>
-                      </Grid>
-                      <Grid item xs={12} md={3}>
-                        {variable.type === "boolean" ? (
-                          <FormControlLabel
-                            control={
-                              <Checkbox
-                                checked={Boolean(variable.defaultValue)}
-                                onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.checked })}
-                                sx={{ color: "#58a6ff" }}
-                              />
-                            }
-                            label="Default Value"
-                          />
-                        ) : (
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 2, lg: 1.5 } }}>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                          gap: { xs: 2, lg: 1.5 },
+                          pt: 0.5
+                        }}
+                      >
+                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 28%" }, minWidth: { lg: 220 } }}>
+                          <Tooltip
+                            title="This is the name of the variable you will be referencing inside of the script.  Within the script you will reference this variable with a prefixed \"$env:<variable>\".  For example, a variable named \"message\" would be written in the script as \"$env:message\"."
+                            arrow
+                            placement="top-start"
+                          >
                           <TextField
-                            label="Default Value"
-                            value={variable.defaultValue ?? ""}
-                            onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.value })}
+                            label="Variable"
+                            value={variable.name}
+                            onChange={(e) => updateVariable(variable.id, { name: e.target.value })}
                             fullWidth
                             variant="outlined"
                             sx={INPUT_BASE_SX}
                           />
+                        </Tooltip>
+                        </Box>
+                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 22%" }, minWidth: { lg: 180 } }}>
+                          <Tooltip
+                            title="This is the name that will be given to the variable and seen by Borealis server operators."
+                            arrow
+                            placement="top-start"
+                          >
+                          <TextField
+                            label="Display Label"
+                            value={variable.label}
+                            onChange={(e) => updateVariable(variable.id, { label: e.target.value })}
+                            fullWidth
+                            variant="outlined"
+                            sx={INPUT_BASE_SX}
+                          />
+                        </Tooltip>
+                        </Box>
+                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 18%" }, minWidth: { lg: 160 } }}>
+                          <Tooltip
+                            title="This defines the type of variable data the script should expect."
+                            arrow
+                            placement="top-start"
+                        >
+                          <TextField
+                            select
+                            fullWidth
+                            label="Type"
+                            value={variable.type}
+                            onChange={(e) => updateVariable(variable.id, { type: e.target.value })}
+                            sx={SELECT_BASE_SX}
+                            SelectProps={{ MenuProps: MENU_PROPS }}
+                          >
+                            {VARIABLE_TYPE_OPTIONS.map((opt) => (
+                              <MenuItem key={opt.key} value={opt.key}>{opt.label}</MenuItem>
+                            ))}
+                          </TextField>
+                        </Tooltip>
+                        </Box>
+                        <Box
+                          sx={{
+                            flex: { xs: "1 1 100%", lg: "0 1 24%" },
+                            minWidth: { lg: 220 },
+                            display: "flex",
+                            alignItems: "center"
+                          }}
+                        >
+                          {variable.type === "boolean" ? (
+                            <Tooltip
+                              title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
+                              arrow
+                              placement="top-start"
+                          >
+                            <FormControlLabel
+                              control={
+                                <Checkbox
+                                  checked={Boolean(variable.defaultValue)}
+                                  onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.checked })}
+                                  sx={{ color: "#58a6ff" }}
+                                />
+                              }
+                              label="Default Value"
+                              sx={{
+                                color: "#9ba3b4",
+                                m: 0,
+                                "& .MuiFormControlLabel-label": { fontSize: "0.95rem" }
+                              }}
+                            />
+                          </Tooltip>
+                        ) : (
+                          <Tooltip
+                            title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
+                            arrow
+                            placement="top-start"
+                          >
+                            <TextField
+                              label="Default Value"
+                              value={variable.defaultValue ?? ""}
+                              onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.value })}
+                              fullWidth
+                              variant="outlined"
+                              sx={INPUT_BASE_SX}
+                            />
+                          </Tooltip>
                         )}
-                      </Grid>
-                      <Grid item xs={12} md={1} sx={{ display: "flex", justifyContent: "center" }}>
-                        <Tooltip title="Required">
+                        </Box>
+                        <Box
+                          sx={{
+                            flex: { xs: "1 1 100%", lg: "0 0 110px" },
+                            minWidth: { lg: 110 },
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 1
+                          }}
+                        >
+                          <Typography variant="caption" sx={{ color: "#9ba3b4", fontSize: "0.75rem" }}>
+                            Required
+                          </Typography>
                           <Checkbox
                             checked={Boolean(variable.required)}
                             onChange={(e) => updateVariable(variable.id, { required: e.target.checked })}
-                            sx={{ color: "#58a6ff" }}
+                            sx={{ color: "#58a6ff", p: 0.5 }}
+                            inputProps={{ "aria-label": "Required" }}
                           />
-                        </Tooltip>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <TextField
-                          label="Description"
-                          value={variable.description}
-                          onChange={(e) => updateVariable(variable.id, { description: e.target.value })}
-                          fullWidth
-                          multiline
-                          minRows={2}
-                          variant="outlined"
-                          sx={INPUT_BASE_SX}
-                        />
-                      </Grid>
-                      <Grid item xs={12} sx={{ display: "flex", justifyContent: "flex-end" }}>
-                        <IconButton onClick={() => removeVariable(variable.id)} sx={{ color: "#ff6b6b" }}>
-                          <DeleteIcon />
-                        </IconButton>
-                      </Grid>
-                    </Grid>
+                        </Box>
+                        <Box
+                          sx={{
+                            flex: { xs: "1 1 100%", lg: "0 0 auto" },
+                            display: "flex",
+                            justifyContent: "flex-end",
+                            alignItems: "center",
+                            ml: { lg: "auto" }
+                          }}
+                        >
+                          <Tooltip title="Remove this Variable." arrow>
+                            <IconButton onClick={() => removeVariable(variable.id)} sx={{ color: "#ff6b6b" }}>
+                              <DeleteIcon />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      </Box>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: { xs: 2, lg: 1.5 }
+                        }}
+                      >
+                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 50%" }, minWidth: { lg: 260 } }}>
+                          <Tooltip
+                            title="Instruct the operator in why this variable exists and how to set it appropriately."
+                            arrow
+                            placement="top-start"
+                          >
+                            <TextField
+                              label="Description"
+                              value={variable.description}
+                              onChange={(e) => updateVariable(variable.id, { description: e.target.value })}
+                              fullWidth
+                              variant="outlined"
+                              sx={INPUT_BASE_SX}
+                            />
+                          </Tooltip>
+                        </Box>
+                      </Box>
+                    </Box>
                   </Paper>
                 ))}
               </Box>
