@@ -918,15 +918,15 @@ export default function AssemblyEditor({
                             arrow
                             placement="top-start"
                           >
-                          <TextField
-                            label="Variable"
-                            value={variable.name}
-                            onChange={(e) => updateVariable(variable.id, { name: e.target.value })}
-                            fullWidth
-                            variant="outlined"
-                            sx={INPUT_BASE_SX}
-                          />
-                        </Tooltip>
+                            <TextField
+                              label="Variable"
+                              value={variable.name}
+                              onChange={(e) => updateVariable(variable.id, { name: e.target.value })}
+                              fullWidth
+                              variant="outlined"
+                              sx={INPUT_BASE_SX}
+                            />
+                          </Tooltip>
                         </Box>
                         <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 22%" }, minWidth: { lg: 180 } }}>
                           <Tooltip
@@ -934,36 +934,52 @@ export default function AssemblyEditor({
                             arrow
                             placement="top-start"
                           >
-                          <TextField
-                            label="Display Label"
-                            value={variable.label}
-                            onChange={(e) => updateVariable(variable.id, { label: e.target.value })}
-                            fullWidth
-                            variant="outlined"
-                            sx={INPUT_BASE_SX}
-                          />
-                        </Tooltip>
+                            <TextField
+                              label="Display Label"
+                              value={variable.label}
+                              onChange={(e) => updateVariable(variable.id, { label: e.target.value })}
+                              fullWidth
+                              variant="outlined"
+                              sx={INPUT_BASE_SX}
+                            />
+                          </Tooltip>
+                        </Box>
+                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 28%" }, minWidth: { lg: 220 } }}>
+                          <Tooltip
+                            title="Instruct the operator in why this variable exists and how to set it appropriately."
+                            arrow
+                            placement="top-start"
+                          >
+                            <TextField
+                              label="Description"
+                              value={variable.description}
+                              onChange={(e) => updateVariable(variable.id, { description: e.target.value })}
+                              fullWidth
+                              variant="outlined"
+                              sx={INPUT_BASE_SX}
+                            />
+                          </Tooltip>
                         </Box>
                         <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 18%" }, minWidth: { lg: 160 } }}>
                           <Tooltip
                             title="This defines the type of variable data the script should expect."
                             arrow
                             placement="top-start"
-                        >
-                          <TextField
-                            select
-                            fullWidth
-                            label="Type"
-                            value={variable.type}
-                            onChange={(e) => updateVariable(variable.id, { type: e.target.value })}
-                            sx={SELECT_BASE_SX}
-                            SelectProps={{ MenuProps: MENU_PROPS }}
                           >
-                            {VARIABLE_TYPE_OPTIONS.map((opt) => (
-                              <MenuItem key={opt.key} value={opt.key}>{opt.label}</MenuItem>
-                            ))}
-                          </TextField>
-                        </Tooltip>
+                            <TextField
+                              select
+                              fullWidth
+                              label="Type"
+                              value={variable.type}
+                              onChange={(e) => updateVariable(variable.id, { type: e.target.value })}
+                              sx={SELECT_BASE_SX}
+                              SelectProps={{ MenuProps: MENU_PROPS }}
+                            >
+                              {VARIABLE_TYPE_OPTIONS.map((opt) => (
+                                <MenuItem key={opt.key} value={opt.key}>{opt.label}</MenuItem>
+                              ))}
+                            </TextField>
+                          </Tooltip>
                         </Box>
                         <Box
                           sx={{
@@ -978,59 +994,39 @@ export default function AssemblyEditor({
                               title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
                               arrow
                               placement="top-start"
-                          >
-                            <FormControlLabel
-                              control={
-                                <Checkbox
-                                  checked={Boolean(variable.defaultValue)}
-                                  onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.checked })}
-                                  sx={{ color: "#58a6ff" }}
-                                />
-                              }
-                              label="Default Value"
-                              sx={{
-                                color: "#9ba3b4",
-                                m: 0,
-                                "& .MuiFormControlLabel-label": { fontSize: "0.95rem" }
-                              }}
-                            />
-                          </Tooltip>
-                        ) : (
-                          <Tooltip
-                            title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
-                            arrow
-                            placement="top-start"
-                          >
-                            <TextField
-                              label="Default Value"
-                              value={variable.defaultValue ?? ""}
-                              onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.value })}
-                              fullWidth
-                              variant="outlined"
-                              sx={INPUT_BASE_SX}
-                            />
-                          </Tooltip>
-                        )}
-                        </Box>
-                        <Box
-                          sx={{
-                            flex: { xs: "1 1 100%", lg: "0 0 110px" },
-                            minWidth: { lg: 110 },
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            gap: 1
-                          }}
-                        >
-                          <Typography variant="caption" sx={{ color: "#9ba3b4", fontSize: "0.75rem" }}>
-                            Required
-                          </Typography>
-                          <Checkbox
-                            checked={Boolean(variable.required)}
-                            onChange={(e) => updateVariable(variable.id, { required: e.target.checked })}
-                            sx={{ color: "#58a6ff", p: 0.5 }}
-                            inputProps={{ "aria-label": "Required" }}
-                          />
+                            >
+                              <FormControlLabel
+                                control={
+                                  <Checkbox
+                                    checked={Boolean(variable.defaultValue)}
+                                    onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.checked })}
+                                    sx={{ color: "#58a6ff" }}
+                                  />
+                                }
+                                label="Default Value"
+                                sx={{
+                                  color: "#9ba3b4",
+                                  m: 0,
+                                  "& .MuiFormControlLabel-label": { fontSize: "0.95rem" }
+                                }}
+                              />
+                            </Tooltip>
+                          ) : (
+                            <Tooltip
+                              title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
+                              arrow
+                              placement="top-start"
+                            >
+                              <TextField
+                                label="Default Value"
+                                value={variable.defaultValue ?? ""}
+                                onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.value })}
+                                fullWidth
+                                variant="outlined"
+                                sx={INPUT_BASE_SX}
+                              />
+                            </Tooltip>
+                          )}
                         </Box>
                         <Box
                           sx={{
@@ -1055,21 +1051,24 @@ export default function AssemblyEditor({
                           gap: { xs: 2, lg: 1.5 }
                         }}
                       >
-                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 50%" }, minWidth: { lg: 260 } }}>
-                          <Tooltip
-                            title="Instruct the operator in why this variable exists and how to set it appropriately."
-                            arrow
-                            placement="top-start"
-                          >
-                            <TextField
-                              label="Description"
-                              value={variable.description}
-                              onChange={(e) => updateVariable(variable.id, { description: e.target.value })}
-                              fullWidth
-                              variant="outlined"
-                              sx={INPUT_BASE_SX}
-                            />
-                          </Tooltip>
+                        <Box
+                          sx={{
+                            flex: { xs: "1 1 100%", lg: "0 1 50%" },
+                            minWidth: { lg: 220 },
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 1.5
+                          }}
+                        >
+                          <Typography variant="caption" sx={{ color: "#9ba3b4", fontSize: "0.75rem" }}>
+                            Required
+                          </Typography>
+                          <Checkbox
+                            checked={Boolean(variable.required)}
+                            onChange={(e) => updateVariable(variable.id, { required: e.target.checked })}
+                            sx={{ color: "#58a6ff", p: 0.5 }}
+                            inputProps={{ "aria-label": "Required" }}
+                          />
                         </Box>
                       </Box>
                     </Box>
