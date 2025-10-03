@@ -913,7 +913,7 @@ export default function AssemblyEditor({
                     >
                       <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 30%" }, minWidth: { lg: 220 } }}>
                         <Tooltip
-                          title="This is the name of the variable you will be referencing inside of the script.  Within the script you will reference this variable with a prefixed \"$env:<variable>\".  For example, a variable named \"message\" would be written in the script as \"$env:message\"."
+                          title="This is the name of the variable you will be referencing inside of the script.  Within the script you will reference this variable with $env:<variable>."
                           arrow
                           placement="top-start"
                         >
