@@ -423,7 +423,7 @@ function buildFileTree(rootLabel, items, folders) {
       if (!node) {
         node = {
           id: path,
-          label: isFile ? (s.file_name || part) : part,
+          label: isFile ? (s.name || s.display_name || s.file_name || part) : part,
           path,
           isFolder: !isFile,
           fileName: s.file_name,
@@ -591,32 +591,21 @@ function ScriptsLikeIsland({
     }
   };
 
-  const createNewItem = async () => {
-    try {
-      const folder = selectedNode?.isFolder ? selectedNode.path : (selectedNode?.path?.split("/").slice(0, -1).join("/") || "");
-      let name = newItemName || "new";
-      const hasExt = /\.[^./\\]+$/i.test(name);
-      if (!hasExt) {
-        if (String(baseApi || '').endsWith('/api/ansible')) name += '.yml';
-        else name += '.ps1';
-      }
-      const newPath = folder ? `${folder}/${name}` : name;
-      // create empty file via unified API
-      const res = await fetch(`/api/assembly/create`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ island, kind: 'file', path: newPath, content: "", type: island === 'ansible' ? 'ansible' : 'powershell' })
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data?.error || `HTTP ${res.status}`);
-      }
-      setNewItemOpen(false);
-      setNewItemName("");
-      loadTree();
-    } catch (err) {
-      console.error("Failed to create:", err);
-    }
+  const createNewItem = () => {
+    const trimmedName = (newItemName || '').trim();
+    const folder = selectedNode?.isFolder
+      ? selectedNode.path
+      : (selectedNode?.path?.split("/").slice(0, -1).join("/") || "");
+    const context = {
+      folder,
+      suggestedFileName: trimmedName,
+      defaultType: island === 'ansible' ? 'ansible' : 'powershell',
+      type: island === 'ansible' ? 'ansible' : 'powershell',
+      category: island === 'ansible' ? 'application' : 'script'
+    };
+    setNewItemOpen(false);
+    setNewItemName("");
+    onEdit && onEdit(null, context);
   };
 
   const renderItems = (nodes) =>
@@ -754,7 +743,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
           rootLabel="Scripts"
           baseApi="/api/scripts"
           newItemLabel="New Script"
-          onEdit={(rel) => onOpenScript && onOpenScript(rel, 'scripts')}
+          onEdit={(rel, ctx) => onOpenScript && onOpenScript(rel, 'scripts', ctx)}
         />
 
         {/* Right: Ansible Playbooks */}
@@ -764,7 +753,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
           rootLabel="Ansible Playbooks"
           baseApi="/api/ansible"
           newItemLabel="New Playbook"
-          onEdit={(rel) => onOpenScript && onOpenScript(rel, 'ansible')}
+          onEdit={(rel, ctx) => onOpenScript && onOpenScript(rel, 'ansible', ctx)}
         />
         </Box>
       </Box>

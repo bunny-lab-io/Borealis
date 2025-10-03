@@ -78,7 +78,7 @@ function buildScriptTree(scripts, folders) {
       const isFile = idx === parts.length - 1;
       let node = children.find((n) => n.id === path);
       if (!node) {
-        node = { id: path, label: isFile ? s.file_name : part, path, isFolder: !isFile, fileName: s.file_name, script: isFile ? s : null, children: [] };
+        node = { id: path, label: isFile ? (s.name || s.file_name || part) : part, path, isFolder: !isFile, fileName: s.file_name, script: isFile ? s : null, children: [] };
         children.push(node); map[path] = node;
       }
       if (!isFile) { children = node.children; parentPath = path; }

@@ -36,7 +36,7 @@ import SiteList from "./Sites/Site_List";
 import DeviceList from "./Devices/Device_List";
 import DeviceDetails from "./Devices/Device_Details";
 import AssemblyList from "./Assemblies/Assembly_List";
-import ScriptEditor from "./Assemblies/Script_Editor";
+import AssemblyEditor from "./Assemblies/Assembly_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
 import CreateJob from "./Scheduling/Create_Job.jsx";
 import UserManagement from "./Admin/User_Management.jsx";
@@ -106,7 +106,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   const [userDisplayName, setUserDisplayName] = useState(null);
   const [editingJob, setEditingJob] = useState(null);
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
-  const [scriptToEdit, setScriptToEdit] = useState(null); // { path, mode: 'scripts'|'ansible' }
+  const [assemblyEditorState, setAssemblyEditorState] = useState(null); // { path, mode, context, nonce }
       const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
 
       // Top-bar search state
@@ -631,8 +631,14 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
               setActiveTabId(newId);
               setCurrentPage("workflow-editor");
             }}
-            onOpenScript={(rel, mode) => {
-              setScriptToEdit({ path: rel, mode });
+            onOpenScript={(rel, mode, context) => {
+              const nonce = Date.now();
+              setAssemblyEditorState({
+                path: rel || '',
+                mode,
+                context: context ? { ...context, nonce } : null,
+                nonce
+              });
               setCurrentPage(mode === 'ansible' ? 'ansible_editor' : 'scripts');
             }}
           />
@@ -660,8 +666,14 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
               setActiveTabId(newId);
               setCurrentPage("workflow-editor");
             }}
-            onOpenScript={(rel, mode) => {
-              setScriptToEdit({ path: rel, mode });
+            onOpenScript={(rel, mode, context) => {
+              const nonce = Date.now();
+              setAssemblyEditorState({
+                path: rel || '',
+                mode,
+                context: context ? { ...context, nonce } : null,
+                nonce
+              });
               setCurrentPage(mode === 'ansible' ? 'ansible_editor' : 'scripts');
             }}
           />
@@ -669,20 +681,26 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
       case "scripts":
         return (
-          <ScriptEditor
+          <AssemblyEditor
             mode="scripts"
-            initialPath={scriptToEdit?.mode === 'scripts' ? (scriptToEdit?.path || '') : ''}
-            onConsumedInitialPath={() => setScriptToEdit(null)}
+            initialPath={assemblyEditorState?.mode === 'scripts' ? (assemblyEditorState?.path || '') : ''}
+            initialContext={assemblyEditorState?.mode === 'scripts' ? assemblyEditorState?.context : null}
+            onConsumeInitialData={() =>
+              setAssemblyEditorState((prev) => (prev && prev.mode === 'scripts' ? null : prev))
+            }
             onSaved={() => setCurrentPage('assemblies')}
           />
         );
 
       case "ansible_editor":
         return (
-          <ScriptEditor
+          <AssemblyEditor
             mode="ansible"
-            initialPath={scriptToEdit?.mode === 'ansible' ? (scriptToEdit?.path || '') : ''}
-            onConsumedInitialPath={() => setScriptToEdit(null)}
+            initialPath={assemblyEditorState?.mode === 'ansible' ? (assemblyEditorState?.path || '') : ''}
+            initialContext={assemblyEditorState?.mode === 'ansible' ? assemblyEditorState?.context : null}
+            onConsumeInitialData={() =>
+              setAssemblyEditorState((prev) => (prev && prev.mode === 'ansible' ? null : prev))
+            }
             onSaved={() => setCurrentPage('assemblies')}
           />
         );

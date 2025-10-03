@@ -1,8 +1,10 @@
 import os
 import sys
+import re
 import asyncio
 import tempfile
 import uuid
+from typing import Dict, List
 from PyQt5 import QtWidgets, QtGui
 
 
@@ -13,12 +15,62 @@ ROLE_CONTEXTS = ['interactive']
 IS_WINDOWS = os.name == 'nt'
 
 
-def _write_temp_script(content: str, suffix: str):
+def _sanitize_env_map(raw) -> Dict[str, str]:
+    env: Dict[str, str] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if key is None:
+                continue
+            name = str(key).strip()
+            if not name:
+                continue
+            env_key = re.sub(r"[^A-Za-z0-9_]", "_", name).upper()
+            if not env_key:
+                continue
+            if isinstance(value, bool):
+                env_val = "True" if value else "False"
+            elif value is None:
+                env_val = ""
+            else:
+                env_val = str(value)
+            env[env_key] = env_val
+    return env
+
+
+def _ps_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _build_wrapped_script(content: str, env_map: Dict[str, str], timeout_seconds: int) -> str:
+    inner_lines: List[str] = []
+    for key, value in (env_map or {}).items():
+        if not key:
+            continue
+        inner_lines.append(f"$Env:{key} = {_ps_literal(value)}")
+    inner_lines.append(content or "")
+    inner = "\n".join(line for line in inner_lines if line is not None)
+    script_block = "$__BorealisScript = {\n" + inner + "\n}\n"
+    if timeout_seconds and timeout_seconds > 0:
+        block = (
+            "$job = Start-Job -ScriptBlock $__BorealisScript\n"
+            f"if (Wait-Job -Job $job -Timeout {timeout_seconds}) {{\n"
+            "  Receive-Job $job\n"
+            "} else {\n"
+            "  Stop-Job $job -Force\n"
+            f"  throw \"Script timed out after {timeout_seconds} seconds\"\n"
+            "}\n"
+        )
+        return script_block + block
+    return script_block + "& $__BorealisScript\n"
+
+
+def _write_temp_script(content: str, suffix: str, env_map: Dict[str, str], timeout_seconds: int):
     temp_dir = os.path.join(tempfile.gettempdir(), "Borealis", "quick_jobs")
     os.makedirs(temp_dir, exist_ok=True)
     fd, path = tempfile.mkstemp(prefix="bj_", suffix=suffix, dir=temp_dir, text=True)
+    final_content = _build_wrapped_script(content or "", env_map, timeout_seconds)
     with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as fh:
-        fh.write(content or "")
+        fh.write(final_content)
     return path
 
 
@@ -45,7 +97,7 @@ async def _run_powershell_local(path: str):
         return -1, "", str(e)
 
 
-async def _run_powershell_via_user_task(content: str):
+async def _run_powershell_via_user_task(content: str, env_map: Dict[str, str], timeout_seconds: int):
     if not IS_WINDOWS:
         return -999, '', 'Windows only'
     ps = os.path.expandvars(r"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
@@ -58,8 +110,9 @@ async def _run_powershell_via_user_task(content: str):
         temp_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'Temp'))
         os.makedirs(temp_dir, exist_ok=True)
         fd, path = _tf.mkstemp(prefix='usr_task_', suffix='.ps1', dir=temp_dir, text=True)
+        final_content = _build_wrapped_script(content or '', env_map, timeout_seconds)
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(content or '')
+            f.write(final_content)
         out_path = os.path.join(temp_dir, f'out_{uuid.uuid4().hex}.txt')
         name = f"Borealis Agent - Task - {uuid.uuid4().hex} @ CurrentUser"
         task_ps = f"""
@@ -84,7 +137,7 @@ Get-ScheduledTask -TaskName $task | Out-Null
             return -999, '', (err_b or out_b or b'').decode(errors='replace')
         # Wait a short time for output file; best-effort
         import time as _t
-        deadline = _t.time() + 30
+        deadline = _t.time() + (timeout_seconds if timeout_seconds > 0 else 30)
         out_data = ''
         while _t.time() < deadline:
             try:
@@ -139,6 +192,29 @@ class Role:
                 script_type = (payload.get('script_type') or '').lower()
                 run_mode = (payload.get('run_mode') or 'current_user').lower()
                 content = payload.get('script_content') or ''
+                raw_env = payload.get('environment')
+                env_map = _sanitize_env_map(raw_env)
+                variables = payload.get('variables') if isinstance(payload.get('variables'), list) else []
+                for var in variables:
+                    if not isinstance(var, dict):
+                        continue
+                    name = str(var.get('name') or '').strip()
+                    if not name:
+                        continue
+                    key = re.sub(r"[^A-Za-z0-9_]", "_", name).upper()
+                    if key in env_map:
+                        continue
+                    default_val = var.get('default')
+                    if isinstance(default_val, bool):
+                        env_map[key] = "True" if default_val else "False"
+                    elif default_val is None:
+                        env_map[key] = ""
+                    else:
+                        env_map[key] = str(default_val)
+                try:
+                    timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
+                except Exception:
+                    timeout_seconds = 0
                 if run_mode == 'system':
                     return
                 if script_type != 'powershell':
@@ -147,10 +223,17 @@ class Role:
                 if run_mode == 'admin':
                     rc, out, err = -1, '', 'Admin credentialed runs are disabled; use SYSTEM or Current User.'
                 else:
-                    rc, out, err = await _run_powershell_via_user_task(content)
+                    rc, out, err = await _run_powershell_via_user_task(content, env_map, timeout_seconds)
                     if rc == -999:
-                        path = _write_temp_script(content, '.ps1')
-                        rc, out, err = await _run_powershell_local(path)
+                        path = _write_temp_script(content, '.ps1', env_map, timeout_seconds)
+                        try:
+                            rc, out, err = await _run_powershell_local(path)
+                        finally:
+                            try:
+                                if path and os.path.isfile(path):
+                                    os.remove(path)
+                            except Exception:
+                                pass
                 status = 'Success' if rc == 0 else 'Failed'
                 await sio.emit('quick_job_result', {
                     'job_id': job_id,

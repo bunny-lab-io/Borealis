@@ -1,6 +1,8 @@
 import os
 import time
 import json
+import os
+import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
@@ -150,16 +152,110 @@ class JobScheduler:
             return False
 
     def _detect_script_type(self, filename: str) -> str:
-        fn = (filename or "").lower()
-        if fn.endswith(".yml"):
-            return "ansible"
-        if fn.endswith(".ps1"):
+        fn_lower = (filename or "").lower()
+        if fn_lower.endswith(".json") and os.path.isfile(filename):
+            try:
+                with open(filename, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                if isinstance(data, dict):
+                    typ = str(data.get("type") or data.get("script_type") or "").strip().lower()
+                    if typ in ("powershell", "batch", "bash", "ansible"):
+                        return typ
+            except Exception:
+                pass
             return "powershell"
-        if fn.endswith(".bat"):
+        if fn_lower.endswith(".yml"):
+            return "ansible"
+        if fn_lower.endswith(".ps1"):
+            return "powershell"
+        if fn_lower.endswith(".bat"):
             return "batch"
-        if fn.endswith(".sh"):
+        if fn_lower.endswith(".sh"):
             return "bash"
         return "unknown"
+
+    def _load_assembly_document(self, abs_path: str, default_type: str) -> Dict[str, Any]:
+        base_name = os.path.splitext(os.path.basename(abs_path))[0]
+        doc: Dict[str, Any] = {
+            "name": base_name,
+            "description": "",
+            "category": "application" if default_type == "ansible" else "script",
+            "type": default_type,
+            "script": "",
+            "variables": [],
+            "files": [],
+            "timeout_seconds": 0,
+        }
+        if abs_path.lower().endswith(".json") and os.path.isfile(abs_path):
+            try:
+                with open(abs_path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except Exception:
+                data = {}
+            if isinstance(data, dict):
+                doc["name"] = str(data.get("name") or doc["name"])
+                doc["description"] = str(data.get("description") or "")
+                cat = str(data.get("category") or doc["category"]).strip().lower()
+                if cat in ("application", "script"):
+                    doc["category"] = cat
+                typ = str(data.get("type") or data.get("script_type") or default_type).strip().lower()
+                if typ in ("powershell", "batch", "bash", "ansible"):
+                    doc["type"] = typ
+                script_val = data.get("script")
+                if isinstance(script_val, str):
+                    doc["script"] = script_val
+                else:
+                    content_val = data.get("content")
+                    if isinstance(content_val, str):
+                        doc["script"] = content_val
+                try:
+                    doc["timeout_seconds"] = max(0, int(data.get("timeout_seconds") or 0))
+                except Exception:
+                    doc["timeout_seconds"] = 0
+                vars_in = data.get("variables") if isinstance(data.get("variables"), list) else []
+                doc["variables"] = []
+                for v in vars_in:
+                    if not isinstance(v, dict):
+                        continue
+                    name = str(v.get("name") or v.get("key") or "").strip()
+                    if not name:
+                        continue
+                    vtype = str(v.get("type") or "string").strip().lower()
+                    if vtype not in ("string", "number", "boolean", "credential"):
+                        vtype = "string"
+                    doc["variables"].append({
+                        "name": name,
+                        "label": str(v.get("label") or ""),
+                        "type": vtype,
+                        "default": v.get("default", v.get("default_value")),
+                        "required": bool(v.get("required")),
+                        "description": str(v.get("description") or ""),
+                    })
+                files_in = data.get("files") if isinstance(data.get("files"), list) else []
+                doc["files"] = []
+                for f in files_in:
+                    if not isinstance(f, dict):
+                        continue
+                    fname = f.get("file_name") or f.get("name")
+                    if not fname or not isinstance(f.get("data"), str):
+                        continue
+                    try:
+                        size_val = int(f.get("size") or 0)
+                    except Exception:
+                        size_val = 0
+                    doc["files"].append({
+                        "file_name": str(fname),
+                        "size": size_val,
+                        "mime_type": str(f.get("mime_type") or f.get("mimeType") or ""),
+                        "data": f.get("data"),
+                    })
+            return doc
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
+                doc["script"] = fh.read()
+        except Exception:
+            doc["script"] = ""
+        return doc
 
     def _ansible_root(self) -> str:
         import os
@@ -175,11 +271,10 @@ class JobScheduler:
             abs_path = os.path.abspath(os.path.join(ans_root, rel_norm))
             if (not abs_path.startswith(ans_root)) or (not os.path.isfile(abs_path)):
                 return
-            try:
-                with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
-                    content = fh.read()
-            except Exception:
-                return
+            doc = self._load_assembly_document(abs_path, "ansible")
+            content = doc.get("script") or ""
+            variables = doc.get("variables") or []
+            files = doc.get("files") or []
 
             # Record in activity_history for UI parity
             now = _now_ts()
@@ -217,6 +312,8 @@ class JobScheduler:
                 "scheduled_job_id": int(scheduled_job_id),
                 "scheduled_run_id": int(scheduled_run_id),
                 "connection": "winrm",
+                "variables": variables,
+                "files": files,
             }
             try:
                 self.socketio.emit("ansible_playbook_run", payload)
@@ -236,15 +333,33 @@ class JobScheduler:
             abs_path = os.path.abspath(os.path.join(scripts_root, path_norm))
             if (not abs_path.startswith(scripts_root)) or (not self._is_valid_scripts_relpath(path_norm)) or (not os.path.isfile(abs_path)):
                 return
-            stype = self._detect_script_type(abs_path)
+            doc = self._load_assembly_document(abs_path, "powershell")
+            stype = (doc.get("type") or "powershell").lower()
             # For now, only PowerShell is supported by agents for scheduled jobs
             if stype != "powershell":
                 return
+            content = doc.get("script") or ""
+            env_map: Dict[str, str] = {}
+            for var in doc.get("variables") or []:
+                if not isinstance(var, dict):
+                    continue
+                name = str(var.get("name") or "").strip()
+                if not name:
+                    continue
+                env_key = re.sub(r"[^A-Za-z0-9_]", "_", name.upper())
+                default_val = var.get("default")
+                if isinstance(default_val, bool):
+                    env_val = "True" if default_val else "False"
+                elif default_val is None:
+                    env_val = ""
+                else:
+                    env_val = str(default_val)
+                env_map[env_key] = env_val
+            timeout_seconds = 0
             try:
-                with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
-                    content = fh.read()
+                timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))
             except Exception:
-                return
+                timeout_seconds = 0
 
             # Insert into activity_history for device for parity with Quick Job
             import sqlite3
@@ -281,6 +396,10 @@ class JobScheduler:
                 "script_name": os.path.basename(abs_path),
                 "script_path": path_norm,
                 "script_content": content,
+                "environment": env_map,
+                "variables": doc.get("variables") or [],
+                "timeout_seconds": timeout_seconds,
+                "files": doc.get("files") or [],
                 "run_mode": (run_mode or "system").strip().lower(),
                 "admin_user": "",
                 "admin_pass": "",

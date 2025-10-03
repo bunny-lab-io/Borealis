@@ -53,7 +53,7 @@ function buildTree(items, folders, rootLabel = "Scripts") {
       if (!node) {
         node = {
           id: path,
-          label: isFile ? s.file_name : part,
+          label: isFile ? (s.name || s.file_name || part) : part,
           path,
           isFolder: !isFile,
           fileName: s.file_name,
