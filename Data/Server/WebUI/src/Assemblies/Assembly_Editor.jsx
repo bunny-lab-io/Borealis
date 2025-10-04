@@ -202,28 +202,51 @@ function decodeBase64String(data = "") {
   if (typeof data !== "string") {
     return { success: false, value: "" };
   }
-  if (!data.trim()) {
+
+  const trimmed = data.trim();
+  if (!trimmed) {
     return { success: true, value: "" };
   }
+
+  const sanitized = trimmed.replace(/\s+/g, "");
+
   try {
     if (typeof window !== "undefined" && typeof window.atob === "function") {
-      const binary = window.atob(data);
+      const binary = window.atob(sanitized);
       if (typeof TextDecoder !== "undefined") {
-        const decoder = new TextDecoder("utf-8", { fatal: false });
-        return { success: true, value: decoder.decode(Uint8Array.from(binary, (c) => c.charCodeAt(0))) };
+        try {
+          const decoder = new TextDecoder("utf-8", { fatal: false });
+          return {
+            success: true,
+            value: decoder.decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)))
+          };
+        } catch (err) {
+          // fall through to manual reconstruction
+        }
       }
-      return { success: true, value: binary };
+
+      let decoded = "";
+      for (let i = 0; i < binary.length; i += 1) {
+        decoded += String.fromCharCode(binary.charCodeAt(i));
+      }
+      try {
+        return { success: true, value: decodeURIComponent(escape(decoded)) };
+      } catch (err) {
+        return { success: true, value: decoded };
+      }
     }
   } catch (err) {
     // fall through to Buffer fallback
   }
+
   try {
     if (typeof Buffer !== "undefined") {
-      return { success: true, value: Buffer.from(data, "base64").toString("utf-8") };
+      return { success: true, value: Buffer.from(sanitized, "base64").toString("utf-8") };
     }
   } catch (err) {
     // ignore
   }
+
   return { success: false, value: "" };
 }
 
@@ -278,7 +301,7 @@ function fromServerDocument(doc = {}, defaultType = "powershell") {
       const encoding = (doc.script_encoding || doc.scriptEncoding || "").toLowerCase();
       if (["base64", "b64", "base-64"].includes(encoding)) {
         const decoded = decodeBase64String(script);
-        assembly.script = decoded.success ? decoded.value : "";
+        assembly.script = decoded.success ? decoded.value : script;
       } else if (!encoding) {
         const decoded = decodeBase64String(script);
         assembly.script = decoded.success ? decoded.value : script;
