@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "Shutdown Device [WIN]",
+  "description": "Shutdown the device with a configurable countdown.",
+  "category": "script",
+  "type": "powershell",
+  "script": "c2h1dGRvd24uZXhlIC9zIC9mIC90ICRlbnY6dGltZW91dA==",
+  "timeout_seconds": 3600,
+  "sites": {
+    "mode": "all",
+    "values": []
+  },
+  "variables": [
+    {
+      "name": "timeout",
+      "label": "Shutdown Countdown",
+      "type": "number",
+      "default": "30",
+      "required": true,
+      "description": "Amount of time to wait before shutdown occurs."
+    }
+  ],
+  "files": [],
+  "script_encoding": "base64"
+}
