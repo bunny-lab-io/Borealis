@@ -5,7 +5,8 @@ import tempfile
 import uuid
 import time
 import subprocess
-from typing import Dict, List
+import base64
+from typing import Dict, List, Optional
 
 
 ROLE_NAME = 'script_exec_system'
@@ -14,6 +15,11 @@ ROLE_CONTEXTS = ['system']
 
 def _project_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+
+def _canonical_env_key(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", (name or "").strip())
+    return cleaned.upper()
 
 
 def _sanitize_env_map(raw) -> Dict[str, str]:
@@ -25,7 +31,7 @@ def _sanitize_env_map(raw) -> Dict[str, str]:
             name = str(key).strip()
             if not name:
                 continue
-            env_key = re.sub(r"[^A-Za-z0-9_]", "_", name).upper()
+            env_key = _canonical_env_key(name)
             if not env_key:
                 continue
             if isinstance(value, bool):
@@ -38,19 +44,100 @@ def _sanitize_env_map(raw) -> Dict[str, str]:
     return env
 
 
+def _apply_variable_aliases(env_map: Dict[str, str], variables: List[Dict[str, str]]) -> Dict[str, str]:
+    if not isinstance(env_map, dict) or not isinstance(variables, list):
+        return env_map
+    for var in variables:
+        if not isinstance(var, dict):
+            continue
+        name = str(var.get('name') or '').strip()
+        if not name:
+            continue
+        canonical = _canonical_env_key(name)
+        if not canonical or canonical not in env_map:
+            continue
+        value = env_map[canonical]
+        alias = re.sub(r"[^A-Za-z0-9_]", "_", name)
+        if alias and alias not in env_map:
+            env_map[alias] = value
+        if alias == name:
+            continue
+        # Only add the original name when it results in a valid identifier.
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) and name not in env_map:
+            env_map[name] = value
+    return env_map
+
+
+def _decode_base64_text(value: str) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    try:
+        cleaned = re.sub(r"\s+", "", stripped)
+    except Exception:
+        cleaned = stripped
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except Exception:
+        return None
+    try:
+        return decoded.decode("utf-8")
+    except Exception:
+        return decoded.decode("utf-8", errors="replace")
+
+
+def _decode_script_content(raw_content, encoding_hint) -> str:
+    if isinstance(raw_content, str):
+        encoding = str(encoding_hint or "").strip().lower()
+        if encoding in ("base64", "b64", "base-64"):
+            decoded = _decode_base64_text(raw_content)
+            if decoded is not None:
+                return decoded
+        decoded = _decode_base64_text(raw_content)
+        if decoded is not None:
+            return decoded
+        return raw_content
+    return ""
+
+
 def _ps_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
 def _build_wrapped_script(content: str, env_map: Dict[str, str], timeout_seconds: int) -> str:
+    def _env_assignment_lines(lines: List[str]) -> None:
+        for key, value in (env_map or {}).items():
+            if not key:
+                continue
+            value_literal = _ps_literal(value)
+            key_literal = _ps_literal(key)
+            env_path_literal = f"[string]::Format('Env:{{0}}', {key_literal})"
+            lines.append(
+                f"try {{ [System.Environment]::SetEnvironmentVariable({key_literal}, {value_literal}, 'Process') }} catch {{}}"
+            )
+            lines.append(
+                "try { Set-Item -LiteralPath (" + env_path_literal + ") -Value " + value_literal +
+                " -ErrorAction Stop } catch { try { New-Item -Path (" + env_path_literal + ") -Value " +
+                value_literal + " -Force | Out-Null } catch {} }"
+            )
+
+    prelude_lines: List[str] = []
+    _env_assignment_lines(prelude_lines)
+
     inner_lines: List[str] = []
-    for key, value in (env_map or {}).items():
-        if not key:
-            continue
-        inner_lines.append(f"$Env:{key} = {_ps_literal(value)}")
+    _env_assignment_lines(inner_lines)
     inner_lines.append(content or "")
+
+    prelude = "\n".join(prelude_lines)
     inner = "\n".join(line for line in inner_lines if line is not None)
-    script_block = "$__BorealisScript = {\n" + inner + "\n}\n"
+
+    pieces: List[str] = []
+    if prelude:
+        pieces.append(prelude)
+    pieces.append("$__BorealisScript = {\n" + inner + "\n}\n")
+    script_block = "\n".join(pieces)
     if timeout_seconds and timeout_seconds > 0:
         block = (
             "$job = Start-Job -ScriptBlock $__BorealisScript\n"
@@ -184,7 +271,7 @@ class Role:
                     return
                 job_id = payload.get('job_id')
                 script_type = (payload.get('script_type') or '').lower()
-                content = payload.get('script_content') or ''
+                content = _decode_script_content(payload.get('script_content'), payload.get('script_encoding'))
                 raw_env = payload.get('environment')
                 env_map = _sanitize_env_map(raw_env)
                 variables = payload.get('variables') if isinstance(payload.get('variables'), list) else []
@@ -194,7 +281,7 @@ class Role:
                     name = str(var.get('name') or '').strip()
                     if not name:
                         continue
-                    key = re.sub(r"[^A-Za-z0-9_]", "_", name).upper()
+                    key = _canonical_env_key(name)
                     if key in env_map:
                         continue
                     default_val = var.get('default')
@@ -204,6 +291,7 @@ class Role:
                         env_map[key] = ""
                     else:
                         env_map[key] = str(default_val)
+                env_map = _apply_variable_aliases(env_map, variables)
                 try:
                     timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
                 except Exception:

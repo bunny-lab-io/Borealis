@@ -198,6 +198,61 @@ function normalizeVariablesFromServer(vars = []) {
   }));
 }
 
+function decodeBase64String(data = "") {
+  if (typeof data !== "string") {
+    return { success: false, value: "" };
+  }
+  if (!data.trim()) {
+    return { success: true, value: "" };
+  }
+  try {
+    if (typeof window !== "undefined" && typeof window.atob === "function") {
+      const binary = window.atob(data);
+      if (typeof TextDecoder !== "undefined") {
+        const decoder = new TextDecoder("utf-8", { fatal: false });
+        return { success: true, value: decoder.decode(Uint8Array.from(binary, (c) => c.charCodeAt(0))) };
+      }
+      return { success: true, value: binary };
+    }
+  } catch (err) {
+    // fall through to Buffer fallback
+  }
+  try {
+    if (typeof Buffer !== "undefined") {
+      return { success: true, value: Buffer.from(data, "base64").toString("utf-8") };
+    }
+  } catch (err) {
+    // ignore
+  }
+  return { success: false, value: "" };
+}
+
+function encodeBase64String(text = "") {
+  if (typeof text !== "string") {
+    text = text == null ? "" : String(text);
+  }
+  if (!text) return "";
+  try {
+    if (typeof TextEncoder !== "undefined" && typeof window !== "undefined" && typeof window.btoa === "function") {
+      const encoder = new TextEncoder();
+      const bytes = encoder.encode(text);
+      let binary = "";
+      bytes.forEach((b) => { binary += String.fromCharCode(b); });
+      return window.btoa(binary);
+    }
+  } catch (err) {
+    // fall through to Buffer fallback
+  }
+  try {
+    if (typeof Buffer !== "undefined") {
+      return Buffer.from(text, "utf-8").toString("base64");
+    }
+  } catch (err) {
+    // ignore
+  }
+  return "";
+}
+
 function normalizeFilesFromServer(files = []) {
   return (Array.isArray(files) ? files : []).map((f, idx) => ({
     id: `${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 8)}`,
@@ -219,7 +274,20 @@ function fromServerDocument(doc = {}, defaultType = "powershell") {
       ? doc.script_lines.map((line) => (line == null ? "" : String(line))).join("\n")
       : "";
     const script = doc.script ?? doc.content ?? legacyScript;
-    assembly.script = typeof script === "string" ? script : legacyScript;
+    if (typeof script === "string") {
+      const encoding = (doc.script_encoding || doc.scriptEncoding || "").toLowerCase();
+      if (["base64", "b64", "base-64"].includes(encoding)) {
+        const decoded = decodeBase64String(script);
+        assembly.script = decoded.success ? decoded.value : "";
+      } else if (!encoding) {
+        const decoded = decodeBase64String(script);
+        assembly.script = decoded.success ? decoded.value : script;
+      } else {
+        assembly.script = script;
+      }
+    } else {
+      assembly.script = legacyScript;
+    }
     const timeout = doc.timeout_seconds ?? doc.timeout ?? assembly.timeoutSeconds;
     assembly.timeoutSeconds = Number.isFinite(Number(timeout))
       ? Number(timeout)
@@ -241,13 +309,15 @@ function toServerDocument(assembly) {
     : "";
   const timeoutNumeric = Number(assembly.timeoutSeconds);
   const timeoutSeconds = Number.isFinite(timeoutNumeric) ? Math.max(0, Math.round(timeoutNumeric)) : 3600;
+  const encodedScript = encodeBase64String(normalizedScript);
   return {
     version: 1,
     name: assembly.name?.trim() || "",
     description: assembly.description || "",
     category: assembly.category || "script",
     type: assembly.type || "powershell",
-    script: normalizedScript,
+    script: encodedScript,
+    script_encoding: "base64",
     timeout_seconds: timeoutSeconds,
     sites: {
       mode: assembly.sites?.mode === "specific" ? "specific" : "all",
