@@ -7,6 +7,7 @@ import time
 import json
 import socket
 import subprocess
+import base64
 from typing import Optional
 
 try:
@@ -37,6 +38,39 @@ def _project_root():
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     except Exception:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+
+def _decode_base64_text(value):
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    cleaned = ''.join(stripped.split())
+    if not cleaned:
+        return ""
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except Exception:
+        return None
+    try:
+        return decoded.decode('utf-8')
+    except Exception:
+        return decoded.decode('utf-8', errors='replace')
+
+
+def _decode_playbook_content(raw_content, encoding_hint):
+    if isinstance(raw_content, str):
+        encoding = str(encoding_hint or '').strip().lower()
+        if encoding in ('base64', 'b64', 'base-64'):
+            decoded = _decode_base64_text(raw_content)
+            if decoded is not None:
+                return decoded
+        decoded = _decode_base64_text(raw_content)
+        if decoded is not None:
+            return decoded
+        return raw_content
+    return ''
 
 
 def _agent_root():
@@ -801,7 +835,7 @@ try {{
                     return
                 # Accept provided run_id or generate one
                 run_id = (payload.get('run_id') or '').strip() or uuid.uuid4().hex
-                content = payload.get('playbook_content') or ''
+                content = _decode_playbook_content(payload.get('playbook_content'), payload.get('playbook_encoding'))
                 p_name = payload.get('playbook_name') or ''
                 act_id = payload.get('activity_job_id')
                 sched_job_id = payload.get('scheduled_job_id')
@@ -874,7 +908,7 @@ try {{
                 if target and target != hostname.lower():
                     return
                 run_id = uuid.uuid4().hex
-                content = payload.get('script_content') or ''
+                content = _decode_playbook_content(payload.get('script_content'), payload.get('script_encoding'))
                 p_name = payload.get('script_name') or ''
                 self._runs[run_id] = {'cancel': False, 'proc': None}
                 asyncio.create_task(self._run_playbook(run_id, content, playbook_name=p_name, activity_job_id=payload.get('job_id'), connection='local'))

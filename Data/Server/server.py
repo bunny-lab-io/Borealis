@@ -689,6 +689,64 @@ def _empty_assembly_document(default_type: str = "powershell") -> Dict[str, Any]
     }
 
 
+def _decode_base64_text(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    try:
+        cleaned = re.sub(r"\s+", "", stripped)
+    except Exception:
+        cleaned = stripped
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except Exception:
+        return None
+    try:
+        return decoded.decode("utf-8")
+    except Exception:
+        return decoded.decode("utf-8", errors="replace")
+
+
+def _decode_script_content(value: Any, encoding_hint: str = "") -> str:
+    encoding = (encoding_hint or "").strip().lower()
+    if isinstance(value, str):
+        if encoding in ("base64", "b64", "base-64"):
+            decoded = _decode_base64_text(value)
+            if decoded is not None:
+                return decoded.replace("\r\n", "\n")
+        decoded = _decode_base64_text(value)
+        if decoded is not None:
+            return decoded.replace("\r\n", "\n")
+        return value.replace("\r\n", "\n")
+    return ""
+
+
+def _encode_script_content(script_text: Any) -> str:
+    if not isinstance(script_text, str):
+        if script_text is None:
+            script_text = ""
+        else:
+            script_text = str(script_text)
+    normalized = script_text.replace("\r\n", "\n")
+    if not normalized:
+        return ""
+    encoded = base64.b64encode(normalized.encode("utf-8"))
+    return encoded.decode("ascii")
+
+
+def _prepare_assembly_storage(doc: Dict[str, Any]) -> Dict[str, Any]:
+    stored: Dict[str, Any] = {}
+    for key, value in (doc or {}).items():
+        if key == "script":
+            stored[key] = _encode_script_content(value)
+        else:
+            stored[key] = value
+    stored["script_encoding"] = "base64"
+    return stored
+
+
 def _normalize_assembly_document(obj: Any, default_type: str, base_name: str) -> Dict[str, Any]:
     doc = _empty_assembly_document(default_type)
     if not isinstance(obj, dict):
@@ -703,6 +761,7 @@ def _normalize_assembly_document(obj: Any, default_type: str, base_name: str) ->
     if typ in ("powershell", "batch", "bash", "ansible"):
         doc["type"] = typ
     script_val = obj.get("script")
+    content_val = obj.get("content")
     script_lines = obj.get("script_lines")
     if isinstance(script_lines, list):
         try:
@@ -712,11 +771,24 @@ def _normalize_assembly_document(obj: Any, default_type: str, base_name: str) ->
     elif isinstance(script_val, str):
         doc["script"] = script_val
     else:
-        content_val = obj.get("content")
         if isinstance(content_val, str):
             doc["script"] = content_val
-    normalized_script = (doc["script"] or "").replace("\r\n", "\n")
-    doc["script"] = normalized_script
+    encoding_hint = str(obj.get("script_encoding") or obj.get("scriptEncoding") or "").strip().lower()
+    doc["script"] = _decode_script_content(doc.get("script"), encoding_hint)
+    if encoding_hint in ("base64", "b64", "base-64"):
+        doc["script_encoding"] = "base64"
+    else:
+        probe_source = ""
+        if isinstance(script_val, str) and script_val:
+            probe_source = script_val
+        elif isinstance(content_val, str) and content_val:
+            probe_source = content_val
+        decoded_probe = _decode_base64_text(probe_source) if probe_source else None
+        if decoded_probe is not None:
+            doc["script_encoding"] = "base64"
+            doc["script"] = decoded_probe.replace("\r\n", "\n")
+        else:
+            doc["script_encoding"] = "plain"
     timeout_val = obj.get("timeout_seconds", obj.get("timeout"))
     if timeout_val is not None:
         try:
@@ -853,7 +925,7 @@ def assembly_create():
                     base_name,
                 )
                 with open(abs_path, "w", encoding="utf-8") as fh:
-                    json.dump(normalized, fh, indent=2)
+                    json.dump(_prepare_assembly_storage(normalized), fh, indent=2)
             rel_new = os.path.relpath(abs_path, root).replace(os.sep, "/")
             return jsonify({"status": "ok", "rel_path": rel_new})
         else:
@@ -902,7 +974,7 @@ def assembly_edit():
                 base_name,
             )
             with open(target_abs, "w", encoding="utf-8") as fh:
-                json.dump(normalized, fh, indent=2)
+                json.dump(_prepare_assembly_storage(normalized), fh, indent=2)
         if target_abs != abs_path:
             try:
                 os.remove(abs_path)
@@ -2816,6 +2888,144 @@ def _safe_filename(rel_path: str) -> str:
         return rel_path or ""
 
 
+def _env_string(value: Any) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _canonical_env_key(name: Any) -> str:
+    try:
+        return re.sub(r"[^A-Za-z0-9_]", "_", str(name or "").strip()).upper()
+    except Exception:
+        return ""
+
+
+def _expand_env_aliases(env_map: Dict[str, str], variables: List[Dict[str, Any]]) -> Dict[str, str]:
+    expanded: Dict[str, str] = dict(env_map or {})
+    if not isinstance(variables, list):
+        return expanded
+    for var in variables:
+        if not isinstance(var, dict):
+            continue
+        name = str(var.get("name") or "").strip()
+        if not name:
+            continue
+        canonical = _canonical_env_key(name)
+        if not canonical or canonical not in expanded:
+            continue
+        value = expanded[canonical]
+        alias = re.sub(r"[^A-Za-z0-9_]", "_", name)
+        if alias and alias not in expanded:
+            expanded[alias] = value
+        if alias != name and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) and name not in expanded:
+            expanded[name] = value
+    return expanded
+
+
+def _powershell_literal(value: Any, var_type: str) -> str:
+    """Convert a variable value to a PowerShell literal for substitution."""
+    typ = str(var_type or "string").lower()
+    if typ == "boolean":
+        if isinstance(value, bool):
+            truthy = value
+        elif value is None:
+            truthy = False
+        elif isinstance(value, (int, float)):
+            truthy = value != 0
+        else:
+            s = str(value).strip().lower()
+            if s in {"true", "1", "yes", "y", "on"}:
+                truthy = True
+            elif s in {"false", "0", "no", "n", "off", ""}:
+                truthy = False
+            else:
+                truthy = bool(s)
+        return "$true" if truthy else "$false"
+    if typ == "number":
+        if value is None or value == "":
+            return "0"
+        return str(value)
+    # Treat credentials and any other type as strings
+    s = "" if value is None else str(value)
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _extract_variable_default(var: Dict[str, Any]) -> Any:
+    for key in ("value", "default", "defaultValue", "default_value"):
+        if key in var:
+            val = var.get(key)
+            return "" if val is None else val
+    return ""
+
+
+def _prepare_variable_context(doc_variables: List[Dict[str, Any]], overrides: Dict[str, Any]):
+    env_map: Dict[str, str] = {}
+    variables: List[Dict[str, Any]] = []
+    literal_lookup: Dict[str, str] = {}
+    doc_names: Dict[str, bool] = {}
+
+    overrides = overrides or {}
+
+    if not isinstance(doc_variables, list):
+        doc_variables = []
+
+    for var in doc_variables:
+        if not isinstance(var, dict):
+            continue
+        name = str(var.get("name") or "").strip()
+        if not name:
+            continue
+        doc_names[name] = True
+        canonical = _canonical_env_key(name)
+        var_type = str(var.get("type") or "string").lower()
+        default_val = _extract_variable_default(var)
+        final_val = overrides[name] if name in overrides else default_val
+        if canonical:
+            env_map[canonical] = _env_string(final_val)
+            literal_lookup[canonical] = _powershell_literal(final_val, var_type)
+        if name in overrides:
+            new_var = dict(var)
+            new_var["value"] = overrides[name]
+            variables.append(new_var)
+        else:
+            variables.append(var)
+
+    for name, val in overrides.items():
+        if name in doc_names:
+            continue
+        canonical = _canonical_env_key(name)
+        if canonical:
+            env_map[canonical] = _env_string(val)
+            literal_lookup[canonical] = _powershell_literal(val, "string")
+        variables.append({"name": name, "value": val, "type": "string"})
+
+    env_map = _expand_env_aliases(env_map, variables)
+    return env_map, variables, literal_lookup
+
+
+_ENV_VAR_PATTERN = re.compile(r"(?i)\$env:(\{)?([A-Za-z0-9_\-]+)(?(1)\})")
+
+
+def _rewrite_powershell_script(content: str, literal_lookup: Dict[str, str]) -> str:
+    if not content or not literal_lookup:
+        return content
+
+    def _replace(match: Any) -> str:
+        name = match.group(2)
+        canonical = _canonical_env_key(name)
+        if not canonical:
+            return match.group(0)
+        literal = literal_lookup.get(canonical)
+        if literal is None:
+            return match.group(0)
+        return literal
+
+    return _ENV_VAR_PATTERN.sub(_replace, content)
+
+
 @app.route("/api/scripts/quick_run", methods=["POST"])
 def scripts_quick_run():
     """Queue a Quick Job to agents via WebSocket and record Running status.
@@ -2843,23 +3053,20 @@ def scripts_quick_run():
         return jsonify({"error": f"Unsupported script type '{script_type}'. Only powershell is supported for Quick Job currently."}), 400
 
     content = doc.get("script") or ""
-    variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
-    env_map: Dict[str, str] = {}
-    for var in variables:
-        if not isinstance(var, dict):
-            continue
-        name = str(var.get("name") or "").strip()
-        if not name:
-            continue
-        env_key = re.sub(r"[^A-Za-z0-9_]", "_", name.upper())
-        default_val = var.get("default")
-        if isinstance(default_val, bool):
-            env_val = "True" if default_val else "False"
-        elif default_val is None:
-            env_val = ""
-        else:
-            env_val = str(default_val)
-        env_map[env_key] = env_val
+    doc_variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
+
+    overrides_raw = data.get("variable_values")
+    overrides: Dict[str, Any] = {}
+    if isinstance(overrides_raw, dict):
+        for key, val in overrides_raw.items():
+            name = str(key or "").strip()
+            if not name:
+                continue
+            overrides[name] = val
+
+    env_map, variables, literal_lookup = _prepare_variable_context(doc_variables, overrides)
+    content = _rewrite_powershell_script(content, literal_lookup)
+    encoded_content = _encode_script_content(content)
     timeout_seconds = 0
     try:
         timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))
@@ -2901,7 +3108,8 @@ def scripts_quick_run():
             "script_type": script_type,
             "script_name": _safe_filename(rel_path),
             "script_path": rel_path.replace(os.sep, "/"),
-            "script_content": content,
+            "script_content": encoded_content,
+            "script_encoding": "base64",
             "environment": env_map,
             "variables": variables,
             "timeout_seconds": timeout_seconds,
@@ -2937,6 +3145,7 @@ def ansible_quick_run():
             return jsonify({"error": "Playbook not found"}), 404
         doc = _load_assembly_document(abs_path, 'ansible')
         content = doc.get('script') or ''
+        encoded_content = _encode_script_content(content)
         variables = doc.get('variables') if isinstance(doc.get('variables'), list) else []
         files = doc.get('files') if isinstance(doc.get('files'), list) else []
 
@@ -2979,7 +3188,8 @@ def ansible_quick_run():
                 "run_id": run_id,
                 "target_hostname": str(host),
                 "playbook_name": os.path.basename(abs_path),
-                "playbook_content": content,
+                "playbook_content": encoded_content,
+                "playbook_encoding": "base64",
                 "connection": "winrm",
                 "variables": variables,
                 "files": files,
