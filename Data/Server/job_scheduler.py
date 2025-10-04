@@ -33,6 +33,35 @@ def _env_string(value: Any) -> str:
     return str(value)
 
 
+def _canonical_env_key(name: Any) -> str:
+    try:
+        return re.sub(r"[^A-Za-z0-9_]", "_", str(name or "").strip()).upper()
+    except Exception:
+        return ""
+
+
+def _expand_env_aliases(env_map: Dict[str, str], variables: List[Dict[str, Any]]) -> Dict[str, str]:
+    expanded: Dict[str, str] = dict(env_map or {})
+    if not isinstance(variables, list):
+        return expanded
+    for var in variables:
+        if not isinstance(var, dict):
+            continue
+        name = str(var.get("name") or "").strip()
+        if not name:
+            continue
+        canonical = _canonical_env_key(name)
+        if not canonical or canonical not in expanded:
+            continue
+        value = expanded[canonical]
+        alias = re.sub(r"[^A-Za-z0-9_]", "_", name)
+        if alias and alias not in expanded:
+            expanded[alias] = value
+        if alias != name and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) and name not in expanded:
+            expanded[name] = value
+    return expanded
+
+
 def _parse_ts(val: Any) -> Optional[int]:
     """Best effort to parse ISO-ish datetime string or numeric seconds to epoch seconds."""
     if val is None:
@@ -395,7 +424,9 @@ class JobScheduler:
                 name = str(var.get("name") or "").strip()
                 if not name:
                     continue
-                env_key = re.sub(r"[^A-Za-z0-9_]", "_", name.upper())
+                env_key = _canonical_env_key(name)
+                if not env_key:
+                    continue
                 default_val = var.get("default")
                 if default_val is None and "defaultValue" in var:
                     default_val = var.get("defaultValue")
@@ -404,7 +435,9 @@ class JobScheduler:
                 env_map[env_key] = _env_string(default_val)
                 doc_names[name] = True
             for name, val in overrides.items():
-                env_key = re.sub(r"[^A-Za-z0-9_]", "_", name.upper())
+                env_key = _canonical_env_key(name)
+                if not env_key:
+                    continue
                 env_map[env_key] = _env_string(val)
 
             variables: List[Dict[str, Any]] = []
@@ -423,6 +456,7 @@ class JobScheduler:
             for name, val in overrides.items():
                 if name not in doc_names:
                     variables.append({"name": name, "value": val})
+            env_map = _expand_env_aliases(env_map, variables)
             timeout_seconds = 0
             try:
                 timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))

@@ -72,19 +72,37 @@ def _ps_literal(value: str) -> str:
 
 
 def _build_wrapped_script(content: str, env_map: Dict[str, str], timeout_seconds: int) -> str:
+    def _env_assignment_lines(lines: List[str]) -> None:
+        for key, value in (env_map or {}).items():
+            if not key:
+                continue
+            value_literal = _ps_literal(value)
+            key_literal = _ps_literal(key)
+            env_path_literal = f"[string]::Format('Env:{{0}}', {key_literal})"
+            lines.append(
+                f"try {{ [System.Environment]::SetEnvironmentVariable({key_literal}, {value_literal}, 'Process') }} catch {{}}"
+            )
+            lines.append(
+                "try { Set-Item -LiteralPath (" + env_path_literal + ") -Value " + value_literal +
+                " -ErrorAction Stop } catch { try { New-Item -Path (" + env_path_literal + ") -Value " +
+                value_literal + " -Force | Out-Null } catch {} }"
+            )
+
+    prelude_lines: List[str] = []
+    _env_assignment_lines(prelude_lines)
+
     inner_lines: List[str] = []
-    for key, value in (env_map or {}).items():
-        if not key:
-            continue
-        value_literal = _ps_literal(value)
-        key_literal = _ps_literal(key)
-        inner_lines.append(
-            f"[System.Environment]::SetEnvironmentVariable({key_literal}, {value_literal}, 'Process')"
-        )
-        inner_lines.append(f"$Env:{key} = {value_literal}")
+    _env_assignment_lines(inner_lines)
     inner_lines.append(content or "")
+
+    prelude = "\n".join(prelude_lines)
     inner = "\n".join(line for line in inner_lines if line is not None)
-    script_block = "$__BorealisScript = {\n" + inner + "\n}\n"
+
+    pieces: List[str] = []
+    if prelude:
+        pieces.append(prelude)
+    pieces.append("$__BorealisScript = {\n" + inner + "\n}\n")
+    script_block = "\n".join(pieces)
     if timeout_seconds and timeout_seconds > 0:
         block = (
             "$job = Start-Job -ScriptBlock $__BorealisScript\n"
