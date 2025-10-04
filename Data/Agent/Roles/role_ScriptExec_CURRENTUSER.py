@@ -15,6 +15,11 @@ ROLE_CONTEXTS = ['interactive']
 IS_WINDOWS = os.name == 'nt'
 
 
+def _canonical_env_key(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", (name or "").strip())
+    return cleaned.upper()
+
+
 def _sanitize_env_map(raw) -> Dict[str, str]:
     env: Dict[str, str] = {}
     if isinstance(raw, dict):
@@ -24,7 +29,7 @@ def _sanitize_env_map(raw) -> Dict[str, str]:
             name = str(key).strip()
             if not name:
                 continue
-            env_key = re.sub(r"[^A-Za-z0-9_]", "_", name).upper()
+            env_key = _canonical_env_key(name)
             if not env_key:
                 continue
             if isinstance(value, bool):
@@ -35,6 +40,29 @@ def _sanitize_env_map(raw) -> Dict[str, str]:
                 env_val = str(value)
             env[env_key] = env_val
     return env
+
+
+def _apply_variable_aliases(env_map: Dict[str, str], variables: List[Dict[str, str]]) -> Dict[str, str]:
+    if not isinstance(env_map, dict) or not isinstance(variables, list):
+        return env_map
+    for var in variables:
+        if not isinstance(var, dict):
+            continue
+        name = str(var.get('name') or '').strip()
+        if not name:
+            continue
+        canonical = _canonical_env_key(name)
+        if not canonical or canonical not in env_map:
+            continue
+        value = env_map[canonical]
+        alias = re.sub(r"[^A-Za-z0-9_]", "_", name)
+        if alias and alias not in env_map:
+            env_map[alias] = value
+        if alias == name:
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) and name not in env_map:
+            env_map[name] = value
+    return env_map
 
 
 def _ps_literal(value: str) -> str:
@@ -201,7 +229,7 @@ class Role:
                     name = str(var.get('name') or '').strip()
                     if not name:
                         continue
-                    key = re.sub(r"[^A-Za-z0-9_]", "_", name).upper()
+                    key = _canonical_env_key(name)
                     if key in env_map:
                         continue
                     default_val = var.get('default')
@@ -211,6 +239,7 @@ class Role:
                         env_map[key] = ""
                     else:
                         env_map[key] = str(default_val)
+                env_map = _apply_variable_aliases(env_map, variables)
                 try:
                     timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
                 except Exception:
