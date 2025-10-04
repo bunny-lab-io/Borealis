@@ -819,7 +819,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   return (
     <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
       <Box sx={{ p: 2, pb: 1 }}>
-        <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>Create a Job</Typography>
+        <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>Create a Scheduled Job</Typography>
         <Typography variant="body2" sx={{ color: "#aaa" }}>
           Configure advanced schedulable automation jobs for one or more devices.
         </Typography>

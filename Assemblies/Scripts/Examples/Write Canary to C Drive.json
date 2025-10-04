@@ -7,10 +7,8 @@
   "script": "IyBEZWZpbmUgdGhlIGZpbGUgcGF0aAokZmlsZVBhdGggPSAiQzpcQ2FuYXJ5LnR4dCIKCiMgV3JpdGUgc29tZSBjb250ZW50IGludG8gdGhlIGZpbGUKJGVudjpjYW5hcnlNZXNzYWdlIHwgT3V0LUZpbGUgLUZpbGVQYXRoICRmaWxlUGF0aCAtRW5jb2RpbmcgVVRGOAo=",
   "timeout_seconds": 3600,
   "sites": {
-    "mode": "specific",
-    "values": [
-      "1"
-    ]
+    "mode": "all",
+    "values": []
   },
   "variables": [
     {

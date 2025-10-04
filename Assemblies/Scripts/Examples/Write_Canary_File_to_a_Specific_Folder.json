@@ -15,7 +15,7 @@
       "name": "canaryLocation",
       "label": "Folder Location",
       "type": "string",
-      "default": "C:\\Users\\example\\Desktop",
+      "default": "C:\\Users\\example\\Desktop\\Canary.txt",
       "required": true,
       "description": "Location of Canary File"
     },
