@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "name": "Write Canary File to a Specific Folder",
+  "description": "Writes a basic canary file to a specific folder with specific input.",
+  "category": "script",
+  "type": "powershell",
+  "script": "JGVudjpjYW5hcnlNZXNzYWdlIHwgT3V0LUZpbGUgLUZpbGVQYXRoICRlbnY6Y2FuYXJ5TG9jYXRpb24gLUVuY29kaW5nIFVURjgK",
+  "timeout_seconds": 3600,
+  "sites": {
+    "mode": "all",
+    "values": []
+  },
+  "variables": [
+    {
+      "name": "canaryLocation",
+      "label": "Folder Location",
+      "type": "string",
+      "default": "C:\\Users\\example\\Desktop",
+      "required": true,
+      "description": "Location of Canary File"
+    },
+    {
+      "name": "canaryMessage",
+      "label": "Message",
+      "type": "string",
+      "default": "Hello World!",
+      "required": false,
+      "description": "Message to be written into the canary file."
+    }
+  ],
+  "files": [],
+  "script_encoding": "base64"
+}
