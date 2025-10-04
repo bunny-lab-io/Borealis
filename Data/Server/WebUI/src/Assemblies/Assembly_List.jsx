@@ -60,6 +60,16 @@ const Island = ({ title, description, icon, actions, children, sx }) => (
 );
 
 // ---------------- Workflows Island -----------------
+const sortTree = (node) => {
+  if (!node || !Array.isArray(node.children)) return;
+  node.children.sort((a, b) =>
+    String(a.label || "").localeCompare(String(b.label || ""), undefined, {
+      sensitivity: "base"
+    })
+  );
+  node.children.forEach(sortTree);
+};
+
 function buildWorkflowTree(workflows, folders) {
   const map = {};
   const rootNode = { id: "root", label: "Workflows", path: "", isFolder: true, children: [] };
@@ -107,6 +117,7 @@ function buildWorkflowTree(workflows, folders) {
       }
     });
   });
+  sortTree(rootNode);
   return { root: [rootNode], map };
 }
 
@@ -439,6 +450,7 @@ function buildFileTree(rootLabel, items, folders) {
       }
     });
   });
+  sortTree(rootNode);
   return { root: [rootNode], map };
 }
 
