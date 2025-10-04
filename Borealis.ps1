@@ -8,7 +8,8 @@ param(
     [string]$AgentAction = '',
     [switch]$Vite,
     [switch]$Flask,
-    [switch]$Quick
+    [switch]$Quick,
+    [switch]$SilentUpdate
 )
 
 # Preselect menu choices from CLI args (optional)
@@ -23,6 +24,11 @@ if ($Server -and $Agent) {
 
 if ($Vite -and $Flask) {
     Write-Host "Cannot combine -Vite and -Flask." -ForegroundColor Red
+    exit 1
+}
+
+if ($SilentUpdate -and ($Server -or $Agent -or $Vite -or $Flask -or $Quick -or ($AgentAction -and $AgentAction.Trim()))) {
+    Write-Host "-SilentUpdate cannot be combined with other options." -ForegroundColor Red
     exit 1
 }
 
@@ -240,7 +246,7 @@ function Run-Step {
         }
     } catch {
         Write-Host "`r$($symbols.Fail) $Message - Failed: $_                        " -ForegroundColor Red
-        exit 1
+        throw
     }
 }
 
@@ -575,6 +581,142 @@ function InstallOrUpdate-BorealisAgent {
     }
 }
 
+function Stop-AgentScheduledTasks {
+    param(
+        [string[]]$TaskNames
+    )
+
+    $stopped = @()
+    foreach ($name in $TaskNames) {
+        $taskExists = $false
+        try {
+            $null = Get-ScheduledTask -TaskName $name -ErrorAction Stop
+            $taskExists = $true
+        } catch {
+            try {
+                schtasks.exe /Query /TN "$name" 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) { $taskExists = $true }
+            } catch {}
+        }
+
+        if (-not $taskExists) { continue }
+
+        Write-Host "Stopping scheduled task: $name" -ForegroundColor Yellow
+        $stopped += $name
+        try { Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue } catch {}
+        try { schtasks.exe /End /TN "$name" /F 2>$null | Out-Null } catch {}
+        try {
+            for ($i = 0; $i -lt 20; $i++) {
+                $info = Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop
+                if ($info.State -ne 'Running' -and $info.State -ne 'Queued') { break }
+                Start-Sleep -Milliseconds 500
+            }
+        } catch {}
+    }
+
+    return ,$stopped
+}
+
+function Start-AgentScheduledTasks {
+    param(
+        [string[]]$TaskNames
+    )
+
+    foreach ($name in $TaskNames) {
+        Write-Host "Restarting scheduled task: $name" -ForegroundColor Green
+        try {
+            Start-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null
+            continue
+        } catch {}
+
+        try { schtasks.exe /Run /TN "$name" 2>$null | Out-Null } catch {}
+    }
+}
+
+function Invoke-BorealisUpdate {
+    param(
+        [switch]$Silent
+    )
+
+    $host.UI.RawUI.WindowTitle = "Borealis Updater"
+    if ($Silent) {
+        Write-Host "Starting unattended Borealis update..." -ForegroundColor Cyan
+    } else {
+        Write-Host " "
+        Write-Host "Updating Borealis..." -ForegroundColor Green
+    }
+
+    $updateZip = Join-Path $scriptDir "Update_Staging\main.zip"
+    $updateDir = Join-Path $scriptDir "Update_Staging\Borealis-main"
+    $preservePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
+    $preserveBackupPath = Join-Path $scriptDir "Update_Staging\Tesseract-OCR"
+
+    Run-Step "Updating: Move Tesseract-OCR Folder Somewhere Safe to Restore Later" {
+        if (Test-Path $preservePath) {
+            $stagingPath = Join-Path $scriptDir "Update_Staging"
+            if (-not (Test-Path $stagingPath)) { New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null }
+            Move-Item -Path $preservePath -Destination $preserveBackupPath -Force
+        }
+    }
+
+    Run-Step "Updating: Clean Up Folders to Prepare for Update" {
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
+            (Join-Path $scriptDir "Data"), `
+            (Join-Path $scriptDir "Server\web-interface\src"), `
+            (Join-Path $scriptDir "Server\web-interface\build"), `
+            (Join-Path $scriptDir "Server\web-interface\public"), `
+            (Join-Path $scriptDir "Server\Borealis")
+    }
+
+    Run-Step "Updating: Create Update Staging Folder" {
+        $stagingPath = Join-Path $scriptDir "Update_Staging"
+        if (-not (Test-Path $stagingPath)) { New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null }
+        Set-Variable -Name updateZip -Scope 1 -Value (Join-Path $stagingPath "main.zip")
+        Set-Variable -Name updateDir -Scope 1 -Value (Join-Path $stagingPath "Borealis-main")
+    }
+
+    Run-Step "Updating: Download Update" { Invoke-WebRequest -Uri "https://github.com/bunny-lab-io/Borealis/archive/refs/heads/main.zip" -OutFile $updateZip }
+    Run-Step "Updating: Extract Update Files" { Expand-Archive -Path $updateZip -DestinationPath (Join-Path $scriptDir "Update_Staging") -Force }
+    Run-Step "Updating: Copy Update Files into Production Borealis Root Folder" { Copy-Item "$updateDir\*" $scriptDir -Recurse -Force }
+
+    Run-Step "Updating: Restore Tesseract-OCR Folder" {
+        $restorePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints"
+        if (Test-Path $preserveBackupPath) {
+            if (-not (Test-Path $restorePath)) { New-Item -ItemType Directory -Force -Path $restorePath | Out-Null }
+            Move-Item -Path $preserveBackupPath -Destination $restorePath -Force
+        }
+    }
+
+    Run-Step "Updating: Clean Up Update Staging Folder" { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $scriptDir "Update_Staging") }
+
+    if ($Silent) {
+        Write-Host "Unattended Borealis update completed." -ForegroundColor Green
+        return
+    }
+
+    Write-Host "`nUpdate Complete! Please Re-Launch the Borealis Script." -ForegroundColor Green
+    Read-Host "Press any key to re-launch Borealis..."
+    & (Join-Path $scriptDir "Borealis.ps1")
+    exit 0
+}
+
+function Invoke-BorealisSilentUpdate {
+    Write-Host "Initiating Borealis silent update workflow..." -ForegroundColor DarkCyan
+    $managedTasks = Stop-AgentScheduledTasks -TaskNames @('Borealis Agent','Borealis Agent (UserHelper)')
+    try {
+        Invoke-BorealisUpdate -Silent
+    } finally {
+        if ($managedTasks.Count -gt 0) {
+            Start-AgentScheduledTasks -TaskNames $managedTasks
+        }
+    }
+}
+
+if ($SilentUpdate) {
+    Invoke-BorealisSilentUpdate
+    exit 0
+}
+
 # ---------------------- Main ----------------------
 Clear-Host
 
@@ -813,56 +955,8 @@ switch ($choice) {
     }
 
     "5" {
-        $host.UI.RawUI.WindowTitle = "Borealis Updater"
-        Write-Host " "
-        Write-Host "Updating Borealis..." -ForegroundColor Green
-        $updateZip = Join-Path $scriptDir "Update_Staging\main.zip"
-        $updateDir = Join-Path $scriptDir "Update_Staging\Borealis-main"
-        $preservePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
-        $preserveBackupPath = Join-Path $scriptDir "Update_Staging\Tesseract-OCR"
-
-        Run-Step "Updating: Move Tesseract-OCR Folder Somewhere Safe to Restore Later" {
-            if (Test-Path $preservePath) {
-                $stagingPath = Join-Path $scriptDir "Update_Staging"
-                if (-not (Test-Path $stagingPath)) { New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null }
-                Move-Item -Path $preservePath -Destination $preserveBackupPath -Force
-            }
-        }
-
-        Run-Step "Updating: Clean Up Folders to Prepare for Update" {
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
-                (Join-Path $scriptDir "Data"), `
-                (Join-Path $scriptDir "Server\web-interface\src"), `
-                (Join-Path $scriptDir "Server\web-interface\build"), `
-                (Join-Path $scriptDir "Server\web-interface\public"), `
-                (Join-Path $scriptDir "Server\Borealis")
-        }
-
-        Run-Step "Updating: Create Update Staging Folder" {
-            $stagingPath = Join-Path $scriptDir "Update_Staging"
-            if (-not (Test-Path $stagingPath)) { New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null }
-            $updateZip = Join-Path $stagingPath "main.zip"
-            $updateDir = Join-Path $stagingPath "Borealis-main"
-        }
-
-        Run-Step "Updating: Download Update" { Invoke-WebRequest -Uri "https://github.com/bunny-lab-io/Borealis/archive/refs/heads/main.zip" -OutFile $updateZip }
-        Run-Step "Updating: Extract Update Files" { Expand-Archive -Path $updateZip -DestinationPath (Join-Path $scriptDir "Update_Staging") -Force }
-        Run-Step "Updating: Copy Update Files into Production Borealis Root Folder" { Copy-Item "$updateDir\*" $scriptDir -Recurse -Force }
-
-        Run-Step "Updating: Restore Tesseract-OCR Folder" {
-            $restorePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints"
-            if (Test-Path $preserveBackupPath) {
-                if (-not (Test-Path $restorePath)) { New-Item -ItemType Directory -Force -Path $restorePath | Out-Null }
-                Move-Item -Path $preserveBackupPath -Destination $restorePath -Force
-            }
-        }
-
-        Run-Step "Updating: Clean Up Update Staging Folder" { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $scriptDir "Update_Staging") }
-
-        Write-Host "`nUpdate Complete! Please Re-Launch the Borealis Script." -ForegroundColor Green
-        Read-Host "Press any key to re-launch Borealis..."
-        & (Join-Path $scriptDir "Borealis.ps1")
-        Exit 0
+        Invoke-BorealisUpdate
+        break
     }
 
     # (Removed) case "6" experimental AHK test
