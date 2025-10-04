@@ -3150,15 +3150,34 @@ def agent_silent_update():
         return jsonify({"error": "No valid hostnames provided"}), 400
 
     request_id = uuid.uuid4().hex
-    results: List[Dict[str, str]] = []
+    now_ts = int(time.time())
+    results: List[Dict[str, Any]] = []
+
+    # Map hostname -> connected agent_id(s) so we can target specific rooms.
+    host_to_agents: Dict[str, List[str]] = {}
+    for agent_id, info in (registered_agents or {}).items():
+        try:
+            hostname = str(info.get("hostname") or "").strip().lower()
+        except Exception:
+            hostname = ""
+        if not hostname:
+            continue
+        host_to_agents.setdefault(hostname, []).append(agent_id)
+
     for host in hostnames:
         payload = {
             "target_hostname": host,
             "request_id": request_id,
-            "requested_at": int(time.time()),
+            "requested_at": now_ts,
         }
-        socketio.emit("agent_silent_update", payload)
-        results.append({"hostname": host, "status": "queued"})
+        target_agents = host_to_agents.get(host.strip().lower(), [])
+        if target_agents:
+            for agent_id in target_agents:
+                socketio.emit("agent_silent_update", payload, room=agent_id)
+        else:
+            # Fallback broadcast for legacy agents or if hostname lookup failed.
+            socketio.emit("agent_silent_update", payload)
+        results.append({"hostname": host, "status": "queued", "agent_ids": target_agents})
 
     _write_service_log(
         "server",
