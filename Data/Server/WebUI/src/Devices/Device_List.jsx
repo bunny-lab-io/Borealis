@@ -18,7 +18,9 @@ import {
   MenuItem,
   Popover,
   TextField,
-  Tooltip
+  Tooltip,
+  Snackbar,
+  Alert
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import FilterListIcon from "@mui/icons-material/FilterList";
@@ -61,6 +63,8 @@ export default function DeviceList({ onSelectDevice }) {
   // Track selection by agent id to avoid duplicate hostname collisions
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [quickJobOpen, setQuickJobOpen] = useState(false);
+  const [updateLoading, setUpdateLoading] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState({ open: false, severity: "success", message: "" });
 
   // Saved custom views (from server)
   const [views, setViews] = useState([]); // [{id, name, columns:[id], filters:{}}]
@@ -422,6 +426,49 @@ export default function DeviceList({ onSelectDevice }) {
     });
   };
 
+  const triggerSilentUpdate = useCallback(async () => {
+    const hostnames = Array.from(
+      new Set(
+        rows
+          .filter((r) => selectedIds.has(r.id))
+          .map((r) => r.hostname)
+          .filter(Boolean)
+      )
+    );
+    if (!hostnames.length) return;
+
+    setUpdateLoading(true);
+    try {
+      const resp = await fetch('/api/agents/silent_update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostnames }),
+      });
+      let payload = null;
+      try {
+        payload = await resp.json();
+      } catch (err) {
+        payload = null;
+      }
+      if (!resp.ok || (payload && payload.error)) {
+        const msg = payload && payload.error ? payload.error : `HTTP ${resp.status}`;
+        throw new Error(msg);
+      }
+      const count = Array.isArray(payload?.results) ? payload.results.length : hostnames.length;
+      const requestId = typeof payload?.request_id === 'string' && payload.request_id ? payload.request_id : '';
+      setUpdateStatus({
+        open: true,
+        severity: 'success',
+        message: `Silent update triggered for ${count} device${count === 1 ? '' : 's'}${requestId ? ` (request ${requestId})` : ''}.`,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setUpdateStatus({ open: true, severity: 'error', message: `Failed to trigger silent update: ${message}` });
+    } finally {
+      setUpdateLoading(false);
+    }
+  }, [rows, selectedIds]);
+
   // Column drag handlers
   const onHeaderDragStart = (colId) => (e) => {
     dragColId.current = colId;
@@ -572,7 +619,23 @@ export default function DeviceList({ onSelectDevice }) {
           </Box>
         </Box>
         {/* Second row: Quick Job button aligned under header title */}
-        <Box sx={{ display: 'flex' }}>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="contained"
+            size="small"
+            disabled={selectedIds.size === 0 || updateLoading}
+            onClick={triggerSilentUpdate}
+            sx={{
+              textTransform: "none",
+              bgcolor: selectedIds.size === 0 || updateLoading ? "#2d4a6a" : "#1f6feb",
+              color: "#fff",
+              '&:hover': {
+                bgcolor: selectedIds.size === 0 || updateLoading ? "#2d4a6a" : "#388bfd"
+              }
+            }}
+          >
+            {updateLoading ? "Updating..." : "Update Agent"}
+          </Button>
           <Button
             variant="outlined"
             size="small"
@@ -954,6 +1017,23 @@ export default function DeviceList({ onSelectDevice }) {
           hostnames={rows.filter((r) => selectedIds.has(r.id)).map((r) => r.hostname)}
         />
       )}
+      <Snackbar
+        open={updateStatus.open}
+        autoHideDuration={6000}
+        onClose={(_event, reason) => {
+          if (reason === 'clickaway') return;
+          setUpdateStatus((prev) => ({ ...prev, open: false }));
+        }}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setUpdateStatus((prev) => ({ ...prev, open: false }))}
+          severity={updateStatus.severity}
+          sx={{ width: '100%' }}
+        >
+          {updateStatus.message}
+        </Alert>
+      </Snackbar>
       {assignDialogOpen && (
         <Popover
           open={assignDialogOpen}

@@ -17,9 +17,10 @@ import time
 import os  # To Read Production ReactJS Server Folder
 import json  # For reading workflow JSON files
 import shutil  # For moving workflow files and folders
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional, Any, Set
 import sqlite3
 import io
+import uuid
 from datetime import datetime, timezone
 
 try:
@@ -3125,6 +3126,48 @@ def scripts_quick_run():
     return jsonify({"results": results})
 
 
+@app.route("/api/agents/silent_update", methods=["POST"])
+def agent_silent_update():
+    """Request connected agents to run the Borealis silent update workflow."""
+    data = request.get_json(silent=True) or {}
+    raw_hosts = data.get("hostnames")
+    if not isinstance(raw_hosts, list):
+        return jsonify({"error": "hostnames[] must be provided"}), 400
+
+    hostnames: List[str] = []
+    seen: Set[str] = set()
+    for entry in raw_hosts:
+        name = str(entry or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        hostnames.append(name)
+
+    if not hostnames:
+        return jsonify({"error": "No valid hostnames provided"}), 400
+
+    request_id = uuid.uuid4().hex
+    results: List[Dict[str, str]] = []
+    for host in hostnames:
+        payload = {
+            "target_hostname": host,
+            "request_id": request_id,
+            "requested_at": int(time.time()),
+        }
+        socketio.emit("agent_silent_update", payload)
+        results.append({"hostname": host, "status": "queued"})
+
+    _write_service_log(
+        "server",
+        f"[silent_update] request_id={request_id} dispatched to {len(hostnames)} host(s): {', '.join(hostnames)}",
+    )
+
+    return jsonify({"results": results, "request_id": request_id})
+
+
 @app.route("/api/ansible/quick_run", methods=["POST"])
 def ansible_quick_run():
     """Queue an Ansible Playbook Quick Job via WebSocket to targeted agents.
@@ -3292,6 +3335,27 @@ def handle_quick_job_result(data):
         conn.close()
     except Exception as e:
         print(f"[ERROR] quick_job_result DB update failed for job {job_id}: {e}")
+
+
+@socketio.on("agent_silent_update_status")
+def handle_agent_silent_update_status(data):
+    try:
+        hostname = str(data.get("hostname") or "").strip()
+        status = str(data.get("status") or "").strip() or "unknown"
+        request_id = str(data.get("request_id") or "").strip()
+        error = str(data.get("error") or "").strip()
+        message_parts = [
+            "[silent_update_status]",
+            f"host={hostname or 'unknown'}",
+            f"status={status}",
+        ]
+        if request_id:
+            message_parts.append(f"request_id={request_id}")
+        if error:
+            message_parts.append(f"error={error}")
+        _write_service_log("server", " ".join(message_parts))
+    except Exception:
+        pass
 
 
 # ---------------------------------------------
