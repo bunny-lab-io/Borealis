@@ -2888,6 +2888,14 @@ def _safe_filename(rel_path: str) -> str:
         return rel_path or ""
 
 
+def _env_string(value: Any) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _canonical_env_key(name: Any) -> str:
     try:
         return re.sub(r"[^A-Za-z0-9_]", "_", str(name or "").strip()).upper()
@@ -3046,13 +3054,6 @@ def scripts_quick_run():
 
     content = doc.get("script") or ""
     doc_variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
-
-    def _env_string(value: Any) -> str:
-        if isinstance(value, bool):
-            return "True" if value else "False"
-        if value is None:
-            return ""
-        return str(value)
 
     overrides_raw = data.get("variable_values")
     overrides: Dict[str, Any] = {}
