@@ -74,7 +74,12 @@ def _build_wrapped_script(content: str, env_map: Dict[str, str], timeout_seconds
     for key, value in (env_map or {}).items():
         if not key:
             continue
-        inner_lines.append(f"$Env:{key} = {_ps_literal(value)}")
+        value_literal = _ps_literal(value)
+        key_literal = _ps_literal(key)
+        inner_lines.append(
+            f"[System.Environment]::SetEnvironmentVariable({key_literal}, {value_literal}, 'Process')"
+        )
+        inner_lines.append(f"$Env:{key} = {value_literal}")
     inner_lines.append(content or "")
     inner = "\n".join(line for line in inner_lines if line is not None)
     script_block = "$__BorealisScript = {\n" + inner + "\n}\n"
