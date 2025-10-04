@@ -5,7 +5,8 @@ import tempfile
 import uuid
 import time
 import subprocess
-from typing import Dict, List
+import base64
+from typing import Dict, List, Optional
 
 
 ROLE_NAME = 'script_exec_system'
@@ -65,6 +66,40 @@ def _apply_variable_aliases(env_map: Dict[str, str], variables: List[Dict[str, s
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) and name not in env_map:
             env_map[name] = value
     return env_map
+
+
+def _decode_base64_text(value: str) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    try:
+        cleaned = re.sub(r"\s+", "", stripped)
+    except Exception:
+        cleaned = stripped
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except Exception:
+        return None
+    try:
+        return decoded.decode("utf-8")
+    except Exception:
+        return decoded.decode("utf-8", errors="replace")
+
+
+def _decode_script_content(raw_content, encoding_hint) -> str:
+    if isinstance(raw_content, str):
+        encoding = str(encoding_hint or "").strip().lower()
+        if encoding in ("base64", "b64", "base-64"):
+            decoded = _decode_base64_text(raw_content)
+            if decoded is not None:
+                return decoded
+        decoded = _decode_base64_text(raw_content)
+        if decoded is not None:
+            return decoded
+        return raw_content
+    return ""
 
 
 def _ps_literal(value: str) -> str:
@@ -236,7 +271,7 @@ class Role:
                     return
                 job_id = payload.get('job_id')
                 script_type = (payload.get('script_type') or '').lower()
-                content = payload.get('script_content') or ''
+                content = _decode_script_content(payload.get('script_content'), payload.get('script_encoding'))
                 raw_env = payload.get('environment')
                 env_map = _sanitize_env_map(raw_env)
                 variables = payload.get('variables') if isinstance(payload.get('variables'), list) else []

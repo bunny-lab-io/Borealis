@@ -156,6 +156,39 @@ def _log_agent(message: str, fname: str = 'agent.log'):
     except Exception:
         pass
 
+
+def _decode_base64_text(value):
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    cleaned = ''.join(stripped.split())
+    if not cleaned:
+        return ""
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except Exception:
+        return None
+    try:
+        return decoded.decode('utf-8')
+    except Exception:
+        return decoded.decode('utf-8', errors='replace')
+
+
+def _decode_script_payload(content, encoding_hint):
+    if isinstance(content, str):
+        encoding = str(encoding_hint or '').strip().lower()
+        if encoding in ('base64', 'b64', 'base-64'):
+            decoded = _decode_base64_text(content)
+            if decoded is not None:
+                return decoded
+        decoded = _decode_base64_text(content)
+        if decoded is not None:
+            return decoded
+        return content
+    return ''
+
 def _resolve_config_path():
     """
     Resolve the path for agent settings json in the centralized location:
@@ -1520,7 +1553,7 @@ if __name__=='__main__':
                     return
                 job_id = payload.get('job_id')
                 script_type = (payload.get('script_type') or '').lower()
-                content = payload.get('script_content') or ''
+                content = _decode_script_payload(payload.get('script_content'), payload.get('script_encoding'))
                 run_mode = (payload.get('run_mode') or 'current_user').lower()
                 if script_type != 'powershell':
                     await sio.emit('quick_job_result', { 'job_id': job_id, 'status': 'Failed', 'stdout': '', 'stderr': f"Unsupported type: {script_type}" })

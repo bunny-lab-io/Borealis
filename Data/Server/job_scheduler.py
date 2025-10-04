@@ -2,6 +2,7 @@ import os
 import time
 import json
 import os
+import base64
 import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple, Callable
@@ -31,6 +32,53 @@ def _env_string(value: Any) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _decode_base64_text(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    try:
+        cleaned = re.sub(r"\s+", "", stripped)
+    except Exception:
+        cleaned = stripped
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except Exception:
+        return None
+    try:
+        return decoded.decode("utf-8")
+    except Exception:
+        return decoded.decode("utf-8", errors="replace")
+
+
+def _decode_script_content(value: Any, encoding_hint: str = "") -> str:
+    encoding = (encoding_hint or "").strip().lower()
+    if isinstance(value, str):
+        if encoding in ("base64", "b64", "base-64"):
+            decoded = _decode_base64_text(value)
+            if decoded is not None:
+                return decoded.replace("\r\n", "\n")
+        decoded = _decode_base64_text(value)
+        if decoded is not None:
+            return decoded.replace("\r\n", "\n")
+        return value.replace("\r\n", "\n")
+    return ""
+
+
+def _encode_script_content(script_text: Any) -> str:
+    if not isinstance(script_text, str):
+        if script_text is None:
+            script_text = ""
+        else:
+            script_text = str(script_text)
+    normalized = script_text.replace("\r\n", "\n")
+    if not normalized:
+        return ""
+    encoded = base64.b64encode(normalized.encode("utf-8"))
+    return encoded.decode("ascii")
 
 
 def _canonical_env_key(name: Any) -> str:
@@ -338,6 +386,7 @@ class JobScheduler:
                 if typ in ("powershell", "batch", "bash", "ansible"):
                     doc["type"] = typ
                 script_val = data.get("script")
+                content_val = data.get("content")
                 script_lines = data.get("script_lines")
                 if isinstance(script_lines, list):
                     try:
@@ -347,11 +396,24 @@ class JobScheduler:
                 elif isinstance(script_val, str):
                     doc["script"] = script_val
                 else:
-                    content_val = data.get("content")
                     if isinstance(content_val, str):
                         doc["script"] = content_val
-                normalized_script = (doc["script"] or "").replace("\r\n", "\n")
-                doc["script"] = normalized_script
+                encoding_hint = str(data.get("script_encoding") or data.get("scriptEncoding") or "").strip().lower()
+                doc["script"] = _decode_script_content(doc.get("script"), encoding_hint)
+                if encoding_hint in ("base64", "b64", "base-64"):
+                    doc["script_encoding"] = "base64"
+                else:
+                    probe_source = ""
+                    if isinstance(script_val, str) and script_val:
+                        probe_source = script_val
+                    elif isinstance(content_val, str) and content_val:
+                        probe_source = content_val
+                    decoded_probe = _decode_base64_text(probe_source) if probe_source else None
+                    if decoded_probe is not None:
+                        doc["script_encoding"] = "base64"
+                        doc["script"] = decoded_probe.replace("\r\n", "\n")
+                    else:
+                        doc["script_encoding"] = "plain"
                 try:
                     timeout_raw = data.get("timeout_seconds", data.get("timeout"))
                     if timeout_raw is None:
@@ -423,6 +485,7 @@ class JobScheduler:
                 return
             doc = self._load_assembly_document(abs_path, "ansible")
             content = doc.get("script") or ""
+            encoded_content = _encode_script_content(content)
             variables = doc.get("variables") or []
             files = doc.get("files") or []
 
@@ -457,7 +520,8 @@ class JobScheduler:
                 "run_id": uuid.uuid4().hex,
                 "target_hostname": str(hostname),
                 "playbook_name": os.path.basename(abs_path),
-                "playbook_content": content,
+                "playbook_content": encoded_content,
+                "playbook_encoding": "base64",
                 "activity_job_id": act_id,
                 "scheduled_job_id": int(scheduled_job_id),
                 "scheduled_run_id": int(scheduled_run_id),
@@ -517,6 +581,7 @@ class JobScheduler:
 
             env_map, variables, literal_lookup = _prepare_variable_context(doc_variables, overrides)
             content = _rewrite_powershell_script(content, literal_lookup)
+            encoded_content = _encode_script_content(content)
             timeout_seconds = 0
             try:
                 timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))
@@ -557,7 +622,8 @@ class JobScheduler:
                 "script_type": stype,
                 "script_name": os.path.basename(abs_path),
                 "script_path": path_norm,
-                "script_content": content,
+                "script_content": encoded_content,
+                "script_encoding": "base64",
                 "environment": env_map,
                 "variables": variables,
                 "timeout_seconds": timeout_seconds,
