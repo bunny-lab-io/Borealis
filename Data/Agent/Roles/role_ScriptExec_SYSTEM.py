@@ -1,6 +1,7 @@
 import os
 import re
 import asyncio
+import datetime
 import tempfile
 import uuid
 import time
@@ -37,6 +38,42 @@ def _find_borealis_root() -> Optional[str]:
     if os.path.isfile(os.path.join(fallback, 'Borealis.ps1')):
         return fallback
     return None
+
+
+def _agent_logs_root() -> str:
+    root = _find_borealis_root() or _project_root()
+    return os.path.abspath(os.path.join(root, 'Logs', 'Agent'))
+
+
+def _rotate_daily(path: str):
+    try:
+        if os.path.isfile(path):
+            mtime = os.path.getmtime(path)
+            dt = datetime.datetime.fromtimestamp(mtime)
+            today = datetime.datetime.now().date()
+            if dt.date() != today:
+                base, ext = os.path.splitext(path)
+                suffix = dt.strftime('%Y-%m-%d')
+                newp = f"{base}.{suffix}{ext}"
+                try:
+                    os.replace(path, newp)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _write_updater_log(message: str):
+    try:
+        log_dir = _agent_logs_root()
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, 'updater.log')
+        _rotate_daily(path)
+        ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(path, 'a', encoding='utf-8') as fh:
+            fh.write(f'[{ts}] {message}\n')
+    except Exception:
+        pass
 
 
 def _launch_silent_update_task():
@@ -86,6 +123,7 @@ def _launch_silent_update_task():
     if proc.returncode != 0:
         stderr = proc.stderr or proc.stdout or 'scheduled task registration failed'
         raise RuntimeError(stderr.strip())
+    return task_name
 
 def _canonical_env_key(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_]", "_", (name or "").strip())
@@ -341,7 +379,25 @@ class Role:
                     return
 
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, _launch_silent_update_task)
+                request_id = (details.get('request_id') or '').strip()
+                req_disp = request_id or 'n/a'
+                host_disp = hostname or 'unknown'
+                _write_updater_log(f"Silent update request received for host '{host_disp}' (request_id={req_disp})")
+                try:
+                    task_name = await loop.run_in_executor(None, _launch_silent_update_task)
+                except Exception as exc:
+                    _write_updater_log(
+                        f"Silent update launch failed for host '{host_disp}' (request_id={req_disp}): {exc}"
+                    )
+                    try:
+                        details['_silent_update_error_logged'] = True
+                    except Exception:
+                        pass
+                    raise
+
+                _write_updater_log(
+                    f"Silent update scheduled via task '{task_name}' for host '{host_disp}' (request_id={req_disp})"
+                )
 
                 try:
                     await sio.emit(
@@ -355,6 +411,16 @@ class Role:
                 except Exception:
                     pass
             except Exception as e:
+                if not isinstance(details, dict) or not details.get('_silent_update_error_logged'):
+                    try:
+                        request_id = (details.get('request_id') or '').strip()
+                        req_disp = request_id or 'n/a'
+                        host_disp = hostname or 'unknown'
+                        _write_updater_log(
+                            f"Silent update encountered error on host '{host_disp}' (request_id={req_disp}): {e}"
+                        )
+                    except Exception:
+                        pass
                 try:
                     await sio.emit(
                         'agent_silent_update_status',
