@@ -21,7 +21,12 @@ Device List Overview:
 Device Details:
 ![Device Details](Data/Repository_Resources/borealis_device_details.png)
 
+Assembly List & Editor:
+![Assembly List](Data\Repository_Resources\borealis_assembly_list.png)
+![Assembly Editor](Data\Repository_Resources\borealis_assembly_editor.png)
+
 [![Workflow Editor Demonstration](Data/Repository_Resources/borealis_flow_editor.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
+
 
 ## Getting Started
 
