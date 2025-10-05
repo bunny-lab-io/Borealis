@@ -633,6 +633,153 @@ function Start-AgentScheduledTasks {
     }
 }
 
+$BorealisRepoOwner  = 'bunny-lab-io'
+$BorealisRepoName   = 'Borealis'
+$BorealisRepoBranch = 'main'
+
+function Get-BorealisServerRepoSha {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BaseUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Owner,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Repo,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Branch
+    )
+
+    if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+        throw 'Server URL is blank; cannot query repo hash.'
+    }
+
+    $base = $BaseUrl.TrimEnd('/')
+    $repoParam = [System.Uri]::EscapeDataString("$Owner/$Repo")
+    $branchParam = [System.Uri]::EscapeDataString($Branch)
+    $uri = "$base/api/agent/repo_hash?repo=$repoParam&branch=$branchParam"
+
+    $headers = @{ 'User-Agent' = 'borealis-agent-updater' }
+
+    $resp = Invoke-WebRequest -Uri $uri -Method GET -Headers $headers -UseBasicParsing -ErrorAction Stop
+    $json = $resp.Content | ConvertFrom-Json
+
+    if ($resp.StatusCode -ne 200) {
+        $message = $json.error
+        if (-not $message) { $message = "HTTP $($resp.StatusCode)" }
+        throw "Borealis server responded with an error: $message"
+    }
+
+    $sha = ($json.sha)
+    if (-not $sha) {
+        $message = $json.error
+        if ($message) {
+            throw "Borealis server did not return a repository hash: $message"
+        }
+        throw 'Borealis server did not return a repository hash.'
+    }
+
+    return ($sha.ToString()).Trim()
+}
+
+function Get-BorealisUpdatePlan {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptDirectory,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RepoOwner,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RepoName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Branch
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ScriptDirectory)) {
+        throw 'Script directory was not provided.'
+    }
+
+    $updateMode = $env:update_mode
+    if ($updateMode) {
+        $updateMode = $updateMode.ToLowerInvariant()
+    } else {
+        $updateMode = 'update'
+    }
+    $forceUpdate = $updateMode -eq 'force_update'
+
+    $agentRootCandidate = Join-Path $ScriptDirectory 'Agent\Borealis'
+    $agentRoot = $ScriptDirectory
+    if (Test-Path $agentRootCandidate -PathType Container) {
+        try {
+            $agentRoot = (Resolve-Path -Path $agentRootCandidate -ErrorAction Stop).Path
+        } catch {
+            $agentRoot = $agentRootCandidate
+        }
+    }
+
+    $hashFile = Join-Path $agentRoot 'github_repo_hash.txt'
+    $lastSha = $null
+    if (Test-Path $hashFile -PathType Leaf) {
+        $lastSha = (Get-Content $hashFile -Raw).Trim()
+    }
+
+    $serverBaseUrl = $env:BOREALIS_SERVER_URL
+    if (-not $serverBaseUrl) {
+        $settingsDir = Join-Path $agentRoot 'Settings'
+        $serverUrlFile = Join-Path $settingsDir 'server_url.txt'
+        if (Test-Path $serverUrlFile -PathType Leaf) {
+            $serverBaseUrl = (Get-Content $serverUrlFile -Raw).Trim()
+        }
+    }
+    if (-not $serverBaseUrl) { $serverBaseUrl = 'http://localhost:5000' }
+    $serverBaseUrl = $serverBaseUrl.Trim()
+    Write-Verbose "Using Borealis server URL: $serverBaseUrl"
+
+    try {
+        $newSha = Get-BorealisServerRepoSha -BaseUrl $serverBaseUrl -Owner $RepoOwner -Repo $RepoName -Branch $Branch
+    } catch {
+        throw "Failed to query Borealis server for latest SHA: $($_.Exception.Message)"
+    }
+
+    $changeDetected = $false
+    if (-not $lastSha) {
+        Write-Verbose 'No prior SHA on disk; treating as first run.'
+        $changeDetected = $true
+    } elseif ($lastSha -ne $newSha) {
+        $changeDetected = $true
+        Write-Verbose "Repo updated: $lastSha -> $newSha"
+    } else {
+        Write-Verbose "SHA unchanged: $newSha"
+    }
+
+    $shouldUpdate = $false
+    if ($forceUpdate) {
+        Write-Verbose 'update_mode=force_update → forcing update.'
+        $shouldUpdate = $true
+    } elseif ($changeDetected) {
+        Write-Verbose 'update_mode=update → repo changed or first run.'
+        $shouldUpdate = $true
+    } else {
+        Write-Verbose 'No change; skipping Borealis.ps1 -SilentUpdate.'
+    }
+
+    return [pscustomobject]@{
+        ShouldUpdate   = $shouldUpdate
+        ForceUpdate    = $forceUpdate
+        ChangeDetected = $changeDetected
+        LastSha        = $lastSha
+        NewSha         = $newSha
+        HashFile       = $hashFile
+        AgentRoot      = $agentRoot
+        ServerBaseUrl  = $serverBaseUrl
+        UpdateMode     = $updateMode
+    }
+}
+
 function Invoke-BorealisUpdate {
     param(
         [switch]$Silent
@@ -702,13 +849,85 @@ function Invoke-BorealisUpdate {
 
 function Invoke-BorealisSilentUpdate {
     Write-Host "Initiating Borealis silent update workflow..." -ForegroundColor DarkCyan
-    $managedTasks = Stop-AgentScheduledTasks -TaskNames @('Borealis Agent','Borealis Agent (UserHelper)')
+
+    $plan = Get-BorealisUpdatePlan -ScriptDirectory $scriptDir -RepoOwner $BorealisRepoOwner -RepoName $BorealisRepoName -Branch $BorealisRepoBranch
+
+    if (-not $plan.ShouldUpdate) {
+        Write-Host "=============================================="
+        Write-Host "Borealis Agent Already Up-to-Date"
+        Write-Host "=============================================="
+        return
+    }
+
+    $mutex = $null
+    $gotMutex = $false
+    $managedTasks = @()
     try {
-        Invoke-BorealisUpdate -Silent
-    } finally {
-        if ($managedTasks.Count -gt 0) {
-            Start-AgentScheduledTasks -TaskNames $managedTasks
+        $mutex = New-Object System.Threading.Mutex($false, 'Global\BorealisUpdate')
+        $gotMutex = $mutex.WaitOne(0)
+        if (-not $gotMutex) {
+            Write-Verbose 'Another update is already running (mutex held). Exiting quietly.'
+            Write-Host "=============================================="
+            Write-Host "Borealis Agent Already Up-to-Date"
+            Write-Host "=============================================="
+            return
         }
+
+        $staging = Join-Path $scriptDir 'Update_Staging'
+        $zipPath = Join-Path $staging 'main.zip'
+        if (Test-Path $zipPath) {
+            Write-Verbose "Pre-flight: removing existing $zipPath"
+            for ($i = 1; $i -le 10; $i++) {
+                try {
+                    Remove-Item -LiteralPath $zipPath -Force -ErrorAction Stop
+                    break
+                } catch {
+                    Start-Sleep -Milliseconds (100 * $i)
+                    if ($i -eq 10) {
+                        throw "Pre-flight delete failed; $zipPath appears locked by another process."
+                    }
+                }
+            }
+        }
+
+        $managedTasks = Stop-AgentScheduledTasks -TaskNames @('Borealis Agent','Borealis Agent (UserHelper)')
+
+        $updateSucceeded = $false
+        try {
+            if ($plan.NewSha) {
+                $env:BOREALIS_EXPECTED_SHA = $plan.NewSha
+            }
+
+            Invoke-BorealisUpdate -Silent
+            $updateSucceeded = $true
+        } finally {
+            if ($plan.NewSha) {
+                Remove-Item Env:BOREALIS_EXPECTED_SHA -ErrorAction SilentlyContinue
+            }
+
+            if ($managedTasks.Count -gt 0) {
+                Start-AgentScheduledTasks -TaskNames $managedTasks
+            }
+        }
+
+        if (-not $updateSucceeded) {
+            throw 'Borealis.ps1 -SilentUpdate failed; not advancing stored SHA.'
+        }
+
+        if ($plan.NewSha) {
+            $hashDir = Split-Path $plan.HashFile -Parent
+            if ($hashDir -and -not (Test-Path $hashDir -PathType Container)) {
+                New-Item -ItemType Directory -Path $hashDir -Force | Out-Null
+            }
+            Set-Content -Path $plan.HashFile -Value $plan.NewSha -Encoding ASCII
+        }
+
+        Write-Host "=============================================="
+        Write-Host ("Borealis Agent Updated - New Github Repository Hash: {0}" -f $plan.NewSha)
+        Write-Host "=============================================="
+    } finally {
+        if ($mutex -and $gotMutex) { $mutex.ReleaseMutex() | Out-Null }
+        if ($mutex) { $mutex.Dispose() }
     }
 }
 
