@@ -302,9 +302,12 @@ function Invoke-BorealisUpdate {
 function Invoke-BorealisAgentUpdate {
     Write-Host "Initiating Borealis update workflow..." -ForegroundColor DarkCyan
 
+    Write-Host "Gathering local repository information..." -ForegroundColor DarkGray
     $currentHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir
     if ($currentHash) {
         Write-Host ("Current repository hash: {0}" -f $currentHash) -ForegroundColor DarkGray
+    } else {
+        Write-Host "Current repository hash: unavailable (no embedded Git metadata)." -ForegroundColor DarkYellow
     }
 
     $agentRootCandidate = Join-Path $scriptDir 'Agent\Borealis'
@@ -332,6 +335,11 @@ function Invoke-BorealisAgentUpdate {
             try {
                 $updateInfo = Invoke-AgentUpdateCheck -ServerBaseUrl $serverBaseUrl -AgentId $agentId
                 $shouldUpdate = [bool]($updateInfo.update_available)
+                $repoHashDisplay = $updateInfo.repo_hash
+                if ([string]::IsNullOrWhiteSpace($repoHashDisplay)) { $repoHashDisplay = 'unknown' }
+                $agentHashDisplay = $updateInfo.agent_hash
+                if ([string]::IsNullOrWhiteSpace($agentHashDisplay)) { $agentHashDisplay = 'none' }
+                Write-Host ("Update check result -> repo hash: {0}, stored hash: {1}, update available: {2}" -f $repoHashDisplay, $agentHashDisplay, $shouldUpdate) -ForegroundColor DarkGray
             } catch {
                 Write-Verbose ("Update check failed: {0}" -f $_.Exception.Message)
                 $shouldUpdate = $true
@@ -399,14 +407,34 @@ function Invoke-BorealisAgentUpdate {
         }
 
         $newHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir
+        if (-not $newHash -and $updateInfo -and $updateInfo.repo_hash) {
+            $newHash = ($updateInfo.repo_hash).ToString().Trim()
+        }
+        if (-not $newHash -and $agentId) {
+            try {
+                $postUpdateInfo = Invoke-AgentUpdateCheck -ServerBaseUrl $serverBaseUrl -AgentId $agentId
+                if ($postUpdateInfo -and $postUpdateInfo.repo_hash) {
+                    $newHash = ($postUpdateInfo.repo_hash).ToString().Trim()
+                }
+            } catch {
+                Write-Verbose ("Post-update hash retrieval failed: {0}" -f $_.Exception.Message)
+            }
+        }
+
         if ($newHash) {
+            Write-Host ("Submitting agent hash to server: {0}" -f $newHash) -ForegroundColor DarkGray
             try {
                 if ($agentId) {
                     Submit-AgentHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentHash $newHash
+                    Write-Host "Server agent hash updated successfully." -ForegroundColor DarkGreen
+                } else {
+                    Write-Host "Agent ID unavailable; skipping agent hash submission." -ForegroundColor DarkYellow
                 }
             } catch {
                 Write-Verbose ("Failed to submit agent hash: {0}" -f $_.Exception.Message)
             }
+        } else {
+            Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
         }
 
         $displayHash = $newHash
