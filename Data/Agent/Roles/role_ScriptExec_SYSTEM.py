@@ -1,7 +1,6 @@
 import os
 import re
 import asyncio
-import datetime
 import tempfile
 import uuid
 import time
@@ -39,91 +38,6 @@ def _find_borealis_root() -> Optional[str]:
         return fallback
     return None
 
-
-def _agent_logs_root() -> str:
-    root = _find_borealis_root() or _project_root()
-    return os.path.abspath(os.path.join(root, 'Logs', 'Agent'))
-
-
-def _rotate_daily(path: str):
-    try:
-        if os.path.isfile(path):
-            mtime = os.path.getmtime(path)
-            dt = datetime.datetime.fromtimestamp(mtime)
-            today = datetime.datetime.now().date()
-            if dt.date() != today:
-                base, ext = os.path.splitext(path)
-                suffix = dt.strftime('%Y-%m-%d')
-                newp = f"{base}.{suffix}{ext}"
-                try:
-                    os.replace(path, newp)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-
-def _write_updater_log(message: str):
-    try:
-        log_dir = _agent_logs_root()
-        os.makedirs(log_dir, exist_ok=True)
-        path = os.path.join(log_dir, 'updater.log')
-        _rotate_daily(path)
-        ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        with open(path, 'a', encoding='utf-8') as fh:
-            fh.write(f'[{ts}] {message}\n')
-    except Exception:
-        pass
-
-
-def _launch_silent_update_task():
-    if os.name != 'nt':
-        raise RuntimeError('Silent update is supported on Windows hosts only.')
-
-    root = _find_borealis_root()
-    if not root:
-        raise RuntimeError('Unable to locate Borealis.ps1 on this agent.')
-
-    ps_exe = os.path.expandvars(r"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
-    if not os.path.isfile(ps_exe):
-        ps_exe = 'powershell.exe'
-
-    task_name = f"Borealis Agent - SilentUpdate - {uuid.uuid4().hex}"
-    task_literal = _ps_literal(task_name)
-    ps_literal = _ps_literal(ps_exe)
-    root_literal = _ps_literal(root)
-    args_literal = _ps_literal('-NoProfile -ExecutionPolicy Bypass -File .\\Borealis.ps1 -SilentUpdate')
-
-    cleanup_script = (
-        "Start-Job -ScriptBlock { Start-Sleep -Seconds 600; "
-        f"try {{ Unregister-ScheduledTask -TaskName {task_literal} -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}} }} | Out-Null"
-    )
-
-    ps_script = "\n".join(
-        [
-            "$ErrorActionPreference='Stop'",
-            f"$task = {task_literal}",
-            "try { Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue } catch {}",
-            f"$action = New-ScheduledTaskAction -Execute {ps_literal} -Argument {args_literal} -WorkingDirectory {root_literal}",
-            "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 30)",
-            "$principal= New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest",
-            "Register-ScheduledTask -TaskName $task -Action $action -Settings $settings -Principal $principal -Force | Out-Null",
-            "Start-ScheduledTask -TaskName $task | Out-Null",
-            cleanup_script,
-        ]
-    )
-
-    flags = 0x08000000 if os.name == 'nt' else 0
-    proc = subprocess.run(
-        [ps_exe, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps_script],
-        capture_output=True,
-        text=True,
-        creationflags=flags,
-    )
-    if proc.returncode != 0:
-        stderr = proc.stderr or proc.stdout or 'scheduled task registration failed'
-        raise RuntimeError(stderr.strip())
-    return task_name
 
 def _canonical_env_key(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_]", "_", (name or "").strip())
@@ -365,74 +279,6 @@ class Role:
 
     def register_events(self):
         sio = self.ctx.sio
-
-        @sio.on('agent_silent_update')
-        async def _on_agent_silent_update(payload):
-            hostname = None
-            details = payload if isinstance(payload, dict) else {}
-            try:
-                import socket
-
-                hostname = socket.gethostname()
-                target = (details.get('target_hostname') or '').strip().lower()
-                if target and target != hostname.lower():
-                    return
-
-                loop = asyncio.get_running_loop()
-                request_id = (details.get('request_id') or '').strip()
-                req_disp = request_id or 'n/a'
-                host_disp = hostname or 'unknown'
-                _write_updater_log(f"Silent update request received for host '{host_disp}' (request_id={req_disp})")
-                try:
-                    task_name = await loop.run_in_executor(None, _launch_silent_update_task)
-                except Exception as exc:
-                    _write_updater_log(
-                        f"Silent update launch failed for host '{host_disp}' (request_id={req_disp}): {exc}"
-                    )
-                    try:
-                        details['_silent_update_error_logged'] = True
-                    except Exception:
-                        pass
-                    raise
-
-                _write_updater_log(
-                    f"Silent update scheduled via task '{task_name}' for host '{host_disp}' (request_id={req_disp})"
-                )
-
-                try:
-                    await sio.emit(
-                        'agent_silent_update_status',
-                        {
-                            'request_id': details.get('request_id') or '',
-                            'hostname': hostname,
-                            'status': 'started',
-                        },
-                    )
-                except Exception:
-                    pass
-            except Exception as e:
-                if not isinstance(details, dict) or not details.get('_silent_update_error_logged'):
-                    try:
-                        request_id = (details.get('request_id') or '').strip()
-                        req_disp = request_id or 'n/a'
-                        host_disp = hostname or 'unknown'
-                        _write_updater_log(
-                            f"Silent update encountered error on host '{host_disp}' (request_id={req_disp}): {e}"
-                        )
-                    except Exception:
-                        pass
-                try:
-                    await sio.emit(
-                        'agent_silent_update_status',
-                        {
-                            'request_id': details.get('request_id') or '',
-                            'hostname': hostname or '',
-                            'status': 'error',
-                            'error': str(e),
-                        },
-                    )
-                except Exception:
-                    pass
 
         @sio.on('quick_job_run')
         async def _on_quick_job_run(payload):
