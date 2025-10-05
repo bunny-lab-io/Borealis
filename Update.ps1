@@ -118,8 +118,8 @@ function Get-AgentServiceId {
     if (-not $AgentRoot) { $AgentRoot = $scriptDir }
     $settingsDir = Join-Path $AgentRoot 'Settings'
     $candidates = @(
-        Join-Path $settingsDir 'agent_settings_svc.json',
-        Join-Path $settingsDir 'agent_settings.json'
+        (Join-Path $settingsDir 'agent_settings_svc.json')
+        (Join-Path $settingsDir 'agent_settings.json')
     )
 
     foreach ($path in $candidates) {
