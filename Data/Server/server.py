@@ -21,6 +21,7 @@ from typing import List, Dict, Tuple, Optional, Any, Set
 import sqlite3
 import io
 import uuid
+from threading import Lock
 from datetime import datetime, timezone
 
 try:
@@ -66,6 +67,210 @@ def _write_service_log(service: str, msg: str):
             fh.write(f'[{ts}] {msg}\n')
     except Exception:
         pass
+
+
+_REPO_HEAD_CACHE: Dict[str, Tuple[str, float]] = {}
+_REPO_HEAD_LOCK = Lock()
+
+_CACHE_ROOT = os.environ.get('BOREALIS_CACHE_DIR')
+if _CACHE_ROOT:
+    _CACHE_ROOT = os.path.abspath(_CACHE_ROOT)
+else:
+    _CACHE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), 'cache'))
+_REPO_HASH_CACHE_FILE = os.path.join(_CACHE_ROOT, 'repo_hash_cache.json')
+
+_DEFAULT_REPO = os.environ.get('BOREALIS_REPO', 'bunny-lab-io/Borealis')
+_DEFAULT_BRANCH = os.environ.get('BOREALIS_REPO_BRANCH', 'main')
+try:
+    _REPO_HASH_INTERVAL = int(os.environ.get('BOREALIS_REPO_HASH_REFRESH', '60'))
+except ValueError:
+    _REPO_HASH_INTERVAL = 60
+_REPO_HASH_INTERVAL = max(30, min(_REPO_HASH_INTERVAL, 3600))
+_REPO_HASH_WORKER_STARTED = False
+_REPO_HASH_WORKER_LOCK = Lock()
+
+
+def _hydrate_repo_hash_cache_from_disk() -> None:
+    try:
+        if not os.path.isfile(_REPO_HASH_CACHE_FILE):
+            return
+        with open(_REPO_HASH_CACHE_FILE, 'r', encoding='utf-8') as fh:
+            payload = json.load(fh)
+        entries = payload.get('entries') if isinstance(payload, dict) else None
+        if not isinstance(entries, dict):
+            return
+        now = time.time()
+        with _REPO_HEAD_LOCK:
+            for key, entry in entries.items():
+                if not isinstance(entry, dict):
+                    continue
+                sha = (entry.get('sha') or '').strip()
+                if not sha:
+                    continue
+                ts_raw = entry.get('ts')
+                try:
+                    ts = float(ts_raw)
+                except (TypeError, ValueError):
+                    ts = now
+                _REPO_HEAD_CACHE[key] = (sha, ts)
+    except Exception as exc:
+        _write_service_log('server', f'failed to hydrate repo hash cache: {exc}')
+
+
+def _persist_repo_hash_cache() -> None:
+    snapshot: Dict[str, Tuple[str, float]]
+    with _REPO_HEAD_LOCK:
+        snapshot = {
+            key: (sha, ts)
+            for key, (sha, ts) in _REPO_HEAD_CACHE.items()
+            if sha
+        }
+    try:
+        if not snapshot:
+            try:
+                os.remove(_REPO_HASH_CACHE_FILE)
+            except FileNotFoundError:
+                pass
+            except Exception as exc:
+                _write_service_log('server', f'failed to remove repo hash cache file: {exc}')
+            return
+        os.makedirs(_CACHE_ROOT, exist_ok=True)
+        tmp_path = _REPO_HASH_CACHE_FILE + '.tmp'
+        payload = {
+            'version': 1,
+            'entries': {
+                key: {'sha': sha, 'ts': ts}
+                for key, (sha, ts) in snapshot.items()
+            },
+        }
+        with open(tmp_path, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh)
+        os.replace(tmp_path, _REPO_HASH_CACHE_FILE)
+    except Exception as exc:
+        _write_service_log('server', f'failed to persist repo hash cache: {exc}')
+
+
+def _fetch_repo_head(owner_repo: str, branch: str = 'main', *, ttl_seconds: int = 60, force_refresh: bool = False) -> Dict[str, Any]:
+    """Resolve the latest commit hash for ``owner_repo``/``branch`` via GitHub's REST API.
+
+    The server caches the response so that a fleet of agents can reuse the
+    result without exhausting rate limits. ``ttl_seconds`` bounds how long a
+    cached value is considered fresh. When ``force_refresh`` is True the cache
+    is bypassed and a new request is attempted immediately.
+    """
+
+    key = f"{owner_repo}:{branch}"
+    now = time.time()
+
+    with _REPO_HEAD_LOCK:
+        cached = _REPO_HEAD_CACHE.get(key)
+
+    cached_sha: Optional[str] = None
+    cached_ts: Optional[float] = None
+    cached_age: Optional[float] = None
+    if cached:
+        cached_sha, cached_ts = cached
+        cached_age = max(0.0, now - cached_ts)
+
+    if cached_sha and not force_refresh and cached_age is not None and cached_age < max(30, ttl_seconds):
+        return {
+            'sha': cached_sha,
+            'cached': True,
+            'age_seconds': cached_age,
+            'error': None,
+            'source': 'cache',
+        }
+
+    headers = {
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'Borealis-Server'
+    }
+    token = os.environ.get('BOREALIS_GITHUB_TOKEN') or os.environ.get('GITHUB_TOKEN')
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+
+    error_msg: Optional[str] = None
+    sha: Optional[str] = None
+    try:
+        resp = requests.get(
+            f'https://api.github.com/repos/{owner_repo}/branches/{branch}',
+            headers=headers,
+            timeout=20,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            sha = (data.get('commit') or {}).get('sha')
+        else:
+            error_msg = f'GitHub REST API repo head lookup failed: HTTP {resp.status_code} {resp.text[:200]}'
+    except Exception as exc:  # pragma: no cover - defensive logging
+        error_msg = f'GitHub REST API repo head lookup raised: {exc}'
+
+    if sha:
+        sha = sha.strip()
+        with _REPO_HEAD_LOCK:
+            _REPO_HEAD_CACHE[key] = (sha, now)
+        _persist_repo_hash_cache()
+        return {
+            'sha': sha,
+            'cached': False,
+            'age_seconds': 0.0,
+            'error': None,
+            'source': 'github',
+        }
+
+    if error_msg:
+        _write_service_log('server', error_msg)
+
+    if cached_sha is not None:
+        return {
+            'sha': cached_sha,
+            'cached': True,
+            'age_seconds': cached_age,
+            'error': error_msg or 'using cached value',
+            'source': 'cache-stale',
+        }
+
+    return {
+        'sha': None,
+        'cached': False,
+        'age_seconds': None,
+        'error': error_msg or 'unable to resolve repository head',
+        'source': 'github',
+    }
+
+
+def _refresh_default_repo_hash(force: bool = False) -> Dict[str, Any]:
+    ttl = max(30, _REPO_HASH_INTERVAL)
+    try:
+        return _fetch_repo_head(_DEFAULT_REPO, _DEFAULT_BRANCH, ttl_seconds=ttl, force_refresh=force)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        _write_service_log('server', f'default repo hash refresh failed: {exc}')
+        raise
+
+
+def _repo_hash_background_worker():
+    interval = max(30, _REPO_HASH_INTERVAL)
+    # Fetch immediately, then sleep between refreshes
+    while True:
+        try:
+            _refresh_default_repo_hash(force=True)
+        except Exception:
+            # _refresh_default_repo_hash already logs details
+            pass
+        eventlet.sleep(interval)
+
+
+def _ensure_repo_hash_worker():
+    global _REPO_HASH_WORKER_STARTED
+    with _REPO_HASH_WORKER_LOCK:
+        if _REPO_HASH_WORKER_STARTED:
+            return
+        _REPO_HASH_WORKER_STARTED = True
+        try:
+            eventlet.spawn_n(_repo_hash_background_worker)
+        except Exception as exc:
+            _REPO_HASH_WORKER_STARTED = False
+            _write_service_log('server', f'failed to start repo hash worker: {exc}')
 
 
 def _ansible_log_server(msg: str):
@@ -126,6 +331,9 @@ socketio = SocketIO(
     }
 )
 
+_hydrate_repo_hash_cache_from_disk()
+_ensure_repo_hash_worker()
+
 # ---------------------------------------------
 # Serve ReactJS Production Vite Build from dist/
 # ---------------------------------------------
@@ -146,6 +354,44 @@ def serve_dist(path):
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.route("/api/agent/repo_hash", methods=["GET"])
+def api_agent_repo_hash():
+    try:
+        repo = (request.args.get('repo') or _DEFAULT_REPO).strip()
+        branch = (request.args.get('branch') or _DEFAULT_BRANCH).strip()
+        refresh_flag = (request.args.get('refresh') or '').strip().lower()
+        ttl_raw = request.args.get('ttl')
+        if '/' not in repo:
+            return jsonify({"error": "repo must be in the form owner/name"}), 400
+        try:
+            ttl = int(ttl_raw) if ttl_raw else _REPO_HASH_INTERVAL
+        except ValueError:
+            ttl = _REPO_HASH_INTERVAL
+        ttl = max(30, min(ttl, 3600))
+        force_refresh = refresh_flag in {'1', 'true', 'yes', 'force', 'refresh'}
+        if repo == _DEFAULT_REPO and branch == _DEFAULT_BRANCH:
+            result = _refresh_default_repo_hash(force=force_refresh)
+        else:
+            result = _fetch_repo_head(repo, branch, ttl_seconds=ttl, force_refresh=force_refresh)
+        sha = (result.get('sha') or '').strip()
+        payload = {
+            'repo': repo,
+            'branch': branch,
+            'sha': sha if sha else None,
+            'cached': bool(result.get('cached')),
+            'age_seconds': result.get('age_seconds'),
+            'source': result.get('source'),
+        }
+        if result.get('error'):
+            payload['error'] = result['error']
+        if sha:
+            return jsonify(payload)
+        return jsonify(payload), 503
+    except Exception as exc:
+        _write_service_log('server', f'/api/agent/repo_hash error: {exc}')
+        return jsonify({"error": "internal error"}), 500
 
 # ---------------------------------------------
 # Server Time Endpoint

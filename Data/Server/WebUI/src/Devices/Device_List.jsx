@@ -126,17 +126,15 @@ export default function DeviceList({ onSelectDevice }) {
 
   const fetchLatestRepoHash = useCallback(async () => {
     try {
-      const resp = await fetch(
-        "https://api.github.com/repos/bunny-lab-io/Borealis/branches/main",
-        {
-          headers: {
-            Accept: "application/vnd.github+json",
-          },
-        }
-      );
-      if (!resp.ok) throw new Error(`GitHub status ${resp.status}`);
+      const params = new URLSearchParams({ repo: "bunny-lab-io/Borealis", branch: "main" });
+      const resp = await fetch(`/api/agent/repo_hash?${params.toString()}`);
       const json = await resp.json();
-      const sha = (json?.commit?.sha || "").trim();
+      const sha = (json?.sha || "").trim();
+      if (!resp.ok || !sha) {
+        const err = new Error(`Latest hash status ${resp.status}${json?.error ? ` - ${json.error}` : ""}`);
+        err.response = json;
+        throw err;
+      }
       setRepoHash((prev) => sha || prev || null);
       return sha || null;
     } catch (err) {
