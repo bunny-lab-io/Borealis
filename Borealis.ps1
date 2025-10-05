@@ -633,37 +633,74 @@ function Start-AgentScheduledTasks {
     }
 }
 
-$BorealisRepoOwner  = 'bunny-lab-io'
-$BorealisRepoName   = 'Borealis'
-$BorealisRepoBranch = 'main'
-
-function Get-BorealisServerRepoSha {
+function Get-BorealisServerUrl {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$BaseUrl,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Owner,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Repo,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Branch
+        [string]$AgentRoot
     )
 
-    if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
-        throw 'Server URL is blank; cannot query repo hash.'
+    $serverBaseUrl = $env:BOREALIS_SERVER_URL
+    if (-not $serverBaseUrl) {
+        try {
+            if (-not $AgentRoot) { $AgentRoot = $scriptDir }
+            $settingsDir = Join-Path $AgentRoot 'Settings'
+            $serverUrlFile = Join-Path $settingsDir 'server_url.txt'
+            if (Test-Path $serverUrlFile -PathType Leaf) {
+                $content = Get-Content -Path $serverUrlFile -Raw -ErrorAction Stop
+                if ($content) { $serverBaseUrl = $content.Trim() }
+            }
+        } catch {}
     }
 
-    $base = $BaseUrl.TrimEnd('/')
-    $repoParam = [System.Uri]::EscapeDataString("$Owner/$Repo")
-    $branchParam = [System.Uri]::EscapeDataString($Branch)
-    $uri = "$base/api/agent/repo_hash?repo=$repoParam&branch=$branchParam"
+    if (-not $serverBaseUrl) { $serverBaseUrl = 'http://localhost:5000' }
+    return $serverBaseUrl.Trim()
+}
 
+function Get-AgentServiceId {
+    param(
+        [string]$AgentRoot
+    )
+
+    if (-not $AgentRoot) { $AgentRoot = $scriptDir }
+    $settingsDir = Join-Path $AgentRoot 'Settings'
+    $candidates = @(
+        Join-Path $settingsDir 'agent_settings_svc.json',
+        Join-Path $settingsDir 'agent_settings.json'
+    )
+
+    foreach ($path in $candidates) {
+        try {
+            if (Test-Path $path -PathType Leaf) {
+                $raw = Get-Content -Path $path -Raw -ErrorAction Stop
+                if (-not $raw) { continue }
+                $cfg = $raw | ConvertFrom-Json -ErrorAction Stop
+                $value = ($cfg.agent_id)
+                if ($value) { return ($value.ToString()).Trim() }
+            }
+        } catch {}
+    }
+
+    return ''
+}
+
+function Invoke-AgentUpdateCheck {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ServerBaseUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AgentId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ServerBaseUrl)) {
+        throw 'Server URL is blank; cannot perform update check.'
+    }
+
+    $base = $ServerBaseUrl.TrimEnd('/')
+    $uri = "$base/api/agent/update_check"
+    $payload = @{ agent_id = $AgentId } | ConvertTo-Json -Depth 3
     $headers = @{ 'User-Agent' = 'borealis-agent-updater' }
 
-    $resp = Invoke-WebRequest -Uri $uri -Method GET -Headers $headers -UseBasicParsing -ErrorAction Stop
+    $resp = Invoke-WebRequest -Uri $uri -Method Post -Headers $headers -Body $payload -ContentType 'application/json' -UseBasicParsing -ErrorAction Stop
     $json = $resp.Content | ConvertFrom-Json
 
     if ($resp.StatusCode -ne 200) {
@@ -672,112 +709,86 @@ function Get-BorealisServerRepoSha {
         throw "Borealis server responded with an error: $message"
     }
 
-    $sha = ($json.sha)
-    if (-not $sha) {
-        $message = $json.error
-        if ($message) {
-            throw "Borealis server did not return a repository hash: $message"
-        }
-        throw 'Borealis server did not return a repository hash.'
-    }
-
-    return ($sha.ToString()).Trim()
+    return $json
 }
 
-function Get-BorealisUpdatePlan {
+function Get-RepositoryCommitHash {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$ScriptDirectory,
-
-        [Parameter(Mandatory = $true)]
-        [string]$RepoOwner,
-
-        [Parameter(Mandatory = $true)]
-        [string]$RepoName,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Branch
+        [string]$ProjectRoot
     )
 
-    if ([string]::IsNullOrWhiteSpace($ScriptDirectory)) {
-        throw 'Script directory was not provided.'
-    }
+    $candidates = @($ProjectRoot)
+    $agentRootCandidate = Join-Path $ProjectRoot 'Agent\Borealis'
+    if (Test-Path $agentRootCandidate -PathType Container) { $candidates += $agentRootCandidate }
 
-    $updateMode = $env:update_mode
-    if ($updateMode) {
-        $updateMode = $updateMode.ToLowerInvariant()
-    } else {
-        $updateMode = 'update'
-    }
-    $forceUpdate = $updateMode -eq 'force_update'
-
-    $agentRootCandidate = Join-Path $ScriptDirectory 'Agent\Borealis'
-    $agentRoot = $ScriptDirectory
-    if (Test-Path $agentRootCandidate -PathType Container) {
+    foreach ($root in $candidates) {
         try {
-            $agentRoot = (Resolve-Path -Path $agentRootCandidate -ErrorAction Stop).Path
-        } catch {
-            $agentRoot = $agentRootCandidate
-        }
+            $gitDir = Join-Path $root '.git'
+            $headPath = Join-Path $gitDir 'HEAD'
+            if (-not (Test-Path $headPath -PathType Leaf)) { continue }
+            $head = (Get-Content -Path $headPath -Raw -ErrorAction Stop).Trim()
+            if (-not $head) { continue }
+
+            if ($head -match '^ref:\s*(.+)$') {
+                $ref = $Matches[1].Trim()
+                if ($ref) {
+                    $refPath = $gitDir
+                    foreach ($part in ($ref -split '/')) {
+                        if ($part) { $refPath = Join-Path $refPath $part }
+                    }
+                    if (Test-Path $refPath -PathType Leaf) {
+                        $commit = (Get-Content -Path $refPath -Raw -ErrorAction Stop).Trim()
+                        if ($commit) { return $commit }
+                    }
+                    $packedRefs = Join-Path $gitDir 'packed-refs'
+                    if (Test-Path $packedRefs -PathType Leaf) {
+                        foreach ($line in Get-Content -Path $packedRefs -ErrorAction Stop) {
+                            $trim = ($line).Trim()
+                            if (-not $trim -or $trim.StartsWith('#') -or $trim.StartsWith('^')) { continue }
+                            $parts = $trim.Split(' ', 2)
+                            if ($parts.Count -ge 2 -and $parts[1].Trim() -eq $ref) {
+                                $candidate = $parts[0].Trim()
+                                if ($candidate) { return $candidate }
+                            }
+                        }
+                    }
+                }
+            } else {
+                $detached = $head.Split([Environment]::NewLine, [StringSplitOptions]::RemoveEmptyEntries)
+                if ($detached.Length -gt 0) {
+                    $candidate = $detached[0].Trim()
+                    if ($candidate) { return $candidate }
+                }
+            }
+        } catch {}
     }
 
-    $hashFile = Join-Path $agentRoot 'github_repo_hash.txt'
-    $lastSha = $null
-    if (Test-Path $hashFile -PathType Leaf) {
-        $lastSha = (Get-Content $hashFile -Raw).Trim()
+    return ''
+}
+
+function Submit-AgentHash {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ServerBaseUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AgentId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AgentHash
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ServerBaseUrl) -or [string]::IsNullOrWhiteSpace($AgentId) -or [string]::IsNullOrWhiteSpace($AgentHash)) {
+        return
     }
 
-    $serverBaseUrl = $env:BOREALIS_SERVER_URL
-    if (-not $serverBaseUrl) {
-        $settingsDir = Join-Path $agentRoot 'Settings'
-        $serverUrlFile = Join-Path $settingsDir 'server_url.txt'
-        if (Test-Path $serverUrlFile -PathType Leaf) {
-            $serverBaseUrl = (Get-Content $serverUrlFile -Raw).Trim()
-        }
-    }
-    if (-not $serverBaseUrl) { $serverBaseUrl = 'http://localhost:5000' }
-    $serverBaseUrl = $serverBaseUrl.Trim()
-    Write-Verbose "Using Borealis server URL: $serverBaseUrl"
+    $base = $ServerBaseUrl.TrimEnd('/')
+    $uri = "$base/api/agent/agent_hash"
+    $payload = @{ agent_id = $AgentId; agent_hash = $AgentHash } | ConvertTo-Json -Depth 3
+    $headers = @{ 'User-Agent' = 'borealis-agent-updater' }
 
-    try {
-        $newSha = Get-BorealisServerRepoSha -BaseUrl $serverBaseUrl -Owner $RepoOwner -Repo $RepoName -Branch $Branch
-    } catch {
-        throw "Failed to query Borealis server for latest SHA: $($_.Exception.Message)"
-    }
-
-    $changeDetected = $false
-    if (-not $lastSha) {
-        Write-Verbose 'No prior SHA on disk; treating as first run.'
-        $changeDetected = $true
-    } elseif ($lastSha -ne $newSha) {
-        $changeDetected = $true
-        Write-Verbose "Repo updated: $lastSha -> $newSha"
-    } else {
-        Write-Verbose "SHA unchanged: $newSha"
-    }
-
-    $shouldUpdate = $false
-    if ($forceUpdate) {
-        Write-Verbose 'update_mode=force_update → forcing update.'
-        $shouldUpdate = $true
-    } elseif ($changeDetected) {
-        Write-Verbose 'update_mode=update → repo changed or first run.'
-        $shouldUpdate = $true
-    } else {
-        Write-Verbose 'No change; skipping Borealis.ps1 -SilentUpdate.'
-    }
-
-    return [pscustomobject]@{
-        ShouldUpdate   = $shouldUpdate
-        ForceUpdate    = $forceUpdate
-        ChangeDetected = $changeDetected
-        LastSha        = $lastSha
-        NewSha         = $newSha
-        HashFile       = $hashFile
-        AgentRoot      = $agentRoot
-        ServerBaseUrl  = $serverBaseUrl
-        UpdateMode     = $updateMode
-    }
+    Invoke-WebRequest -Uri $uri -Method Post -Headers $headers -Body $payload -ContentType 'application/json' -UseBasicParsing -ErrorAction Stop | Out-Null
 }
 
 function Invoke-BorealisUpdate {
@@ -850,9 +861,44 @@ function Invoke-BorealisUpdate {
 function Invoke-BorealisSilentUpdate {
     Write-Host "Initiating Borealis silent update workflow..." -ForegroundColor DarkCyan
 
-    $plan = Get-BorealisUpdatePlan -ScriptDirectory $scriptDir -RepoOwner $BorealisRepoOwner -RepoName $BorealisRepoName -Branch $BorealisRepoBranch
+    $agentRootCandidate = Join-Path $scriptDir 'Agent\Borealis'
+    $agentRoot = $scriptDir
+    if (Test-Path $agentRootCandidate -PathType Container) {
+        try {
+            $agentRoot = (Resolve-Path -Path $agentRootCandidate -ErrorAction Stop).Path
+        } catch {
+            $agentRoot = $agentRootCandidate
+        }
+    }
 
-    if (-not $plan.ShouldUpdate) {
+    $serverBaseUrl = Get-BorealisServerUrl -AgentRoot $agentRoot
+    $agentId = Get-AgentServiceId -AgentRoot $agentRoot
+
+    $updateMode = $env:update_mode
+    if ($updateMode) { $updateMode = $updateMode.ToLowerInvariant() } else { $updateMode = 'update' }
+    $forceUpdate = $updateMode -eq 'force_update'
+
+    $shouldUpdate = $true
+    $updateInfo = $null
+
+    if (-not $forceUpdate) {
+        if ($agentId) {
+            try {
+                $updateInfo = Invoke-AgentUpdateCheck -ServerBaseUrl $serverBaseUrl -AgentId $agentId
+                $shouldUpdate = [bool]($updateInfo.update_available)
+            } catch {
+                Write-Verbose ("Update check failed: {0}" -f $_.Exception.Message)
+                $shouldUpdate = $true
+            }
+        } else {
+            Write-Verbose 'Agent ID not found; defaulting to update.'
+            $shouldUpdate = $true
+        }
+    } else {
+        $shouldUpdate = $true
+    }
+
+    if (-not $shouldUpdate) {
         Write-Host "=============================================="
         Write-Host "Borealis Agent Already Up-to-Date"
         Write-Host "=============================================="
@@ -894,36 +940,37 @@ function Invoke-BorealisSilentUpdate {
 
         $updateSucceeded = $false
         try {
-            if ($plan.NewSha) {
-                $env:BOREALIS_EXPECTED_SHA = $plan.NewSha
-            }
-
             Invoke-BorealisUpdate -Silent
             $updateSucceeded = $true
         } finally {
-            if ($plan.NewSha) {
-                Remove-Item Env:BOREALIS_EXPECTED_SHA -ErrorAction SilentlyContinue
-            }
-
             if ($managedTasks.Count -gt 0) {
                 Start-AgentScheduledTasks -TaskNames $managedTasks
             }
         }
 
         if (-not $updateSucceeded) {
-            throw 'Borealis.ps1 -SilentUpdate failed; not advancing stored SHA.'
+            throw 'Borealis.ps1 -SilentUpdate failed.'
         }
 
-        if ($plan.NewSha) {
-            $hashDir = Split-Path $plan.HashFile -Parent
-            if ($hashDir -and -not (Test-Path $hashDir -PathType Container)) {
-                New-Item -ItemType Directory -Path $hashDir -Force | Out-Null
+        $newHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir
+        if ($newHash) {
+            try {
+                if ($agentId) {
+                    Submit-AgentHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentHash $newHash
+                }
+            } catch {
+                Write-Verbose ("Failed to submit agent hash: {0}" -f $_.Exception.Message)
             }
-            Set-Content -Path $plan.HashFile -Value $plan.NewSha -Encoding ASCII
         }
+
+        $displayHash = $newHash
+        if (-not $displayHash -and $updateInfo) {
+            $displayHash = ($updateInfo.repo_hash)
+        }
+        if (-not $displayHash) { $displayHash = 'unknown' }
 
         Write-Host "=============================================="
-        Write-Host ("Borealis Agent Updated - New Github Repository Hash: {0}" -f $plan.NewSha)
+        Write-Host ("Borealis Agent Updated - Repository Hash: {0}" -f $displayHash)
         Write-Host "=============================================="
     } finally {
         if ($mutex -and $gotMutex) { $mutex.ReleaseMutex() | Out-Null }

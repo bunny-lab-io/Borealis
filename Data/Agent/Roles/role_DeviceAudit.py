@@ -9,7 +9,6 @@ import shutil
 import string
 import asyncio
 from pathlib import Path
-from typing import Optional
 
 try:
     import psutil  # type: ignore
@@ -133,166 +132,6 @@ def _project_root():
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     except Exception:
         return os.getcwd()
-
-
-_AGENT_HASH_CACHE = {
-    "path": None,
-    "mtime": None,
-    "value": None,
-    "source": None,
-    "extra": None,
-}
-
-
-def _iter_hash_roots():
-    """Yield candidate folders that may contain github_repo_hash.txt."""
-
-    root = _project_root()
-    if not root:
-        return
-
-    # Breadth-first walk up to a small, bounded set of parents/siblings.
-    seen = set()
-    queue = [root]
-
-    # Some deployments place the hash file directly under Agent/, while others
-    # (including the scheduled updater) write to Agent/Borealis/.  The previous
-    # implementation only checked the parent chain which skipped Agent/Borealis,
-    # so seed the queue with that sibling when available.
-    borealis = os.path.join(root, "Borealis")
-    if os.path.isdir(borealis):
-        queue.append(borealis)
-
-    steps = 0
-    while queue and steps < 12:  # hard stop to avoid wandering too far
-        steps += 1
-        cur = queue.pop(0)
-        if not cur or cur in seen:
-            continue
-        seen.add(cur)
-        yield cur
-
-        parent = os.path.dirname(cur)
-        if parent and parent != cur and parent not in seen:
-            queue.append(parent)
-
-        # If we're currently at Agent/ or its parent, also check for an adjacent
-        # Borealis/ folder in case the hash lives there.
-        if cur != borealis:
-            candidate = os.path.join(cur, "Borealis")
-            if os.path.isdir(candidate) and candidate not in seen:
-                queue.append(candidate)
-
-
-def _resolve_git_head_hash(root: str) -> Optional[str]:
-    git_dir = os.path.join(root, ".git")
-    head_path = os.path.join(git_dir, "HEAD")
-    if not os.path.isfile(head_path):
-        return None
-    try:
-        with open(head_path, "r", encoding="utf-8") as fh:
-            head = fh.read().strip()
-    except Exception:
-        return None
-    if not head:
-        return None
-    if head.startswith("ref:"):
-        ref = head.split(" ", 1)[1].strip() if " " in head else head.split(":", 1)[1].strip()
-        if not ref:
-            return None
-        ref_path = os.path.join(git_dir, *ref.split("/"))
-        if os.path.isfile(ref_path):
-            try:
-                with open(ref_path, "r", encoding="utf-8") as rf:
-                    commit = rf.read().strip()
-                    return commit or None
-            except Exception:
-                return None
-        packed_refs = os.path.join(git_dir, "packed-refs")
-        if os.path.isfile(packed_refs):
-            try:
-                with open(packed_refs, "r", encoding="utf-8") as pf:
-                    for line in pf:
-                        line = line.strip()
-                        if not line or line.startswith("#") or line.startswith("^"):
-                            continue
-                        try:
-                            commit, ref_name = line.split(" ", 1)
-                        except ValueError:
-                            continue
-                        if ref_name.strip() == ref:
-                            commit = commit.strip()
-                            return commit or None
-            except Exception:
-                return None
-        return None
-    # Detached head contains the commit hash directly
-    commit = head.splitlines()[0].strip()
-    return commit or None
-
-
-def _read_agent_hash():
-    try:
-        cache = _AGENT_HASH_CACHE
-        for root in _iter_hash_roots():
-            path = os.path.join(root, 'github_repo_hash.txt')
-            if not os.path.isfile(path):
-                continue
-            mtime = os.path.getmtime(path)
-            if (
-                cache.get("source") == "file"
-                and cache.get("path") == path
-                and cache.get("mtime") == mtime
-            ):
-                return cache.get("value")
-            with open(path, 'r', encoding='utf-8') as fh:
-                value = fh.read().strip()
-            cache.update(
-                {
-                    "source": "file",
-                    "path": path,
-                    "mtime": mtime,
-                    "extra": None,
-                    "value": value or None,
-                }
-            )
-            return cache.get("value")
-
-        for root in _iter_hash_roots():
-            git_dir = os.path.join(root, '.git')
-            head_path = os.path.join(git_dir, 'HEAD')
-            if not os.path.isfile(head_path):
-                continue
-            head_mtime = os.path.getmtime(head_path)
-            packed_path = os.path.join(git_dir, 'packed-refs')
-            packed_mtime = os.path.getmtime(packed_path) if os.path.isfile(packed_path) else None
-            if (
-                cache.get("source") == "git"
-                and cache.get("path") == head_path
-                and cache.get("mtime") == head_mtime
-                and cache.get("extra") == packed_mtime
-            ):
-                return cache.get("value")
-            commit = _resolve_git_head_hash(root)
-            cache.update(
-                {
-                    "source": "git",
-                    "path": head_path,
-                    "mtime": head_mtime,
-                    "extra": packed_mtime,
-                    "value": commit or None,
-                }
-            )
-            if commit:
-                return commit
-        cache.update({"source": None, "path": None, "mtime": None, "extra": None, "value": None})
-        return None
-    except Exception:
-        try:
-            _AGENT_HASH_CACHE.update({"value": None})
-        except Exception:
-            pass
-        return None
 
 
 # Removed Ansible-based audit path; Python collectors provide details directly.
@@ -938,12 +777,6 @@ def _build_details_fallback() -> dict:
         'storage': collect_storage(),
         'network': network,
     }
-    try:
-        agent_hash_value = _read_agent_hash()
-        if agent_hash_value:
-            details.setdefault('summary', {})['agent_hash'] = agent_hash_value
-    except Exception:
-        pass
     return details
 
 
@@ -995,12 +828,6 @@ class Role:
 
                 # Always post the latest available details (possibly cached)
                 details_to_send = self._last_details or {'summary': collect_summary(self.ctx.config)}
-                agent_hash_value = _read_agent_hash()
-                if agent_hash_value:
-                    try:
-                        details_to_send.setdefault('summary', {})['agent_hash'] = agent_hash_value
-                    except Exception:
-                        pass
                 get_url = (self.ctx.hooks.get('get_server_url') if isinstance(self.ctx.hooks, dict) else None) or (lambda: 'http://localhost:5000')
                 url = (get_url() or '').rstrip('/') + '/api/agent/details'
                 payload = {
@@ -1008,8 +835,6 @@ class Role:
                     'hostname': details_to_send.get('summary', {}).get('hostname', socket.gethostname()),
                     'details': details_to_send,
                 }
-                if agent_hash_value:
-                    payload['agent_hash'] = agent_hash_value
                 if aiohttp is not None:
                     async with aiohttp.ClientSession() as session:
                         await session.post(url, json=payload, timeout=10)
