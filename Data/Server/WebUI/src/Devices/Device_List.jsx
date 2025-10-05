@@ -77,6 +77,7 @@ export default function DeviceList({ onSelectDevice }) {
   const COL_LABELS = useMemo(
     () => ({
       status: "Status",
+      agentVersion: "Agent Version",
       site: "Site",
       hostname: "Hostname",
       description: "Description",
@@ -95,6 +96,7 @@ export default function DeviceList({ onSelectDevice }) {
   const defaultColumns = useMemo(
     () => [
       { id: "status", label: COL_LABELS.status },
+      { id: "agentVersion", label: COL_LABELS.agentVersion },
       { id: "site", label: COL_LABELS.site },
       { id: "hostname", label: COL_LABELS.hostname },
       { id: "description", label: COL_LABELS.description },
@@ -120,13 +122,52 @@ export default function DeviceList({ onSelectDevice }) {
   const [assignSiteId, setAssignSiteId] = useState(null);
   const [assignTargets, setAssignTargets] = useState([]); // hostnames
 
-  const fetchAgents = useCallback(async () => {
+  const [repoHash, setRepoHash] = useState(null);
+
+  const fetchLatestRepoHash = useCallback(async () => {
+    try {
+      const resp = await fetch(
+        "https://api.github.com/repos/bunny-lab-io/Borealis/branches/main",
+        {
+          headers: {
+            Accept: "application/vnd.github+json",
+          },
+        }
+      );
+      if (!resp.ok) throw new Error(`GitHub status ${resp.status}`);
+      const json = await resp.json();
+      const sha = (json?.commit?.sha || "").trim();
+      setRepoHash((prev) => sha || prev || null);
+      return sha || null;
+    } catch (err) {
+      console.warn("Failed to fetch repository hash", err);
+      setRepoHash((prev) => prev || null);
+      return null;
+    }
+  }, []);
+
+  const computeAgentVersion = useCallback((agentHashValue, repoHashValue) => {
+    const agentHash = (agentHashValue || "").trim();
+    const repo = (repoHashValue || "").trim();
+    if (!repo) return agentHash ? "Unknown" : "Unknown";
+    if (!agentHash) return "Needs Updated";
+    return agentHash === repo ? "Up-to-Date" : "Needs Updated";
+  }, []);
+
+  const fetchAgents = useCallback(async (options = {}) => {
+    const { refreshRepo = false } = options || {};
+    let repoSha = repoHash;
+    if (refreshRepo || !repoSha) {
+      const fetched = await fetchLatestRepoHash();
+      if (fetched) repoSha = fetched;
+    }
     try {
       const res = await fetch("/api/agents");
       const data = await res.json();
       const arr = Object.entries(data || {}).map(([id, a]) => {
         const hostname = a.hostname || id || "unknown";
         const details = detailsByHost[hostname] || {};
+        const agentHash = (a.agent_hash || "").trim();
         return {
           id,
           hostname,
@@ -142,6 +183,8 @@ export default function DeviceList({ onSelectDevice }) {
           externalIp: details.externalIp || "",
           lastReboot: details.lastReboot || "",
           description: details.description || "",
+          agentHash,
+          agentVersion: computeAgentVersion(agentHash, repoSha),
         };
       });
       setRows(arr);
@@ -229,7 +272,7 @@ export default function DeviceList({ onSelectDevice }) {
       console.warn("Failed to load agents:", e);
       setRows([]);
     }
-  }, [detailsByHost]);
+  }, [detailsByHost, repoHash, fetchLatestRepoHash, computeAgentVersion]);
 
   const fetchViews = useCallback(async () => {
     try {
@@ -244,7 +287,7 @@ export default function DeviceList({ onSelectDevice }) {
 
   useEffect(() => {
     // Initial load only; removed auto-refresh interval
-    fetchAgents();
+    fetchAgents({ refreshRepo: true });
   }, [fetchAgents]);
 
   useEffect(() => {
@@ -271,7 +314,20 @@ export default function DeviceList({ onSelectDevice }) {
           setFilters((prev) => ({ ...prev, ...obj }));
           // Optionally ensure Site column exists when site filter is present
           if (obj.site) {
-            setColumns((prev) => (prev.some((c) => c.id === 'site') ? prev : [{ id: 'status', label: COL_LABELS.status }, { id: 'site', label: COL_LABELS.site }, ...prev.filter((c) => c.id !== 'status') ]));
+            setColumns((prev) => {
+              if (prev.some((c) => c.id === 'site')) return prev;
+              const hasAgentVersion = prev.some((c) => c.id === 'agentVersion');
+              const remainder = prev.filter((c) => !['status', 'agentVersion'].includes(c.id));
+              const base = [
+                { id: 'status', label: COL_LABELS.status },
+                ...(hasAgentVersion ? [{ id: 'agentVersion', label: COL_LABELS.agentVersion }] : []),
+                { id: 'site', label: COL_LABELS.site },
+              ];
+              if (!hasAgentVersion) {
+                return base.concat(prev.filter((c) => c.id !== 'status'));
+              }
+              return [...base, ...remainder];
+            });
           }
         }
         localStorage.removeItem('device_list_initial_filters');
@@ -283,7 +339,9 @@ export default function DeviceList({ onSelectDevice }) {
           const hasSite = prev.some((c) => c.id === 'site');
           if (hasSite) return prev;
           const next = [...prev];
-          next.splice(1, 0, { id: 'site', label: COL_LABELS.site });
+          const agentIndex = next.findIndex((c) => c.id === 'agentVersion');
+          const insertAt = agentIndex >= 0 ? agentIndex + 1 : 1;
+          next.splice(insertAt, 0, { id: 'site', label: COL_LABELS.site });
           return next;
         });
         setFilters((f) => ({ ...f, site }));
@@ -333,6 +391,8 @@ export default function DeviceList({ onSelectDevice }) {
           return row.type || "";
         case "os":
           return row.os || "";
+        case "agentVersion":
+          return row.agentVersion || "";
         case "internalIp":
           return row.internalIp || "";
         case "externalIp":
@@ -554,7 +614,7 @@ export default function DeviceList({ onSelectDevice }) {
             <Tooltip title="Refresh Devices to Detect Changes">
               <IconButton
                 size="small"
-                onClick={fetchAgents}
+                onClick={() => fetchAgents({ refreshRepo: true })}
                 sx={{ color: "#bbb", mr: 1 }}
               >
                 <CachedIcon fontSize="small" />
@@ -660,6 +720,8 @@ export default function DeviceList({ onSelectDevice }) {
                         </Box>
                       </TableCell>
                     );
+                  case "agentVersion":
+                    return <TableCell key={col.id}>{r.agentVersion || ""}</TableCell>;
                   case "site":
                     return <TableCell key={col.id}>{r.site || "Not Configured"}</TableCell>;
                   case "hostname":
@@ -822,7 +884,8 @@ export default function DeviceList({ onSelectDevice }) {
         PaperProps={{ sx: { bgcolor: "#1e1e1e", color: '#fff', p: 1 } }}
       >
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, p: 1 }}>
-          {[
+          {[ 
+            { id: 'agentVersion', label: 'Agent Version' },
             { id: 'site', label: 'Site' },
             { id: 'hostname', label: 'Hostname' },
             { id: 'os', label: 'Operating System' },

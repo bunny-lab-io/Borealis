@@ -1776,7 +1776,7 @@ def init_db():
 
     # Device details table
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS device_details (hostname TEXT PRIMARY KEY, description TEXT, details TEXT, created_at INTEGER)"
+        "CREATE TABLE IF NOT EXISTS device_details (hostname TEXT PRIMARY KEY, description TEXT, details TEXT, created_at INTEGER, agent_hash TEXT)"
     )
     # Backfill missing created_at column on existing installs
     try:
@@ -1784,6 +1784,8 @@ def init_db():
         cols = [r[1] for r in cur.fetchall()]
         if 'created_at' not in cols:
             cur.execute("ALTER TABLE device_details ADD COLUMN created_at INTEGER")
+        if 'agent_hash' not in cols:
+            cur.execute("ALTER TABLE device_details ADD COLUMN agent_hash TEXT")
     except Exception:
         pass
 
@@ -2607,14 +2609,19 @@ def load_agents_from_db():
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        cur.execute("SELECT hostname, details FROM device_details")
-        for hostname, details_json in cur.fetchall():
+        cur.execute("SELECT hostname, details, agent_hash FROM device_details")
+        for hostname, details_json, agent_hash in cur.fetchall():
             try:
                 details = json.loads(details_json or "{}")
             except Exception:
                 details = {}
             summary = details.get("summary", {})
             agent_id = summary.get("agent_id") or hostname
+            stored_hash = None
+            try:
+                stored_hash = (agent_hash or summary.get("agent_hash") or "").strip()
+            except Exception:
+                stored_hash = summary.get("agent_hash") or ""
             registered_agents[agent_id] = {
                 "agent_id": agent_id,
                 "hostname": summary.get("hostname") or hostname,
@@ -2625,6 +2632,8 @@ def load_agents_from_db():
                 "last_seen": summary.get("last_seen") or 0,
                 "status": "Offline",
             }
+            if stored_hash:
+                registered_agents[agent_id]["agent_hash"] = stored_hash
         conn.close()
     except Exception as e:
         print(f"[WARN] Failed to load agents from DB: {e}")
@@ -2690,6 +2699,11 @@ def save_agent_details():
     hostname = data.get("hostname")
     details = data.get("details")
     agent_id = data.get("agent_id")
+    agent_hash = data.get("agent_hash")
+    if isinstance(agent_hash, str):
+        agent_hash = agent_hash.strip() or None
+    else:
+        agent_hash = None
     if not hostname and isinstance(details, dict):
         hostname = (details.get("summary") or {}).get("hostname")
     if not hostname or not isinstance(details, dict):
@@ -2726,6 +2740,11 @@ def save_agent_details():
                 pass
         if hostname and not incoming_summary.get("hostname"):
             incoming_summary["hostname"] = hostname
+        if agent_hash:
+            try:
+                incoming_summary["agent_hash"] = agent_hash
+            except Exception:
+                pass
 
         # Preserve last_seen if incoming omitted it
         if not incoming_summary.get("last_seen"):
@@ -2781,17 +2800,34 @@ def save_agent_details():
         # Upsert row without destroying created_at; keep previous created_at if exists
         cur.execute(
             """
-            INSERT INTO device_details(hostname, description, details, created_at)
-            VALUES (?,?,?,?)
+            INSERT INTO device_details(hostname, description, details, created_at, agent_hash)
+            VALUES (?,?,?,?,?)
             ON CONFLICT(hostname) DO UPDATE SET
                 description=excluded.description,
                 details=excluded.details,
-                created_at=COALESCE(device_details.created_at, excluded.created_at)
+                created_at=COALESCE(device_details.created_at, excluded.created_at),
+                agent_hash=COALESCE(NULLIF(excluded.agent_hash, ''), device_details.agent_hash)
             """,
-            (hostname, description, json.dumps(merged), created_at),
+            (hostname, description, json.dumps(merged), created_at, agent_hash or None),
         )
         conn.commit()
         conn.close()
+
+        normalized_hash = None
+        try:
+            normalized_hash = (agent_hash or (merged.get("summary") or {}).get("agent_hash") or "").strip()
+        except Exception:
+            normalized_hash = agent_hash
+        if normalized_hash:
+            if agent_id and agent_id in registered_agents:
+                registered_agents[agent_id]["agent_hash"] = normalized_hash
+            # Also update any entries keyed by hostname (duplicate agents)
+            try:
+                for aid, rec in registered_agents.items():
+                    if rec.get("hostname") == hostname and normalized_hash:
+                        rec["agent_hash"] = normalized_hash
+            except Exception:
+                pass
         return jsonify({"status": "ok"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
