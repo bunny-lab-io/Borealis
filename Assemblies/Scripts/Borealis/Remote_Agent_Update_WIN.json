@@ -10,16 +10,7 @@
     "mode": "all",
     "values": []
   },
-  "variables": [
-    {
-      "name": "update_mode",
-      "label": "Update Mode",
-      "type": "string",
-      "default": "update",
-      "required": true,
-      "description": "Leave the default value of \"update\" to check Github's repository hash for changes, and perform an updated if it changed since the last update, or use \"force_update\" to force an update, regardless of the Github repository's hash value."
-    }
-  ],
+  "variables": [],
   "files": [],
   "script_encoding": "base64"
 }
