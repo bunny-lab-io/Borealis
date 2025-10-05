@@ -167,7 +167,7 @@ export default function DeviceList({ onSelectDevice }) {
       const arr = Object.entries(data || {}).map(([id, a]) => {
         const hostname = a.hostname || id || "unknown";
         const details = detailsByHost[hostname] || {};
-        const agentHash = (a.agent_hash || "").trim();
+        const agentHash = (a.agent_hash || details.agentHash || "").trim();
         return {
           id,
           hostname,
@@ -230,43 +230,47 @@ export default function DeviceList({ onSelectDevice }) {
                 const externalIp = summary.external_ip || "";
                 const lastReboot = summary.last_reboot || "";
                 const description = summary.description || "";
+                const agentHashValue = (summary.agent_hash || "").trim();
+                const enriched = {
+                  lastUser,
+                  created: createdRaw,
+                  createdTs,
+                  type: deviceType,
+                  internalIp,
+                  externalIp,
+                  lastReboot,
+                  description,
+                  agentHash: agentHashValue,
+                };
                 setDetailsByHost((prev) => ({
                   ...prev,
-                  [h]: {
-                    lastUser,
-                    created: createdRaw,
-                    createdTs,
-                    type: deviceType,
-                    internalIp,
-                    externalIp,
-                    lastReboot,
-                    description,
-                  },
+                  [h]: enriched,
                 }));
+                setRows((prev) =>
+                  prev.map((r) => {
+                    if (r.hostname !== h) return r;
+                    const nextHash = agentHashValue || r.agentHash;
+                    return {
+                      ...r,
+                      lastUser: enriched.lastUser || r.lastUser,
+                      type: enriched.type || r.type,
+                      created: enriched.created || r.created,
+                      createdTs: enriched.createdTs || r.createdTs,
+                      internalIp: enriched.internalIp || r.internalIp,
+                      externalIp: enriched.externalIp || r.externalIp,
+                      lastReboot: enriched.lastReboot || r.lastReboot,
+                      description: enriched.description || r.description,
+                      agentHash: nextHash,
+                      agentVersion: computeAgentVersion(nextHash, repoSha),
+                    };
+                  })
+                );
               } catch {
                 // ignore per-host failure
               }
             })
           );
         }
-        // After caching, refresh rows to apply newly available details
-        setRows((prev) =>
-          prev.map((r) => {
-            const det = detailsByHost[r.hostname];
-            if (!det) return r;
-            return {
-              ...r,
-              lastUser: det.lastUser || r.lastUser,
-              type: det.type || r.type,
-              created: det.created || r.created,
-              createdTs: det.createdTs || r.createdTs,
-              internalIp: det.internalIp || r.internalIp,
-              externalIp: det.externalIp || r.externalIp,
-              lastReboot: det.lastReboot || r.lastReboot,
-              description: det.description || r.description,
-            };
-          })
-        );
       }
     } catch (e) {
       console.warn("Failed to load agents:", e);

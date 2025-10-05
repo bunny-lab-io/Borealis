@@ -912,6 +912,12 @@ def _build_details_fallback() -> dict:
         'storage': collect_storage(),
         'network': network,
     }
+    try:
+        agent_hash_value = _read_agent_hash()
+        if agent_hash_value:
+            details.setdefault('summary', {})['agent_hash'] = agent_hash_value
+    except Exception:
+        pass
     return details
 
 
