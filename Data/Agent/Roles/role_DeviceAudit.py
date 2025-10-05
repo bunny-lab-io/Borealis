@@ -145,17 +145,43 @@ _AGENT_HASH_CACHE = {
 
 
 def _iter_hash_roots():
-    seen = set()
+    """Yield candidate folders that may contain github_repo_hash.txt."""
+
     root = _project_root()
-    for _ in range(6):
-        if not root or root in seen:
-            break
-        yield root
-        seen.add(root)
-        parent = os.path.dirname(root)
-        if not parent or parent == root:
-            break
-        root = parent
+    if not root:
+        return
+
+    # Breadth-first walk up to a small, bounded set of parents/siblings.
+    seen = set()
+    queue = [root]
+
+    # Some deployments place the hash file directly under Agent/, while others
+    # (including the scheduled updater) write to Agent/Borealis/.  The previous
+    # implementation only checked the parent chain which skipped Agent/Borealis,
+    # so seed the queue with that sibling when available.
+    borealis = os.path.join(root, "Borealis")
+    if os.path.isdir(borealis):
+        queue.append(borealis)
+
+    steps = 0
+    while queue and steps < 12:  # hard stop to avoid wandering too far
+        steps += 1
+        cur = queue.pop(0)
+        if not cur or cur in seen:
+            continue
+        seen.add(cur)
+        yield cur
+
+        parent = os.path.dirname(cur)
+        if parent and parent != cur and parent not in seen:
+            queue.append(parent)
+
+        # If we're currently at Agent/ or its parent, also check for an adjacent
+        # Borealis/ folder in case the hash lives there.
+        if cur != borealis:
+            candidate = os.path.join(cur, "Borealis")
+            if os.path.isdir(candidate) and candidate not in seen:
+                queue.append(candidate)
 
 
 def _resolve_git_head_hash(root: str) -> Optional[str]:
