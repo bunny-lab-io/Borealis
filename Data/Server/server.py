@@ -72,6 +72,13 @@ def _write_service_log(service: str, msg: str):
 _REPO_HEAD_CACHE: Dict[str, Tuple[str, float]] = {}
 _REPO_HEAD_LOCK = Lock()
 
+_CACHE_ROOT = os.environ.get('BOREALIS_CACHE_DIR')
+if _CACHE_ROOT:
+    _CACHE_ROOT = os.path.abspath(_CACHE_ROOT)
+else:
+    _CACHE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), 'cache'))
+_REPO_HASH_CACHE_FILE = os.path.join(_CACHE_ROOT, 'repo_hash_cache.json')
+
 _DEFAULT_REPO = os.environ.get('BOREALIS_REPO', 'bunny-lab-io/Borealis')
 _DEFAULT_BRANCH = os.environ.get('BOREALIS_REPO_BRANCH', 'main')
 try:
@@ -81,6 +88,66 @@ except ValueError:
 _REPO_HASH_INTERVAL = max(30, min(_REPO_HASH_INTERVAL, 3600))
 _REPO_HASH_WORKER_STARTED = False
 _REPO_HASH_WORKER_LOCK = Lock()
+
+
+def _hydrate_repo_hash_cache_from_disk() -> None:
+    try:
+        if not os.path.isfile(_REPO_HASH_CACHE_FILE):
+            return
+        with open(_REPO_HASH_CACHE_FILE, 'r', encoding='utf-8') as fh:
+            payload = json.load(fh)
+        entries = payload.get('entries') if isinstance(payload, dict) else None
+        if not isinstance(entries, dict):
+            return
+        now = time.time()
+        with _REPO_HEAD_LOCK:
+            for key, entry in entries.items():
+                if not isinstance(entry, dict):
+                    continue
+                sha = (entry.get('sha') or '').strip()
+                if not sha:
+                    continue
+                ts_raw = entry.get('ts')
+                try:
+                    ts = float(ts_raw)
+                except (TypeError, ValueError):
+                    ts = now
+                _REPO_HEAD_CACHE[key] = (sha, ts)
+    except Exception as exc:
+        _write_service_log('server', f'failed to hydrate repo hash cache: {exc}')
+
+
+def _persist_repo_hash_cache() -> None:
+    snapshot: Dict[str, Tuple[str, float]]
+    with _REPO_HEAD_LOCK:
+        snapshot = {
+            key: (sha, ts)
+            for key, (sha, ts) in _REPO_HEAD_CACHE.items()
+            if sha
+        }
+    try:
+        if not snapshot:
+            try:
+                os.remove(_REPO_HASH_CACHE_FILE)
+            except FileNotFoundError:
+                pass
+            except Exception as exc:
+                _write_service_log('server', f'failed to remove repo hash cache file: {exc}')
+            return
+        os.makedirs(_CACHE_ROOT, exist_ok=True)
+        tmp_path = _REPO_HASH_CACHE_FILE + '.tmp'
+        payload = {
+            'version': 1,
+            'entries': {
+                key: {'sha': sha, 'ts': ts}
+                for key, (sha, ts) in snapshot.items()
+            },
+        }
+        with open(tmp_path, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh)
+        os.replace(tmp_path, _REPO_HASH_CACHE_FILE)
+    except Exception as exc:
+        _write_service_log('server', f'failed to persist repo hash cache: {exc}')
 
 
 def _fetch_repo_head(owner_repo: str, branch: str = 'main', *, ttl_seconds: int = 60, force_refresh: bool = False) -> Dict[str, Any]:
@@ -142,6 +209,7 @@ def _fetch_repo_head(owner_repo: str, branch: str = 'main', *, ttl_seconds: int 
         sha = sha.strip()
         with _REPO_HEAD_LOCK:
             _REPO_HEAD_CACHE[key] = (sha, now)
+        _persist_repo_hash_cache()
         return {
             'sha': sha,
             'cached': False,
@@ -263,6 +331,7 @@ socketio = SocketIO(
     }
 )
 
+_hydrate_repo_hash_cache_from_disk()
 _ensure_repo_hash_worker()
 
 # ---------------------------------------------
