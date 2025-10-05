@@ -3138,6 +3138,83 @@ def set_device_description(hostname: str):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/agent/hash/<path:agent_id>", methods=["GET"])
+def get_agent_hash(agent_id: str):
+    """Return the last known github_repo_hash for a specific agent."""
+
+    agent_id = (agent_id or "").strip()
+    if not agent_id:
+        return jsonify({"error": "invalid agent id"}), 400
+
+    # Prefer the in-memory registry (updated on every heartbeat/details post).
+    info = registered_agents.get(agent_id) or {}
+    candidate = (info.get("agent_hash") or "").strip()
+    hostname = (info.get("hostname") or "").strip()
+
+    if candidate:
+        return jsonify({
+            "agent_id": agent_id,
+            "agent_hash": candidate,
+            "source": "memory",
+        })
+
+    # Fall back to the persisted device_details row, if any.
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+
+        row = None
+        if hostname:
+            cur.execute(
+                "SELECT agent_hash, details FROM device_details WHERE hostname = ?",
+                (hostname,),
+            )
+            row = cur.fetchone()
+        else:
+            # No hostname available; scan for a matching agent_id in the JSON payload.
+            cur.execute("SELECT hostname, agent_hash, details FROM device_details")
+            for host, db_hash, details_json in cur.fetchall():
+                try:
+                    data = json.loads(details_json or "{}")
+                except Exception:
+                    data = {}
+                summary = data.get("summary") or {}
+                if (summary.get("agent_id") or "").strip() == agent_id:
+                    row = (db_hash, details_json)
+                    hostname = host or hostname
+                    break
+
+        conn.close()
+
+        if row:
+            db_hash = (row[0] or "").strip()
+            if db_hash:
+                return jsonify({
+                    "agent_id": agent_id,
+                    "agent_hash": db_hash,
+                    "hostname": hostname,
+                    "source": "database",
+                })
+            # Hash column may be empty if only stored inside details JSON.
+            try:
+                details = json.loads(row[1] or "{}")
+            except Exception:
+                details = {}
+            summary = details.get("summary") or {}
+            summary_hash = (summary.get("agent_hash") or "").strip()
+            if summary_hash:
+                return jsonify({
+                    "agent_id": agent_id,
+                    "agent_hash": summary_hash,
+                    "hostname": hostname,
+                    "source": "database",
+                })
+
+        return jsonify({"error": "agent hash not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ---------------------------------------------
 # Quick Job Execution + Activity History
 # ---------------------------------------------
