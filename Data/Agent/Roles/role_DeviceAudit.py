@@ -134,6 +134,32 @@ def _project_root():
         return os.getcwd()
 
 
+_AGENT_HASH_CACHE = {"path": None, "mtime": None, "value": None}
+
+
+def _read_agent_hash():
+    try:
+        root = _project_root()
+        path = os.path.join(root, 'github_repo_hash.txt')
+        cache = _AGENT_HASH_CACHE
+        if not os.path.isfile(path):
+            cache.update({"path": path, "mtime": None, "value": None})
+            return None
+        mtime = os.path.getmtime(path)
+        if cache.get("path") == path and cache.get("mtime") == mtime:
+            return cache.get("value")
+        with open(path, 'r', encoding='utf-8') as fh:
+            value = fh.read().strip()
+        cache.update({"path": path, "mtime": mtime, "value": value or None})
+        return cache.get("value")
+    except Exception:
+        try:
+            _AGENT_HASH_CACHE.update({"value": None})
+        except Exception:
+            pass
+        return None
+
+
 # Removed Ansible-based audit path; Python collectors provide details directly.
 
 
@@ -828,6 +854,12 @@ class Role:
 
                 # Always post the latest available details (possibly cached)
                 details_to_send = self._last_details or {'summary': collect_summary(self.ctx.config)}
+                agent_hash_value = _read_agent_hash()
+                if agent_hash_value:
+                    try:
+                        details_to_send.setdefault('summary', {})['agent_hash'] = agent_hash_value
+                    except Exception:
+                        pass
                 get_url = (self.ctx.hooks.get('get_server_url') if isinstance(self.ctx.hooks, dict) else None) or (lambda: 'http://localhost:5000')
                 url = (get_url() or '').rstrip('/') + '/api/agent/details'
                 payload = {
@@ -835,6 +867,8 @@ class Role:
                     'hostname': details_to_send.get('summary', {}).get('hostname', socket.gethostname()),
                     'details': details_to_send,
                 }
+                if agent_hash_value:
+                    payload['agent_hash'] = agent_hash_value
                 if aiohttp is not None:
                     async with aiohttp.ClientSession() as session:
                         await session.post(url, json=payload, timeout=10)
