@@ -3146,6 +3146,22 @@ def get_agent_hash(agent_id: str):
     if not agent_id:
         return jsonify({"error": "invalid agent id"}), 400
 
+    def _extract_hostname_from_agent(agent: str) -> Optional[str]:
+        try:
+            agent = (agent or "").strip()
+            if not agent:
+                return None
+            lower = agent.lower()
+            marker = "-agent"
+            if marker not in lower:
+                return None
+            idx = lower.index(marker)
+            if idx <= 0:
+                return None
+            return agent[:idx]
+        except Exception:
+            return None
+
     # Prefer the in-memory registry (updated on every heartbeat/details post).
     info = registered_agents.get(agent_id) or {}
     candidate = (info.get("agent_hash") or "").strip()
@@ -3163,15 +3179,39 @@ def get_agent_hash(agent_id: str):
         conn = _db_conn()
         cur = conn.cursor()
 
-        row = None
+        parsed_hostname = _extract_hostname_from_agent(agent_id)
+        host_candidates = []
         if hostname:
-            cur.execute(
-                "SELECT agent_hash, details FROM device_details WHERE hostname = ?",
-                (hostname,),
-            )
-            row = cur.fetchone()
-        else:
-            # No hostname available; scan for a matching agent_id in the JSON payload.
+            host_candidates.append(hostname)
+        if parsed_hostname and not any(
+            parsed_hostname.lower() == (h or "").lower() for h in host_candidates
+        ):
+            host_candidates.append(parsed_hostname)
+
+        def _load_row_for_host(host_value: str):
+            if not host_value:
+                return None, None
+            try:
+                cur.execute(
+                    "SELECT agent_hash, details, hostname FROM device_details WHERE LOWER(hostname) = ?",
+                    (host_value.lower(),),
+                )
+                return cur.fetchone()
+            except Exception:
+                return None
+
+        row = None
+        matched_hostname = hostname
+
+        for host_value in host_candidates:
+            fetched = _load_row_for_host(host_value)
+            if fetched:
+                row = fetched
+                matched_hostname = fetched[2] or matched_hostname or host_value
+                break
+
+        if not row:
+            # No hostname available or found; scan for a matching agent_id in the JSON payload.
             cur.execute("SELECT hostname, agent_hash, details FROM device_details")
             for host, db_hash, details_json in cur.fetchall():
                 try:
@@ -3179,25 +3219,35 @@ def get_agent_hash(agent_id: str):
                 except Exception:
                     data = {}
                 summary = data.get("summary") or {}
-                if (summary.get("agent_id") or "").strip() == agent_id:
-                    row = (db_hash, details_json)
-                    hostname = host or hostname
+                summary_agent_id = (summary.get("agent_id") or "").strip()
+                summary_hostname = (summary.get("hostname") or "").strip()
+                if summary_agent_id == agent_id:
+                    row = (db_hash, details_json, host)
+                    matched_hostname = host or summary_hostname or matched_hostname
                     break
-
+                if (
+                    not row
+                    and parsed_hostname
+                    and summary_hostname
+                    and summary_hostname.lower() == parsed_hostname.lower()
+                ):
+                    row = (db_hash, details_json, host)
+                    matched_hostname = host or summary_hostname
         conn.close()
 
         if row:
             db_hash = (row[0] or "").strip()
+            effective_hostname = matched_hostname or hostname or parsed_hostname
             if db_hash:
                 return jsonify({
                     "agent_id": agent_id,
                     "agent_hash": db_hash,
-                    "hostname": hostname,
+                    "hostname": effective_hostname,
                     "source": "database",
                 })
             # Hash column may be empty if only stored inside details JSON.
             try:
-                details = json.loads(row[1] or "{}")
+                details = json.loads(row[1] if len(row) > 1 else "{}")
             except Exception:
                 details = {}
             summary = details.get("summary") or {}
@@ -3206,7 +3256,7 @@ def get_agent_hash(agent_id: str):
                 return jsonify({
                     "agent_id": agent_id,
                     "agent_hash": summary_hash,
-                    "hostname": hostname,
+                    "hostname": effective_hostname,
                     "source": "database",
                 })
 
