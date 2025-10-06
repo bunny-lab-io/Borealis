@@ -235,6 +235,43 @@ function Get-RepositoryCommitHash {
     return ''
 }
 
+function Get-StoredAgentHash {
+    param(
+        [string]$AgentRoot
+    )
+
+    if (-not $AgentRoot) { return '' }
+
+    try {
+        $settingsDir = Join-Path $AgentRoot 'Settings'
+        $hashFile = Join-Path $settingsDir 'agent_hash.txt'
+        if (Test-Path $hashFile -PathType Leaf) {
+            $value = (Get-Content -Path $hashFile -Raw -ErrorAction Stop).Trim()
+            return $value
+        }
+    } catch {}
+
+    return ''
+}
+
+function Set-StoredAgentHash {
+    param(
+        [string]$AgentRoot,
+        [string]$AgentHash
+    )
+
+    if ([string]::IsNullOrWhiteSpace($AgentRoot) -or [string]::IsNullOrWhiteSpace($AgentHash)) { return }
+
+    try {
+        $settingsDir = Join-Path $AgentRoot 'Settings'
+        if (-not (Test-Path $settingsDir -PathType Container)) {
+            New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
+        }
+        $hashFile = Join-Path $settingsDir 'agent_hash.txt'
+        Set-Content -Path $hashFile -Value $AgentHash.Trim() -Encoding UTF8
+    } catch {}
+}
+
 function Get-ServerRepositoryHash {
     param(
         [Parameter(Mandatory = $true)]
@@ -344,7 +381,6 @@ function Invoke-BorealisAgentUpdate {
     Write-Host "Borealis - Automation Platform Updater Script"
     Write-Host "==================================="
 
-    $currentHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir
     $agentRootCandidate = Join-Path $scriptDir 'Agent\Borealis'
     $agentRoot = $scriptDir
     if (Test-Path $agentRootCandidate -PathType Container) {
@@ -353,6 +389,14 @@ function Invoke-BorealisAgentUpdate {
         } catch {
             $agentRoot = $agentRootCandidate
         }
+    }
+
+    $currentHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir
+    if ($currentHash) {
+        Set-StoredAgentHash -AgentRoot $agentRoot -AgentHash $currentHash
+    } else {
+        $storedHash = Get-StoredAgentHash -AgentRoot $agentRoot
+        if ($storedHash) { $currentHash = $storedHash }
     }
 
     $serverBaseUrl = Get-BorealisServerUrl -AgentRoot $agentRoot
@@ -368,7 +412,7 @@ function Invoke-BorealisAgentUpdate {
     if ($updateMode) { $updateMode = $updateMode.ToLowerInvariant() } else { $updateMode = 'update' }
     $forceUpdate = $updateMode -eq 'force_update'
 
-    $shouldUpdate = $true
+    $shouldUpdate = $forceUpdate
     $updateInfo = $null
 
     if (-not $forceUpdate) {
@@ -379,14 +423,12 @@ function Invoke-BorealisAgentUpdate {
                 if (-not $serverHash -and $updateInfo.repo_hash) { $serverHash = ($updateInfo.repo_hash).ToString().Trim() }
             } catch {
                 Write-Verbose ("Update check failed: {0}" -f $_.Exception.Message)
-                $shouldUpdate = $true
+                $shouldUpdate = $false
             }
         } else {
             Write-Verbose 'Agent ID not found; defaulting to update.'
-            $shouldUpdate = $true
+            $shouldUpdate = $false
         }
-    } else {
-        $shouldUpdate = $true
     }
 
     if ($currentHash) {
@@ -418,11 +460,25 @@ function Invoke-BorealisAgentUpdate {
         Write-Verbose 'Unable to compare server and client hashes due to missing data.'
     }
 
-    if (-not $forceUpdate -and -not $updateInfo -and $hashesMatch) {
-        $shouldUpdate = $false
+    if (-not $forceUpdate) {
+        if (-not $updateInfo) {
+            if ($hashesComparable) {
+                $shouldUpdate = -not $hashesMatch
+            } else {
+                $shouldUpdate = $false
+                if ($serverHash) {
+                    Write-Verbose 'Server hash available but local hash missing; skipping update.'
+                } else {
+                    Write-Verbose 'Unable to determine update state from server; skipping update.'
+                }
+            }
+        }
     }
 
     if (-not $shouldUpdate) {
+        if (-not $currentHash -and $serverHash) {
+            Set-StoredAgentHash -AgentRoot $agentRoot -AgentHash $serverHash
+        }
         Write-Host "✅ Borealis - Automation Platform Already Up-to-Date"
         return
     }
@@ -488,6 +544,7 @@ function Invoke-BorealisAgentUpdate {
         }
 
         if ($newHash) {
+            Set-StoredAgentHash -AgentRoot $agentRoot -AgentHash $newHash
             Write-Host ("Submitting agent hash to server: {0}" -f $newHash)
             try {
                 if ($agentId) {
@@ -505,6 +562,8 @@ function Invoke-BorealisAgentUpdate {
             } catch {
                 Write-Verbose ("Failed to submit agent hash: {0}" -f $_.Exception.Message)
             }
+        } elseif ($serverHash) {
+            Set-StoredAgentHash -AgentRoot $agentRoot -AgentHash $serverHash
         } else {
             Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
         }
