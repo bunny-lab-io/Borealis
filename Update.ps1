@@ -323,6 +323,41 @@ function Submit-AgentHash {
     }
 }
 
+function Sync-AgentHashRecord {
+    param(
+        [string]$AgentRoot,
+        [string]$AgentHash,
+        [string]$ServerBaseUrl,
+        [string]$AgentId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($AgentHash)) { return }
+
+    Set-StoredAgentHash -AgentRoot $AgentRoot -AgentHash $AgentHash
+
+    if ([string]::IsNullOrWhiteSpace($ServerBaseUrl)) { return }
+
+    Write-Host ("Submitting agent hash to server: {0}" -f $AgentHash)
+
+    if ([string]::IsNullOrWhiteSpace($AgentId)) {
+        Write-Host "Agent ID unavailable; skipping agent hash submission." -ForegroundColor DarkYellow
+        return
+    }
+
+    try {
+        $submitResult = Submit-AgentHash -ServerBaseUrl $ServerBaseUrl -AgentId $AgentId -AgentHash $AgentHash
+        if ($submitResult -and ($submitResult.status -eq 'ok')) {
+            Write-Host "Server agent_hash database record updated successfully."
+        } elseif ($submitResult -and ($submitResult.status -eq 'ignored')) {
+            Write-Host "Server ignored agent_hash update (agent not registered)." -ForegroundColor DarkYellow
+        } elseif ($submitResult) {
+            Write-Host "Server agent_hash update response unrecognized." -ForegroundColor DarkYellow
+        }
+    } catch {
+        Write-Verbose ("Failed to submit agent hash: {0}" -f $_.Exception.Message)
+    }
+}
+
 function Invoke-BorealisUpdate {
     param(
         [switch]$Silent
@@ -445,6 +480,10 @@ function Invoke-BorealisAgentUpdate {
         Write-Host "Borealis Server Hash: unavailable"
     }
 
+    $normalizedLocalHash = if ($currentHash) { $currentHash.Trim().ToLowerInvariant() } else { '' }
+    $normalizedServerHash = if ($serverHash) { $serverHash.Trim().ToLowerInvariant() } else { '' }
+    $hashesMatch = ($normalizedLocalHash -and $normalizedServerHash -and ($normalizedLocalHash -eq $normalizedServerHash))
+
     if ($forceUpdate) {
         Write-Host "Server update check bypassed (force update requested)."
     } elseif ($updateInfo) {
@@ -461,6 +500,13 @@ function Invoke-BorealisAgentUpdate {
     } else {
         Write-Host "Server response unavailable; cannot continue." -ForegroundColor Yellow
         Write-Host "⚠️ Borealis update aborted."
+        return
+    }
+
+    if (-not $forceUpdate -and $updateInfo -and $shouldUpdate -and $hashesMatch) {
+        Write-Host "Local agent files already match the server repository hash; skipping update while syncing server state." -ForegroundColor Green
+        Sync-AgentHashRecord -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId
+        Write-Host "✅ Borealis - Automation Platform Already Up-to-Date"
         return
     }
 
@@ -525,26 +571,9 @@ function Invoke-BorealisAgentUpdate {
         }
 
         if ($newHash) {
-            Set-StoredAgentHash -AgentRoot $agentRoot -AgentHash $newHash
-            Write-Host ("Submitting agent hash to server: {0}" -f $newHash)
-            try {
-                if ($agentId) {
-                    $submitResult = Submit-AgentHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentHash $newHash
-                    if ($submitResult -and ($submitResult.status -eq 'ok')) {
-                        Write-Host "Server agent_hash database record updated successfully."
-                    } elseif ($submitResult -and ($submitResult.status -eq 'ignored')) {
-                        Write-Host "Server ignored agent_hash update (agent not registered)." -ForegroundColor DarkYellow
-                    } else {
-                        Write-Host "Server agent_hash update response unrecognized." -ForegroundColor DarkYellow
-                    }
-                } else {
-                    Write-Host "Agent ID unavailable; skipping agent hash submission." -ForegroundColor DarkYellow
-                }
-            } catch {
-                Write-Verbose ("Failed to submit agent hash: {0}" -f $_.Exception.Message)
-            }
+            Sync-AgentHashRecord -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId
         } elseif ($serverHash) {
-            Set-StoredAgentHash -AgentRoot $agentRoot -AgentHash $serverHash
+            Sync-AgentHashRecord -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId
         } else {
             Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
         }
