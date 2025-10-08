@@ -127,7 +127,7 @@ export default function DeviceList({ onSelectDevice }) {
   const fetchLatestRepoHash = useCallback(async () => {
     try {
       const params = new URLSearchParams({ repo: "bunny-lab-io/Borealis", branch: "main" });
-      const resp = await fetch(`/api/agent/repo_hash?${params.toString()}`);
+      const resp = await fetch(`/api/repo/current_hash?${params.toString()}`);
       const json = await resp.json();
       const sha = (json?.sha || "").trim();
       if (!resp.ok || !sha) {

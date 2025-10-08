@@ -356,8 +356,8 @@ def health():
     return jsonify({"status": "ok"})
 
 
-@app.route("/api/agent/repo_hash", methods=["GET"])
-def api_agent_repo_hash():
+@app.route("/api/repo/current_hash", methods=["GET"])
+def api_repo_current_hash():
     try:
         repo = (request.args.get('repo') or _DEFAULT_REPO).strip()
         branch = (request.args.get('branch') or _DEFAULT_BRANCH).strip()
@@ -390,130 +390,141 @@ def api_agent_repo_hash():
             return jsonify(payload)
         return jsonify(payload), 503
     except Exception as exc:
-        _write_service_log('server', f'/api/agent/repo_hash error: {exc}')
+        _write_service_log('server', f'/api/repo/current_hash error: {exc}')
         return jsonify({"error": "internal error"}), 500
 
 
-@app.route("/api/agent/update_check", methods=["POST"])
-def api_agent_update_check():
-    data = request.get_json(silent=True) or {}
-    agent_id = (data.get("agent_id") or "").strip()
+def _lookup_agent_hash_record(agent_id: str) -> Optional[Dict[str, Any]]:
+    agent_id = (agent_id or '').strip()
     if not agent_id:
-        return jsonify({"error": "agent_id required"}), 400
+        return None
 
-    repo_info = _refresh_default_repo_hash()
-    repo_sha = (repo_info.get("sha") or "").strip()
-    if not repo_sha:
-        payload = {
-            "error": repo_info.get("error") or "repository hash unavailable",
-            "repo_source": repo_info.get("source"),
+    info = registered_agents.get(agent_id) or {}
+    candidate = (info.get('agent_hash') or '').strip()
+    hostname = (info.get('hostname') or '').strip()
+    if candidate:
+        payload: Dict[str, Any] = {
+            'agent_id': agent_id,
+            'agent_hash': candidate,
+            'source': 'memory',
         }
-        return jsonify(payload), 503
+        if hostname:
+            payload['hostname'] = hostname
+        return payload
 
-    registry_info = registered_agents.get(agent_id) or {}
-    hostname = (registry_info.get("hostname") or "").strip() or None
-    stored_hash: Optional[str] = (registry_info.get("agent_hash") or "").strip() or None
     conn = None
     try:
         conn = _db_conn()
         cur = conn.cursor()
         rows = _device_rows_for_agent(cur, agent_id)
-    except Exception:
-        rows = []
+        effective_hostname = hostname or None
+        if rows:
+            if not effective_hostname:
+                effective_hostname = rows[0].get('hostname') or effective_hostname
+            for row in rows:
+                if row.get('matched'):
+                    normalized_hash = (row.get('agent_hash') or '').strip()
+                    if not normalized_hash:
+                        details = row.get('details') or {}
+                        try:
+                            normalized_hash = ((details.get('summary') or {}).get('agent_hash') or '').strip()
+                        except Exception:
+                            normalized_hash = ''
+                    if normalized_hash:
+                        payload = {
+                            'agent_id': agent_id,
+                            'agent_hash': normalized_hash,
+                            'hostname': row.get('hostname') or effective_hostname,
+                            'source': 'database',
+                        }
+                        return payload
+            first = rows[0]
+            fallback_hash = (first.get('agent_hash') or '').strip()
+            if not fallback_hash:
+                details = first.get('details') or {}
+                try:
+                    fallback_hash = ((details.get('summary') or {}).get('agent_hash') or '').strip()
+                except Exception:
+                    fallback_hash = ''
+            if fallback_hash:
+                payload = {
+                    'agent_id': agent_id,
+                    'agent_hash': fallback_hash,
+                    'hostname': first.get('hostname') or effective_hostname,
+                    'source': 'database',
+                }
+                return payload
+        cur.execute('SELECT hostname, agent_hash, details FROM device_details')
+        for host, db_hash, details_json in cur.fetchall():
+            try:
+                data = json.loads(details_json or '{}')
+            except Exception:
+                data = {}
+            summary = data.get('summary') or {}
+            summary_agent_id = (summary.get('agent_id') or '').strip()
+            if summary_agent_id != agent_id:
+                continue
+            summary_hash = (summary.get('agent_hash') or '').strip()
+            normalized_hash = (db_hash or '').strip() or summary_hash
+            if normalized_hash:
+                return {
+                    'agent_id': agent_id,
+                    'agent_hash': normalized_hash,
+                    'hostname': host,
+                    'source': 'database',
+                }
     finally:
         if conn:
             try:
                 conn.close()
             except Exception:
                 pass
-
-    if rows:
-        hostname = rows[0].get("hostname") or hostname
-        for row in rows:
-            if row.get("matched"):
-                hostname = row.get("hostname") or hostname
-                candidate = (row.get("agent_hash") or "").strip()
-                if not candidate:
-                    summary = row.get("details") or {}
-                    try:
-                        candidate = (summary.get("summary") or {}).get("agent_hash") or ""
-                    except Exception:
-                        candidate = ""
-                    candidate = candidate.strip()
-                stored_hash = candidate or None
-                break
-        if stored_hash is None:
-            first = rows[0]
-            candidate = (first.get("agent_hash") or "").strip()
-            if not candidate:
-                details = first.get("details") or {}
-                try:
-                    candidate = (details.get("summary") or {}).get("agent_hash") or ""
-                except Exception:
-                    candidate = ""
-                candidate = candidate.strip()
-            stored_hash = candidate or None
-
-    update_available = (not stored_hash) or (stored_hash.strip() != repo_sha)
-
-    payload = {
-        "agent_id": agent_id,
-        "hostname": hostname,
-        "repo_hash": repo_sha,
-        "agent_hash": stored_hash,
-        "update_available": bool(update_available),
-        "repo_source": repo_info.get("source"),
-    }
-    if repo_info.get("cached") is not None:
-        payload["cached"] = bool(repo_info.get("cached"))
-    if repo_info.get("age_seconds") is not None:
-        payload["age_seconds"] = repo_info.get("age_seconds")
-    if repo_info.get("error"):
-        payload["repo_error"] = repo_info.get("error")
-    return jsonify(payload)
+    return None
 
 
-@app.route("/api/agent/agent_hash", methods=["POST"])
-def api_agent_agent_hash_post():
-    data = request.get_json(silent=True) or {}
-    agent_id = (data.get("agent_id") or "").strip()
-    agent_hash = (data.get("agent_hash") or "").strip()
+def _apply_agent_hash_update(agent_id: str, agent_hash: str) -> Tuple[Dict[str, Any], int]:
+    agent_id = (agent_id or '').strip()
+    agent_hash = (agent_hash or '').strip()
     if not agent_id or not agent_hash:
-        return jsonify({"error": "agent_id and agent_hash required"}), 400
+        return {'error': 'agent_id and agent_hash required'}, 400
 
     conn = None
     hostname = None
+    response_payload: Optional[Dict[str, Any]] = None
+    status_code = 200
     try:
         conn = _db_conn()
         cur = conn.cursor()
         rows = _device_rows_for_agent(cur, agent_id)
         target = None
         for row in rows:
-            if row.get("matched"):
+            if row.get('matched'):
                 target = row
                 break
         if not target:
-            if conn:
-                conn.close()
-            return jsonify({"status": "ignored"}), 200
-
-        hostname = target.get("hostname")
-        details = target.get("details") or {}
-        summary = details.setdefault("summary", {})
-        summary["agent_hash"] = agent_hash
-        cur.execute(
-            "UPDATE device_details SET agent_hash=?, details=? WHERE hostname=?",
-            (agent_hash, json.dumps(details), hostname),
-        )
-        conn.commit()
+            response_payload = {
+                'status': 'ignored',
+                'agent_id': agent_id,
+                'agent_hash': agent_hash,
+            }
+        else:
+            hostname = target.get('hostname')
+            details = target.get('details') or {}
+            summary = details.setdefault('summary', {})
+            summary['agent_hash'] = agent_hash
+            cur.execute(
+                'UPDATE device_details SET agent_hash=?, details=? WHERE hostname=?',
+                (agent_hash, json.dumps(details), hostname),
+            )
+            conn.commit()
     except Exception as exc:
         if conn:
             try:
                 conn.rollback()
             except Exception:
                 pass
-        _write_service_log('server', f'/api/agent/agent_hash error: {exc}')
-        return jsonify({"error": "internal error"}), 500
+        _write_service_log('server', f'/api/agent/hash error: {exc}')
+        return {'error': 'internal error'}, 500
     finally:
         if conn:
             try:
@@ -521,22 +532,53 @@ def api_agent_agent_hash_post():
             except Exception:
                 pass
 
+    if response_payload is not None:
+        return response_payload, status_code
+
     normalized_hash = agent_hash
     if agent_id in registered_agents:
-        registered_agents[agent_id]["agent_hash"] = normalized_hash
+        registered_agents[agent_id]['agent_hash'] = normalized_hash
     try:
         for aid, rec in registered_agents.items():
-            if rec.get("hostname") and hostname and rec["hostname"] == hostname:
-                rec["agent_hash"] = normalized_hash
+            if rec.get('hostname') and hostname and rec['hostname'] == hostname:
+                rec['agent_hash'] = normalized_hash
     except Exception:
         pass
 
-    return jsonify({
-        "status": "ok",
-        "agent_id": agent_id,
-        "hostname": hostname,
-        "agent_hash": agent_hash,
-    })
+    payload: Dict[str, Any] = {
+        'status': 'ok',
+        'agent_id': agent_id,
+        'agent_hash': agent_hash,
+    }
+    if hostname:
+        payload['hostname'] = hostname
+    return payload, 200
+
+
+@app.route("/api/agent/hash", methods=["GET", "POST"])
+def api_agent_hash():
+    if request.method == 'GET':
+        agent_id = (request.args.get('agent_id') or request.args.get('id') or '').strip()
+        if not agent_id:
+            data = request.get_json(silent=True) or {}
+            agent_id = (data.get('agent_id') or '').strip()
+        if not agent_id:
+            return jsonify({'error': 'agent_id required'}), 400
+        try:
+            record = _lookup_agent_hash_record(agent_id)
+        except Exception as exc:
+            _write_service_log('server', f'/api/agent/hash lookup error: {exc}')
+            return jsonify({'error': 'internal error'}), 500
+        if record:
+            return jsonify(record)
+        return jsonify({'error': 'agent hash not found'}), 404
+
+    data = request.get_json(silent=True) or {}
+    agent_id = (data.get('agent_id') or '').strip()
+    agent_hash = (data.get('agent_hash') or '').strip()
+    payload, status = _apply_agent_hash_update(agent_id, agent_hash)
+    return jsonify(payload), status
+
 
 # ---------------------------------------------
 # Server Time Endpoint
@@ -3342,92 +3384,6 @@ def set_device_description(hostname: str):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/agent/hash/<path:agent_id>", methods=["GET"])
-def get_agent_hash(agent_id: str):
-    """Return the last known repository hash for a specific agent."""
-
-    agent_id = (agent_id or "").strip()
-    if not agent_id:
-        return jsonify({"error": "invalid agent id"}), 400
-
-    # Prefer the in-memory registry (updated on every heartbeat/details post).
-    info = registered_agents.get(agent_id) or {}
-    candidate = (info.get("agent_hash") or "").strip()
-    hostname = (info.get("hostname") or "").strip()
-
-    if candidate:
-        return jsonify({
-            "agent_id": agent_id,
-            "agent_hash": candidate,
-            "source": "memory",
-        })
-
-    # Fall back to the persisted device_details row, if any.
-    try:
-        conn = _db_conn()
-        cur = conn.cursor()
-        rows = _device_rows_for_agent(cur, agent_id)
-        if rows:
-            if not hostname:
-                hostname = rows[0].get("hostname") or hostname
-            for row in rows:
-                if row.get("matched"):
-                    normalized_hash = (row.get("agent_hash") or "").strip()
-                    if not normalized_hash:
-                        details = row.get("details") or {}
-                        try:
-                            normalized_hash = ((details.get("summary") or {}).get("agent_hash") or "").strip()
-                        except Exception:
-                            normalized_hash = ""
-                    if normalized_hash:
-                        effective_hostname = row.get("hostname") or hostname
-                        return jsonify({
-                            "agent_id": agent_id,
-                            "agent_hash": normalized_hash,
-                            "hostname": effective_hostname,
-                            "source": "database",
-                        })
-            first = rows[0]
-            fallback_hash = (first.get("agent_hash") or "").strip()
-            if not fallback_hash:
-                details = first.get("details") or {}
-                try:
-                    fallback_hash = ((details.get("summary") or {}).get("agent_hash") or "").strip()
-                except Exception:
-                    fallback_hash = ""
-            if fallback_hash:
-                effective_hostname = first.get("hostname") or hostname
-                return jsonify({
-                    "agent_id": agent_id,
-                    "agent_hash": fallback_hash,
-                    "hostname": effective_hostname,
-                    "source": "database",
-                })
-
-        # As a final fallback, scan the table for any matching agent_id in case hostname inference failed.
-        cur.execute("SELECT hostname, agent_hash, details FROM device_details")
-        for host, db_hash, details_json in cur.fetchall():
-            try:
-                data = json.loads(details_json or "{}")
-            except Exception:
-                data = {}
-            summary = data.get("summary") or {}
-            summary_agent_id = (summary.get("agent_id") or "").strip()
-            if summary_agent_id != agent_id:
-                continue
-            summary_hash = (summary.get("agent_hash") or "").strip()
-            normalized_hash = (db_hash or "").strip() or summary_hash
-            if normalized_hash:
-                effective_hostname = host or summary.get("hostname") or hostname
-                return jsonify({
-                    "agent_id": agent_id,
-                    "agent_hash": normalized_hash,
-                    "hostname": effective_hostname,
-                    "source": "database",
-                })
-        conn.close()
-
-        return jsonify({"error": "agent hash not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
