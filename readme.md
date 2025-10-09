@@ -21,8 +21,10 @@ Device List Overview:
 Device Details:
 ![Device Details](Data/Repository_Resources/borealis_device_details.png)
 
-Assembly List & Editor:
+Assembly List:
 ![Assembly List](Data/Repository_Resources/borealis_assembly_list.png)
+
+Assembly Editor:
 ![Assembly Editor](Data/Repository_Resources/borealis_assembly_editor.png)
 
 Scheduled Job History View:
