@@ -1503,10 +1503,16 @@ def api_users_toggle_mfa(username):
         cur = conn.cursor()
         now = _now_ts()
         if enabled:
-            cur.execute(
-                "UPDATE users SET mfa_enabled=1, updated_at=? WHERE LOWER(username)=LOWER(?)",
-                (now, username)
-            )
+            if reset_secret:
+                cur.execute(
+                    "UPDATE users SET mfa_enabled=1, mfa_secret=NULL, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                    (now, username)
+                )
+            else:
+                cur.execute(
+                    "UPDATE users SET mfa_enabled=1, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                    (now, username)
+                )
         else:
             if reset_secret:
                 cur.execute(

@@ -89,6 +89,8 @@ export default function UserManagement({ isAdmin = false }) {
   const [warnMessage, setWarnMessage] = useState("");
   const [me, setMe] = useState(null);
   const [mfaBusyUser, setMfaBusyUser] = useState(null);
+  const [resetMfaOpen, setResetMfaOpen] = useState(false);
+  const [resetMfaTarget, setResetMfaTarget] = useState(null);
 
   // Columns and filters
   const columns = useMemo(() => ([
@@ -240,6 +242,43 @@ export default function UserManagement({ isAdmin = false }) {
       console.error(e);
       setWarnMessage("Failed to change role");
       setWarnOpen(true);
+    }
+  };
+
+  const openResetMfa = (user) => {
+    if (!user) return;
+    setResetMfaTarget(user);
+    setResetMfaOpen(true);
+  };
+
+  const doResetMfa = async () => {
+    const user = resetMfaTarget;
+    setResetMfaOpen(false);
+    setResetMfaTarget(null);
+    if (!user) return;
+    const username = user.username;
+    const keepEnabled = Boolean(user.mfa_enabled);
+    setMfaBusyUser(username);
+    try {
+      const resp = await fetch(`/api/users/${encodeURIComponent(username)}/mfa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ enabled: keepEnabled, reset_secret: true })
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setWarnMessage(data?.error || "Failed to reset MFA for this user.");
+        setWarnOpen(true);
+        return;
+      }
+      await fetchUsers();
+    } catch (err) {
+      console.error(err);
+      setWarnMessage("Failed to reset MFA for this user.");
+      setWarnOpen(true);
+    } finally {
+      setMfaBusyUser(null);
     }
   };
 
@@ -509,6 +548,9 @@ export default function UserManagement({ isAdmin = false }) {
           >
             Change Role
           </MenuItem>
+          <MenuItem onClick={() => { const u = menuUser; closeMenu(); openResetMfa(u); }}>
+            Reset MFA
+          </MenuItem>
         </Menu>
 
         <Dialog open={resetOpen} onClose={() => setResetOpen(false)} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
@@ -620,6 +662,12 @@ export default function UserManagement({ isAdmin = false }) {
         message={changeRoleTarget ? `Change role for '${changeRoleTarget.username}' to ${changeRoleNext}?` : ""}
         onCancel={() => setConfirmChangeRoleOpen(false)}
         onConfirm={doChangeRole}
+      />
+      <ConfirmDeleteDialog
+        open={resetMfaOpen}
+        message={resetMfaTarget ? `Reset MFA enrollment for '${resetMfaTarget.username}'? This clears their existing authenticator.` : ""}
+        onCancel={() => { setResetMfaOpen(false); setResetMfaTarget(null); }}
+        onConfirm={doResetMfa}
       />
       <ConfirmDeleteDialog
         open={warnOpen}
