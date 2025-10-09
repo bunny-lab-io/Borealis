@@ -25,6 +25,9 @@ Assembly List & Editor:
 ![Assembly List](Data/Repository_Resources/borealis_assembly_list.png)
 ![Assembly Editor](Data/Repository_Resources/borealis_assembly_editor.png)
 
+Scheduled Job History View:
+![Scheduled Job History](Data\Repository_Resources\borealis_scheduled_job_history.png)
+
 Workflow Editor:
 [![Workflow Editor Demonstration](Data/Repository_Resources/borealis_flow_editor.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
 
