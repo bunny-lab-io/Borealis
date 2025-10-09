@@ -9,6 +9,8 @@ $symbols = @{
     Info    = [char]0x2139
 }
 
+$repositoryUrl = 'https://github.com/bunny-lab-io/Borealis.git'
+
 function Write-ProgressStep {
     param (
         [string]$Message,
@@ -34,6 +36,61 @@ function Run-Step {
         Write-Host "`r$($symbols.Fail) $Message - Failed: $_                        " -ForegroundColor Red
         throw
     }
+}
+
+function Get-GitExecutablePath {
+    param(
+        [string]$ProjectRoot
+    )
+
+    $candidates = @()
+    if ($ProjectRoot) {
+        $candidates += (Join-Path $ProjectRoot 'Dependencies\git\cmd\git.exe')
+        $candidates += (Join-Path $ProjectRoot 'Dependencies\git\bin\git.exe')
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        try {
+            if (Test-Path $candidate -PathType Leaf) { return $candidate }
+        } catch {}
+    }
+
+    return ''
+}
+
+function Invoke-GitCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GitExe,
+
+        [Parameter(Mandatory = $true)]
+        [string]$WorkingDirectory,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    if ([string]::IsNullOrWhiteSpace($GitExe) -or -not (Test-Path $GitExe -PathType Leaf)) {
+        throw "Git executable not found at '$GitExe'"
+    }
+
+    if (-not (Test-Path $WorkingDirectory -PathType Container)) {
+        throw "Working directory '$WorkingDirectory' does not exist."
+    }
+
+    $fullArgs = @('-C', $WorkingDirectory) + $Arguments
+    $output = & $GitExe @fullArgs 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        $joined = ($Arguments -join ' ')
+        $message = "git $joined failed with exit code $exitCode."
+        if ($output) {
+            $message = "$message Output: $output"
+        }
+        throw $message
+    }
+
+    return $output
 }
 
 function Stop-AgentScheduledTasks {
@@ -166,7 +223,9 @@ function Get-RepositoryCommitHash {
         [Parameter(Mandatory = $true)]
         [string]$ProjectRoot,
 
-        [string]$AgentRoot
+        [string]$AgentRoot,
+
+        [string]$GitExe
     )
 
     $candidates = @()
@@ -176,6 +235,19 @@ function Get-RepositoryCommitHash {
         $agentRootCandidate = Join-Path $ProjectRoot 'Agent\Borealis'
         if ((Test-Path $agentRootCandidate -PathType Container) -and ($candidates -notcontains $agentRootCandidate)) {
             $candidates += $agentRootCandidate
+        }
+    }
+
+    if ($GitExe -and (Test-Path $GitExe -PathType Leaf)) {
+        foreach ($root in $candidates) {
+            try {
+                if (-not (Test-Path (Join-Path $root '.git') -PathType Container)) { continue }
+                $revParse = Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $root -Arguments @('rev-parse','HEAD')
+                if ($revParse) {
+                    $candidate = ($revParse | Select-Object -Last 1)
+                    if ($candidate) { return ($candidate.Trim()) }
+                }
+            } catch {}
         }
     }
 
@@ -405,11 +477,24 @@ function Sync-AgentHashRecord {
 
 function Invoke-BorealisUpdate {
     param(
+        [Parameter(Mandatory = $true)]
+        [string]$GitExe,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TargetHash,
+
+        [string]$BranchName = 'main',
+
         [switch]$Silent
     )
 
-    $updateZip = Join-Path $scriptDir "Update_Staging\main.zip"
-    $updateDir = Join-Path $scriptDir "Update_Staging\Borealis-main"
+    if ([string]::IsNullOrWhiteSpace($TargetHash)) {
+        throw 'Target commit hash is required for Borealis update.'
+    }
+
     $preservePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
     $preserveBackupPath = Join-Path $scriptDir "Update_Staging\Tesseract-OCR"
 
@@ -427,19 +512,60 @@ function Invoke-BorealisUpdate {
             (Join-Path $scriptDir "Server\web-interface\src"), `
             (Join-Path $scriptDir "Server\web-interface\build"), `
             (Join-Path $scriptDir "Server\web-interface\public"), `
-            (Join-Path $scriptDir "Server\Borealis")
+            (Join-Path $scriptDir "Server\Borealis"), `
+            (Join-Path $scriptDir '.git')
     }
+
+    $stagingPath = Join-Path $scriptDir "Update_Staging"
+    $cloneDir = Join-Path $stagingPath 'repo'
 
     Run-Step "Updating: Create Update Staging Folder" {
-        $stagingPath = Join-Path $scriptDir "Update_Staging"
         if (-not (Test-Path $stagingPath)) { New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null }
-        Set-Variable -Name updateZip -Scope 1 -Value (Join-Path $stagingPath "main.zip")
-        Set-Variable -Name updateDir -Scope 1 -Value (Join-Path $stagingPath "Borealis-main")
+        if (Test-Path $cloneDir) {
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $cloneDir
+        }
     }
 
-    Run-Step "Updating: Download Update" { Invoke-WebRequest -Uri "https://github.com/bunny-lab-io/Borealis/archive/refs/heads/main.zip" -OutFile $updateZip }
-    Run-Step "Updating: Extract Update Files" { Expand-Archive -Path $updateZip -DestinationPath (Join-Path $scriptDir "Update_Staging") -Force }
-    Run-Step "Updating: Copy Update Files into Production Borealis Root Folder" { Copy-Item "$updateDir\*" $scriptDir -Recurse -Force }
+    Run-Step "Updating: Clone Repository Source" {
+        $cloneArgs = @('clone','--no-tags','--depth','1')
+        if (-not [string]::IsNullOrWhiteSpace($BranchName)) {
+            $cloneArgs += @('--branch', $BranchName)
+        }
+        $cloneArgs += @($RepositoryUrl, $cloneDir)
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $stagingPath -Arguments $cloneArgs | Out-Null
+    }
+
+    Run-Step "Updating: Checkout Target Revision" {
+        $normalizedHash = $TargetHash.Trim()
+        $haveHash = $false
+        try {
+            Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $cloneDir -Arguments @('rev-parse', $normalizedHash) | Out-Null
+            $haveHash = $true
+        } catch {
+            $haveHash = $false
+        }
+
+        if (-not $haveHash) {
+            Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $cloneDir -Arguments @('fetch','origin',$normalizedHash) | Out-Null
+        }
+
+        if ([string]::IsNullOrWhiteSpace($BranchName)) {
+            Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $cloneDir -Arguments @('checkout', $normalizedHash) | Out-Null
+        } else {
+            Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $cloneDir -Arguments @('checkout','-B',$BranchName,$normalizedHash) | Out-Null
+        }
+    }
+
+    Run-Step "Updating: Copy Update Files into Production Borealis Root Folder" {
+        Get-ChildItem -Path $cloneDir -Force | ForEach-Object {
+            $destination = Join-Path $scriptDir $_.Name
+            if ($_.PSIsContainer) {
+                Copy-Item -Path $_.FullName -Destination $destination -Recurse -Force
+            } else {
+                Copy-Item -Path $_.FullName -Destination $scriptDir -Force
+            }
+        }
+    }
 
     Run-Step "Updating: Restore Tesseract-OCR Folder" {
         $restorePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints"
@@ -449,7 +575,9 @@ function Invoke-BorealisUpdate {
         }
     }
 
-    Run-Step "Updating: Clean Up Update Staging Folder" { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $scriptDir "Update_Staging") }
+    Run-Step "Updating: Clean Up Update Staging Folder" {
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stagingPath
+    }
 
     if (-not $Silent) {
         Write-Host "Unattended Borealis update completed." -ForegroundColor Green
@@ -480,7 +608,8 @@ function Invoke-BorealisAgentUpdate {
         return
     }
 
-    $currentHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot
+    $gitExe = Get-GitExecutablePath -ProjectRoot $scriptDir
+    $currentHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot -GitExe $gitExe
     $serverBaseUrl = Get-BorealisServerUrl -AgentRoot $agentRoot
     $agentId = Get-AgentServiceId -AgentRoot $agentRoot
 
@@ -531,6 +660,12 @@ function Invoke-BorealisAgentUpdate {
         Write-Host "Repository hash mismatch detected; update required."
     }
 
+    if (-not ($gitExe) -or -not (Test-Path $gitExe -PathType Leaf)) {
+        Write-Host "Bundled Git dependency not found. Run '.\\Borealis.ps1 -Agent -AgentAction repair' to bootstrap dependencies and try again." -ForegroundColor Yellow
+        Write-Host "⚠️ Borealis update aborted."
+        return
+    }
+
     $mutex = $null
     $gotMutex = $false
     $managedTasks = @()
@@ -544,27 +679,12 @@ function Invoke-BorealisAgentUpdate {
         }
 
         $staging = Join-Path $scriptDir 'Update_Staging'
-        $zipPath = Join-Path $staging 'main.zip'
-        if (Test-Path $zipPath) {
-            Write-Verbose "Pre-flight: removing existing $zipPath"
-            for ($i = 1; $i -le 10; $i++) {
-                try {
-                    Remove-Item -LiteralPath $zipPath -Force -ErrorAction Stop
-                    break
-                } catch {
-                    Start-Sleep -Milliseconds (100 * $i)
-                    if ($i -eq 10) {
-                        throw "Pre-flight delete failed; $zipPath appears locked by another process."
-                    }
-                }
-            }
-        }
 
         $managedTasks = Stop-AgentScheduledTasks -TaskNames @('Borealis Agent','Borealis Agent (UserHelper)')
 
         $updateSucceeded = $false
         try {
-            Invoke-BorealisUpdate -Silent
+            Invoke-BorealisUpdate -GitExe $gitExe -RepositoryUrl $repositoryUrl -TargetHash $serverHash -BranchName $serverBranch -Silent
             $updateSucceeded = $true
         } finally {
             if ($managedTasks.Count -gt 0) {
@@ -588,8 +708,15 @@ function Invoke-BorealisAgentUpdate {
             } catch {}
         }
 
-        $newHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot
-        if (-not $newHash -and $serverHash) {
+        $newHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot -GitExe $gitExe
+
+        $normalizedNewHash = if ($newHash) { $newHash.Trim().ToLowerInvariant() } else { '' }
+        $normalizedServerHash = if ($serverHash) { $serverHash.Trim().ToLowerInvariant() } else { '' }
+
+        if ($normalizedServerHash -and (-not $normalizedNewHash -or $normalizedNewHash -ne $normalizedServerHash)) {
+            $newHash = $serverHash
+            $normalizedNewHash = $normalizedServerHash
+        } elseif (-not $newHash -and $serverHash) {
             $newHash = $serverHash
         }
 
