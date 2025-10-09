@@ -4743,6 +4743,15 @@ def scripts_quick_run():
         }
         # Broadcast to all connected clients; no broadcast kw in python-socketio v5
         socketio.emit("quick_job_run", payload)
+        try:
+            socketio.emit("device_activity_changed", {
+                "hostname": str(host),
+                "activity_id": job_id,
+                "change": "created",
+                "source": "quick_job",
+            })
+        except Exception:
+            pass
         results.append({"hostname": host, "job_id": job_id, "status": "Running"})
 
     return jsonify({"results": results})
@@ -4821,6 +4830,13 @@ def ansible_quick_run():
             try:
                 _ansible_log_server(f"[quick_run] emit ansible_playbook_run host='{host}' run_id={run_id} job_id={job_id} path={rel_path}")
                 socketio.emit("ansible_playbook_run", payload)
+                if job_id:
+                    socketio.emit("device_activity_changed", {
+                        "hostname": str(host),
+                        "activity_id": job_id,
+                        "change": "created",
+                        "source": "ansible",
+                    })
             except Exception as ex:
                 _ansible_log_server(f"[quick_run] emit failed host='{host}' run_id={run_id} err={ex}")
             results.append({"hostname": host, "run_id": run_id, "status": "Queued", "activity_job_id": job_id})
@@ -4904,6 +4920,7 @@ def handle_quick_job_result(data):
     status = (data.get("status") or "").strip() or "Failed"
     stdout = data.get("stdout") or ""
     stderr = data.get("stderr") or ""
+    broadcast_payload = None
     try:
         conn = _db_conn()
         cur = conn.cursor()
@@ -4912,9 +4929,30 @@ def handle_quick_job_result(data):
             (status, stdout, stderr, job_id),
         )
         conn.commit()
+        try:
+            cur.execute(
+                "SELECT id, hostname, status FROM activity_history WHERE id=?",
+                (job_id,),
+            )
+            row = cur.fetchone()
+            if row and (row[1] or "").strip():
+                broadcast_payload = {
+                    "activity_id": row[0],
+                    "hostname": row[1],
+                    "status": row[2] or status,
+                    "change": "updated",
+                    "source": "quick_job",
+                }
+        except Exception:
+            pass
         conn.close()
     except Exception as e:
         print(f"[ERROR] quick_job_result DB update failed for job {job_id}: {e}")
+    if broadcast_payload:
+        try:
+            socketio.emit("device_activity_changed", broadcast_payload)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------
@@ -5287,6 +5325,14 @@ def api_ansible_recap_report():
                 "updated_at": row[15],
             }
             socketio.emit("ansible_recap_update", payload)
+            if payload.get("activity_job_id"):
+                socketio.emit("device_activity_changed", {
+                    "hostname": payload.get("hostname") or "",
+                    "activity_id": payload.get("activity_job_id"),
+                    "status": payload.get("status") or "",
+                    "change": "updated",
+                    "source": "ansible",
+                })
         except Exception:
             pass
 

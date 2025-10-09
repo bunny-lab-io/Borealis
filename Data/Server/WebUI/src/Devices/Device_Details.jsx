@@ -231,10 +231,14 @@ export default function DeviceDetails({ device, onBack }) {
     load();
   }, [device]);
 
+  const activityHostname = useMemo(() => {
+    return (meta?.hostname || agent?.hostname || device?.hostname || "").trim();
+  }, [meta?.hostname, agent?.hostname, device?.hostname]);
+
   const loadHistory = useCallback(async () => {
-    if (!device?.hostname) return;
+    if (!activityHostname) return;
     try {
-      const resp = await fetch(`/api/device/activity/${encodeURIComponent(device.hostname)}`);
+      const resp = await fetch(`/api/device/activity/${encodeURIComponent(activityHostname)}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       setHistoryRows(data.history || []);
@@ -242,18 +246,47 @@ export default function DeviceDetails({ device, onBack }) {
       console.warn("Failed to load activity history", e);
       setHistoryRows([]);
     }
-  }, [device]);
-
-  
+  }, [activityHostname]);
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  useEffect(() => {
+    const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
+    if (!socket || !activityHostname) return undefined;
+
+    let refreshTimer = null;
+    const normalizedHost = activityHostname.toLowerCase();
+    const scheduleRefresh = (delay = 200) => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        loadHistory();
+      }, delay);
+    };
+
+    const handleActivityChanged = (payload = {}) => {
+      const payloadHost = String(payload?.hostname || "").trim().toLowerCase();
+      if (!payloadHost) return;
+      if (payloadHost === normalizedHost) {
+        const delay = payload?.change === "updated" ? 150 : 0;
+        scheduleRefresh(delay);
+      }
+    };
+
+    socket.on("device_activity_changed", handleActivityChanged);
+
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      socket.off("device_activity_changed", handleActivityChanged);
+    };
+  }, [activityHostname, loadHistory]);
 
   // No explicit live recap tab; recaps are recorded into Activity History
 
   const clearHistory = async () => {
-    if (!device?.hostname) return;
+    if (!activityHostname) return;
     try {
-      const resp = await fetch(`/api/device/activity/${encodeURIComponent(device.hostname)}`, { method: "DELETE" });
+      const resp = await fetch(`/api/device/activity/${encodeURIComponent(activityHostname)}`, { method: "DELETE" });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       setHistoryRows([]);
     } catch (e) {
