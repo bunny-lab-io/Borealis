@@ -111,8 +111,35 @@ export default function DeviceDetails({ device, onBack }) {
           setAgent({ id: device.id, ...agentsData[device.id] });
         }
         const detailData = await detailsRes.json();
-        setDetails(detailData || {});
-        setDescription(detailData?.summary?.description || "");
+        const summary = detailData?.summary && typeof detailData.summary === 'object'
+          ? detailData.summary
+          : (detailData?.details?.summary || {});
+        const normalized = {
+          ...(detailData?.details || {}),
+          summary: summary || {},
+          memory: Array.isArray(detailData?.memory) ? detailData.memory : (detailData?.details?.memory || []),
+          network: Array.isArray(detailData?.network) ? detailData.network : (detailData?.details?.network || []),
+          software: Array.isArray(detailData?.software) ? detailData.software : (detailData?.details?.software || []),
+          storage: Array.isArray(detailData?.storage) ? detailData.storage : (detailData?.details?.storage || []),
+          cpu: detailData?.cpu || detailData?.details?.cpu || {},
+        };
+        if (detailData?.description) {
+          normalized.summary = { ...normalized.summary, description: detailData.description };
+        }
+        setDetails(normalized);
+        setDescription(normalized.summary?.description || detailData?.description || "");
+        setAgent((prev) => ({
+          ...(prev || {}),
+          id: device?.id || prev?.id,
+          hostname: device?.hostname || normalized.summary?.hostname || prev?.hostname,
+          agent_hash: detailData?.agent_hash || normalized.summary?.agent_hash || prev?.agent_hash,
+          agent_operating_system:
+            detailData?.operating_system ||
+            normalized.summary?.operating_system ||
+            prev?.agent_operating_system,
+          device_type: detailData?.device_type || normalized.summary?.device_type || prev?.device_type,
+          last_seen: detailData?.last_seen || normalized.summary?.last_seen || prev?.last_seen,
+        }));
       } catch (e) {
         console.warn("Failed to load device info", e);
       }
