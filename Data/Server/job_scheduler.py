@@ -475,14 +475,14 @@ class JobScheduler:
             os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Ansible_Playbooks")
         )
 
-    def _dispatch_ansible(self, hostname: str, rel_path: str, scheduled_job_id: int, scheduled_run_id: int) -> None:
+    def _dispatch_ansible(self, hostname: str, rel_path: str, scheduled_job_id: int, scheduled_run_id: int) -> Optional[Dict[str, Any]]:
         try:
             import os, json, uuid
             ans_root = self._ansible_root()
             rel_norm = (rel_path or "").replace("\\", "/").lstrip("/")
             abs_path = os.path.abspath(os.path.join(ans_root, rel_norm))
             if (not abs_path.startswith(ans_root)) or (not os.path.isfile(abs_path)):
-                return
+                return None
             doc = self._load_assembly_document(abs_path, "ansible")
             content = doc.get("script") or ""
             encoded_content = _encode_script_content(content)
@@ -503,7 +503,7 @@ class JobScheduler:
                     (
                         str(hostname),
                         rel_norm,
-                        os.path.basename(abs_path),
+                        doc.get("name") or os.path.basename(abs_path),
                         "ansible",
                         now,
                         "Running",
@@ -519,7 +519,7 @@ class JobScheduler:
             payload = {
                 "run_id": uuid.uuid4().hex,
                 "target_hostname": str(hostname),
-                "playbook_name": os.path.basename(abs_path),
+                "playbook_name": doc.get("name") or os.path.basename(abs_path),
                 "playbook_content": encoded_content,
                 "playbook_encoding": "base64",
                 "activity_job_id": act_id,
@@ -533,10 +533,19 @@ class JobScheduler:
                 self.socketio.emit("ansible_playbook_run", payload)
             except Exception:
                 pass
+            if act_id:
+                return {
+                    "activity_id": int(act_id),
+                    "component_name": doc.get("name") or os.path.basename(abs_path),
+                    "component_path": rel_norm,
+                    "script_type": "ansible",
+                    "component_kind": "ansible",
+                }
+            return None
         except Exception:
             pass
 
-    def _dispatch_script(self, hostname: str, component: Dict[str, Any], run_mode: str) -> None:
+    def _dispatch_script(self, hostname: str, component: Dict[str, Any], run_mode: str) -> Optional[Dict[str, Any]]:
         """Emit a quick_job_run event to agents for the given script/host.
         Mirrors /api/scripts/quick_run behavior for scheduled jobs.
         """
@@ -553,12 +562,12 @@ class JobScheduler:
                 path_norm = f"Scripts/{path_norm}"
             abs_path = os.path.abspath(os.path.join(scripts_root, path_norm))
             if (not abs_path.startswith(scripts_root)) or (not self._is_valid_scripts_relpath(path_norm)) or (not os.path.isfile(abs_path)):
-                return
+                return None
             doc = self._load_assembly_document(abs_path, "powershell")
             stype = (doc.get("type") or "powershell").lower()
             # For now, only PowerShell is supported by agents for scheduled jobs
             if stype != "powershell":
-                return
+                return None
             content = doc.get("script") or ""
             doc_variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
 
@@ -603,7 +612,7 @@ class JobScheduler:
                     (
                         str(hostname),
                         path_norm,
-                        os.path.basename(abs_path),
+                        doc.get("name") or os.path.basename(abs_path),
                         stype,
                         now,
                         "Running",
@@ -620,7 +629,7 @@ class JobScheduler:
                 "job_id": act_id,
                 "target_hostname": str(hostname),
                 "script_type": stype,
-                "script_name": os.path.basename(abs_path),
+                "script_name": doc.get("name") or os.path.basename(abs_path),
                 "script_path": path_norm,
                 "script_content": encoded_content,
                 "script_encoding": "base64",
@@ -636,9 +645,19 @@ class JobScheduler:
                 self.socketio.emit("quick_job_run", payload)
             except Exception:
                 pass
+            if act_id:
+                return {
+                    "activity_id": int(act_id),
+                    "component_name": doc.get("name") or os.path.basename(abs_path),
+                    "component_path": path_norm,
+                    "script_type": stype,
+                    "component_kind": "script",
+                }
+            return None
         except Exception:
             # Keep scheduler resilient
             pass
+        return None
 
     # ---------- DB helpers ----------
     def _conn(self):
@@ -675,6 +694,27 @@ class JobScheduler:
         # Helpful index for lookups
         try:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_job_sched_target ON scheduled_job_runs(job_id, scheduled_ts, target_hostname)")
+        except Exception:
+            pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scheduled_job_run_activity (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    activity_id INTEGER NOT NULL,
+                    component_kind TEXT,
+                    script_type TEXT,
+                    component_path TEXT,
+                    component_name TEXT,
+                    created_at INTEGER,
+                    FOREIGN KEY(run_id) REFERENCES scheduled_job_runs(id) ON DELETE CASCADE,
+                    FOREIGN KEY(activity_id) REFERENCES activity_history(id) ON DELETE CASCADE
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_run_activity_run ON scheduled_job_run_activity(run_id)")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_activity_activity ON scheduled_job_run_activity(activity_id)")
         except Exception:
             pass
         conn.commit()
@@ -970,18 +1010,55 @@ class JobScheduler:
                             )
                             run_row_id = c2.lastrowid or 0
                             conn2.commit()
+                            activity_links: List[Dict[str, Any]] = []
                             # Dispatch all script components for this job to the target host
                             for comp in script_components:
                                 try:
-                                    self._dispatch_script(host, comp, run_mode)
+                                    link = self._dispatch_script(host, comp, run_mode)
+                                    if link and link.get("activity_id"):
+                                        activity_links.append({
+                                            "run_id": run_row_id,
+                                            "activity_id": int(link["activity_id"]),
+                                            "component_kind": link.get("component_kind") or "script",
+                                            "script_type": link.get("script_type") or "powershell",
+                                            "component_path": link.get("component_path") or "",
+                                            "component_name": link.get("component_name") or "",
+                                        })
                                 except Exception:
                                     continue
                             # Dispatch ansible playbooks for this job to the target host
                             for ap in ansible_paths:
                                 try:
-                                    self._dispatch_ansible(host, ap, job_id, run_row_id)
+                                    link = self._dispatch_ansible(host, ap, job_id, run_row_id)
+                                    if link and link.get("activity_id"):
+                                        activity_links.append({
+                                            "run_id": run_row_id,
+                                            "activity_id": int(link["activity_id"]),
+                                            "component_kind": link.get("component_kind") or "ansible",
+                                            "script_type": link.get("script_type") or "ansible",
+                                            "component_path": link.get("component_path") or "",
+                                            "component_name": link.get("component_name") or "",
+                                        })
                                 except Exception:
                                     continue
+                            if activity_links:
+                                try:
+                                    for link in activity_links:
+                                        c2.execute(
+                                            "INSERT OR IGNORE INTO scheduled_job_run_activity(run_id, activity_id, component_kind, script_type, component_path, component_name, created_at) VALUES (?,?,?,?,?,?,?)",
+                                            (
+                                                int(link["run_id"]),
+                                                int(link["activity_id"]),
+                                                link.get("component_kind") or "",
+                                                link.get("script_type") or "",
+                                                link.get("component_path") or "",
+                                                link.get("component_name") or "",
+                                                ts_now,
+                                            ),
+                                        )
+                                    conn2.commit()
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                         finally:
@@ -1389,21 +1466,60 @@ class JobScheduler:
 
                 # Status per target for occurrence
                 run_by_host: Dict[str, Dict[str, Any]] = {}
+                run_ids: List[int] = []
                 if occ is not None:
                     try:
                         cur.execute(
-                            "SELECT target_hostname, status, started_ts, finished_ts FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=? ORDER BY id DESC",
+                            "SELECT id, target_hostname, status, started_ts, finished_ts FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=? ORDER BY id DESC",
                             (job_id, occ)
                         )
                         rows = cur.fetchall()
-                        for h, st, st_ts, fin_ts in rows:
+                        for rid, h, st, st_ts, fin_ts in rows:
                             h = str(h)
                             if h not in run_by_host:
                                 run_by_host[h] = {
                                     "status": st or "",
                                     "started_ts": st_ts,
                                     "finished_ts": fin_ts,
+                                    "run_id": int(rid),
                                 }
+                                run_ids.append(int(rid))
+                    except Exception:
+                        pass
+
+                activities_by_run: Dict[int, List[Dict[str, Any]]] = {}
+                if run_ids:
+                    try:
+                        placeholders = ",".join(["?"] * len(run_ids))
+                        cur.execute(
+                            f"""
+                            SELECT
+                                s.run_id,
+                                s.activity_id,
+                                s.component_kind,
+                                s.script_type,
+                                s.component_path,
+                                s.component_name,
+                                COALESCE(LENGTH(h.stdout), 0),
+                                COALESCE(LENGTH(h.stderr), 0)
+                            FROM scheduled_job_run_activity s
+                            LEFT JOIN activity_history h ON h.id = s.activity_id
+                            WHERE s.run_id IN ({placeholders})
+                            """,
+                            run_ids,
+                        )
+                        for rid, act_id, kind, stype, path, name, so_len, se_len in cur.fetchall():
+                            rid = int(rid)
+                            entry = {
+                                "activity_id": int(act_id),
+                                "component_kind": kind or "",
+                                "script_type": stype or "",
+                                "component_path": path or "",
+                                "component_name": name or "",
+                                "has_stdout": bool(so_len),
+                                "has_stderr": bool(se_len),
+                            }
+                            activities_by_run.setdefault(rid, []).append(entry)
                     except Exception:
                         pass
 
@@ -1422,14 +1538,18 @@ class JobScheduler:
                     rec = run_by_host.get(str(host), {})
                     job_status = rec.get("status") or "Pending"
                     ran_on = rec.get("started_ts") or rec.get("finished_ts")
+                    activities = activities_by_run.get(rec.get("run_id", 0) or 0, [])
+                    has_stdout = any(a.get("has_stdout") for a in activities)
+                    has_stderr = any(a.get("has_stderr") for a in activities)
                     out.append({
                         "hostname": str(host),
                         "online": str(host) in online,
                         "site": site_by_host.get(str(host), ""),
                         "ran_on": ran_on,
                         "job_status": job_status,
-                        "has_stdout": False,
-                        "has_stderr": False,
+                        "has_stdout": has_stdout,
+                        "has_stderr": has_stderr,
+                        "activities": activities,
                     })
 
                 return json.dumps({"occurrence": occ, "devices": out}), 200, {"Content-Type": "application/json"}

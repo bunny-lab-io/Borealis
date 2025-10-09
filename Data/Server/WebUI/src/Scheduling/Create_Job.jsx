@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   Paper,
   Box,
@@ -11,6 +11,7 @@ import {
   Checkbox,
   FormControlLabel,
   Select,
+  Menu,
   MenuItem,
   Divider,
   Dialog,
@@ -22,14 +23,103 @@ import {
   TableRow,
   TableCell,
   TableBody,
-  TableSortLabel
+  TableSortLabel,
+  GlobalStyles
 } from "@mui/material";
-import { Add as AddIcon, Delete as DeleteIcon } from "@mui/icons-material";
+import {
+  Add as AddIcon,
+  Delete as DeleteIcon,
+  FilterList as FilterListIcon,
+  PendingActions as PendingActionsIcon,
+  Sync as SyncIcon,
+  Timer as TimerIcon,
+  Check as CheckIcon,
+  Error as ErrorIcon
+} from "@mui/icons-material";
 import { SimpleTreeView, TreeItem } from "@mui/x-tree-view";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import dayjs from "dayjs";
+import Prism from "prismjs";
+import "prismjs/components/prism-yaml";
+import "prismjs/components/prism-bash";
+import "prismjs/components/prism-powershell";
+import "prismjs/components/prism-batch";
+import "prismjs/themes/prism-okaidia.css";
+import Editor from "react-simple-code-editor";
+import ReactFlow, { Handle, Position } from "reactflow";
+import "reactflow/dist/style.css";
+
+const hiddenHandleStyle = {
+  width: 12,
+  height: 12,
+  border: "none",
+  background: "transparent",
+  opacity: 0,
+  pointerEvents: "none"
+};
+
+const STATUS_META = {
+  pending: { label: "Pending", color: "#aab2bf", Icon: PendingActionsIcon },
+  running: { label: "Running", color: "#58a6ff", Icon: SyncIcon },
+  expired: { label: "Expired", color: "#aab2bf", Icon: TimerIcon },
+  success: { label: "Success", color: "#00d18c", Icon: CheckIcon },
+  failed: { label: "Failed", color: "#ff4f4f", Icon: ErrorIcon }
+};
+
+const DEVICE_COLUMNS = [
+  { key: "hostname", label: "Hostname" },
+  { key: "online", label: "Status" },
+  { key: "site", label: "Site" },
+  { key: "ran_on", label: "Ran On" },
+  { key: "job_status", label: "Job Status" },
+  { key: "output", label: "StdOut / StdErr" }
+];
+
+function StatusNode({ data }) {
+  const { label, color, count, onClick, isActive, Icon } = data || {};
+  const displayCount = Number.isFinite(count) ? count : Number(count) || 0;
+  const borderColor = color || "#333";
+  const activeGlow = color ? `${color}55` : "rgba(88,166,255,0.35)";
+  const handleClick = useCallback((event) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    onClick && onClick();
+  }, [onClick]);
+  return (
+    <Box
+      onClick={handleClick}
+      sx={{
+        px: 5.4,
+        py: 3.8,
+        backgroundColor: "#1f1f1f",
+        borderRadius: 1.5,
+        border: `1px solid ${borderColor}`,
+        boxShadow: isActive ? `0 0 0 2px ${activeGlow}` : "none",
+        cursor: "pointer",
+        minWidth: 324,
+        textAlign: "left",
+        transition: "border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease",
+        transform: isActive ? "translateY(-2px)" : "none",
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "flex-start"
+      }}
+    >
+      <Handle type="target" position={Position.Left} id="left-top" style={{ ...hiddenHandleStyle, top: "32%", transform: "translateY(-50%)" }} isConnectable={false} />
+      <Handle type="target" position={Position.Left} id="left-bottom" style={{ ...hiddenHandleStyle, top: "68%", transform: "translateY(-50%)" }} isConnectable={false} />
+      <Handle type="source" position={Position.Right} id="right-top" style={{ ...hiddenHandleStyle, top: "32%", transform: "translateY(-50%)" }} isConnectable={false} />
+      <Handle type="source" position={Position.Right} id="right-bottom" style={{ ...hiddenHandleStyle, top: "68%", transform: "translateY(-50%)" }} isConnectable={false} />
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.2 }}>
+        {Icon ? <Icon sx={{ color: color || "#e6edf3", fontSize: 32 }} /> : null}
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, color: color || "#e6edf3", userSelect: "none", fontSize: "1.3rem" }}>
+          {`${displayCount} ${label || ""}`}
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
 
 function SectionHeader({ title, action }) {
   return (
@@ -322,6 +412,7 @@ function ComponentCard({ comp, onRemove, onVariableChange, errors = {} }) {
 export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [tab, setTab] = useState(0);
   const [jobName, setJobName] = useState("");
+  const [pageTitleJobName, setPageTitleJobName] = useState("");
   // Components the job will run: {type:'script'|'workflow', path, name, description}
   const [components, setComponents] = useState([]);
   const [targets, setTargets] = useState([]); // array of hostnames
@@ -344,11 +435,263 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [selectedTargets, setSelectedTargets] = useState({}); // map hostname->bool
   const [deviceSearch, setDeviceSearch] = useState("");
   const [componentVarErrors, setComponentVarErrors] = useState({});
+  const [deviceRows, setDeviceRows] = useState([]);
+  const [deviceStatusFilter, setDeviceStatusFilter] = useState(null);
+  const [deviceOrderBy, setDeviceOrderBy] = useState("hostname");
+  const [deviceOrder, setDeviceOrder] = useState("asc");
+  const [deviceFilters, setDeviceFilters] = useState({});
+  const [filterAnchorEl, setFilterAnchorEl] = useState(null);
+  const [activeFilterColumn, setActiveFilterColumn] = useState(null);
+  const [pendingFilterValue, setPendingFilterValue] = useState("");
 
   const generateLocalId = useCallback(
     () => `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     []
   );
+
+  const getDefaultFilterValue = useCallback((key) => (["online", "job_status", "output"].includes(key) ? "all" : ""), []);
+
+  const isColumnFiltered = useCallback((key) => {
+    if (!deviceFilters || typeof deviceFilters !== "object") return false;
+    const value = deviceFilters[key];
+    if (value == null) return false;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed || trimmed === "all") return false;
+      return true;
+    }
+    return true;
+  }, [deviceFilters]);
+
+  const openFilterMenu = useCallback((event, columnKey) => {
+    setActiveFilterColumn(columnKey);
+    setPendingFilterValue(deviceFilters[columnKey] ?? getDefaultFilterValue(columnKey));
+    setFilterAnchorEl(event.currentTarget);
+  }, [deviceFilters, getDefaultFilterValue]);
+
+  const closeFilterMenu = useCallback(() => {
+    setFilterAnchorEl(null);
+    setActiveFilterColumn(null);
+  }, []);
+
+  const applyFilter = useCallback(() => {
+    if (!activeFilterColumn) {
+      closeFilterMenu();
+      return;
+    }
+    const value = pendingFilterValue;
+    setDeviceFilters((prev) => {
+      const next = { ...(prev || {}) };
+      if (!value || value === "all" || (typeof value === "string" && !value.trim())) {
+        delete next[activeFilterColumn];
+      } else {
+        next[activeFilterColumn] = value;
+      }
+      return next;
+    });
+    closeFilterMenu();
+  }, [activeFilterColumn, pendingFilterValue, closeFilterMenu]);
+
+  const clearFilter = useCallback(() => {
+    if (!activeFilterColumn) {
+      closeFilterMenu();
+      return;
+    }
+    setDeviceFilters((prev) => {
+      const next = { ...(prev || {}) };
+      delete next[activeFilterColumn];
+      return next;
+    });
+    setPendingFilterValue(getDefaultFilterValue(activeFilterColumn));
+    closeFilterMenu();
+  }, [activeFilterColumn, closeFilterMenu, getDefaultFilterValue]);
+
+  const renderFilterControl = () => {
+    const columnKey = activeFilterColumn;
+    if (!columnKey) return null;
+    if (columnKey === "online") {
+      return (
+        <Select
+          size="small"
+          fullWidth
+          value={typeof pendingFilterValue === "string" && pendingFilterValue ? pendingFilterValue : "all"}
+          onChange={(e) => setPendingFilterValue(e.target.value)}
+        >
+          <MenuItem value="all">All Statuses</MenuItem>
+          <MenuItem value="online">Online</MenuItem>
+          <MenuItem value="offline">Offline</MenuItem>
+        </Select>
+      );
+    }
+    if (columnKey === "job_status") {
+      const options = ["success", "failed", "running", "pending", "expired", "timed out"];
+      return (
+        <Select
+          size="small"
+          fullWidth
+          value={typeof pendingFilterValue === "string" && pendingFilterValue ? pendingFilterValue : "all"}
+          onChange={(e) => setPendingFilterValue(e.target.value)}
+        >
+          <MenuItem value="all">All Results</MenuItem>
+          {options.map((opt) => (
+            <MenuItem key={opt} value={opt}>{opt.replace(/\b\w/g, (m) => m.toUpperCase())}</MenuItem>
+          ))}
+        </Select>
+      );
+    }
+    if (columnKey === "output") {
+      return (
+        <Select
+          size="small"
+          fullWidth
+          value={typeof pendingFilterValue === "string" && pendingFilterValue ? pendingFilterValue : "all"}
+          onChange={(e) => setPendingFilterValue(e.target.value)}
+        >
+          <MenuItem value="all">All Output</MenuItem>
+          <MenuItem value="stdout">StdOut Only</MenuItem>
+          <MenuItem value="stderr">StdErr Only</MenuItem>
+          <MenuItem value="both">StdOut & StdErr</MenuItem>
+          <MenuItem value="none">No Output</MenuItem>
+        </Select>
+      );
+    }
+    const placeholders = {
+      hostname: "Filter hostname",
+      site: "Filter site",
+      ran_on: "Filter date/time"
+    };
+    const value = typeof pendingFilterValue === "string" ? pendingFilterValue : "";
+    return (
+      <TextField
+        size="small"
+        autoFocus
+        fullWidth
+        placeholder={placeholders[columnKey] || "Filter value"}
+        value={value}
+        onChange={(e) => setPendingFilterValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            applyFilter();
+          }
+        }}
+      />
+    );
+  };
+
+  const handleDeviceSort = useCallback((key) => {
+    setDeviceOrderBy((prevKey) => {
+      if (prevKey === key) {
+        setDeviceOrder((prevDir) => (prevDir === "asc" ? "desc" : "asc"));
+        return prevKey;
+      }
+      setDeviceOrder(key === "ran_on" ? "desc" : "asc");
+      return key;
+    });
+  }, []);
+
+  const fmtTs = useCallback((ts) => {
+    if (!ts) return "";
+    try {
+      const d = new Date(Number(ts) * 1000);
+      return d.toLocaleString(undefined, {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "numeric",
+        minute: "2-digit"
+      });
+    } catch {
+      return "";
+    }
+  }, []);
+
+  const deviceFiltered = useMemo(() => {
+    const matchStatusFilter = (status, filterKey) => {
+      if (filterKey === "pending") return status === "pending" || status === "scheduled" || status === "queued" || status === "";
+      if (filterKey === "running") return status === "running";
+      if (filterKey === "success") return status === "success";
+      if (filterKey === "failed") return status === "failed" || status === "failure" || status === "timed out" || status === "timed_out" || status === "warning";
+      if (filterKey === "expired") return status === "expired";
+      return true;
+    };
+
+    return deviceRows.filter((row) => {
+      const normalizedStatus = String(row?.job_status || "").trim().toLowerCase();
+      if (deviceStatusFilter && !matchStatusFilter(normalizedStatus, deviceStatusFilter)) {
+        return false;
+      }
+      if (deviceFilters && typeof deviceFilters === "object") {
+        for (const [key, rawValue] of Object.entries(deviceFilters)) {
+          if (rawValue == null) continue;
+          if (typeof rawValue === "string") {
+            const trimmed = rawValue.trim();
+            if (!trimmed || trimmed === "all") continue;
+          }
+          if (key === "hostname") {
+            const expected = String(rawValue || "").toLowerCase();
+            if (!String(row?.hostname || "").toLowerCase().includes(expected)) return false;
+          } else if (key === "online") {
+            if (rawValue === "online" && !row?.online) return false;
+            if (rawValue === "offline" && row?.online) return false;
+          } else if (key === "site") {
+            const expected = String(rawValue || "").toLowerCase();
+            if (!String(row?.site || "").toLowerCase().includes(expected)) return false;
+          } else if (key === "ran_on") {
+            const expected = String(rawValue || "").toLowerCase();
+            const formatted = fmtTs(row?.ran_on).toLowerCase();
+            if (!formatted.includes(expected)) return false;
+          } else if (key === "job_status") {
+            const expected = String(rawValue || "").toLowerCase();
+            if (!normalizedStatus.includes(expected)) return false;
+          } else if (key === "output") {
+            if (rawValue === "stdout" && !row?.has_stdout) return false;
+            if (rawValue === "stderr" && !row?.has_stderr) return false;
+            if (rawValue === "both" && (!row?.has_stdout || !row?.has_stderr)) return false;
+            if (rawValue === "none" && (row?.has_stdout || row?.has_stderr)) return false;
+          }
+        }
+      }
+      return true;
+    });
+  }, [deviceRows, deviceStatusFilter, deviceFilters, fmtTs]);
+
+  const deviceSorted = useMemo(() => {
+    const arr = [...deviceFiltered];
+    const dir = deviceOrder === "asc" ? 1 : -1;
+    arr.sort((a, b) => {
+      let delta = 0;
+      switch (deviceOrderBy) {
+        case "hostname":
+          delta = String(a?.hostname || "").localeCompare(String(b?.hostname || ""));
+          break;
+        case "online":
+          delta = Number(a?.online ? 1 : 0) - Number(b?.online ? 1 : 0);
+          break;
+        case "site":
+          delta = String(a?.site || "").localeCompare(String(b?.site || ""));
+          break;
+        case "ran_on":
+          delta = Number(a?.ran_on || 0) - Number(b?.ran_on || 0);
+          break;
+        case "job_status":
+          delta = String(a?.job_status || "").localeCompare(String(b?.job_status || ""));
+          break;
+        case "output": {
+          const score = (row) => (row?.has_stdout ? 2 : 0) + (row?.has_stderr ? 1 : 0);
+          delta = score(a) - score(b);
+          break;
+        }
+        default:
+          delta = 0;
+      }
+      if (delta === 0) {
+        delta = String(a?.hostname || "").localeCompare(String(b?.hostname || ""));
+      }
+      return delta * dir;
+    });
+    return arr;
+  }, [deviceFiltered, deviceOrder, deviceOrderBy]);
 
   const normalizeComponentPath = useCallback((type, rawPath) => {
     const trimmed = (rawPath || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
@@ -497,14 +840,12 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [historyRows, setHistoryRows] = useState([]);
   const [historyOrderBy, setHistoryOrderBy] = useState("started_ts");
   const [historyOrder, setHistoryOrder] = useState("desc");
-
-  const fmtTs = useCallback((ts) => {
-    if (!ts) return '';
-    try {
-      const d = new Date(Number(ts) * 1000);
-      return d.toLocaleString(undefined, { year:'numeric', month:'2-digit', day:'2-digit', hour:'numeric', minute:'2-digit' });
-    } catch { return ''; }
-  }, []);
+  const activityCacheRef = useRef(new Map());
+  const [outputOpen, setOutputOpen] = useState(false);
+  const [outputTitle, setOutputTitle] = useState("");
+  const [outputSections, setOutputSections] = useState([]);
+  const [outputLoading, setOutputLoading] = useState(false);
+  const [outputError, setOutputError] = useState("");
 
   const loadHistory = useCallback(async () => {
     if (!editing) return;
@@ -522,7 +863,11 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
       if (!devResp.ok) throw new Error(dev.error || `HTTP ${devResp.status}`);
       setHistoryRows(Array.isArray(runs.runs) ? runs.runs : []);
       setJobSummary(job.job || {});
-      setDeviceRows(Array.isArray(dev.devices) ? dev.devices : []);
+      const devices = Array.isArray(dev.devices) ? dev.devices.map((device) => ({
+        ...device,
+        activities: Array.isArray(device.activities) ? device.activities : [],
+      })) : [];
+      setDeviceRows(devices);
     } catch {
       setHistoryRows([]);
       setJobSummary({});
@@ -555,18 +900,68 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
     );
   };
 
+  const aggregatedHistory = useMemo(() => {
+    if (!Array.isArray(historyRows) || historyRows.length === 0) return [];
+    const map = new Map();
+    historyRows.forEach((row) => {
+      const key = row?.scheduled_ts || row?.started_ts || row?.finished_ts || row?.id;
+      if (!key) return;
+      const strKey = String(key);
+      const existing = map.get(strKey) || {
+        key: strKey,
+        scheduled_ts: row?.scheduled_ts || null,
+        started_ts: null,
+        finished_ts: null,
+        statuses: new Set()
+      };
+      if (!existing.scheduled_ts && row?.scheduled_ts) existing.scheduled_ts = row.scheduled_ts;
+      if (row?.started_ts) {
+        existing.started_ts = existing.started_ts == null ? row.started_ts : Math.min(existing.started_ts, row.started_ts);
+      }
+      if (row?.finished_ts) {
+        existing.finished_ts = existing.finished_ts == null ? row.finished_ts : Math.max(existing.finished_ts, row.finished_ts);
+      }
+      if (row?.status) existing.statuses.add(String(row.status));
+      map.set(strKey, existing);
+    });
+    const summaries = [];
+    map.forEach((entry) => {
+      const statuses = Array.from(entry.statuses).map((s) => String(s || "").trim().toLowerCase()).filter(Boolean);
+      if (!statuses.length) return;
+      const hasInFlight = statuses.some((s) => s === "running" || s === "pending" || s === "scheduled");
+      if (hasInFlight) return;
+      const hasFailure = statuses.some((s) => ["failed", "failure", "expired", "timed out", "timed_out", "warning"].includes(s));
+      const allSuccess = statuses.every((s) => s === "success");
+      const statusLabel = hasFailure ? "Failed" : (allSuccess ? "Success" : "Failed");
+      summaries.push({
+        key: entry.key,
+        scheduled_ts: entry.scheduled_ts,
+        started_ts: entry.started_ts,
+        finished_ts: entry.finished_ts,
+        status: statusLabel
+      });
+    });
+    return summaries;
+  }, [historyRows]);
+
   const sortedHistory = useMemo(() => {
     const dir = historyOrder === 'asc' ? 1 : -1;
     const key = historyOrderBy;
-    return [...historyRows].sort((a, b) => {
-      const A = a?.[key];
-      const B = b?.[key];
-      if (key === 'started_ts' || key === 'finished_ts' || key === 'scheduled_ts') {
-        return ((A || 0) - (B || 0)) * dir;
+    return [...aggregatedHistory].sort((a, b) => {
+      const getVal = (row) => {
+        if (key === 'scheduled_ts' || key === 'started_ts' || key === 'finished_ts') {
+          return Number(row?.[key] || 0);
+        }
+        return String(row?.[key] || '');
+      };
+      const A = getVal(a);
+      const B = getVal(b);
+      if (typeof A === 'number' && typeof B === 'number') {
+        return (A - B) * dir;
       }
-      return String(A ?? '').localeCompare(String(B ?? '')) * dir;
+      return String(A).localeCompare(String(B)) * dir;
     });
-  }, [historyRows, historyOrderBy, historyOrder]);
+  }, [aggregatedHistory, historyOrderBy, historyOrder]);
 
   const handleHistorySort = (col) => {
     if (historyOrderBy === col) setHistoryOrder(historyOrder === 'asc' ? 'desc' : 'asc');
@@ -598,7 +993,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         </TableHead>
         <TableBody>
           {sortedHistory.map((r) => (
-            <TableRow key={r.id}>
+            <TableRow key={r.key}>
               <TableCell>{fmtTs(r.scheduled_ts)}</TableCell>
               <TableCell>{fmtTs(r.started_ts)}</TableCell>
               <TableCell>{fmtTs(r.finished_ts)}</TableCell>
@@ -617,39 +1012,294 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
 
   // --- Job Progress (summary) ---
   const [jobSummary, setJobSummary] = useState({});
-  const sumCounts = (o, k) => Number((o?.result_counts||{})[k] || 0);
   const counts = jobSummary?.result_counts || {};
 
-  const ProgressSummary = () => (
-    <Box sx={{ p: 2, bgcolor: '#1b1b1b', border: '1px solid #333', borderRadius: 1, mb: 2 }}>
-      <Typography variant="subtitle1" sx={{ color: '#7db7ff', mb: 1 }}>Job Progress</Typography>
-      <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-        {[
-          ['pending','Pending','#999999'],
-          ['running','Running','#58a6ff'],
-          ['success','Success','#00d18c'],
-          ['failed','Failed','#ff4f4f'],
-          ['expired','Expired','#777777'],
-          ['timed_out','Timed Out','#b36ae2']
-        ].map(([key,label,color]) => (
-          <Box key={key} sx={{ color: '#ddd', display: 'flex', alignItems: 'center', gap: 1 }}>
-            <span style={{ display:'inline-block', width:10, height:10, borderRadius:10, background: color }} />
-            <span>{label}: {Number((counts||{})[key] || 0)}</span>
-          </Box>
-        ))}
+  const deviceStatusCounts = useMemo(() => {
+    const base = { pending: 0, running: 0, success: 0, failed: 0, expired: 0 };
+    deviceRows.forEach((row) => {
+      const normalized = String(row?.job_status || "").trim().toLowerCase();
+      if (!normalized || normalized === "pending" || normalized === "scheduled" || normalized === "queued") {
+        base.pending += 1;
+      } else if (normalized === "running") {
+        base.running += 1;
+      } else if (normalized === "success") {
+        base.success += 1;
+      } else if (normalized === "expired") {
+        base.expired += 1;
+      } else if (normalized === "failed" || normalized === "failure" || normalized === "timed out" || normalized === "timed_out" || normalized === "warning") {
+        base.failed += 1;
+      } else {
+        base.pending += 1;
+      }
+    });
+    return base;
+  }, [deviceRows]);
+
+  const statusCounts = useMemo(() => {
+    const merged = { pending: 0, running: 0, success: 0, failed: 0, expired: 0 };
+    Object.keys(merged).forEach((key) => {
+      const summaryVal = Number((counts || {})[key] ?? 0);
+      const fallback = deviceStatusCounts[key] ?? 0;
+      merged[key] = summaryVal > 0 ? summaryVal : fallback;
+    });
+    return merged;
+  }, [counts, deviceStatusCounts]);
+
+  const statusNodeTypes = useMemo(() => ({ statusNode: StatusNode }), []);
+
+  const handleStatusNodeClick = useCallback((key) => {
+    setDeviceStatusFilter((prev) => (prev === key ? null : key));
+  }, []);
+
+  const statusNodes = useMemo(() => [
+    {
+      id: "pending",
+      type: "statusNode",
+      position: { x: -420, y: 170 },
+      data: {
+        label: STATUS_META.pending.label,
+        color: STATUS_META.pending.color,
+        count: statusCounts.pending,
+        Icon: STATUS_META.pending.Icon,
+        onClick: () => handleStatusNodeClick("pending"),
+        isActive: deviceStatusFilter === "pending"
+      },
+      draggable: false,
+      selectable: false
+    },
+    {
+      id: "running",
+      type: "statusNode",
+      position: { x: 0, y: 0 },
+      data: {
+        label: STATUS_META.running.label,
+        color: STATUS_META.running.color,
+        count: statusCounts.running,
+        Icon: STATUS_META.running.Icon,
+        onClick: () => handleStatusNodeClick("running"),
+        isActive: deviceStatusFilter === "running"
+      },
+      draggable: false,
+      selectable: false
+    },
+    {
+      id: "expired",
+      type: "statusNode",
+      position: { x: 0, y: 340 },
+      data: {
+        label: STATUS_META.expired.label,
+        color: STATUS_META.expired.color,
+        count: statusCounts.expired,
+        Icon: STATUS_META.expired.Icon,
+        onClick: () => handleStatusNodeClick("expired"),
+        isActive: deviceStatusFilter === "expired"
+      },
+      draggable: false,
+      selectable: false
+    },
+    {
+      id: "success",
+      type: "statusNode",
+      position: { x: 420, y: 0 },
+      data: {
+        label: STATUS_META.success.label,
+        color: STATUS_META.success.color,
+        count: statusCounts.success,
+        Icon: STATUS_META.success.Icon,
+        onClick: () => handleStatusNodeClick("success"),
+        isActive: deviceStatusFilter === "success"
+      },
+      draggable: false,
+      selectable: false
+    },
+    {
+      id: "failed",
+      type: "statusNode",
+      position: { x: 420, y: 340 },
+      data: {
+        label: STATUS_META.failed.label,
+        color: STATUS_META.failed.color,
+        count: statusCounts.failed,
+        Icon: STATUS_META.failed.Icon,
+        onClick: () => handleStatusNodeClick("failed"),
+        isActive: deviceStatusFilter === "failed"
+      },
+      draggable: false,
+      selectable: false
+    }
+  ], [statusCounts, handleStatusNodeClick, deviceStatusFilter]);
+
+  const statusEdges = useMemo(() => [
+    {
+      id: "pending-running",
+      source: "pending",
+      target: "running",
+      sourceHandle: "right-top",
+      targetHandle: "left-top",
+      type: "smoothstep",
+      animated: true,
+      className: "status-flow-edge"
+    },
+    {
+      id: "pending-expired",
+      source: "pending",
+      target: "expired",
+      sourceHandle: "right-bottom",
+      targetHandle: "left-bottom",
+      type: "smoothstep",
+      animated: true,
+      className: "status-flow-edge"
+    },
+    {
+      id: "running-success",
+      source: "running",
+      target: "success",
+      sourceHandle: "right-top",
+      targetHandle: "left-top",
+      type: "smoothstep",
+      animated: true,
+      className: "status-flow-edge"
+    },
+    {
+      id: "running-failed",
+      source: "running",
+      target: "failed",
+      sourceHandle: "right-bottom",
+      targetHandle: "left-bottom",
+      type: "smoothstep",
+      animated: true,
+      className: "status-flow-edge"
+    }
+  ], []);
+
+  const JobStatusFlow = () => (
+    <Box sx={{ bgcolor: "#2e2e2e", border: "1px solid #2a2a2a", borderRadius: 1, mb: 2 }}>
+      <GlobalStyles styles={{
+        "@keyframes statusFlowDash": {
+          "0%": { strokeDashoffset: 0 },
+          "100%": { strokeDashoffset: -24 }
+        },
+        ".status-flow-edge .react-flow__edge-path": {
+          strokeDasharray: "10 6",
+          animation: "statusFlowDash 1.2s linear infinite",
+          strokeWidth: 2,
+          stroke: "#58a6ff"
+        }
+      }} />
+      <Box sx={{ height: 380, p: 3 }}>
+        <ReactFlow
+          nodes={statusNodes}
+          edges={statusEdges}
+          nodeTypes={statusNodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.2 }}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable={false}
+          panOnDrag={false}
+          zoomOnScroll={false}
+          zoomOnPinch={false}
+          panOnScroll={false}
+          zoomOnDoubleClick={false}
+          preventScrolling={false}
+          onNodeClick={(_, node) => {
+            if (node?.id && STATUS_META[node.id]) handleStatusNodeClick(node.id);
+          }}
+          selectionOnDrag={false}
+          proOptions={{ hideAttribution: true }}
+          style={{ background: "transparent" }}
+        />
       </Box>
+      {deviceStatusFilter ? (
+        <Box sx={{ mt: 1, px: 3, pb: 3, display: "flex", alignItems: "center", gap: 1.5 }}>
+          <Typography variant="caption" sx={{ color: "#aaa" }}>
+            Showing devices with {STATUS_META[deviceStatusFilter]?.label || deviceStatusFilter} results
+          </Typography>
+          <Button size="small" sx={{ color: "#58a6ff", textTransform: "none", p: 0 }} onClick={() => setDeviceStatusFilter(null)}>
+            Clear Filter
+          </Button>
+        </Box>
+      ) : null}
     </Box>
   );
+  const inferLanguage = useCallback((path = "") => {
+    const lower = String(path || "").toLowerCase();
+    if (lower.endsWith(".ps1")) return "powershell";
+    if (lower.endsWith(".bat")) return "batch";
+    if (lower.endsWith(".sh")) return "bash";
+    if (lower.endsWith(".yml") || lower.endsWith(".yaml")) return "yaml";
+    return "powershell";
+  }, []);
 
-  // --- Devices breakdown ---
-  const [deviceRows, setDeviceRows] = useState([]);
-  const deviceSorted = useMemo(() => deviceRows, [deviceRows]);
+  const highlightCode = useCallback((code, lang) => {
+    try {
+      return Prism.highlight(code ?? "", Prism.languages[lang] || Prism.languages.markup, lang);
+    } catch {
+      return String(code || "");
+    }
+  }, []);
+
+  const loadActivity = useCallback(async (activityId) => {
+    const idNum = Number(activityId || 0);
+    if (!idNum) return null;
+    if (activityCacheRef.current.has(idNum)) {
+      return activityCacheRef.current.get(idNum);
+    }
+    try {
+      const resp = await fetch(`/api/device/activity/job/${idNum}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      activityCacheRef.current.set(idNum, data);
+      return data;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const handleViewDeviceOutput = useCallback(async (row, mode = "stdout") => {
+    if (!row) return;
+    const label = mode === "stderr" ? "StdErr" : "StdOut";
+    const activities = Array.isArray(row.activities) ? row.activities : [];
+    const relevant = activities.filter((act) => (mode === "stderr" ? act.has_stderr : act.has_stdout));
+    setOutputTitle(`${label} - ${row.hostname || ""}`);
+    setOutputSections([]);
+    setOutputError("");
+    setOutputLoading(true);
+    setOutputOpen(true);
+    if (!relevant.length) {
+      setOutputError(`No ${label} available for this device.`);
+      setOutputLoading(false);
+      return;
+    }
+    const sections = [];
+    for (const act of relevant) {
+      const activityId = Number(act.activity_id || act.id || 0);
+      if (!activityId) continue;
+      const data = await loadActivity(activityId);
+      if (!data) continue;
+      const content = mode === "stderr" ? (data.stderr || "") : (data.stdout || "");
+      const sectionTitle = act.component_name || data.script_name || data.script_path || `Activity ${activityId}`;
+      sections.push({
+        key: `${activityId}-${mode}`,
+        title: sectionTitle,
+        path: data.script_path || "",
+        lang: inferLanguage(data.script_path || ""),
+        content,
+      });
+    }
+    if (!sections.length) {
+      setOutputError(`No ${label} available for this device.`);
+    }
+    setOutputSections(sections);
+    setOutputLoading(false);
+  }, [inferLanguage, loadActivity]);
 
   useEffect(() => {
     let canceled = false;
     const hydrate = async () => {
       if (initialJob && initialJob.id) {
         setJobName(initialJob.name || "");
+        setPageTitleJobName(typeof initialJob.name === "string" ? initialJob.name.trim() : "");
         setTargets(Array.isArray(initialJob.targets) ? initialJob.targets : []);
         setScheduleType(initialJob.schedule_type || initialJob.schedule?.type || "immediately");
         setStartDateTime(initialJob.start_ts ? dayjs(Number(initialJob.start_ts) * 1000).second(0) : (initialJob.schedule?.start ? dayjs(initialJob.schedule.start).second(0) : dayjs().add(5, "minute").second(0)));
@@ -663,6 +1313,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
           setComponentVarErrors({});
         }
       } else if (!initialJob) {
+        setPageTitleJobName("");
         setComponents([]);
         setComponentVarErrors({});
       }
@@ -817,9 +1468,16 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   }, [editing]);
 
   return (
-    <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
+    <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e", overflow: "auto" }} elevation={2}>
       <Box sx={{ p: 2, pb: 1 }}>
-        <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>Create a Scheduled Job</Typography>
+        <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
+          Create a Scheduled Job
+          {pageTitleJobName && (
+            <Box component="span" sx={{ color: "#aaa", fontSize: "inherit", fontWeight: 400 }}>
+              {`: "${pageTitleJobName}"`}
+            </Box>
+          )}
+        </Typography>
         <Typography variant="body2" sx={{ color: "#aaa" }}>
           Configure advanced schedulable automation jobs for one or more devices.
         </Typography>
@@ -864,6 +1522,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
               placeholder="Example Job Name"
               value={jobName}
               onChange={(e) => setJobName(e.target.value)}
+              onBlur={(e) => setPageTitleJobName(e.target.value.trim())}
               InputLabelProps={{ shrink: true }}
               error={jobName.trim().length === 0}
               helperText={jobName.trim().length === 0 ? "Job name is required" : ""}
@@ -1027,7 +1686,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
             <Typography variant="caption" sx={{ color: '#aaa' }}>Showing the last 30 days of runs.</Typography>
 
             <Box sx={{ mt: 2 }}>
-              <ProgressSummary />
+              <JobStatusFlow />
             </Box>
 
             <Box sx={{ mt: 2 }}>
@@ -1036,12 +1695,26 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Hostname</TableCell>
-                    <TableCell>Status</TableCell>
-                    <TableCell>Site</TableCell>
-                    <TableCell>Ran On</TableCell>
-                    <TableCell>Job Status</TableCell>
-                    <TableCell>StdOut / StdErr</TableCell>
+                    {DEVICE_COLUMNS.map((col) => (
+                      <TableCell key={col.key}>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                          <TableSortLabel
+                            active={deviceOrderBy === col.key}
+                            direction={deviceOrderBy === col.key ? deviceOrder : "asc"}
+                            onClick={() => handleDeviceSort(col.key)}
+                          >
+                            {col.label}
+                          </TableSortLabel>
+                          <IconButton
+                            size="small"
+                            onClick={(event) => openFilterMenu(event, col.key)}
+                            sx={{ color: isColumnFiltered(col.key) ? "#58a6ff" : "#666" }}
+                          >
+                            <FilterListIcon fontSize="inherit" />
+                          </IconButton>
+                        </Box>
+                      </TableCell>
+                    ))}
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1057,8 +1730,24 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
                       <TableCell>{resultChip(d.job_status)}</TableCell>
                       <TableCell>
                         <Box sx={{ display:'flex', gap:1 }}>
-                          {d.has_stdout ? <Button size="small" sx={{ color:'#58a6ff', textTransform:'none', minWidth:0, p:0 }}>StdOut</Button> : null}
-                          {d.has_stderr ? <Button size="small" sx={{ color:'#ff4f4f', textTransform:'none', minWidth:0, p:0 }}>StdErr</Button> : null}
+                          {d.has_stdout ? (
+                            <Button
+                              size="small"
+                              sx={{ color:'#58a6ff', textTransform:'none', minWidth:0, p:0 }}
+                              onClick={(e) => { e.stopPropagation(); handleViewDeviceOutput(d, 'stdout'); }}
+                            >
+                              StdOut
+                            </Button>
+                          ) : null}
+                          {d.has_stderr ? (
+                            <Button
+                              size="small"
+                              sx={{ color:'#ff4f4f', textTransform:'none', minWidth:0, p:0 }}
+                              onClick={(e) => { e.stopPropagation(); handleViewDeviceOutput(d, 'stderr'); }}
+                            >
+                              StdErr
+                            </Button>
+                          ) : null}
                         </Box>
                       </TableCell>
                     </TableRow>
@@ -1070,6 +1759,25 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
                   )}
                 </TableBody>
               </Table>
+              <Menu
+                anchorEl={filterAnchorEl}
+                open={Boolean(filterAnchorEl)}
+                onClose={closeFilterMenu}
+                disableAutoFocusItem
+                PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#e6edf3", minWidth: 240 } }}
+              >
+                <Box sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 1 }}>
+                  {renderFilterControl()}
+                  <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1 }}>
+                    <Button size="small" sx={{ color: "#ff6666", textTransform: "none" }} onClick={clearFilter}>
+                      Clear
+                    </Button>
+                    <Button size="small" sx={{ color: "#58a6ff", textTransform: "none" }} onClick={applyFilter}>
+                      Apply
+                    </Button>
+                  </Box>
+                </Box>
+              </Menu>
             </Box>
 
             <Box sx={{ mt: 2 }}>
@@ -1082,6 +1790,48 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
           </Box>
         )}
       </Box>
+
+      <Dialog open={outputOpen} onClose={() => setOutputOpen(false)} fullWidth maxWidth="md"
+        PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+      >
+        <DialogTitle>{outputTitle}</DialogTitle>
+        <DialogContent dividers>
+          {outputLoading ? (
+            <Typography variant="body2" sx={{ color: "#888" }}>Loading output…</Typography>
+          ) : null}
+          {!outputLoading && outputError ? (
+            <Typography variant="body2" sx={{ color: "#888" }}>{outputError}</Typography>
+          ) : null}
+          {!outputLoading && !outputError ? (
+            outputSections.map((section) => (
+              <Box key={section.key} sx={{ mb: 2 }}>
+                <Typography variant="subtitle2" sx={{ color: "#7db7ff" }}>{section.title}</Typography>
+                {section.path ? (
+                  <Typography variant="caption" sx={{ color: "#888", display: "block", mb: 0.5 }}>{section.path}</Typography>
+                ) : null}
+                <Box sx={{ border: "1px solid #333", borderRadius: 1, bgcolor: "#1e1e1e" }}>
+                  <Editor
+                    value={section.content ?? ""}
+                    onValueChange={() => {}}
+                    highlight={(code) => highlightCode(code, section.lang)}
+                    padding={12}
+                    style={{
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                      fontSize: 12,
+                      color: "#e6edf3",
+                      minHeight: 160
+                    }}
+                    textareaProps={{ readOnly: true }}
+                  />
+                </Box>
+              </Box>
+            ))
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOutputOpen(false)} sx={{ color: "#58a6ff" }}>Close</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Bottom actions removed per design; actions live next to tabs. */}
 

@@ -58,6 +58,7 @@ export default function DeviceDetails({ device, onBack }) {
   const [quickJobOpen, setQuickJobOpen] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [assemblyNameMap, setAssemblyNameMap] = useState({});
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
     // Prefer status provided by the device list row if available
@@ -69,6 +70,68 @@ export default function DeviceDetails({ device, onBack }) {
     return now - tsSec <= 300 ? "Online" : "Offline";
   });
 
+  useEffect(() => {
+    let canceled = false;
+    const loadAssemblyNames = async () => {
+      const next = {};
+      const storeName = (rawPath, rawName, prefix = "") => {
+        const name = typeof rawName === "string" ? rawName.trim() : "";
+        if (!name) return;
+        const normalizedPath = String(rawPath || "")
+          .replace(/\\/g, "/")
+          .replace(/^\/+/, "")
+          .trim();
+        const keys = new Set();
+        if (normalizedPath) {
+          keys.add(normalizedPath);
+          if (prefix) {
+            const prefixed = `${prefix}/${normalizedPath}`.replace(/\/+/g, "/");
+            keys.add(prefixed);
+          }
+        }
+        const base = normalizedPath ? normalizedPath.split("/").pop() || "" : "";
+        if (base) {
+          keys.add(base);
+          const dot = base.lastIndexOf(".");
+          if (dot > 0) {
+            keys.add(base.slice(0, dot));
+          }
+        }
+        keys.forEach((key) => {
+          if (key && !next[key]) {
+            next[key] = name;
+          }
+        });
+      };
+      const ingest = async (island, prefix = "") => {
+        try {
+          const resp = await fetch(`/api/assembly/list?island=${island}`);
+          if (!resp.ok) return;
+          const data = await resp.json();
+          const items = Array.isArray(data.items) ? data.items : [];
+          items.forEach((item) => {
+            if (!item || typeof item !== "object") return;
+            const rel = item.rel_path || item.path || item.file_name || item.playbook_path || "";
+            const label = (item.name || item.tab_name || item.display_name || item.file_name || "").trim();
+            storeName(rel, label, prefix);
+          });
+        } catch {
+          // ignore failures; map remains partial
+        }
+      };
+      await ingest("scripts", "Scripts");
+      await ingest("workflows", "Workflows");
+      await ingest("ansible", "Ansible_Playbooks");
+      if (!canceled) {
+        setAssemblyNameMap(next);
+      }
+    };
+    loadAssemblyNames();
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
   const statusFromHeartbeat = (tsSec, offlineAfter = 300) => {
     if (!tsSec) return "Offline";
     const now = Date.now() / 1000;
@@ -76,6 +139,21 @@ export default function DeviceDetails({ device, onBack }) {
   };
 
   const statusColor = (s) => (s === "Online" ? "#00d18c" : "#ff4f4f");
+
+  const resolveAssemblyName = useCallback((scriptName, scriptPath) => {
+    const normalized = String(scriptPath || "").replace(/\\/g, "/").trim();
+    const base = normalized ? normalized.split("/").pop() || "" : "";
+    const baseNoExt = base && base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : base;
+    return (
+      assemblyNameMap[normalized] ||
+      (base ? assemblyNameMap[base] : "") ||
+      (baseNoExt ? assemblyNameMap[baseNoExt] : "") ||
+      scriptName ||
+      base ||
+      scriptPath ||
+      ""
+    );
+  }, [assemblyNameMap]);
 
   const formatLastSeen = (tsSec, offlineAfter = 120) => {
     if (!tsSec) return "unknown";
@@ -918,7 +996,8 @@ export default function DeviceDetails({ device, onBack }) {
     }
   };
 
-  const handleViewOutput = async (row, which) => {
+  const handleViewOutput = useCallback(async (row, which) => {
+    if (!row || !row.id) return;
     try {
       const resp = await fetch(`/api/device/activity/job/${row.id}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -928,13 +1007,14 @@ export default function DeviceDetails({ device, onBack }) {
         : ((data.script_path || "").toLowerCase().endsWith(".sh")) ? "bash"
         : ((data.script_path || "").toLowerCase().endsWith(".yml")) ? "yaml" : "powershell";
       setOutputLang(lang);
-      setOutputTitle(`${which === 'stderr' ? 'StdErr' : 'StdOut'} - ${data.script_name}`);
+      const friendly = resolveAssemblyName(data.script_name, data.script_path);
+      setOutputTitle(`${which === 'stderr' ? 'StdErr' : 'StdOut'} - ${friendly}`);
       setOutputContent(which === 'stderr' ? (data.stderr || "") : (data.stdout || ""));
       setOutputOpen(true);
     } catch (e) {
       console.warn("Failed to load output", e);
     }
-  };
+  }, [resolveAssemblyName]);
 
   const handleHistorySort = (col) => {
     if (historyOrderBy === col) setHistoryOrder(historyOrder === "asc" ? "desc" : "asc");
@@ -944,15 +1024,23 @@ export default function DeviceDetails({ device, onBack }) {
     }
   };
 
+  const historyDisplayRows = useMemo(() => {
+    return (historyRows || []).map((row) => ({
+      ...row,
+      script_display_name: resolveAssemblyName(row.script_name, row.script_path),
+    }));
+  }, [historyRows, resolveAssemblyName]);
+
   const sortedHistory = useMemo(() => {
     const dir = historyOrder === "asc" ? 1 : -1;
-    return [...historyRows].sort((a, b) => {
-      const A = a[historyOrderBy];
-      const B = b[historyOrderBy];
-      if (historyOrderBy === "ran_at") return ((A || 0) - (B || 0)) * dir;
+    const key = historyOrderBy === "script_name" ? "script_display_name" : historyOrderBy;
+    return [...historyDisplayRows].sort((a, b) => {
+      const A = a[key];
+      const B = b[key];
+      if (key === "ran_at") return ((A || 0) - (B || 0)) * dir;
       return String(A ?? "").localeCompare(String(B ?? "")) * dir;
     });
-  }, [historyRows, historyOrderBy, historyOrder]);
+  }, [historyDisplayRows, historyOrderBy, historyOrder]);
 
   const renderHistory = () => (
     <Box>
@@ -992,7 +1080,7 @@ export default function DeviceDetails({ device, onBack }) {
           {sortedHistory.map((r) => (
             <TableRow key={r.id}>
               <TableCell>{(r.script_type || '').toLowerCase() === 'ansible' ? 'Ansible Playbook' : 'Script'}</TableCell>
-              <TableCell>{r.script_name}</TableCell>
+            <TableCell>{r.script_display_name || r.script_name}</TableCell>
               <TableCell>{formatTimestamp(r.ran_at)}</TableCell>
               <TableCell>
                 <Box sx={{

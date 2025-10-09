@@ -4958,6 +4958,7 @@ def scripts_quick_run():
         timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))
     except Exception:
         timeout_seconds = 0
+    friendly_name = (doc.get("name") or "").strip() or _safe_filename(rel_path)
 
     now = int(time.time())
     results = []
@@ -4974,7 +4975,7 @@ def scripts_quick_run():
                 (
                     host,
                     rel_path.replace(os.sep, "/"),
-                    _safe_filename(rel_path),
+                    friendly_name,
                     script_type,
                     now,
                     "Running",
@@ -4992,7 +4993,7 @@ def scripts_quick_run():
             "job_id": job_id,
             "target_hostname": host,
             "script_type": script_type,
-            "script_name": _safe_filename(rel_path),
+            "script_name": friendly_name,
             "script_path": rel_path.replace(os.sep, "/"),
             "script_content": encoded_content,
             "script_encoding": "base64",
@@ -5043,6 +5044,7 @@ def ansible_quick_run():
         encoded_content = _encode_script_content(content)
         variables = doc.get('variables') if isinstance(doc.get('variables'), list) else []
         files = doc.get('files') if isinstance(doc.get('files'), list) else []
+        friendly_name = (doc.get("name") or "").strip() or os.path.basename(abs_path)
 
         results = []
         for host in hostnames:
@@ -5060,7 +5062,7 @@ def ansible_quick_run():
                     (
                         str(host),
                         rel_path.replace(os.sep, "/"),
-                        os.path.basename(abs_path),
+                        friendly_name,
                         "ansible",
                         now_ts,
                         "Running",
@@ -5082,7 +5084,7 @@ def ansible_quick_run():
             payload = {
                 "run_id": run_id,
                 "target_hostname": str(host),
-                "playbook_name": os.path.basename(abs_path),
+                "playbook_name": friendly_name,
                 "playbook_content": encoded_content,
                 "playbook_encoding": "base64",
                 "connection": "winrm",
@@ -5192,6 +5194,28 @@ def handle_quick_job_result(data):
             (status, stdout, stderr, job_id),
         )
         conn.commit()
+        try:
+            cur.execute(
+                "SELECT run_id FROM scheduled_job_run_activity WHERE activity_id=?",
+                (job_id,),
+            )
+            link = cur.fetchone()
+            if link:
+                run_id = int(link[0])
+                ts_now = _now_ts()
+                if status.lower() == "running":
+                    cur.execute(
+                        "UPDATE scheduled_job_runs SET status='Running', updated_at=? WHERE id=?",
+                        (ts_now, run_id),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE scheduled_job_runs SET status=?, finished_ts=COALESCE(finished_ts, ?), updated_at=? WHERE id=?",
+                        (status, ts_now, ts_now, run_id),
+                    )
+                conn.commit()
+        except Exception:
+            pass
         try:
             cur.execute(
                 "SELECT id, hostname, status FROM activity_history WHERE id=?",

@@ -254,7 +254,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             </TableCell>
             {[
               ["name", "Name"],
-              ["scriptWorkflow", "Script / Workflow"],
+              ["scriptWorkflow", "Assembly(s)"],
               ["target", "Target"],
               ["occurrence", "Recurrence"],
               ["lastRun", "Last Run"],
