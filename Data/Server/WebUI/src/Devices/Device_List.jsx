@@ -160,7 +160,7 @@ export default function DeviceList({ onSelectDevice }) {
       if (force) {
         params.set("refresh", "1");
       }
-      const resp = await fetch(`/api/agent/repo_hash?${params.toString()}`);
+      const resp = await fetch(`/api/repo/current_hash?${params.toString()}`);
       const json = await resp.json();
       const sha = (json?.sha || "").trim();
       if (!resp.ok || !sha) {

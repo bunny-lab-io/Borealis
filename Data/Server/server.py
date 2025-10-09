@@ -356,44 +356,6 @@ def health():
     return jsonify({"status": "ok"})
 
 
-@app.route("/api/agent/repo_hash", methods=["GET"])
-def api_agent_repo_hash():
-    try:
-        repo = (request.args.get('repo') or _DEFAULT_REPO).strip()
-        branch = (request.args.get('branch') or _DEFAULT_BRANCH).strip()
-        refresh_flag = (request.args.get('refresh') or '').strip().lower()
-        ttl_raw = request.args.get('ttl')
-        if '/' not in repo:
-            return jsonify({"error": "repo must be in the form owner/name"}), 400
-        try:
-            ttl = int(ttl_raw) if ttl_raw else _REPO_HASH_INTERVAL
-        except ValueError:
-            ttl = _REPO_HASH_INTERVAL
-        ttl = max(30, min(ttl, 3600))
-        force_refresh = refresh_flag in {'1', 'true', 'yes', 'force', 'refresh'}
-        if repo == _DEFAULT_REPO and branch == _DEFAULT_BRANCH:
-            result = _refresh_default_repo_hash(force=force_refresh)
-        else:
-            result = _fetch_repo_head(repo, branch, ttl_seconds=ttl, force_refresh=force_refresh)
-        sha = (result.get('sha') or '').strip()
-        payload = {
-            'repo': repo,
-            'branch': branch,
-            'sha': sha if sha else None,
-            'cached': bool(result.get('cached')),
-            'age_seconds': result.get('age_seconds'),
-            'source': result.get('source'),
-        }
-        if result.get('error'):
-            payload['error'] = result['error']
-        if sha:
-            return jsonify(payload)
-        return jsonify(payload), 503
-    except Exception as exc:
-        _write_service_log('server', f'/api/agent/repo_hash error: {exc}')
-        return jsonify({"error": "internal error"}), 500
-
-
 @app.route("/api/repo/current_hash", methods=["GET"])
 def api_repo_current_hash():
     try:
