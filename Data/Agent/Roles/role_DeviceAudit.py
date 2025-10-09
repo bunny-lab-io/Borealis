@@ -68,7 +68,15 @@ def detect_agent_os():
                 else:
                     major_label = platform.release()
 
-                os_name = f"Windows {major_label}"
+                # Prefer the registry product name so Windows Server editions keep their
+                # native branding (e.g., "Windows Server 2022 Standard"). Fall back to
+                # the major label when the product name is unavailable.
+                base_name = (product_name or "").strip()
+                if not base_name:
+                    base_name = f"Windows {major_label}".strip()
+                elif not base_name.lower().startswith("windows"):
+                    base_name = f"Windows {major_label} {base_name}".strip()
+
                 version_label = display_version or release_id or ""
                 if isinstance(ubr, int):
                     build_str = f"{build_number}.{ubr}" if build_number else str(ubr)
@@ -78,14 +86,7 @@ def detect_agent_os():
                     except Exception:
                         build_str = build_number or ""
 
-                parts = [os_name]
-                if product_name and product_name.lower().startswith('windows '):
-                    try:
-                        tail = product_name.split(' ', 2)[2]
-                        if tail:
-                            parts.append(tail)
-                    except Exception:
-                        pass
+                parts = [base_name]
                 if version_label:
                     parts.append(version_label)
                 if build_str:
