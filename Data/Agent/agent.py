@@ -535,6 +535,38 @@ def _settings_dir():
     except Exception:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings'))
 
+
+def _agent_guid_path() -> str:
+    try:
+        root = _find_project_root()
+        return os.path.join(root, 'Agent', 'Borealis', 'agent_GUID')
+    except Exception:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'agent_GUID'))
+
+
+def _persist_agent_guid_local(guid: str):
+    guid = (guid or '').strip()
+    if not guid:
+        return
+    path = _agent_guid_path()
+    try:
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        existing = ''
+        if os.path.isfile(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as fh:
+                    existing = fh.read().strip()
+            except Exception:
+                existing = ''
+        if existing != guid:
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write(guid)
+    except Exception as exc:
+        _log_agent(f'Failed to persist agent GUID locally: {exc}', fname='agent.error.log')
+
+
 def get_server_url() -> str:
     """Return the Borealis server URL from env or Agent/Borealis/Settings/server_url.txt.
     - Strips UTF-8 BOM and whitespace
@@ -1214,7 +1246,16 @@ async def connect():
                 payload = {"agent_id": AGENT_ID, "hostname": socket.gethostname(), "username": ".\\svcBorealis"}
                 timeout = aiohttp.ClientTimeout(total=10)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    await session.post(url, json=payload)
+                    async with session.post(url, json=payload) as resp:
+                        if resp.status == 200:
+                            try:
+                                data = await resp.json(content_type=None)
+                            except Exception:
+                                data = None
+                            if isinstance(data, dict):
+                                guid_value = (data.get('agent_guid') or '').strip()
+                                if guid_value:
+                                    _persist_agent_guid_local(guid_value)
             except Exception:
                 pass
         asyncio.create_task(_svc_checkin_once())
