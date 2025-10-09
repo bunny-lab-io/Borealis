@@ -160,12 +160,74 @@ export default function DeviceList({ onSelectDevice }) {
       if (fetched) repoSha = fetched;
     }
     try {
+      const hashById = new Map();
+      const hashByGuid = new Map();
+      const hashByHost = new Map();
+      try {
+        const hashResp = await fetch('/api/agent/hash_list');
+        if (hashResp.ok) {
+          const hashJson = await hashResp.json();
+          const list = Array.isArray(hashJson?.agents) ? hashJson.agents : [];
+          list.forEach((rec) => {
+            if (!rec || typeof rec !== 'object') return;
+            const hash = (rec.agent_hash || '').trim();
+            if (!hash) return;
+            const agentId = (rec.agent_id || '').trim();
+            const guidRaw = (rec.agent_guid || '').trim().toLowerCase();
+            const hostKey = (rec.hostname || '').trim().toLowerCase();
+            const isMemory = (rec.source || '').trim() === 'memory';
+            if (agentId && (!hashById.has(agentId) || isMemory)) {
+              hashById.set(agentId, hash);
+            }
+            if (guidRaw && (!hashByGuid.has(guidRaw) || isMemory)) {
+              hashByGuid.set(guidRaw, hash);
+            }
+            if (hostKey && (!hashByHost.has(hostKey) || isMemory)) {
+              hashByHost.set(hostKey, hash);
+            }
+          });
+        } else {
+          try {
+            const errPayload = await hashResp.json();
+            if (errPayload?.error) {
+              console.warn('Failed to fetch agent hash list', errPayload.error);
+            }
+          } catch {}
+        }
+      } catch (err) {
+        console.warn('Failed to fetch agent hash list', err);
+      }
+
       const res = await fetch("/api/agents");
       const data = await res.json();
       const arr = Object.entries(data || {}).map(([id, a]) => {
-        const hostname = a.hostname || id || "unknown";
+        const agentId = (id || '').trim();
+        const hostname = a.hostname || agentId || "unknown";
+        const normalizedHostKey = (hostname || '').trim().toLowerCase();
         const details = detailsByHost[hostname] || {};
-        const agentHash = (a.agent_hash || details.agentHash || "").trim();
+        const rawGuid = (a.agent_guid || a.agentGuid || a.guid || '').trim();
+        const detailGuid = (details.agentGuid || details.agent_guid || '').trim();
+        const guidCandidates = [rawGuid, detailGuid].filter((g) => g && g.trim());
+        let agentHash = '';
+        if (agentId && hashById.has(agentId)) {
+          agentHash = hashById.get(agentId) || '';
+        }
+        if (!agentHash) {
+          for (const candidate of guidCandidates) {
+            const key = (candidate || '').trim().toLowerCase();
+            if (key && hashByGuid.has(key)) {
+              agentHash = hashByGuid.get(key) || '';
+              break;
+            }
+          }
+        }
+        if (!agentHash && normalizedHostKey && hashByHost.has(normalizedHostKey)) {
+          agentHash = hashByHost.get(normalizedHostKey) || '';
+        }
+        if (!agentHash) {
+          agentHash = (a.agent_hash || details.agentHash || '').trim();
+        }
+        const agentGuidValue = rawGuid || detailGuid || '';
         return {
           id,
           hostname,
@@ -181,6 +243,7 @@ export default function DeviceList({ onSelectDevice }) {
           externalIp: details.externalIp || "",
           lastReboot: details.lastReboot || "",
           description: details.description || "",
+          agentGuid: agentGuidValue,
           agentHash,
           agentVersion: computeAgentVersion(agentHash, repoSha),
         };
@@ -229,6 +292,7 @@ export default function DeviceList({ onSelectDevice }) {
                 const lastReboot = summary.last_reboot || "";
                 const description = summary.description || "";
                 const agentHashValue = (summary.agent_hash || "").trim();
+                const agentGuidValue = (summary.agent_guid || summary.agentGuid || "").trim();
                 const enriched = {
                   lastUser,
                   created: createdRaw,
@@ -239,6 +303,7 @@ export default function DeviceList({ onSelectDevice }) {
                   lastReboot,
                   description,
                   agentHash: agentHashValue,
+                  agentGuid: agentGuidValue,
                 };
                 setDetailsByHost((prev) => ({
                   ...prev,
@@ -258,6 +323,7 @@ export default function DeviceList({ onSelectDevice }) {
                       externalIp: enriched.externalIp || r.externalIp,
                       lastReboot: enriched.lastReboot || r.lastReboot,
                       description: enriched.description || r.description,
+                      agentGuid: agentGuidValue || r.agentGuid || "",
                       agentHash: nextHash,
                       agentVersion: computeAgentVersion(nextHash, repoSha),
                     };
