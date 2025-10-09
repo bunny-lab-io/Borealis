@@ -119,6 +119,7 @@ function Get-AgentServiceId {
     $settingsDir = Join-Path $AgentRoot 'Settings'
     $candidates = @(
         (Join-Path $settingsDir 'agent_settings_svc.json')
+        (Join-Path $settingsDir 'agent_settings_user.json')
         (Join-Path $settingsDir 'agent_settings.json')
     )
 
@@ -130,6 +131,29 @@ function Get-AgentServiceId {
                 $cfg = $raw | ConvertFrom-Json -ErrorAction Stop
                 $value = ($cfg.agent_id)
                 if ($value) { return ($value.ToString()).Trim() }
+            }
+        } catch {}
+    }
+
+    return ''
+}
+
+function Get-AgentGuid {
+    param(
+        [string]$AgentRoot
+    )
+
+    $candidates = @()
+    if (-not $AgentRoot) { $AgentRoot = $scriptDir }
+    if ($AgentRoot) { $candidates += (Join-Path $AgentRoot 'agent_GUID') }
+    $defaultPath = Join-Path $scriptDir 'Agent\Borealis\agent_GUID'
+    if ($defaultPath -and ($candidates -notcontains $defaultPath)) { $candidates += $defaultPath }
+
+    foreach ($path in ($candidates | Select-Object -Unique)) {
+        try {
+            if (Test-Path $path -PathType Leaf) {
+                $value = (Get-Content -Path $path -Raw -ErrorAction Stop)
+                if ($value) { return $value.Trim() }
             }
         } catch {}
     }
@@ -310,16 +334,21 @@ function Submit-AgentHash {
         [string]$AgentId,
 
         [Parameter(Mandatory = $true)]
-        [string]$AgentHash
+        [string]$AgentHash,
+
+        [string]$AgentGuid
     )
 
-    if ([string]::IsNullOrWhiteSpace($ServerBaseUrl) -or [string]::IsNullOrWhiteSpace($AgentId) -or [string]::IsNullOrWhiteSpace($AgentHash)) {
+    if ([string]::IsNullOrWhiteSpace($ServerBaseUrl) -or [string]::IsNullOrWhiteSpace($AgentHash)) {
         return
     }
 
     $base = $ServerBaseUrl.TrimEnd('/')
     $uri = "$base/api/agent/hash"
-    $payload = @{ agent_id = $AgentId; agent_hash = $AgentHash } | ConvertTo-Json -Depth 3
+    $payloadBody = @{ agent_hash = $AgentHash }
+    if (-not [string]::IsNullOrWhiteSpace($AgentId)) { $payloadBody.agent_id = $AgentId }
+    if (-not [string]::IsNullOrWhiteSpace($AgentGuid)) { $payloadBody.agent_guid = $AgentGuid }
+    $payload = $payloadBody | ConvertTo-Json -Depth 3
     $headers = @{ 'User-Agent' = 'borealis-agent-updater' }
 
     $resp = Invoke-WebRequest -Uri $uri -Method Post -Headers $headers -Body $payload -ContentType 'application/json' -UseBasicParsing -ErrorAction Stop
@@ -338,6 +367,7 @@ function Sync-AgentHashRecord {
         [string]$AgentHash,
         [string]$ServerBaseUrl,
         [string]$AgentId,
+        [string]$AgentGuid,
         [string]$BranchName = 'main'
     )
 
@@ -354,13 +384,13 @@ function Sync-AgentHashRecord {
 
     Write-Host ("Submitting agent hash to server: {0}" -f $AgentHash)
 
-    if ([string]::IsNullOrWhiteSpace($AgentId)) {
-        Write-Host "Agent ID unavailable; skipping agent hash submission." -ForegroundColor DarkYellow
+    if ([string]::IsNullOrWhiteSpace($AgentId) -and [string]::IsNullOrWhiteSpace($AgentGuid)) {
+        Write-Host "Agent identifier unavailable; skipping agent hash submission." -ForegroundColor DarkYellow
         return
     }
 
     try {
-        $submitResult = Submit-AgentHash -ServerBaseUrl $ServerBaseUrl -AgentId $AgentId -AgentHash $AgentHash
+        $submitResult = Submit-AgentHash -ServerBaseUrl $ServerBaseUrl -AgentId $AgentId -AgentHash $AgentHash -AgentGuid $AgentGuid
         if ($submitResult -and ($submitResult.status -eq 'ok')) {
             Write-Host "Server agent_hash database record updated successfully."
         } elseif ($submitResult -and ($submitResult.status -eq 'ignored')) {
@@ -441,6 +471,15 @@ function Invoke-BorealisAgentUpdate {
         }
     }
 
+    $agentGuid = Get-AgentGuid -AgentRoot $agentRoot
+    if ($agentGuid) {
+        Write-Host ("Agent GUID: {0}" -f $agentGuid)
+    } else {
+        Write-Host "Warning: No agent GUID detected - Please deploy the agent, associating it with a Borealis server then try running the updater script again." -ForegroundColor Yellow
+        Write-Host "⚠️ Borealis update aborted."
+        return
+    }
+
     $currentHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot
     $serverBaseUrl = Get-BorealisServerUrl -AgentRoot $agentRoot
     $agentId = Get-AgentServiceId -AgentRoot $agentRoot
@@ -485,7 +524,7 @@ function Invoke-BorealisAgentUpdate {
         return
     } elseif (-not $needsUpdate) {
         Write-Host "Local agent files already match the server repository hash." -ForegroundColor Green
-        Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -BranchName $serverBranch
+        Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -BranchName $serverBranch
         Write-Host "✅ Borealis - Automation Platform Already Up-to-Date"
         return
     } else {
@@ -555,7 +594,7 @@ function Invoke-BorealisAgentUpdate {
         }
 
         if ($newHash) {
-            Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -BranchName $serverBranch
+            Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -BranchName $serverBranch
         } else {
             Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
         }

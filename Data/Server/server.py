@@ -401,6 +401,7 @@ def _lookup_agent_hash_record(agent_id: str) -> Optional[Dict[str, Any]]:
 
     info = registered_agents.get(agent_id) or {}
     candidate = (info.get('agent_hash') or '').strip()
+    candidate_guid = _normalize_guid(info.get('agent_guid')) if info.get('agent_guid') else ''
     hostname = (info.get('hostname') or '').strip()
     if candidate:
         payload: Dict[str, Any] = {
@@ -410,6 +411,8 @@ def _lookup_agent_hash_record(agent_id: str) -> Optional[Dict[str, Any]]:
         }
         if hostname:
             payload['hostname'] = hostname
+        if candidate_guid:
+            payload['agent_guid'] = candidate_guid
         return payload
 
     conn = None
@@ -437,6 +440,9 @@ def _lookup_agent_hash_record(agent_id: str) -> Optional[Dict[str, Any]]:
                             'hostname': row.get('hostname') or effective_hostname,
                             'source': 'database',
                         }
+                        row_guid = _normalize_guid(row.get('guid')) if row.get('guid') else ''
+                        if row_guid:
+                            payload['agent_guid'] = row_guid
                         return payload
             first = rows[0]
             fallback_hash = (first.get('agent_hash') or '').strip()
@@ -453,9 +459,12 @@ def _lookup_agent_hash_record(agent_id: str) -> Optional[Dict[str, Any]]:
                     'hostname': first.get('hostname') or effective_hostname,
                     'source': 'database',
                 }
+                row_guid = _normalize_guid(first.get('guid')) if first.get('guid') else ''
+                if row_guid:
+                    payload['agent_guid'] = row_guid
                 return payload
-        cur.execute('SELECT hostname, agent_hash, details FROM device_details')
-        for host, db_hash, details_json in cur.fetchall():
+        cur.execute('SELECT hostname, agent_hash, details, guid FROM device_details')
+        for host, db_hash, details_json, row_guid in cur.fetchall():
             try:
                 data = json.loads(details_json or '{}')
             except Exception:
@@ -467,12 +476,18 @@ def _lookup_agent_hash_record(agent_id: str) -> Optional[Dict[str, Any]]:
             summary_hash = (summary.get('agent_hash') or '').strip()
             normalized_hash = (db_hash or '').strip() or summary_hash
             if normalized_hash:
-                return {
+                payload = {
                     'agent_id': agent_id,
                     'agent_hash': normalized_hash,
                     'hostname': host,
                     'source': 'database',
                 }
+                normalized_guid = _normalize_guid(row_guid) if row_guid else ''
+                if not normalized_guid:
+                    normalized_guid = _normalize_guid(summary.get('agent_guid')) if summary.get('agent_guid') else ''
+                if normalized_guid:
+                    payload['agent_guid'] = normalized_guid
+                return payload
     finally:
         if conn:
             try:
@@ -482,41 +497,156 @@ def _lookup_agent_hash_record(agent_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _apply_agent_hash_update(agent_id: str, agent_hash: str) -> Tuple[Dict[str, Any], int]:
+def _lookup_agent_hash_by_guid(agent_guid: str) -> Optional[Dict[str, Any]]:
+    normalized_guid = _normalize_guid(agent_guid)
+    if not normalized_guid:
+        return None
+
+    # Prefer in-memory record when available
+    for aid, rec in registered_agents.items():
+        try:
+            if _normalize_guid(rec.get('agent_guid')) == normalized_guid:
+                candidate_hash = (rec.get('agent_hash') or '').strip()
+                if candidate_hash:
+                    payload: Dict[str, Any] = {
+                        'agent_guid': normalized_guid,
+                        'agent_hash': candidate_hash,
+                        'source': 'memory',
+                    }
+                    hostname = (rec.get('hostname') or '').strip()
+                    if hostname:
+                        payload['hostname'] = hostname
+                    if aid:
+                        payload['agent_id'] = aid
+                    return payload
+                break
+        except Exception:
+            continue
+
+    conn = None
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT hostname, agent_hash, details FROM device_details WHERE guid = ?',
+            (normalized_guid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        hostname, agent_hash, details_json = row
+        try:
+            details = json.loads(details_json or '{}')
+        except Exception:
+            details = {}
+        summary = details.get('summary') or {}
+        agent_id = (summary.get('agent_id') or '').strip()
+        normalized_hash = (agent_hash or summary.get('agent_hash') or '').strip()
+        payload = {
+            'agent_guid': normalized_guid,
+            'agent_hash': normalized_hash,
+            'hostname': hostname,
+            'source': 'database',
+        }
+        if agent_id:
+            payload['agent_id'] = agent_id
+        return payload
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _apply_agent_hash_update(agent_id: str, agent_hash: str, agent_guid: Optional[str] = None) -> Tuple[Dict[str, Any], int]:
     agent_id = (agent_id or '').strip()
     agent_hash = (agent_hash or '').strip()
-    if not agent_id or not agent_hash:
-        return {'error': 'agent_id and agent_hash required'}, 400
+    normalized_guid = _normalize_guid(agent_guid)
+    if not agent_hash or (not agent_id and not normalized_guid):
+        return {'error': 'agent_hash and agent_guid or agent_id required'}, 400
 
     conn = None
     hostname = None
+    resolved_agent_id = agent_id
     response_payload: Optional[Dict[str, Any]] = None
     status_code = 200
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        rows = _device_rows_for_agent(cur, agent_id)
-        target = None
-        for row in rows:
-            if row.get('matched'):
-                target = row
-                break
-        if not target:
+        updated_via_guid = False
+        if normalized_guid:
+            cur.execute(
+                'SELECT hostname, details FROM device_details WHERE guid = ?',
+                (normalized_guid,),
+            )
+            row = cur.fetchone()
+            if row:
+                updated_via_guid = True
+                hostname = row[0]
+                try:
+                    details = json.loads(row[1] or '{}')
+                except Exception:
+                    details = {}
+                summary = details.setdefault('summary', {})
+                if not resolved_agent_id:
+                    resolved_agent_id = (summary.get('agent_id') or '').strip()
+                if resolved_agent_id:
+                    summary['agent_id'] = resolved_agent_id
+                summary['agent_hash'] = agent_hash
+                summary['agent_guid'] = normalized_guid
+                cur.execute(
+                    'UPDATE device_details SET agent_hash=?, details=? WHERE hostname=?',
+                    (agent_hash, json.dumps(details), hostname),
+                )
+                conn.commit()
+            elif not agent_id:
+                response_payload = {
+                    'status': 'ignored',
+                    'agent_guid': normalized_guid,
+                    'agent_hash': agent_hash,
+                }
+
+        if response_payload is None and not updated_via_guid:
+            target = None
+            rows = _device_rows_for_agent(cur, resolved_agent_id)
+            for row in rows:
+                if row.get('matched'):
+                    target = row
+                    break
+            if not target and rows:
+                target = rows[0]
+            if not target:
+                response_payload = {
+                    'status': 'ignored',
+                    'agent_id': resolved_agent_id,
+                    'agent_hash': agent_hash,
+                }
+            else:
+                hostname = target.get('hostname')
+                details = target.get('details') or {}
+                summary = details.setdefault('summary', {})
+                summary['agent_hash'] = agent_hash
+                if normalized_guid:
+                    summary['agent_guid'] = normalized_guid
+                if resolved_agent_id:
+                    summary['agent_id'] = resolved_agent_id
+                cur.execute(
+                    'UPDATE device_details SET agent_hash=?, details=? WHERE hostname=?',
+                    (agent_hash, json.dumps(details), hostname),
+                )
+                conn.commit()
+                if not normalized_guid:
+                    normalized_guid = _normalize_guid(target.get('guid')) if target.get('guid') else ''
+                if not normalized_guid:
+                    normalized_guid = _normalize_guid((summary.get('agent_guid') or '')) if summary else ''
+        elif response_payload is None and normalized_guid and not hostname:
+            # GUID provided and update attempted but hostname not resolved
             response_payload = {
                 'status': 'ignored',
-                'agent_id': agent_id,
+                'agent_guid': normalized_guid,
                 'agent_hash': agent_hash,
             }
-        else:
-            hostname = target.get('hostname')
-            details = target.get('details') or {}
-            summary = details.setdefault('summary', {})
-            summary['agent_hash'] = agent_hash
-            cur.execute(
-                'UPDATE device_details SET agent_hash=?, details=? WHERE hostname=?',
-                (agent_hash, json.dumps(details), hostname),
-            )
-            conn.commit()
     except Exception as exc:
         if conn:
             try:
@@ -536,36 +666,59 @@ def _apply_agent_hash_update(agent_id: str, agent_hash: str) -> Tuple[Dict[str, 
         return response_payload, status_code
 
     normalized_hash = agent_hash
-    if agent_id in registered_agents:
-        registered_agents[agent_id]['agent_hash'] = normalized_hash
-    try:
-        for aid, rec in registered_agents.items():
-            if rec.get('hostname') and hostname and rec['hostname'] == hostname:
-                rec['agent_hash'] = normalized_hash
-    except Exception:
-        pass
+    if normalized_guid:
+        try:
+            for aid, rec in registered_agents.items():
+                guid_candidate = _normalize_guid(rec.get('agent_guid'))
+                if guid_candidate == normalized_guid or (resolved_agent_id and aid == resolved_agent_id):
+                    rec['agent_hash'] = normalized_hash
+                    rec['agent_guid'] = normalized_guid
+                    if not resolved_agent_id:
+                        resolved_agent_id = aid
+        except Exception:
+            pass
+    if resolved_agent_id and resolved_agent_id in registered_agents:
+        registered_agents[resolved_agent_id]['agent_hash'] = normalized_hash
+        if normalized_guid:
+            registered_agents[resolved_agent_id]['agent_guid'] = normalized_guid
+    if hostname:
+        try:
+            for aid, rec in registered_agents.items():
+                if rec.get('hostname') and rec['hostname'] == hostname:
+                    rec['agent_hash'] = normalized_hash
+                    if normalized_guid:
+                        rec['agent_guid'] = normalized_guid
+        except Exception:
+            pass
 
     payload: Dict[str, Any] = {
         'status': 'ok',
-        'agent_id': agent_id,
         'agent_hash': agent_hash,
     }
+    if resolved_agent_id:
+        payload['agent_id'] = resolved_agent_id
     if hostname:
         payload['hostname'] = hostname
+    if normalized_guid:
+        payload['agent_guid'] = normalized_guid
     return payload, 200
 
 
 @app.route("/api/agent/hash", methods=["GET", "POST"])
 def api_agent_hash():
     if request.method == 'GET':
+        agent_guid = _normalize_guid(request.args.get('agent_guid'))
         agent_id = (request.args.get('agent_id') or request.args.get('id') or '').strip()
-        if not agent_id:
+        if not agent_guid and not agent_id:
             data = request.get_json(silent=True) or {}
-            agent_id = (data.get('agent_id') or '').strip()
-        if not agent_id:
-            return jsonify({'error': 'agent_id required'}), 400
+            agent_guid = _normalize_guid(data.get('agent_guid')) if data else agent_guid
+            agent_id = (data.get('agent_id') or '').strip() if data else agent_id
         try:
-            record = _lookup_agent_hash_record(agent_id)
+            record = None
+            if agent_guid:
+                record = _lookup_agent_hash_by_guid(agent_guid)
+            if not record and agent_id:
+                record = _lookup_agent_hash_record(agent_id)
         except Exception as exc:
             _write_service_log('server', f'/api/agent/hash lookup error: {exc}')
             return jsonify({'error': 'internal error'}), 500
@@ -576,7 +729,8 @@ def api_agent_hash():
     data = request.get_json(silent=True) or {}
     agent_id = (data.get('agent_id') or '').strip()
     agent_hash = (data.get('agent_hash') or '').strip()
-    payload, status = _apply_agent_hash_update(agent_id, agent_hash)
+    agent_guid = _normalize_guid(data.get('agent_guid')) if data else None
+    payload, status = _apply_agent_hash_update(agent_id, agent_hash, agent_guid)
     return jsonify(payload), status
 
 
@@ -746,6 +900,7 @@ def api_login():
         # update last_login
         now = _now_ts()
         cur.execute("UPDATE users SET last_login=?, updated_at=? WHERE id=?", (now, now, row[0]))
+        conn.commit()
         conn.commit()
         conn.close()
         # set session cookie
@@ -2209,7 +2364,7 @@ def init_db():
 
     # Device details table
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS device_details (hostname TEXT PRIMARY KEY, description TEXT, details TEXT, created_at INTEGER, agent_hash TEXT)"
+        "CREATE TABLE IF NOT EXISTS device_details (hostname TEXT PRIMARY KEY, description TEXT, details TEXT, created_at INTEGER, agent_hash TEXT, guid TEXT)"
     )
     # Backfill missing created_at column on existing installs
     try:
@@ -2219,6 +2374,8 @@ def init_db():
             cur.execute("ALTER TABLE device_details ADD COLUMN created_at INTEGER")
         if 'agent_hash' not in cols:
             cur.execute("ALTER TABLE device_details ADD COLUMN agent_hash TEXT")
+        if 'guid' not in cols:
+            cur.execute("ALTER TABLE device_details ADD COLUMN guid TEXT")
     except Exception:
         pass
 
@@ -2980,7 +3137,7 @@ def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
         conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT details, description, created_at FROM device_details WHERE hostname = ?",
+            "SELECT details, description, created_at, guid FROM device_details WHERE hostname = ?",
             (hostname,),
         )
         row = cur.fetchone()
@@ -3007,6 +3164,12 @@ def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
                 summary["agent_id"] = str(agent_id)
             except Exception:
                 pass
+        try:
+            existing_guid = (row[3] or "").strip() if row and len(row) > 3 else ""
+        except Exception:
+            existing_guid = ""
+        if existing_guid and not summary.get("agent_guid"):
+            summary["agent_guid"] = _normalize_guid(existing_guid)
         details["summary"] = summary
 
         now = int(time.time())
@@ -3042,8 +3205,9 @@ def load_agents_from_db():
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        cur.execute("SELECT hostname, details, agent_hash FROM device_details")
-        for hostname, details_json, agent_hash in cur.fetchall():
+        cur.execute("SELECT hostname, details, agent_hash, guid FROM device_details")
+        rows = cur.fetchall()
+        for hostname, details_json, agent_hash, guid in rows:
             try:
                 details = json.loads(details_json or "{}")
             except Exception:
@@ -3055,6 +3219,16 @@ def load_agents_from_db():
                 stored_hash = (agent_hash or summary.get("agent_hash") or "").strip()
             except Exception:
                 stored_hash = summary.get("agent_hash") or ""
+            agent_guid = (summary.get("agent_guid") or guid or "").strip()
+            if guid and not summary.get("agent_guid"):
+                summary["agent_guid"] = _normalize_guid(guid)
+                try:
+                    cur.execute(
+                        "UPDATE device_details SET details=? WHERE hostname=?",
+                        (json.dumps(details), hostname),
+                    )
+                except Exception:
+                    pass
             registered_agents[agent_id] = {
                 "agent_id": agent_id,
                 "hostname": summary.get("hostname") or hostname,
@@ -3067,6 +3241,8 @@ def load_agents_from_db():
             }
             if stored_hash:
                 registered_agents[agent_id]["agent_hash"] = stored_hash
+            if agent_guid:
+                registered_agents[agent_id]["agent_guid"] = _normalize_guid(agent_guid)
         conn.close()
     except Exception as e:
         print(f"[WARN] Failed to load agents from DB: {e}")
@@ -3100,13 +3276,13 @@ def _device_rows_for_agent(cur, agent_id: str) -> List[Dict[str, Any]]:
         return results
     try:
         cur.execute(
-            "SELECT hostname, agent_hash, details FROM device_details WHERE LOWER(hostname) = ?",
+            "SELECT hostname, agent_hash, details, guid FROM device_details WHERE LOWER(hostname) = ?",
             (base_host.lower(),),
         )
         rows = cur.fetchall()
     except Exception:
         return results
-    for hostname, agent_hash, details_json in rows or []:
+    for hostname, agent_hash, details_json, guid in rows or []:
         try:
             details = json.loads(details_json or "{}")
         except Exception:
@@ -3121,9 +3297,120 @@ def _device_rows_for_agent(cur, agent_id: str) -> List[Dict[str, Any]]:
                 "details": details,
                 "summary_agent_id": summary_agent,
                 "matched": matched,
+                "guid": (guid or "").strip(),
             }
         )
     return results
+
+
+def _normalize_guid(value: Optional[str]) -> str:
+    candidate = (value or "").strip()
+    if not candidate:
+        return ""
+    try:
+        return str(uuid.UUID(candidate))
+    except Exception:
+        return candidate
+
+
+def _ensure_agent_guid_for_hostname(cur, hostname: str, agent_id: Optional[str] = None) -> Optional[str]:
+    normalized_host = (hostname or "").strip()
+    if not normalized_host:
+        return None
+    cur.execute(
+        "SELECT hostname, guid, details FROM device_details WHERE LOWER(hostname) = ?",
+        (normalized_host.lower(),),
+    )
+    row = cur.fetchone()
+    if row:
+        actual_host, existing_guid, details_json = row
+    else:
+        actual_host, existing_guid, details_json = normalized_host, "", "{}"
+    try:
+        details = json.loads(details_json or "{}")
+    except Exception:
+        details = {}
+    summary = details.setdefault("summary", {})
+    if agent_id and not summary.get("agent_id"):
+        try:
+            summary["agent_id"] = str(agent_id)
+        except Exception:
+            summary["agent_id"] = agent_id
+    if actual_host and not summary.get("hostname"):
+        summary["hostname"] = actual_host
+
+    if existing_guid:
+        normalized = _normalize_guid(existing_guid)
+        summary.setdefault("agent_guid", normalized)
+        cur.execute(
+            "UPDATE device_details SET guid=?, details=? WHERE hostname=?",
+            (normalized, json.dumps(details), actual_host),
+        )
+        return summary.get("agent_guid") or normalized
+
+    new_guid = str(uuid.uuid4())
+    summary["agent_guid"] = new_guid
+    now = int(time.time())
+    cur.execute(
+        """
+        INSERT INTO device_details(hostname, description, details, created_at, guid)
+        VALUES (?, COALESCE((SELECT description FROM device_details WHERE hostname = ?), ''), ?, COALESCE((SELECT created_at FROM device_details WHERE hostname = ?), ?), ?)
+        ON CONFLICT(hostname) DO UPDATE SET
+            guid=excluded.guid,
+            details=excluded.details,
+            created_at=COALESCE(device_details.created_at, excluded.created_at),
+            description=COALESCE(device_details.description, excluded.description)
+        """,
+        (actual_host, actual_host, json.dumps(details), actual_host, now, new_guid),
+    )
+    return new_guid
+
+
+def _ensure_agent_guid(agent_id: str, hostname: Optional[str] = None) -> Optional[str]:
+    agent_id = (agent_id or "").strip()
+    normalized_host = (hostname or "").strip()
+    conn = None
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        rows = _device_rows_for_agent(cur, agent_id) if agent_id else []
+        for row in rows:
+            candidate = _normalize_guid(row.get("guid"))
+            if candidate:
+                summary = row.get("details", {}).setdefault("summary", {})
+                summary.setdefault("agent_guid", candidate)
+                cur.execute(
+                    "UPDATE device_details SET guid=?, details=? WHERE hostname=?",
+                    (candidate, json.dumps(row.get("details", {})), row.get("hostname")),
+                )
+                conn.commit()
+                return candidate
+
+        target_host = normalized_host
+        if not target_host:
+            for row in rows:
+                if row.get("matched"):
+                    target_host = row.get("hostname")
+                    break
+            if not target_host and rows:
+                target_host = rows[0].get("hostname")
+        if not target_host and agent_id and agent_id in registered_agents:
+            target_host = registered_agents[agent_id].get("hostname")
+        if not target_host:
+            return None
+
+        guid = _ensure_agent_guid_for_hostname(cur, target_host, agent_id)
+        conn.commit()
+        return guid
+    except Exception as exc:
+        _write_service_log('server', f'ensure_agent_guid failure for {agent_id or hostname}: {exc}')
+        return None
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 @app.route("/api/agents")
 def get_agents():
@@ -3188,6 +3475,11 @@ def save_agent_details():
         agent_hash = agent_hash.strip() or None
     else:
         agent_hash = None
+    agent_guid = data.get("agent_guid")
+    if isinstance(agent_guid, str):
+        agent_guid = agent_guid.strip() or None
+    else:
+        agent_guid = None
     if not hostname and isinstance(details, dict):
         hostname = (details.get("summary") or {}).get("hostname")
     if not hostname or not isinstance(details, dict):
@@ -3197,13 +3489,14 @@ def save_agent_details():
         cur = conn.cursor()
         # Load existing row to preserve description and created_at and merge fields
         cur.execute(
-            "SELECT details, description, created_at FROM device_details WHERE hostname = ?",
+            "SELECT details, description, created_at, guid FROM device_details WHERE hostname = ?",
             (hostname,),
         )
         row = cur.fetchone()
         prev_details = {}
         description = ""
         created_at = 0
+        existing_guid = None
         if row:
             try:
                 prev_details = json.loads(row[0] or '{}')
@@ -3214,6 +3507,12 @@ def save_agent_details():
                 created_at = int(row[2] or 0)
             except Exception:
                 created_at = 0
+            try:
+                existing_guid = (row[3] or "").strip()
+            except Exception:
+                existing_guid = None
+        else:
+            existing_guid = None
 
         # Ensure summary exists and attach hostname/agent_id if missing
         incoming_summary = details.setdefault("summary", {})
@@ -3229,6 +3528,10 @@ def save_agent_details():
                 incoming_summary["agent_hash"] = agent_hash
             except Exception:
                 pass
+        effective_guid = agent_guid or existing_guid
+        normalized_effective_guid = _normalize_guid(effective_guid) if effective_guid else None
+        if normalized_effective_guid:
+            incoming_summary["agent_guid"] = normalized_effective_guid
 
         # Preserve last_seen if incoming omitted it
         if not incoming_summary.get("last_seen"):
@@ -3284,15 +3587,23 @@ def save_agent_details():
         # Upsert row without destroying created_at; keep previous created_at if exists
         cur.execute(
             """
-            INSERT INTO device_details(hostname, description, details, created_at, agent_hash)
-            VALUES (?,?,?,?,?)
+            INSERT INTO device_details(hostname, description, details, created_at, agent_hash, guid)
+            VALUES (?,?,?,?,?,?)
             ON CONFLICT(hostname) DO UPDATE SET
                 description=excluded.description,
                 details=excluded.details,
                 created_at=COALESCE(device_details.created_at, excluded.created_at),
-                agent_hash=COALESCE(NULLIF(excluded.agent_hash, ''), device_details.agent_hash)
+                agent_hash=COALESCE(NULLIF(excluded.agent_hash, ''), device_details.agent_hash),
+                guid=COALESCE(NULLIF(excluded.guid, ''), device_details.guid)
             """,
-            (hostname, description, json.dumps(merged), created_at, agent_hash or None),
+            (
+                hostname,
+                description,
+                json.dumps(merged),
+                created_at,
+                agent_hash or None,
+                (normalized_effective_guid or None),
+            ),
         )
         conn.commit()
         conn.close()
@@ -3302,16 +3613,20 @@ def save_agent_details():
             normalized_hash = (agent_hash or (merged.get("summary") or {}).get("agent_hash") or "").strip()
         except Exception:
             normalized_hash = agent_hash
-        if normalized_hash:
-            if agent_id and agent_id in registered_agents:
+        if agent_id and agent_id in registered_agents:
+            if normalized_hash:
                 registered_agents[agent_id]["agent_hash"] = normalized_hash
-            # Also update any entries keyed by hostname (duplicate agents)
-            try:
-                for aid, rec in registered_agents.items():
-                    if rec.get("hostname") == hostname and normalized_hash:
-                        rec["agent_hash"] = normalized_hash
-            except Exception:
-                pass
+            if normalized_effective_guid:
+                registered_agents[agent_id]["agent_guid"] = normalized_effective_guid
+        # Also update any entries keyed by hostname (duplicate agents)
+        try:
+            for aid, rec in registered_agents.items():
+                if rec.get("hostname") == hostname and normalized_hash:
+                    rec["agent_hash"] = normalized_hash
+                if rec.get("hostname") == hostname and normalized_effective_guid:
+                    rec["agent_guid"] = normalized_effective_guid
+        except Exception:
+            pass
         return jsonify({"status": "ok"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -3323,7 +3638,7 @@ def get_device_details(hostname: str):
         conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT details, description, created_at, agent_hash FROM device_details WHERE hostname = ?",
+            "SELECT details, description, created_at, agent_hash, guid FROM device_details WHERE hostname = ?",
             (hostname,),
         )
         row = cur.fetchone()
@@ -3352,6 +3667,15 @@ def get_device_details(hostname: str):
                         details['summary']['agent_hash'] = agent_hash
                 except Exception:
                     pass
+            if len(row) > 4:
+                agent_guid = (row[4] or "").strip()
+                if agent_guid:
+                    try:
+                        details.setdefault('summary', {})
+                        if not details['summary'].get('agent_guid'):
+                            details['summary']['agent_guid'] = _normalize_guid(agent_guid)
+                    except Exception:
+                        pass
             return jsonify(details)
     except Exception:
         pass
@@ -3915,6 +4239,7 @@ def api_agent_checkin():
     username = raw_username or DEFAULT_SERVICE_ACCOUNT
     if username in LEGACY_SERVICE_ACCOUNTS:
         username = DEFAULT_SERVICE_ACCOUNT
+    hostname = (payload.get('hostname') or '').strip()
     try:
         conn = _db_conn()
         row = _service_acct_get(conn, agent_id)
@@ -3947,10 +4272,22 @@ def api_agent_checkin():
                 }
         conn.close()
         _ansible_log_server(f"[checkin] return creds agent_id={agent_id} user={out['username']}")
+        try:
+            if hostname:
+                _persist_last_seen(hostname, int(time.time()), agent_id)
+        except Exception:
+            pass
+        agent_guid = _ensure_agent_guid(agent_id, hostname or None)
+        if agent_guid and agent_id:
+            rec = registered_agents.setdefault(agent_id, {})
+            rec['agent_guid'] = agent_guid
+        else:
+            agent_guid = agent_guid or ''
         return jsonify({
             'username': out['username'],
             'password': out['password'],
-            'policy': { 'force_rotation_minutes': 43200 }
+            'policy': { 'force_rotation_minutes': 43200 },
+            'agent_guid': agent_guid or None,
         })
     except Exception as e:
         _ansible_log_server(f"[checkin] error agent_id={agent_id} err={e}")
