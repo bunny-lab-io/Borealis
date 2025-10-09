@@ -259,6 +259,12 @@ $npxCmd     = Join-Path (Split-Path $nodeExe) 'npx.cmd'
 $node7zUrl      = "https://nodejs.org/dist/v23.11.0/node-v23.11.0-win-x64.7z"
 $nodeInstallDir = Join-Path $depsRoot "NodeJS"
 $node7zPath     = Join-Path $depsRoot "node-v23.11.0-win-x64.7z"
+$gitVersionTag  = 'v2.47.1.windows.1'
+$gitPackageName = 'MinGit-2.47.1-64-bit.zip'
+$gitZipUrl      = "https://github.com/git-for-windows/git/releases/download/$gitVersionTag/$gitPackageName"
+$gitZipPath     = Join-Path $depsRoot $gitPackageName
+$gitInstallDir  = Join-Path $depsRoot 'git'
+$gitExePath     = Join-Path $gitInstallDir 'cmd\git.exe'
 
 # ---------------------- Dependency Installation Functions ----------------------
 function Install_Shared_Dependencies {
@@ -412,6 +418,32 @@ function Install_Agent_Dependencies {
 
             if (-not (Test-Path $ahkExePath)) {
                 throw "AutoHotKey executable not found after extraction."
+            }
+        }
+    }
+
+    # Portable Git client for agent updates
+    Run-Step "Dependency: Git CLI" {
+        if (-not (Test-Path $gitExePath)) {
+            if (-not (Test-Path $gitZipPath)) {
+                Invoke-WebRequest -Uri $gitZipUrl -OutFile $gitZipPath
+            }
+
+            if (-not (Test-Path $sevenZipExe)) {
+                throw "7-Zip CLI not found at: $sevenZipExe"
+            }
+
+            if (Test-Path $gitInstallDir) {
+                Remove-Item $gitInstallDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+
+            New-Item -ItemType Directory -Path $gitInstallDir | Out-Null
+            & $sevenZipExe x $gitZipPath "-o$gitInstallDir" -y | Out-Null
+
+            Remove-Item $gitZipPath -Force -ErrorAction SilentlyContinue
+
+            if (-not (Test-Path $gitExePath)) {
+                throw "Git executable not found after extraction."
             }
         }
     }

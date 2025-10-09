@@ -14,6 +14,7 @@ Borealis-Server.exe
 /Dependencies/NodeJS/
 /Dependencies/Python/
 /Dependencies/AutoHotKey/
+/Dependencies/git/
 /Data/Server/Python_API_Endpoints/Tesseract-OCR/
 
 # Misc Files/Folders
