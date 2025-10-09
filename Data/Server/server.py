@@ -29,6 +29,16 @@ try:
 except Exception:
     Fernet = None  # optional; we will fall back to reversible base64 if missing
 
+try:
+    import pyotp  # type: ignore
+except Exception:
+    pyotp = None  # type: ignore
+
+try:
+    import qrcode  # type: ignore
+except Exception:
+    qrcode = None  # type: ignore
+
 # Centralized logging (Server)
 def _server_logs_root() -> str:
     try:
@@ -946,6 +956,48 @@ def _sha512_hex(s: str) -> str:
     return hashlib.sha512((s or '').encode('utf-8')).hexdigest()
 
 
+def _generate_totp_secret() -> str:
+    if not pyotp:
+        raise RuntimeError("pyotp is not installed; MFA unavailable")
+    return pyotp.random_base32()
+
+
+def _totp_for_secret(secret: str):
+    if not pyotp:
+        raise RuntimeError("pyotp is not installed; MFA unavailable")
+    normalized = (secret or "").replace(" ", "").strip().upper()
+    if not normalized:
+        raise ValueError("empty MFA secret")
+    return pyotp.TOTP(normalized, digits=6, interval=30)
+
+
+def _totp_provisioning_uri(secret: str, username: str) -> Optional[str]:
+    try:
+        totp = _totp_for_secret(secret)
+    except Exception:
+        return None
+    issuer = os.environ.get('BOREALIS_MFA_ISSUER', 'Borealis')
+    try:
+        return totp.provisioning_uri(name=username, issuer_name=issuer)
+    except Exception:
+        return None
+
+
+def _totp_qr_data_uri(payload: str) -> Optional[str]:
+    if not payload:
+        return None
+    if qrcode is None:
+        return None
+    try:
+        img = qrcode.make(payload, box_size=6, border=4)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
+    except Exception:
+        return None
+
+
 def _db_conn():
     conn = sqlite3.connect(DB_PATH, timeout=15)
     try:
@@ -960,8 +1012,53 @@ def _db_conn():
     return conn
 
 
+def _update_last_login(username: str) -> None:
+    if not username:
+        return
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        now = _now_ts()
+        cur.execute(
+            "UPDATE users SET last_login=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
+            (now, now, username)
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _finalize_login(username: str, role: str):
+    session.pop("mfa_pending", None)
+    session["username"] = username
+    session["role"] = role
+    _update_last_login(username)
+    token = _make_token(username, role or "User")
+    resp = jsonify({"status": "ok", "username": username, "role": role, "token": token})
+    samesite = app.config.get("SESSION_COOKIE_SAMESITE", "Lax")
+    secure = bool(app.config.get("SESSION_COOKIE_SECURE", False))
+    domain = app.config.get("SESSION_COOKIE_DOMAIN", None)
+    resp.set_cookie(
+        "borealis_auth",
+        token,
+        httponly=False,
+        samesite=samesite,
+        secure=secure,
+        domain=domain,
+        path="/",
+    )
+    return resp
+
+
 def _user_row_to_dict(row):
-    # id, username, display_name, role, last_login, created_at, updated_at
+    # id, username, display_name, role, last_login, created_at, updated_at, mfa_enabled?, mfa_secret?
+    mfa_enabled = 0
+    if len(row) > 7:
+        try:
+            mfa_enabled = 1 if (row[7] or 0) else 0
+        except Exception:
+            mfa_enabled = 0
     return {
         "id": row[0],
         "username": row[1],
@@ -970,6 +1067,7 @@ def _user_row_to_dict(row):
         "last_login": row[4] or 0,
         "created_at": row[5] or 0,
         "updated_at": row[6] or 0,
+        "mfa_enabled": mfa_enabled,
     }
 
 
@@ -1047,7 +1145,20 @@ def api_login():
         conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, username, display_name, password_sha512, role, last_login, created_at, updated_at FROM users WHERE LOWER(username)=LOWER(?)",
+            """
+            SELECT
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                COALESCE(mfa_enabled, 0) AS mfa_enabled,
+                COALESCE(mfa_secret, '') AS mfa_secret
+            FROM users WHERE LOWER(username)=LOWER(?)
+            """,
             (username,)
         )
         row = cur.fetchone()
@@ -1060,26 +1171,58 @@ def api_login():
             conn.close()
             return jsonify({"error": "invalid username or password"}), 401
         role = row[4] or 'User'
-        # update last_login
-        now = _now_ts()
-        cur.execute("UPDATE users SET last_login=?, updated_at=? WHERE id=?", (now, now, row[0]))
-        conn.commit()
-        conn.commit()
-        conn.commit()
         conn.close()
-        # set session cookie
-        session['username'] = row[1]
-        session['role'] = role
+        mfa_enabled = bool(row[8] or 0)
+        existing_secret = (row[9] or '').strip()
 
-        # also issue a signed bearer token and set a dev-friendly cookie
-        token = _make_token(row[1], role)
-        resp = jsonify({"status": "ok", "username": row[1], "role": role, "token": token})
-        # mirror session cookie flags for the token cookie
-        samesite = app.config.get('SESSION_COOKIE_SAMESITE', 'Lax')
-        secure = bool(app.config.get('SESSION_COOKIE_SECURE', False))
-        domain = app.config.get('SESSION_COOKIE_DOMAIN', None)
-        resp.set_cookie('borealis_auth', token, httponly=False, samesite=samesite, secure=secure, domain=domain, path='/')
-        return resp
+        session.pop('username', None)
+        session.pop('role', None)
+
+        if not mfa_enabled:
+            session.pop('mfa_pending', None)
+            return _finalize_login(row[1], role)
+
+        # MFA required path
+        stage = 'verify' if existing_secret else 'setup'
+        pending_token = uuid.uuid4().hex
+        pending = {
+            "username": row[1],
+            "role": role,
+            "token": pending_token,
+            "stage": stage,
+            "expires": _now_ts() + 300  # 5 minutes window
+        }
+        secret = None
+        otpauth_url = None
+        qr_image = None
+        if stage == 'setup':
+            try:
+                secret = _generate_totp_secret()
+            except Exception as exc:
+                return jsonify({"error": f"MFA setup unavailable: {exc}"}), 500
+            pending['secret'] = secret
+            otpauth_url = _totp_provisioning_uri(secret, row[1])
+            if otpauth_url:
+                qr_image = _totp_qr_data_uri(otpauth_url)
+        else:
+            # For verification we rely on stored secret in DB
+            pending['secret'] = None
+        session['mfa_pending'] = pending
+        session.modified = True
+        resp_payload = {
+            "status": "mfa_required",
+            "stage": stage,
+            "pending_token": pending_token,
+            "username": row[1],
+            "role": role,
+        }
+        if stage == 'setup':
+            resp_payload.update({
+                "secret": secret,
+                "otpauth_url": otpauth_url,
+                "qr_image": qr_image,
+            })
+        return jsonify(resp_payload)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1091,6 +1234,61 @@ def api_logout():
     # Clear token cookie as well
     resp.set_cookie('borealis_auth', '', expires=0, path='/')
     return resp
+
+
+@app.route("/api/auth/mfa/verify", methods=["POST"])
+def api_mfa_verify():
+    pending = session.get("mfa_pending") or {}
+    if not pending or not isinstance(pending, dict):
+        return jsonify({"error": "mfa_pending"}), 401
+    payload = request.get_json(silent=True) or {}
+    token = (payload.get("pending_token") or "").strip()
+    code_raw = str(payload.get("code") or "").strip()
+    code = "".join(ch for ch in code_raw if ch.isdigit())
+    if not token or token != pending.get("token"):
+        return jsonify({"error": "invalid_session"}), 401
+    if pending.get("expires", 0) < _now_ts():
+        session.pop("mfa_pending", None)
+        return jsonify({"error": "expired"}), 401
+    if len(code) < 6:
+        return jsonify({"error": "invalid_code"}), 400
+    username = pending.get("username") or ""
+    role = pending.get("role") or "User"
+    stage = pending.get("stage") or "verify"
+    try:
+        if stage == "setup":
+            secret = pending.get("secret") or ""
+            totp = _totp_for_secret(secret)
+            if not totp.verify(code, valid_window=1):
+                return jsonify({"error": "invalid_code"}), 401
+            # Persist the secret only after successful verification
+            now = _now_ts()
+            conn = _db_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE users SET mfa_secret=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                (secret, now, username)
+            )
+            conn.commit()
+            conn.close()
+        else:
+            conn = _db_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COALESCE(mfa_secret,'') FROM users WHERE LOWER(username)=LOWER(?)",
+                (username,)
+            )
+            row = cur.fetchone()
+            conn.close()
+            secret = (row[0] or "").strip() if row else ""
+            if not secret:
+                return jsonify({"error": "mfa_not_configured"}), 403
+            totp = _totp_for_secret(secret)
+            if not totp.verify(code, valid_window=1):
+                return jsonify({"error": "invalid_code"}), 401
+        return _finalize_login(username, role)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/auth/me", methods=["GET"])  # whoami
@@ -1136,7 +1334,7 @@ def api_users_list():
         conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, username, display_name, role, last_login, created_at, updated_at FROM users ORDER BY LOWER(username) ASC"
+            "SELECT id, username, display_name, role, last_login, created_at, updated_at, COALESCE(mfa_enabled,0) FROM users ORDER BY LOWER(username) ASC"
         )
         rows = cur.fetchall()
         conn.close()
@@ -1149,6 +1347,7 @@ def api_users_list():
                 "last_login": r[4] or 0,
                 "created_at": r[5] or 0,
                 "updated_at": r[6] or 0,
+                "mfa_enabled": 1 if (r[7] or 0) else 0,
             }
             for r in rows
         ]
@@ -1286,6 +1485,51 @@ def api_users_change_role(username):
         return jsonify({"status": "ok"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/users/<username>/mfa", methods=["POST"])
+def api_users_toggle_mfa(username):
+    chk = _require_admin()
+    if chk:
+        return chk
+    username = (username or "").strip()
+    if not username:
+        return jsonify({"error": "invalid username"}), 400
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get("enabled"))
+    reset_secret = bool(data.get("reset_secret", False))
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        now = _now_ts()
+        if enabled:
+            cur.execute(
+                "UPDATE users SET mfa_enabled=1, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                (now, username)
+            )
+        else:
+            if reset_secret:
+                cur.execute(
+                    "UPDATE users SET mfa_enabled=0, mfa_secret=NULL, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                    (now, username)
+                )
+            else:
+                cur.execute(
+                    "UPDATE users SET mfa_enabled=0, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                    (now, username)
+                )
+        if cur.rowcount == 0:
+            conn.close()
+            return jsonify({"error": "user not found"}), 404
+        conn.commit()
+        conn.close()
+        # If the current user disabled MFA for themselves, clear pending session state
+        me = _current_user()
+        if me and me.get("username", "").lower() == username.lower() and not enabled:
+            session.pop("mfa_pending", None)
+        return jsonify({"status": "ok"})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 # ---------------------------------------------
 # Borealis Python API Endpoints
@@ -3116,10 +3360,23 @@ def init_db():
             role TEXT NOT NULL DEFAULT 'Admin',
             last_login INTEGER,
             created_at INTEGER,
-            updated_at INTEGER
+            updated_at INTEGER,
+            mfa_enabled INTEGER NOT NULL DEFAULT 0,
+            mfa_secret TEXT
         )
         """
     )
+
+    try:
+        cur.execute("PRAGMA table_info(users)")
+        user_cols = [r[1] for r in cur.fetchall()]
+        if "mfa_enabled" not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN mfa_enabled INTEGER NOT NULL DEFAULT 0")
+            user_cols.append("mfa_enabled")
+        if "mfa_secret" not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN mfa_secret TEXT")
+    except Exception:
+        pass
 
     # Ansible play recap storage (one row per playbook run/session)
     cur.execute(

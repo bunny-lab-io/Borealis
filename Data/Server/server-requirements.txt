@@ -11,6 +11,8 @@ flask_socketio
 flask-cors
 eventlet
 cryptography
+pyotp
+qrcode
 
 # GUI-related dependencies (Qt for GUI components)
 Qt.py

@@ -22,6 +22,7 @@ import {
   Select,
   FormControl,
   InputLabel,
+  Checkbox,
   Popover
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
@@ -87,6 +88,7 @@ export default function UserManagement({ isAdmin = false }) {
   const [warnOpen, setWarnOpen] = useState(false);
   const [warnMessage, setWarnMessage] = useState("");
   const [me, setMe] = useState(null);
+  const [mfaBusyUser, setMfaBusyUser] = useState(null);
 
   // Columns and filters
   const columns = useMemo(() => ([
@@ -94,6 +96,7 @@ export default function UserManagement({ isAdmin = false }) {
     { id: "username", label: "User Name" },
     { id: "last_login", label: "Last Login" },
     { id: "role", label: "User Role" },
+    { id: "mfa_enabled", label: "MFA" },
     { id: "actions", label: "" }
   ]), []);
   const [filters, setFilters] = useState({}); // id -> string
@@ -106,7 +109,16 @@ export default function UserManagement({ isAdmin = false }) {
     try {
       const res = await fetch("/api/users", { credentials: "include" });
       const data = await res.json();
-      setRows(Array.isArray(data?.users) ? data.users : []);
+      if (Array.isArray(data?.users)) {
+        setRows(
+          data.users.map((u) => ({
+            ...u,
+            mfa_enabled: u && typeof u.mfa_enabled !== "undefined" ? (u.mfa_enabled ? 1 : 0) : 0
+          }))
+        );
+      } else {
+        setRows([]);
+      }
     } catch {
       setRows([]);
     }
@@ -148,6 +160,7 @@ export default function UserManagement({ isAdmin = false }) {
     const arr = rows.filter(applyFilters);
     arr.sort((a, b) => {
       if (orderBy === "last_login") return ((a.last_login || 0) - (b.last_login || 0)) * dir;
+      if (orderBy === "mfa_enabled") return ((a.mfa_enabled ? 1 : 0) - (b.mfa_enabled ? 1 : 0)) * dir;
       return String(a[orderBy] ?? "").toLowerCase()
         .localeCompare(String(b[orderBy] ?? "").toLowerCase()) * dir;
     });
@@ -227,6 +240,55 @@ export default function UserManagement({ isAdmin = false }) {
       console.error(e);
       setWarnMessage("Failed to change role");
       setWarnOpen(true);
+    }
+  };
+
+  const toggleMfa = async (user, enabled) => {
+    if (!user) return;
+    const previous = Boolean(user.mfa_enabled);
+    const nextFlag = enabled ? 1 : 0;
+    setRows((prev) =>
+      prev.map((r) =>
+        String(r.username).toLowerCase() === String(user.username).toLowerCase()
+          ? { ...r, mfa_enabled: nextFlag }
+          : r
+      )
+    );
+    setMfaBusyUser(user.username);
+    try {
+      const resp = await fetch(`/api/users/${encodeURIComponent(user.username)}/mfa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ enabled })
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setRows((prev) =>
+          prev.map((r) =>
+            String(r.username).toLowerCase() === String(user.username).toLowerCase()
+              ? { ...r, mfa_enabled: previous ? 1 : 0 }
+              : r
+          )
+        );
+        setWarnMessage(data?.error || "Failed to update MFA settings.");
+        setWarnOpen(true);
+        return;
+      }
+      await fetchUsers();
+    } catch (e) {
+      console.error(e);
+      setRows((prev) =>
+        prev.map((r) =>
+          String(r.username).toLowerCase() === String(user.username).toLowerCase()
+            ? { ...r, mfa_enabled: previous ? 1 : 0 }
+            : r
+        )
+      );
+      setWarnMessage("Failed to update MFA settings.");
+      setWarnOpen(true);
+    } finally {
+      setMfaBusyUser(null);
     }
   };
 
@@ -358,6 +420,23 @@ export default function UserManagement({ isAdmin = false }) {
                 <TableCell>{u.username}</TableCell>
                 <TableCell>{formatTs(u.last_login)}</TableCell>
                 <TableCell>{u.role || "User"}</TableCell>
+                <TableCell align="center">
+                  <Checkbox
+                    size="small"
+                    checked={Boolean(u.mfa_enabled)}
+                    disabled={Boolean(mfaBusyUser && String(mfaBusyUser).toLowerCase() === String(u.username).toLowerCase())}
+                    onChange={(event) => {
+                      event.stopPropagation();
+                      toggleMfa(u, event.target.checked);
+                    }}
+                    onClick={(event) => event.stopPropagation()}
+                    sx={{
+                      color: "#888",
+                      "&.Mui-checked": { color: "#58a6ff" }
+                    }}
+                    inputProps={{ "aria-label": `Toggle MFA for ${u.username}` }}
+                  />
+                </TableCell>
                 <TableCell align="right">
                   <IconButton size="small" onClick={(e) => openMenu(e, u)} sx={{ color: "#ccc" }}>
                     <MoreVertIcon fontSize="inherit" />
