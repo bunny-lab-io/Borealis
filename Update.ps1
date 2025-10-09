@@ -585,9 +585,9 @@ function Invoke-BorealisUpdate {
 }
 
 function Invoke-BorealisAgentUpdate {
-    Write-Host "==================================="
-    Write-Host "Borealis - Automation Platform Updater Script"
-    Write-Host "==================================="
+    Write-Host "==============================================="
+    Write-Host " Borealis - Automation Platform Updater Script "
+    Write-Host "==============================================="
 
     $agentRootCandidate = Join-Path $scriptDir 'Agent\Borealis'
     $agentRoot = $scriptDir

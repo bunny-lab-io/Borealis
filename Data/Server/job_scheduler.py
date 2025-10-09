@@ -475,10 +475,33 @@ class JobScheduler:
             os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Ansible_Playbooks")
         )
 
-    def _dispatch_ansible(self, hostname: str, rel_path: str, scheduled_job_id: int, scheduled_run_id: int) -> Optional[Dict[str, Any]]:
+    def _dispatch_ansible(self, hostname: str, component: Dict[str, Any], scheduled_job_id: int, scheduled_run_id: int) -> Optional[Dict[str, Any]]:
         try:
-            import os, json, uuid
+            import os, uuid
             ans_root = self._ansible_root()
+            rel_path = ""
+            overrides_map: Dict[str, Any] = {}
+            if isinstance(component, dict):
+                rel_path = component.get("path") or component.get("playbook_path") or component.get("script_path") or ""
+                raw_overrides = component.get("variable_values")
+                if isinstance(raw_overrides, dict):
+                    for key, val in raw_overrides.items():
+                        name = str(key or "").strip()
+                        if not name:
+                            continue
+                        overrides_map[name] = val
+                comp_vars = component.get("variables")
+                if isinstance(comp_vars, list):
+                    for var in comp_vars:
+                        if not isinstance(var, dict):
+                            continue
+                        name = str(var.get("name") or "").strip()
+                        if not name or name in overrides_map:
+                            continue
+                        if "value" in var:
+                            overrides_map[name] = var.get("value")
+            else:
+                rel_path = str(component or "")
             rel_norm = (rel_path or "").replace("\\", "/").lstrip("/")
             abs_path = os.path.abspath(os.path.join(ans_root, rel_norm))
             if (not abs_path.startswith(ans_root)) or (not os.path.isfile(abs_path)):
@@ -528,6 +551,7 @@ class JobScheduler:
                 "connection": "winrm",
                 "variables": variables,
                 "files": files,
+                "variable_values": overrides_map,
             }
             try:
                 self.socketio.emit("ansible_playbook_run", payload)
@@ -908,7 +932,7 @@ class JobScheduler:
                 except Exception:
                     comps = []
                 script_components = []
-                ansible_paths = []
+                ansible_components = []
                 for c in comps:
                     try:
                         ctype = (c or {}).get("type")
@@ -921,7 +945,9 @@ class JobScheduler:
                         elif ctype == "ansible":
                             p = (c.get("path") or "").strip()
                             if p:
-                                ansible_paths.append(p)
+                                comp_copy = dict(c)
+                                comp_copy["path"] = p
+                                ansible_components.append(comp_copy)
                     except Exception:
                         continue
                 run_mode = (execution_context or "system").strip().lower()
@@ -1027,9 +1053,9 @@ class JobScheduler:
                                 except Exception:
                                     continue
                             # Dispatch ansible playbooks for this job to the target host
-                            for ap in ansible_paths:
+                            for comp in ansible_components:
                                 try:
-                                    link = self._dispatch_ansible(host, ap, job_id, run_row_id)
+                                    link = self._dispatch_ansible(host, comp, job_id, run_row_id)
                                     if link and link.get("activity_id"):
                                         activity_links.append({
                                             "run_id": run_row_id,

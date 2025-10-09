@@ -21,6 +21,19 @@ LEGACY_SERVICE_ACCOUNTS = {'.\\svcBorealisAnsibleRunner', 'svcBorealisAnsibleRun
 ROLE_NAME = 'playbook_exec_system'
 ROLE_CONTEXTS = ['system']
 
+REQUIRED_MODULES = {
+    'ansible': 'ansible-core>=2.15,<2.17',
+    'ansible_runner': 'ansible-runner>=2.3',
+    'winrm': 'pywinrm>=0.4.3',
+    'requests_ntlm': 'requests-ntlm>=1.2.0',
+    'requests_credssp': 'requests-credssp>=2.0',
+    'pypsrp': 'pypsrp>=0.8.1',
+}
+
+WINRM_USERNAME_VAR = '__borealis_winrm_username'
+WINRM_PASSWORD_VAR = '__borealis_winrm_password'
+WINRM_TRANSPORT_VAR = '__borealis_winrm_transport'
+
 
 def _project_root():
     try:
@@ -139,12 +152,286 @@ class Role:
         self.ctx = ctx
         self._runs = {}  # run_id -> { proc, task, cancel }
         self._svc_creds = None  # cache per-process: {username, password}
+        self._ansible_ready = False
+        self._ansible_bootstrap_lock = None
         try:
             base = os.path.join(_project_root(), 'Logs', 'Agent')
             os.makedirs(base, exist_ok=True)
             self._ansible_log(f"[init] PlaybookExec role init agent_id={ctx.agent_id}")
         except Exception:
             pass
+
+    def _bootstrap_marker_path(self) -> str:
+        try:
+            state_dir = os.path.join(_project_root(), 'Agent', 'Borealis', 'State')
+            os.makedirs(state_dir, exist_ok=True)
+            return os.path.join(state_dir, 'ansible_bootstrap.json')
+        except Exception:
+            tmp_dir = os.path.join(_project_root(), 'Temp')
+            try:
+                os.makedirs(tmp_dir, exist_ok=True)
+            except Exception:
+                pass
+            return os.path.join(tmp_dir, 'ansible_bootstrap.json')
+
+    def _detect_missing_modules(self) -> dict:
+        missing = {}
+        for module, spec in REQUIRED_MODULES.items():
+            try:
+                __import__(module)
+            except Exception:
+                missing[module] = spec
+        return missing
+
+    def _bootstrap_ansible_sync(self) -> bool:
+        missing = self._detect_missing_modules()
+        if not missing:
+            return True
+        specs = sorted({spec for spec in missing.values() if spec})
+        python_exe = _venv_python() or sys.executable
+        if not python_exe:
+            self._ansible_log('[bootstrap] python executable not found for pip install', error=True)
+            return False
+        cmd = [python_exe, '-m', 'pip', 'install', '--disable-pip-version-check'] + specs
+        self._ansible_log(f"[bootstrap] ensuring modules via pip: {', '.join(specs)}")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        except Exception as exc:
+            self._ansible_log(f"[bootstrap] pip install exception: {exc}", error=True)
+            return False
+        if result.returncode != 0:
+            err_tail = (result.stderr or '').strip()
+            if len(err_tail) > 500:
+                err_tail = err_tail[-500:]
+            self._ansible_log(f"[bootstrap] pip install failed rc={result.returncode} err={err_tail}", error=True)
+            return False
+        remaining = self._detect_missing_modules()
+        if remaining:
+            self._ansible_log(f"[bootstrap] modules still missing after install: {', '.join(sorted(remaining.keys()))}", error=True)
+            return False
+        try:
+            marker = self._bootstrap_marker_path()
+            payload = {
+                'timestamp': int(time.time()),
+                'modules': specs,
+            }
+            with open(marker, 'w', encoding='utf-8') as fh:
+                json.dump(payload, fh)
+        except Exception:
+            pass
+        return True
+
+    async def _ensure_ansible_ready(self) -> bool:
+        if getattr(self, '_ansible_ready', False):
+            return True
+        lock = getattr(self, '_ansible_bootstrap_lock', None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._ansible_bootstrap_lock = lock
+        async with lock:
+            if getattr(self, '_ansible_ready', False):
+                return True
+            loop = asyncio.get_running_loop()
+            success = await loop.run_in_executor(None, self._bootstrap_ansible_sync)
+            self._ansible_ready = bool(success)
+            if success:
+                self._ansible_log('[bootstrap] ansible dependencies ready')
+            else:
+                self._ansible_log('[bootstrap] unable to prepare ansible dependencies', error=True)
+            return success
+
+    def _stage_payload_files(self, base_dir: str, files) -> list:
+        staged = []
+        if not base_dir or not isinstance(files, list):
+            return staged
+        root = os.path.abspath(base_dir)
+        for idx, entry in enumerate(files):
+            if not isinstance(entry, dict):
+                continue
+            raw_name = entry.get('name') or entry.get('path') or f'payload_{idx}'
+            name = str(raw_name or '').replace('\\', '/').strip()
+            if not name:
+                continue
+            while name.startswith('/'):
+                name = name[1:]
+            if not name or '..' in name.split('/'):
+                continue
+            dest = os.path.abspath(os.path.join(root, name))
+            if not dest.startswith(root):
+                continue
+            try:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+            except Exception:
+                pass
+            content = entry.get('content')
+            if content is None:
+                content = entry.get('data')
+            if content is None:
+                content = entry.get('blob')
+            encoding = str(entry.get('encoding') or '').lower()
+            is_binary = bool(entry.get('binary'))
+            try:
+                if encoding in ('base64', 'b64', 'base-64'):
+                    raw = ''
+                    if isinstance(content, str):
+                        raw = ''.join(content.split())
+                    data = base64.b64decode(raw or '', validate=True)
+                    with open(dest, 'wb') as fh:
+                        fh.write(data)
+                elif is_binary:
+                    if isinstance(content, bytes):
+                        data = content
+                    elif isinstance(content, str):
+                        data = content.encode('utf-8')
+                    else:
+                        data = b''
+                    with open(dest, 'wb') as fh:
+                        fh.write(data)
+                else:
+                    text = content if isinstance(content, str) else ''
+                    with open(dest, 'w', encoding='utf-8', newline='\n') as fh:
+                        fh.write(text)
+                staged.append(dest)
+            except Exception as exc:
+                self._ansible_log(f"[files] failed to stage '{name}': {exc}", error=True)
+        return staged
+
+    def _coerce_variable_value(self, var_type: str, value):
+        typ = str(var_type or 'string').lower()
+        if typ == 'boolean':
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return value != 0
+            if value is None:
+                return False
+            s = str(value).strip().lower()
+            if s in {'true', '1', 'yes', 'on'}:
+                return True
+            if s in {'false', '0', 'no', 'off'}:
+                return False
+            return bool(s)
+        if typ == 'number':
+            if value is None or value == '':
+                return ''
+            try:
+                if isinstance(value, (int, float)):
+                    return value
+                s = str(value)
+                return int(s) if s.isdigit() else float(s)
+            except Exception:
+                return ''
+        return '' if value is None else str(value)
+
+    def _resolve_extra_vars(self, definitions, overrides: dict):
+        extra_vars = {}
+        meta = {}
+        doc_names = set()
+        defs = definitions if isinstance(definitions, list) else []
+        ovs = {}
+        if isinstance(overrides, dict):
+            for key, val in overrides.items():
+                name = str(key or '').strip()
+                if name:
+                    ovs[name] = val
+        for var in defs:
+            if not isinstance(var, dict):
+                continue
+            name = str(var.get('name') or '').strip()
+            if not name:
+                continue
+            doc_names.add(name)
+            var_type = str(var.get('type') or 'string').lower()
+            default_val = ''
+            for key in ('value', 'default', 'defaultValue', 'default_value'):
+                if key in var:
+                    default_val = var.get(key)
+                    break
+            if name in ovs:
+                val = ovs[name]
+            else:
+                val = default_val
+            extra_vars[name] = self._coerce_variable_value(var_type, val)
+            meta[name] = {
+                'type': var_type,
+                'sensitive': (var_type == 'credential') or ('password' in name.lower()),
+            }
+        for name, val in ovs.items():
+            if name in doc_names:
+                continue
+            extra_vars[name] = val
+            meta[name] = {
+                'type': 'string',
+                'sensitive': ('password' in name.lower()),
+            }
+        return extra_vars, meta
+
+    def _format_var_summary(self, meta: dict) -> str:
+        if not isinstance(meta, dict) or not meta:
+            return ''
+        parts = []
+        for name in sorted(meta.keys()):
+            info = meta.get(name) or {}
+            sensitive = bool(info.get('sensitive'))
+            parts.append(f"{name}=<secret>" if sensitive else f"{name}=set")
+        return ', '.join(parts)
+
+    def _build_execution_context(self, variables, variable_values):
+        overrides = {}
+        if isinstance(variable_values, dict):
+            for key, val in variable_values.items():
+                name = str(key or '').strip()
+                if name:
+                    overrides[name] = val
+        extra_vars, meta = self._resolve_extra_vars(variables if isinstance(variables, list) else [], overrides)
+        # Remove sentinel metadata if they exist
+        for sentinel in (WINRM_USERNAME_VAR, WINRM_PASSWORD_VAR, WINRM_TRANSPORT_VAR):
+            meta.pop(sentinel, None)
+        conn_user = overrides.get(WINRM_USERNAME_VAR)
+        conn_pass = overrides.get(WINRM_PASSWORD_VAR)
+        conn_transport = overrides.get(WINRM_TRANSPORT_VAR)
+        if WINRM_USERNAME_VAR in extra_vars:
+            extra_vars.pop(WINRM_USERNAME_VAR, None)
+        if WINRM_PASSWORD_VAR in extra_vars:
+            extra_vars.pop(WINRM_PASSWORD_VAR, None)
+        if WINRM_TRANSPORT_VAR in extra_vars:
+            extra_vars.pop(WINRM_TRANSPORT_VAR, None)
+        if conn_user is None:
+            conn_user = extra_vars.get('ansible_user')
+        if conn_pass is None:
+            conn_pass = extra_vars.get('ansible_password')
+        if conn_transport is None:
+            conn_transport = extra_vars.get('ansible_winrm_transport') or extra_vars.get('ansible_transport') or 'ntlm'
+        ctx = {
+            'extra_vars': extra_vars,
+            'var_meta': meta,
+            'conn_username': conn_user,
+            'conn_password': conn_pass,
+            'conn_transport': str(conn_transport or 'ntlm').strip().lower() or 'ntlm',
+        }
+        return ctx
+
+    def _write_ansible_cfg(self, directory: str, python_path: Optional[str]) -> str:
+        try:
+            cfg_path = os.path.join(directory, 'ansible.cfg')
+            lines = [
+                "[defaults]",
+                "host_key_checking = False",
+                "retry_files_enabled = False",
+                "stdout_callback = default",
+                "inventory = inventory",
+            ]
+            if python_path:
+                lines.append(f"interpreter_python = {python_path}")
+            lines.append("deprecation_warnings = False")
+            lines.append("timeout = 45")
+            lines.append("")
+            with open(cfg_path, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write('\n'.join(lines) + '\n')
+            return cfg_path
+        except Exception as exc:
+            self._ansible_log(f"[cfg] failed to write ansible.cfg: {exc}", error=True)
+            return ''
 
     def _log_local(self, msg: str, error: bool = False):
         try:
@@ -351,10 +638,11 @@ try {{
         except Exception as e:
             self._ansible_log(f"[ensure] bootstrap exception: {e}", error=True)
 
-    def _write_winrm_inventory(self, base_dir: str, username: str, password: str) -> str:
+    def _write_winrm_inventory(self, base_dir: str, username: str, password: str, transport: str = 'ntlm') -> str:
         inv_dir = os.path.join(base_dir, 'inventory')
         os.makedirs(inv_dir, exist_ok=True)
         hosts = os.path.join(inv_dir, 'hosts')
+        t = str(transport or 'ntlm').strip().lower() or 'ntlm'
         try:
             content = (
                 "[local]\n" \
@@ -364,7 +652,7 @@ try {{
                 "ansible_host=127.0.0.1\n" \
                 "ansible_port=5986\n" \
                 "ansible_winrm_scheme=https\n" \
-                "ansible_winrm_transport=ntlm\n" \
+                f"ansible_winrm_transport={t}\n" \
                 f"ansible_user={username}\n" \
                 f"ansible_password={password}\n" \
                 "ansible_winrm_server_cert_validation=ignore\n"
@@ -406,11 +694,14 @@ try {{
         except Exception:
             self._log_local(f"Failed to post recap for run_id={payload.get('run_id')}", error=True)
 
-    async def _run_playbook_runner(self, run_id: str, playbook_content: str, playbook_name: str = '', activity_job_id=None, connection: str = 'local'):
+    async def _run_playbook_runner(self, run_id: str, playbook_content: str, playbook_name: str = '', activity_job_id=None, connection: str = 'local', exec_ctx: dict = None, files=None):
+        exec_ctx = exec_ctx or {}
+        if not await self._ensure_ansible_ready():
+            return False
         try:
             import ansible_runner  # type: ignore
         except Exception as e:
-            self._ansible_log(f"[runner] ansible_runner import failed: {e}")
+            self._ansible_log(f"[runner] ansible_runner import failed: {e}", error=True)
             return False
 
         tmp_dir = os.path.join(_project_root(), 'Temp')
@@ -429,27 +720,64 @@ try {{
         with open(play_abs, 'w', encoding='utf-8', newline='\n') as fh:
             fh.write(_norm)
         self._ansible_log(f"[runner] prepared playbook={play_abs} bytes={len(_norm.encode('utf-8'))}")
-        # WinRM service account credentials
-        creds = await self._fetch_service_creds()
-        user = creds.get('username') or DEFAULT_SERVICE_ACCOUNT
-        pwd = creds.get('password') or ''
-        # Converge endpoint state (listener + user)
-        self._ensure_winrm_and_user(user, pwd)
-        # Preflight auth and auto-rotate if needed
-        pre_ok = self._winrm_preflight(user, pwd)
-        if not pre_ok:
-            # rotate and retry once
-            creds = await self._rotate_service_creds(reason='winrm_preflight_failure')
-            user = creds.get('username') or user
-            pwd = creds.get('password') or ''
-            self._ensure_winrm_and_user(user, pwd)
-        # Write inventory for winrm localhost
-        inv_file = self._write_winrm_inventory(pd, user, pwd)
-        self._ansible_log(f"[runner] inventory={inv_file} user={user}")
 
-        # Set connection via envvars
+        staged = self._stage_payload_files(project, files or [])
+        if staged:
+            self._ansible_log(f"[runner] staged {len(staged)} payload file(s)")
+
+        cfg_path = self._write_ansible_cfg(project, _venv_python())
+        if cfg_path:
+            self._ansible_log(f"[runner] ansible.cfg={cfg_path}")
+
+        extra_vars = dict(exec_ctx.get('extra_vars') or {})
+        var_meta = exec_ctx.get('var_meta') or {}
+        if extra_vars:
+            summary = self._format_var_summary(var_meta)
+            if summary:
+                self._ansible_log(f"[runner] extra vars: {summary}")
+
+        svc_creds = await self._fetch_service_creds()
+        svc_user = svc_creds.get('username') or DEFAULT_SERVICE_ACCOUNT
+        svc_pwd = svc_creds.get('password') or ''
+        self._ensure_winrm_and_user(svc_user, svc_pwd)
+
+        conn_user_override = exec_ctx.get('conn_username')
+        conn_pass_override = exec_ctx.get('conn_password')
+        conn_transport = str(exec_ctx.get('conn_transport') or 'ntlm').strip().lower() or 'ntlm'
+
+        final_user = conn_user_override or svc_user
+        if conn_pass_override is None:
+            final_pwd = svc_pwd if final_user == svc_user else (extra_vars.get('ansible_password') or '')
+        else:
+            final_pwd = conn_pass_override
+        final_pwd = '' if final_pwd is None else str(final_pwd)
+
+        pre_ok = self._winrm_preflight(final_user, final_pwd)
+        if not pre_ok:
+            if final_user == svc_user:
+                creds = await self._rotate_service_creds(reason='winrm_preflight_failure')
+                final_user = creds.get('username') or svc_user
+                final_pwd = creds.get('password') or ''
+                self._ensure_winrm_and_user(final_user, final_pwd)
+                pre_ok = self._winrm_preflight(final_user, final_pwd)
+            else:
+                self._ansible_log("[runner] winrm preflight failed for provided credentials; continuing", error=True)
+        self._ansible_log(f"[runner] using user={final_user} transport={conn_transport} preflight_ok={pre_ok}")
+
+        inv_file = self._write_winrm_inventory(pd, final_user, final_pwd, transport=conn_transport)
+        self._ansible_log(f"[runner] inventory={inv_file}")
+
+        env_payload = {
+            'ANSIBLE_FORCE_COLOR': '0',
+            'ANSIBLE_STDOUT_CALLBACK': 'default',
+        }
+        if cfg_path:
+            env_payload['ANSIBLE_CONFIG'] = cfg_path
+        coll_dir = _collections_dir()
+        if coll_dir:
+            env_payload['ANSIBLE_COLLECTIONS_PATHS'] = coll_dir
         with open(os.path.join(env_dir, 'envvars'), 'w', encoding='utf-8', newline='\n') as fh:
-            json.dump({ 'ANSIBLE_FORCE_COLOR': '0', 'ANSIBLE_STDOUT_CALLBACK': 'default' }, fh)
+            json.dump(env_payload, fh)
 
         hostname = socket.gethostname()
         agent_id = self.ctx.agent_id
@@ -473,16 +801,13 @@ try {{
             try:
                 if not isinstance(ev, dict):
                     return
-                # Capture minimal textual progress
                 tx = ev.get('stdout') or ''
                 if tx:
                     lines.append(str(tx))
                     if len(lines) > 5000:
                         lines = lines[-2500:]
-                # Capture final stats
                 if (ev.get('event') or '') == 'playbook_on_stats':
                     d = ev.get('event_data') or {}
-                    # ansible-runner provides per-host stats under 'res'
                     recap_json = d.get('res') or d.get('stats') or d
             except Exception:
                 pass
@@ -503,7 +828,7 @@ try {{
                 quiet=True,
                 event_handler=_on_event,
                 cancel_callback=_cancel_cb,
-                extravars={}
+                extravars=extra_vars or {}
             )
             try:
                 self._ansible_log(f"[runner] finished status={getattr(r,'status',None)} rc={getattr(r,'rc',None)}")
@@ -511,7 +836,6 @@ try {{
                 pass
             status = 'Cancelled' if _cancel_cb() else 'Success'
             try:
-                # Some auth failures bubble up in events only; inspect last few lines
                 tail = '\n'.join(lines[-50:]).lower()
                 if ('access is denied' in tail) or ('unauthorized' in tail) or ('cannot process the request' in tail):
                     auth_failed = True
@@ -522,11 +846,9 @@ try {{
             status = 'Failed'
             self._ansible_log("[runner] exception in ansible-runner", error=True)
 
-        # Synthesize recap text from recap_json if available
         recap_text = ''
         try:
             if isinstance(recap_json, dict):
-                # Expect a single host 'localhost'
                 stats = recap_json.get('localhost') or recap_json
                 ok = int(stats.get('ok') or 0)
                 changed = int(stats.get('changed') or 0)
@@ -552,22 +874,32 @@ try {{
             'finished_ts': int(time.time()),
         })
         self._ansible_log(f"[runner] recap posted status={status}")
-        # If authentication failed on first pass, rotate password and try once more
         if auth_failed:
             try:
-                newc = await self._rotate_service_creds(reason='auth_failed_retry')
-                user2 = newc.get('username') or user
-                pwd2 = newc.get('password') or ''
-                self._ensure_winrm_and_user(user2, pwd2)
-                # Recurse once with updated creds
-                await self._run_playbook_runner(run_id, playbook_content, playbook_name=playbook_name, activity_job_id=activity_job_id, connection=connection)
+                retried = bool(exec_ctx.get('_retried_auth'))
+                if final_user == svc_user and not retried:
+                    newc = await self._rotate_service_creds(reason='auth_failed_retry')
+                    exec_ctx_retry = dict(exec_ctx)
+                    exec_ctx_retry['_retried_auth'] = True
+                    exec_ctx_retry['conn_username'] = newc.get('username') or svc_user
+                    exec_ctx_retry['conn_password'] = newc.get('password') or ''
+                    self._ensure_winrm_and_user(exec_ctx_retry['conn_username'], exec_ctx_retry['conn_password'])
+                    await self._run_playbook_runner(
+                        run_id,
+                        playbook_content,
+                        playbook_name=playbook_name,
+                        activity_job_id=activity_job_id,
+                        connection=connection,
+                        exec_ctx=exec_ctx_retry,
+                        files=files,
+                    )
                 return True
             except Exception:
                 self._ansible_log("[runner] rotate+retry failed", error=True)
                 pass
         return True
 
-    async def _run_playbook(self, run_id: str, playbook_content: str, playbook_name: str = '', activity_job_id=None, connection: str = 'local'):
+    async def _run_playbook(self, run_id: str, playbook_content: str, playbook_name: str = '', activity_job_id=None, connection: str = 'local', variables=None, variable_values=None, files=None):
         # Write playbook temp
         tmp_dir = os.path.join(_project_root(), 'Temp')
         os.makedirs(tmp_dir, exist_ok=True)
@@ -592,24 +924,85 @@ try {{
             'started_ts': started,
         })
 
-        # Prefer WinRM localhost via inventory when on Windows; otherwise fallback to provided connection
-        inv_file_cli = None
+        exec_ctx = self._build_execution_context(variables, variable_values)
+        extra_vars = dict(exec_ctx.get('extra_vars') or {})
+        var_meta = exec_ctx.get('var_meta') or {}
+        if extra_vars:
+            summary = self._format_var_summary(var_meta)
+            if summary:
+                self._ansible_log(f"[cli] extra vars: {summary}")
+
+        ready = await self._ensure_ansible_ready()
+        if not ready:
+            await self._post_recap({
+                'run_id': run_id,
+                'hostname': hostname,
+                'agent_id': agent_id,
+                'status': 'Failed',
+                'recap_text': 'Ansible dependencies unavailable; see agent ansible.log',
+                'finished_ts': int(time.time()),
+            })
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+            return
+
+        staged = self._stage_payload_files(os.path.dirname(path), files or [])
+        if staged:
+            self._ansible_log(f"[cli] staged {len(staged)} payload file(s)")
+
+        cfg_path_cli = self._write_ansible_cfg(os.path.dirname(path), _venv_python())
+        if cfg_path_cli:
+            self._ansible_log(f"[cli] ansible.cfg={cfg_path_cli}")
+
         conn = (connection or 'local').strip().lower()
+        inv_file_cli = None
+        svc_creds = await self._fetch_service_creds()
+        svc_user = svc_creds.get('username') or DEFAULT_SERVICE_ACCOUNT
+        svc_pwd = svc_creds.get('password') or ''
+        self._ensure_winrm_and_user(svc_user, svc_pwd)
+
+        conn_user_override = exec_ctx.get('conn_username')
+        conn_pass_override = exec_ctx.get('conn_password')
+        conn_transport = str(exec_ctx.get('conn_transport') or 'ntlm').strip().lower() or 'ntlm'
+
+        final_user = conn_user_override or svc_user
+        if conn_pass_override is None:
+            final_pwd = svc_pwd if final_user == svc_user else (extra_vars.get('ansible_password') or '')
+        else:
+            final_pwd = conn_pass_override
+        final_pwd = '' if final_pwd is None else str(final_pwd)
+
         if os.name == 'nt':
             try:
-                creds = await self._fetch_service_creds()
-                user = creds.get('username') or DEFAULT_SERVICE_ACCOUNT
-                pwd = creds.get('password') or ''
-                self._ensure_winrm_and_user(user, pwd)
-                if not self._winrm_preflight(user, pwd):
-                    creds = await self._rotate_service_creds(reason='winrm_preflight_failure')
-                    user = creds.get('username') or user
-                    pwd = creds.get('password') or ''
-                    self._ensure_winrm_and_user(user, pwd)
-                # Create temp inventory adjacent to playbook
-                inv_file_cli = self._write_winrm_inventory(os.path.dirname(path), user, pwd)
-            except Exception:
+                pre_ok = self._winrm_preflight(final_user, final_pwd)
+                if not pre_ok:
+                    if final_user == svc_user:
+                        creds = await self._rotate_service_creds(reason='winrm_preflight_failure')
+                        final_user = creds.get('username') or svc_user
+                        final_pwd = creds.get('password') or ''
+                        self._ensure_winrm_and_user(final_user, final_pwd)
+                    else:
+                        self._ansible_log("[cli] winrm preflight failed for provided credentials; continuing", error=True)
+                inv_file_cli = self._write_winrm_inventory(os.path.dirname(path), final_user, final_pwd, transport=conn_transport)
+                self._ansible_log(f"[cli] inventory={inv_file_cli} user={final_user}")
+            except Exception as exc:
+                self._ansible_log(f"[cli] inventory setup failed: {exc}", error=True)
                 inv_file_cli = None
+        else:
+            inv_file_cli = None
+
+        extra_vars_file = None
+        if extra_vars:
+            try:
+                extra_vars_file = os.path.join(os.path.dirname(path), 'extra_vars.json')
+                with open(extra_vars_file, 'w', encoding='utf-8') as fh:
+                    json.dump(extra_vars, fh)
+            except Exception as exc:
+                self._ansible_log(f"[cli] failed to write extra_vars.json: {exc}", error=True)
+                extra_vars_file = None
+
         # Build CLI; resolve ansible-playbook or fallback to python -m ansible.cli.playbook
         ap = _ansible_playbook_cmd()
         use_module = False
@@ -638,6 +1031,8 @@ try {{
             cmd = base_cmd + [path, '-i', 'localhost,', '-c', conn]
             self._log_local(f"Launching ansible-playbook: conn={conn} cmd={' '.join(cmd)}")
             self._ansible_log(f"[cli] cmd={' '.join(cmd)}")
+        if extra_vars_file:
+            cmd.extend(['-e', f"@{extra_vars_file}"])
         # Ensure clean, plain output and correct interpreter for localhost
         env = os.environ.copy()
         env['ANSIBLE_FORCE_COLOR'] = '0'
@@ -646,7 +1041,11 @@ try {{
         env['PYTHONUTF8'] = '1'
         env['ANSIBLE_STDOUT_CALLBACK'] = 'default'
         env['ANSIBLE_LOCALHOST_WARNING'] = '0'
-        env['ANSIBLE_COLLECTIONS_PATHS'] = _collections_dir()
+        coll_dir = _collections_dir()
+        if coll_dir:
+            env['ANSIBLE_COLLECTIONS_PATHS'] = coll_dir
+        if cfg_path_cli:
+            env['ANSIBLE_CONFIG'] = cfg_path_cli
         if os.name == 'nt':
             env['LANG'] = 'en_US.UTF-8'
             env['LC_ALL'] = 'en_US.UTF-8'
@@ -682,7 +1081,15 @@ try {{
                     if os.name == 'nt' and runner_pref not in ('force',):
                         self._ansible_log('[runner] skipping ansible-runner on Windows platform')
                     else:
-                        used = await self._run_playbook_runner(run_id, playbook_content, playbook_name=playbook_name, activity_job_id=activity_job_id, connection=connection)
+                        used = await self._run_playbook_runner(
+                            run_id,
+                            playbook_content,
+                            playbook_name=playbook_name,
+                            activity_job_id=activity_job_id,
+                            connection=connection,
+                            exec_ctx=exec_ctx,
+                            files=files,
+                        )
                         if used:
                             return
             except Exception:
@@ -841,6 +1248,9 @@ try {{
                 sched_job_id = payload.get('scheduled_job_id')
                 sched_run_id = payload.get('scheduled_run_id')
                 conn = (payload.get('connection') or 'local')
+                var_defs = payload.get('variables') if isinstance(payload.get('variables'), list) else []
+                var_values = payload.get('variable_values') if isinstance(payload.get('variable_values'), dict) else {}
+                files = payload.get('files') if isinstance(payload.get('files'), list) else []
                 # Track run
                 self._runs[run_id] = {'cancel': False, 'proc': None}
                 # Include scheduled ids on first recap post
@@ -859,7 +1269,16 @@ try {{
                         await orig(payload2)
                     self._post_recap = _wrapped
                     try:
-                        await self._run_playbook(run_id, content, playbook_name=p_name, activity_job_id=act_id, connection=conn)
+                        await self._run_playbook(
+                            run_id,
+                            content,
+                            playbook_name=p_name,
+                            activity_job_id=act_id,
+                            connection=conn,
+                            variables=var_defs,
+                            variable_values=var_values,
+                            files=files,
+                        )
                     finally:
                         self._post_recap = orig
                 asyncio.create_task(run_and_tag())
@@ -911,7 +1330,19 @@ try {{
                 content = _decode_playbook_content(payload.get('script_content'), payload.get('script_encoding'))
                 p_name = payload.get('script_name') or ''
                 self._runs[run_id] = {'cancel': False, 'proc': None}
-                asyncio.create_task(self._run_playbook(run_id, content, playbook_name=p_name, activity_job_id=payload.get('job_id'), connection='local'))
+                var_defs = payload.get('variables') if isinstance(payload.get('variables'), list) else []
+                var_values = payload.get('variable_values') if isinstance(payload.get('variable_values'), dict) else {}
+                files = payload.get('files') if isinstance(payload.get('files'), list) else []
+                asyncio.create_task(self._run_playbook(
+                    run_id,
+                    content,
+                    playbook_name=p_name,
+                    activity_job_id=payload.get('job_id'),
+                    connection='local',
+                    variables=var_defs,
+                    variable_values=var_values,
+                    files=files,
+                ))
             except Exception:
                 pass
 

@@ -5045,6 +5045,14 @@ def ansible_quick_run():
         variables = doc.get('variables') if isinstance(doc.get('variables'), list) else []
         files = doc.get('files') if isinstance(doc.get('files'), list) else []
         friendly_name = (doc.get("name") or "").strip() or os.path.basename(abs_path)
+        overrides_raw = data.get("variable_values")
+        variable_values = {}
+        if isinstance(overrides_raw, dict):
+            for key, val in overrides_raw.items():
+                name = str(key or "").strip()
+                if not name:
+                    continue
+                variable_values[name] = val
 
         results = []
         for host in hostnames:
@@ -5091,6 +5099,7 @@ def ansible_quick_run():
                 "variables": variables,
                 "files": files,
                 "activity_job_id": job_id,
+                "variable_values": variable_values,
             }
             try:
                 _ansible_log_server(f"[quick_run] emit ansible_playbook_run host='{host}' run_id={run_id} job_id={job_id} path={rel_path}")
