@@ -240,9 +240,9 @@ export default function DeviceList({ onSelectDevice }) {
         const rawHostname = (device.hostname || summary.hostname || '').trim();
         const hostname = rawHostname || `device-${index + 1}`;
         const agentId = (device.agent_id || summary.agent_id || '').trim();
-        const id = agentId || hostname || `device-${index + 1}`;
         const guidRaw = (device.agent_guid || summary.agent_guid || '').trim();
         const guidLookupKey = guidRaw.toLowerCase();
+        const rowKey = guidRaw || agentId || hostname || `device-${index + 1}`;
         let agentHash = (device.agent_hash || summary.agent_hash || '').trim();
         if (agentId && hashById.has(agentId)) agentHash = hashById.get(agentId) || agentHash;
         if (!agentHash && guidLookupKey && hashByGuid.has(guidLookupKey)) {
@@ -305,7 +305,7 @@ export default function DeviceList({ onSelectDevice }) {
         const cpuDisplay = cpuObj.name || summary.processor || '';
 
         return {
-          id,
+          id: rowKey,
           hostname,
           status,
           lastSeen,
@@ -551,8 +551,11 @@ export default function DeviceList({ onSelectDevice }) {
 
   const handleDelete = async () => {
     if (!selected) return;
+    const targetAgentId = selected.agentId || selected.summary?.agent_id || selected.id;
     try {
-      await fetch(`/api/agent/${selected.id}`, { method: "DELETE" });
+      if (targetAgentId) {
+        await fetch(`/api/agent/${encodeURIComponent(targetAgentId)}`, { method: "DELETE" });
+      }
     } catch (e) {
       console.warn("Failed to remove agent", e);
     }

@@ -43,6 +43,7 @@ export default function DeviceDetails({ device, onBack }) {
   const [tab, setTab] = useState(0);
   const [agent, setAgent] = useState(device || {});
   const [details, setDetails] = useState({});
+  const [meta, setMeta] = useState({});
   const [softwareOrderBy, setSoftwareOrderBy] = useState("name");
   const [softwareOrder, setSoftwareOrder] = useState("asc");
   const [softwareSearch, setSoftwareSearch] = useState("");
@@ -94,54 +95,137 @@ export default function DeviceDetails({ device, onBack }) {
   };
 
   useEffect(() => {
-    // When navigating to a different device, take a fresh snapshot of its status
     if (device) {
       setLockedStatus(device.status || statusFromHeartbeat(device.lastSeen));
     }
 
-    if (!device || !device.hostname) return;
+    const guid = device?.agent_guid || device?.guid || device?.agentGuid || device?.summary?.agent_guid;
+    const agentId = device?.agentId || device?.summary?.agent_id || device?.id;
+    const hostname = device?.hostname || device?.summary?.hostname;
+    if (!device || (!guid && !hostname)) return;
+
     const load = async () => {
       try {
-        const [agentsRes, detailsRes] = await Promise.all([
-          fetch("/api/agents"),
-          fetch(`/api/device/details/${device.hostname}`)
-        ]);
-        const agentsData = await agentsRes.json();
-        if (agentsData && agentsData[device.id]) {
-          setAgent({ id: device.id, ...agentsData[device.id] });
+        const agentsPromise = fetch("/api/agents").catch(() => null);
+        let detailResponse = null;
+        if (guid) {
+          try {
+            detailResponse = await fetch(`/api/devices/${encodeURIComponent(guid)}`);
+          } catch (err) {
+            detailResponse = null;
+          }
         }
-        const detailData = await detailsRes.json();
-        const summary = detailData?.summary && typeof detailData.summary === 'object'
-          ? detailData.summary
-          : (detailData?.details?.summary || {});
+        if ((!detailResponse || !detailResponse.ok) && hostname) {
+          try {
+            detailResponse = await fetch(`/api/device/details/${encodeURIComponent(hostname)}`);
+          } catch (err) {
+            detailResponse = null;
+          }
+        }
+        if (!detailResponse || !detailResponse.ok) {
+          throw new Error(`Failed to load device record (${detailResponse ? detailResponse.status : 'no response'})`);
+        }
+
+        const [agentsData, detailData] = await Promise.all([
+          agentsPromise?.then((r) => (r ? r.json() : {})).catch(() => ({})),
+          detailResponse.json(),
+        ]);
+
+        if (agentsData && agentId && agentsData[agentId]) {
+          setAgent({ id: agentId, ...agentsData[agentId] });
+        }
+
+        const summary =
+          detailData?.summary && typeof detailData.summary === "object"
+            ? detailData.summary
+            : (detailData?.details?.summary || {});
+        const normalizedSummary = { ...(summary || {}) };
+        if (detailData?.description) {
+          normalizedSummary.description = detailData.description;
+        }
+
         const normalized = {
-          ...(detailData?.details || {}),
-          summary: summary || {},
-          memory: Array.isArray(detailData?.memory) ? detailData.memory : (detailData?.details?.memory || []),
-          network: Array.isArray(detailData?.network) ? detailData.network : (detailData?.details?.network || []),
-          software: Array.isArray(detailData?.software) ? detailData.software : (detailData?.details?.software || []),
-          storage: Array.isArray(detailData?.storage) ? detailData.storage : (detailData?.details?.storage || []),
+          summary: normalizedSummary,
+          memory: Array.isArray(detailData?.memory)
+            ? detailData.memory
+            : Array.isArray(detailData?.details?.memory)
+              ? detailData.details.memory
+              : [],
+          network: Array.isArray(detailData?.network)
+            ? detailData.network
+            : Array.isArray(detailData?.details?.network)
+              ? detailData.details.network
+              : [],
+          software: Array.isArray(detailData?.software)
+            ? detailData.software
+            : Array.isArray(detailData?.details?.software)
+              ? detailData.details.software
+              : [],
+          storage: Array.isArray(detailData?.storage)
+            ? detailData.storage
+            : Array.isArray(detailData?.details?.storage)
+              ? detailData.details.storage
+              : [],
           cpu: detailData?.cpu || detailData?.details?.cpu || {},
         };
-        if (detailData?.description) {
-          normalized.summary = { ...normalized.summary, description: detailData.description };
-        }
         setDetails(normalized);
-        setDescription(normalized.summary?.description || detailData?.description || "");
+
+        const toYmdHms = (dateObj) => {
+          if (!dateObj || Number.isNaN(dateObj.getTime())) return '';
+          const pad = (v) => String(v).padStart(2, '0');
+          return `${dateObj.getUTCFullYear()}-${pad(dateObj.getUTCMonth() + 1)}-${pad(dateObj.getUTCDate())} ${pad(dateObj.getUTCHours())}:${pad(dateObj.getUTCMinutes())}:${pad(dateObj.getUTCSeconds())}`;
+        };
+
+        let createdDisplay = normalizedSummary.created || '';
+        if (!createdDisplay) {
+          if (detailData?.created_at && Number(detailData.created_at)) {
+            createdDisplay = toYmdHms(new Date(Number(detailData.created_at) * 1000));
+          } else if (detailData?.created_at_iso) {
+            createdDisplay = toYmdHms(new Date(detailData.created_at_iso));
+          }
+        }
+
+        const metaPayload = {
+          hostname: detailData?.hostname || normalizedSummary.hostname || hostname || "",
+          lastUser: detailData?.last_user || normalizedSummary.last_user || "",
+          deviceType: detailData?.device_type || normalizedSummary.device_type || "",
+          created: createdDisplay,
+          createdAtIso: detailData?.created_at_iso || "",
+          lastSeen: detailData?.last_seen || normalizedSummary.last_seen || 0,
+          lastReboot: detailData?.last_reboot || normalizedSummary.last_reboot || "",
+          operatingSystem:
+            detailData?.operating_system || normalizedSummary.operating_system || normalizedSummary.agent_operating_system || "",
+          agentId: detailData?.agent_id || normalizedSummary.agent_id || agentId || "",
+          agentGuid: detailData?.agent_guid || normalizedSummary.agent_guid || guid || "",
+          agentHash: detailData?.agent_hash || normalizedSummary.agent_hash || "",
+          internalIp: detailData?.internal_ip || normalizedSummary.internal_ip || "",
+          externalIp: detailData?.external_ip || normalizedSummary.external_ip || "",
+          siteId: detailData?.site_id,
+          siteName: detailData?.site_name || "",
+          siteDescription: detailData?.site_description || "",
+          status: detailData?.status || "",
+        };
+        setMeta(metaPayload);
+        setDescription(normalizedSummary.description || detailData?.description || "");
+
         setAgent((prev) => ({
           ...(prev || {}),
-          id: device?.id || prev?.id,
-          hostname: device?.hostname || normalized.summary?.hostname || prev?.hostname,
-          agent_hash: detailData?.agent_hash || normalized.summary?.agent_hash || prev?.agent_hash,
-          agent_operating_system:
-            detailData?.operating_system ||
-            normalized.summary?.operating_system ||
-            prev?.agent_operating_system,
-          device_type: detailData?.device_type || normalized.summary?.device_type || prev?.device_type,
-          last_seen: detailData?.last_seen || normalized.summary?.last_seen || prev?.last_seen,
+          id: agentId || prev?.id,
+          hostname: metaPayload.hostname || prev?.hostname,
+          agent_hash: metaPayload.agentHash || prev?.agent_hash,
+          agent_operating_system: metaPayload.operatingSystem || prev?.agent_operating_system,
+          device_type: metaPayload.deviceType || prev?.device_type,
+          last_seen: metaPayload.lastSeen || prev?.last_seen,
         }));
+
+        if (metaPayload.status) {
+          setLockedStatus(metaPayload.status);
+        } else if (metaPayload.lastSeen) {
+          setLockedStatus(statusFromHeartbeat(metaPayload.lastSeen));
+        }
       } catch (e) {
         console.warn("Failed to load device info", e);
+        setMeta({});
       }
     };
     load();
@@ -178,9 +262,10 @@ export default function DeviceDetails({ device, onBack }) {
   };
 
   const saveDescription = async () => {
-    if (!details.summary?.hostname) return;
+    const targetHost = meta.hostname || details.summary?.hostname;
+    if (!targetHost) return;
     try {
-      await fetch(`/api/device/description/${details.summary.hostname}`, {
+      await fetch(`/api/device/description/${targetHost}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description })
@@ -189,6 +274,7 @@ export default function DeviceDetails({ device, onBack }) {
         ...d,
         summary: { ...(d.summary || {}), description }
       }));
+      setMeta((m) => ({ ...(m || {}), hostname: targetHost }));
     } catch (e) {
       console.warn("Failed to save description", e);
     }
@@ -263,7 +349,7 @@ export default function DeviceDetails({ device, onBack }) {
   const summary = details.summary || {};
   // Build a best-effort CPU display from summary fields
   const cpuInfo = useMemo(() => {
-    const cpu = summary.cpu || {};
+    const cpu = details.cpu || summary.cpu || {};
     const cores = cpu.logical_cores || cpu.cores || cpu.physical_cores;
     let ghz = cpu.base_clock_ghz;
     if (!ghz && typeof (summary.processor || '') === 'string') {
@@ -280,24 +366,42 @@ export default function DeviceDetails({ device, onBack }) {
   }, [summary]);
 
   const summaryItems = [
-    { label: "Hostname", value: summary.hostname || agent.hostname || device?.hostname || "unknown" },
-    { label: "Operating System", value: summary.operating_system || agent.agent_operating_system || "unknown" },
-    { label: "Processor", value: cpuInfo.display || "unknown" },
-    { label: "Device Type", value: summary.device_type || "unknown" },
-    { label: "Last User", value: (
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Box component="span" sx={{
-          display: 'inline-block', width: 10, height: 10, borderRadius: 10,
-          bgcolor: agent?.collector_active ? '#00d18c' : '#ff4f4f'
-        }} />
-        <span>{summary.last_user || 'unknown'}</span>
-      </Box>
-    ) },
-    { label: "Internal IP", value: summary.internal_ip || "unknown" },
-    { label: "External IP", value: summary.external_ip || "unknown" },
-    { label: "Last Reboot", value: summary.last_reboot ? formatDateTime(summary.last_reboot) : "unknown" },
-    { label: "Created", value: summary.created ? formatDateTime(summary.created) : "unknown" },
-    { label: "Last Seen", value: formatLastSeen(agent.last_seen || device?.lastSeen) }
+    { label: "Hostname", value: meta.hostname || summary.hostname || agent.hostname || device?.hostname || "unknown" },
+    {
+      label: "Last User",
+      value: (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box
+            component="span"
+            sx={{
+              display: 'inline-block',
+              width: 10,
+              height: 10,
+              borderRadius: 10,
+              bgcolor: agent?.collector_active ? '#00d18c' : '#ff4f4f'
+            }}
+          />
+          <span>{meta.lastUser || summary.last_user || 'unknown'}</span>
+        </Box>
+      )
+    },
+    { label: "Device Type", value: meta.deviceType || summary.device_type || 'unknown' },
+    {
+      label: "Created",
+      value: meta.created ? formatDateTime(meta.created) : summary.created ? formatDateTime(summary.created) : 'unknown'
+    },
+    {
+      label: "Last Seen",
+      value: formatLastSeen(meta.lastSeen || agent.last_seen || device?.lastSeen)
+    },
+    {
+      label: "Last Reboot",
+      value: meta.lastReboot ? formatDateTime(meta.lastReboot) : summary.last_reboot ? formatDateTime(summary.last_reboot) : 'unknown'
+    },
+    { label: "Operating System", value: meta.operatingSystem || summary.operating_system || agent.agent_operating_system || 'unknown' },
+    { label: "Agent ID", value: meta.agentId || summary.agent_id || 'unknown' },
+    { label: "Agent GUID", value: meta.agentGuid || summary.agent_guid || 'unknown' },
+    { label: "Agent Hash", value: meta.agentHash || summary.agent_hash || 'unknown' },
   ];
 
   const MetricCard = ({ icon, title, main, sub, color }) => {
@@ -720,9 +824,29 @@ export default function DeviceDetails({ device, onBack }) {
 
   const renderNetwork = () => {
     const rows = details.network || [];
-    if (!rows.length) return placeholderTable(["Adapter", "IP Address", "MAC Address"]);
+    const internalIp = meta.internalIp || summary.internal_ip || "unknown";
+    const externalIp = meta.externalIp || summary.external_ip || "unknown";
+    const ipHeader = (
+      <Box sx={{ mb: rows.length ? 1.5 : 1 }}>
+        <Typography variant="body2" sx={{ display: 'block', opacity: 0.9 }}>
+          Internal IP: {internalIp || 'unknown'}
+        </Typography>
+        <Typography variant="body2" sx={{ display: 'block', opacity: 0.9 }}>
+          External IP: {externalIp || 'unknown'}
+        </Typography>
+      </Box>
+    );
+    if (!rows.length) {
+      return (
+        <Box>
+          {ipHeader}
+          {placeholderTable(["Adapter", "IP Address", "MAC Address"])}
+        </Box>
+      );
+    }
     return (
       <Box>
+        {ipHeader}
         <Table size="small">
           <TableHead>
             <TableRow>
