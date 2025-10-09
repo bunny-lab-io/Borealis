@@ -559,6 +559,148 @@ def _lookup_agent_hash_by_guid(agent_guid: str) -> Optional[Dict[str, Any]]:
                 pass
 
 
+def _collect_agent_hash_records() -> List[Dict[str, Any]]:
+    """Aggregate known agent hash records from memory and the database."""
+
+    records: List[Dict[str, Any]] = []
+    key_to_index: Dict[str, int] = {}
+
+    def _register(
+        agent_id: Optional[str],
+        agent_guid: Optional[str],
+        hostname: Optional[str],
+        agent_hash: Optional[str],
+        source: Optional[str],
+    ) -> None:
+        normalized_id = (agent_id or '').strip()
+        normalized_guid = _normalize_guid(agent_guid)
+        normalized_hostname = (hostname or '').strip()
+        normalized_hash = (agent_hash or '').strip()
+        keys: List[str] = []
+        if normalized_id:
+            keys.append(f'id:{normalized_id.lower()}')
+        if normalized_guid:
+            keys.append(f'guid:{normalized_guid.lower()}')
+        if normalized_hostname:
+            keys.append(f'host:{normalized_hostname.lower()}')
+
+        if not keys:
+            records.append(
+                {
+                    'agent_id': normalized_id or None,
+                    'agent_guid': normalized_guid or None,
+                    'hostname': normalized_hostname or None,
+                    'agent_hash': normalized_hash or None,
+                    'source': source or None,
+                }
+            )
+            return
+
+        existing_idx: Optional[int] = None
+        for key in keys:
+            if key in key_to_index:
+                existing_idx = key_to_index[key]
+                break
+
+        if existing_idx is None:
+            idx = len(records)
+            records.append(
+                {
+                    'agent_id': normalized_id or None,
+                    'agent_guid': normalized_guid or None,
+                    'hostname': normalized_hostname or None,
+                    'agent_hash': normalized_hash or None,
+                    'source': source or None,
+                }
+            )
+            for key in keys:
+                key_to_index[key] = idx
+            return
+
+        existing = records[existing_idx]
+        prev_hash = (existing.get('agent_hash') or '').strip()
+        if normalized_hash and (not prev_hash or source == 'memory'):
+            existing['agent_hash'] = normalized_hash
+            if source:
+                existing['source'] = source
+        if normalized_id and not (existing.get('agent_id') or '').strip():
+            existing['agent_id'] = normalized_id
+        if normalized_guid and not (existing.get('agent_guid') or '').strip():
+            existing['agent_guid'] = normalized_guid
+        if normalized_hostname and not (existing.get('hostname') or '').strip():
+            existing['hostname'] = normalized_hostname
+        if source == 'memory':
+            existing['source'] = 'memory'
+        for key in keys:
+            key_to_index[key] = existing_idx
+
+    conn = None
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT hostname, agent_hash, details, guid FROM device_details')
+        for hostname, stored_hash, details_json, row_guid in cur.fetchall():
+            try:
+                details = json.loads(details_json or '{}')
+            except Exception:
+                details = {}
+            summary = details.get('summary') or {}
+            summary_hash = (summary.get('agent_hash') or '').strip()
+            summary_guid = summary.get('agent_guid') or ''
+            summary_agent_id = (summary.get('agent_id') or '').strip()
+            normalized_hash = (stored_hash or '').strip() or summary_hash
+            _register(
+                summary_agent_id or None,
+                summary_guid or row_guid,
+                hostname,
+                normalized_hash,
+                'database',
+            )
+    except Exception as exc:
+        _write_service_log('server', f'collect_agent_hash_records database error: {exc}')
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    try:
+        for agent_id, info in (registered_agents or {}).items():
+            if agent_id and isinstance(agent_id, str) and agent_id.lower().endswith('-script'):
+                continue
+            if info.get('is_script_agent'):
+                continue
+            _register(
+                agent_id,
+                info.get('agent_guid'),
+                info.get('hostname'),
+                info.get('agent_hash'),
+                'memory',
+            )
+    except Exception as exc:
+        _write_service_log('server', f'collect_agent_hash_records memory error: {exc}')
+
+    records.sort(
+        key=lambda r: (
+            (r.get('hostname') or '').lower(),
+            (r.get('agent_id') or '').lower(),
+        )
+    )
+    sanitized: List[Dict[str, Any]] = []
+    for rec in records:
+        sanitized.append(
+            {
+                'agent_id': rec.get('agent_id') or None,
+                'agent_guid': rec.get('agent_guid') or None,
+                'hostname': rec.get('hostname') or None,
+                'agent_hash': (rec.get('agent_hash') or '').strip() or None,
+                'source': rec.get('source') or None,
+            }
+        )
+    return sanitized
+
+
 def _apply_agent_hash_update(agent_id: str, agent_hash: str, agent_guid: Optional[str] = None) -> Tuple[Dict[str, Any], int]:
     agent_id = (agent_id or '').strip()
     agent_hash = (agent_hash or '').strip()
@@ -732,6 +874,16 @@ def api_agent_hash():
     agent_guid = _normalize_guid(data.get('agent_guid')) if data else None
     payload, status = _apply_agent_hash_update(agent_id, agent_hash, agent_guid)
     return jsonify(payload), status
+
+
+@app.route("/api/agent/hash_list", methods=["GET"])
+def api_agent_hash_list():
+    try:
+        records = _collect_agent_hash_records()
+        return jsonify({'agents': records})
+    except Exception as exc:
+        _write_service_log('server', f'/api/agent/hash_list error: {exc}')
+        return jsonify({'error': 'internal error'}), 500
 
 
 # ---------------------------------------------
