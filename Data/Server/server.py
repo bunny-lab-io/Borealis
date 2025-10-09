@@ -17,7 +17,7 @@ import time
 import os  # To Read Production ReactJS Server Folder
 import json  # For reading workflow JSON files
 import shutil  # For moving workflow files and folders
-from typing import List, Dict, Tuple, Optional, Any, Set
+from typing import List, Dict, Tuple, Optional, Any, Set, Sequence
 import sqlite3
 import io
 import uuid
@@ -463,26 +463,25 @@ def _lookup_agent_hash_record(agent_id: str) -> Optional[Dict[str, Any]]:
                 if row_guid:
                     payload['agent_guid'] = row_guid
                 return payload
-        cur.execute('SELECT hostname, agent_hash, details, guid FROM device_details')
-        for host, db_hash, details_json, row_guid in cur.fetchall():
-            try:
-                data = json.loads(details_json or '{}')
-            except Exception:
-                data = {}
-            summary = data.get('summary') or {}
+        cur.execute(f'SELECT {_device_column_sql()} FROM {DEVICE_TABLE}')
+        for row in cur.fetchall():
+            record = _row_to_device_dict(row, _DEVICE_TABLE_COLUMNS)
+            snapshot = _assemble_device_snapshot(record)
+            summary = snapshot.get('summary', {})
             summary_agent_id = (summary.get('agent_id') or '').strip()
             if summary_agent_id != agent_id:
                 continue
-            summary_hash = (summary.get('agent_hash') or '').strip()
-            normalized_hash = (db_hash or '').strip() or summary_hash
+            normalized_hash = (snapshot.get('agent_hash') or '').strip()
+            if not normalized_hash:
+                normalized_hash = (summary.get('agent_hash') or '').strip()
             if normalized_hash:
                 payload = {
                     'agent_id': agent_id,
                     'agent_hash': normalized_hash,
-                    'hostname': host,
+                    'hostname': snapshot.get('hostname'),
                     'source': 'database',
                 }
-                normalized_guid = _normalize_guid(row_guid) if row_guid else ''
+                normalized_guid = snapshot.get('agent_guid') or ''
                 if not normalized_guid:
                     normalized_guid = _normalize_guid(summary.get('agent_guid')) if summary.get('agent_guid') else ''
                 if normalized_guid:
@@ -528,24 +527,21 @@ def _lookup_agent_hash_by_guid(agent_guid: str) -> Optional[Dict[str, Any]]:
         conn = _db_conn()
         cur = conn.cursor()
         cur.execute(
-            'SELECT hostname, agent_hash, details FROM device_details WHERE guid = ?',
-            (normalized_guid,),
+            f'SELECT {_device_column_sql()} FROM {DEVICE_TABLE} WHERE LOWER(guid) = ?',
+            (normalized_guid.lower(),),
         )
         row = cur.fetchone()
         if not row:
             return None
-        hostname, agent_hash, details_json = row
-        try:
-            details = json.loads(details_json or '{}')
-        except Exception:
-            details = {}
-        summary = details.get('summary') or {}
+        record = _row_to_device_dict(row, _DEVICE_TABLE_COLUMNS)
+        snapshot = _assemble_device_snapshot(record)
+        summary = snapshot.get('summary', {})
         agent_id = (summary.get('agent_id') or '').strip()
-        normalized_hash = (agent_hash or summary.get('agent_hash') or '').strip()
+        normalized_hash = (snapshot.get('agent_hash') or summary.get('agent_hash') or '').strip()
         payload = {
             'agent_guid': normalized_guid,
             'agent_hash': normalized_hash,
-            'hostname': hostname,
+            'hostname': snapshot.get('hostname'),
             'source': 'database',
         }
         if agent_id:
@@ -638,21 +634,19 @@ def _collect_agent_hash_records() -> List[Dict[str, Any]]:
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        cur.execute('SELECT hostname, agent_hash, details, guid FROM device_details')
-        for hostname, stored_hash, details_json, row_guid in cur.fetchall():
-            try:
-                details = json.loads(details_json or '{}')
-            except Exception:
-                details = {}
-            summary = details.get('summary') or {}
+        cur.execute(f'SELECT {_device_column_sql()} FROM {DEVICE_TABLE}')
+        for row in cur.fetchall():
+            record = _row_to_device_dict(row, _DEVICE_TABLE_COLUMNS)
+            snapshot = _assemble_device_snapshot(record)
+            summary = snapshot.get('summary', {})
             summary_hash = (summary.get('agent_hash') or '').strip()
-            summary_guid = summary.get('agent_guid') or ''
+            summary_guid = summary.get('agent_guid') or snapshot.get('agent_guid') or ''
             summary_agent_id = (summary.get('agent_id') or '').strip()
-            normalized_hash = (stored_hash or '').strip() or summary_hash
+            normalized_hash = (snapshot.get('agent_hash') or '').strip() or summary_hash
             _register(
                 summary_agent_id or None,
-                summary_guid or row_guid,
-                hostname,
+                summary_guid or snapshot.get('agent_guid'),
+                snapshot.get('hostname'),
                 normalized_hash,
                 'database',
             )
@@ -719,17 +713,17 @@ def _apply_agent_hash_update(agent_id: str, agent_hash: str, agent_guid: Optiona
         updated_via_guid = False
         if normalized_guid:
             cur.execute(
-                'SELECT hostname, details FROM device_details WHERE guid = ?',
-                (normalized_guid,),
+                f'SELECT {_device_column_sql()} FROM {DEVICE_TABLE} WHERE LOWER(guid) = ?',
+                (normalized_guid.lower(),),
             )
             row = cur.fetchone()
             if row:
                 updated_via_guid = True
-                hostname = row[0]
-                try:
-                    details = json.loads(row[1] or '{}')
-                except Exception:
-                    details = {}
+                record = _row_to_device_dict(row, _DEVICE_TABLE_COLUMNS)
+                snapshot = _assemble_device_snapshot(record)
+                hostname = snapshot.get('hostname')
+                description = snapshot.get('description')
+                details = snapshot.get('details', {})
                 summary = details.setdefault('summary', {})
                 if not resolved_agent_id:
                     resolved_agent_id = (summary.get('agent_id') or '').strip()
@@ -737,9 +731,16 @@ def _apply_agent_hash_update(agent_id: str, agent_hash: str, agent_guid: Optiona
                     summary['agent_id'] = resolved_agent_id
                 summary['agent_hash'] = agent_hash
                 summary['agent_guid'] = normalized_guid
-                cur.execute(
-                    'UPDATE device_details SET agent_hash=?, details=? WHERE hostname=?',
-                    (agent_hash, json.dumps(details), hostname),
+                existing_created_at = snapshot.get('created_at')
+                existing_hash = snapshot.get('agent_hash')
+                _device_upsert(
+                    cur,
+                    hostname,
+                    description,
+                    details,
+                    existing_created_at,
+                    agent_hash=agent_hash or existing_hash,
+                    guid=normalized_guid,
                 )
                 conn.commit()
             elif not agent_id:
@@ -773,9 +774,19 @@ def _apply_agent_hash_update(agent_id: str, agent_hash: str, agent_guid: Optiona
                     summary['agent_guid'] = normalized_guid
                 if resolved_agent_id:
                     summary['agent_id'] = resolved_agent_id
-                cur.execute(
-                    'UPDATE device_details SET agent_hash=?, details=? WHERE hostname=?',
-                    (agent_hash, json.dumps(details), hostname),
+                snapshot_existing = _load_device_snapshot(cur, hostname=hostname)
+                description = snapshot_existing.get('description') if snapshot_existing else None
+                existing_created_at = snapshot_existing.get('created_at') if snapshot_existing else None
+                existing_hash = snapshot_existing.get('agent_hash') if snapshot_existing else None
+                effective_guid = normalized_guid or target.get('guid')
+                _device_upsert(
+                    cur,
+                    hostname,
+                    description,
+                    details,
+                    existing_created_at,
+                    agent_hash=agent_hash or existing_hash,
+                    guid=effective_guid,
                 )
                 conn.commit()
                 if not normalized_guid:
@@ -1052,6 +1063,7 @@ def api_login():
         # update last_login
         now = _now_ts()
         cur.execute("UPDATE users SET last_login=?, updated_at=? WHERE id=?", (now, now, row[0]))
+        conn.commit()
         conn.commit()
         conn.commit()
         conn.close()
@@ -2427,6 +2439,371 @@ latest_images: Dict[str, Dict] = {}
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "database.db"))
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
+DEVICE_TABLE = "devices"
+_DEVICE_JSON_LIST_FIELDS = {
+    "memory": [],
+    "network": [],
+    "software": [],
+    "storage": [],
+}
+_DEVICE_JSON_OBJECT_FIELDS = {
+    "cpu": {},
+}
+
+
+_DEVICE_TABLE_COLUMNS = [
+    "hostname",
+    "description",
+    "created_at",
+    "agent_hash",
+    "guid",
+    "memory",
+    "network",
+    "software",
+    "storage",
+    "cpu",
+    "device_type",
+    "domain",
+    "external_ip",
+    "internal_ip",
+    "last_reboot",
+    "last_seen",
+    "last_user",
+    "operating_system",
+    "uptime",
+    "agent_id",
+]
+
+
+def _device_column_sql(alias: Optional[str] = None) -> str:
+    if alias:
+        return ", ".join(f"{alias}.{col}" for col in _DEVICE_TABLE_COLUMNS)
+    return ", ".join(_DEVICE_TABLE_COLUMNS)
+
+
+def _parse_device_json(raw: Optional[str], default: Any) -> Any:
+    candidate = default
+    if raw is None:
+        return json.loads(json.dumps(default)) if isinstance(default, (list, dict)) else default
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = None
+    if isinstance(default, list):
+        if isinstance(data, list):
+            return data
+        return []
+    if isinstance(default, dict):
+        if isinstance(data, dict):
+            return data
+        return {}
+    return default
+
+
+def _ts_to_iso(ts: Optional[int]) -> str:
+    if not ts:
+        return ""
+    try:
+        from datetime import datetime, timezone
+
+        return datetime.fromtimestamp(int(ts), timezone.utc).isoformat()
+    except Exception:
+        return ""
+
+
+def _ts_to_human(ts: Optional[int]) -> str:
+    if not ts:
+        return ""
+    try:
+        from datetime import datetime
+
+        return datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return ""
+
+
+def _row_to_device_dict(row: Sequence[Any], columns: Sequence[str]) -> Dict[str, Any]:
+    return {columns[idx]: row[idx] for idx in range(min(len(row), len(columns)))}
+
+
+def _assemble_device_snapshot(record: Dict[str, Any]) -> Dict[str, Any]:
+    parsed_lists: Dict[str, List[Any]] = {}
+    for field, default in _DEVICE_JSON_LIST_FIELDS.items():
+        parsed_lists[field] = _parse_device_json(record.get(field), default)
+    cpu_obj = _parse_device_json(record.get("cpu"), _DEVICE_JSON_OBJECT_FIELDS["cpu"])
+
+    created_ts = _coerce_int(record.get("created_at")) or 0
+    last_seen_ts = _coerce_int(record.get("last_seen")) or 0
+    uptime_val = _coerce_int(record.get("uptime")) or 0
+
+    agent_hash = _clean_device_str(record.get("agent_hash")) or ""
+    normalized_guid = _normalize_guid(record.get("guid")) if record.get("guid") else ""
+
+    summary: Dict[str, Any] = {
+        "hostname": record.get("hostname") or "",
+        "description": record.get("description") or "",
+        "agent_hash": agent_hash,
+        "agent_guid": normalized_guid,
+        "agent_id": _clean_device_str(record.get("agent_id")) or "",
+        "device_type": _clean_device_str(record.get("device_type")) or "",
+        "domain": _clean_device_str(record.get("domain")) or "",
+        "external_ip": _clean_device_str(record.get("external_ip")) or "",
+        "internal_ip": _clean_device_str(record.get("internal_ip")) or "",
+        "last_reboot": _clean_device_str(record.get("last_reboot")) or "",
+        "last_seen": last_seen_ts,
+        "last_user": _clean_device_str(record.get("last_user")) or "",
+        "operating_system": _clean_device_str(record.get("operating_system")) or "",
+        "uptime": uptime_val,
+        "uptime_sec": uptime_val,
+        "created_at": created_ts,
+        "created": _ts_to_human(created_ts),
+    }
+
+    details = {
+        "summary": summary,
+        "memory": parsed_lists["memory"],
+        "network": parsed_lists["network"],
+        "software": parsed_lists["software"],
+        "storage": parsed_lists["storage"],
+        "cpu": cpu_obj,
+    }
+
+    payload: Dict[str, Any] = {
+        "hostname": summary["hostname"],
+        "description": summary.get("description", ""),
+        "created_at": created_ts,
+        "created_at_iso": _ts_to_iso(created_ts),
+        "agent_hash": agent_hash,
+        "agent_guid": normalized_guid,
+        "guid": normalized_guid,
+        "memory": parsed_lists["memory"],
+        "network": parsed_lists["network"],
+        "software": parsed_lists["software"],
+        "storage": parsed_lists["storage"],
+        "cpu": cpu_obj,
+        "device_type": summary.get("device_type", ""),
+        "domain": summary.get("domain", ""),
+        "external_ip": summary.get("external_ip", ""),
+        "internal_ip": summary.get("internal_ip", ""),
+        "last_reboot": summary.get("last_reboot", ""),
+        "last_seen": last_seen_ts,
+        "last_seen_iso": _ts_to_iso(last_seen_ts),
+        "last_user": summary.get("last_user", ""),
+        "operating_system": summary.get("operating_system", ""),
+        "uptime": uptime_val,
+        "agent_id": summary.get("agent_id", ""),
+        "details": details,
+        "summary": summary,
+    }
+    return payload
+
+
+def _load_device_snapshot(
+    cur: sqlite3.Cursor,
+    *,
+    hostname: Optional[str] = None,
+    guid: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if hostname:
+        cur.execute(
+            f"SELECT {_device_column_sql()} FROM {DEVICE_TABLE} WHERE hostname = ?",
+            (hostname,),
+        )
+    elif guid:
+        normalized_guid = _normalize_guid(guid)
+        if not normalized_guid:
+            return None
+        cur.execute(
+            f"SELECT {_device_column_sql()} FROM {DEVICE_TABLE} WHERE LOWER(guid) = ?",
+            (normalized_guid.lower(),),
+        )
+    else:
+        return None
+    row = cur.fetchone()
+    if not row:
+        return None
+    record = _row_to_device_dict(row, _DEVICE_TABLE_COLUMNS)
+    return _assemble_device_snapshot(record)
+
+
+def _serialize_device_json(value: Any, default: Any) -> str:
+    candidate = value
+    if candidate is None:
+        candidate = default
+    if not isinstance(candidate, (list, dict)):
+        candidate = default
+    try:
+        return json.dumps(candidate)
+    except Exception:
+        try:
+            return json.dumps(default)
+        except Exception:
+            return "{}" if isinstance(default, dict) else "[]"
+
+
+def _clean_device_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        text = str(value)
+    elif isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = str(value)
+        except Exception:
+            return None
+    text = text.strip()
+    return text or None
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return int(float(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def _extract_device_columns(details: Dict[str, Any]) -> Dict[str, Any]:
+    summary = details.get("summary") or {}
+    payload = {}
+
+    for field, default in _DEVICE_JSON_LIST_FIELDS.items():
+        payload[field] = _serialize_device_json(details.get(field), default)
+    payload["cpu"] = _serialize_device_json(summary.get("cpu") or details.get("cpu"), _DEVICE_JSON_OBJECT_FIELDS["cpu"])
+
+    payload["device_type"] = _clean_device_str(summary.get("device_type") or summary.get("type"))
+    payload["domain"] = _clean_device_str(summary.get("domain"))
+    payload["external_ip"] = _clean_device_str(summary.get("external_ip") or summary.get("public_ip"))
+    payload["internal_ip"] = _clean_device_str(summary.get("internal_ip") or summary.get("private_ip"))
+    payload["last_reboot"] = _clean_device_str(summary.get("last_reboot") or summary.get("last_boot"))
+    payload["last_seen"] = _coerce_int(summary.get("last_seen"))
+    payload["last_user"] = _clean_device_str(
+        summary.get("last_user")
+        or summary.get("last_user_name")
+        or summary.get("username")
+    )
+    payload["operating_system"] = _clean_device_str(
+        summary.get("operating_system")
+        or summary.get("agent_operating_system")
+        or summary.get("os")
+    )
+    uptime_value = (
+        summary.get("uptime_sec")
+        or summary.get("uptime_seconds")
+        or summary.get("uptime")
+    )
+    payload["uptime"] = _coerce_int(uptime_value)
+    payload["agent_id"] = _clean_device_str(summary.get("agent_id"))
+    return payload
+
+
+def _device_upsert(
+    cur: sqlite3.Cursor,
+    hostname: str,
+    description: Optional[str],
+    merged_details: Dict[str, Any],
+    created_at: Optional[int],
+    *,
+    agent_hash: Optional[str] = None,
+    guid: Optional[str] = None,
+) -> None:
+    if not hostname:
+        return
+    column_values = _extract_device_columns(merged_details or {})
+
+    normalized_description = description if description is not None else ""
+    try:
+        normalized_description = str(normalized_description)
+    except Exception:
+        normalized_description = ""
+
+    normalized_hash = _clean_device_str(agent_hash) or None
+    normalized_guid = _clean_device_str(guid) or None
+    if normalized_guid:
+        try:
+            normalized_guid = _normalize_guid(normalized_guid)
+        except Exception:
+            pass
+
+    created_ts = _coerce_int(created_at)
+    if not created_ts:
+        created_ts = int(time.time())
+
+    sql = f"""
+        INSERT INTO {DEVICE_TABLE}(
+            hostname,
+            description,
+            created_at,
+            agent_hash,
+            guid,
+            memory,
+            network,
+            software,
+            storage,
+            cpu,
+            device_type,
+            domain,
+            external_ip,
+            internal_ip,
+            last_reboot,
+            last_seen,
+            last_user,
+            operating_system,
+            uptime,
+            agent_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(hostname) DO UPDATE SET
+            description=excluded.description,
+            created_at=COALESCE({DEVICE_TABLE}.created_at, excluded.created_at),
+            agent_hash=COALESCE(NULLIF(excluded.agent_hash, ''), {DEVICE_TABLE}.agent_hash),
+            guid=COALESCE(NULLIF(excluded.guid, ''), {DEVICE_TABLE}.guid),
+            memory=excluded.memory,
+            network=excluded.network,
+            software=excluded.software,
+            storage=excluded.storage,
+            cpu=excluded.cpu,
+            device_type=COALESCE(NULLIF(excluded.device_type, ''), {DEVICE_TABLE}.device_type),
+            domain=COALESCE(NULLIF(excluded.domain, ''), {DEVICE_TABLE}.domain),
+            external_ip=COALESCE(NULLIF(excluded.external_ip, ''), {DEVICE_TABLE}.external_ip),
+            internal_ip=COALESCE(NULLIF(excluded.internal_ip, ''), {DEVICE_TABLE}.internal_ip),
+            last_reboot=COALESCE(NULLIF(excluded.last_reboot, ''), {DEVICE_TABLE}.last_reboot),
+            last_seen=COALESCE(NULLIF(excluded.last_seen, 0), {DEVICE_TABLE}.last_seen),
+            last_user=COALESCE(NULLIF(excluded.last_user, ''), {DEVICE_TABLE}.last_user),
+            operating_system=COALESCE(NULLIF(excluded.operating_system, ''), {DEVICE_TABLE}.operating_system),
+            uptime=COALESCE(NULLIF(excluded.uptime, 0), {DEVICE_TABLE}.uptime),
+            agent_id=COALESCE(NULLIF(excluded.agent_id, ''), {DEVICE_TABLE}.agent_id)
+    """
+
+    params: List[Any] = [
+        hostname,
+        normalized_description,
+        created_ts,
+        normalized_hash,
+        normalized_guid,
+        column_values.get("memory"),
+        column_values.get("network"),
+        column_values.get("software"),
+        column_values.get("storage"),
+        column_values.get("cpu"),
+        column_values.get("device_type"),
+        column_values.get("domain"),
+        column_values.get("external_ip"),
+        column_values.get("internal_ip"),
+        column_values.get("last_reboot"),
+        column_values.get("last_seen"),
+        column_values.get("last_user"),
+        column_values.get("operating_system"),
+        column_values.get("uptime"),
+        column_values.get("agent_id"),
+    ]
+    cur.execute(sql, params)
+
+
 # --- Simple at-rest secret handling for service account passwords ---
 _SERVER_SECRET_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), 'server_secret.key'))
 
@@ -2514,22 +2891,164 @@ def init_db():
     conn = _db_conn()
     cur = conn.cursor()
 
-    # Device details table
+    # Device table (renamed from historical device_details)
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS device_details (hostname TEXT PRIMARY KEY, description TEXT, details TEXT, created_at INTEGER, agent_hash TEXT, guid TEXT)"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (DEVICE_TABLE,),
     )
-    # Backfill missing created_at column on existing installs
-    try:
-        cur.execute("PRAGMA table_info(device_details)")
-        cols = [r[1] for r in cur.fetchall()]
-        if 'created_at' not in cols:
-            cur.execute("ALTER TABLE device_details ADD COLUMN created_at INTEGER")
-        if 'agent_hash' not in cols:
-            cur.execute("ALTER TABLE device_details ADD COLUMN agent_hash TEXT")
-        if 'guid' not in cols:
-            cur.execute("ALTER TABLE device_details ADD COLUMN guid TEXT")
-    except Exception:
-        pass
+    has_devices = cur.fetchone()
+    if not has_devices:
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='device_details'"
+        )
+        legacy = cur.fetchone()
+        if legacy:
+            cur.execute("ALTER TABLE device_details RENAME TO devices")
+        else:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS devices (
+                    hostname TEXT PRIMARY KEY,
+                    description TEXT,
+                    created_at INTEGER,
+                    agent_hash TEXT,
+                    guid TEXT,
+                    memory TEXT,
+                    network TEXT,
+                    software TEXT,
+                    storage TEXT,
+                    cpu TEXT,
+                    device_type TEXT,
+                    domain TEXT,
+                    external_ip TEXT,
+                    internal_ip TEXT,
+                    last_reboot TEXT,
+                    last_seen INTEGER,
+                    last_user TEXT,
+                    operating_system TEXT,
+                    uptime INTEGER,
+                    agent_id TEXT
+                )
+                """
+            )
+
+    # Ensure required columns exist on upgraded installs
+    cur.execute(f"PRAGMA table_info({DEVICE_TABLE})")
+    existing_cols = [r[1] for r in cur.fetchall()]
+
+    def _ensure_column(name: str, decl: str) -> None:
+        if name not in existing_cols:
+            cur.execute(f"ALTER TABLE {DEVICE_TABLE} ADD COLUMN {name} {decl}")
+            existing_cols.append(name)
+
+    _ensure_column("description", "TEXT")
+    _ensure_column("created_at", "INTEGER")
+    _ensure_column("agent_hash", "TEXT")
+    _ensure_column("guid", "TEXT")
+    _ensure_column("memory", "TEXT")
+    _ensure_column("network", "TEXT")
+    _ensure_column("software", "TEXT")
+    _ensure_column("storage", "TEXT")
+    _ensure_column("cpu", "TEXT")
+    _ensure_column("device_type", "TEXT")
+    _ensure_column("domain", "TEXT")
+    _ensure_column("external_ip", "TEXT")
+    _ensure_column("internal_ip", "TEXT")
+    _ensure_column("last_reboot", "TEXT")
+    _ensure_column("last_seen", "INTEGER")
+    _ensure_column("last_user", "TEXT")
+    _ensure_column("operating_system", "TEXT")
+    _ensure_column("uptime", "INTEGER")
+    _ensure_column("agent_id", "TEXT")
+
+    details_rows: List[Tuple[Any, ...]] = []
+    if "details" in existing_cols:
+        try:
+            cur.execute(f"SELECT hostname, details FROM {DEVICE_TABLE}")
+            details_rows = cur.fetchall()
+        except Exception:
+            details_rows = []
+        for hostname, details_json in details_rows:
+            try:
+                details = json.loads(details_json or "{}")
+            except Exception:
+                details = {}
+            column_values = _extract_device_columns(details)
+            params = [column_values.get(col) for col in (
+                "memory",
+                "network",
+                "software",
+                "storage",
+                "cpu",
+                "device_type",
+                "domain",
+                "external_ip",
+                "internal_ip",
+                "last_reboot",
+                "last_seen",
+                "last_user",
+                "operating_system",
+                "uptime",
+                "agent_id",
+            )]
+            cur.execute(
+                f"""
+                UPDATE {DEVICE_TABLE}
+                SET memory=?, network=?, software=?, storage=?, cpu=?,
+                    device_type=?, domain=?, external_ip=?, internal_ip=?,
+                    last_reboot=?, last_seen=?, last_user=?, operating_system=?,
+                    uptime=?, agent_id=?
+                WHERE hostname=?
+                """,
+                params + [hostname],
+            )
+
+        if "details" in existing_cols:
+            try:
+                cur.execute(f"ALTER TABLE {DEVICE_TABLE} DROP COLUMN details")
+                existing_cols.remove("details")
+            except sqlite3.OperationalError:
+                try:
+                    cur.execute("BEGIN")
+                except Exception:
+                    pass
+                temp_table = f"{DEVICE_TABLE}_old"
+                cur.execute(f"ALTER TABLE {DEVICE_TABLE} RENAME TO {temp_table}")
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS devices (
+                        hostname TEXT PRIMARY KEY,
+                        description TEXT,
+                        created_at INTEGER,
+                        agent_hash TEXT,
+                        guid TEXT,
+                        memory TEXT,
+                        network TEXT,
+                        software TEXT,
+                        storage TEXT,
+                        cpu TEXT,
+                        device_type TEXT,
+                        domain TEXT,
+                        external_ip TEXT,
+                        internal_ip TEXT,
+                        last_reboot TEXT,
+                        last_seen INTEGER,
+                        last_user TEXT,
+                        operating_system TEXT,
+                        uptime INTEGER,
+                        agent_id TEXT
+                    )
+                    """
+                )
+                copy_cols = [col for col in _DEVICE_TABLE_COLUMNS if col != "details"]
+                col_sql = ", ".join(copy_cols)
+                cur.execute(
+                    f"INSERT INTO {DEVICE_TABLE} ({col_sql}) SELECT {col_sql} FROM {temp_table}"
+                )
+                cur.execute(f"DROP TABLE {temp_table}")
+                cur.execute("COMMIT")
+                cur.execute(f"PRAGMA table_info({DEVICE_TABLE})")
+                existing_cols = [r[1] for r in cur.fetchall()]
 
     # Activity history table for script/job runs
     cur.execute(
@@ -2980,13 +3499,13 @@ def rename_site():
 def _load_device_records(limit: int = 0):
     """
     Load device records from SQLite and flatten commonly-searched fields
-    from the JSON details column. Returns a list of dicts with keys:
+    from the devices table. Returns a list of dicts with keys:
       hostname, description, last_user, internal_ip, external_ip, site_id, site_name
     """
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        cur.execute("SELECT hostname, description, details FROM device_details")
+        cur.execute(f"SELECT {_device_column_sql()} FROM {DEVICE_TABLE}")
         rows = cur.fetchall()
 
         # Build device -> site mapping
@@ -3005,19 +3524,16 @@ def _load_device_records(limit: int = 0):
         site_map = {}
 
     out = []
-    for hostname, description, details_json in rows:
-        d = {}
-        try:
-            d = json.loads(details_json or "{}")
-        except Exception:
-            d = {}
-        summary = d.get("summary") or {}
+    for row in rows:
+        record = _row_to_device_dict(row, _DEVICE_TABLE_COLUMNS)
+        snapshot = _assemble_device_snapshot(record)
+        summary = snapshot.get("summary", {})
         rec = {
-            "hostname": hostname or summary.get("hostname") or "",
-            "description": (description or summary.get("description") or ""),
-            "last_user": summary.get("last_user") or summary.get("last_user_name") or "",
-            "internal_ip": summary.get("internal_ip") or "",
-            "external_ip": summary.get("external_ip") or "",
+            "hostname": snapshot.get("hostname") or summary.get("hostname") or "",
+            "description": snapshot.get("description") or summary.get("description") or "",
+            "last_user": snapshot.get("last_user") or summary.get("last_user") or summary.get("last_user_name") or "",
+            "internal_ip": snapshot.get("internal_ip") or summary.get("internal_ip") or "",
+            "external_ip": snapshot.get("external_ip") or summary.get("external_ip") or "",
         }
         site_info = site_map.get(rec["hostname"]) or {}
         rec.update({
@@ -3118,6 +3634,129 @@ def search_suggest():
         "devices": devices,
         "sites": sites,
     })
+
+
+@app.route("/api/devices", methods=["GET"])
+def list_devices():
+    """Return all devices with expanded columns for the WebUI."""
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT {_device_column_sql('d')},
+                   s.id, s.name, s.description
+            FROM {DEVICE_TABLE} d
+            LEFT JOIN device_sites ds ON ds.device_hostname = d.hostname
+            LEFT JOIN sites s ON s.id = ds.site_id
+            """
+        )
+        rows = cur.fetchall()
+        conn.close()
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    devices = []
+    now = time.time()
+    for row in rows:
+        core = row[: len(_DEVICE_TABLE_COLUMNS)]
+        site_id, site_name, site_description = row[len(_DEVICE_TABLE_COLUMNS) :]
+        record = _row_to_device_dict(core, _DEVICE_TABLE_COLUMNS)
+        snapshot = _assemble_device_snapshot(record)
+        summary = snapshot.get("summary", {})
+        last_seen = snapshot.get("last_seen") or 0
+        status = "Offline"
+        try:
+            if last_seen and (now - float(last_seen)) <= 300:
+                status = "Online"
+        except Exception:
+            pass
+        devices.append(
+            {
+                "hostname": snapshot.get("hostname") or summary.get("hostname") or "",
+                "description": snapshot.get("description") or summary.get("description") or "",
+                "details": snapshot.get("details", {}),
+                "summary": summary,
+                "created_at": snapshot.get("created_at") or 0,
+                "created_at_iso": snapshot.get("created_at_iso") or _ts_to_iso(snapshot.get("created_at")),
+                "agent_hash": snapshot.get("agent_hash") or summary.get("agent_hash") or "",
+                "agent_guid": snapshot.get("agent_guid") or summary.get("agent_guid") or "",
+                "guid": snapshot.get("agent_guid") or summary.get("agent_guid") or "",
+                "memory": snapshot.get("memory", []),
+                "network": snapshot.get("network", []),
+                "software": snapshot.get("software", []),
+                "storage": snapshot.get("storage", []),
+                "cpu": snapshot.get("cpu", {}),
+                "device_type": snapshot.get("device_type") or summary.get("device_type") or "",
+                "domain": snapshot.get("domain") or "",
+                "external_ip": snapshot.get("external_ip") or summary.get("external_ip") or "",
+                "internal_ip": snapshot.get("internal_ip") or summary.get("internal_ip") or "",
+                "last_reboot": snapshot.get("last_reboot") or summary.get("last_reboot") or "",
+                "last_seen": last_seen,
+                "last_seen_iso": snapshot.get("last_seen_iso") or _ts_to_iso(last_seen),
+                "last_user": snapshot.get("last_user") or summary.get("last_user") or "",
+                "operating_system": snapshot.get("operating_system")
+                or summary.get("operating_system")
+                or summary.get("agent_operating_system")
+                or "",
+                "uptime": snapshot.get("uptime") or 0,
+                "agent_id": snapshot.get("agent_id") or summary.get("agent_id") or "",
+                "site_id": site_id,
+                "site_name": site_name or "",
+                "site_description": site_description or "",
+                "status": status,
+            }
+        )
+
+    return jsonify({"devices": devices})
+
+
+@app.route("/api/devices/<guid>", methods=["GET"])
+def get_device_by_guid(guid: str):
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        snapshot = _load_device_snapshot(cur, guid=guid)
+        site_info = {"site_id": None, "site_name": "", "site_description": ""}
+        if snapshot:
+            try:
+                cur.execute(
+                    """
+                    SELECT s.id, s.name, s.description
+                    FROM device_sites ds
+                    JOIN sites s ON s.id = ds.site_id
+                    WHERE ds.device_hostname = ?
+                    """,
+                    (snapshot.get("hostname"),),
+                )
+                site_row = cur.fetchone()
+                if site_row:
+                    site_info = {
+                        "site_id": site_row[0],
+                        "site_name": site_row[1] or "",
+                        "site_description": site_row[2] or "",
+                    }
+            except Exception:
+                pass
+        conn.close()
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    if not snapshot:
+        return jsonify({"error": "not found"}), 404
+
+    last_seen = snapshot.get("last_seen") or 0
+    status = "Offline"
+    try:
+        if last_seen and (time.time() - float(last_seen)) <= 300:
+            status = "Online"
+    except Exception:
+        pass
+
+    payload = dict(snapshot)
+    payload.update(site_info)
+    payload["status"] = status
+    return jsonify(payload)
 
 
 # ---------------------------------------------
@@ -3277,7 +3916,7 @@ def delete_device_list_view(view_id: int):
 
 
 def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
-    """Persist last_seen (and agent_id if provided) into device_details.details JSON.
+    """Persist last_seen (and agent_id if provided) into the stored device record.
 
     Ensures that after a server restart, we can restore last_seen from DB even
     if the agent is offline, and helps merge entries by keeping track of the
@@ -3288,22 +3927,11 @@ def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        cur.execute(
-            "SELECT details, description, created_at, guid FROM device_details WHERE hostname = ?",
-            (hostname,),
-        )
-        row = cur.fetchone()
-        if row and row[0]:
-            try:
-                details = json.loads(row[0])
-            except Exception:
-                details = {}
-            description = row[1] or ""
-            created_at = int(row[2] or 0)
-        else:
-            details = {}
-            description = ""
-            created_at = 0
+        snapshot = _load_device_snapshot(cur, hostname=hostname) or {}
+        details = snapshot.get("details", {})
+        description = snapshot.get("description") or ""
+        created_at = int(snapshot.get("created_at") or 0)
+        existing_hash = snapshot.get("agent_hash")
 
         summary = details.get("summary") or {}
         summary["hostname"] = summary.get("hostname") or hostname
@@ -3317,7 +3945,7 @@ def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
             except Exception:
                 pass
         try:
-            existing_guid = (row[3] or "").strip() if row and len(row) > 3 else ""
+            existing_guid = (snapshot.get("agent_guid") or "").strip()
         except Exception:
             existing_guid = ""
         if existing_guid and not summary.get("agent_guid"):
@@ -3335,16 +3963,16 @@ def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
             pass
 
         # Single upsert to avoid unique-constraint races
-        cur.execute(
-            """
-            INSERT INTO device_details(hostname, description, details, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(hostname) DO UPDATE SET
-                description=excluded.description,
-                details=excluded.details,
-                created_at=COALESCE(device_details.created_at, excluded.created_at)
-            """,
-            (hostname, description, json.dumps(details), target_created_at),
+        effective_hash = summary.get("agent_hash") or existing_hash
+        effective_guid = summary.get("agent_guid") or existing_guid
+        _device_upsert(
+            cur,
+            hostname,
+            description,
+            details,
+            target_created_at,
+            agent_hash=effective_hash,
+            guid=effective_guid,
         )
         conn.commit()
         conn.close()
@@ -3357,27 +3985,30 @@ def load_agents_from_db():
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        cur.execute("SELECT hostname, details, agent_hash, guid FROM device_details")
+        cur.execute(f"SELECT {_device_column_sql()} FROM {DEVICE_TABLE}")
         rows = cur.fetchall()
-        for hostname, details_json, agent_hash, guid in rows:
-            try:
-                details = json.loads(details_json or "{}")
-            except Exception:
-                details = {}
+        for row in rows:
+            record = _row_to_device_dict(row, _DEVICE_TABLE_COLUMNS)
+            snapshot = _assemble_device_snapshot(record)
+            hostname = snapshot.get("hostname")
+            description = snapshot.get("description")
+            details = snapshot.get("details", {})
             summary = details.get("summary", {})
             agent_id = summary.get("agent_id") or hostname
-            stored_hash = None
-            try:
-                stored_hash = (agent_hash or summary.get("agent_hash") or "").strip()
-            except Exception:
-                stored_hash = summary.get("agent_hash") or ""
-            agent_guid = (summary.get("agent_guid") or guid or "").strip()
-            if guid and not summary.get("agent_guid"):
-                summary["agent_guid"] = _normalize_guid(guid)
+            stored_hash = (snapshot.get("agent_hash") or summary.get("agent_hash") or "").strip()
+            agent_guid = (summary.get("agent_guid") or snapshot.get("agent_guid") or "").strip()
+            if snapshot.get("agent_guid") and not summary.get("agent_guid"):
+                normalized_guid = _normalize_guid(snapshot.get("agent_guid"))
+                summary["agent_guid"] = normalized_guid
                 try:
-                    cur.execute(
-                        "UPDATE device_details SET details=? WHERE hostname=?",
-                        (json.dumps(details), hostname),
+                    _device_upsert(
+                        cur,
+                        hostname,
+                        description,
+                        details,
+                        snapshot.get("created_at"),
+                        agent_hash=snapshot.get("agent_hash") or stored_hash,
+                        guid=normalized_guid,
                     )
                 except Exception:
                     pass
@@ -3428,28 +4059,26 @@ def _device_rows_for_agent(cur, agent_id: str) -> List[Dict[str, Any]]:
         return results
     try:
         cur.execute(
-            "SELECT hostname, agent_hash, details, guid FROM device_details WHERE LOWER(hostname) = ?",
+            f"SELECT {_device_column_sql()} FROM {DEVICE_TABLE} WHERE LOWER(hostname) = ?",
             (base_host.lower(),),
         )
         rows = cur.fetchall()
     except Exception:
         return results
-    for hostname, agent_hash, details_json, guid in rows or []:
-        try:
-            details = json.loads(details_json or "{}")
-        except Exception:
-            details = {}
-        summary = details.get("summary") or {}
+    for row in rows or []:
+        record = _row_to_device_dict(row, _DEVICE_TABLE_COLUMNS)
+        snapshot = _assemble_device_snapshot(record)
+        summary = snapshot.get("summary", {})
         summary_agent = (summary.get("agent_id") or "").strip()
         matched = summary_agent.lower() == normalized_id.lower() if summary_agent else False
         results.append(
             {
-                "hostname": hostname,
-                "agent_hash": (agent_hash or "").strip(),
-                "details": details,
+                "hostname": snapshot.get("hostname"),
+                "agent_hash": (snapshot.get("agent_hash") or "").strip(),
+                "details": snapshot.get("details", {}),
                 "summary_agent_id": summary_agent,
                 "matched": matched,
-                "guid": (guid or "").strip(),
+                "guid": snapshot.get("agent_guid") or "",
             }
         )
     return results
@@ -3469,19 +4098,21 @@ def _ensure_agent_guid_for_hostname(cur, hostname: str, agent_id: Optional[str] 
     normalized_host = (hostname or "").strip()
     if not normalized_host:
         return None
-    cur.execute(
-        "SELECT hostname, guid, details FROM device_details WHERE LOWER(hostname) = ?",
-        (normalized_host.lower(),),
-    )
-    row = cur.fetchone()
-    if row:
-        actual_host, existing_guid, details_json = row
+    snapshot = _load_device_snapshot(cur, hostname=normalized_host)
+    if snapshot:
+        actual_host = snapshot.get("hostname") or normalized_host
+        existing_guid = snapshot.get("agent_guid") or ""
+        details = snapshot.get("details", {})
+        description = snapshot.get("description") or ""
+        created_at = snapshot.get("created_at")
+        agent_hash = snapshot.get("agent_hash")
     else:
-        actual_host, existing_guid, details_json = normalized_host, "", "{}"
-    try:
-        details = json.loads(details_json or "{}")
-    except Exception:
+        actual_host = normalized_host
+        existing_guid = ""
         details = {}
+        description = ""
+        created_at = None
+        agent_hash = None
     summary = details.setdefault("summary", {})
     if agent_id and not summary.get("agent_id"):
         try:
@@ -3494,26 +4125,28 @@ def _ensure_agent_guid_for_hostname(cur, hostname: str, agent_id: Optional[str] 
     if existing_guid:
         normalized = _normalize_guid(existing_guid)
         summary.setdefault("agent_guid", normalized)
-        cur.execute(
-            "UPDATE device_details SET guid=?, details=? WHERE hostname=?",
-            (normalized, json.dumps(details), actual_host),
+        _device_upsert(
+            cur,
+            actual_host,
+            description,
+            details,
+            created_at,
+            agent_hash=agent_hash,
+            guid=normalized,
         )
         return summary.get("agent_guid") or normalized
 
     new_guid = str(uuid.uuid4())
     summary["agent_guid"] = new_guid
     now = int(time.time())
-    cur.execute(
-        """
-        INSERT INTO device_details(hostname, description, details, created_at, guid)
-        VALUES (?, COALESCE((SELECT description FROM device_details WHERE hostname = ?), ''), ?, COALESCE((SELECT created_at FROM device_details WHERE hostname = ?), ?), ?)
-        ON CONFLICT(hostname) DO UPDATE SET
-            guid=excluded.guid,
-            details=excluded.details,
-            created_at=COALESCE(device_details.created_at, excluded.created_at),
-            description=COALESCE(device_details.description, excluded.description)
-        """,
-        (actual_host, actual_host, json.dumps(details), actual_host, now, new_guid),
+    _device_upsert(
+        cur,
+        actual_host,
+        description,
+        details,
+        created_at or now,
+        agent_hash=agent_hash,
+        guid=new_guid,
     )
     return new_guid
 
@@ -3531,9 +4164,19 @@ def _ensure_agent_guid(agent_id: str, hostname: Optional[str] = None) -> Optiona
             if candidate:
                 summary = row.get("details", {}).setdefault("summary", {})
                 summary.setdefault("agent_guid", candidate)
-                cur.execute(
-                    "UPDATE device_details SET guid=?, details=? WHERE hostname=?",
-                    (candidate, json.dumps(row.get("details", {})), row.get("hostname")),
+                host = row.get("hostname")
+                snapshot_existing = _load_device_snapshot(cur, hostname=host)
+                description = snapshot_existing.get("description") if snapshot_existing else None
+                created_at = snapshot_existing.get("created_at") if snapshot_existing else None
+                agent_hash = snapshot_existing.get("agent_hash") if snapshot_existing else None
+                _device_upsert(
+                    cur,
+                    host,
+                    description,
+                    row.get("details", {}),
+                    created_at,
+                    agent_hash=agent_hash,
+                    guid=candidate,
                 )
                 conn.commit()
                 return candidate
@@ -3639,32 +4282,15 @@ def save_agent_details():
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        # Load existing row to preserve description and created_at and merge fields
-        cur.execute(
-            "SELECT details, description, created_at, guid FROM device_details WHERE hostname = ?",
-            (hostname,),
-        )
-        row = cur.fetchone()
-        prev_details = {}
-        description = ""
-        created_at = 0
-        existing_guid = None
-        if row:
-            try:
-                prev_details = json.loads(row[0] or '{}')
-            except Exception:
-                prev_details = {}
-            description = row[1] or ""
-            try:
-                created_at = int(row[2] or 0)
-            except Exception:
-                created_at = 0
-            try:
-                existing_guid = (row[3] or "").strip()
-            except Exception:
-                existing_guid = None
-        else:
-            existing_guid = None
+        snapshot = _load_device_snapshot(cur, hostname=hostname) or {}
+        try:
+            prev_details = json.loads(json.dumps(snapshot.get("details", {})))
+        except Exception:
+            prev_details = snapshot.get("details", {}) or {}
+        description = snapshot.get("description") or ""
+        created_at = int(snapshot.get("created_at") or 0)
+        existing_guid = (snapshot.get("agent_guid") or "").strip() or None
+        existing_agent_hash = (snapshot.get("agent_hash") or "").strip() or None
 
         # Ensure summary exists and attach hostname/agent_id if missing
         incoming_summary = details.setdefault("summary", {})
@@ -3737,25 +4363,14 @@ def save_agent_details():
             pass
 
         # Upsert row without destroying created_at; keep previous created_at if exists
-        cur.execute(
-            """
-            INSERT INTO device_details(hostname, description, details, created_at, agent_hash, guid)
-            VALUES (?,?,?,?,?,?)
-            ON CONFLICT(hostname) DO UPDATE SET
-                description=excluded.description,
-                details=excluded.details,
-                created_at=COALESCE(device_details.created_at, excluded.created_at),
-                agent_hash=COALESCE(NULLIF(excluded.agent_hash, ''), device_details.agent_hash),
-                guid=COALESCE(NULLIF(excluded.guid, ''), device_details.guid)
-            """,
-            (
-                hostname,
-                description,
-                json.dumps(merged),
-                created_at,
-                agent_hash or None,
-                (normalized_effective_guid or None),
-            ),
+        _device_upsert(
+            cur,
+            hostname,
+            description,
+            merged,
+            created_at,
+            agent_hash=agent_hash or existing_agent_hash,
+            guid=normalized_effective_guid,
         )
         conn.commit()
         conn.close()
@@ -3789,46 +4404,37 @@ def get_device_details(hostname: str):
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        cur.execute(
-            "SELECT details, description, created_at, agent_hash, guid FROM device_details WHERE hostname = ?",
-            (hostname,),
-        )
-        row = cur.fetchone()
+        snapshot = _load_device_snapshot(cur, hostname=hostname)
         conn.close()
-        if row:
-            try:
-                details = json.loads(row[0])
-            except Exception:
-                details = {}
-            description = row[1] if len(row) > 1 else ""
-            created_at = int(row[2] or 0) if len(row) > 2 else 0
-            agent_hash = (row[3] or "").strip() if len(row) > 3 else ""
-            if description:
-                details.setdefault("summary", {})["description"] = description
-            # Ensure created string exists from created_at
-            try:
-                if created_at and not (details.get('summary') or {}).get('created'):
-                    from datetime import datetime
-                    details.setdefault('summary', {})['created'] = datetime.utcfromtimestamp(created_at).strftime('%Y-%m-%d %H:%M:%S')
-            except Exception:
-                pass
-            if agent_hash:
-                try:
-                    details.setdefault('summary', {})
-                    if not details['summary'].get('agent_hash'):
-                        details['summary']['agent_hash'] = agent_hash
-                except Exception:
-                    pass
-            if len(row) > 4:
-                agent_guid = (row[4] or "").strip()
-                if agent_guid:
-                    try:
-                        details.setdefault('summary', {})
-                        if not details['summary'].get('agent_guid'):
-                            details['summary']['agent_guid'] = _normalize_guid(agent_guid)
-                    except Exception:
-                        pass
-            return jsonify(details)
+        if snapshot:
+            summary = snapshot.get("summary", {})
+            payload = {
+                "details": snapshot.get("details", {}),
+                "summary": summary,
+                "description": snapshot.get("description") or summary.get("description") or "",
+                "created_at": snapshot.get("created_at") or 0,
+                "agent_hash": snapshot.get("agent_hash") or summary.get("agent_hash") or "",
+                "agent_guid": snapshot.get("agent_guid") or summary.get("agent_guid") or "",
+                "memory": snapshot.get("memory", []),
+                "network": snapshot.get("network", []),
+                "software": snapshot.get("software", []),
+                "storage": snapshot.get("storage", []),
+                "cpu": snapshot.get("cpu", {}),
+                "device_type": snapshot.get("device_type") or summary.get("device_type") or "",
+                "domain": snapshot.get("domain") or summary.get("domain") or "",
+                "external_ip": snapshot.get("external_ip") or summary.get("external_ip") or "",
+                "internal_ip": snapshot.get("internal_ip") or summary.get("internal_ip") or "",
+                "last_reboot": snapshot.get("last_reboot") or summary.get("last_reboot") or "",
+                "last_seen": snapshot.get("last_seen") or summary.get("last_seen") or 0,
+                "last_user": snapshot.get("last_user") or summary.get("last_user") or "",
+                "operating_system": snapshot.get("operating_system")
+                or summary.get("operating_system")
+                or summary.get("agent_operating_system")
+                or "",
+                "uptime": snapshot.get("uptime") or summary.get("uptime") or 0,
+                "agent_id": snapshot.get("agent_id") or summary.get("agent_id") or "",
+            }
+            return jsonify(payload)
     except Exception:
         pass
     return jsonify({})
@@ -3841,17 +4447,25 @@ def set_device_description(hostname: str):
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        now = int(time.time())
-        # Insert row if missing with created_at; otherwise update description only
-        cur.execute(
-            "INSERT INTO device_details(hostname, description, details, created_at) "
-            "VALUES (?, COALESCE(?, ''), COALESCE((SELECT details FROM device_details WHERE hostname = ?), '{}'), ?) "
-            "ON CONFLICT(hostname) DO NOTHING",
-            (hostname, description, hostname, now),
-        )
-        cur.execute(
-            "UPDATE device_details SET description=? WHERE hostname=?",
-            (description, hostname),
+        snapshot = _load_device_snapshot(cur, hostname=hostname) or {}
+        try:
+            details = json.loads(json.dumps(snapshot.get("details", {})))
+        except Exception:
+            details = snapshot.get("details", {}) or {}
+        created_at = snapshot.get("created_at") or int(time.time())
+        agent_hash = snapshot.get("agent_hash")
+        guid = snapshot.get("agent_guid")
+        existing_description = snapshot.get("description") or ""
+        summary = details.setdefault("summary", {})
+        summary["description"] = description
+        _device_upsert(
+            cur,
+            hostname,
+            description or existing_description or "",
+            details,
+            created_at,
+            agent_hash=agent_hash,
+            guid=guid,
         )
         conn.commit()
         conn.close()
@@ -4875,37 +5489,28 @@ def handle_collector_status(data):
             host = hostname or rec.get('hostname')
             conn = _db_conn()
             cur = conn.cursor()
-            cur.execute(
-                "SELECT details, description, created_at FROM device_details WHERE hostname = ?",
-                (host,),
-            )
-            row = cur.fetchone()
-            if row and row[0]:
-                try:
-                    details = json.loads(row[0])
-                except Exception:
-                    details = {}
-                description = row[1] or ""
-                created_at = int(row[2] or 0)
-            else:
-                details = {}
-                description = ""
-                created_at = 0
+            snapshot = _load_device_snapshot(cur, hostname=host) or {}
+            try:
+                details = json.loads(json.dumps(snapshot.get("details", {})))
+            except Exception:
+                details = snapshot.get("details", {}) or {}
+            description = snapshot.get("description") or ""
+            created_at = int(snapshot.get("created_at") or 0)
+            existing_hash = (snapshot.get("agent_hash") or "").strip() or None
+            existing_guid = (snapshot.get("agent_guid") or "").strip() or None
             summary = details.get('summary') or {}
             # Only update last_user if provided; do not clear other fields
             summary['last_user'] = last_user
             details['summary'] = summary
             now = int(time.time())
-            cur.execute(
-                """
-                INSERT INTO device_details(hostname, description, details, created_at)
-                VALUES (?,?,?,?)
-                ON CONFLICT(hostname) DO UPDATE SET
-                    description=excluded.description,
-                    details=excluded.details,
-                    created_at=COALESCE(device_details.created_at, excluded.created_at)
-                """,
-                (host, description, json.dumps(details), created_at or now),
+            _device_upsert(
+                cur,
+                host,
+                description,
+                details,
+                created_at or now,
+                agent_hash=existing_hash,
+                guid=existing_guid,
             )
             conn.commit()
             conn.close()
@@ -4918,10 +5523,10 @@ def delete_agent(agent_id: str):
     """Remove an agent from the registry and database."""
     info = registered_agents.pop(agent_id, None)
     agent_configurations.pop(agent_id, None)
-    # IMPORTANT: Do NOT delete device_details here. Multiple in-memory agent
+    # IMPORTANT: Do NOT delete devices here. Multiple in-memory agent
     # records can refer to the same hostname; removing one should not wipe the
     # persisted device inventory for the hostname. A dedicated endpoint can be
-    # added later to purge device_details by hostname if needed.
+    # added later to purge devices by hostname if needed.
     if info:
         return jsonify({"status": "removed"})
     return jsonify({"error": "agent not found"}), 404
