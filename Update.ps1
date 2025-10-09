@@ -150,7 +150,7 @@ function Get-RepositoryCommitHash {
     if ($AgentRoot -and ($candidates -notcontains $AgentRoot)) { $candidates += $AgentRoot }
     if ($ProjectRoot) {
         $agentRootCandidate = Join-Path $ProjectRoot 'Agent\Borealis'
-        if (Test-Path $agentRootCandidate -PathType Container -and ($candidates -notcontains $agentRootCandidate)) {
+        if ((Test-Path $agentRootCandidate -PathType Container) -and ($candidates -notcontains $agentRootCandidate)) {
             $candidates += $agentRootCandidate
         }
     }
