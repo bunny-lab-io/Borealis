@@ -146,11 +146,21 @@ export default function DeviceList({ onSelectDevice }) {
   const [assignTargets, setAssignTargets] = useState([]); // hostnames
 
   const [repoHash, setRepoHash] = useState(null);
+  const lastRepoFetchRef = useRef(0);
 
-  const fetchLatestRepoHash = useCallback(async () => {
+  const fetchLatestRepoHash = useCallback(async (options = {}) => {
+    const { force = false } = options || {};
+    const now = Date.now();
+    const elapsed = now - lastRepoFetchRef.current;
+    if (!force && repoHash && elapsed >= 0 && elapsed < 60_000) {
+      return repoHash;
+    }
     try {
       const params = new URLSearchParams({ repo: "bunny-lab-io/Borealis", branch: "main" });
-      const resp = await fetch(`/api/repo/current_hash?${params.toString()}`);
+      if (force) {
+        params.set("refresh", "1");
+      }
+      const resp = await fetch(`/api/agent/repo_hash?${params.toString()}`);
       const json = await resp.json();
       const sha = (json?.sha || "").trim();
       if (!resp.ok || !sha) {
@@ -158,14 +168,19 @@ export default function DeviceList({ onSelectDevice }) {
         err.response = json;
         throw err;
       }
-      setRepoHash((prev) => sha || prev || null);
+      lastRepoFetchRef.current = now;
+      setRepoHash((prev) => (sha ? sha : prev || null));
       return sha || null;
     } catch (err) {
       console.warn("Failed to fetch repository hash", err);
+      if (!force && repoHash) {
+        return repoHash;
+      }
+      lastRepoFetchRef.current = now;
       setRepoHash((prev) => prev || null);
       return null;
     }
-  }, []);
+  }, [repoHash]);
 
   const computeAgentVersion = useCallback((agentHashValue, repoHashValue) => {
     const agentHash = (agentHashValue || "").trim();
@@ -179,7 +194,7 @@ export default function DeviceList({ onSelectDevice }) {
     const { refreshRepo = false } = options || {};
     let repoSha = repoHash;
     if (refreshRepo || !repoSha) {
-      const fetched = await fetchLatestRepoHash();
+      const fetched = await fetchLatestRepoHash({ force: refreshRepo });
       if (fetched) repoSha = fetched;
     }
 
