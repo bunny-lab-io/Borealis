@@ -60,6 +60,20 @@ def detect_agent_os():
                 edition_id = _get("EditionID", "")
                 composition_edition = _get("CompositionEditionID", "")
                 product_type = _get("ProductType", "")
+                # Prefer WMI caption when available because it carries the official
+                # Windows Server branding (e.g., "Microsoft Windows Server 2022 Standard").
+                wmi_caption = ""
+                try:
+                    cmd = "(Get-CimInstance Win32_OperatingSystem | Select-Object -ExpandProperty Caption) -replace '^Microsoft ', ''"
+                    out = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command", cmd],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    wmi_caption = (out.stdout or "").strip()
+                except Exception:
+                    wmi_caption = ""
 
                 try:
                     build_int = int(str(build_number).split(".")[0]) if build_number else 0
@@ -77,6 +91,14 @@ def detect_agent_os():
                 # the major label when the product name is unavailable.
                 def _is_server() -> bool:
                     try:
+                        try:
+                            wver = sys.getwindowsversion()  # type: ignore[attr-defined]
+                            if getattr(wver, 'product_type', 0) in (2, 3):
+                                return True
+                        except Exception:
+                            pass
+                        if wmi_caption and 'server' in wmi_caption.lower():
+                            return True
                         server_markers = (
                             product_name,
                             installation_type,
@@ -86,14 +108,18 @@ def detect_agent_os():
                         for marker in server_markers:
                             if isinstance(marker, str) and 'server' in marker.lower():
                                 return True
-                        pt = (product_type or '').lower()
-                        return pt in ('servernt', 'lanmannt', 'domaincontroller')
+                        pt = (str(product_type).lower()) if product_type is not None else ''
+                        return pt in ('servernt', 'lanmannt', 'domaincontroller', 'serverserver', 'server', '3')
                     except Exception:
                         return False
 
                 is_server = _is_server()
 
-                base_name = (product_name or "").strip()
+                base_name = ""
+                if wmi_caption:
+                    base_name = wmi_caption
+                if not base_name:
+                    base_name = (product_name or "").strip()
                 if not base_name:
                     base_name = f"Windows {major_label}".strip()
                 elif not base_name.lower().startswith("windows"):
