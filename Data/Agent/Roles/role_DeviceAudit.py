@@ -56,6 +56,10 @@ def detect_agent_os():
                 release_id = _get("ReleaseId", "")
                 build_number = _get("CurrentBuildNumber", "") or _get("CurrentBuild", "")
                 ubr = _get("UBR", None)
+                installation_type = _get("InstallationType", "")
+                edition_id = _get("EditionID", "")
+                composition_edition = _get("CompositionEditionID", "")
+                product_type = _get("ProductType", "")
 
                 try:
                     build_int = int(str(build_number).split(".")[0]) if build_number else 0
@@ -71,11 +75,43 @@ def detect_agent_os():
                 # Prefer the registry product name so Windows Server editions keep their
                 # native branding (e.g., "Windows Server 2022 Standard"). Fall back to
                 # the major label when the product name is unavailable.
+                def _is_server() -> bool:
+                    try:
+                        server_markers = (
+                            product_name,
+                            installation_type,
+                            edition_id,
+                            composition_edition,
+                        )
+                        for marker in server_markers:
+                            if isinstance(marker, str) and 'server' in marker.lower():
+                                return True
+                        pt = (product_type or '').lower()
+                        return pt in ('servernt', 'lanmannt', 'domaincontroller')
+                    except Exception:
+                        return False
+
+                is_server = _is_server()
+
                 base_name = (product_name or "").strip()
                 if not base_name:
                     base_name = f"Windows {major_label}".strip()
                 elif not base_name.lower().startswith("windows"):
                     base_name = f"Windows {major_label} {base_name}".strip()
+
+                if is_server:
+                    lowered = base_name.lower()
+                    if not lowered.startswith("windows server"):
+                        tokens = base_name.split()
+                        if len(tokens) >= 2 and tokens[0].lower() == 'windows':
+                            # Replace the second token with 'Server' to drop client labels like '10'/'11'
+                            tokens[1] = 'Server'
+                            base_name = " ".join(tokens)
+                        else:
+                            base_name = f"Windows Server {base_name}"
+                    # Normalize double "Server" occurrences (e.g., "Windows Server Server 2022")
+                    while "Server Server" in base_name:
+                        base_name = base_name.replace("Server Server", "Server", 1)
 
                 version_label = display_version or release_id or ""
                 if isinstance(ubr, int):
