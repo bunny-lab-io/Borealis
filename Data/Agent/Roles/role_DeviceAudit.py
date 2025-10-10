@@ -8,6 +8,7 @@ import subprocess
 import shutil
 import string
 import asyncio
+import re
 from pathlib import Path
 
 try:
@@ -56,90 +57,141 @@ def detect_agent_os():
                 release_id = _get("ReleaseId", "")
                 build_number = _get("CurrentBuildNumber", "") or _get("CurrentBuild", "")
                 ubr = _get("UBR", None)
-                installation_type = _get("InstallationType", "")
                 edition_id = _get("EditionID", "")
-                composition_edition = _get("CompositionEditionID", "")
-                product_type = _get("ProductType", "")
-                # Prefer WMI caption when available because it carries the official
-                # Windows Server branding (e.g., "Microsoft Windows Server 2022 Standard").
-                wmi_caption = ""
+
+                wmi_info = {}
                 try:
-                    cmd = "(Get-CimInstance Win32_OperatingSystem | Select-Object -ExpandProperty Caption) -replace '^Microsoft ', ''"
+                    cmd = "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,ProductType,BuildNumber | ConvertTo-Json -Compress"
                     out = subprocess.run(
                         ["powershell", "-NoProfile", "-Command", cmd],
                         capture_output=True,
                         text=True,
                         timeout=5,
                     )
-                    wmi_caption = (out.stdout or "").strip()
+                    raw = (out.stdout or "").strip()
+                    if raw:
+                        data = json.loads(raw)
+                        if isinstance(data, list):
+                            data = data[0] if data else {}
+                        if isinstance(data, dict):
+                            wmi_info = data
                 except Exception:
-                    wmi_caption = ""
+                    wmi_info = {}
 
-                try:
-                    build_int = int(str(build_number).split(".")[0]) if build_number else 0
-                except Exception:
-                    build_int = 0
-                if build_int >= 22000:
-                    major_label = "11"
-                elif build_int >= 10240:
-                    major_label = "10"
-                else:
-                    major_label = platform.release()
+                wmi_caption = ""
+                caption_val = wmi_info.get("Caption")
+                if isinstance(caption_val, str):
+                    wmi_caption = caption_val.strip()
+                    if wmi_caption.lower().startswith("microsoft "):
+                        wmi_caption = wmi_caption[10:].strip()
 
-                # Prefer the registry product name so Windows Server editions keep their
-                # native branding (e.g., "Windows Server 2022 Standard"). Fall back to
-                # the major label when the product name is unavailable.
-                def _is_server() -> bool:
+                def _parse_int(value) -> int:
                     try:
-                        try:
-                            wver = sys.getwindowsversion()  # type: ignore[attr-defined]
-                            if getattr(wver, 'product_type', 0) in (2, 3):
-                                return True
-                        except Exception:
-                            pass
-                        if wmi_caption and 'server' in wmi_caption.lower():
-                            return True
-                        server_markers = (
-                            product_name,
-                            installation_type,
-                            edition_id,
-                            composition_edition,
-                        )
-                        for marker in server_markers:
-                            if isinstance(marker, str) and 'server' in marker.lower():
-                                return True
-                        pt = (str(product_type).lower()) if product_type is not None else ''
-                        return pt in ('servernt', 'lanmannt', 'domaincontroller', 'serverserver', 'server', '3')
+                        return int(str(value).split(".")[0])
                     except Exception:
-                        return False
+                        return 0
 
-                is_server = _is_server()
+                build_int = 0
+                for candidate in (build_number, wmi_info.get("BuildNumber")):
+                    if candidate:
+                        parsed = _parse_int(candidate)
+                        if parsed:
+                            build_int = parsed
+                            break
 
-                base_name = ""
-                if wmi_caption:
-                    base_name = wmi_caption
-                if not base_name:
-                    base_name = (product_name or "").strip()
-                if not base_name:
-                    base_name = f"Windows {major_label}".strip()
-                elif not base_name.lower().startswith("windows"):
-                    base_name = f"Windows {major_label} {base_name}".strip()
+                if not build_int:
+                    try:
+                        build_int = _parse_int(sys.getwindowsversion().build)  # type: ignore[attr-defined]
+                    except Exception:
+                        build_int = 0
+
+                product_type_val = wmi_info.get("ProductType")
+                if isinstance(product_type_val, str):
+                    try:
+                        product_type_val = int(product_type_val.strip())
+                    except Exception:
+                        product_type_val = None
+                if not isinstance(product_type_val, int):
+                    try:
+                        product_type_val = getattr(sys.getwindowsversion(), 'product_type', None)  # type: ignore[attr-defined]
+                    except Exception:
+                        product_type_val = None
+                if not isinstance(product_type_val, int):
+                    product_type_val = 0
+
+                is_server = False
+                if product_type_val not in (0, 1):
+                    is_server = True
+                elif product_type_val == 1:
+                    is_server = False
+                else:
+                    if isinstance(product_name, str) and 'server' in product_name.lower():
+                        is_server = True
+                    elif wmi_caption and 'server' in wmi_caption.lower():
+                        is_server = True
 
                 if is_server:
-                    lowered = base_name.lower()
-                    if not lowered.startswith("windows server"):
-                        tokens = base_name.split()
-                        if len(tokens) >= 2 and tokens[0].lower() == 'windows':
-                            # Replace the second token with 'Server' to drop client labels like '10'/'11'
-                            tokens[1] = 'Server'
-                            base_name = " ".join(tokens)
-                        else:
-                            base_name = f"Windows Server {base_name}"
-                    # Normalize double "Server" occurrences (e.g., "Windows Server Server 2022")
-                    while "Server Server" in base_name:
-                        base_name = base_name.replace("Server Server", "Server", 1)
+                    if build_int >= 26100:
+                        family = "Windows Server 2025"
+                    elif build_int >= 20348:
+                        family = "Windows Server 2022"
+                    elif build_int >= 17763:
+                        family = "Windows Server 2019"
+                    else:
+                        family = "Windows Server"
+                else:
+                    family = "Windows 11" if build_int >= 22000 else "Windows 10"
 
-                version_label = display_version or release_id or ""
+                if not family:
+                    family = (product_name or wmi_caption or "Windows").strip()
+
+                def _extract_edition(source: str) -> str:
+                    if not isinstance(source, str):
+                        return ""
+                    text = source.strip()
+                    if not text:
+                        return ""
+                    lower = text.lower()
+                    if lower.startswith("microsoft "):
+                        text = text[len("Microsoft "):].strip()
+                        lower = text.lower()
+                    fam_words = family.split()
+                    source_words = text.split()
+                    i = 0
+                    while i < len(fam_words) and i < len(source_words):
+                        if fam_words[i].lower() != source_words[i].lower():
+                            break
+                        i += 1
+                    if i < len(fam_words):
+                        return ""
+                    if i >= len(source_words):
+                        return ""
+                    suffix = " ".join(source_words[i:]).strip()
+                    if suffix.startswith("-"):
+                        suffix = suffix[1:].strip()
+                    return suffix
+
+                def _edition_from_id(value: str, drop_server: bool) -> str:
+                    if not isinstance(value, str):
+                        return ""
+                    text = value.replace("_", " ")
+                    text = re.sub(r"(?<!^)(?=[A-Z])", " ", text)
+                    text = re.sub(r"\bEdition\b", "", text, flags=re.IGNORECASE)
+                    text = " ".join(text.split()).strip()
+                    if drop_server and text.lower().startswith("server "):
+                        text = text[7:].strip()
+                    return text
+
+                edition_part = _extract_edition(product_name) or _extract_edition(wmi_caption)
+                if not edition_part:
+                    edition_part = _edition_from_id(edition_id, is_server)
+
+                version_label = ""
+                for val in (display_version, release_id):
+                    if isinstance(val, str) and val.strip():
+                        version_label = val.strip()
+                        break
+
                 if isinstance(ubr, int):
                     build_str = f"{build_number}.{ubr}" if build_number else str(ubr)
                 else:
@@ -148,7 +200,9 @@ def detect_agent_os():
                     except Exception:
                         build_str = build_number or ""
 
-                parts = [base_name]
+                parts = [family]
+                if edition_part:
+                    parts.append(edition_part)
                 if version_label:
                     parts.append(version_label)
                 if build_str:
