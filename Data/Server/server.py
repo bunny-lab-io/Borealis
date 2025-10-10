@@ -1,4 +1,22 @@
 #////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Server/server.py
+"""
+Borealis Server
+----------------
+Flask + Socket.IO application that fronts the Borealis platform. The module
+coordinates agent lifecycle, workflow storage, job scheduling, and supportive
+utilities exposed through HTTP and WebSocket interfaces.
+
+Section Guide:
+  * Logging & Repository Hash Tracking
+  * Local Python Integrations
+  * Runtime Stack Configuration
+  * Authentication & Identity
+  * Storage, Assemblies, and Legacy Script APIs
+  * Agent Lifecycle and Scheduler Integration
+  * Sites, Search, and Device Views
+  * Quick Jobs, Ansible Reporting, and Service Accounts
+  * WebSocket Event Handling and Entrypoint
+"""
 
 import eventlet
 # Monkey-patch stdlib for cooperative sockets
@@ -39,7 +57,10 @@ try:
 except Exception:
     qrcode = None  # type: ignore
 
-# Centralized logging (Server)
+# =============================================================================
+# Section: Logging & Observability
+# =============================================================================
+# Centralized writers for server/ansible logs with daily rotation under Logs/Server.
 def _server_logs_root() -> str:
     try:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'Logs', 'Server'))
@@ -79,6 +100,10 @@ def _write_service_log(service: str, msg: str):
         pass
 
 
+# =============================================================================
+# Section: Repository Hash Tracking
+# =============================================================================
+# Cache GitHub repository heads so agents can poll without rate limit pressure.
 _REPO_HEAD_CACHE: Dict[str, Tuple[str, float]] = {}
 _REPO_HEAD_LOCK = Lock()
 
@@ -286,18 +311,23 @@ def _ensure_repo_hash_worker():
 def _ansible_log_server(msg: str):
     _write_service_log('ansible', msg)
 
+# =============================================================================
+# Section: Local Python Integrations
+# =============================================================================
+# Shared constants and helper imports that bridge into bundled Python services.
 DEFAULT_SERVICE_ACCOUNT = '.\\svcBorealis'
 LEGACY_SERVICE_ACCOUNTS = {'.\\svcBorealisAnsibleRunner', 'svcBorealisAnsibleRunner'}
 
-# Borealis Python API Endpoints
 from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
 from Python_API_Endpoints.script_engines import run_powershell_script
 from job_scheduler import register as register_job_scheduler
 from job_scheduler import set_online_lookup as scheduler_set_online_lookup
 
-# ---------------------------------------------
-# Flask + WebSocket Server Configuration
-# ---------------------------------------------
+# =============================================================================
+# Section: Runtime Stack Configuration
+# =============================================================================
+# Configure Flask, reverse-proxy awareness, CORS, and Socket.IO transport.
+
 app = Flask(
     __name__,
     static_folder=os.path.join(os.path.dirname(__file__), '../web-interface/build'),
@@ -344,9 +374,8 @@ socketio = SocketIO(
 _hydrate_repo_hash_cache_from_disk()
 _ensure_repo_hash_worker()
 
-# ---------------------------------------------
-# Serve ReactJS Production Vite Build from dist/
-# ---------------------------------------------
+# Endpoint: / and /<path> — serve the built Vite SPA assets.
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_dist(path):
@@ -358,14 +387,14 @@ def serve_dist(path):
         return send_from_directory(app.static_folder, 'index.html')
 
 
-# ---------------------------------------------
-# Health Check Endpoint
-# ---------------------------------------------
+# Endpoint: /health — liveness probe for orchestrators.
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
 
 
+# Endpoint: /api/repo/current_hash — cached GitHub head lookup for agents.
 @app.route("/api/repo/current_hash", methods=["GET"])
 def api_repo_current_hash():
     try:
@@ -867,6 +896,8 @@ def _apply_agent_hash_update(agent_id: str, agent_hash: str, agent_guid: Optiona
     return payload, 200
 
 
+# Endpoint: /api/agent/hash — methods GET, POST.
+
 @app.route("/api/agent/hash", methods=["GET", "POST"])
 def api_agent_hash():
     if request.method == 'GET':
@@ -897,6 +928,8 @@ def api_agent_hash():
     return jsonify(payload), status
 
 
+# Endpoint: /api/agent/hash_list — methods GET.
+
 @app.route("/api/agent/hash_list", methods=["GET"])
 def api_agent_hash_list():
     try:
@@ -907,9 +940,8 @@ def api_agent_hash_list():
         return jsonify({'error': 'internal error'}), 500
 
 
-# ---------------------------------------------
-# Server Time Endpoint
-# ---------------------------------------------
+# Endpoint: /api/server/time — return current UTC timestamp metadata.
+
 @app.route("/api/server/time", methods=["GET"])
 def api_server_time():
     try:
@@ -944,9 +976,11 @@ def api_server_time():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ---------------------------------------------
-# Auth + Users (DB-backed)
-# ---------------------------------------------
+# =============================================================================
+# Section: Authentication & User Accounts
+# =============================================================================
+# Credential storage, MFA helpers, and user management endpoints.
+
 def _now_ts() -> int:
     return int(time.time())
 
@@ -1108,9 +1142,11 @@ def _require_admin():
     return None
 
 
-# ---------------------------------------------
-# Token helpers (for dev/proxy-friendly auth)
-# ---------------------------------------------
+# =============================================================================
+# Section: Token & Session Utilities
+# =============================================================================
+# URL-safe serializers that back login cookies and recovery flows.
+
 def _token_serializer():
     secret = app.secret_key or 'borealis-dev-secret'
     return URLSafeTimedSerializer(secret, salt='borealis-auth')
@@ -1131,6 +1167,8 @@ def _verify_token(token: str):
     except (BadSignature, SignatureExpired, Exception):
         return None
 
+
+# Endpoint: /api/auth/login — methods POST.
 
 @app.route("/api/auth/login", methods=["POST"])
 def api_login():
@@ -1227,6 +1265,8 @@ def api_login():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/auth/logout — methods POST.
+
 @app.route("/api/auth/logout", methods=["POST"])  # simple logout
 def api_logout():
     session.clear()
@@ -1235,6 +1275,8 @@ def api_logout():
     resp.set_cookie('borealis_auth', '', expires=0, path='/')
     return resp
 
+
+# Endpoint: /api/auth/mfa/verify — methods POST.
 
 @app.route("/api/auth/mfa/verify", methods=["POST"])
 def api_mfa_verify():
@@ -1291,6 +1333,8 @@ def api_mfa_verify():
         return jsonify({"error": str(exc)}), 500
 
 
+# Endpoint: /api/auth/me — methods GET.
+
 @app.route("/api/auth/me", methods=["GET"])  # whoami
 def api_me():
     user = _current_user()
@@ -1325,6 +1369,8 @@ def api_me():
     })
 
 
+# Endpoint: /api/users — methods GET.
+
 @app.route("/api/users", methods=["GET"])
 def api_users_list():
     chk = _require_admin()
@@ -1356,6 +1402,8 @@ def api_users_list():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/users — methods POST.
+
 @app.route("/api/users", methods=["POST"])  # create user
 def api_users_create():
     chk = _require_admin()
@@ -1386,6 +1434,8 @@ def api_users_create():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/users/<username> — methods DELETE.
 
 @app.route("/api/users/<username>", methods=["DELETE"])  # delete user
 def api_users_delete(username):
@@ -1420,6 +1470,8 @@ def api_users_delete(username):
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/users/<username>/reset_password — methods POST.
+
 @app.route("/api/users/<username>/reset_password", methods=["POST"])  # reset password
 def api_users_reset_password(username):
     chk = _require_admin()
@@ -1446,6 +1498,8 @@ def api_users_reset_password(username):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/users/<username>/role — methods POST.
 
 @app.route("/api/users/<username>/role", methods=["POST"])  # change role
 def api_users_change_role(username):
@@ -1486,6 +1540,8 @@ def api_users_change_role(username):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/users/<username>/mfa — methods POST.
 
 @app.route("/api/users/<username>/mfa", methods=["POST"])
 def api_users_toggle_mfa(username):
@@ -1537,11 +1593,13 @@ def api_users_toggle_mfa(username):
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
-# ---------------------------------------------
-# Borealis Python API Endpoints
-# ---------------------------------------------
-# /api/ocr: Accepts a base64 image and OCR engine selection,
-# and returns extracted text lines.
+# =============================================================================
+# Section: Python Sidecar Services
+# =============================================================================
+# Bridge into Python helpers such as OCR and PowerShell execution.
+
+# Endpoint: /api/ocr — methods POST.
+
 @app.route("/api/ocr", methods=["POST"])
 def ocr_endpoint():
     payload = request.get_json()
@@ -1564,9 +1622,11 @@ def ocr_endpoint():
 
 # unified assembly endpoints supersede prior storage workflow endpoints
 
-# ---------------------------------------------
-# Borealis Storage API Endpoints
-# ---------------------------------------------
+# =============================================================================
+# Section: Storage Legacy Helpers
+# =============================================================================
+# Compatibility helpers for direct script/storage file access.
+
 def _safe_read_json(path: str) -> Dict:
     """
     Try to read JSON safely. Returns {} on failure.
@@ -1602,9 +1662,11 @@ def _extract_tab_name(obj: Dict) -> str:
 # superseded by /api/assembly/rename
 
 
-# ---------------------------------------------
-# Unified Assembly API (Workflows, Scripts, Playbooks)
-# ---------------------------------------------
+# =============================================================================
+# Section: Assemblies CRUD
+# =============================================================================
+# Unified workflow/script/playbook storage with path normalization.
+
 
 def _assemblies_root() -> str:
     return os.path.abspath(
@@ -1876,6 +1938,8 @@ def _load_assembly_document(abs_path: str, island: str, type_hint: str = "") -> 
     return doc
 
 
+# Endpoint: /api/assembly/create — methods POST.
+
 @app.route("/api/assembly/create", methods=["POST"])
 def assembly_create():
     data = request.get_json(silent=True) or {}
@@ -1939,6 +2003,8 @@ def assembly_create():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/assembly/edit — methods POST.
+
 @app.route("/api/assembly/edit", methods=["POST"])
 def assembly_edit():
     data = request.get_json(silent=True) or {}
@@ -1990,6 +2056,8 @@ def assembly_edit():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/assembly/rename — methods POST.
 
 @app.route("/api/assembly/rename", methods=["POST"])
 def assembly_rename():
@@ -2045,6 +2113,8 @@ def assembly_rename():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/assembly/move — methods POST.
+
 @app.route("/api/assembly/move", methods=["POST"])
 def assembly_move():
     data = request.get_json(silent=True) or {}
@@ -2069,6 +2139,8 @@ def assembly_move():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/assembly/delete — methods POST.
 
 @app.route("/api/assembly/delete", methods=["POST"])
 def assembly_delete():
@@ -2096,6 +2168,8 @@ def assembly_delete():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/assembly/list — methods GET.
 
 @app.route("/api/assembly/list", methods=["GET"])
 def assembly_list():
@@ -2199,6 +2273,8 @@ def assembly_list():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/assembly/load — methods GET.
+
 @app.route("/api/assembly/load", methods=["GET"])
 def assembly_load():
     """Load a file for a given island. Returns workflow JSON for workflows, and text content for others."""
@@ -2229,9 +2305,11 @@ def assembly_load():
         return jsonify({"error": str(e)}), 500
 
 
-# ---------------------------------------------
-# Scripts Storage API Endpoints
-# ---------------------------------------------
+# =============================================================================
+# Section: Scripts File API (Deprecated)
+# =============================================================================
+# Older per-file script endpoints retained for backward compatibility.
+
 def _scripts_root() -> str:
     # Scripts live under Assemblies. We unify listing under Assemblies and
     # only allow access within top-level folders: "Scripts" and "Ansible Playbooks".
@@ -2287,6 +2365,8 @@ def _ext_for_type(script_type: str) -> str:
 """
 Legacy scripts endpoints removed in favor of unified assembly APIs.
 """
+# Endpoint: /api/scripts/list — methods GET.
+
 @app.route("/api/scripts/list", methods=["GET"])
 def list_scripts():
     """Scan <ProjectRoot>/Assemblies/Scripts for script files and return list + folders."""
@@ -2341,6 +2421,8 @@ def list_scripts():
     return jsonify({"error": "deprecated; use /api/assembly/list?island=scripts"}), 410
 
 
+# Endpoint: /api/scripts/load — methods GET.
+
 @app.route("/api/scripts/load", methods=["GET"])
 def load_script():
     rel_path = request.args.get("path", "")
@@ -2355,6 +2437,8 @@ def load_script():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/scripts/save — methods POST.
 
 @app.route("/api/scripts/save", methods=["POST"])
 def save_script():
@@ -2401,6 +2485,8 @@ def save_script():
     return jsonify({"error": "deprecated; use /api/assembly/create or /api/assembly/edit"}), 410
 
 
+# Endpoint: /api/scripts/rename_file — methods POST.
+
 @app.route("/api/scripts/rename_file", methods=["POST"])
 def rename_script_file():
     data = request.get_json(silent=True) or {}
@@ -2422,6 +2508,8 @@ def rename_script_file():
     return jsonify({"error": "deprecated; use /api/assembly/rename"}), 410
 
 
+# Endpoint: /api/scripts/move_file — methods POST.
+
 @app.route("/api/scripts/move_file", methods=["POST"])
 def move_script_file():
     data = request.get_json(silent=True) or {}
@@ -2438,6 +2526,8 @@ def move_script_file():
     return jsonify({"error": "deprecated; use /api/assembly/move"}), 410
 
 
+# Endpoint: /api/scripts/delete_file — methods POST.
+
 @app.route("/api/scripts/delete_file", methods=["POST"])
 def delete_script_file():
     data = request.get_json(silent=True) or {}
@@ -2448,9 +2538,11 @@ def delete_script_file():
         return jsonify({"error": "File not found"}), 404
     return jsonify({"error": "deprecated; use /api/assembly/delete"}), 410
 
-# ---------------------------------------------
-# Ansible Playbooks Storage API Endpoints
-# ---------------------------------------------
+# =============================================================================
+# Section: Ansible File API (Deprecated)
+# =============================================================================
+# Legacy Ansible playbook file operations pending assembly migration.
+
 def _ansible_root() -> str:
     return os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "Assemblies", "Ansible_Playbooks")
@@ -2465,6 +2557,8 @@ def _is_valid_ansible_relpath(rel_path: str) -> bool:
     except Exception:
         return False
 
+
+# Endpoint: /api/ansible/list — methods GET.
 
 @app.route("/api/ansible/list", methods=["GET"])
 def list_ansible():
@@ -2498,6 +2592,8 @@ def list_ansible():
     return jsonify({"error": "deprecated; use /api/assembly/list?island=ansible"}), 410
 
 
+# Endpoint: /api/ansible/load — methods GET.
+
 @app.route("/api/ansible/load", methods=["GET"])
 def load_ansible():
     rel_path = request.args.get("path", "")
@@ -2512,6 +2608,8 @@ def load_ansible():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/ansible/save — methods POST.
 
 @app.route("/api/ansible/save", methods=["POST"])
 def save_ansible():
@@ -2541,6 +2639,8 @@ def save_ansible():
     return jsonify({"error": "deprecated; use /api/assembly/create or /api/assembly/edit"}), 410
 
 
+# Endpoint: /api/ansible/rename_file — methods POST.
+
 @app.route("/api/ansible/rename_file", methods=["POST"])
 def rename_ansible_file():
     data = request.get_json(silent=True) or {}
@@ -2558,6 +2658,8 @@ def rename_ansible_file():
     return jsonify({"error": "deprecated; use /api/assembly/rename"}), 410
 
 
+# Endpoint: /api/ansible/move_file — methods POST.
+
 @app.route("/api/ansible/move_file", methods=["POST"])
 def move_ansible_file():
     data = request.get_json(silent=True) or {}
@@ -2574,6 +2676,8 @@ def move_ansible_file():
     return jsonify({"error": "deprecated; use /api/assembly/move"}), 410
 
 
+# Endpoint: /api/ansible/delete_file — methods POST.
+
 @app.route("/api/ansible/delete_file", methods=["POST"])
 def delete_ansible_file():
     data = request.get_json(silent=True) or {}
@@ -2584,6 +2688,8 @@ def delete_ansible_file():
         return jsonify({"error": "File not found"}), 404
     return jsonify({"error": "deprecated; use /api/assembly/delete"}), 410
 
+
+# Endpoint: /api/ansible/create_folder — methods POST.
 
 @app.route("/api/ansible/create_folder", methods=["POST"])
 def ansible_create_folder():
@@ -2596,6 +2702,8 @@ def ansible_create_folder():
         return jsonify({"error": "Invalid path"}), 400
     return jsonify({"error": "deprecated; use /api/assembly/create"}), 410
 
+
+# Endpoint: /api/ansible/delete_folder — methods POST.
 
 @app.route("/api/ansible/delete_folder", methods=["POST"])
 def ansible_delete_folder():
@@ -2610,6 +2718,8 @@ def ansible_delete_folder():
         return jsonify({"error": "Cannot delete top-level folder"}), 400
     return jsonify({"error": "deprecated; use /api/assembly/delete"}), 410
 
+
+# Endpoint: /api/ansible/rename_folder — methods POST.
 
 @app.route("/api/ansible/rename_folder", methods=["POST"])
 def ansible_rename_folder():
@@ -2629,6 +2739,8 @@ def ansible_rename_folder():
     return jsonify({"error": "deprecated; use /api/assembly/rename"}), 410
 
 
+# Endpoint: /api/scripts/create_folder — methods POST.
+
 @app.route("/api/scripts/create_folder", methods=["POST"])
 def scripts_create_folder():
     data = request.get_json(silent=True) or {}
@@ -2644,6 +2756,8 @@ def scripts_create_folder():
     return jsonify({"error": "deprecated; use /api/assembly/create"}), 410
 
 
+# Endpoint: /api/scripts/delete_folder — methods POST.
+
 @app.route("/api/scripts/delete_folder", methods=["POST"])
 def scripts_delete_folder():
     data = request.get_json(silent=True) or {}
@@ -2657,6 +2771,8 @@ def scripts_delete_folder():
         return jsonify({"error": "Cannot delete top-level folder"}), 400
     return jsonify({"error": "deprecated; use /api/assembly/delete"}), 410
 
+
+# Endpoint: /api/scripts/rename_folder — methods POST.
 
 @app.route("/api/scripts/rename_folder", methods=["POST"])
 def scripts_rename_folder():
@@ -2675,12 +2791,11 @@ def scripts_rename_folder():
     new_abs = os.path.join(os.path.dirname(old_abs), new_name)
     return jsonify({"error": "deprecated; use /api/assembly/rename"}), 410
 
-# ---------------------------------------------
-# Borealis Agent API Endpoints
-# ---------------------------------------------
-# These endpoints handle agent registration, provisioning, image streaming, and heartbeats.
-# Shape expected by UI for each agent:
-# { "agent_id", "hostname", "agent_operating_system", "last_seen", "status" }
+# =============================================================================
+# Section: Agent Lifecycle API
+# =============================================================================
+# Agent registration, configuration, device persistence, and screenshot streaming metadata.
+
 registered_agents: Dict[str, Dict] = {}
 agent_configurations: Dict[str, Dict] = {}
 latest_images: Dict[str, Dict] = {}
@@ -3501,9 +3616,11 @@ def ensure_default_admin():
 
 ensure_default_admin()
 
-# ---------------------------------------------
-# Scheduler Registration
-# ---------------------------------------------
+# =============================================================================
+# Section: Scheduler Integration
+# =============================================================================
+# Connect the Flask app to the background job scheduler and helpers.
+
 job_scheduler = register_job_scheduler(app, socketio, DB_PATH)
 job_scheduler.start()
 
@@ -3524,9 +3641,11 @@ def _online_hostnames_snapshot():
 
 scheduler_set_online_lookup(job_scheduler, _online_hostnames_snapshot)
 
-# ---------------------------------------------
-# Sites API
-# ---------------------------------------------
+# =============================================================================
+# Section: Site Management API
+# =============================================================================
+# CRUD for site records and device membership.
+
 
 def _row_to_site(row):
     # id, name, description, created_at, device_count
@@ -3538,6 +3657,8 @@ def _row_to_site(row):
         "device_count": row[4] or 0,
     }
 
+
+# Endpoint: /api/sites — methods GET.
 
 @app.route("/api/sites", methods=["GET"])
 def list_sites():
@@ -3563,6 +3684,8 @@ def list_sites():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/sites — methods POST.
 
 @app.route("/api/sites", methods=["POST"])
 def create_site():
@@ -3594,6 +3717,8 @@ def create_site():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/sites/delete — methods POST.
 
 @app.route("/api/sites/delete", methods=["POST"])
 def delete_sites():
@@ -3629,6 +3754,8 @@ def delete_sites():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/sites/device_map — methods GET.
 
 @app.route("/api/sites/device_map", methods=["GET"])
 def sites_device_map():
@@ -3675,6 +3802,8 @@ def sites_device_map():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/sites/assign — methods POST.
+
 @app.route("/api/sites/assign", methods=["POST"])
 def assign_devices_to_site():
     payload = request.get_json(silent=True) or {}
@@ -3713,6 +3842,8 @@ def assign_devices_to_site():
 
 
 # Rename a site (update name only)
+# Endpoint: /api/sites/rename — methods POST.
+
 @app.route("/api/sites/rename", methods=["POST"])
 def rename_site():
     payload = request.get_json(silent=True) or {}
@@ -3755,9 +3886,11 @@ def rename_site():
         return jsonify({"error": str(e)}), 500
 
 
-# ---------------------------------------------
-# Global Search (suggestions)
-# ---------------------------------------------
+# =============================================================================
+# Section: Global Search API
+# =============================================================================
+# Lightweight search surface for auto-complete over device data.
+
 
 def _load_device_records(limit: int = 0):
     """
@@ -3808,6 +3941,8 @@ def _load_device_records(limit: int = 0):
             break
     return out
 
+
+# Endpoint: /api/search/suggest — methods GET.
 
 @app.route("/api/search/suggest", methods=["GET"])
 def search_suggest():
@@ -3899,6 +4034,8 @@ def search_suggest():
     })
 
 
+# Endpoint: /api/devices — methods GET.
+
 @app.route("/api/devices", methods=["GET"])
 def list_devices():
     """Return all devices with expanded columns for the WebUI."""
@@ -3974,6 +4111,8 @@ def list_devices():
     return jsonify({"devices": devices})
 
 
+# Endpoint: /api/devices/<guid> — methods GET.
+
 @app.route("/api/devices/<guid>", methods=["GET"])
 def get_device_by_guid(guid: str):
     try:
@@ -4022,9 +4161,11 @@ def get_device_by_guid(guid: str):
     return jsonify(payload)
 
 
-# ---------------------------------------------
-# Device List Views API
-# ---------------------------------------------
+# =============================================================================
+# Section: Device List Views
+# =============================================================================
+# Persisted filters/layouts for the device list interface.
+
 def _row_to_view(row):
     return {
         "id": row[0],
@@ -4035,6 +4176,8 @@ def _row_to_view(row):
         "updated_at": row[5],
     }
 
+
+# Endpoint: /api/device_list_views — methods GET.
 
 @app.route("/api/device_list_views", methods=["GET"])
 def list_device_list_views():
@@ -4050,6 +4193,8 @@ def list_device_list_views():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/device_list_views/<int:view_id> — methods GET.
 
 @app.route("/api/device_list_views/<int:view_id>", methods=["GET"])
 def get_device_list_view(view_id: int):
@@ -4068,6 +4213,8 @@ def get_device_list_view(view_id: int):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/device_list_views — methods POST.
 
 @app.route("/api/device_list_views", methods=["POST"])
 def create_device_list_view():
@@ -4107,6 +4254,8 @@ def create_device_list_view():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/device_list_views/<int:view_id> — methods PUT.
 
 @app.route("/api/device_list_views/<int:view_id>", methods=["PUT"])
 def update_device_list_view(view_id: int):
@@ -4161,6 +4310,8 @@ def update_device_list_view(view_id: int):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/device_list_views/<int:view_id> — methods DELETE.
 
 @app.route("/api/device_list_views/<int:view_id>", methods=["DELETE"])
 def delete_device_list_view(view_id: int):
@@ -4470,6 +4621,8 @@ def _ensure_agent_guid(agent_id: str, hostname: Optional[str] = None) -> Optiona
             except Exception:
                 pass
 
+# Endpoint: /api/agents — methods GET.
+
 @app.route("/api/agents")
 def get_agents():
     """Return agents with collector activity indicator."""
@@ -4521,6 +4674,8 @@ def _deep_merge_preserve(prev: dict, incoming: dict) -> dict:
             out[k] = v
     return out
 
+
+# Endpoint: /api/agent/details — methods POST.
 
 @app.route("/api/agent/details", methods=["POST"])
 def save_agent_details():
@@ -4662,6 +4817,8 @@ def save_agent_details():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/device/details/<hostname> — methods GET.
+
 @app.route("/api/device/details/<hostname>", methods=["GET"])
 def get_device_details(hostname: str):
     try:
@@ -4703,6 +4860,8 @@ def get_device_details(hostname: str):
     return jsonify({})
 
 
+# Endpoint: /api/device/description/<hostname> — methods POST.
+
 @app.route("/api/device/description/<hostname>", methods=["POST"])
 def set_device_description(hostname: str):
     data = request.get_json(silent=True) or {}
@@ -4741,9 +4900,11 @@ def set_device_description(hostname: str):
         return jsonify({"error": str(e)}), 500
 
 
-# ---------------------------------------------
-# Quick Job Execution + Activity History
-# ---------------------------------------------
+# =============================================================================
+# Section: Quick Jobs & Activity
+# =============================================================================
+# Submit ad-hoc runs and expose execution history for devices.
+
 def _detect_script_type(fn: str) -> str:
     fn_lower = (fn or "").lower()
     if fn_lower.endswith(".json") and os.path.isfile(fn):
@@ -4912,6 +5073,8 @@ def _rewrite_powershell_script(content: str, literal_lookup: Dict[str, str]) -> 
     return _ENV_VAR_PATTERN.sub(_replace, content)
 
 
+# Endpoint: /api/scripts/quick_run — methods POST.
+
 @app.route("/api/scripts/quick_run", methods=["POST"])
 def scripts_quick_run():
     """Queue a Quick Job to agents via WebSocket and record Running status.
@@ -5021,6 +5184,8 @@ def scripts_quick_run():
     return jsonify({"results": results})
 
 
+# Endpoint: /api/ansible/quick_run — methods POST.
+
 @app.route("/api/ansible/quick_run", methods=["POST"])
 def ansible_quick_run():
     """Queue an Ansible Playbook Quick Job via WebSocket to targeted agents.
@@ -5121,6 +5286,8 @@ def ansible_quick_run():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/device/activity/<hostname> — methods GET, DELETE.
+
 @app.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
 def device_activity(hostname: str):
     try:
@@ -5154,6 +5321,8 @@ def device_activity(hostname: str):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/device/activity/job/<int:job_id> — methods GET.
 
 @app.route("/api/device/activity/job/<int:job_id>", methods=["GET"])
 def device_activity_job(job_id: int):
@@ -5251,9 +5420,11 @@ def handle_quick_job_result(data):
             pass
 
 
-# ---------------------------------------------
-# Ansible Runtime API (Play Recaps)
-# ---------------------------------------------
+# =============================================================================
+# Section: Ansible Runtime Reporting
+# =============================================================================
+# Collect and return Ansible recap payloads emitted by agents.
+
 def _json_dump_safe(obj) -> str:
     try:
         if isinstance(obj, str):
@@ -5265,9 +5436,11 @@ def _json_dump_safe(obj) -> str:
         return json.dumps({})
 
 
-# ---------------------------------------------
-# Agent Service Account (WinRM localhost) APIs
-# ---------------------------------------------
+# =============================================================================
+# Section: Service Account Rotation
+# =============================================================================
+# Manage local service account secrets for SYSTEM PowerShell runs.
+
 def _now_iso_utc() -> str:
     try:
         return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
@@ -5328,6 +5501,8 @@ def _service_acct_set(conn, agent_id: str, username: str, plaintext_password: st
     }
 
 
+
+# Endpoint: /api/agent/checkin — methods POST.
 
 @app.route('/api/agent/checkin', methods=['POST'])
 def api_agent_checkin():
@@ -5394,6 +5569,8 @@ def api_agent_checkin():
         return jsonify({'error': str(e)}), 500
 
 
+# Endpoint: /api/agent/service-account/rotate — methods POST.
+
 @app.route('/api/agent/service-account/rotate', methods=['POST'])
 def api_agent_service_account_rotate():
     payload = request.get_json(silent=True) or {}
@@ -5423,6 +5600,8 @@ def api_agent_service_account_rotate():
     except Exception as e:
         _ansible_log_server(f"[rotate] error agent_id={agent_id} err={e}")
         return jsonify({'error': str(e)}), 500
+
+# Endpoint: /api/ansible/recap/report — methods POST.
 
 @app.route("/api/ansible/recap/report", methods=["POST"])
 def api_ansible_recap_report():
@@ -5654,6 +5833,8 @@ def api_ansible_recap_report():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/ansible/recaps — methods GET.
+
 @app.route("/api/ansible/recaps", methods=["GET"])
 def api_ansible_recaps_list():
     """List Ansible play recaps. Optional query params: hostname, limit (default 50)"""
@@ -5706,6 +5887,8 @@ def api_ansible_recaps_list():
         return jsonify({"error": str(e)}), 500
 
 
+# Endpoint: /api/ansible/recap/<int:recap_id> — methods GET.
+
 @app.route("/api/ansible/recap/<int:recap_id>", methods=["GET"])
 def api_ansible_recap_get(recap_id: int):
     try:
@@ -5740,6 +5923,8 @@ def api_ansible_recap_get(recap_id: int):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Endpoint: /api/ansible/run_for_activity/<int:activity_id> — methods GET.
 
 @app.route("/api/ansible/run_for_activity/<int:activity_id>", methods=["GET"])
 def api_ansible_run_for_activity(activity_id: int):
@@ -5860,6 +6045,8 @@ def handle_collector_status(data):
             pass
 
 
+# Endpoint: /api/agent/<agent_id> — methods DELETE.
+
 @app.route("/api/agent/<agent_id>", methods=["DELETE"])
 def delete_agent(agent_id: str):
     """Remove an agent from the registry and database."""
@@ -5872,6 +6059,8 @@ def delete_agent(agent_id: str):
     if info:
         return jsonify({"status": "removed"})
     return jsonify({"error": "agent not found"}), 404
+
+# Endpoint: /api/agent/provision — methods POST.
 
 @app.route("/api/agent/provision", methods=["POST"])
 def provision_agent():
@@ -5896,9 +6085,8 @@ def provision_agent():
         socketio.emit("agent_config", {**config, "agent_id": agent_id}, to=agent_id)
     return jsonify({"status": "provisioned", "roles": roles})
 
-# ---------------------------------------------
-# Borealis External API Proxy Endpoint
-# ---------------------------------------------
+# Endpoint: /api/proxy — fan-out HTTP proxy used by agents.
+
 @app.route("/api/proxy", methods=["GET", "POST", "OPTIONS"])
 def proxy():
     target = request.args.get("url")
@@ -5921,9 +6109,8 @@ def proxy():
         resp.headers[k] = v
     return resp
 
-# ---------------------------------------------
-# Live Screenshot Viewer for Debugging
-# ---------------------------------------------
+# Endpoint: /api/agent/<agent_id>/node/<node_id>/screenshot/live — lightweight diagnostic viewer.
+
 @app.route("/api/agent/<agent_id>/node/<node_id>/screenshot/live")
 def screenshot_node_viewer(agent_id, node_id):
     return f"""
@@ -5979,9 +6166,11 @@ def screenshot_node_viewer(agent_id, node_id):
     </html>
     """
 
-# ---------------------------------------------
-# WebSocket Events for Real-Time Communication
-# ---------------------------------------------
+# =============================================================================
+# Section: WebSocket Event Handlers
+# =============================================================================
+# Realtime channels for screenshots, macros, windows, and Ansible control.
+
 @socketio.on("agent_screenshot_task")
 def receive_screenshot_task(data):
     agent_id = data.get("agent_id")
@@ -6166,9 +6355,11 @@ def relay_ansible_run(data):
     except Exception:
         pass
 
-# ---------------------------------------------
-# Server Launch
-# ---------------------------------------------
+# =============================================================================
+# Section: Module Entrypoint
+# =============================================================================
+# Run the Socket.IO-enabled Flask server when executed as __main__.
+
 if __name__ == "__main__":
     # Use SocketIO runner so WebSocket transport works with eventlet.
     socketio.run(app, host="0.0.0.0", port=5000)
