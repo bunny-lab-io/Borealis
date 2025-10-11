@@ -3510,6 +3510,8 @@ _DEVICE_TABLE_COLUMNS = [
     "operating_system",
     "uptime",
     "agent_id",
+    "connection_type",
+    "connection_endpoint",
 ]
 
 
@@ -3595,6 +3597,8 @@ def _assemble_device_snapshot(record: Dict[str, Any]) -> Dict[str, Any]:
         "uptime_sec": uptime_val,
         "created_at": created_ts,
         "created": _ts_to_human(created_ts),
+        "connection_type": _clean_device_str(record.get("connection_type")) or "",
+        "connection_endpoint": _clean_device_str(record.get("connection_endpoint")) or "",
     }
 
     details = {
@@ -3630,6 +3634,8 @@ def _assemble_device_snapshot(record: Dict[str, Any]) -> Dict[str, Any]:
         "operating_system": summary.get("operating_system", ""),
         "uptime": uptime_val,
         "agent_id": summary.get("agent_id", ""),
+        "connection_type": summary.get("connection_type", ""),
+        "connection_endpoint": summary.get("connection_endpoint", ""),
         "details": details,
         "summary": summary,
     }
@@ -3737,6 +3743,17 @@ def _extract_device_columns(details: Dict[str, Any]) -> Dict[str, Any]:
     )
     payload["uptime"] = _coerce_int(uptime_value)
     payload["agent_id"] = _clean_device_str(summary.get("agent_id"))
+    payload["connection_type"] = _clean_device_str(
+        summary.get("connection_type")
+        or summary.get("remote_type")
+    )
+    payload["connection_endpoint"] = _clean_device_str(
+        summary.get("connection_endpoint")
+        or summary.get("connection_address")
+        or summary.get("address")
+        or summary.get("external_ip")
+        or summary.get("internal_ip")
+    )
     return payload
 
 
@@ -3793,8 +3810,10 @@ def _device_upsert(
             last_user,
             operating_system,
             uptime,
-            agent_id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            agent_id,
+            connection_type,
+            connection_endpoint
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(hostname) DO UPDATE SET
             description=excluded.description,
             created_at=COALESCE({DEVICE_TABLE}.created_at, excluded.created_at),
@@ -3814,7 +3833,9 @@ def _device_upsert(
             last_user=COALESCE(NULLIF(excluded.last_user, ''), {DEVICE_TABLE}.last_user),
             operating_system=COALESCE(NULLIF(excluded.operating_system, ''), {DEVICE_TABLE}.operating_system),
             uptime=COALESCE(NULLIF(excluded.uptime, 0), {DEVICE_TABLE}.uptime),
-            agent_id=COALESCE(NULLIF(excluded.agent_id, ''), {DEVICE_TABLE}.agent_id)
+            agent_id=COALESCE(NULLIF(excluded.agent_id, ''), {DEVICE_TABLE}.agent_id),
+            connection_type=COALESCE(NULLIF(excluded.connection_type, ''), {DEVICE_TABLE}.connection_type),
+            connection_endpoint=COALESCE(NULLIF(excluded.connection_endpoint, ''), {DEVICE_TABLE}.connection_endpoint)
     """
 
     params: List[Any] = [
@@ -3838,6 +3859,8 @@ def _device_upsert(
         column_values.get("operating_system"),
         column_values.get("uptime"),
         column_values.get("agent_id"),
+        column_values.get("connection_type"),
+        column_values.get("connection_endpoint"),
     ]
     cur.execute(sql, params)
 
@@ -4166,6 +4189,8 @@ def init_db():
     _ensure_column("operating_system", "TEXT")
     _ensure_column("uptime", "INTEGER")
     _ensure_column("agent_id", "TEXT")
+    _ensure_column("connection_type", "TEXT")
+    _ensure_column("connection_endpoint", "TEXT")
 
     details_rows: List[Tuple[Any, ...]] = []
     if "details" in existing_cols:
@@ -4196,6 +4221,8 @@ def init_db():
                 "operating_system",
                 "uptime",
                 "agent_id",
+                "connection_type",
+                "connection_endpoint",
             )]
             cur.execute(
                 f"""
@@ -4203,7 +4230,7 @@ def init_db():
                 SET memory=?, network=?, software=?, storage=?, cpu=?,
                     device_type=?, domain=?, external_ip=?, internal_ip=?,
                     last_reboot=?, last_seen=?, last_user=?, operating_system=?,
-                    uptime=?, agent_id=?
+                    uptime=?, agent_id=?, connection_type=?, connection_endpoint=?
                 WHERE hostname=?
                 """,
                 params + [hostname],
@@ -4242,7 +4269,9 @@ def init_db():
                         last_user TEXT,
                         operating_system TEXT,
                         uptime INTEGER,
-                        agent_id TEXT
+                        agent_id TEXT,
+                        connection_type TEXT,
+                        connection_endpoint TEXT
                     )
                     """
                 )
@@ -4934,28 +4963,39 @@ def search_suggest():
 
 # Endpoint: /api/devices — methods GET.
 
-@app.route("/api/devices", methods=["GET"])
-def list_devices():
-    """Return all devices with expanded columns for the WebUI."""
+def _fetch_devices(
+    *,
+    connection_type: Optional[str] = None,
+    hostname: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     try:
         conn = _db_conn()
         cur = conn.cursor()
-        cur.execute(
-            f"""
+        sql = f"""
             SELECT {_device_column_sql('d')},
                    s.id, s.name, s.description
             FROM {DEVICE_TABLE} d
             LEFT JOIN device_sites ds ON ds.device_hostname = d.hostname
             LEFT JOIN sites s ON s.id = ds.site_id
-            """
-        )
+        """
+        clauses: List[str] = []
+        params: List[Any] = []
+        if connection_type:
+            clauses.append("LOWER(d.connection_type) = LOWER(?)")
+            params.append(connection_type)
+        if hostname:
+            clauses.append("LOWER(d.hostname) = LOWER(?)")
+            params.append(hostname.lower())
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        cur.execute(sql, params)
         rows = cur.fetchall()
         conn.close()
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        raise RuntimeError(str(exc)) from exc
 
-    devices = []
     now = time.time()
+    devices: List[Dict[str, Any]] = []
     for row in rows:
         core = row[: len(_DEVICE_TABLE_COLUMNS)]
         site_id, site_name, site_description = row[len(_DEVICE_TABLE_COLUMNS) :]
@@ -4989,6 +5029,8 @@ def list_devices():
                 "domain": snapshot.get("domain") or "",
                 "external_ip": snapshot.get("external_ip") or summary.get("external_ip") or "",
                 "internal_ip": snapshot.get("internal_ip") or summary.get("internal_ip") or "",
+                "connection_type": snapshot.get("connection_type") or summary.get("connection_type") or "",
+                "connection_endpoint": snapshot.get("connection_endpoint") or summary.get("connection_endpoint") or "",
                 "last_reboot": snapshot.get("last_reboot") or summary.get("last_reboot") or "",
                 "last_seen": last_seen,
                 "last_seen_iso": snapshot.get("last_seen_iso") or _ts_to_iso(last_seen),
@@ -5005,8 +5047,157 @@ def list_devices():
                 "status": status,
             }
         )
+    return devices
 
+
+@app.route("/api/devices", methods=["GET"])
+def list_devices():
+    """Return all devices with expanded columns for the WebUI."""
+    try:
+        devices = _fetch_devices()
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
     return jsonify({"devices": devices})
+
+
+@app.route("/api/ssh_devices", methods=["GET", "POST"])
+def api_ssh_devices():
+    chk = _require_admin()
+    if chk:
+        return chk
+    if request.method == "GET":
+        try:
+            devices = _fetch_devices(connection_type="ssh")
+            return jsonify({"devices": devices})
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    data = request.get_json(silent=True) or {}
+    hostname = _clean_device_str(data.get("hostname")) or ""
+    address = _clean_device_str(data.get("address") or data.get("connection_endpoint") or data.get("endpoint")) or ""
+    description = _clean_device_str(data.get("description")) or ""
+    os_hint = _clean_device_str(data.get("operating_system") or data.get("os")) or ""
+    if not hostname:
+        return jsonify({"error": "hostname is required"}), 400
+    if not address:
+        return jsonify({"error": "address is required"}), 400
+
+    now_ts = _now_ts()
+    conn = None
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        existing = _load_device_snapshot(cur, hostname=hostname)
+        if existing and (existing.get("summary", {}).get("connection_type") or "").lower() not in ("", "ssh"):
+            conn.close()
+            return jsonify({"error": "Device already exists and is managed by an agent"}), 409
+
+        summary_payload = {
+            "connection_type": "ssh",
+            "connection_endpoint": address,
+            "internal_ip": address,
+            "external_ip": address,
+            "device_type": "SSH Remote",
+            "operating_system": os_hint or (existing.get("summary", {}).get("operating_system") if existing else ""),
+            "last_seen": 0,
+        }
+
+        _device_upsert(
+            cur,
+            hostname,
+            description,
+            {"summary": summary_payload},
+            now_ts,
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        if conn:
+            conn.close()
+        return jsonify({"error": str(exc)}), 500
+
+    try:
+        devices = _fetch_devices(hostname=hostname)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    device = devices[0] if devices else None
+    return jsonify({"device": device}), 201
+
+
+@app.route("/api/ssh_devices/<hostname>", methods=["PUT", "DELETE"])
+def api_ssh_device_detail(hostname: str):
+    chk = _require_admin()
+    if chk:
+        return chk
+    normalized_host = _clean_device_str(hostname) or ""
+    if not normalized_host:
+        return jsonify({"error": "invalid hostname"}), 400
+
+    conn = None
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        existing = _load_device_snapshot(cur, hostname=normalized_host)
+        if not existing:
+            conn.close()
+            return jsonify({"error": "device not found"}), 404
+        existing_type = (existing.get("summary", {}).get("connection_type") or "").lower()
+        if existing_type != "ssh":
+            conn.close()
+            return jsonify({"error": "device is not managed as SSH"}), 400
+
+        if request.method == "DELETE":
+            cur.execute("DELETE FROM device_sites WHERE device_hostname = ?", (normalized_host,))
+            cur.execute(f"DELETE FROM {DEVICE_TABLE} WHERE hostname = ?", (normalized_host,))
+            conn.commit()
+            conn.close()
+            return jsonify({"status": "ok"})
+
+        data = request.get_json(silent=True) or {}
+        new_address = _clean_device_str(data.get("address") or data.get("connection_endpoint") or data.get("endpoint"))
+        new_description = data.get("description")
+        new_os = _clean_device_str(data.get("operating_system") or data.get("os"))
+
+        summary = existing.get("summary", {})
+        description_value = summary.get("description") or existing.get("description") or ""
+        if new_description is not None:
+            try:
+                description_value = str(new_description).strip()
+            except Exception:
+                description_value = summary.get("description") or ""
+
+        endpoint_value = new_address or summary.get("connection_endpoint") or ""
+        os_value = new_os or summary.get("operating_system") or ""
+        summary_payload = {
+            "connection_type": "ssh",
+            "connection_endpoint": endpoint_value,
+            "internal_ip": endpoint_value or summary.get("internal_ip") or "",
+            "external_ip": endpoint_value or summary.get("external_ip") or "",
+            "device_type": summary.get("device_type") or "SSH Remote",
+            "operating_system": os_value,
+            "last_seen": 0,
+        }
+        created_ts = summary.get("created_at") or existing.get("created_at") or _now_ts()
+        _device_upsert(
+            cur,
+            normalized_host,
+            description_value,
+            {"summary": summary_payload},
+            created_ts,
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        if conn:
+            conn.close()
+        return jsonify({"error": str(exc)}), 500
+
+    try:
+        devices = _fetch_devices(hostname=normalized_host)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    device = devices[0] if devices else None
+    return jsonify({"device": device})
 
 
 # Endpoint: /api/devices/<guid> — methods GET.

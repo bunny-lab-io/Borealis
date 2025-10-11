@@ -35,6 +35,7 @@ import Login from "./Login.jsx";
 import SiteList from "./Sites/Site_List";
 import DeviceList from "./Devices/Device_List";
 import DeviceDetails from "./Devices/Device_Details";
+import SSHDevices from "./Devices/SSH_Devices.jsx";
 import AssemblyList from "./Assemblies/Assembly_List";
 import AssemblyEditor from "./Assemblies/Assembly_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
@@ -201,6 +202,14 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "community":
         items.push({ label: "Automation", page: "jobs" });
         items.push({ label: "Community Content", page: "community" });
+        break;
+      case "devices":
+        items.push({ label: "Inventory", page: "devices" });
+        items.push({ label: "Devices", page: "devices" });
+        break;
+      case "ssh_devices":
+        items.push({ label: "Inventory", page: "devices" });
+        items.push({ label: "SSH Devices", page: "ssh_devices" });
         break;
       case "access_credentials":
         items.push({ label: "Access Management", page: "access_credentials" });
@@ -556,7 +565,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   const isAdmin = (String(userRole || '').toLowerCase() === 'admin');
 
   useEffect(() => {
-    if (!isAdmin && (currentPage === 'server_info' || currentPage === 'access_credentials' || currentPage === 'access_users')) {
+    if (!isAdmin && (currentPage === 'server_info' || currentPage === 'access_credentials' || currentPage === 'access_users' || currentPage === 'ssh_devices')) {
       setNotAuthorizedOpen(true);
       setCurrentPage('devices');
     }
@@ -584,6 +593,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             }}
           />
         );
+      case "ssh_devices":
+        return <SSHDevices />;
 
       case "device_details":
         return (

@@ -304,6 +304,8 @@ export default function DeviceList({ onSelectDevice }) {
             summary.uptime ||
             0
         ) || 0;
+        const connectionType = (device.connection_type || summary.connection_type || '').trim().toLowerCase();
+        const connectionEndpoint = (device.connection_endpoint || summary.connection_endpoint || '').trim();
 
         const memoryList = Array.isArray(device.memory) ? device.memory : [];
         const networkList = Array.isArray(device.network) ? device.network : [];
@@ -357,6 +359,9 @@ export default function DeviceList({ onSelectDevice }) {
           cpuRaw: normalizeJson(cpuObj),
           summary,
           details: device.details || {},
+          connectionType,
+          connectionEndpoint,
+          isRemote: connectionType === 'ssh',
         };
       });
 
@@ -648,7 +653,7 @@ export default function DeviceList({ onSelectDevice }) {
       <Box sx={{ p: 2, pb: 1, display: "flex", flexDirection: 'column', gap: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
-            Devices
+            Device Inventory
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             {/* Views dropdown + add button */}
@@ -856,7 +861,27 @@ export default function DeviceList({ onSelectDevice }) {
                           },
                         }}
                       >
-                        {r.hostname}
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          {r.isRemote && (
+                            <Box
+                              component="span"
+                              sx={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                px: 0.75,
+                                py: 0.1,
+                                borderRadius: 999,
+                                bgcolor: "#2a3b28",
+                                color: "#7cffc4",
+                                fontSize: "11px",
+                                fontWeight: 600
+                              }}
+                            >
+                              SSH
+                            </Box>
+                          )}
+                          <span>{r.hostname}</span>
+                        </Box>
                       </TableCell>
                     );
                   case "description":

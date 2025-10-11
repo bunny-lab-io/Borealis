@@ -152,9 +152,9 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         </Accordion>
           );
         })()}
-        {/* Devices */}
+        {/* Inventory */}
         {(() => {
-          const groupActive = currentPage === "devices";
+          const groupActive = currentPage === "devices" || currentPage === "ssh_devices";
           return (
         <Accordion
           expanded={expandedNav.devices}
@@ -187,11 +187,12 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             }}
           >
             <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
-              <b>Devices</b>
+              <b>Inventory</b>
             </Typography>
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
             <NavItem icon={<DevicesIcon fontSize="small" />} label="Devices" pageKey="devices" />
+            <NavItem icon={<DevicesIcon fontSize="small" />} label="SSH Devices" pageKey="ssh_devices" indent />
           </AccordionDetails>
         </Accordion>
           );

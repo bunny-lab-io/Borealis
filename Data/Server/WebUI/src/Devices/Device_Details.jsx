@@ -48,6 +48,12 @@ export default function DeviceDetails({ device, onBack }) {
   const [softwareOrder, setSoftwareOrder] = useState("asc");
   const [softwareSearch, setSoftwareSearch] = useState("");
   const [description, setDescription] = useState("");
+  const [connectionType, setConnectionType] = useState("");
+  const [connectionEndpoint, setConnectionEndpoint] = useState("");
+  const [connectionDraft, setConnectionDraft] = useState("");
+  const [connectionSaving, setConnectionSaving] = useState(false);
+  const [connectionMessage, setConnectionMessage] = useState("");
+  const [connectionError, setConnectionError] = useState("");
   const [historyRows, setHistoryRows] = useState([]);
   const [historyOrderBy, setHistoryOrderBy] = useState("ran_at");
   const [historyOrder, setHistoryOrder] = useState("desc");
@@ -69,6 +75,17 @@ export default function DeviceDetails({ device, onBack }) {
     const now = Date.now() / 1000;
     return now - tsSec <= 300 ? "Online" : "Offline";
   });
+
+  useEffect(() => {
+    setConnectionError("");
+  }, [connectionDraft]);
+
+  useEffect(() => {
+    if (connectionType !== "ssh") {
+      setConnectionMessage("");
+      setConnectionError("");
+    }
+  }, [connectionType]);
 
   useEffect(() => {
     let canceled = false;
@@ -222,6 +239,21 @@ export default function DeviceDetails({ device, onBack }) {
           normalizedSummary.description = detailData.description;
         }
 
+        const connectionTypeValue =
+          (normalizedSummary.connection_type ||
+            normalizedSummary.remote_type ||
+            "").toLowerCase();
+        const connectionEndpointValue =
+          normalizedSummary.connection_endpoint ||
+          normalizedSummary.connection_address ||
+          detailData?.connection_endpoint ||
+          "";
+        setConnectionType(connectionTypeValue);
+        setConnectionEndpoint(connectionEndpointValue);
+        setConnectionDraft(connectionEndpointValue);
+        setConnectionMessage("");
+        setConnectionError("");
+
         const normalized = {
           summary: normalizedSummary,
           memory: Array.isArray(detailData?.memory)
@@ -282,6 +314,8 @@ export default function DeviceDetails({ device, onBack }) {
           siteName: detailData?.site_name || "",
           siteDescription: detailData?.site_description || "",
           status: detailData?.status || "",
+          connectionType: connectionTypeValue,
+          connectionEndpoint: connectionEndpointValue,
         };
         setMeta(metaPayload);
         setDescription(normalizedSummary.description || detailData?.description || "");
@@ -312,6 +346,43 @@ export default function DeviceDetails({ device, onBack }) {
   const activityHostname = useMemo(() => {
     return (meta?.hostname || agent?.hostname || device?.hostname || "").trim();
   }, [meta?.hostname, agent?.hostname, device?.hostname]);
+
+  const saveConnectionEndpoint = useCallback(async () => {
+    if (connectionType !== "ssh") return;
+    const host = activityHostname;
+    if (!host) return;
+    const trimmed = connectionDraft.trim();
+    if (!trimmed) {
+      setConnectionError("Address is required.");
+      return;
+    }
+    if (trimmed === connectionEndpoint.trim()) {
+      setConnectionMessage("No changes to save.");
+      return;
+    }
+    setConnectionSaving(true);
+    setConnectionError("");
+    setConnectionMessage("");
+    try {
+      const resp = await fetch(`/api/ssh_devices/${encodeURIComponent(host)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: trimmed })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      const updated = data?.device?.connection_endpoint || trimmed;
+      setConnectionEndpoint(updated);
+      setConnectionDraft(updated);
+      setMeta((prev) => ({ ...(prev || {}), connectionEndpoint: updated }));
+      setConnectionMessage("SSH endpoint updated.");
+      setTimeout(() => setConnectionMessage(""), 3000);
+    } catch (err) {
+      setConnectionError(String(err.message || err));
+    } finally {
+      setConnectionSaving(false);
+    }
+  }, [connectionType, connectionDraft, connectionEndpoint, activityHostname]);
 
   const loadHistory = useCallback(async () => {
     if (!activityHostname) return;
@@ -689,6 +760,44 @@ export default function DeviceDetails({ device, onBack }) {
                       />
                     </TableCell>
                   </TableRow>
+                  {connectionType === "ssh" && (
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 500 }}>SSH Endpoint</TableCell>
+                      <TableCell>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                          <TextField
+                            size="small"
+                            value={connectionDraft}
+                            onChange={(e) => setConnectionDraft(e.target.value)}
+                            placeholder="user@host or host"
+                            sx={{
+                              maxWidth: 300,
+                              input: { color: '#fff' },
+                              '& .MuiOutlinedInput-root': {
+                                '& fieldset': { borderColor: '#555' },
+                                '&:hover fieldset': { borderColor: '#888' }
+                              }
+                            }}
+                          />
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            sx={{ color: '#58a6ff', borderColor: '#58a6ff' }}
+                            onClick={saveConnectionEndpoint}
+                            disabled={connectionSaving || connectionDraft.trim() === connectionEndpoint.trim()}
+                          >
+                            {connectionSaving ? "Saving..." : "Save"}
+                          </Button>
+                        </Box>
+                        {connectionMessage && (
+                          <Typography variant="caption" sx={{ color: '#7db7ff' }}>{connectionMessage}</Typography>
+                        )}
+                        {connectionError && (
+                          <Typography variant="caption" sx={{ color: '#ff8080' }}>{connectionError}</Typography>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )}
                   {summaryItems.map((item) => (
                     <TableRow key={item.label}>
                       <TableCell sx={{ fontWeight: 500 }}>{item.label}</TableCell>
