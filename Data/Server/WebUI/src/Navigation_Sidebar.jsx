@@ -22,7 +22,7 @@ import {
   Apps as AssembliesIcon
 } from "@mui/icons-material";
 import { LocationCity as SitesIcon } from "@mui/icons-material";
-import { ManageAccounts as AdminUsersIcon, Dns as ServerInfoIcon } from "@mui/icons-material";
+import { Dns as ServerInfoIcon, VpnKey as CredentialIcon, PersonOutline as UserIcon } from "@mui/icons-material";
 
 function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
   const [expandedNav, setExpandedNav] = useState({
@@ -30,6 +30,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
     devices: true,
     automation: true,
     filters: true,
+    access: true,
     admin: true
   });
 
@@ -289,10 +290,57 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
           );
         })()}
 
+        {/* Access Management */}
+        {(() => {
+          if (!isAdmin) return null;
+          const groupActive = currentPage === "access_credentials" || currentPage === "access_users";
+          return (
+        <Accordion
+          expanded={expandedNav.access}
+          onChange={(_, e) => setExpandedNav((s) => ({ ...s, access: e }))}
+          square
+          disableGutters
+          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            sx={{
+              position: "relative",
+              background: groupActive
+                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
+                : "#2c2c2c",
+              minHeight: "36px",
+              "& .MuiAccordionSummary-content": { margin: 0 },
+              "&::before": {
+                content: '""',
+                position: "absolute",
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: groupActive ? 3 : 0,
+                bgcolor: "#58a6ff",
+                borderTopRightRadius: 2,
+                borderBottomRightRadius: 2,
+                transition: "width 160ms ease"
+              }
+            }}
+          >
+            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
+              <b>Access Management</b>
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
+            <NavItem icon={<CredentialIcon fontSize="small" />} label="Credentials" pageKey="access_credentials" />
+            <NavItem icon={<UserIcon fontSize="small" />} label="Users" pageKey="access_users" />
+          </AccordionDetails>
+        </Accordion>
+          );
+        })()}
+
         {/* Admin */}
         {(() => {
           if (!isAdmin) return null;
-          const groupActive = currentPage === "admin_users" || currentPage === "server_info";
+          const groupActive = currentPage === "server_info";
           return (
         <Accordion
           expanded={expandedNav.admin}
@@ -329,7 +377,6 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             </Typography>
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-            <NavItem icon={<AdminUsersIcon fontSize="small" />} label="User Management" pageKey="admin_users" />
             <NavItem icon={<ServerInfoIcon fontSize="small" />} label="Server Info" pageKey="server_info" />
           </AccordionDetails>
         </Accordion>

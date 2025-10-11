@@ -10,7 +10,12 @@ import {
   Paper,
   FormControlLabel,
   Checkbox,
-  TextField
+  TextField,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  CircularProgress
 } from "@mui/material";
 import { Folder as FolderIcon, Description as DescriptionIcon } from "@mui/icons-material";
 import { SimpleTreeView, TreeItem } from "@mui/x-tree-view";
@@ -82,6 +87,10 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
   const [error, setError] = useState("");
   const [runAsCurrentUser, setRunAsCurrentUser] = useState(false);
   const [mode, setMode] = useState("scripts"); // 'scripts' | 'ansible'
+  const [credentials, setCredentials] = useState([]);
+  const [credentialsLoading, setCredentialsLoading] = useState(false);
+  const [credentialsError, setCredentialsError] = useState("");
+  const [selectedCredentialId, setSelectedCredentialId] = useState("");
   const [variables, setVariables] = useState([]);
   const [variableValues, setVariableValues] = useState({});
   const [variableErrors, setVariableErrors] = useState({});
@@ -114,6 +123,53 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
       loadTree();
     }
   }, [open, loadTree]);
+
+  useEffect(() => {
+    if (!open || mode !== "ansible") return;
+    let canceled = false;
+    setCredentialsLoading(true);
+    setCredentialsError("");
+    (async () => {
+      try {
+        const resp = await fetch("/api/credentials");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (canceled) return;
+        const list = Array.isArray(data?.credentials)
+          ? data.credentials.filter((cred) => String(cred.connection_type || "").toLowerCase() === "ssh")
+          : [];
+        list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
+        setCredentials(list);
+      } catch (err) {
+        if (!canceled) {
+          setCredentials([]);
+          setCredentialsError(String(err.message || err));
+        }
+      } finally {
+        if (!canceled) setCredentialsLoading(false);
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
+  }, [open, mode]);
+
+  useEffect(() => {
+    if (!open) {
+      setSelectedCredentialId("");
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (mode !== "ansible") return;
+    if (!credentials.length) {
+      setSelectedCredentialId("");
+      return;
+    }
+    if (!selectedCredentialId || !credentials.some((cred) => String(cred.id) === String(selectedCredentialId))) {
+      setSelectedCredentialId(String(credentials[0].id));
+    }
+  }, [mode, credentials, selectedCredentialId]);
 
   const renderNodes = (nodes = []) =>
     nodes.map((n) => (
@@ -286,6 +342,10 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
       setError(mode === 'ansible' ? "Please choose a playbook to run." : "Please choose a script to run.");
       return;
     }
+    if (mode === 'ansible' && !selectedCredentialId) {
+      setError("Select a credential to run this playbook.");
+      return;
+    }
     if (variables.length) {
       const errors = {};
       variables.forEach((variable) => {
@@ -314,7 +374,12 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
         resp = await fetch("/api/ansible/quick_run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ playbook_path, hostnames, variable_values: variableOverrides })
+          body: JSON.stringify({
+            playbook_path,
+            hostnames,
+            variable_values: variableOverrides,
+            credential_id: selectedCredentialId ? Number(selectedCredentialId) : null
+          })
         });
       } else {
         // quick_run expects a path relative to Assemblies root with 'Scripts/' prefix
@@ -340,6 +405,9 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
     }
   };
 
+  const credentialRequired = mode === "ansible";
+  const disableRun = running || !selectedPath || (credentialRequired && (!selectedCredentialId || !credentials.length));
+
   return (
     <Dialog open={open} onClose={running ? undefined : onClose} fullWidth maxWidth="md"
       PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
@@ -353,6 +421,38 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
         <Typography variant="body2" sx={{ color: "#aaa", mb: 1 }}>
           Select a {mode === 'ansible' ? 'playbook' : 'script'} to run on {hostnames.length} device{hostnames.length !== 1 ? "s" : ""}.
         </Typography>
+        {mode === 'ansible' && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap", mb: 2 }}>
+            <FormControl
+              size="small"
+              sx={{ minWidth: 260 }}
+              disabled={credentialsLoading || !credentials.length}
+            >
+              <InputLabel sx={{ color: "#aaa" }}>Credential</InputLabel>
+              <Select
+                value={selectedCredentialId}
+                label="Credential"
+                onChange={(e) => setSelectedCredentialId(e.target.value)}
+                sx={{ bgcolor: "#1f1f1f", color: "#fff" }}
+              >
+                {credentials.map((cred) => (
+                  <MenuItem key={cred.id} value={String(cred.id)}>
+                    {cred.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            {credentialsLoading && <CircularProgress size={18} sx={{ color: "#58a6ff" }} />}
+            {!credentialsLoading && credentialsError && (
+              <Typography variant="body2" sx={{ color: "#ff8080" }}>{credentialsError}</Typography>
+            )}
+            {!credentialsLoading && !credentialsError && !credentials.length && (
+              <Typography variant="body2" sx={{ color: "#ff8080" }}>
+                No SSH credentials available. Create one under Access Management.
+              </Typography>
+            )}
+          </Box>
+        )}
         <Box sx={{ display: "flex", gap: 2 }}>
           <Paper sx={{ flex: 1, p: 1, bgcolor: "#1e1e1e", maxHeight: 400, overflow: "auto" }}>
             <SimpleTreeView sx={{ color: "#e6edf3" }} onItemSelectionToggle={onItemSelect}>
@@ -444,8 +544,8 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={running} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onRun} disabled={running || !selectedPath}
-          sx={{ color: running || !selectedPath ? "#666" : "#58a6ff" }}
+        <Button onClick={onRun} disabled={disableRun}
+          sx={{ color: disableRun ? "#666" : "#58a6ff" }}
         >
           Run
         </Button>
@@ -453,4 +553,3 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
     </Dialog>
   );
 }
-

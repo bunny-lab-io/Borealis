@@ -9,8 +9,10 @@ import {
   Button,
   IconButton,
   Checkbox,
+  FormControl,
   FormControlLabel,
   Select,
+  InputLabel,
   Menu,
   MenuItem,
   Divider,
@@ -24,7 +26,8 @@ import {
   TableCell,
   TableBody,
   TableSortLabel,
-  GlobalStyles
+  GlobalStyles,
+  CircularProgress
 } from "@mui/material";
 import {
   Add as AddIcon,
@@ -34,7 +37,8 @@ import {
   Sync as SyncIcon,
   Timer as TimerIcon,
   Check as CheckIcon,
-  Error as ErrorIcon
+  Error as ErrorIcon,
+  Refresh as RefreshIcon
 } from "@mui/icons-material";
 import { SimpleTreeView, TreeItem } from "@mui/x-tree-view";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
@@ -421,6 +425,52 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [stopAfterEnabled, setStopAfterEnabled] = useState(false);
   const [expiration, setExpiration] = useState("no_expire");
   const [execContext, setExecContext] = useState("system");
+  const [credentials, setCredentials] = useState([]);
+  const [credentialLoading, setCredentialLoading] = useState(false);
+  const [credentialError, setCredentialError] = useState("");
+  const [selectedCredentialId, setSelectedCredentialId] = useState("");
+
+  const loadCredentials = useCallback(async () => {
+    setCredentialLoading(true);
+    setCredentialError("");
+    try {
+      const resp = await fetch("/api/credentials");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const list = Array.isArray(data?.credentials) ? data.credentials : [];
+      list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
+      setCredentials(list);
+    } catch (err) {
+      setCredentials([]);
+      setCredentialError(String(err.message || err));
+    } finally {
+      setCredentialLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCredentials();
+  }, [loadCredentials]);
+
+  const remoteExec = useMemo(() => execContext === "ssh" || execContext === "winrm", [execContext]);
+  const filteredCredentials = useMemo(() => {
+    if (!remoteExec) return credentials;
+    const target = execContext === "winrm" ? "winrm" : "ssh";
+    return credentials.filter((cred) => String(cred.connection_type || "").toLowerCase() === target);
+  }, [credentials, remoteExec, execContext]);
+
+  useEffect(() => {
+    if (!remoteExec) {
+      return;
+    }
+    if (!filteredCredentials.length) {
+      setSelectedCredentialId("");
+      return;
+    }
+    if (!selectedCredentialId || !filteredCredentials.some((cred) => String(cred.id) === String(selectedCredentialId))) {
+      setSelectedCredentialId(String(filteredCredentials[0].id));
+    }
+  }, [remoteExec, filteredCredentials, selectedCredentialId]);
 
   // dialogs state
   const [addCompOpen, setAddCompOpen] = useState(false);
@@ -827,11 +877,12 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const isValid = useMemo(() => {
     const base = jobName.trim().length > 0 && components.length > 0 && targets.length > 0;
     if (!base) return false;
+    if (remoteExec && !selectedCredentialId) return false;
     if (scheduleType !== "immediately") {
       return !!startDateTime;
     }
     return true;
-  }, [jobName, components.length, targets.length, scheduleType, startDateTime]);
+  }, [jobName, components.length, targets.length, scheduleType, startDateTime, remoteExec, selectedCredentialId]);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const editing = !!(initialJob && initialJob.id);
@@ -1306,6 +1357,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         setStopAfterEnabled(Boolean(initialJob.duration_stop_enabled));
         setExpiration(initialJob.expiration || "no_expire");
         setExecContext(initialJob.execution_context || "system");
+        setSelectedCredentialId(initialJob.credential_id ? String(initialJob.credential_id) : "");
         const comps = Array.isArray(initialJob.components) ? initialJob.components : [];
         const hydrated = await hydrateExistingComponents(comps);
         if (!canceled) {
@@ -1316,6 +1368,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         setPageTitleJobName("");
         setComponents([]);
         setComponentVarErrors({});
+        setSelectedCredentialId("");
       }
     };
     hydrate();
@@ -1411,6 +1464,10 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   };
 
   const handleCreate = async () => {
+    if (remoteExec && !selectedCredentialId) {
+      alert("Please select a credential for this execution context.");
+      return;
+    }
     const requiredErrors = {};
     components.forEach((comp) => {
       if (!comp || !comp.localId) return;
@@ -1438,7 +1495,8 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
       targets,
       schedule: { type: scheduleType, start: scheduleType !== "immediately" ? (() => { try { const d = startDateTime?.toDate?.() || new Date(startDateTime); d.setSeconds(0,0); return d.toISOString(); } catch { return startDateTime; } })() : null },
       duration: { stopAfterEnabled, expiration },
-      execution_context: execContext
+      execution_context: execContext,
+      credential_id: remoteExec && selectedCredentialId ? Number(selectedCredentialId) : null
     };
     try {
       const resp = await fetch(initialJob && initialJob.id ? `/api/scheduled_jobs/${initialJob.id}` : "/api/scheduled_jobs", {
@@ -1665,10 +1723,61 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         {tab === 4 && (
           <Box>
             <SectionHeader title="Execution Context" />
-            <Select size="small" value={execContext} onChange={(e) => setExecContext(e.target.value)} sx={{ minWidth: 280 }}>
-              <MenuItem value="system">Run as SYSTEM Account</MenuItem>
-              <MenuItem value="current_user">Run as the Logged-In User</MenuItem>
+            <Select
+              size="small"
+              value={execContext}
+              onChange={(e) => setExecContext(e.target.value)}
+              sx={{ minWidth: 320 }}
+            >
+              <MenuItem value="system">Run on agent as SYSTEM (device-local)</MenuItem>
+              <MenuItem value="current_user">Run on agent as logged-in user (device-local)</MenuItem>
+              <MenuItem value="ssh">Run from server via SSH (remote)</MenuItem>
+              <MenuItem value="winrm">Run from server via WinRM (remote)</MenuItem>
             </Select>
+            {remoteExec && (
+              <Box sx={{ mt: 2, display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+                <FormControl
+                  size="small"
+                  sx={{ minWidth: 320 }}
+                  disabled={credentialLoading || !filteredCredentials.length}
+                >
+                  <InputLabel sx={{ color: "#aaa" }}>Credential</InputLabel>
+                  <Select
+                    value={selectedCredentialId}
+                    label="Credential"
+                    onChange={(e) => setSelectedCredentialId(e.target.value)}
+                    sx={{ bgcolor: "#1f1f1f", color: "#fff" }}
+                  >
+                    {filteredCredentials.map((cred) => (
+                      <MenuItem key={cred.id} value={String(cred.id)}>
+                        {cred.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<RefreshIcon fontSize="small" />}
+                  onClick={loadCredentials}
+                  disabled={credentialLoading}
+                  sx={{ color: "#58a6ff", borderColor: "#58a6ff" }}
+                >
+                  Refresh
+                </Button>
+                {credentialLoading && <CircularProgress size={18} sx={{ color: "#58a6ff" }} />}
+                {!credentialLoading && credentialError && (
+                  <Typography variant="body2" sx={{ color: "#ff8080" }}>
+                    {credentialError}
+                  </Typography>
+                )}
+                {!credentialLoading && !credentialError && !filteredCredentials.length && (
+                  <Typography variant="body2" sx={{ color: "#ff8080" }}>
+                    No {execContext === "winrm" ? "WinRM" : "SSH"} credentials available. Create one under Access Management &gt; Credentials.
+                  </Typography>
+                )}
+              </Box>
+            )}
           </Box>
         )}
 

@@ -39,7 +39,8 @@ import AssemblyList from "./Assemblies/Assembly_List";
 import AssemblyEditor from "./Assemblies/Assembly_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
 import CreateJob from "./Scheduling/Create_Job.jsx";
-import UserManagement from "./Admin/User_Management.jsx";
+import CredentialList from "./Access_Management/Credential_List.jsx";
+import UserManagement from "./Access_Management/Users.jsx";
 import ServerInfo from "./Admin/Server_Info.jsx";
 
 // Networking Imports
@@ -201,12 +202,16 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         items.push({ label: "Automation", page: "jobs" });
         items.push({ label: "Community Content", page: "community" });
         break;
-      case "admin_users":
-        items.push({ label: "Admin Settings", page: "admin_users" });
-        items.push({ label: "User Management", page: "admin_users" });
+      case "access_credentials":
+        items.push({ label: "Access Management", page: "access_credentials" });
+        items.push({ label: "Credentials", page: "access_credentials" });
+        break;
+      case "access_users":
+        items.push({ label: "Access Management", page: "access_credentials" });
+        items.push({ label: "Users", page: "access_users" });
         break;
       case "server_info":
-        items.push({ label: "Admin Settings", page: "admin_users" });
+        items.push({ label: "Admin Settings" });
         items.push({ label: "Server Info", page: "server_info" });
         break;
       case "filters":
@@ -551,7 +556,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   const isAdmin = (String(userRole || '').toLowerCase() === 'admin');
 
   useEffect(() => {
-    if (!isAdmin && (currentPage === 'admin_users' || currentPage === 'server_info')) {
+    if (!isAdmin && (currentPage === 'server_info' || currentPage === 'access_credentials' || currentPage === 'access_users')) {
       setNotAuthorizedOpen(true);
       setCurrentPage('devices');
     }
@@ -705,7 +710,10 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           />
         );
 
-      case "admin_users":
+      case "access_credentials":
+        return <CredentialList isAdmin={isAdmin} />;
+
+      case "access_users":
         return <UserManagement isAdmin={isAdmin} />;
 
       case "server_info":

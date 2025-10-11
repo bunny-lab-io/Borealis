@@ -39,6 +39,9 @@ from typing import List, Dict, Tuple, Optional, Any, Set, Sequence
 import sqlite3
 import io
 import uuid
+import subprocess
+import stat
+import traceback
 from threading import Lock
 from datetime import datetime, timezone
 
@@ -322,6 +325,7 @@ from Python_API_Endpoints.ocr_engines import run_ocr_on_base64
 from Python_API_Endpoints.script_engines import run_powershell_script
 from job_scheduler import register as register_job_scheduler
 from job_scheduler import set_online_lookup as scheduler_set_online_lookup
+from job_scheduler import set_server_ansible_runner as scheduler_set_server_runner
 
 # =============================================================================
 # Section: Runtime Stack Configuration
@@ -1592,6 +1596,675 @@ def api_users_toggle_mfa(username):
         return jsonify({"status": "ok"})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+# =============================================================================
+# Section: Access Management - Credentials
+# =============================================================================
+
+
+@app.route("/api/credentials", methods=["GET", "POST"])
+def api_credentials_collection():
+    chk = _require_admin()
+    if chk:
+        return chk
+    if request.method == "GET":
+        site_filter = _coerce_int(request.args.get("site_id"))
+        connection_filter = request.args.get("connection_type")
+        where_parts: List[str] = []
+        params: List[Any] = []
+        if site_filter is not None:
+            where_parts.append("c.site_id = ?")
+            params.append(site_filter)
+        if connection_filter:
+            where_parts.append("LOWER(c.connection_type) = ?")
+            params.append(_normalize_connection_type(connection_filter))
+        where_clause = " AND ".join(where_parts)
+        creds = _query_credentials(where_clause, tuple(params))
+        return jsonify({"credentials": creds})
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    credential_type = _normalize_credential_type(data.get("credential_type"))
+    connection_type = _normalize_connection_type(data.get("connection_type"))
+    username = (data.get("username") or "").strip()
+    description = (data.get("description") or "").strip()
+    site_id = _coerce_int(data.get("site_id"))
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else None
+    metadata_json = json.dumps(metadata) if metadata else None
+
+    password_blob = _secret_from_payload(data.get("password"))
+    private_key_val = data.get("private_key")
+    if isinstance(private_key_val, str) and private_key_val and not private_key_val.endswith("\n"):
+        private_key_val = private_key_val + "\n"
+    private_key_blob = _secret_from_payload(private_key_val)
+    private_key_passphrase_blob = _secret_from_payload(data.get("private_key_passphrase"))
+
+    become_method = _normalize_become_method(data.get("become_method"))
+    become_username = (data.get("become_username") or "").strip()
+    become_password_blob = _secret_from_payload(data.get("become_password"))
+
+    now = _now_ts()
+    conn = None
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO credentials (
+                name,
+                description,
+                site_id,
+                credential_type,
+                connection_type,
+                username,
+                password_encrypted,
+                private_key_encrypted,
+                private_key_passphrase_encrypted,
+                become_method,
+                become_username,
+                become_password_encrypted,
+                metadata_json,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                name,
+                description,
+                site_id,
+                credential_type,
+                connection_type,
+                username,
+                password_blob,
+                private_key_blob,
+                private_key_passphrase_blob,
+                become_method,
+                become_username,
+                become_password_blob,
+                metadata_json,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        cred_id = int(cur.lastrowid or 0)
+        conn.close()
+    except sqlite3.IntegrityError:
+        if conn:
+            conn.close()
+        return jsonify({"error": "credential name already exists"}), 409
+    except Exception as exc:
+        if conn:
+            conn.close()
+        return jsonify({"error": str(exc)}), 500
+
+    record = _fetch_credential_record(cred_id)
+    return jsonify({"credential": record}), 201
+
+
+@app.route("/api/credentials/<int:credential_id>", methods=["GET", "PUT", "DELETE"])
+def api_credentials_detail(credential_id: int):
+    chk = _require_admin()
+    if chk:
+        return chk
+
+    if request.method == "GET":
+        conn = None
+        try:
+            conn = _db_conn()
+            conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT c.*, s.name AS site_name
+                FROM credentials c
+                LEFT JOIN sites s ON s.id = c.site_id
+                WHERE c.id = ?
+                """,
+                (credential_id,),
+            )
+            row = cur.fetchone()
+        except Exception as exc:
+            if conn:
+                conn.close()
+            return jsonify({"error": str(exc)}), 500
+        if conn:
+            conn.close()
+        if not row:
+            return jsonify({"error": "credential not found"}), 404
+        row_map = dict(row)
+        row_map["has_password"] = 1 if row_map.get("password_encrypted") else 0
+        row_map["has_private_key"] = 1 if row_map.get("private_key_encrypted") else 0
+        row_map["has_become_password"] = 1 if row_map.get("become_password_encrypted") else 0
+        detail = _credential_row_to_dict(row_map)
+        detail["has_private_key_passphrase"] = bool(row_map.get("private_key_passphrase_encrypted"))
+        detail["password_fingerprint"] = _secret_fingerprint(row_map.get("password_encrypted"))
+        detail["private_key_fingerprint"] = _secret_fingerprint(row_map.get("private_key_encrypted"))
+        detail["become_password_fingerprint"] = _secret_fingerprint(row_map.get("become_password_encrypted"))
+        return jsonify({"credential": detail})
+
+    if request.method == "DELETE":
+        conn = None
+        try:
+            conn = _db_conn()
+            cur = conn.cursor()
+            cur.execute("UPDATE scheduled_jobs SET credential_id=NULL WHERE credential_id=?", (credential_id,))
+            cur.execute("DELETE FROM credentials WHERE id=?", (credential_id,))
+            if cur.rowcount == 0:
+                conn.close()
+                return jsonify({"error": "credential not found"}), 404
+            conn.commit()
+            conn.close()
+            return jsonify({"status": "ok"})
+        except Exception as exc:
+            if conn:
+                conn.close()
+            return jsonify({"error": str(exc)}), 500
+
+    data = request.get_json(silent=True) or {}
+    updates: Dict[str, Any] = {}
+    if "name" in data:
+        name = (data.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name cannot be empty"}), 400
+        updates["name"] = name
+    if "description" in data:
+        updates["description"] = (data.get("description") or "").strip()
+    if "site_id" in data:
+        updates["site_id"] = _coerce_int(data.get("site_id"))
+    if "credential_type" in data:
+        updates["credential_type"] = _normalize_credential_type(data.get("credential_type"))
+    if "connection_type" in data:
+        updates["connection_type"] = _normalize_connection_type(data.get("connection_type"))
+    if "username" in data:
+        updates["username"] = (data.get("username") or "").strip()
+    if "become_method" in data:
+        updates["become_method"] = _normalize_become_method(data.get("become_method"))
+    if "become_username" in data:
+        updates["become_username"] = (data.get("become_username") or "").strip()
+    if "metadata" in data:
+        metadata = data.get("metadata")
+        if metadata is None:
+            updates["metadata_json"] = None
+        elif isinstance(metadata, dict):
+            updates["metadata_json"] = json.dumps(metadata)
+    if data.get("clear_password"):
+        updates["password_encrypted"] = None
+    elif "password" in data:
+        updates["password_encrypted"] = _secret_from_payload(data.get("password"))
+    if data.get("clear_private_key"):
+        updates["private_key_encrypted"] = None
+    elif "private_key" in data:
+        pk_val = data.get("private_key")
+        if isinstance(pk_val, str) and pk_val and not pk_val.endswith("\n"):
+            pk_val = pk_val + "\n"
+        updates["private_key_encrypted"] = _secret_from_payload(pk_val)
+    if data.get("clear_private_key_passphrase"):
+        updates["private_key_passphrase_encrypted"] = None
+    elif "private_key_passphrase" in data:
+        updates["private_key_passphrase_encrypted"] = _secret_from_payload(data.get("private_key_passphrase"))
+    if data.get("clear_become_password"):
+        updates["become_password_encrypted"] = None
+    elif "become_password" in data:
+        updates["become_password_encrypted"] = _secret_from_payload(data.get("become_password"))
+
+    if not updates:
+        return jsonify({"error": "no fields to update"}), 400
+    updates["updated_at"] = _now_ts()
+
+    conn = None
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        set_clause = ", ".join([f"{col}=?" for col in updates.keys()])
+        params = list(updates.values()) + [credential_id]
+        cur.execute(f"UPDATE credentials SET {set_clause} WHERE id=?", params)
+        if cur.rowcount == 0:
+            conn.close()
+            return jsonify({"error": "credential not found"}), 404
+        conn.commit()
+        conn.close()
+    except sqlite3.IntegrityError:
+        if conn:
+            conn.close()
+        return jsonify({"error": "credential name already exists"}), 409
+    except Exception as exc:
+        if conn:
+            conn.close()
+        return jsonify({"error": str(exc)}), 500
+
+    record = _fetch_credential_record(credential_id)
+    return jsonify({"credential": record})
+
+
+# =============================================================================
+# Section: Server-Side Ansible Execution
+# =============================================================================
+
+_ANSIBLE_WORKSPACE_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "Logs", "Server", "AnsibleRuns")
+)
+
+
+def _ensure_ansible_workspace() -> str:
+    try:
+        os.makedirs(_ANSIBLE_WORKSPACE_DIR, exist_ok=True)
+    except Exception:
+        pass
+    return _ANSIBLE_WORKSPACE_DIR
+
+
+def _fetch_credential_with_secrets(credential_id: int) -> Optional[Dict[str, Any]]:
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                id,
+                name,
+                credential_type,
+                connection_type,
+                username,
+                password_encrypted,
+                private_key_encrypted,
+                private_key_passphrase_encrypted,
+                become_method,
+                become_username,
+                become_password_encrypted
+            FROM credentials
+            WHERE id=?
+            """,
+            (credential_id,),
+        )
+        row = cur.fetchone()
+        conn.close()
+    except Exception:
+        return None
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "name": row[1],
+        "credential_type": (row[2] or "machine").lower(),
+        "connection_type": (row[3] or "ssh").lower(),
+        "username": row[4] or "",
+        "password": _decrypt_secret(row[5]) if row[5] else "",
+        "private_key": _decrypt_secret(row[6]) if row[6] else "",
+        "private_key_passphrase": _decrypt_secret(row[7]) if row[7] else "",
+        "become_method": _normalize_become_method(row[8]),
+        "become_username": row[9] or "",
+        "become_password": _decrypt_secret(row[10]) if row[10] else "",
+    }
+
+
+def _emit_ansible_recap_from_row(row):
+    if not row:
+        return
+    try:
+        payload = {
+            "id": row[0],
+            "run_id": row[1],
+            "hostname": row[2] or "",
+            "agent_id": row[3] or "",
+            "playbook_path": row[4] or "",
+            "playbook_name": row[5] or "",
+            "scheduled_job_id": row[6],
+            "scheduled_run_id": row[7],
+            "activity_job_id": row[8],
+            "status": row[9] or "",
+            "recap_text": row[10] or "",
+            "recap_json": json.loads(row[11]) if (row[11] or "").strip() else None,
+            "started_ts": row[12],
+            "finished_ts": row[13],
+            "created_at": row[14],
+            "updated_at": row[15],
+        }
+        socketio.emit("ansible_recap_update", payload)
+        if payload.get("activity_job_id"):
+            socketio.emit(
+                "device_activity_changed",
+                {
+                    "hostname": payload.get("hostname") or "",
+                    "activity_id": payload.get("activity_job_id"),
+                    "status": payload.get("status") or "",
+                    "change": "updated",
+                    "source": "ansible",
+                },
+            )
+    except Exception:
+        pass
+
+
+def _record_ansible_recap_start(
+    run_id: str,
+    hostname: str,
+    playbook_rel_path: str,
+    playbook_name: str,
+    activity_id: Optional[int],
+    scheduled_job_id: Optional[int],
+    scheduled_run_id: Optional[int],
+):
+    try:
+        now = _now_ts()
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO ansible_play_recaps (
+                run_id,
+                hostname,
+                agent_id,
+                playbook_path,
+                playbook_name,
+                scheduled_job_id,
+                scheduled_run_id,
+                activity_job_id,
+                status,
+                recap_text,
+                recap_json,
+                started_ts,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, 'server', ?, ?, ?, ?, ?, 'Running', '', '', ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                hostname=excluded.hostname,
+                playbook_path=excluded.playbook_path,
+                playbook_name=excluded.playbook_name,
+                scheduled_job_id=excluded.scheduled_job_id,
+                scheduled_run_id=excluded.scheduled_run_id,
+                activity_job_id=excluded.activity_job_id,
+                status='Running',
+                started_ts=COALESCE(ansible_play_recaps.started_ts, excluded.started_ts),
+                updated_at=excluded.updated_at
+            """,
+            (
+                run_id,
+                hostname,
+                playbook_rel_path,
+                playbook_name,
+                scheduled_job_id,
+                scheduled_run_id,
+                activity_id,
+                now,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        _ansible_log_server(f"[server_run] failed to record recap start run_id={run_id}: {exc}")
+
+
+def _queue_server_ansible_run(
+    *,
+    hostname: str,
+    playbook_abs_path: str,
+    playbook_rel_path: str,
+    playbook_name: str,
+    credential_id: int,
+    variable_values: Dict[str, Any],
+    source: str,
+    activity_id: Optional[int] = None,
+    scheduled_job_id: Optional[int] = None,
+    scheduled_run_id: Optional[int] = None,
+    scheduled_job_run_row_id: Optional[int] = None,
+) -> str:
+    try:
+        run_id = uuid.uuid4().hex
+    except Exception:
+        run_id = str(int(time.time() * 1000))
+
+    _record_ansible_recap_start(
+        run_id,
+        hostname,
+        playbook_rel_path,
+        playbook_name,
+        activity_id,
+        scheduled_job_id,
+        scheduled_run_id,
+    )
+
+    ctx = {
+        "run_id": run_id,
+        "hostname": hostname,
+        "playbook_abs_path": playbook_abs_path,
+        "playbook_rel_path": playbook_rel_path,
+        "playbook_name": playbook_name,
+        "credential_id": credential_id,
+        "variable_values": variable_values or {},
+        "activity_id": activity_id,
+        "scheduled_job_id": scheduled_job_id,
+        "scheduled_run_id": scheduled_run_id,
+        "scheduled_job_run_row_id": scheduled_job_run_row_id,
+        "source": source,
+        "started_ts": _now_ts(),
+    }
+    try:
+        socketio.start_background_task(_execute_server_ansible_run, ctx)
+    except Exception as exc:
+        _ansible_log_server(f"[server_run] failed to queue background task run_id={run_id}: {exc}")
+        _execute_server_ansible_run(ctx, immediate_error=str(exc))
+    return run_id
+
+
+def _execute_server_ansible_run(ctx: Dict[str, Any], immediate_error: Optional[str] = None):
+    run_id = ctx.get("run_id") or uuid.uuid4().hex
+    hostname = ctx.get("hostname") or ""
+    playbook_abs_path = ctx.get("playbook_abs_path") or ""
+    playbook_rel_path = ctx.get("playbook_rel_path") or os.path.basename(playbook_abs_path)
+    playbook_name = ctx.get("playbook_name") or os.path.basename(playbook_abs_path)
+    credential_id = ctx.get("credential_id")
+    variable_values = ctx.get("variable_values") or {}
+    activity_id = ctx.get("activity_id")
+    scheduled_job_id = ctx.get("scheduled_job_id")
+    scheduled_run_id = ctx.get("scheduled_run_id")
+    scheduled_job_run_row_id = ctx.get("scheduled_job_run_row_id")
+    started_ts = ctx.get("started_ts") or _now_ts()
+    source = ctx.get("source") or "ansible"
+
+    status = "Failed"
+    stdout = ""
+    stderr = ""
+    error_message = immediate_error or ""
+    finished_ts = started_ts
+    workspace = None
+
+    try:
+        credential = _fetch_credential_with_secrets(int(credential_id))
+        if not credential:
+            raise RuntimeError("Credential not found")
+        connection_type = credential.get("connection_type", "ssh")
+        if connection_type not in ("ssh",):
+            raise RuntimeError(f"Unsupported credential connection type '{connection_type}' for server execution")
+
+        workspace_root = _ensure_ansible_workspace()
+        workspace = os.path.join(workspace_root, run_id)
+        os.makedirs(workspace, exist_ok=True)
+
+        inventory_path = os.path.join(workspace, "inventory.json")
+        extra_vars_path = None
+        key_path = None
+
+        host_entry: Dict[str, Any] = {
+            "ansible_host": hostname,
+            "ansible_user": credential.get("username") or "",
+            "ansible_connection": "ssh",
+            "ansible_ssh_common_args": "-o StrictHostKeyChecking=no",
+        }
+        if credential.get("password"):
+            host_entry["ansible_password"] = credential["password"]
+            host_entry["ansible_ssh_pass"] = credential["password"]
+        if credential.get("private_key"):
+            key_path = os.path.join(workspace, "ssh_key")
+            with open(key_path, "w", encoding="utf-8") as fh:
+                fh.write(credential["private_key"])
+            try:
+                os.chmod(key_path, stat.S_IRUSR | stat.S_IWUSR)
+            except Exception:
+                pass
+            host_entry["ansible_ssh_private_key_file"] = key_path
+        become_method = credential.get("become_method") or ""
+        become_username = credential.get("become_username") or ""
+        become_password = credential.get("become_password") or ""
+        if become_method or become_username or become_password:
+            host_entry["ansible_become"] = True
+            if become_method:
+                host_entry["ansible_become_method"] = become_method
+            if become_username:
+                host_entry["ansible_become_user"] = become_username
+            if become_password:
+                host_entry["ansible_become_password"] = become_password
+
+        with open(inventory_path, "w", encoding="utf-8") as fh:
+            json.dump({"all": {"hosts": {hostname: host_entry}}}, fh)
+
+        if variable_values:
+            extra_vars_path = os.path.join(workspace, "extra_vars.json")
+            with open(extra_vars_path, "w", encoding="utf-8") as fh:
+                json.dump(variable_values, fh)
+
+        env = os.environ.copy()
+        env.setdefault("ANSIBLE_STDOUT_CALLBACK", "yaml")
+        env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
+        env.setdefault("ANSIBLE_RETRY_FILES_ENABLED", "False")
+
+        cmd = ["ansible-playbook", playbook_abs_path, "-i", inventory_path]
+        if extra_vars_path:
+            cmd.extend(["--extra-vars", f"@{extra_vars_path}"])
+        if become_method or become_username or become_password:
+            cmd.append("--become")
+            if become_method:
+                cmd.extend(["--become-method", become_method])
+            if become_username:
+                cmd.extend(["--become-user", become_username])
+
+        _ansible_log_server(
+            f"[server_run] start run_id={run_id} host='{hostname}' playbook='{playbook_rel_path}' credential={credential_id}"
+        )
+
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            cwd=os.path.dirname(playbook_abs_path) or None,
+        )
+
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        status = "Success" if proc.returncode == 0 else "Failed"
+        finished_ts = _now_ts()
+        if proc.returncode != 0 and not error_message:
+            error_message = stderr or stdout or f"ansible-playbook exited with {proc.returncode}"
+    except Exception as exc:
+        finished_ts = _now_ts()
+        status = "Failed"
+        if not error_message:
+            error_message = str(exc)
+        if not stderr:
+            stderr = f"{exc}"
+        _ansible_log_server(
+            f"[server_run] error run_id={run_id} host='{hostname}' err={exc}\n{traceback.format_exc()}"
+        )
+    finally:
+        if workspace:
+            try:
+                shutil.rmtree(workspace, ignore_errors=True)
+            except Exception:
+                pass
+
+    recap_json = "{}"
+
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        if activity_id:
+            try:
+                cur.execute(
+                    "UPDATE activity_history SET status=?, stdout=?, stderr=?, ran_at=? WHERE id=?",
+                    (status, stdout, stderr, finished_ts, int(activity_id)),
+                )
+            except Exception:
+                pass
+        if scheduled_job_run_row_id:
+            try:
+                cur.execute(
+                    "UPDATE scheduled_job_runs SET status=?, finished_ts=?, updated_at=?, error=? WHERE id=?",
+                    (
+                        status,
+                        finished_ts,
+                        finished_ts,
+                        (error_message or "")[:1024],
+                        int(scheduled_job_run_row_id),
+                    ),
+                )
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                UPDATE ansible_play_recaps
+                SET status=?,
+                    recap_text=?,
+                    recap_json=?,
+                    finished_ts=?,
+                    updated_at=?,
+                    hostname=?,
+                    playbook_path=?,
+                    playbook_name=?,
+                    scheduled_job_id=?,
+                    scheduled_run_id=?,
+                    activity_job_id=?
+                WHERE run_id=?
+                """,
+                (
+                    status,
+                    stdout,
+                    recap_json,
+                    finished_ts,
+                    finished_ts,
+                    hostname,
+                    playbook_rel_path,
+                    playbook_name,
+                    scheduled_job_id,
+                    scheduled_run_id,
+                    activity_id,
+                    run_id,
+                ),
+            )
+        except Exception as exc:
+            _ansible_log_server(f"[server_run] failed to update recap run_id={run_id}: {exc}")
+        try:
+            cur.execute(
+                "SELECT id, run_id, hostname, agent_id, playbook_path, playbook_name, scheduled_job_id, scheduled_run_id, activity_job_id, status, recap_text, recap_json, started_ts, finished_ts, created_at, updated_at FROM ansible_play_recaps WHERE run_id=?",
+                (run_id,),
+            )
+            recap_row = cur.fetchone()
+        except Exception:
+            recap_row = None
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        _ansible_log_server(f"[server_run] database update failed run_id={run_id}: {exc}")
+
+    if recap_row:
+        _emit_ansible_recap_from_row(recap_row)
+
+    if status == "Success":
+        _ansible_log_server(
+            f"[server_run] completed run_id={run_id} host='{hostname}' status=Success duration={finished_ts - started_ts}s"
+        )
+    else:
+        _ansible_log_server(
+            f"[server_run] completed run_id={run_id} host='{hostname}' status=Failed duration={finished_ts - started_ts}s"
+        )
+
 
 # =============================================================================
 # Section: Python Sidecar Services
@@ -3251,6 +3924,174 @@ def _decrypt_secret(blob: Optional[bytes]) -> str:
             return ''
 
 
+def _normalize_credential_type(value: Optional[str]) -> str:
+    val = (value or '').strip().lower()
+    if val in {"machine", "ssh", "domain", "token", "api"}:
+        return val if val != "ssh" else "machine"
+    return "machine"
+
+
+def _normalize_connection_type(value: Optional[str]) -> str:
+    val = (value or '').strip().lower()
+    if val in {"ssh", "linux", "unix"}:
+        return "ssh"
+    if val in {"winrm", "windows"}:
+        return "winrm"
+    if val in {"api", "http"}:
+        return "api"
+    return "ssh"
+
+
+def _normalize_become_method(value: Optional[str]) -> str:
+    val = (value or '').strip().lower()
+    if val in {"", "none", "no", "false"}:
+        return ""
+    if val in {"sudo", "su", "runas", "enable"}:
+        return val
+    return ""
+
+
+def _secret_from_payload(value) -> Optional[bytes]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if value.strip() == "":
+            return None
+        return _encrypt_secret(value)
+    text = str(value)
+    if not text.strip():
+        return None
+    return _encrypt_secret(text)
+
+
+def _coerce_int(value) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _credential_row_to_dict(row) -> Dict[str, Any]:
+    if not row:
+        return {}
+    # Support both sqlite3.Row and tuple
+    try:
+        getter = row.__getitem__
+        keys = row.keys() if hasattr(row, "keys") else None
+    except Exception:
+        getter = None
+        keys = None
+
+    def _get(field, index=None):
+        if getter and keys:
+            try:
+                return getter(field)
+            except Exception:
+                pass
+        if index is not None:
+            try:
+                return row[index]
+            except Exception:
+                return None
+        return None
+
+    metadata_json = _get("metadata_json")
+    metadata = {}
+    if metadata_json:
+        try:
+            metadata = json.loads(metadata_json)
+            if not isinstance(metadata, dict):
+                metadata = {}
+        except Exception:
+            metadata = {}
+    created_at = _get("created_at")
+    updated_at = _get("updated_at")
+    out = {
+        "id": _get("id"),
+        "name": _get("name"),
+        "description": _get("description") or "",
+        "credential_type": _get("credential_type") or "machine",
+        "connection_type": _get("connection_type") or "ssh",
+        "site_id": _get("site_id"),
+        "site_name": _get("site_name"),
+        "username": _get("username") or "",
+        "become_method": _get("become_method") or "",
+        "become_username": _get("become_username") or "",
+        "has_password": bool(_get("has_password")),
+        "has_private_key": bool(_get("has_private_key")),
+        "has_private_key_passphrase": bool(_get("has_private_key_passphrase")),
+        "has_become_password": bool(_get("has_become_password")),
+        "metadata": metadata,
+        "created_at": int(created_at or 0),
+        "updated_at": int(updated_at or 0),
+    }
+    return out
+
+
+def _query_credentials(where_clause: str = "", params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
+    try:
+        conn = _db_conn()
+        conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]
+        cur = conn.cursor()
+        sql = """
+            SELECT
+                c.id,
+                c.name,
+                c.description,
+                c.credential_type,
+                c.connection_type,
+                c.username,
+                c.site_id,
+                s.name AS site_name,
+                c.become_method,
+                c.become_username,
+                c.metadata_json,
+                c.created_at,
+                c.updated_at,
+                CASE WHEN c.password_encrypted IS NOT NULL AND LENGTH(c.password_encrypted) > 0 THEN 1 ELSE 0 END AS has_password,
+                CASE WHEN c.private_key_encrypted IS NOT NULL AND LENGTH(c.private_key_encrypted) > 0 THEN 1 ELSE 0 END AS has_private_key,
+                CASE WHEN c.private_key_passphrase_encrypted IS NOT NULL AND LENGTH(c.private_key_passphrase_encrypted) > 0 THEN 1 ELSE 0 END AS has_private_key_passphrase,
+                CASE WHEN c.become_password_encrypted IS NOT NULL AND LENGTH(c.become_password_encrypted) > 0 THEN 1 ELSE 0 END AS has_become_password
+            FROM credentials c
+            LEFT JOIN sites s ON s.id = c.site_id
+        """
+        if where_clause:
+            sql += f" WHERE {where_clause} "
+        sql += " ORDER BY LOWER(c.name)"
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        conn.close()
+        return [_credential_row_to_dict(r) for r in rows]
+    except Exception as exc:
+        _write_service_log("server", f"credential query failure: {exc}")
+        return []
+
+
+def _fetch_credential_record(credential_id: int) -> Optional[Dict[str, Any]]:
+    rows = _query_credentials("c.id = ?", (credential_id,))
+    if rows:
+        return rows[0]
+    return None
+
+
+def _secret_fingerprint(secret_blob: Optional[bytes]) -> str:
+    if not secret_blob:
+        return ""
+    try:
+        import hashlib
+        plaintext = _decrypt_secret(secret_blob)
+        if not plaintext:
+            return ""
+        digest = hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+        return digest[:16]
+    except Exception:
+        return ""
+
+
 def init_db():
     """Initialize all required tables in the unified database."""
     conn = _db_conn()
@@ -3544,7 +4385,55 @@ def init_db():
     )
     conn.commit()
 
+    # Central credential vault for remote execution
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS credentials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            site_id INTEGER,
+            credential_type TEXT NOT NULL DEFAULT 'machine',
+            connection_type TEXT NOT NULL DEFAULT 'ssh',
+            username TEXT,
+            password_encrypted BLOB,
+            private_key_encrypted BLOB,
+            private_key_passphrase_encrypted BLOB,
+            become_method TEXT,
+            become_username TEXT,
+            become_password_encrypted BLOB,
+            metadata_json TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE SET NULL
+        )
+        """
+    )
+    try:
+        cur.execute("PRAGMA table_info(credentials)")
+        cred_cols = [row[1] for row in cur.fetchall()]
+        if "connection_type" not in cred_cols:
+            cur.execute("ALTER TABLE credentials ADD COLUMN connection_type TEXT NOT NULL DEFAULT 'ssh'")
+        if "credential_type" not in cred_cols:
+            cur.execute("ALTER TABLE credentials ADD COLUMN credential_type TEXT NOT NULL DEFAULT 'machine'")
+        if "metadata_json" not in cred_cols:
+            cur.execute("ALTER TABLE credentials ADD COLUMN metadata_json TEXT")
+        if "private_key_passphrase_encrypted" not in cred_cols:
+            cur.execute("ALTER TABLE credentials ADD COLUMN private_key_passphrase_encrypted BLOB")
+        if "become_method" not in cred_cols:
+            cur.execute("ALTER TABLE credentials ADD COLUMN become_method TEXT")
+        if "become_username" not in cred_cols:
+            cur.execute("ALTER TABLE credentials ADD COLUMN become_username TEXT")
+        if "become_password_encrypted" not in cred_cols:
+            cur.execute("ALTER TABLE credentials ADD COLUMN become_password_encrypted BLOB")
+        if "site_id" not in cred_cols:
+            cur.execute("ALTER TABLE credentials ADD COLUMN site_id INTEGER")
+        if "description" not in cred_cols:
+            cur.execute("ALTER TABLE credentials ADD COLUMN description TEXT")
+    except Exception:
+        pass
     conn.commit()
+
     # Scheduled jobs table
     cur.execute(
         """
@@ -3558,12 +4447,20 @@ def init_db():
             duration_stop_enabled INTEGER DEFAULT 0,
             expiration TEXT,
             execution_context TEXT NOT NULL,
+            credential_id INTEGER,
             enabled INTEGER DEFAULT 1,
             created_at INTEGER,
             updated_at INTEGER
         )
         """
     )
+    try:
+        cur.execute("PRAGMA table_info(scheduled_jobs)")
+        sj_cols = [row[1] for row in cur.fetchall()]
+        if "credential_id" not in sj_cols:
+            cur.execute("ALTER TABLE scheduled_jobs ADD COLUMN credential_id INTEGER")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -3622,6 +4519,7 @@ ensure_default_admin()
 # Connect the Flask app to the background job scheduler and helpers.
 
 job_scheduler = register_job_scheduler(app, socketio, DB_PATH)
+scheduler_set_server_runner(job_scheduler, _queue_server_ansible_run)
 job_scheduler.start()
 
 # Provide scheduler with online device lookup based on registered agents
@@ -5196,9 +6094,21 @@ def ansible_quick_run():
     data = request.get_json(silent=True) or {}
     rel_path = (data.get("playbook_path") or "").strip()
     hostnames = data.get("hostnames") or []
+    credential_id = data.get("credential_id")
     if not rel_path or not isinstance(hostnames, list) or not hostnames:
         _ansible_log_server(f"[quick_run] invalid payload rel_path='{rel_path}' hostnames={hostnames}")
         return jsonify({"error": "Missing playbook_path or hostnames[]"}), 400
+    server_mode = False
+    cred_id_int = None
+    if credential_id not in (None, "", "null"):
+        try:
+            cred_id_int = int(credential_id)
+            if cred_id_int <= 0:
+                cred_id_int = None
+            else:
+                server_mode = True
+        except Exception:
+            return jsonify({"error": "Invalid credential_id"}), 400
     try:
         root, abs_path, _ = _resolve_assembly_path('ansible', rel_path)
         if not os.path.isfile(abs_path):
@@ -5218,6 +6128,19 @@ def ansible_quick_run():
                 if not name:
                     continue
                 variable_values[name] = val
+
+        if server_mode and not cred_id_int:
+            return jsonify({"error": "credential_id is required for server-side execution"}), 400
+
+        if server_mode:
+            cred = _fetch_credential_with_secrets(cred_id_int)
+            if not cred:
+                return jsonify({"error": "Credential not found"}), 404
+            conn_type = (cred.get("connection_type") or "ssh").lower()
+            if conn_type not in ("ssh",):
+                return jsonify({"error": f"Credential connection '{conn_type}' not supported for server execution"}), 400
+            # Avoid keeping decrypted secrets in memory longer than necessary
+            del cred
 
         results = []
         for host in hostnames:
@@ -5267,18 +6190,51 @@ def ansible_quick_run():
                 "variable_values": variable_values,
             }
             try:
-                _ansible_log_server(f"[quick_run] emit ansible_playbook_run host='{host}' run_id={run_id} job_id={job_id} path={rel_path}")
-                socketio.emit("ansible_playbook_run", payload)
-                if job_id:
-                    socketio.emit("device_activity_changed", {
-                        "hostname": str(host),
-                        "activity_id": job_id,
-                        "change": "created",
-                        "source": "ansible",
-                    })
+                if server_mode and cred_id_int:
+                    run_id = _queue_server_ansible_run(
+                        hostname=str(host),
+                        playbook_abs_path=abs_path,
+                        playbook_rel_path=rel_path.replace(os.sep, "/"),
+                        playbook_name=friendly_name,
+                        credential_id=cred_id_int,
+                        variable_values=variable_values,
+                        source="quick_job",
+                        activity_id=job_id,
+                    )
+                    if job_id:
+                        socketio.emit("device_activity_changed", {
+                            "hostname": str(host),
+                            "activity_id": job_id,
+                            "change": "created",
+                            "source": "ansible",
+                        })
+                    results.append({"hostname": host, "run_id": run_id, "status": "Queued", "activity_job_id": job_id, "execution": "server"})
+                else:
+                    _ansible_log_server(f"[quick_run] emit ansible_playbook_run host='{host}' run_id={run_id} job_id={job_id} path={rel_path}")
+                    socketio.emit("ansible_playbook_run", payload)
+                    if job_id:
+                        socketio.emit("device_activity_changed", {
+                            "hostname": str(host),
+                            "activity_id": job_id,
+                            "change": "created",
+                            "source": "ansible",
+                        })
+                    results.append({"hostname": host, "run_id": run_id, "status": "Queued", "activity_job_id": job_id, "execution": "agent"})
             except Exception as ex:
                 _ansible_log_server(f"[quick_run] emit failed host='{host}' run_id={run_id} err={ex}")
-            results.append({"hostname": host, "run_id": run_id, "status": "Queued", "activity_job_id": job_id})
+                if job_id:
+                    try:
+                        conn_fail = _db_conn()
+                        cur_fail = conn_fail.cursor()
+                        cur_fail.execute(
+                            "UPDATE activity_history SET status='Failed', stderr=?, ran_at=? WHERE id=?",
+                            (str(ex), int(time.time()), job_id),
+                        )
+                        conn_fail.commit()
+                        conn_fail.close()
+                    except Exception:
+                        pass
+                results.append({"hostname": host, "run_id": run_id, "status": "Failed", "activity_job_id": job_id, "error": str(ex)})
         return jsonify({"results": results})
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400

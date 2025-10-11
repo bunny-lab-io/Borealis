@@ -30,3 +30,10 @@ Pillow                 # Image processing (Windows)
 # WebRTC Video Libraries
 ###aiortc                 # Python library for WebRTC in async environments
 ###av                     # Required by aiortc for video/audio codecs
+
+# Ansible Execution (server-side playbooks)
+ansible-core
+ansible-compat
+ansible-runner
+paramiko
+pywinrm
