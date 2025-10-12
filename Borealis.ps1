@@ -524,7 +524,11 @@ function Ensure-AnsibleExecutionEnvironment {
 
     $existingPython = $pythonCandidates | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
 
-    $expectedVersionNorm = ($ExpectedVersion ?? '1.0.0').Trim()
+    $expectedVersionNorm = $ExpectedVersion
+    if ([string]::IsNullOrWhiteSpace($expectedVersionNorm)) {
+        $expectedVersionNorm = '1.0.0'
+    }
+    $expectedVersionNorm = $expectedVersionNorm.Trim()
     $isUpToDate = $false
     if ($existingPython -and $currentVersion -and ($currentVersion -eq $expectedVersionNorm)) {
         if (-not $requirementsHash -or ($currentHash -and $currentHash -eq $requirementsHash)) {
