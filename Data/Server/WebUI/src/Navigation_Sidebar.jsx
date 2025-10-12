@@ -154,7 +154,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         })()}
         {/* Inventory */}
         {(() => {
-          const groupActive = currentPage === "devices" || currentPage === "ssh_devices";
+          const groupActive = ["devices", "ssh_devices", "winrm_devices", "agent_devices"].includes(currentPage);
           return (
         <Accordion
           expanded={expandedNav.devices}
@@ -192,7 +192,9 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
             <NavItem icon={<DevicesIcon fontSize="small" />} label="Devices" pageKey="devices" />
+            <NavItem icon={<DevicesIcon fontSize="small" />} label="Agent Devices" pageKey="agent_devices" indent />
             <NavItem icon={<DevicesIcon fontSize="small" />} label="SSH Devices" pageKey="ssh_devices" indent />
+            <NavItem icon={<DevicesIcon fontSize="small" />} label="WinRM Devices" pageKey="winrm_devices" indent />
           </AccordionDetails>
         </Accordion>
           );

@@ -23,6 +23,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
+import AddDevice from "./Add_Device.jsx";
 
 const tableStyles = {
   "& th, & td": {
@@ -45,7 +46,19 @@ const defaultForm = {
   operating_system: ""
 };
 
-export default function SSHDevices() {
+export default function SSHDevices({ type = "ssh" }) {
+  const typeLabel = type === "winrm" ? "WinRM" : "SSH";
+  const apiBase = type === "winrm" ? "/api/winrm_devices" : "/api/ssh_devices";
+  const pageTitle = `${typeLabel} Devices`;
+  const addButtonLabel = `Add ${typeLabel} Device`;
+  const addressLabel = `${typeLabel} Address`;
+  const loadingLabel = `Loading ${typeLabel} devices…`;
+  const emptyLabel = `No ${typeLabel} devices have been added yet.`;
+  const descriptionText = type === "winrm"
+    ? "Manage remote endpoints reachable via WinRM for playbook execution."
+    : "Manage remote endpoints reachable via SSH for playbook execution.";
+  const editDialogTitle = `Edit ${typeLabel} Device`;
+  const newDialogTitle = `New ${typeLabel} Device`;
   const [rows, setRows] = useState([]);
   const [orderBy, setOrderBy] = useState("hostname");
   const [order, setOrder] = useState("asc");
@@ -58,6 +71,7 @@ export default function SSHDevices() {
   const [editTarget, setEditTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [addDeviceOpen, setAddDeviceOpen] = useState(false);
 
   const isEdit = Boolean(editTarget);
 
@@ -65,7 +79,7 @@ export default function SSHDevices() {
     setLoading(true);
     setError("");
     try {
-      const resp = await fetch("/api/ssh_devices");
+      const resp = await fetch(apiBase);
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}));
         throw new Error(data?.error || `HTTP ${resp.status}`);
@@ -79,7 +93,7 @@ export default function SSHDevices() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [apiBase]);
 
   useEffect(() => {
     loadDevices();
@@ -119,9 +133,7 @@ export default function SSHDevices() {
   };
 
   const openCreate = () => {
-    setEditTarget(null);
-    setForm(defaultForm);
-    setDialogOpen(true);
+    setAddDeviceOpen(true);
     setFormError("");
   };
 
@@ -164,16 +176,14 @@ export default function SSHDevices() {
     setSubmitting(true);
     setFormError("");
     try {
-      const resp = await fetch(
-        isEdit
-          ? `/api/ssh_devices/${encodeURIComponent(editTarget.hostname)}`
-          : "/api/ssh_devices",
-        {
-          method: isEdit ? "PUT" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        }
-      );
+      const endpoint = isEdit
+        ? `${apiBase}/${encodeURIComponent(editTarget.hostname)}`
+        : apiBase;
+      const resp = await fetch(endpoint, {
+        method: isEdit ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         throw new Error(data?.error || `HTTP ${resp.status}`);
@@ -205,7 +215,7 @@ export default function SSHDevices() {
     if (!deleteTarget) return;
     setDeleteBusy(true);
     try {
-      const resp = await fetch(`/api/ssh_devices/${encodeURIComponent(deleteTarget.hostname)}`, {
+      const resp = await fetch(`${apiBase}/${encodeURIComponent(deleteTarget.hostname)}`, {
         method: "DELETE"
       });
       const data = await resp.json().catch(() => ({}));
@@ -232,10 +242,10 @@ export default function SSHDevices() {
       >
         <Box>
           <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
-            SSH Devices
+            {pageTitle}
           </Typography>
           <Typography variant="body2" sx={{ color: "#aaa" }}>
-            Manage remote endpoints reachable via SSH for playbook execution.
+            {descriptionText}
           </Typography>
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -256,7 +266,7 @@ export default function SSHDevices() {
             sx={{ bgcolor: "#58a6ff", color: "#0b0f19" }}
             onClick={openCreate}
           >
-            New SSH Device
+            {addButtonLabel}
           </Button>
         </Box>
       </Box>
@@ -269,7 +279,7 @@ export default function SSHDevices() {
       {loading && (
         <Box sx={{ px: 2, py: 1.5, display: "flex", alignItems: "center", gap: 1, color: "#7db7ff" }}>
           <CircularProgress size={18} sx={{ color: "#58a6ff" }} />
-          <Typography variant="body2">Loading SSH devices…</Typography>
+          <Typography variant="body2">{loadingLabel}</Typography>
         </Box>
       )}
 
@@ -291,7 +301,7 @@ export default function SSHDevices() {
                 direction={orderBy === "address" ? order : "asc"}
                 onClick={handleSort("address")}
               >
-                SSH Address
+                {addressLabel}
               </TableSortLabel>
             </TableCell>
             <TableCell sortDirection={orderBy === "description" ? order : false}>
@@ -341,7 +351,7 @@ export default function SSHDevices() {
           {!sortedRows.length && !loading && (
             <TableRow>
               <TableCell colSpan={5} sx={{ textAlign: "center", color: "#888" }}>
-                No SSH devices have been added yet.
+                {emptyLabel}
               </TableCell>
             </TableRow>
           )}
@@ -355,7 +365,7 @@ export default function SSHDevices() {
         maxWidth="sm"
         PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
       >
-        <DialogTitle>{isEdit ? "Edit SSH Device" : "New SSH Device"}</DialogTitle>
+        <DialogTitle>{isEdit ? editDialogTitle : newDialogTitle}</DialogTitle>
         <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
           <TextField
             label="Hostname"
@@ -376,7 +386,7 @@ export default function SSHDevices() {
             helperText="Hostname used within Borealis (unique)."
           />
           <TextField
-            label="SSH Address"
+            label={addressLabel}
             value={form.address}
             onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))}
             fullWidth
@@ -390,7 +400,7 @@ export default function SSHDevices() {
               },
               "& .MuiInputLabel-root": { color: "#aaa" }
             }}
-            helperText="IP or FQDN Borealis can reach over SSH."
+            helperText={`IP or FQDN Borealis can reach over ${typeLabel}.`}
           />
           <TextField
             label="Description"
@@ -449,12 +459,21 @@ export default function SSHDevices() {
         open={Boolean(deleteTarget)}
         message={
           deleteTarget
-            ? `Remove SSH device '${deleteTarget.hostname}' from inventory?`
+            ? `Remove ${typeLabel} device '${deleteTarget.hostname}' from inventory?`
             : ""
         }
         onCancel={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
         confirmDisabled={deleteBusy}
+      />
+      <AddDevice
+        open={addDeviceOpen}
+        defaultType={type}
+        onClose={() => setAddDeviceOpen(false)}
+        onCreated={() => {
+          setAddDeviceOpen(false);
+          loadDevices();
+        }}
       />
     </Paper>
   );

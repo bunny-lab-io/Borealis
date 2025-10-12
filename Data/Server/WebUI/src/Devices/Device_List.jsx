@@ -27,6 +27,7 @@ import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
 import QuickJob from "../Scheduling/Quick_Job.jsx";
+import AddDevice from "./Add_Device.jsx";
 
 function formatLastSeen(tsSec, offlineAfter = 300) {
   if (!tsSec) return "unknown";
@@ -66,7 +67,14 @@ function formatUptime(seconds) {
   return parts.join(' ');
 }
 
-export default function DeviceList({ onSelectDevice }) {
+export default function DeviceList({
+  onSelectDevice,
+  filterMode = "all",
+  title,
+  showAddButton,
+  addButtonLabel,
+  defaultAddType,
+}) {
   const [rows, setRows] = useState([]);
   const [orderBy, setOrderBy] = useState("status");
   const [order, setOrder] = useState("desc");
@@ -76,6 +84,36 @@ export default function DeviceList({ onSelectDevice }) {
   // Track selection by agent id to avoid duplicate hostname collisions
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [quickJobOpen, setQuickJobOpen] = useState(false);
+  const [addDeviceOpen, setAddDeviceOpen] = useState(false);
+  const [addDeviceType, setAddDeviceType] = useState(null);
+  const computedTitle = useMemo(() => {
+    if (title) return title;
+    switch (filterMode) {
+      case "agent":
+        return "Agent Devices";
+      case "ssh":
+        return "SSH Devices";
+      case "winrm":
+        return "WinRM Devices";
+      default:
+        return "Device Inventory";
+    }
+  }, [filterMode, title]);
+  const derivedDefaultType = useMemo(() => {
+    if (defaultAddType !== undefined) return defaultAddType;
+    if (filterMode === "ssh" || filterMode === "winrm") return filterMode;
+    return null;
+  }, [defaultAddType, filterMode]);
+  const derivedAddLabel = useMemo(() => {
+    if (addButtonLabel) return addButtonLabel;
+    if (filterMode === "ssh") return "Add SSH Device";
+    if (filterMode === "winrm") return "Add WinRM Device";
+    return "Add Device";
+  }, [addButtonLabel, filterMode]);
+  const derivedShowAddButton = useMemo(() => {
+    if (typeof showAddButton === "boolean") return showAddButton;
+    return filterMode !== "agent";
+  }, [showAddButton, filterMode]);
 
   // Saved custom views (from server)
   const [views, setViews] = useState([]); // [{id, name, columns:[id], filters:{}}]
@@ -305,6 +343,7 @@ export default function DeviceList({ onSelectDevice }) {
             0
         ) || 0;
         const connectionType = (device.connection_type || summary.connection_type || '').trim().toLowerCase();
+        const connectionLabel = connectionType === 'ssh' ? 'SSH' : connectionType === 'winrm' ? 'WinRM' : '';
         const connectionEndpoint = (device.connection_endpoint || summary.connection_endpoint || '').trim();
 
         const memoryList = Array.isArray(device.memory) ? device.memory : [];
@@ -329,7 +368,7 @@ export default function DeviceList({ onSelectDevice }) {
           lastSeenDisplay: formatLastSeen(lastSeen),
           os: osName,
           lastUser,
-          type,
+          type: type || connectionLabel || '',
           site: device.site_name || 'Not Configured',
           siteId: device.site_id || null,
           siteDescription: device.site_description || '',
@@ -360,17 +399,27 @@ export default function DeviceList({ onSelectDevice }) {
           summary,
           details: device.details || {},
           connectionType,
+          connectionLabel,
           connectionEndpoint,
-          isRemote: connectionType === 'ssh',
+          isRemote: Boolean(connectionLabel),
         };
       });
 
-      setRows(normalized);
+      let filtered = normalized;
+      if (filterMode === "agent") {
+        filtered = normalized.filter((row) => !row.connectionType);
+      } else if (filterMode === "ssh") {
+        filtered = normalized.filter((row) => row.connectionType === "ssh");
+      } else if (filterMode === "winrm") {
+        filtered = normalized.filter((row) => row.connectionType === "winrm");
+      }
+
+      setRows(filtered);
     } catch (e) {
       console.warn('Failed to load devices:', e);
       setRows([]);
     }
-  }, [repoHash, fetchLatestRepoHash, computeAgentVersion]);
+  }, [repoHash, fetchLatestRepoHash, computeAgentVersion, filterMode]);
 
   const fetchViews = useCallback(async () => {
     try {
@@ -653,7 +702,7 @@ export default function DeviceList({ onSelectDevice }) {
       <Box sx={{ p: 2, pb: 1, display: "flex", flexDirection: 'column', gap: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
-            Device Inventory
+            {computedTitle}
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             {/* Views dropdown + add button */}
@@ -753,6 +802,20 @@ export default function DeviceList({ onSelectDevice }) {
                 <ViewColumnIcon fontSize="small" />
               </IconButton>
             </Tooltip>
+            {derivedShowAddButton && (
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<AddIcon />}
+                sx={{ bgcolor: "#58a6ff", color: "#0b0f19" }}
+                onClick={() => {
+                  setAddDeviceType(derivedDefaultType ?? null);
+                  setAddDeviceOpen(true);
+                }}
+              >
+                {derivedAddLabel}
+              </Button>
+            )}
           </Box>
         </Box>
         {/* Second row: Quick Job button aligned under header title */}
@@ -1224,6 +1287,19 @@ export default function DeviceList({ onSelectDevice }) {
           </Box>
         </Popover>
       )}
+      <AddDevice
+        open={addDeviceOpen}
+        defaultType={addDeviceType}
+        onClose={() => {
+          setAddDeviceOpen(false);
+          setAddDeviceType(derivedDefaultType ?? null);
+        }}
+        onCreated={() => {
+          setAddDeviceOpen(false);
+          setAddDeviceType(derivedDefaultType ?? null);
+          fetchDevices({ refreshRepo: true });
+        }}
+      />
     </Paper>
   );
 }
