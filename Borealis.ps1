@@ -475,30 +475,22 @@ function Ensure-AnsibleExecutionEnvironment {
     )
 
     $pythonBootstrap = $PythonBootstrapExe
-    if ([string]::IsNullOrWhiteSpace($pythonBootstrap) -or -not (Test-Path $pythonBootstrap -PathType Leaf)) {
-        $bundleCandidate = Join-Path $ProjectRoot 'Dependencies\Python\python.exe'
+    $bundleCandidate = Join-Path $ProjectRoot 'Dependencies\Python\python.exe'
+    if ([string]::IsNullOrWhiteSpace($pythonBootstrap)) {
+        $pythonBootstrap = $bundleCandidate
+    }
+
+    if (-not (Test-Path $pythonBootstrap -PathType Leaf)) {
+        if ((-not [string]::IsNullOrWhiteSpace($PythonBootstrapExe)) -and ($PythonBootstrapExe -ne $pythonBootstrap)) {
+            Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Provided Python bootstrap path '$PythonBootstrapExe' was not found."
+        }
+
         if (Test-Path $bundleCandidate -PathType Leaf) {
             $pythonBootstrap = $bundleCandidate
+        } else {
+            Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Unable to locate bundled Python bootstrap executable at $bundleCandidate."
+            throw "Bundled Python executable not found for Ansible execution environment provisioning."
         }
-    }
-
-    if ([string]::IsNullOrWhiteSpace($pythonBootstrap) -or -not (Test-Path $pythonBootstrap -PathType Leaf)) {
-        $pyCmd = Get-Command py -ErrorAction SilentlyContinue
-        if ($pyCmd -and (Test-Path $pyCmd.Source -PathType Leaf)) {
-            $pythonBootstrap = $pyCmd.Source
-        }
-    }
-
-    if ([string]::IsNullOrWhiteSpace($pythonBootstrap) -or -not (Test-Path $pythonBootstrap -PathType Leaf)) {
-        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-        if ($pythonCmd -and (Test-Path $pythonCmd.Source -PathType Leaf)) {
-            $pythonBootstrap = $pythonCmd.Source
-        }
-    }
-
-    if ([string]::IsNullOrWhiteSpace($pythonBootstrap) -or -not (Test-Path $pythonBootstrap -PathType Leaf)) {
-        Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Unable to locate Python bootstrap executable."
-        throw "Python executable not found for Ansible execution environment provisioning."
     }
 
     Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Using Python bootstrap at $pythonBootstrap"
