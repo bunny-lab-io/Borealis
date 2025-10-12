@@ -256,6 +256,19 @@ $nodeExe    = Join-Path $depsRoot 'NodeJS\node.exe'
 $sevenZipExe    = Join-Path $depsRoot "7zip\7z.exe"
 $npmCmd     = Join-Path (Split-Path $nodeExe) 'npm.cmd'
 $npxCmd     = Join-Path (Split-Path $nodeExe) 'npx.cmd'
+$ansibleEeRequirementsPath = Join-Path $scriptDir 'Data\Agent\ansible-ee-requirements.txt'
+$ansibleEeVersionFile      = Join-Path $scriptDir 'Data\Agent\ansible-ee-version.txt'
+$script:AnsibleExecutionEnvironmentVersion = '1.0.0'
+if (Test-Path $ansibleEeVersionFile -PathType Leaf) {
+    try {
+        $rawVersion = (Get-Content -Path $ansibleEeVersionFile -Raw -ErrorAction Stop)
+        if ($rawVersion) {
+            $script:AnsibleExecutionEnvironmentVersion = ($rawVersion.Split("`n")[0]).Trim()
+        }
+    } catch {
+        # Leave default version value
+    }
+}
 $node7zUrl      = "https://nodejs.org/dist/v23.11.0/node-v23.11.0-win-x64.7z"
 $nodeInstallDir = Join-Path $depsRoot "NodeJS"
 $node7zPath     = Join-Path $depsRoot "node-v23.11.0-win-x64.7z"
@@ -449,6 +462,139 @@ function Install_Agent_Dependencies {
     }
 }
 
+function Ensure-AnsibleExecutionEnvironment {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PythonBootstrapExe,
+
+        [string]$RequirementsPath,
+        [string]$ExpectedVersion = '1.0.0',
+        [string]$LogName = 'Install.log'
+    )
+
+    if (-not (Test-Path $PythonBootstrapExe -PathType Leaf)) {
+        Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Bundled python executable missing at $PythonBootstrapExe"
+        throw "Bundled python executable not found for Ansible execution environment provisioning."
+    }
+
+    $eeRoot = Join-Path $ProjectRoot 'Agent\Ansible_EE'
+    $metadataPath = Join-Path $eeRoot 'metadata.json'
+    $versionTxtPath = Join-Path $eeRoot 'version.txt'
+
+    $requirementsHash = ''
+    if ($RequirementsPath -and (Test-Path $RequirementsPath -PathType Leaf)) {
+        try {
+            $requirementsHash = (Get-FileHash -Path $RequirementsPath -Algorithm SHA256).Hash
+        } catch {
+            $requirementsHash = ''
+        }
+    }
+
+    $currentVersion = ''
+    $currentHash = ''
+    if (Test-Path $metadataPath -PathType Leaf) {
+        try {
+            $metaRaw = Get-Content -Path $metadataPath -Raw -ErrorAction Stop
+            if ($metaRaw) {
+                $meta = $metaRaw | ConvertFrom-Json -ErrorAction Stop
+                if ($meta.version) {
+                    $currentVersion = ($meta.version).ToString().Trim()
+                }
+                if ($meta.requirements_hash) {
+                    $currentHash = ($meta.requirements_hash).ToString().Trim()
+                } elseif ($meta.requirements_sha256) {
+                    $currentHash = ($meta.requirements_sha256).ToString().Trim()
+                }
+            }
+        } catch {
+            $currentVersion = ''
+            $currentHash = ''
+        }
+    }
+
+    $pythonCandidates = @(
+        Join-Path $eeRoot 'Scripts\python.exe',
+        Join-Path $eeRoot 'Scripts\python3.exe',
+        Join-Path $eeRoot 'bin\python3',
+        Join-Path $eeRoot 'bin\python'
+    )
+
+    $existingPython = $pythonCandidates | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
+
+    $expectedVersionNorm = ($ExpectedVersion ?? '1.0.0').Trim()
+    $isUpToDate = $false
+    if ($existingPython -and $currentVersion -and ($currentVersion -eq $expectedVersionNorm)) {
+        if (-not $requirementsHash -or ($currentHash -and $currentHash -eq $requirementsHash)) {
+            $isUpToDate = $true
+        }
+    }
+
+    if ($isUpToDate) {
+        Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Existing execution environment is up-to-date (version $currentVersion)."
+        return
+    }
+
+    Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Provisioning execution environment version $expectedVersionNorm."
+
+    if (Test-Path $eeRoot) {
+        try { Remove-Item -Path $eeRoot -Recurse -Force -ErrorAction Stop } catch {}
+    }
+    New-Item -ItemType Directory -Force -Path $eeRoot | Out-Null
+
+    & $PythonBootstrapExe -m venv $eeRoot | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-AgentLog -FileName $LogName -Message "[AnsibleEE] python -m venv failed with exit code $LASTEXITCODE"
+        throw "Failed to create Ansible execution environment virtual environment."
+    }
+
+    $pythonExe = $pythonCandidates | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $pythonExe) {
+        Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Unable to locate python executable inside execution environment."
+        throw "Ansible execution environment python executable missing after provisioning."
+    }
+
+    & $pythonExe -m pip install --upgrade pip setuptools wheel --disable-pip-version-check | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-AgentLog -FileName $LogName -Message "[AnsibleEE] pip bootstrap failed with exit code $LASTEXITCODE"
+        throw "Failed to bootstrap pip inside the Ansible execution environment."
+    }
+
+    if ($RequirementsPath -and (Test-Path $RequirementsPath -PathType Leaf)) {
+        & $pythonExe -m pip install --disable-pip-version-check -r $RequirementsPath | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-AgentLog -FileName $LogName -Message "[AnsibleEE] pip install -r requirements failed with exit code $LASTEXITCODE"
+            throw "Failed to install Ansible execution environment requirements."
+        }
+    } else {
+        Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Requirements file not found; skipping dependency installation."
+    }
+
+    $metadata = [ordered]@{
+        version = $expectedVersionNorm
+        created_utc = (Get-Date).ToUniversalTime().ToString('o')
+        python = $pythonExe
+    }
+    if ($requirementsHash) {
+        $metadata['requirements_hash'] = $requirementsHash
+    }
+
+    try {
+        $metadata | ConvertTo-Json -Depth 5 | Set-Content -Path $metadataPath -Encoding UTF8
+    } catch {
+        Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Failed to persist metadata.json: $($_.Exception.Message)"
+        throw "Unable to persist Ansible execution environment metadata."
+    }
+
+    try {
+        Set-Content -Path $versionTxtPath -Value $expectedVersionNorm -Encoding UTF8
+    } catch {}
+
+    Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Execution environment ready at $eeRoot"
+}
+
 function Ensure-AgentTasks {
     param([string]$ScriptRoot)
     $pyw         = Join-Path $ScriptRoot 'Agent\Scripts\pythonw.exe'
@@ -567,6 +713,15 @@ function InstallOrUpdate-BorealisAgent {
             Write-AgentLog -FileName 'Install.log' -Message '[UTF8] Ensuring sitecustomize shim is installed.'
             Copy-Item $siteCustomSource $siteCustomDest -Force
         }
+    }
+
+    Run-Step "Provision Ansible Execution Environment" {
+        Ensure-AnsibleExecutionEnvironment \
+            -ProjectRoot $scriptDir \
+            -PythonBootstrapExe $pythonExe \
+            -RequirementsPath $ansibleEeRequirementsPath \
+            -ExpectedVersion $script:AnsibleExecutionEnvironmentVersion \
+            -LogName 'Install.log'
     }
 
     Run-Step "Configure Agent Settings" {

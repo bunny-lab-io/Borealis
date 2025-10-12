@@ -229,18 +229,55 @@ def detect_agent_os():
         return "Unknown"
 
 
+def _ansible_ee_version():
+    try:
+        root = _project_root()
+        meta_path = os.path.join(root, 'Ansible_EE', 'metadata.json')
+        if os.path.isfile(meta_path):
+            try:
+                with open(meta_path, 'r', encoding='utf-8') as fh:
+                    data = json.load(fh)
+                if isinstance(data, dict):
+                    for key in ('version', 'ansible_ee_ver', 'ansible_ee_version'):
+                        value = data.get(key)
+                        if isinstance(value, (str, int, float)):
+                            text = str(value).strip()
+                            if text:
+                                return text
+            except Exception:
+                pass
+        version_txt = os.path.join(root, 'Ansible_EE', 'version.txt')
+        if os.path.isfile(version_txt):
+            try:
+                raw = Path(version_txt).read_text(encoding='utf-8')
+                if raw:
+                    text = raw.splitlines()[0].strip()
+                    if text:
+                        return text
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return ''
+
+
 def collect_summary(CONFIG):
     try:
         hostname = socket.gethostname()
-        return {
+        summary = {
             'hostname': hostname,
             'os': detect_agent_os(),
             'username': os.environ.get('USERNAME') or os.environ.get('USER') or '',
             'domain': os.environ.get('USERDOMAIN') or '',
             'uptime_sec': int(time.time() - psutil.boot_time()) if psutil else None,
         }
+        summary['ansible_ee_ver'] = _ansible_ee_version()
+        return summary
     except Exception:
-        return {'hostname': socket.gethostname()}
+        return {
+            'hostname': socket.gethostname(),
+            'ansible_ee_ver': _ansible_ee_version(),
+        }
 
 
 def _project_root():

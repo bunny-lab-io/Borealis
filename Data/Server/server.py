@@ -3514,6 +3514,7 @@ _DEVICE_TABLE_COLUMNS = [
     "operating_system",
     "uptime",
     "agent_id",
+    "ansible_ee_ver",
     "connection_type",
     "connection_endpoint",
 ]
@@ -3603,6 +3604,7 @@ def _assemble_device_snapshot(record: Dict[str, Any]) -> Dict[str, Any]:
         "created": _ts_to_human(created_ts),
         "connection_type": _clean_device_str(record.get("connection_type")) or "",
         "connection_endpoint": _clean_device_str(record.get("connection_endpoint")) or "",
+        "ansible_ee_ver": _clean_device_str(record.get("ansible_ee_ver")) or "",
     }
 
     details = {
@@ -3747,6 +3749,7 @@ def _extract_device_columns(details: Dict[str, Any]) -> Dict[str, Any]:
     )
     payload["uptime"] = _coerce_int(uptime_value)
     payload["agent_id"] = _clean_device_str(summary.get("agent_id"))
+    payload["ansible_ee_ver"] = _clean_device_str(summary.get("ansible_ee_ver"))
     payload["connection_type"] = _clean_device_str(
         summary.get("connection_type")
         or summary.get("remote_type")
@@ -3815,9 +3818,10 @@ def _device_upsert(
             operating_system,
             uptime,
             agent_id,
+            ansible_ee_ver,
             connection_type,
             connection_endpoint
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(hostname) DO UPDATE SET
             description=excluded.description,
             created_at=COALESCE({DEVICE_TABLE}.created_at, excluded.created_at),
@@ -3838,6 +3842,7 @@ def _device_upsert(
             operating_system=COALESCE(NULLIF(excluded.operating_system, ''), {DEVICE_TABLE}.operating_system),
             uptime=COALESCE(NULLIF(excluded.uptime, 0), {DEVICE_TABLE}.uptime),
             agent_id=COALESCE(NULLIF(excluded.agent_id, ''), {DEVICE_TABLE}.agent_id),
+            ansible_ee_ver=COALESCE(NULLIF(excluded.ansible_ee_ver, ''), {DEVICE_TABLE}.ansible_ee_ver),
             connection_type=COALESCE(NULLIF(excluded.connection_type, ''), {DEVICE_TABLE}.connection_type),
             connection_endpoint=COALESCE(NULLIF(excluded.connection_endpoint, ''), {DEVICE_TABLE}.connection_endpoint)
     """
@@ -3863,6 +3868,7 @@ def _device_upsert(
         column_values.get("operating_system"),
         column_values.get("uptime"),
         column_values.get("agent_id"),
+        column_values.get("ansible_ee_ver"),
         column_values.get("connection_type"),
         column_values.get("connection_endpoint"),
     ]
@@ -4160,7 +4166,10 @@ def init_db():
                     last_user TEXT,
                     operating_system TEXT,
                     uptime INTEGER,
-                    agent_id TEXT
+                    agent_id TEXT,
+                    ansible_ee_ver TEXT,
+                    connection_type TEXT,
+                    connection_endpoint TEXT
                 )
                 """
             )
@@ -4193,6 +4202,7 @@ def init_db():
     _ensure_column("operating_system", "TEXT")
     _ensure_column("uptime", "INTEGER")
     _ensure_column("agent_id", "TEXT")
+    _ensure_column("ansible_ee_ver", "TEXT")
     _ensure_column("connection_type", "TEXT")
     _ensure_column("connection_endpoint", "TEXT")
 
@@ -4274,6 +4284,7 @@ def init_db():
                         operating_system TEXT,
                         uptime INTEGER,
                         agent_id TEXT,
+                        ansible_ee_ver TEXT,
                         connection_type TEXT,
                         connection_endpoint TEXT
                     )

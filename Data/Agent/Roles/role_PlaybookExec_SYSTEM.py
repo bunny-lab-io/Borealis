@@ -8,6 +8,7 @@ import json
 import socket
 import subprocess
 import base64
+from pathlib import Path
 from typing import Optional
 
 try:
@@ -51,6 +52,62 @@ def _project_root():
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     except Exception:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+
+def _ansible_ee_root():
+    candidates = []
+    try:
+        candidates.append(os.path.join(_project_root(), 'Agent', 'Ansible_EE'))
+    except Exception:
+        pass
+    try:
+        candidates.append(os.path.join(_agent_root(), 'Ansible_EE'))
+    except Exception:
+        pass
+    for path in candidates:
+        if path and os.path.isdir(path):
+            return path
+    return None
+
+
+def _ansible_ee_metadata():
+    root = _ansible_ee_root()
+    if not root:
+        return {}
+    meta_path = os.path.join(root, 'metadata.json')
+    if not os.path.isfile(meta_path):
+        return {}
+    try:
+        with open(meta_path, 'r', encoding='utf-8') as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return {}
+    return {}
+
+
+def _ansible_ee_version():
+    meta = _ansible_ee_metadata()
+    for key in ('version', 'ansible_ee_ver', 'ansible_ee_version'):
+        value = meta.get(key) if isinstance(meta, dict) else None
+        if isinstance(value, (str, int, float)):
+            text = str(value).strip()
+            if text:
+                return text
+    root = _ansible_ee_root()
+    if root:
+        txt_path = os.path.join(root, 'version.txt')
+        if os.path.isfile(txt_path):
+            try:
+                raw = Path(txt_path).read_text(encoding='utf-8')
+                if raw:
+                    text = raw.splitlines()[0].strip()
+                    if text:
+                        return text
+            except Exception:
+                pass
+    return ''
 
 
 def _decode_base64_text(value):
@@ -99,11 +156,22 @@ def _agent_root():
 
 def _scripts_bin():
     # Return the venv Scripts (Windows) or bin (POSIX) path adjacent to Borealis
+    candidates = []
+    ee_root = _ansible_ee_root()
+    if ee_root:
+        candidates.extend(
+            [
+                os.path.join(ee_root, 'Scripts'),
+                os.path.join(ee_root, 'bin'),
+            ]
+        )
     agent_root = _agent_root()
-    candidates = [
-        os.path.join(agent_root, 'Scripts'),  # Windows venv
-        os.path.join(agent_root, 'bin'),      # POSIX venv
-    ]
+    candidates.extend(
+        [
+            os.path.join(agent_root, 'Scripts'),  # Windows venv
+            os.path.join(agent_root, 'bin'),      # POSIX venv
+        ]
+    )
     for base in candidates:
         if os.path.isdir(base):
             return base
@@ -137,10 +205,19 @@ def _collections_dir():
     return base
 
 def _venv_python():
+    ee_root = _ansible_ee_root()
+    if ee_root:
+        ee_candidates = [
+            os.path.join(ee_root, 'Scripts', 'python.exe'),
+            os.path.join(ee_root, 'Scripts', 'python3.exe'),
+            os.path.join(ee_root, 'bin', 'python3'),
+            os.path.join(ee_root, 'bin', 'python'),
+        ]
+        for cand in ee_candidates:
+            if os.path.isfile(cand):
+                return cand
     try:
-        sdir = _scripts_bin()
-        if not sdir:
-            return None
+        sdir = os.path.join(_agent_root(), 'Scripts' if os.name == 'nt' else 'bin')
         cand = os.path.join(sdir, 'python.exe' if os.name == 'nt' else 'python3')
         return cand if os.path.isfile(cand) else None
     except Exception:
@@ -185,40 +262,55 @@ class Role:
 
     def _bootstrap_ansible_sync(self) -> bool:
         missing = self._detect_missing_modules()
-        if not missing:
-            return True
-        specs = sorted({spec for spec in missing.values() if spec})
-        python_exe = _venv_python() or sys.executable
-        if not python_exe:
-            self._ansible_log('[bootstrap] python executable not found for pip install', error=True)
+        if missing:
+            self._ansible_log(
+                f"[bootstrap] required agent modules missing: {', '.join(sorted(missing.keys()))}",
+                error=True,
+            )
             return False
-        cmd = [python_exe, '-m', 'pip', 'install', '--disable-pip-version-check'] + specs
-        self._ansible_log(f"[bootstrap] ensuring modules via pip: {', '.join(specs)}")
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-        except Exception as exc:
-            self._ansible_log(f"[bootstrap] pip install exception: {exc}", error=True)
+        ee_root = _ansible_ee_root()
+        if not ee_root or not os.path.isdir(ee_root):
+            self._ansible_log('[bootstrap] execution environment folder Agent/Ansible_EE not found', error=True)
             return False
-        if result.returncode != 0:
-            err_tail = (result.stderr or '').strip()
-            if len(err_tail) > 500:
-                err_tail = err_tail[-500:]
-            self._ansible_log(f"[bootstrap] pip install failed rc={result.returncode} err={err_tail}", error=True)
+
+        scripts_dir = _scripts_bin()
+        exe_name = 'ansible-playbook.exe' if os.name == 'nt' else 'ansible-playbook'
+        playbook_path = None
+        if scripts_dir:
+            candidate = os.path.join(scripts_dir, exe_name)
+            if os.path.isfile(candidate):
+                playbook_path = candidate
+        if not playbook_path:
+            self._ansible_log('[bootstrap] ansible-playbook executable missing in execution environment', error=True)
             return False
-        remaining = self._detect_missing_modules()
-        if remaining:
-            self._ansible_log(f"[bootstrap] modules still missing after install: {', '.join(sorted(remaining.keys()))}", error=True)
+
+        python_exe = _venv_python()
+        if not python_exe or not os.path.isfile(python_exe):
+            self._ansible_log('[bootstrap] execution environment python not found', error=True)
             return False
-        try:
-            marker = self._bootstrap_marker_path()
-            payload = {
-                'timestamp': int(time.time()),
-                'modules': specs,
-            }
-            with open(marker, 'w', encoding='utf-8') as fh:
-                json.dump(payload, fh)
-        except Exception:
-            pass
+
+        env_path = os.environ.get('PATH') or ''
+        bin_dir = os.path.dirname(playbook_path)
+        if bin_dir:
+            segments = [seg for seg in env_path.split(os.pathsep) if seg]
+            if bin_dir not in segments:
+                os.environ['PATH'] = bin_dir + (os.pathsep + env_path if env_path else '')
+
+        collections_dir = os.path.join(ee_root, 'collections')
+        if os.path.isdir(collections_dir):
+            existing = os.environ.get('ANSIBLE_COLLECTIONS_PATHS') or ''
+            paths = [seg for seg in existing.split(os.pathsep) if seg]
+            if collections_dir not in paths:
+                os.environ['ANSIBLE_COLLECTIONS_PATHS'] = (
+                    collections_dir if not existing else collections_dir + os.pathsep + existing
+                )
+
+        os.environ['BOREALIS_ANSIBLE_EE_ROOT'] = ee_root
+        os.environ['BOREALIS_ANSIBLE_EE_PYTHON'] = python_exe
+
+        version = _ansible_ee_version()
+        if version:
+            self._ansible_log(f"[bootstrap] using execution environment version {version}")
         return True
 
     async def _ensure_ansible_ready(self) -> bool:
