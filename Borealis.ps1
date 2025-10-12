@@ -467,7 +467,6 @@ function Ensure-AnsibleExecutionEnvironment {
         [Parameter(Mandatory = $true)]
         [string]$ProjectRoot,
 
-        [Parameter(Mandatory = $true)]
         [string]$PythonBootstrapExe,
 
         [string]$RequirementsPath,
@@ -475,10 +474,34 @@ function Ensure-AnsibleExecutionEnvironment {
         [string]$LogName = 'Install.log'
     )
 
-    if (-not (Test-Path $PythonBootstrapExe -PathType Leaf)) {
-        Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Bundled python executable missing at $PythonBootstrapExe"
-        throw "Bundled python executable not found for Ansible execution environment provisioning."
+    $pythonBootstrap = $PythonBootstrapExe
+    if ([string]::IsNullOrWhiteSpace($pythonBootstrap) -or -not (Test-Path $pythonBootstrap -PathType Leaf)) {
+        $bundleCandidate = Join-Path $ProjectRoot 'Dependencies\Python\python.exe'
+        if (Test-Path $bundleCandidate -PathType Leaf) {
+            $pythonBootstrap = $bundleCandidate
+        }
     }
+
+    if ([string]::IsNullOrWhiteSpace($pythonBootstrap) -or -not (Test-Path $pythonBootstrap -PathType Leaf)) {
+        $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+        if ($pyCmd -and (Test-Path $pyCmd.Source -PathType Leaf)) {
+            $pythonBootstrap = $pyCmd.Source
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($pythonBootstrap) -or -not (Test-Path $pythonBootstrap -PathType Leaf)) {
+        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+        if ($pythonCmd -and (Test-Path $pythonCmd.Source -PathType Leaf)) {
+            $pythonBootstrap = $pythonCmd.Source
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($pythonBootstrap) -or -not (Test-Path $pythonBootstrap -PathType Leaf)) {
+        Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Unable to locate Python bootstrap executable."
+        throw "Python executable not found for Ansible execution environment provisioning."
+    }
+
+    Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Using Python bootstrap at $pythonBootstrap"
 
     $eeRoot = Join-Path $ProjectRoot 'Agent\Ansible_EE'
     $metadataPath = Join-Path $eeRoot 'metadata.json'
@@ -548,7 +571,7 @@ function Ensure-AnsibleExecutionEnvironment {
     }
     New-Item -ItemType Directory -Force -Path $eeRoot | Out-Null
 
-    & $PythonBootstrapExe -m venv $eeRoot | Out-Null
+    & $pythonBootstrap -m venv $eeRoot | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-AgentLog -FileName $LogName -Message "[AnsibleEE] python -m venv failed with exit code $LASTEXITCODE"
         throw "Failed to create Ansible execution environment virtual environment."
@@ -580,6 +603,7 @@ function Ensure-AnsibleExecutionEnvironment {
         version = $expectedVersionNorm
         created_utc = (Get-Date).ToUniversalTime().ToString('o')
         python = $pythonExe
+        bootstrap_python = $pythonBootstrap
     }
     if ($requirementsHash) {
         $metadata['requirements_hash'] = $requirementsHash
