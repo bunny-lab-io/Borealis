@@ -91,6 +91,7 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
   const [credentialsLoading, setCredentialsLoading] = useState(false);
   const [credentialsError, setCredentialsError] = useState("");
   const [selectedCredentialId, setSelectedCredentialId] = useState("");
+  const [useSvcAccount, setUseSvcAccount] = useState(true);
   const [variables, setVariables] = useState([]);
   const [variableValues, setVariableValues] = useState({});
   const [variableErrors, setVariableErrors] = useState({});
@@ -120,6 +121,8 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
       setVariableValues({});
       setVariableErrors({});
       setVariableStatus({ loading: false, error: "" });
+      setUseSvcAccount(true);
+      setSelectedCredentialId("");
       loadTree();
     }
   }, [open, loadTree]);
@@ -164,7 +167,7 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
   }, [open]);
 
   useEffect(() => {
-    if (mode !== "ansible") return;
+    if (mode !== "ansible" || useSvcAccount) return;
     if (!credentials.length) {
       setSelectedCredentialId("");
       return;
@@ -172,7 +175,7 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
     if (!selectedCredentialId || !credentials.some((cred) => String(cred.id) === String(selectedCredentialId))) {
       setSelectedCredentialId(String(credentials[0].id));
     }
-  }, [mode, credentials, selectedCredentialId]);
+  }, [mode, credentials, selectedCredentialId, useSvcAccount]);
 
   const renderNodes = (nodes = []) =>
     nodes.map((n) => (
@@ -345,7 +348,7 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
       setError(mode === 'ansible' ? "Please choose a playbook to run." : "Please choose a script to run.");
       return;
     }
-    if (mode === 'ansible' && !selectedCredentialId) {
+    if (mode === 'ansible' && !useSvcAccount && !selectedCredentialId) {
       setError("Select a credential to run this playbook.");
       return;
     }
@@ -381,7 +384,8 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
             playbook_path,
             hostnames,
             variable_values: variableOverrides,
-            credential_id: selectedCredentialId ? Number(selectedCredentialId) : null
+            credential_id: !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null,
+            use_service_account: Boolean(useSvcAccount)
           })
         });
       } else {
@@ -408,8 +412,11 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
     }
   };
 
-  const credentialRequired = mode === "ansible";
-  const disableRun = running || !selectedPath || (credentialRequired && (!selectedCredentialId || !credentials.length));
+  const credentialRequired = mode === "ansible" && !useSvcAccount;
+  const disableRun =
+    running ||
+    !selectedPath ||
+    (credentialRequired && (!selectedCredentialId || !credentials.length));
 
   return (
     <Dialog open={open} onClose={running ? undefined : onClose} fullWidth maxWidth="md"
@@ -426,10 +433,29 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
         </Typography>
         {mode === 'ansible' && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap", mb: 2 }}>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={useSvcAccount}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setUseSvcAccount(checked);
+                    if (checked) {
+                      setSelectedCredentialId("");
+                    } else if (!selectedCredentialId && credentials.length) {
+                      setSelectedCredentialId(String(credentials[0].id));
+                    }
+                  }}
+                  size="small"
+                />
+              }
+              label="Use Configured svcBorealis Account"
+              sx={{ mr: 2 }}
+            />
             <FormControl
               size="small"
               sx={{ minWidth: 260 }}
-              disabled={credentialsLoading || !credentials.length}
+              disabled={useSvcAccount || credentialsLoading || !credentials.length}
             >
               <InputLabel sx={{ color: "#aaa" }}>Credential</InputLabel>
               <Select
@@ -449,11 +475,16 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
                 })}
               </Select>
             </FormControl>
+            {useSvcAccount && (
+              <Typography variant="body2" sx={{ color: "#aaa" }}>
+                Runs with the agent&apos;s svcBorealis account.
+              </Typography>
+            )}
             {credentialsLoading && <CircularProgress size={18} sx={{ color: "#58a6ff" }} />}
             {!credentialsLoading && credentialsError && (
               <Typography variant="body2" sx={{ color: "#ff8080" }}>{credentialsError}</Typography>
             )}
-            {!credentialsLoading && !credentialsError && !credentials.length && (
+            {!useSvcAccount && !credentialsLoading && !credentialsError && !credentials.length && (
               <Typography variant="body2" sx={{ color: "#ff8080" }}>
                 No SSH or WinRM credentials available. Create one under Access Management.
               </Typography>

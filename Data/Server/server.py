@@ -4531,6 +4531,7 @@ def init_db():
             expiration TEXT,
             execution_context TEXT NOT NULL,
             credential_id INTEGER,
+            use_service_account INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER DEFAULT 1,
             created_at INTEGER,
             updated_at INTEGER
@@ -4542,6 +4543,8 @@ def init_db():
         sj_cols = [row[1] for row in cur.fetchall()]
         if "credential_id" not in sj_cols:
             cur.execute("ALTER TABLE scheduled_jobs ADD COLUMN credential_id INTEGER")
+        if "use_service_account" not in sj_cols:
+            cur.execute("ALTER TABLE scheduled_jobs ADD COLUMN use_service_account INTEGER NOT NULL DEFAULT 1")
     except Exception:
         pass
     conn.commit()
@@ -6410,12 +6413,21 @@ def ansible_quick_run():
     rel_path = (data.get("playbook_path") or "").strip()
     hostnames = data.get("hostnames") or []
     credential_id = data.get("credential_id")
+    use_service_account_raw = data.get("use_service_account")
     if not rel_path or not isinstance(hostnames, list) or not hostnames:
         _ansible_log_server(f"[quick_run] invalid payload rel_path='{rel_path}' hostnames={hostnames}")
         return jsonify({"error": "Missing playbook_path or hostnames[]"}), 400
     server_mode = False
     cred_id_int = None
     credential_detail: Optional[Dict[str, Any]] = None
+    overrides_raw = data.get("variable_values")
+    variable_values: Dict[str, Any] = {}
+    if isinstance(overrides_raw, dict):
+        for key, val in overrides_raw.items():
+            name = str(key or "").strip()
+            if not name:
+                continue
+            variable_values[name] = val
     if credential_id not in (None, "", "null"):
         try:
             cred_id_int = int(credential_id)
@@ -6423,7 +6435,13 @@ def ansible_quick_run():
                 cred_id_int = None
         except Exception:
             return jsonify({"error": "Invalid credential_id"}), 400
-
+    if use_service_account_raw is None:
+        use_service_account = cred_id_int is None
+    else:
+        use_service_account = bool(use_service_account_raw)
+    if use_service_account:
+        cred_id_int = None
+        credential_detail = None
     if cred_id_int:
         credential_detail = _fetch_credential_with_secrets(cred_id_int)
         if not credential_detail:
@@ -6446,15 +6464,6 @@ def ansible_quick_run():
         variables = doc.get('variables') if isinstance(doc.get('variables'), list) else []
         files = doc.get('files') if isinstance(doc.get('files'), list) else []
         friendly_name = (doc.get("name") or "").strip() or os.path.basename(abs_path)
-        overrides_raw = data.get("variable_values")
-        variable_values = {}
-        if isinstance(overrides_raw, dict):
-            for key, val in overrides_raw.items():
-                name = str(key or "").strip()
-                if not name:
-                    continue
-                variable_values[name] = val
-
         if server_mode and not cred_id_int:
             return jsonify({"error": "credential_id is required for server-side execution"}), 400
 

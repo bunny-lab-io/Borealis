@@ -511,6 +511,7 @@ class JobScheduler:
         scheduled_run_row_id: int,
         run_mode: str,
         credential_id: Optional[int] = None,
+        use_service_account: bool = False,
     ) -> Optional[Dict[str, Any]]:
         try:
             import os, uuid
@@ -551,7 +552,7 @@ class JobScheduler:
             server_run = run_mode_norm == "ssh"
             agent_winrm = run_mode_norm == "winrm"
 
-            if agent_winrm:
+            if agent_winrm and not use_service_account:
                 if not credential_id:
                     raise RuntimeError("WinRM execution requires a credential_id")
                 if not callable(self._credential_fetcher):
@@ -1000,7 +1001,7 @@ class JobScheduler:
             pass
         try:
             cur.execute(
-                "SELECT id, components_json, targets_json, schedule_type, start_ts, expiration, execution_context, credential_id, created_at FROM scheduled_jobs WHERE enabled=1 ORDER BY id ASC"
+                "SELECT id, components_json, targets_json, schedule_type, start_ts, expiration, execution_context, credential_id, use_service_account, created_at FROM scheduled_jobs WHERE enabled=1 ORDER BY id ASC"
             )
             jobs = cur.fetchall()
         except Exception:
@@ -1018,7 +1019,18 @@ class JobScheduler:
         five_min = 300
         now_min = _now_minute()
 
-        for (job_id, components_json, targets_json, schedule_type, start_ts, expiration, execution_context, credential_id, created_at) in jobs:
+        for (
+            job_id,
+            components_json,
+            targets_json,
+            schedule_type,
+            start_ts,
+            expiration,
+            execution_context,
+            credential_id,
+            use_service_account_flag,
+            created_at,
+        ) in jobs:
             try:
                 # Targets list for this job
                 try:
@@ -1054,6 +1066,9 @@ class JobScheduler:
                         continue
                 run_mode = (execution_context or "system").strip().lower()
                 job_credential_id = None
+                job_use_service_account = bool(use_service_account_flag)
+                if run_mode != "winrm":
+                    job_use_service_account = False
                 try:
                     job_credential_id = int(credential_id) if credential_id is not None else None
                 except Exception:
@@ -1144,7 +1159,7 @@ class JobScheduler:
                             run_row_id = c2.lastrowid or 0
                             conn2.commit()
                             activity_links: List[Dict[str, Any]] = []
-                            remote_requires_cred = run_mode in ("ssh", "winrm")
+                            remote_requires_cred = (run_mode == "ssh") or (run_mode == "winrm" and not job_use_service_account)
                             if remote_requires_cred and not job_credential_id:
                                 err_msg = "Credential required for remote execution"
                                 c2.execute(
@@ -1178,6 +1193,7 @@ class JobScheduler:
                                             run_row_id,
                                             run_mode,
                                             job_credential_id,
+                                            job_use_service_account,
                                         )
                                         if link and link.get("activity_id"):
                                             activity_links.append({
@@ -1289,9 +1305,10 @@ class JobScheduler:
                 "expiration": r[7] or "no_expire",
                 "execution_context": r[8] or "system",
                 "credential_id": r[9],
-                "enabled": bool(r[10] or 0),
-                "created_at": r[11] or 0,
-                "updated_at": r[12] or 0,
+                "use_service_account": bool(r[10] or 0),
+                "enabled": bool(r[11] or 0),
+                "created_at": r[12] or 0,
+                "updated_at": r[13] or 0,
             }
             # Attach computed status summary for latest occurrence
             try:
@@ -1368,7 +1385,8 @@ class JobScheduler:
                 cur.execute(
                     """
                     SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                           duration_stop_enabled, expiration, execution_context, credential_id, enabled, created_at, updated_at
+                           duration_stop_enabled, expiration, execution_context, credential_id,
+                           use_service_account, enabled, created_at, updated_at
                     FROM scheduled_jobs
                     ORDER BY created_at DESC
                     """
@@ -1396,6 +1414,8 @@ class JobScheduler:
                 credential_id = int(credential_id) if credential_id is not None else None
             except Exception:
                 credential_id = None
+            use_service_account_raw = data.get("use_service_account")
+            use_service_account = 1 if (execution_context == "winrm" and (use_service_account_raw is None or bool(use_service_account_raw))) else 0
             enabled = int(bool(data.get("enabled", True)))
             if not name or not components or not targets:
                 return json.dumps({"error": "name, components, targets required"}), 400, {"Content-Type": "application/json"}
@@ -1406,8 +1426,8 @@ class JobScheduler:
                 cur.execute(
                     """
                     INSERT INTO scheduled_jobs
-                    (name, components_json, targets_json, schedule_type, start_ts, duration_stop_enabled, expiration, execution_context, credential_id, enabled, created_at, updated_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    (name, components_json, targets_json, schedule_type, start_ts, duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         name,
@@ -1419,6 +1439,7 @@ class JobScheduler:
                         expiration,
                         execution_context,
                         credential_id,
+                        use_service_account,
                         enabled,
                         now,
                         now,
@@ -1429,7 +1450,7 @@ class JobScheduler:
                 cur.execute(
                     """
                     SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                           duration_stop_enabled, expiration, execution_context, credential_id, enabled, created_at, updated_at
+                           duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
                     FROM scheduled_jobs WHERE id=?
                     """,
                     (job_id,),
@@ -1448,7 +1469,7 @@ class JobScheduler:
                 cur.execute(
                     """
                     SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                           duration_stop_enabled, expiration, execution_context, credential_id, enabled, created_at, updated_at
+                           duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
                     FROM scheduled_jobs WHERE id=?
                     """,
                     (job_id,),
@@ -1481,7 +1502,10 @@ class JobScheduler:
             if "expiration" in data or (data.get("duration") and "expiration" in data.get("duration")):
                 fields["expiration"] = (data.get("duration") or {}).get("expiration") or data.get("expiration") or "no_expire"
             if "execution_context" in data:
-                fields["execution_context"] = (data.get("execution_context") or "system").strip().lower()
+                exec_ctx_val = (data.get("execution_context") or "system").strip().lower()
+                fields["execution_context"] = exec_ctx_val
+                if exec_ctx_val != "winrm":
+                    fields["use_service_account"] = 0
             if "credential_id" in data:
                 cred_val = data.get("credential_id")
                 if cred_val in (None, "", "null"):
@@ -1491,6 +1515,8 @@ class JobScheduler:
                         fields["credential_id"] = int(cred_val)
                     except Exception:
                         fields["credential_id"] = None
+            if "use_service_account" in data:
+                fields["use_service_account"] = 1 if bool(data.get("use_service_account")) else 0
             if "enabled" in data:
                 fields["enabled"] = int(bool(data.get("enabled")))
             if not fields:
@@ -1508,7 +1534,7 @@ class JobScheduler:
                 cur.execute(
                     """
                     SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                           duration_stop_enabled, expiration, execution_context, credential_id, enabled, created_at, updated_at
+                           duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
                     FROM scheduled_jobs WHERE id=?
                     """,
                     (job_id,),
@@ -1532,7 +1558,7 @@ class JobScheduler:
                     return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 conn.commit()
                 cur.execute(
-                    "SELECT id, name, components_json, targets_json, schedule_type, start_ts, duration_stop_enabled, expiration, execution_context, credential_id, enabled, created_at, updated_at FROM scheduled_jobs WHERE id=?",
+                    "SELECT id, name, components_json, targets_json, schedule_type, start_ts, duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at FROM scheduled_jobs WHERE id=?",
                     (job_id,),
                 )
                 row = cur.fetchone()

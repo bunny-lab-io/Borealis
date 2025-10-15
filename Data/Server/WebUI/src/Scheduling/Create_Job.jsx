@@ -429,6 +429,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [credentialLoading, setCredentialLoading] = useState(false);
   const [credentialError, setCredentialError] = useState("");
   const [selectedCredentialId, setSelectedCredentialId] = useState("");
+  const [useSvcAccount, setUseSvcAccount] = useState(true);
 
   const loadCredentials = useCallback(async () => {
     setCredentialLoading(true);
@@ -453,6 +454,16 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   }, [loadCredentials]);
 
   const remoteExec = useMemo(() => execContext === "ssh" || execContext === "winrm", [execContext]);
+  const handleExecContextChange = useCallback((value) => {
+    const normalized = String(value || "system").toLowerCase();
+    setExecContext(normalized);
+    if (normalized === "winrm") {
+      setUseSvcAccount(true);
+      setSelectedCredentialId("");
+    } else {
+      setUseSvcAccount(false);
+    }
+  }, []);
   const filteredCredentials = useMemo(() => {
     if (!remoteExec) return credentials;
     const target = execContext === "winrm" ? "winrm" : "ssh";
@@ -463,6 +474,10 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
     if (!remoteExec) {
       return;
     }
+    if (execContext === "winrm" && useSvcAccount) {
+      setSelectedCredentialId("");
+      return;
+    }
     if (!filteredCredentials.length) {
       setSelectedCredentialId("");
       return;
@@ -470,7 +485,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
     if (!selectedCredentialId || !filteredCredentials.some((cred) => String(cred.id) === String(selectedCredentialId))) {
       setSelectedCredentialId(String(filteredCredentials[0].id));
     }
-  }, [remoteExec, filteredCredentials, selectedCredentialId]);
+  }, [remoteExec, filteredCredentials, selectedCredentialId, execContext, useSvcAccount]);
 
   // dialogs state
   const [addCompOpen, setAddCompOpen] = useState(false);
@@ -877,12 +892,13 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const isValid = useMemo(() => {
     const base = jobName.trim().length > 0 && components.length > 0 && targets.length > 0;
     if (!base) return false;
-    if (remoteExec && !selectedCredentialId) return false;
+    const needsCredential = remoteExec && !(execContext === "winrm" && useSvcAccount);
+    if (needsCredential && !selectedCredentialId) return false;
     if (scheduleType !== "immediately") {
       return !!startDateTime;
     }
     return true;
-  }, [jobName, components.length, targets.length, scheduleType, startDateTime, remoteExec, selectedCredentialId]);
+  }, [jobName, components.length, targets.length, scheduleType, startDateTime, remoteExec, selectedCredentialId, execContext, useSvcAccount]);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const editing = !!(initialJob && initialJob.id);
@@ -1358,6 +1374,11 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         setExpiration(initialJob.expiration || "no_expire");
         setExecContext(initialJob.execution_context || "system");
         setSelectedCredentialId(initialJob.credential_id ? String(initialJob.credential_id) : "");
+        if ((initialJob.execution_context || "").toLowerCase() === "winrm") {
+          setUseSvcAccount(initialJob.use_service_account !== false);
+        } else {
+          setUseSvcAccount(false);
+        }
         const comps = Array.isArray(initialJob.components) ? initialJob.components : [];
         const hydrated = await hydrateExistingComponents(comps);
         if (!canceled) {
@@ -1369,6 +1390,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
         setComponents([]);
         setComponentVarErrors({});
         setSelectedCredentialId("");
+        setUseSvcAccount(true);
       }
     };
     hydrate();
@@ -1464,7 +1486,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   };
 
   const handleCreate = async () => {
-    if (remoteExec && !selectedCredentialId) {
+    if (remoteExec && !(execContext === "winrm" && useSvcAccount) && !selectedCredentialId) {
       alert("Please select a credential for this execution context.");
       return;
     }
@@ -1496,7 +1518,8 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
       schedule: { type: scheduleType, start: scheduleType !== "immediately" ? (() => { try { const d = startDateTime?.toDate?.() || new Date(startDateTime); d.setSeconds(0,0); return d.toISOString(); } catch { return startDateTime; } })() : null },
       duration: { stopAfterEnabled, expiration },
       execution_context: execContext,
-      credential_id: remoteExec && selectedCredentialId ? Number(selectedCredentialId) : null
+      credential_id: remoteExec && !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null,
+      use_service_account: execContext === "winrm" ? Boolean(useSvcAccount) : false
     };
     try {
       const resp = await fetch(initialJob && initialJob.id ? `/api/scheduled_jobs/${initialJob.id}` : "/api/scheduled_jobs", {
@@ -1726,7 +1749,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
             <Select
               size="small"
               value={execContext}
-              onChange={(e) => setExecContext(e.target.value)}
+              onChange={(e) => handleExecContextChange(e.target.value)}
               sx={{ minWidth: 320 }}
             >
               <MenuItem value="system">Run on agent as SYSTEM (device-local)</MenuItem>
@@ -1736,10 +1759,29 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
             </Select>
             {remoteExec && (
               <Box sx={{ mt: 2, display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+                {execContext === "winrm" && (
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={useSvcAccount}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setUseSvcAccount(checked);
+                          if (checked) {
+                            setSelectedCredentialId("");
+                          } else if (!selectedCredentialId && filteredCredentials.length) {
+                            setSelectedCredentialId(String(filteredCredentials[0].id));
+                          }
+                        }}
+                      />
+                    }
+                    label="Use Configured svcBorealis Account"
+                  />
+                )}
                 <FormControl
                   size="small"
                   sx={{ minWidth: 320 }}
-                  disabled={credentialLoading || !filteredCredentials.length}
+                  disabled={credentialLoading || !filteredCredentials.length || (execContext === "winrm" && useSvcAccount)}
                 >
                   <InputLabel sx={{ color: "#aaa" }}>Credential</InputLabel>
                   <Select
@@ -1771,7 +1813,12 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
                     {credentialError}
                   </Typography>
                 )}
-                {!credentialLoading && !credentialError && !filteredCredentials.length && (
+                {execContext === "winrm" && useSvcAccount && (
+                  <Typography variant="body2" sx={{ color: "#aaa" }}>
+                    Runs with the agent&apos;s svcBorealis account.
+                  </Typography>
+                )}
+                {!credentialLoading && !credentialError && !filteredCredentials.length && (!(execContext === "winrm" && useSvcAccount)) && (
                   <Typography variant="body2" sx={{ color: "#ff8080" }}>
                     No {execContext === "winrm" ? "WinRM" : "SSH"} credentials available. Create one under Access Management &gt; Credentials.
                   </Typography>
