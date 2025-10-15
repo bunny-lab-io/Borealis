@@ -8,18 +8,18 @@ const BorealisAgentNode = ({ id, data }) => {
   const edges = useStore((state) => state.edges);
   const [agents, setAgents] = useState({});
   const [sites, setSites] = useState([]);
-  const [selectedAgent, setSelectedAgent] = useState(data.agent_id || "");
-  const [selectedHost, setSelectedHost] = useState(data.agent_host || "");
-  const [selectedSiteId, setSelectedSiteId] = useState(
-    data.agent_site_id ? String(data.agent_site_id) : ""
-  );
-  const initialMode = (data.agent_mode || "currentuser").toLowerCase();
-  const [selectedMode, setSelectedMode] = useState(
-    initialMode === "system" ? "system" : "currentuser"
-  );
   const [isConnected, setIsConnected] = useState(false);
   const [siteMapping, setSiteMapping] = useState({});
   const prevRolesRef = useRef([]);
+  const selectionRef = useRef({ host: "", mode: "", agentId: "", siteId: "" });
+
+  const selectedSiteId = data?.agent_site_id ? String(data.agent_site_id) : "";
+  const selectedHost = data?.agent_host || "";
+  const selectedMode =
+    (data?.agent_mode || "currentuser").toString().toLowerCase() === "system"
+      ? "system"
+      : "currentuser";
+  const selectedAgent = data?.agent_id || "";
 
   // Group agents by hostname and execution context
   const agentsByHostname = useMemo(() => {
@@ -127,18 +127,31 @@ const hostOptions = useMemo(() => {
     });
   }, [hostOptions, selectedSiteId, siteMapping]);
 
-  const hasSiteSelection = Boolean(selectedSiteId);
-
   // Align selected site with known host mapping when available
   useEffect(() => {
     if (selectedSiteId || !selectedHost) return;
     const mapping = siteMapping[selectedHost];
     if (!mapping || typeof mapping.site_id === "undefined" || mapping.site_id === null) return;
-    setSelectedSiteId(String(mapping.site_id));
-  }, [selectedHost, selectedSiteId, siteMapping]);
+    const mappedId = String(mapping.site_id);
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                agent_site_id: mappedId,
+              },
+            }
+          : n
+      )
+    );
+  }, [selectedHost, selectedSiteId, siteMapping, id, setNodes]);
 
   // Ensure host selection stays aligned with available agents
   useEffect(() => {
+    if (!selectedHost) return;
+
     const hostExists = filteredHostOptions.some((opt) => opt.host === selectedHost);
     if (hostExists) return;
 
@@ -147,52 +160,78 @@ const hostOptions = useMemo(() => {
       const inferredHost = (info?.hostname || info?.agent_hostname || "").trim() || "unknown";
       const allowed = filteredHostOptions.some((opt) => opt.host === inferredHost);
       if (allowed && inferredHost && inferredHost !== selectedHost) {
-        setSelectedHost(inferredHost);
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === id
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    agent_host: inferredHost,
+                  },
+                }
+              : n
+          )
+        );
         return;
       }
     }
 
-    const fallbackHost = filteredHostOptions[0]?.host || "";
-    if (fallbackHost !== selectedHost) {
-      setSelectedHost(fallbackHost);
-    }
-    if (!fallbackHost && selectedAgent) {
-      setSelectedAgent("");
-    }
-  }, [filteredHostOptions, selectedHost, selectedAgent, agents]);
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                agent_host: "",
+                agent_id: "",
+                agent_mode: "currentuser",
+              },
+            }
+          : n
+        )
+    );
+  }, [filteredHostOptions, selectedHost, selectedAgent, agents, id, setNodes]);
 
-  // Align agent selection with host/mode choice
-  useEffect(() => {
-    if (!selectedHost) {
-      if (selectedMode !== "currentuser") setSelectedMode("currentuser");
-      if (selectedAgent) setSelectedAgent("");
-      return;
-    }
-    const contexts = agentsByHostname[selectedHost];
-    if (!contexts) {
-      if (selectedMode !== "currentuser") setSelectedMode("currentuser");
-      if (selectedAgent) setSelectedAgent("");
-      return;
-    }
-    if (!contexts[selectedMode]) {
-      const fallbackMode = contexts.currentuser
-        ? "currentuser"
-        : contexts.system
-        ? "system"
-        : selectedMode;
-      if (fallbackMode !== selectedMode) {
-        setSelectedMode(fallbackMode);
-        return;
-      }
-    }
-    const activeContext = contexts[selectedMode];
-    const targetAgentId = activeContext?.agent_id || "";
-    if (targetAgentId !== selectedAgent) {
-      setSelectedAgent(targetAgentId);
-    }
-  }, [selectedHost, selectedMode, agentsByHostname, selectedAgent]);
+  const siteSelectOptions = useMemo(() => {
+    const entries = Array.isArray(sites) ? [...sites] : [];
+    entries.sort((a, b) =>
+      (a?.name || "").localeCompare(b?.name || "", undefined, { sensitivity: "base" })
+    );
+    const mapped = entries.map((site) => ({
+      value: String(site.id),
+      label: site.name || `Site ${site.id}`,
+    }));
+    return [{ value: "", label: "All Sites" }, ...mapped];
+  }, [sites]);
 
-  // Sync node data with sidebar changes
+  const hostSelectOptions = useMemo(() => {
+    const mapped = filteredHostOptions.map(({ host, label }) => ({
+      value: host,
+      label,
+    }));
+    return [{ value: "", label: "-- Select --" }, ...mapped];
+  }, [filteredHostOptions]);
+
+  const activeHostContexts = selectedHost ? agentsByHostname[selectedHost] : null;
+
+  const modeSelectOptions = useMemo(
+    () => [
+      {
+        value: "currentuser",
+        label: "CURRENTUSER (Screen Capture / Macros)",
+        disabled: !activeHostContexts?.currentuser,
+      },
+      {
+        value: "system",
+        label: "SYSTEM (Scripts)",
+        disabled: !activeHostContexts?.system,
+      },
+    ],
+    [activeHostContexts]
+  );
+
   useEffect(() => {
     setNodes((nds) =>
       nds.map((n) =>
@@ -201,17 +240,126 @@ const hostOptions = useMemo(() => {
               ...n,
               data: {
                 ...n.data,
-                agent_id: selectedAgent,
-                agent_host: selectedHost,
-                agent_mode: selectedMode,
-                agent_site_id: selectedSiteId || "",
+                siteOptions: siteSelectOptions,
+                hostOptions: hostSelectOptions,
+                modeOptions: modeSelectOptions,
               },
             }
           : n
       )
     );
-    setIsConnected(false);
-  }, [selectedAgent, selectedHost, selectedMode, selectedSiteId, setNodes, id]);
+  }, [id, setNodes, siteSelectOptions, hostSelectOptions, modeSelectOptions]);
+
+  useEffect(() => {
+    if (!selectedHost) {
+      if (selectedAgent || selectedMode !== "currentuser") {
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === id
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    agent_id: "",
+                    agent_mode: "currentuser",
+                  },
+                }
+              : n
+          )
+        );
+      }
+      return;
+    }
+
+    const contexts = agentsByHostname[selectedHost];
+    if (!contexts) {
+      if (selectedAgent || selectedMode !== "currentuser") {
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === id
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    agent_id: "",
+                    agent_mode: "currentuser",
+                  },
+                }
+              : n
+          )
+        );
+      }
+      return;
+    }
+
+    if (!contexts[selectedMode]) {
+      const fallbackMode = contexts.currentuser
+        ? "currentuser"
+        : contexts.system
+        ? "system"
+        : "currentuser";
+      const fallbackAgentId = contexts[fallbackMode]?.agent_id || "";
+      if (fallbackMode !== selectedMode || fallbackAgentId !== selectedAgent) {
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === id
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    agent_mode: fallbackMode,
+                    agent_id: fallbackAgentId,
+                  },
+                }
+              : n
+          )
+        );
+      }
+      return;
+    }
+
+    const targetAgentId = contexts[selectedMode]?.agent_id || "";
+    if (targetAgentId !== selectedAgent) {
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === id
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  agent_id: targetAgentId,
+                },
+              }
+            : n
+          )
+      );
+    }
+  }, [selectedHost, selectedMode, agentsByHostname, selectedAgent, id, setNodes]);
+
+  useEffect(() => {
+    const prev = selectionRef.current;
+    const changed =
+      prev.host !== selectedHost ||
+      prev.mode !== selectedMode ||
+      prev.agentId !== selectedAgent ||
+      prev.siteId !== selectedSiteId;
+    if (!changed) return;
+
+    const selectionChangedAgent =
+      prev.agentId &&
+      (prev.agentId !== selectedAgent || prev.host !== selectedHost || prev.mode !== selectedMode);
+    if (selectionChangedAgent) {
+      setIsConnected(false);
+      prevRolesRef.current = [];
+    }
+
+    selectionRef.current = {
+      host: selectedHost,
+      mode: selectedMode,
+      agentId: selectedAgent,
+      siteId: selectedSiteId,
+    };
+  }, [selectedHost, selectedMode, selectedAgent, selectedSiteId]);
 
   // Attached Roles logic
   const attachedRoleIds = useMemo(
@@ -287,8 +435,6 @@ const hostOptions = useMemo(() => {
     return status.charAt(0).toUpperCase() + status.slice(1);
   }, [agentsByHostname, selectedHost, selectedMode, selectedAgent]);
 
-  const activeHostContexts = selectedHost ? agentsByHostname[selectedHost] : null;
-
   // Render (Sidebar handles config)
   return (
     <div className="borealis-node">
@@ -301,76 +447,40 @@ const hostOptions = useMemo(() => {
       />
 
       <div className="borealis-node-header">Device Agent</div>
-      <div className="borealis-node-content" style={{ fontSize: "9px" }}>
-        <label>Site:</label>
-        <select
-          value={selectedSiteId}
-          onChange={(e) => setSelectedSiteId(e.target.value)}
-          style={{ width: "100%", marginBottom: "6px", fontSize: "9px" }}
+      <div
+        className="borealis-node-content"
+        style={{
+          fontSize: "9px",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          minHeight: "80px",
+          gap: "8px",
+        }}
+      >
+        <div style={{ fontSize: "8px", color: "#666" }}>Right-Click to Configure Agent</div>
+        <button
+          onClick={isConnected ? handleDisconnect : handleConnect}
+          style={{
+            padding: "6px 14px",
+            fontSize: "10px",
+            background: isConnected ? "#3a3a3a" : "#0475c2",
+            color: "#fff",
+            border: "1px solid #0475c2",
+            borderRadius: "4px",
+            cursor: selectedAgent ? "pointer" : "not-allowed",
+            opacity: selectedAgent ? 1 : 0.5,
+            minWidth: "150px",
+          }}
+          disabled={!selectedAgent}
         >
-          <option value="">All Sites</option>
-          {sites.map((site) => (
-            <option key={site.id} value={String(site.id)}>
-              {site.name}
-            </option>
-          ))}
-        </select>
-
-        <label>Device:</label>
-        <select
-          value={selectedHost}
-          onChange={(e) => setSelectedHost(e.target.value)}
-          style={{ width: "100%", marginBottom: "6px", fontSize: "9px" }}
-          disabled={hasSiteSelection && !filteredHostOptions.length}
-        >
-          <option value="">-- Select --</option>
-          {filteredHostOptions.map(({ host, label }) => (
-            <option key={host} value={host}>
-              {label}
-            </option>
-          ))}
-        </select>
-
-        <label>Available Agent Context(s):</label>
-        <select
-          value={selectedMode}
-          onChange={(e) => setSelectedMode(e.target.value)}
-          style={{ width: "100%", marginBottom: "2px", fontSize: "9px" }}
-          disabled={!selectedHost}
-        >
-          <option value="currentuser" disabled={!activeHostContexts?.currentuser}>
-            CURRENTUSER (Screen Capture / Macros)
-          </option>
-          <option value="system" disabled={!activeHostContexts?.system}>
-            SYSTEM (Scripts)
-          </option>
-        </select>
-
-        <div style={{ fontSize: "6px", color: "#aaa", marginBottom: "6px" }}>
-          Agent ID:{" "}
-          {selectedAgent ? (
-            <span style={{ color: "#666" }}>{selectedAgent}</span>
-          ) : (
-            <span style={{ color: "#666" }}>No Agent Selected</span>
-          )}
+          {isConnected ? "Disconnect" : "Connect to Device"}
+        </button>
+        <div style={{ fontSize: "8px", color: "#777" }}>
+          {selectedHost ? `${selectedHost} · ${selectedMode.toUpperCase()}` : "No device selected"}
         </div>
-
-        {isConnected ? (
-          <button
-            onClick={handleDisconnect}
-            style={{ width: "100%", fontSize: "9px", padding: "4px", marginTop: "4px" }}
-          >
-            Disconnect from Agent
-          </button>
-        ) : (
-          <button
-            onClick={handleConnect}
-            style={{ width: "100%", fontSize: "9px", padding: "4px", marginTop: "4px" }}
-            disabled={!selectedAgent}
-          >
-            Connect to Device
-          </button>
-        )}
       </div>
     </div>
   );
@@ -391,36 +501,53 @@ Select and connect to a remote Borealis Agent.
   component: BorealisAgentNode,
   config: [
     {
+      key: "agent_site_id",
+      label: "Site",
+      type: "select",
+      optionsKey: "siteOptions",
+      defaultValue: ""
+    },
+    {
+      key: "agent_host",
+      label: "Device",
+      type: "select",
+      optionsKey: "hostOptions",
+      defaultValue: ""
+    },
+    {
+      key: "agent_mode",
+      label: "Agent Context",
+      type: "select",
+      optionsKey: "modeOptions",
+      defaultValue: "currentuser"
+    },
+    {
       key: "agent_id",
-      label: "Agent",
-      type: "text", // NOTE: UI populates via agent fetch, but config drives default for sidebar.
+      label: "Agent ID",
+      type: "text",
+      readOnly: true,
       defaultValue: ""
     }
   ],
   usage_documentation: `
 ### Borealis Agent Node
 
-This node represents an available Borealis Agent (Python client) you can control from your workflow.
+This node allows you to establish a connection with a device running a Borealis "Agent", so you can instruct the agent to do things from your workflow.
 
 #### Features
-- **Select** a device and agent context (CURRENTUSER vs SYSTEM).
+- **Select** a site, then a device, then finally an agent context (CURRENTUSER vs SYSTEM).
 - **Connect/Disconnect** from the agent at any time.
 - **Attach roles** (by connecting "Agent Role" nodes to this node's output handle) to assign behaviors dynamically.
-- **Live status** shows if the agent is available, connected, or offline.
 
 #### How to Use
-1. **Drag in a Borealis Agent node.**
-2. **Pick an agent** from the dropdown list (auto-populates from backend).
-3. **Click "Connect to Agent"** to provision it for the workflow.
+1. **Drag and drop in a Borealis Agent node.**
+2. **Pick an agent** from the dropdown list (auto-populates from API backend).
+3. **Click "Connect to Agent"**.
 4. **Attach Agent Role Nodes** (e.g., Screenshot, Macro Keypress) to the "provisioner" output handle to define what the agent should do.
 5. Agent will automatically update its roles as you change connected Role Nodes.
 
-#### Output Handle
-- "provisioner" (bottom): Connect Agent Role nodes here.
-
 #### Good to Know
 - If an agent disconnects or goes offline, its status will show "Reconnecting..." until it returns.
-- Node config can be edited in the right sidebar.
 - **Roles update LIVE**: Any time you change attached roles, the agent gets updated instantly.
 
 `.trim()

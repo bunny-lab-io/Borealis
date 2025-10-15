@@ -40,23 +40,55 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
     const config = nodeData?.config || [];
     const nodeId = nodeData?.nodeId;
 
+    const normalizeOptions = (opts = []) =>
+      opts.map((opt) => {
+        if (typeof opt === "string") {
+          return { value: opt, label: opt, disabled: false };
+        }
+        if (opt && typeof opt === "object") {
+          const val =
+            opt.value ??
+            opt.id ??
+            opt.handle ??
+            (typeof opt.label === "string" ? opt.label : "");
+          const label =
+            opt.label ??
+            opt.name ??
+            opt.title ??
+            (typeof val !== "undefined" ? String(val) : "");
+          return {
+            value: typeof val === "undefined" ? "" : String(val),
+            label: typeof label === "undefined" ? "" : String(label),
+            disabled: Boolean(opt.disabled)
+          };
+        }
+        return { value: String(opt ?? ""), label: String(opt ?? ""), disabled: false };
+      });
+
     return config.map((field, index) => {
-      const value = nodeData?.[field.key] || "";
+      const value = nodeData?.[field.key] ?? "";
+      const isReadOnly = Boolean(field.readOnly);
 
       // ---- DYNAMIC DROPDOWN SUPPORT ----
       if (field.type === "select") {
         let options = field.options || [];
 
-        // Handle dynamic options for things like Target Window
-        if (field.dynamicOptions && nodeData?.windowList && Array.isArray(nodeData.windowList)) {
+        if (field.optionsKey && Array.isArray(nodeData?.[field.optionsKey])) {
+          options = nodeData[field.optionsKey];
+        } else if (field.dynamicOptions && nodeData?.windowList && Array.isArray(nodeData.windowList)) {
           options = nodeData.windowList
-            .map(win => ({
+            .map((win) => ({
               value: String(win.handle),
               label: `${win.title} (${win.handle})`
             }))
             .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
-        } else {
-          options = options.map(opt => ({ value: opt, label: opt }));
+        }
+
+        options = normalizeOptions(options);
+
+        // Handle dynamic options for things like Target Window
+        if (field.dynamicOptions && (!nodeData?.windowList || !Array.isArray(nodeData.windowList))) {
+          options = [];
         }
 
         return (
@@ -70,6 +102,7 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
               size="small"
               value={value}
               onChange={(e) => {
+                if (isReadOnly) return;
                 const newValue = e.target.value;
                 if (!nodeId) return;
                 effectiveSetNodes((nds) =>
@@ -134,7 +167,7 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
                 </MenuItem>
               ) : (
                 options.map((opt, idx) => (
-                  <MenuItem key={idx} value={opt.value}>
+                  <MenuItem key={idx} value={opt.value} disabled={opt.disabled}>
                     {opt.label}
                   </MenuItem>
                 ))
@@ -155,7 +188,13 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
             size="small"
             fullWidth
             value={value}
+            disabled={isReadOnly}
+            InputProps={{
+              readOnly: isReadOnly,
+              sx: { color: "#ccc" }
+            }}
             onChange={(e) => {
+              if (isReadOnly) return;
               const newValue = e.target.value;
               if (!nodeId) return;
               effectiveSetNodes((nds) =>
