@@ -136,7 +136,10 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
         const data = await resp.json();
         if (canceled) return;
         const list = Array.isArray(data?.credentials)
-          ? data.credentials.filter((cred) => String(cred.connection_type || "").toLowerCase() === "ssh")
+          ? data.credentials.filter((cred) => {
+              const conn = String(cred.connection_type || "").toLowerCase();
+              return conn === "ssh" || conn === "winrm";
+            })
           : [];
         list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
         setCredentials(list);
@@ -435,11 +438,15 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
                 onChange={(e) => setSelectedCredentialId(e.target.value)}
                 sx={{ bgcolor: "#1f1f1f", color: "#fff" }}
               >
-                {credentials.map((cred) => (
-                  <MenuItem key={cred.id} value={String(cred.id)}>
-                    {cred.name}
-                  </MenuItem>
-                ))}
+                {credentials.map((cred) => {
+                  const conn = String(cred.connection_type || "").toUpperCase();
+                  return (
+                    <MenuItem key={cred.id} value={String(cred.id)}>
+                      {cred.name}
+                      {conn ? ` (${conn})` : ""}
+                    </MenuItem>
+                  );
+                })}
               </Select>
             </FormControl>
             {credentialsLoading && <CircularProgress size={18} sx={{ color: "#58a6ff" }} />}
@@ -448,7 +455,7 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
             )}
             {!credentialsLoading && !credentialsError && !credentials.length && (
               <Typography variant="body2" sx={{ color: "#ff8080" }}>
-                No SSH credentials available. Create one under Access Management.
+                No SSH or WinRM credentials available. Create one under Access Management.
               </Typography>
             )}
           </Box>

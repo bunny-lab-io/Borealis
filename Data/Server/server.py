@@ -329,6 +329,7 @@ from Python_API_Endpoints.script_engines import run_powershell_script
 from job_scheduler import register as register_job_scheduler
 from job_scheduler import set_online_lookup as scheduler_set_online_lookup
 from job_scheduler import set_server_ansible_runner as scheduler_set_server_runner
+from job_scheduler import set_credential_fetcher as scheduler_set_credential_fetcher
 
 # =============================================================================
 # Section: Runtime Stack Configuration
@@ -1859,6 +1860,11 @@ def _ensure_ansible_workspace() -> str:
     return _ANSIBLE_WORKSPACE_DIR
 
 
+_WINRM_USERNAME_VAR = "__borealis_winrm_username"
+_WINRM_PASSWORD_VAR = "__borealis_winrm_password"
+_WINRM_TRANSPORT_VAR = "__borealis_winrm_transport"
+
+
 def _fetch_credential_with_secrets(credential_id: int) -> Optional[Dict[str, Any]]:
     try:
         conn = _db_conn()
@@ -1876,7 +1882,8 @@ def _fetch_credential_with_secrets(credential_id: int) -> Optional[Dict[str, Any
                 private_key_passphrase_encrypted,
                 become_method,
                 become_username,
-                become_password_encrypted
+                become_password_encrypted,
+                metadata_json
             FROM credentials
             WHERE id=?
             """,
@@ -1900,7 +1907,39 @@ def _fetch_credential_with_secrets(credential_id: int) -> Optional[Dict[str, Any
         "become_method": _normalize_become_method(row[8]),
         "become_username": row[9] or "",
         "become_password": _decrypt_secret(row[10]) if row[10] else "",
+        "metadata": {},
     }
+
+    try:
+        meta_json = row[11] if len(row) > 11 else None
+        if meta_json:
+            meta = json.loads(meta_json)
+            if isinstance(meta, dict):
+                cred["metadata"] = meta
+    except Exception:
+        pass
+
+    return cred
+
+
+def _inject_winrm_credential(
+    base_values: Optional[Dict[str, Any]],
+    credential: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    values: Dict[str, Any] = dict(base_values or {})
+    if not credential:
+        return values
+
+    username = str(credential.get("username") or "")
+    password = str(credential.get("password") or "")
+    metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
+    transport = metadata.get("winrm_transport") if isinstance(metadata, dict) else None
+    transport_str = str(transport or "ntlm").strip().lower() or "ntlm"
+
+    values[_WINRM_USERNAME_VAR] = username
+    values[_WINRM_PASSWORD_VAR] = password
+    values[_WINRM_TRANSPORT_VAR] = transport_str
+    return values
 
 
 def _emit_ansible_recap_from_row(row):
@@ -4564,6 +4603,7 @@ ensure_default_admin()
 
 job_scheduler = register_job_scheduler(app, socketio, DB_PATH)
 scheduler_set_server_runner(job_scheduler, _queue_server_ansible_run)
+scheduler_set_credential_fetcher(job_scheduler, _fetch_credential_with_secrets)
 job_scheduler.start()
 
 # Provide scheduler with online device lookup based on registered agents
@@ -6375,15 +6415,26 @@ def ansible_quick_run():
         return jsonify({"error": "Missing playbook_path or hostnames[]"}), 400
     server_mode = False
     cred_id_int = None
+    credential_detail: Optional[Dict[str, Any]] = None
     if credential_id not in (None, "", "null"):
         try:
             cred_id_int = int(credential_id)
             if cred_id_int <= 0:
                 cred_id_int = None
-            else:
-                server_mode = True
         except Exception:
             return jsonify({"error": "Invalid credential_id"}), 400
+
+    if cred_id_int:
+        credential_detail = _fetch_credential_with_secrets(cred_id_int)
+        if not credential_detail:
+            return jsonify({"error": "Credential not found"}), 404
+        conn_type = (credential_detail.get("connection_type") or "ssh").lower()
+        if conn_type in ("ssh", "linux", "unix"):
+            server_mode = True
+        elif conn_type in ("winrm", "psrp"):
+            variable_values = _inject_winrm_credential(variable_values, credential_detail)
+        else:
+            return jsonify({"error": f"Credential connection '{conn_type}' not supported"}), 400
     try:
         root, abs_path, _ = _resolve_assembly_path('ansible', rel_path)
         if not os.path.isfile(abs_path):
@@ -6406,16 +6457,6 @@ def ansible_quick_run():
 
         if server_mode and not cred_id_int:
             return jsonify({"error": "credential_id is required for server-side execution"}), 400
-
-        if server_mode:
-            cred = _fetch_credential_with_secrets(cred_id_int)
-            if not cred:
-                return jsonify({"error": "Credential not found"}), 404
-            conn_type = (cred.get("connection_type") or "ssh").lower()
-            if conn_type not in ("ssh",):
-                return jsonify({"error": f"Credential connection '{conn_type}' not supported for server execution"}), 400
-            # Avoid keeping decrypted secrets in memory longer than necessary
-            del cred
 
         results = []
         for host in hostnames:
@@ -6510,6 +6551,9 @@ def ansible_quick_run():
                     except Exception:
                         pass
                 results.append({"hostname": host, "run_id": run_id, "status": "Failed", "activity_job_id": job_id, "error": str(ex)})
+        if credential_detail is not None:
+            # Remove decrypted secrets from scope as soon as possible
+            credential_detail.clear()
         return jsonify({"results": results})
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400

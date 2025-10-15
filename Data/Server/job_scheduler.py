@@ -7,6 +7,10 @@ import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
+_WINRM_USERNAME_VAR = "__borealis_winrm_username"
+_WINRM_PASSWORD_VAR = "__borealis_winrm_password"
+_WINRM_TRANSPORT_VAR = "__borealis_winrm_transport"
+
 """
 Job Scheduler module for Borealis
 
@@ -52,6 +56,26 @@ def _decode_base64_text(value: Any) -> Optional[str]:
         return decoded.decode("utf-8")
     except Exception:
         return decoded.decode("utf-8", errors="replace")
+
+
+def _inject_winrm_credential(
+    base_values: Optional[Dict[str, Any]],
+    credential: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    values: Dict[str, Any] = dict(base_values or {})
+    if not credential:
+        return values
+
+    username = str(credential.get("username") or "")
+    password = str(credential.get("password") or "")
+    metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
+    transport = metadata.get("winrm_transport") if isinstance(metadata, dict) else None
+    transport_str = str(transport or "ntlm").strip().lower() or "ntlm"
+
+    values[_WINRM_USERNAME_VAR] = username
+    values[_WINRM_PASSWORD_VAR] = password
+    values[_WINRM_TRANSPORT_VAR] = transport_str
+    return values
 
 
 def _decode_script_content(value: Any, encoding_hint: str = "") -> str:
@@ -311,6 +335,8 @@ class JobScheduler:
         self._online_lookup: Optional[Callable[[], List[str]]] = None
         # Optional callback to execute Ansible directly from the server
         self._server_ansible_runner: Optional[Callable[..., str]] = None
+        # Optional callback to fetch stored credentials (with decrypted secrets)
+        self._credential_fetcher: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None
 
         # Ensure run-history table exists
         self._init_tables()
@@ -522,7 +548,24 @@ class JobScheduler:
             variables = doc.get("variables") or []
             files = doc.get("files") or []
             run_mode_norm = (run_mode or "system").strip().lower()
-            server_run = run_mode_norm in ("ssh", "winrm")
+            server_run = run_mode_norm == "ssh"
+            agent_winrm = run_mode_norm == "winrm"
+
+            if agent_winrm:
+                if not credential_id:
+                    raise RuntimeError("WinRM execution requires a credential_id")
+                if not callable(self._credential_fetcher):
+                    raise RuntimeError("Credential fetcher is not configured")
+                cred_detail = self._credential_fetcher(int(credential_id))
+                if not cred_detail:
+                    raise RuntimeError("Credential not found")
+                try:
+                    overrides_map = _inject_winrm_credential(overrides_map, cred_detail)
+                finally:
+                    try:
+                        cred_detail.clear()  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
 
             # Record in activity_history for UI parity
             now = _now_ts()
@@ -742,6 +785,9 @@ class JobScheduler:
     # ---------- DB helpers ----------
     def _conn(self):
         return sqlite3.connect(self.db_path)
+
+    def set_credential_fetcher(self, fn: Optional[Callable[[int], Optional[Dict[str, Any]]]]):
+        self._credential_fetcher = fn
 
     def _init_tables(self):
         conn = self._conn()
@@ -1738,3 +1784,7 @@ def set_online_lookup(scheduler: JobScheduler, fn: Callable[[], List[str]]):
 
 def set_server_ansible_runner(scheduler: JobScheduler, fn: Callable[..., str]):
     scheduler._server_ansible_runner = fn
+
+
+def set_credential_fetcher(scheduler: JobScheduler, fn: Callable[[int], Optional[Dict[str, Any]]]):
+    scheduler._credential_fetcher = fn
