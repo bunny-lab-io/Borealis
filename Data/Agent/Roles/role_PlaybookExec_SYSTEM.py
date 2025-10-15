@@ -178,6 +178,16 @@ def _scripts_bin():
     return None
 
 
+def _ee_support_path():
+    root = _ansible_ee_root()
+    if not root:
+        return None
+    support = os.path.join(root, 'support')
+    if os.path.isdir(support):
+        return support
+    return None
+
+
 def _ansible_playbook_cmd():
     exe = 'ansible-playbook.exe' if os.name == 'nt' else 'ansible-playbook'
     sdir = _scripts_bin()
@@ -341,6 +351,19 @@ class Role:
         version = _ansible_ee_version()
         if version:
             self._ansible_log(f"[bootstrap] using execution environment version {version}")
+
+        support_dir = _ee_support_path()
+        if support_dir:
+            existing_pp = os.environ.get('PYTHONPATH') or ''
+            paths = [seg for seg in existing_pp.split(os.pathsep) if seg]
+            if support_dir not in paths:
+                os.environ['PYTHONPATH'] = (
+                    support_dir
+                    if not existing_pp
+                    else support_dir + os.pathsep + existing_pp
+                )
+            os.environ['BOREALIS_ANSIBLE_EE_SUPPORT'] = support_dir
+
         return True
 
     async def _ensure_ansible_ready(self) -> bool:
