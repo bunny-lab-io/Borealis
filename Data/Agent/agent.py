@@ -72,6 +72,7 @@ def _bootstrap_log(msg: str):
 
 # Headless/service mode flag (skip Qt and interactive UI)
 SYSTEM_SERVICE_MODE = ('--system-service' in sys.argv) or (os.environ.get('BOREALIS_AGENT_MODE') == 'system')
+SERVICE_MODE = 'system' if SYSTEM_SERVICE_MODE else 'currentuser'
 _bootstrap_log(f'agent.py loaded; SYSTEM_SERVICE_MODE={SYSTEM_SERVICE_MODE}; argv={sys.argv!r}')
 def _argv_get(flag: str, default: str = None):
     try:
@@ -859,7 +860,8 @@ async def send_heartbeat():
                 "agent_id": AGENT_ID,
                 "hostname": socket.gethostname(),
                 "agent_operating_system": detect_agent_os(),
-                "last_seen": int(time.time())
+                "last_seen": int(time.time()),
+                "service_mode": SERVICE_MODE,
             }
             await sio.emit("agent_heartbeat", payload)
             # Also report collector status alive ping.
@@ -872,6 +874,7 @@ async def send_heartbeat():
                         'agent_id': AGENT_ID,
                         'hostname': socket.gethostname(),
                         'active': True,
+                        'service_mode': SERVICE_MODE,
                         'last_user': f"{os.environ.get('USERDOMAIN') or socket.gethostname()}\\{getpass.getuser()}"
                     })
                 else:
@@ -879,6 +882,7 @@ async def send_heartbeat():
                         'agent_id': AGENT_ID,
                         'hostname': socket.gethostname(),
                         'active': True,
+                        'service_mode': SERVICE_MODE,
                     })
             except Exception:
                 pass
@@ -1203,7 +1207,7 @@ async def send_agent_details_once():
 async def connect():
     print(f"[INFO] Successfully Connected to Borealis Server!")
     _log_agent('Connected to server.')
-    await sio.emit('connect_agent', {"agent_id": AGENT_ID})
+    await sio.emit('connect_agent', {"agent_id": AGENT_ID, "service_mode": SERVICE_MODE})
 
     # Send an immediate heartbeat so the UI can populate instantly.
     try:
@@ -1211,7 +1215,8 @@ async def connect():
             "agent_id": AGENT_ID,
             "hostname": socket.gethostname(),
             "agent_operating_system": detect_agent_os(),
-            "last_seen": int(time.time())
+            "last_seen": int(time.time()),
+            "service_mode": SERVICE_MODE,
         })
     except Exception as e:
         print(f"[WARN] initial heartbeat failed: {e}")
@@ -1225,6 +1230,7 @@ async def connect():
                 'agent_id': AGENT_ID,
                 'hostname': socket.gethostname(),
                 'active': True,
+                'service_mode': SERVICE_MODE,
                 'last_user': f"{os.environ.get('USERDOMAIN') or socket.gethostname()}\\{getpass.getuser()}"
             })
         else:
@@ -1232,6 +1238,7 @@ async def connect():
                 'agent_id': AGENT_ID,
                 'hostname': socket.gethostname(),
                 'active': True,
+                'service_mode': SERVICE_MODE,
             })
     except Exception:
         pass
@@ -1542,9 +1549,10 @@ if __name__=='__main__':
     # Initialize roles context for role tasks
     # Initialize role manager and hot-load roles from Roles/
     try:
-        hooks = {'send_service_control': send_service_control, 'get_server_url': get_server_url}
+        base_hooks = {'send_service_control': send_service_control, 'get_server_url': get_server_url}
         if not SYSTEM_SERVICE_MODE:
             # Load interactive-context roles (tray/UI, current-user execution, screenshot, etc.)
+            hooks_interactive = {**base_hooks, 'service_mode': 'currentuser'}
             ROLE_MANAGER = RoleManager(
                 base_dir=os.path.dirname(__file__),
                 context='interactive',
@@ -1552,12 +1560,13 @@ if __name__=='__main__':
                 agent_id=AGENT_ID,
                 config=CONFIG,
                 loop=loop,
-                hooks=hooks,
+                hooks=hooks_interactive,
             )
             ROLE_MANAGER.load()
         # Load system roles only when running in SYSTEM service mode
         ROLE_MANAGER_SYS = None
         if SYSTEM_SERVICE_MODE:
+            hooks_system = {**base_hooks, 'service_mode': 'system'}
             ROLE_MANAGER_SYS = RoleManager(
                 base_dir=os.path.dirname(__file__),
                 context='system',
@@ -1565,7 +1574,7 @@ if __name__=='__main__':
                 agent_id=AGENT_ID,
                 config=CONFIG,
                 loop=loop,
-                hooks=hooks,
+                hooks=hooks_system,
             )
             ROLE_MANAGER_SYS.load()
     except Exception as e:

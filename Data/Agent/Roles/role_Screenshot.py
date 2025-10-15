@@ -87,6 +87,15 @@ def _coerce_text(value):
         return ''
 
 
+def _normalize_mode(value):
+    text = _coerce_text(value).strip().lower()
+    if text in {'interactive', 'currentuser', 'user'}:
+        return 'currentuser'
+    if text in {'system', 'svc', 'service'}:
+        return 'system'
+    return ''
+
+
 class ScreenshotRegion(QtWidgets.QWidget):
     def __init__(self, ctx, node_id, x=100, y=100, w=300, h=200, alias=None):
         super().__init__()
@@ -376,6 +385,8 @@ class Role:
                 'h': _coerce_int(cfg.get('h'), 200, minimum=1),
                 'visible': _coerce_bool(cfg.get('visible'), True),
                 'alias': _coerce_text(cfg.get('alias')),
+                'target_agent_mode': _normalize_mode(cfg.get('target_agent_mode')),
+                'target_agent_host': _coerce_text(cfg.get('target_agent_host')),
             }
             return norm
         except Exception:
@@ -385,6 +396,11 @@ class Role:
         cfg = self._normalize_config(cfg) or {}
         nid = cfg.get('node_id')
         if not nid:
+            return
+
+        target_mode = cfg.get('target_agent_mode') or ''
+        current_mode = getattr(self.ctx, 'service_mode', '') or ''
+        if target_mode and current_mode and target_mode != current_mode:
             return
 
         alias = cfg.get('alias', '')

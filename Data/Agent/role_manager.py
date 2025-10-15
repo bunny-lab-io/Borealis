@@ -24,6 +24,10 @@ class RoleManager:
             self.config = config
             self.loop = loop
             self.hooks = hooks or {}
+            try:
+                self.service_mode = (self.hooks.get('service_mode') or '').strip().lower()
+            except Exception:
+                self.service_mode = ''
 
     def __init__(self, base_dir: str, context: str, sio, agent_id: str, config, loop, hooks: Optional[dict] = None):
         self.base_dir = base_dir
