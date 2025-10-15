@@ -252,12 +252,42 @@ class Role:
             return os.path.join(tmp_dir, 'ansible_bootstrap.json')
 
     def _detect_missing_modules(self) -> dict:
+        """Return any required modules that the execution environment lacks."""
+
         missing = {}
-        for module, spec in REQUIRED_MODULES.items():
-            try:
-                __import__(module)
-            except Exception:
-                missing[module] = spec
+
+        python_exe = _venv_python()
+        if not python_exe or not os.path.isfile(python_exe):
+            missing['python'] = 'execution-environment python missing'
+            return missing
+
+        module_names = sorted(REQUIRED_MODULES.keys())
+        probe = (
+            "import importlib.util, sys;"
+            f"mods={module_names!r};"
+            "missing=[m for m in mods if importlib.util.find_spec(m) is None];"
+            "sys.stdout.write('\\n'.join(missing))"
+        )
+
+        try:
+            completed = subprocess.run(
+                [python_exe, '-c', probe],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            for name in module_names:
+                missing[name] = REQUIRED_MODULES[name]
+            return missing
+
+        stdout = (completed.stdout or '').strip()
+        if stdout:
+            for name in stdout.splitlines():
+                mod = name.strip()
+                if mod and mod in REQUIRED_MODULES:
+                    missing[mod] = REQUIRED_MODULES[mod]
+
         return missing
 
     def _bootstrap_ansible_sync(self) -> bool:
