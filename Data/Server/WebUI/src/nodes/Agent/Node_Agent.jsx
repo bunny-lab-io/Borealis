@@ -7,13 +7,18 @@ const BorealisAgentNode = ({ id, data }) => {
   const { getNodes, setNodes } = useReactFlow();
   const edges = useStore((state) => state.edges);
   const [agents, setAgents] = useState({});
+  const [sites, setSites] = useState([]);
   const [selectedAgent, setSelectedAgent] = useState(data.agent_id || "");
   const [selectedHost, setSelectedHost] = useState(data.agent_host || "");
+  const [selectedSiteId, setSelectedSiteId] = useState(
+    data.agent_site_id ? String(data.agent_site_id) : ""
+  );
   const initialMode = (data.agent_mode || "currentuser").toLowerCase();
   const [selectedMode, setSelectedMode] = useState(
     initialMode === "system" ? "system" : "currentuser"
   );
   const [isConnected, setIsConnected] = useState(false);
+  const [siteMapping, setSiteMapping] = useState({});
   const prevRolesRef = useRef([]);
 
   // Group agents by hostname and execution context
@@ -80,28 +85,81 @@ const hostOptions = useMemo(() => {
     return () => clearInterval(interval);
   }, []);
 
+  // Fetch sites list
+  useEffect(() => {
+    const fetchSites = () => {
+      fetch("/api/sites")
+        .then((res) => res.json())
+        .then((data) => {
+          const siteEntries = Array.isArray(data?.sites) ? data.sites : [];
+          setSites(siteEntries);
+        })
+        .catch(() => setSites([]));
+    };
+    fetchSites();
+  }, []);
+
+  // Fetch site mapping for current host options
+  useEffect(() => {
+    const hostnames = hostOptions.map(({ host }) => host).filter(Boolean);
+    if (!hostnames.length) {
+      setSiteMapping({});
+      return;
+    }
+    const query = hostnames.map(encodeURIComponent).join(",");
+    fetch(`/api/sites/device_map?hostnames=${query}`)
+      .then((res) => res.json())
+      .then((data) => {
+        const mapping = data?.mapping && typeof data.mapping === "object" ? data.mapping : {};
+        setSiteMapping(mapping);
+      })
+      .catch(() => setSiteMapping({}));
+  }, [hostOptions]);
+
+  const filteredHostOptions = useMemo(() => {
+    if (!selectedSiteId) return hostOptions;
+    return hostOptions.filter(({ host }) => {
+      const mapping = siteMapping[host];
+      if (!mapping || typeof mapping.site_id === "undefined" || mapping.site_id === null) {
+        return false;
+      }
+      return String(mapping.site_id) === selectedSiteId;
+    });
+  }, [hostOptions, selectedSiteId, siteMapping]);
+
+  const hasSiteSelection = Boolean(selectedSiteId);
+
+  // Align selected site with known host mapping when available
+  useEffect(() => {
+    if (selectedSiteId || !selectedHost) return;
+    const mapping = siteMapping[selectedHost];
+    if (!mapping || typeof mapping.site_id === "undefined" || mapping.site_id === null) return;
+    setSelectedSiteId(String(mapping.site_id));
+  }, [selectedHost, selectedSiteId, siteMapping]);
+
   // Ensure host selection stays aligned with available agents
   useEffect(() => {
-    const hostExists = hostOptions.some((opt) => opt.host === selectedHost);
+    const hostExists = filteredHostOptions.some((opt) => opt.host === selectedHost);
     if (hostExists) return;
 
     if (selectedAgent && agents[selectedAgent]) {
       const info = agents[selectedAgent];
       const inferredHost = (info?.hostname || info?.agent_hostname || "").trim() || "unknown";
-      if (inferredHost && inferredHost !== selectedHost) {
+      const allowed = filteredHostOptions.some((opt) => opt.host === inferredHost);
+      if (allowed && inferredHost && inferredHost !== selectedHost) {
         setSelectedHost(inferredHost);
         return;
       }
     }
 
-    const fallbackHost = hostOptions[0]?.host || "";
+    const fallbackHost = filteredHostOptions[0]?.host || "";
     if (fallbackHost !== selectedHost) {
       setSelectedHost(fallbackHost);
     }
     if (!fallbackHost && selectedAgent) {
       setSelectedAgent("");
     }
-  }, [hostOptions, selectedHost, selectedAgent, agents]);
+  }, [filteredHostOptions, selectedHost, selectedAgent, agents]);
 
   // Align agent selection with host/mode choice
   useEffect(() => {
@@ -146,13 +204,14 @@ const hostOptions = useMemo(() => {
                 agent_id: selectedAgent,
                 agent_host: selectedHost,
                 agent_mode: selectedMode,
+                agent_site_id: selectedSiteId || "",
               },
             }
           : n
       )
     );
     setIsConnected(false);
-  }, [selectedAgent, selectedHost, selectedMode, setNodes, id]);
+  }, [selectedAgent, selectedHost, selectedMode, selectedSiteId, setNodes, id]);
 
   // Attached Roles logic
   const attachedRoleIds = useMemo(
@@ -243,14 +302,29 @@ const hostOptions = useMemo(() => {
 
       <div className="borealis-node-header">Device Agent</div>
       <div className="borealis-node-content" style={{ fontSize: "9px" }}>
+        <label>Site:</label>
+        <select
+          value={selectedSiteId}
+          onChange={(e) => setSelectedSiteId(e.target.value)}
+          style={{ width: "100%", marginBottom: "6px", fontSize: "9px" }}
+        >
+          <option value="">All Sites</option>
+          {sites.map((site) => (
+            <option key={site.id} value={String(site.id)}>
+              {site.name}
+            </option>
+          ))}
+        </select>
+
         <label>Device:</label>
         <select
           value={selectedHost}
           onChange={(e) => setSelectedHost(e.target.value)}
           style={{ width: "100%", marginBottom: "6px", fontSize: "9px" }}
+          disabled={hasSiteSelection && !filteredHostOptions.length}
         >
           <option value="">-- Select --</option>
-          {hostOptions.map(({ host, label }) => (
+          {filteredHostOptions.map(({ host, label }) => (
             <option key={host} value={host}>
               {label}
             </option>
