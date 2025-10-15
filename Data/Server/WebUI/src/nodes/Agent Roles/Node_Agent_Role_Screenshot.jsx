@@ -1,5 +1,5 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/nodes/Agent/Node_Agent_Role_Screenshot.jsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Handle, Position, useReactFlow, useStore } from "reactflow";
 import ShareIcon from "@mui/icons-material/Share";
 import IconButton from "@mui/material/IconButton";
@@ -21,6 +21,17 @@ const AgentScreenshotNode = ({ id, data }) => {
   const { setNodes, getNodes } = useReactFlow();
   const edges = useStore(state => state.edges);
 
+  const resolveAgentData = useCallback(() => {
+    try {
+      const agentEdge = edges.find(e => e.target === id && e.sourceHandle === "provisioner");
+      const agentNode = getNodes().find(n => n.id === agentEdge?.source);
+      return agentNode?.data || null;
+    } catch (err) {
+      return null;
+    }
+  }, [edges, getNodes, id]);
+
+
   // Core config values pulled from sidebar config (with defaults)
   const interval = parseInt(data?.interval || 1000, 10) || 1000;
   const region = {
@@ -32,6 +43,11 @@ const AgentScreenshotNode = ({ id, data }) => {
   const visible = (data?.visible ?? "true") === "true";
   const alias = data?.alias || "";
   const [imageBase64, setImageBase64] = useState(data?.value || "");
+  const agentData = resolveAgentData();
+  const targetModeLabel = ((agentData?.agent_mode || "").toString().toLowerCase() === "system")
+    ? "SYSTEM Agent"
+    : "CURRENTUSER Agent";
+  const targetHostLabel = (agentData?.agent_host || "").toString();
 
   // Always push current imageBase64 into BorealisValueBus at the global update rate
   useEffect(() => {
@@ -56,14 +72,9 @@ const AgentScreenshotNode = ({ id, data }) => {
     const handleScreenshot = (payload) => {
       if (payload?.node_id !== id) return;
       // Additionally ensure payload is from the agent connected upstream of this node
-      try {
-        const agentEdge = edges.find(e => e.target === id && e.sourceHandle === "provisioner");
-        const agentNode = getNodes().find(n => n.id === agentEdge?.source);
-        const selectedAgentId = agentNode?.data?.agent_id;
-        if (!selectedAgentId || payload?.agent_id !== selectedAgentId) return;
-      } catch (err) {
-        return; // fail-closed if we cannot resolve upstream agent
-      }
+      const agentData = resolveAgentData();
+      const selectedAgentId = agentData?.agent_id;
+      if (!selectedAgentId || payload?.agent_id !== selectedAgentId) return;
 
       if (payload.image_base64) {
         setImageBase64(payload.image_base64);
@@ -86,24 +97,30 @@ const AgentScreenshotNode = ({ id, data }) => {
 
     socket.on("agent_screenshot_task", handleScreenshot);
     return () => socket.off("agent_screenshot_task", handleScreenshot);
-  }, [id, setNodes, edges, getNodes]);
+  }, [id, setNodes, resolveAgentData]);
 
   // Register this node for the agent provisioning sync
   window.__BorealisInstructionNodes = window.__BorealisInstructionNodes || {};
-  window.__BorealisInstructionNodes[id] = () => ({
-    node_id: id,
-    role: "screenshot",
-    interval,
-    visible,
-    alias,
-    ...region
-  });
+  window.__BorealisInstructionNodes[id] = () => {
+    const agentData = resolveAgentData() || {};
+    const modeRaw = (agentData.agent_mode || "").toString().toLowerCase();
+    const targetMode = modeRaw === "system" ? "system" : "currentuser";
+    return {
+      node_id: id,
+      role: "screenshot",
+      interval,
+      visible,
+      alias,
+      target_agent_mode: targetMode,
+      target_agent_host: agentData.agent_host || "",
+      ...region
+    };
+  };
 
   // Manual live view copy button
   const handleCopyLiveViewLink = () => {
-    const agentEdge = edges.find(e => e.target === id && e.sourceHandle === "provisioner");
-    const agentNode = getNodes().find(n => n.id === agentEdge?.source);
-    const selectedAgentId = agentNode?.data?.agent_id;
+    const agentData = resolveAgentData();
+    const selectedAgentId = agentData?.agent_id;
 
     if (!selectedAgentId) {
       alert("No valid agent connection found.");
@@ -131,6 +148,17 @@ const AgentScreenshotNode = ({ id, data }) => {
         </div>
         <div>
           <b>Interval:</b> {interval} ms
+        </div>
+        <div>
+          <b>Agent Context:</b> {targetModeLabel}
+        </div>
+        <div>
+          <b>Target Host:</b>{" "}
+          {targetHostLabel ? (
+            targetHostLabel
+          ) : (
+            <span style={{ color: "#666" }}>unknown</span>
+          )}
         </div>
         <div>
           <b>Overlay:</b> {visible ? "Yes" : "No"}
@@ -165,6 +193,7 @@ Capture a live screenshot of a defined region from a remote Borealis Agent.
 - Optionally show a visual overlay with a label
 - Pushes base64 PNG stream to downstream nodes
 - Use copy button to share live view URL
+- Targets the CURRENTUSER or SYSTEM agent context selected upstream
 `.trim(),
   content: "Capture screenshot region via agent",
   component: AgentScreenshotNode,

@@ -44,12 +44,65 @@ extra_top_padding = overlay_green_thickness * 2 + 4
 overlay_widgets = {}
 
 
+def _coerce_int(value, default, minimum=None, maximum=None):
+    try:
+        if value is None:
+            raise ValueError
+        if isinstance(value, bool):
+            raise ValueError
+        if isinstance(value, (int, float)):
+            ivalue = int(value)
+        else:
+            text = str(value).strip()
+            if not text:
+                raise ValueError
+            ivalue = int(float(text))
+        if minimum is not None and ivalue < minimum:
+            return minimum
+        if maximum is not None and ivalue > maximum:
+            return maximum
+        return ivalue
+    except Exception:
+        return default
+
+
+def _coerce_bool(value, default=True):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {'true', '1', 'yes', 'on'}:
+            return True
+        if text in {'false', '0', 'no', 'off'}:
+            return False
+    return default
+
+
+def _coerce_text(value):
+    if value is None:
+        return ''
+    try:
+        return str(value)
+    except Exception:
+        return ''
+
+
+def _normalize_mode(value):
+    text = _coerce_text(value).strip().lower()
+    if text in {'interactive', 'currentuser', 'user'}:
+        return 'currentuser'
+    if text in {'system', 'svc', 'service'}:
+        return 'system'
+    return ''
+
+
 class ScreenshotRegion(QtWidgets.QWidget):
     def __init__(self, ctx, node_id, x=100, y=100, w=300, h=200, alias=None):
         super().__init__()
         self.ctx = ctx
         self.node_id = node_id
-        self.alias = alias
+        self.alias = _coerce_text(alias)
+        self._visible = True
         self.setGeometry(
             x - handle_size,
             y - handle_size - extra_top_padding,
@@ -99,6 +152,19 @@ class ScreenshotRegion(QtWidgets.QWidget):
         p.setBrush(QtGui.QColor(0, 191, 255))
         p.drawRect(bar_x, bar_y - bar_height - 10, bar_width, bar_height * 4)
 
+        if self.alias:
+            p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255)))
+            font = QtGui.QFont()
+            font.setPointSize(10)
+            p.setFont(font)
+            text_rect = QtCore.QRect(
+                overlay_green_thickness * 2,
+                extra_top_padding + overlay_green_thickness * 2,
+                w - overlay_green_thickness * 4,
+                overlay_green_thickness * 10,
+            )
+            p.drawText(text_rect, QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop, self.alias)
+
     def get_geometry(self):
         g = self.geometry()
         return (
@@ -107,6 +173,29 @@ class ScreenshotRegion(QtWidgets.QWidget):
             g.width() - handle_size * 2,
             g.height() - handle_size * 2 - extra_top_padding,
         )
+
+    def set_region(self, x, y, w, h):
+        self.setGeometry(
+            x - handle_size,
+            y - handle_size - extra_top_padding,
+            w + handle_size * 2,
+            h + handle_size * 2 + extra_top_padding,
+        )
+
+    def set_alias(self, alias):
+        self.alias = _coerce_text(alias)
+        self.update()
+
+    def apply_visibility(self, visible: bool):
+        self._visible = bool(visible)
+        if self._visible:
+            self.show()
+            try:
+                self.raise_()
+            except Exception:
+                pass
+        else:
+            self.hide()
 
     def mousePressEvent(self, e):
         if e.button() == QtCore.Qt.LeftButton:
@@ -184,6 +273,7 @@ class Role:
     def __init__(self, ctx):
         self.ctx = ctx
         self.tasks = {}
+        self.running_configs = {}
 
     def register_events(self):
         sio = self.ctx.sio
@@ -214,6 +304,7 @@ class Role:
             except Exception:
                 pass
         self.tasks.clear()
+        self.running_configs.clear()
         # Close all widgets
         for nid in list(overlay_widgets.keys()):
             self._close_overlay(nid)
@@ -222,10 +313,16 @@ class Role:
         # Filter only screenshot roles
         screenshot_roles = [r for r in roles_cfg if (r.get('role') == 'screenshot')]
 
+        sanitized_roles = []
+        for rcfg in screenshot_roles:
+            sanitized = self._normalize_config(rcfg)
+            if sanitized:
+                sanitized_roles.append(sanitized)
+
         # Optional: forward interval to SYSTEM helper via hook
         try:
-            if screenshot_roles and 'send_service_control' in self.ctx.hooks:
-                interval_ms = int(screenshot_roles[0].get('interval', 1000))
+            if sanitized_roles and 'send_service_control' in self.ctx.hooks:
+                interval_ms = sanitized_roles[0]['interval']
                 try:
                     self.ctx.hooks['send_service_control']({'type': 'screenshot_config', 'interval_ms': interval_ms})
                 except Exception:
@@ -234,7 +331,7 @@ class Role:
             pass
 
         # Cancel tasks that are no longer present
-        new_ids = {r.get('node_id') for r in screenshot_roles if r.get('node_id')}
+        new_ids = {r.get('node_id') for r in sanitized_roles if r.get('node_id')}
         old_ids = set(self.tasks.keys())
         removed = old_ids - new_ids
         for rid in removed:
@@ -250,6 +347,7 @@ class Role:
                 self._close_overlay(rid)
             except Exception:
                 pass
+            self.running_configs.pop(rid, None)
         if removed:
             try:
                 self.ctx.config._write()
@@ -257,39 +355,87 @@ class Role:
                 pass
 
         # Start tasks for all screenshot roles in config
-        for rcfg in screenshot_roles:
+        for rcfg in sanitized_roles:
             nid = rcfg.get('node_id')
             if not nid:
                 continue
             if nid in self.tasks:
-                continue
+                if self.running_configs.get(nid) == rcfg:
+                    continue
+                prev = self.tasks.pop(nid)
+                try:
+                    prev.cancel()
+                except Exception:
+                    pass
             task = asyncio.create_task(self._screenshot_task(rcfg))
             self.tasks[nid] = task
+            self.running_configs[nid] = rcfg
+
+    def _normalize_config(self, cfg):
+        try:
+            nid = cfg.get('node_id')
+            if not nid:
+                return None
+            norm = {
+                'node_id': nid,
+                'interval': _coerce_int(cfg.get('interval'), 1000, minimum=100),
+                'x': _coerce_int(cfg.get('x'), 100),
+                'y': _coerce_int(cfg.get('y'), 100),
+                'w': _coerce_int(cfg.get('w'), 300, minimum=1),
+                'h': _coerce_int(cfg.get('h'), 200, minimum=1),
+                'visible': _coerce_bool(cfg.get('visible'), True),
+                'alias': _coerce_text(cfg.get('alias')),
+                'target_agent_mode': _normalize_mode(cfg.get('target_agent_mode')),
+                'target_agent_host': _coerce_text(cfg.get('target_agent_host')),
+            }
+            return norm
+        except Exception:
+            return None
 
     async def _screenshot_task(self, cfg):
+        cfg = self._normalize_config(cfg) or {}
         nid = cfg.get('node_id')
-        alias = cfg.get('alias', '')
-        reg = self.ctx.config.data.setdefault('regions', {})
-        r = reg.get(nid)
-        if r:
-            region = (r['x'], r['y'], r['w'], r['h'])
-        else:
-            region = (
-                cfg.get('x', 100),
-                cfg.get('y', 100),
-                cfg.get('w', 300),
-                cfg.get('h', 200),
-            )
-            reg[nid] = {'x': region[0], 'y': region[1], 'w': region[2], 'h': region[3]}
-            try:
-                self.ctx.config._write()
-            except Exception:
-                pass
+        if not nid:
+            return
 
-        if nid not in overlay_widgets:
+        target_mode = cfg.get('target_agent_mode') or ''
+        current_mode = getattr(self.ctx, 'service_mode', '') or ''
+        if target_mode and current_mode and target_mode != current_mode:
+            return
+
+        alias = cfg.get('alias', '')
+        visible = cfg.get('visible', True)
+        reg = self.ctx.config.data.setdefault('regions', {})
+        stored = reg.get(nid) if isinstance(reg.get(nid), dict) else None
+        base_region = (
+            cfg.get('x', 100),
+            cfg.get('y', 100),
+            cfg.get('w', 300),
+            cfg.get('h', 200),
+        )
+        if stored:
+            region = (
+                _coerce_int(stored.get('x'), base_region[0]),
+                _coerce_int(stored.get('y'), base_region[1]),
+                _coerce_int(stored.get('w'), base_region[2], minimum=1),
+                _coerce_int(stored.get('h'), base_region[3], minimum=1),
+            )
+        else:
+            region = base_region
+        reg[nid] = {'x': region[0], 'y': region[1], 'w': region[2], 'h': region[3]}
+        try:
+            self.ctx.config._write()
+        except Exception:
+            pass
+
+        widget = overlay_widgets.get(nid)
+        if widget is None:
             widget = ScreenshotRegion(self.ctx, nid, *region, alias=alias)
             overlay_widgets[nid] = widget
-            widget.show()
+        else:
+            widget.set_region(*region)
+            widget.set_alias(alias)
+        widget.apply_visibility(visible)
 
         await self.ctx.sio.emit('agent_screenshot_task', {
             'agent_id': self.ctx.agent_id,
@@ -298,14 +444,17 @@ class Role:
             'x': region[0], 'y': region[1], 'w': region[2], 'h': region[3]
         })
 
-        interval = cfg.get('interval', 1000) / 1000.0
+        interval = max(cfg.get('interval', 1000), 50) / 1000.0
         loop = asyncio.get_event_loop()
         # Maximum number of screenshot roles you can assign to an agent. (8 already feels overkill)
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
-        
+
         try:
             while True:
-                x, y, w, h = overlay_widgets[nid].get_geometry()
+                widget = overlay_widgets.get(nid)
+                if widget is None:
+                    break
+                x, y, w, h = widget.get_geometry()
                 grab = partial(ImageGrab.grab, bbox=(x, y, x + w, y + h))
                 img = await loop.run_in_executor(executor, grab)
                 buf = BytesIO(); img.save(buf, format='PNG')
@@ -321,3 +470,8 @@ class Role:
             pass
         except Exception:
             traceback.print_exc()
+        finally:
+            try:
+                executor.shutdown(wait=False)
+            except Exception:
+                pass

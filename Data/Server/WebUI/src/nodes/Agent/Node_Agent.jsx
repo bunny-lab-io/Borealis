@@ -8,21 +8,58 @@ const BorealisAgentNode = ({ id, data }) => {
   const edges = useStore((state) => state.edges);
   const [agents, setAgents] = useState({});
   const [selectedAgent, setSelectedAgent] = useState(data.agent_id || "");
+  const [selectedHost, setSelectedHost] = useState(data.agent_host || "");
+  const initialMode = (data.agent_mode || "currentuser").toLowerCase();
+  const [selectedMode, setSelectedMode] = useState(
+    initialMode === "system" ? "system" : "currentuser"
+  );
   const [isConnected, setIsConnected] = useState(false);
   const prevRolesRef = useRef([]);
 
-  // Agent List Sorted (Online First)
-  const agentList = useMemo(() => {
-    if (!agents || typeof agents !== "object") return [];
-    return Object.entries(agents)
-      .map(([aid, info]) => ({
-        id: aid,
-        status: info?.status || "offline",
-        last_seen: info?.last_seen || 0
-      }))
-      .filter(({ status }) => status !== "offline")
-      .sort((a, b) => b.last_seen - a.last_seen);
+  // Group agents by hostname and execution context
+  const agentsByHostname = useMemo(() => {
+    if (!agents || typeof agents !== "object") return {};
+    const grouped = {};
+    Object.entries(agents).forEach(([aid, info]) => {
+      if (!info || typeof info !== "object") return;
+      const status = (info.status || "").toString().toLowerCase();
+      if (status === "offline") return;
+      const host = (info.hostname || info.agent_hostname || "").trim() || "unknown";
+      const modeRaw = (info.service_mode || "").toString().toLowerCase();
+      const mode = modeRaw === "system" ? "system" : "currentuser";
+      if (!grouped[host]) {
+        grouped[host] = { currentuser: null, system: null };
+      }
+      grouped[host][mode] = {
+        agent_id: aid,
+        status: info.status || "offline",
+        last_seen: info.last_seen || 0,
+        info,
+      };
+    });
+    return grouped;
   }, [agents]);
+
+const hostOptions = useMemo(() => {
+  const entries = Object.entries(agentsByHostname)
+    .map(([host, contexts]) => {
+      const candidates = [contexts.currentuser, contexts.system].filter(Boolean);
+      if (!candidates.length) return null;
+
+      const label = host;
+      const latest = Math.max(...candidates.map((r) => r.last_seen || 0));
+
+      return { host, label, contexts, latest };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (b.latest !== a.latest) return b.latest - a.latest;
+      return a.host.localeCompare(b.host);
+    });
+
+  return entries;
+}, [agentsByHostname]);
+
 
   // Fetch Agents Periodically
   useEffect(() => {
@@ -33,19 +70,83 @@ const BorealisAgentNode = ({ id, data }) => {
         .catch(() => {});
     };
     fetchAgents();
-    const interval = setInterval(fetchAgents, 4000);
+    const interval = setInterval(fetchAgents, 10000); // Update Agent List Every 10 Seconds
     return () => clearInterval(interval);
   }, []);
+
+  // Ensure host selection stays aligned with available agents
+  useEffect(() => {
+    const hostExists = hostOptions.some((opt) => opt.host === selectedHost);
+    if (hostExists) return;
+
+    if (selectedAgent && agents[selectedAgent]) {
+      const info = agents[selectedAgent];
+      const inferredHost = (info?.hostname || info?.agent_hostname || "").trim() || "unknown";
+      if (inferredHost && inferredHost !== selectedHost) {
+        setSelectedHost(inferredHost);
+        return;
+      }
+    }
+
+    const fallbackHost = hostOptions[0]?.host || "";
+    if (fallbackHost !== selectedHost) {
+      setSelectedHost(fallbackHost);
+    }
+    if (!fallbackHost && selectedAgent) {
+      setSelectedAgent("");
+    }
+  }, [hostOptions, selectedHost, selectedAgent, agents]);
+
+  // Align agent selection with host/mode choice
+  useEffect(() => {
+    if (!selectedHost) {
+      if (selectedMode !== "currentuser") setSelectedMode("currentuser");
+      if (selectedAgent) setSelectedAgent("");
+      return;
+    }
+    const contexts = agentsByHostname[selectedHost];
+    if (!contexts) {
+      if (selectedMode !== "currentuser") setSelectedMode("currentuser");
+      if (selectedAgent) setSelectedAgent("");
+      return;
+    }
+    if (!contexts[selectedMode]) {
+      const fallbackMode = contexts.currentuser
+        ? "currentuser"
+        : contexts.system
+        ? "system"
+        : selectedMode;
+      if (fallbackMode !== selectedMode) {
+        setSelectedMode(fallbackMode);
+        return;
+      }
+    }
+    const activeContext = contexts[selectedMode];
+    const targetAgentId = activeContext?.agent_id || "";
+    if (targetAgentId !== selectedAgent) {
+      setSelectedAgent(targetAgentId);
+    }
+  }, [selectedHost, selectedMode, agentsByHostname, selectedAgent]);
 
   // Sync node data with sidebar changes
   useEffect(() => {
     setNodes((nds) =>
       nds.map((n) =>
-        n.id === id ? { ...n, data: { ...n.data, agent_id: selectedAgent } } : n
+        n.id === id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                agent_id: selectedAgent,
+                agent_host: selectedHost,
+                agent_mode: selectedMode,
+              },
+            }
+          : n
       )
     );
     setIsConnected(false);
-  }, [selectedAgent, setNodes, id]);
+  }, [selectedAgent, selectedHost, selectedMode, setNodes, id]);
 
   // Attached Roles logic
   const attachedRoleIds = useMemo(
@@ -109,11 +210,19 @@ const BorealisAgentNode = ({ id, data }) => {
 
   // Status Label
   const selectedAgentStatus = useMemo(() => {
-    if (!selectedAgent) return "Unassigned";
-    const agent = agents[selectedAgent];
-    if (!agent) return "Reconnecting...";
-    return agent.status === "provisioned" ? "Connected" : "Available";
-  }, [agents, selectedAgent]);
+    if (!selectedHost) return "Unassigned";
+    const contexts = agentsByHostname[selectedHost];
+    if (!contexts) return "Offline";
+    const activeContext = contexts[selectedMode];
+    if (!selectedAgent || !activeContext) return "Unavailable";
+    const status = (activeContext.status || "").toString().toLowerCase();
+    if (status === "provisioned") return "Connected";
+    if (status === "orphaned") return "Available";
+    if (!status) return "Available";
+    return status.charAt(0).toUpperCase() + status.slice(1);
+  }, [agentsByHostname, selectedHost, selectedMode, selectedAgent]);
+
+  const activeHostContexts = selectedHost ? agentsByHostname[selectedHost] : null;
 
   // Render (Sidebar handles config)
   return (
@@ -126,21 +235,45 @@ const BorealisAgentNode = ({ id, data }) => {
         style={{ top: "100%", background: "#58a6ff" }}
       />
 
-      <div className="borealis-node-header">Borealis Agent</div>
+      <div className="borealis-node-header">Device Agent</div>
       <div className="borealis-node-content" style={{ fontSize: "9px" }}>
-        <label>Agent:</label>
+        <label>Current Device:</label>
         <select
-          value={selectedAgent}
-          onChange={(e) => setSelectedAgent(e.target.value)}
+          value={selectedHost}
+          onChange={(e) => setSelectedHost(e.target.value)}
           style={{ width: "100%", marginBottom: "6px", fontSize: "9px" }}
         >
           <option value="">-- Select --</option>
-          {agentList.map(({ id: aid, status }) => (
-            <option key={aid} value={aid}>
-              {aid} ({status})
+          {hostOptions.map(({ host, label }) => (
+            <option key={host} value={host}>
+              {label}
             </option>
           ))}
         </select>
+
+        <label>Available Agent Context(s):</label>
+        <select
+          value={selectedMode}
+          onChange={(e) => setSelectedMode(e.target.value)}
+          style={{ width: "100%", marginBottom: "2px", fontSize: "9px" }}
+          disabled={!selectedHost}
+        >
+          <option value="currentuser" disabled={!activeHostContexts?.currentuser}>
+            CURRENTUSER (Screen Capture / Macros)
+          </option>
+          <option value="system" disabled={!activeHostContexts?.system}>
+            SYSTEM (Scripts)
+          </option>
+        </select>
+
+        <div style={{ fontSize: "6px", color: "#aaa", marginBottom: "6px" }}>
+          Agent ID:{" "}
+          {selectedAgent ? (
+            <span style={{ color: "#eee" }}>{selectedAgent}</span>
+          ) : (
+            <span style={{ color: "#666" }}>none</span>
+          )}
+        </div>
 
         {isConnected ? (
           <button
@@ -158,14 +291,6 @@ const BorealisAgentNode = ({ id, data }) => {
             Connect to Agent
           </button>
         )}
-
-        <hr style={{ margin: "6px 0", borderColor: "#444" }} />
-
-        <div style={{ fontSize: "8px", color: "#aaa" }}>
-          Status: <strong>{selectedAgentStatus}</strong>
-          <br />
-          Attach <strong>Agent Role Nodes</strong> to define live behavior.
-        </div>
       </div>
     </div>
   );
@@ -174,12 +299,13 @@ const BorealisAgentNode = ({ id, data }) => {
 // Node Registration Object with sidebar config and docs
 export default {
   type: "Borealis_Agent",
-  label: "Borealis Agent",
+  label: "Device Agent",
   description: `
 Select and connect to a remote Borealis Agent.
 - Assign roles to agent dynamically by connecting "Agent Role" nodes.
 - Auto-provisions agent as role assignments change.
 - See live agent status and re-connect/disconnect easily.
+- Choose between CURRENTUSER and SYSTEM contexts for each device.
 `.trim(),
   content: "Select and manage an Agent with dynamic roles",
   component: BorealisAgentNode,
@@ -197,7 +323,7 @@ Select and connect to a remote Borealis Agent.
 This node represents an available Borealis Agent (Python client) you can control from your workflow.
 
 #### Features
-- **Select** an agent from the list of online agents.
+- **Select** a device and agent context (CURRENTUSER vs SYSTEM).
 - **Connect/Disconnect** from the agent at any time.
 - **Attach roles** (by connecting "Agent Role" nodes to this node's output handle) to assign behaviors dynamically.
 - **Live status** shows if the agent is available, connected, or offline.
