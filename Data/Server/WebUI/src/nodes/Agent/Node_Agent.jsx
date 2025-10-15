@@ -243,7 +243,7 @@ const hostOptions = useMemo(() => {
 
       <div className="borealis-node-header">Device Agent</div>
       <div className="borealis-node-content" style={{ fontSize: "9px" }}>
-        <label>Current Device:</label>
+        <label>Device:</label>
         <select
           value={selectedHost}
           onChange={(e) => setSelectedHost(e.target.value)}
