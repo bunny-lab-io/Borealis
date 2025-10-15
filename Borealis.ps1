@@ -736,11 +736,11 @@ function InstallOrUpdate-BorealisAgent {
     }
 
     Run-Step "Provision Ansible Execution Environment" {
-        Ensure-AnsibleExecutionEnvironment \
-            -ProjectRoot $scriptDir \
-            -PythonBootstrapExe $pythonExe \
-            -RequirementsPath $ansibleEeRequirementsPath \
-            -ExpectedVersion $script:AnsibleExecutionEnvironmentVersion \
+        Ensure-AnsibleExecutionEnvironment `
+            -ProjectRoot $scriptDir `
+            -PythonBootstrapExe $pythonExe `
+            -RequirementsPath $ansibleEeRequirementsPath `
+            -ExpectedVersion $script:AnsibleExecutionEnvironmentVersion `
             -LogName 'Install.log'
     }
 
