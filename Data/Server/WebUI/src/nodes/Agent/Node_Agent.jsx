@@ -40,28 +40,26 @@ const BorealisAgentNode = ({ id, data }) => {
     return grouped;
   }, [agents]);
 
-  const hostOptions = useMemo(() => {
-    const entries = Object.entries(agentsByHostname)
-      .map(([host, contexts]) => {
-        const candidates = [contexts.currentuser, contexts.system].filter(Boolean);
-        if (!candidates.length) return null;
-        const badge = (record) => {
-          if (!record) return "✕";
-          const st = (record.status || "").toString().toLowerCase();
-          if (st === "provisioned") return "✓";
-          return "•";
-        };
-        const label = `${host} (CURRENTUSER ${badge(contexts.currentuser)}, SYSTEM ${badge(contexts.system)})`;
-        const latest = Math.max(...candidates.map((r) => r.last_seen || 0));
-        return { host, label, contexts, latest };
-      })
-      .filter(Boolean)
-      .sort((a, b) => {
-        if (b.latest !== a.latest) return b.latest - a.latest;
-        return a.host.localeCompare(b.host);
-      });
-    return entries;
-  }, [agentsByHostname]);
+const hostOptions = useMemo(() => {
+  const entries = Object.entries(agentsByHostname)
+    .map(([host, contexts]) => {
+      const candidates = [contexts.currentuser, contexts.system].filter(Boolean);
+      if (!candidates.length) return null;
+
+      const label = host;
+      const latest = Math.max(...candidates.map((r) => r.last_seen || 0));
+
+      return { host, label, contexts, latest };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (b.latest !== a.latest) return b.latest - a.latest;
+      return a.host.localeCompare(b.host);
+    });
+
+  return entries;
+}, [agentsByHostname]);
+
 
   // Fetch Agents Periodically
   useEffect(() => {
@@ -72,7 +70,7 @@ const BorealisAgentNode = ({ id, data }) => {
         .catch(() => {});
     };
     fetchAgents();
-    const interval = setInterval(fetchAgents, 4000);
+    const interval = setInterval(fetchAgents, 10000); // Update Agent List Every 10 Seconds
     return () => clearInterval(interval);
   }, []);
 
@@ -237,9 +235,9 @@ const BorealisAgentNode = ({ id, data }) => {
         style={{ top: "100%", background: "#58a6ff" }}
       />
 
-      <div className="borealis-node-header">Borealis Agent</div>
+      <div className="borealis-node-header">Device Agent</div>
       <div className="borealis-node-content" style={{ fontSize: "9px" }}>
-        <label>Device:</label>
+        <label>Current Device:</label>
         <select
           value={selectedHost}
           onChange={(e) => setSelectedHost(e.target.value)}
@@ -253,23 +251,23 @@ const BorealisAgentNode = ({ id, data }) => {
           ))}
         </select>
 
-        <label>Agent Context:</label>
+        <label>Available Agent Context(s):</label>
         <select
           value={selectedMode}
           onChange={(e) => setSelectedMode(e.target.value)}
-          style={{ width: "100%", marginBottom: "6px", fontSize: "9px" }}
+          style={{ width: "100%", marginBottom: "2px", fontSize: "9px" }}
           disabled={!selectedHost}
         >
           <option value="currentuser" disabled={!activeHostContexts?.currentuser}>
-            CURRENTUSER Agent
+            CURRENTUSER (Screen Capture / Macros)
           </option>
           <option value="system" disabled={!activeHostContexts?.system}>
-            SYSTEM Agent
+            SYSTEM (Scripts)
           </option>
         </select>
 
-        <div style={{ fontSize: "8px", color: "#aaa", marginBottom: "4px" }}>
-          Target Agent ID:{" "}
+        <div style={{ fontSize: "6px", color: "#aaa", marginBottom: "6px" }}>
+          Agent ID:{" "}
           {selectedAgent ? (
             <span style={{ color: "#eee" }}>{selectedAgent}</span>
           ) : (
@@ -293,14 +291,6 @@ const BorealisAgentNode = ({ id, data }) => {
             Connect to Agent
           </button>
         )}
-
-        <hr style={{ margin: "6px 0", borderColor: "#444" }} />
-
-        <div style={{ fontSize: "8px", color: "#aaa" }}>
-          Status: <strong>{selectedAgentStatus}</strong>
-          <br />
-          Attach <strong>Agent Role Nodes</strong> to define live behavior.
-        </div>
       </div>
     </div>
   );
@@ -309,7 +299,7 @@ const BorealisAgentNode = ({ id, data }) => {
 // Node Registration Object with sidebar config and docs
 export default {
   type: "Borealis_Agent",
-  label: "Borealis Agent",
+  label: "Device Agent",
   description: `
 Select and connect to a remote Borealis Agent.
 - Assign roles to agent dynamically by connecting "Agent Role" nodes.
