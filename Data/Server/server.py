@@ -708,10 +708,12 @@ def _collect_agent_hash_records() -> List[Dict[str, Any]]:
 
     try:
         for agent_id, info in (registered_agents or {}).items():
-            if agent_id and isinstance(agent_id, str) and agent_id.lower().endswith('-script'):
-                continue
-            if info.get('is_script_agent'):
-                continue
+            mode = _normalize_service_mode(info.get('service_mode'), agent_id)
+            if mode != 'currentuser':
+                if agent_id and isinstance(agent_id, str) and agent_id.lower().endswith('-script'):
+                    continue
+                if info.get('is_script_agent'):
+                    continue
             _register(
                 agent_id,
                 info.get('agent_guid'),
@@ -5846,13 +5848,14 @@ def get_agents():
     # Collapse duplicates by hostname; prefer newer last_seen and non-script entries
     seen_by_hostname = {}
     for aid, info in (registered_agents or {}).items():
-        # Hide script-execution agents from the public list
-        if aid and isinstance(aid, str) and aid.lower().endswith('-script'):
-            continue
-        if info.get('is_script_agent'):
-            continue
         d = dict(info)
         mode = _normalize_service_mode(d.get('service_mode'), aid)
+        # Hide non-interactive script helper entries from the public list
+        if mode != 'currentuser':
+            if aid and isinstance(aid, str) and aid.lower().endswith('-script'):
+                continue
+            if info.get('is_script_agent'):
+                continue
         d['service_mode'] = mode
         ts = d.get('collector_active_ts') or 0
         d['collector_active'] = bool(ts and (now - float(ts) < 130))
@@ -7532,10 +7535,12 @@ def connect_agent(data):
     rec["last_seen"] = int(time.time())
     rec["status"] = "provisioned" if agent_id in agent_configurations else "orphaned"
     rec["service_mode"] = service_mode
-    # Flag script agents so they can be filtered out elsewhere if desired
+    # Flag non-interactive script agents so they can be filtered out elsewhere if desired
     try:
         if isinstance(agent_id, str) and agent_id.lower().endswith('-script'):
-            rec['is_script_agent'] = True
+            rec['is_script_agent'] = service_mode != 'currentuser'
+        elif 'is_script_agent' in rec:
+            rec.pop('is_script_agent', None)
     except Exception:
         pass
     # If we already know the hostname for this agent, persist last_seen so it
@@ -7602,6 +7607,13 @@ def on_agent_heartbeat(data):
     rec["last_seen"] = int(data.get("last_seen") or time.time())
     rec["status"] = "provisioned" if agent_id in agent_configurations else rec.get("status", "orphaned")
     rec["service_mode"] = incoming_mode
+    try:
+        if isinstance(agent_id, str) and agent_id.lower().endswith('-script'):
+            rec['is_script_agent'] = incoming_mode != 'currentuser'
+        elif 'is_script_agent' in rec:
+            rec.pop('is_script_agent', None)
+    except Exception:
+        pass
     # Persist last_seen (and agent_id) into DB keyed by hostname so it survives restarts.
     try:
         _persist_last_seen(rec.get("hostname") or hostname, rec["last_seen"], rec.get("agent_id"))
