@@ -40,26 +40,32 @@ const BorealisAgentNode = ({ id, data }) => {
     return grouped;
   }, [agents]);
 
+// Locale-aware, case-insensitive, numeric-friendly sorter (e.g., "host2" < "host10")
+const hostCollator = useMemo(
+  () => new Intl.Collator(undefined, { sensitivity: "base", numeric: true }),
+  []
+);
+
 const hostOptions = useMemo(() => {
   const entries = Object.entries(agentsByHostname)
     .map(([host, contexts]) => {
       const candidates = [contexts.currentuser, contexts.system].filter(Boolean);
       if (!candidates.length) return null;
 
+      // Label is just the hostname (you already simplified this earlier)
       const label = host;
+
+      // Keep latest around if you use it elsewhere, but it no longer affects ordering
       const latest = Math.max(...candidates.map((r) => r.last_seen || 0));
 
       return { host, label, contexts, latest };
     })
     .filter(Boolean)
-    .sort((a, b) => {
-      if (b.latest !== a.latest) return b.latest - a.latest;
-      return a.host.localeCompare(b.host);
-    });
+    // Always alphabetical, case-insensitive, numeric-aware
+    .sort((a, b) => hostCollator.compare(a.host, b.host));
 
   return entries;
-}, [agentsByHostname]);
-
+}, [agentsByHostname, hostCollator]);
 
   // Fetch Agents Periodically
   useEffect(() => {
@@ -269,9 +275,9 @@ const hostOptions = useMemo(() => {
         <div style={{ fontSize: "6px", color: "#aaa", marginBottom: "6px" }}>
           Agent ID:{" "}
           {selectedAgent ? (
-            <span style={{ color: "#eee" }}>{selectedAgent}</span>
+            <span style={{ color: "#666" }}>{selectedAgent}</span>
           ) : (
-            <span style={{ color: "#666" }}>none</span>
+            <span style={{ color: "#666" }}>No Agent Selected</span>
           )}
         </div>
 
@@ -288,7 +294,7 @@ const hostOptions = useMemo(() => {
             style={{ width: "100%", fontSize: "9px", padding: "4px", marginTop: "4px" }}
             disabled={!selectedAgent}
           >
-            Connect to Agent
+            Connect to Device
           </button>
         )}
       </div>
