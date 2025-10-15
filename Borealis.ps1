@@ -531,10 +531,10 @@ function Ensure-AnsibleExecutionEnvironment {
     }
 
     $pythonCandidates = @(
-        Join-Path $eeRoot 'Scripts\python.exe',
-        Join-Path $eeRoot 'Scripts\python3.exe',
-        Join-Path $eeRoot 'bin\python3',
-        Join-Path $eeRoot 'bin\python'
+        (Join-Path $eeRoot 'Scripts\python.exe')
+        (Join-Path $eeRoot 'Scripts\python3.exe')
+        (Join-Path $eeRoot 'bin\python3')
+        (Join-Path $eeRoot 'bin\python')
     )
 
     $existingPython = $pythonCandidates | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
