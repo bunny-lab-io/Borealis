@@ -329,6 +329,7 @@ from Python_API_Endpoints.script_engines import run_powershell_script
 from job_scheduler import register as register_job_scheduler
 from job_scheduler import set_online_lookup as scheduler_set_online_lookup
 from job_scheduler import set_server_ansible_runner as scheduler_set_server_runner
+from job_scheduler import set_credential_fetcher as scheduler_set_credential_fetcher
 
 # =============================================================================
 # Section: Runtime Stack Configuration
@@ -1859,6 +1860,11 @@ def _ensure_ansible_workspace() -> str:
     return _ANSIBLE_WORKSPACE_DIR
 
 
+_WINRM_USERNAME_VAR = "__borealis_winrm_username"
+_WINRM_PASSWORD_VAR = "__borealis_winrm_password"
+_WINRM_TRANSPORT_VAR = "__borealis_winrm_transport"
+
+
 def _fetch_credential_with_secrets(credential_id: int) -> Optional[Dict[str, Any]]:
     try:
         conn = _db_conn()
@@ -1876,7 +1882,8 @@ def _fetch_credential_with_secrets(credential_id: int) -> Optional[Dict[str, Any
                 private_key_passphrase_encrypted,
                 become_method,
                 become_username,
-                become_password_encrypted
+                become_password_encrypted,
+                metadata_json
             FROM credentials
             WHERE id=?
             """,
@@ -1900,7 +1907,39 @@ def _fetch_credential_with_secrets(credential_id: int) -> Optional[Dict[str, Any
         "become_method": _normalize_become_method(row[8]),
         "become_username": row[9] or "",
         "become_password": _decrypt_secret(row[10]) if row[10] else "",
+        "metadata": {},
     }
+
+    try:
+        meta_json = row[11] if len(row) > 11 else None
+        if meta_json:
+            meta = json.loads(meta_json)
+            if isinstance(meta, dict):
+                cred["metadata"] = meta
+    except Exception:
+        pass
+
+    return cred
+
+
+def _inject_winrm_credential(
+    base_values: Optional[Dict[str, Any]],
+    credential: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    values: Dict[str, Any] = dict(base_values or {})
+    if not credential:
+        return values
+
+    username = str(credential.get("username") or "")
+    password = str(credential.get("password") or "")
+    metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
+    transport = metadata.get("winrm_transport") if isinstance(metadata, dict) else None
+    transport_str = str(transport or "ntlm").strip().lower() or "ntlm"
+
+    values[_WINRM_USERNAME_VAR] = username
+    values[_WINRM_PASSWORD_VAR] = password
+    values[_WINRM_TRANSPORT_VAR] = transport_str
+    return values
 
 
 def _emit_ansible_recap_from_row(row):
@@ -3514,6 +3553,7 @@ _DEVICE_TABLE_COLUMNS = [
     "operating_system",
     "uptime",
     "agent_id",
+    "ansible_ee_ver",
     "connection_type",
     "connection_endpoint",
 ]
@@ -3603,6 +3643,7 @@ def _assemble_device_snapshot(record: Dict[str, Any]) -> Dict[str, Any]:
         "created": _ts_to_human(created_ts),
         "connection_type": _clean_device_str(record.get("connection_type")) or "",
         "connection_endpoint": _clean_device_str(record.get("connection_endpoint")) or "",
+        "ansible_ee_ver": _clean_device_str(record.get("ansible_ee_ver")) or "",
     }
 
     details = {
@@ -3747,6 +3788,7 @@ def _extract_device_columns(details: Dict[str, Any]) -> Dict[str, Any]:
     )
     payload["uptime"] = _coerce_int(uptime_value)
     payload["agent_id"] = _clean_device_str(summary.get("agent_id"))
+    payload["ansible_ee_ver"] = _clean_device_str(summary.get("ansible_ee_ver"))
     payload["connection_type"] = _clean_device_str(
         summary.get("connection_type")
         or summary.get("remote_type")
@@ -3815,9 +3857,10 @@ def _device_upsert(
             operating_system,
             uptime,
             agent_id,
+            ansible_ee_ver,
             connection_type,
             connection_endpoint
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(hostname) DO UPDATE SET
             description=excluded.description,
             created_at=COALESCE({DEVICE_TABLE}.created_at, excluded.created_at),
@@ -3838,6 +3881,7 @@ def _device_upsert(
             operating_system=COALESCE(NULLIF(excluded.operating_system, ''), {DEVICE_TABLE}.operating_system),
             uptime=COALESCE(NULLIF(excluded.uptime, 0), {DEVICE_TABLE}.uptime),
             agent_id=COALESCE(NULLIF(excluded.agent_id, ''), {DEVICE_TABLE}.agent_id),
+            ansible_ee_ver=COALESCE(NULLIF(excluded.ansible_ee_ver, ''), {DEVICE_TABLE}.ansible_ee_ver),
             connection_type=COALESCE(NULLIF(excluded.connection_type, ''), {DEVICE_TABLE}.connection_type),
             connection_endpoint=COALESCE(NULLIF(excluded.connection_endpoint, ''), {DEVICE_TABLE}.connection_endpoint)
     """
@@ -3863,6 +3907,7 @@ def _device_upsert(
         column_values.get("operating_system"),
         column_values.get("uptime"),
         column_values.get("agent_id"),
+        column_values.get("ansible_ee_ver"),
         column_values.get("connection_type"),
         column_values.get("connection_endpoint"),
     ]
@@ -4160,7 +4205,10 @@ def init_db():
                     last_user TEXT,
                     operating_system TEXT,
                     uptime INTEGER,
-                    agent_id TEXT
+                    agent_id TEXT,
+                    ansible_ee_ver TEXT,
+                    connection_type TEXT,
+                    connection_endpoint TEXT
                 )
                 """
             )
@@ -4193,6 +4241,7 @@ def init_db():
     _ensure_column("operating_system", "TEXT")
     _ensure_column("uptime", "INTEGER")
     _ensure_column("agent_id", "TEXT")
+    _ensure_column("ansible_ee_ver", "TEXT")
     _ensure_column("connection_type", "TEXT")
     _ensure_column("connection_endpoint", "TEXT")
 
@@ -4274,6 +4323,7 @@ def init_db():
                         operating_system TEXT,
                         uptime INTEGER,
                         agent_id TEXT,
+                        ansible_ee_ver TEXT,
                         connection_type TEXT,
                         connection_endpoint TEXT
                     )
@@ -4481,6 +4531,7 @@ def init_db():
             expiration TEXT,
             execution_context TEXT NOT NULL,
             credential_id INTEGER,
+            use_service_account INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER DEFAULT 1,
             created_at INTEGER,
             updated_at INTEGER
@@ -4492,6 +4543,8 @@ def init_db():
         sj_cols = [row[1] for row in cur.fetchall()]
         if "credential_id" not in sj_cols:
             cur.execute("ALTER TABLE scheduled_jobs ADD COLUMN credential_id INTEGER")
+        if "use_service_account" not in sj_cols:
+            cur.execute("ALTER TABLE scheduled_jobs ADD COLUMN use_service_account INTEGER NOT NULL DEFAULT 1")
     except Exception:
         pass
     conn.commit()
@@ -4553,6 +4606,7 @@ ensure_default_admin()
 
 job_scheduler = register_job_scheduler(app, socketio, DB_PATH)
 scheduler_set_server_runner(job_scheduler, _queue_server_ansible_run)
+scheduler_set_credential_fetcher(job_scheduler, _fetch_credential_with_secrets)
 job_scheduler.start()
 
 # Provide scheduler with online device lookup based on registered agents
@@ -6359,20 +6413,46 @@ def ansible_quick_run():
     rel_path = (data.get("playbook_path") or "").strip()
     hostnames = data.get("hostnames") or []
     credential_id = data.get("credential_id")
+    use_service_account_raw = data.get("use_service_account")
     if not rel_path or not isinstance(hostnames, list) or not hostnames:
         _ansible_log_server(f"[quick_run] invalid payload rel_path='{rel_path}' hostnames={hostnames}")
         return jsonify({"error": "Missing playbook_path or hostnames[]"}), 400
     server_mode = False
     cred_id_int = None
+    credential_detail: Optional[Dict[str, Any]] = None
+    overrides_raw = data.get("variable_values")
+    variable_values: Dict[str, Any] = {}
+    if isinstance(overrides_raw, dict):
+        for key, val in overrides_raw.items():
+            name = str(key or "").strip()
+            if not name:
+                continue
+            variable_values[name] = val
     if credential_id not in (None, "", "null"):
         try:
             cred_id_int = int(credential_id)
             if cred_id_int <= 0:
                 cred_id_int = None
-            else:
-                server_mode = True
         except Exception:
             return jsonify({"error": "Invalid credential_id"}), 400
+    if use_service_account_raw is None:
+        use_service_account = cred_id_int is None
+    else:
+        use_service_account = bool(use_service_account_raw)
+    if use_service_account:
+        cred_id_int = None
+        credential_detail = None
+    if cred_id_int:
+        credential_detail = _fetch_credential_with_secrets(cred_id_int)
+        if not credential_detail:
+            return jsonify({"error": "Credential not found"}), 404
+        conn_type = (credential_detail.get("connection_type") or "ssh").lower()
+        if conn_type in ("ssh", "linux", "unix"):
+            server_mode = True
+        elif conn_type in ("winrm", "psrp"):
+            variable_values = _inject_winrm_credential(variable_values, credential_detail)
+        else:
+            return jsonify({"error": f"Credential connection '{conn_type}' not supported"}), 400
     try:
         root, abs_path, _ = _resolve_assembly_path('ansible', rel_path)
         if not os.path.isfile(abs_path):
@@ -6384,27 +6464,8 @@ def ansible_quick_run():
         variables = doc.get('variables') if isinstance(doc.get('variables'), list) else []
         files = doc.get('files') if isinstance(doc.get('files'), list) else []
         friendly_name = (doc.get("name") or "").strip() or os.path.basename(abs_path)
-        overrides_raw = data.get("variable_values")
-        variable_values = {}
-        if isinstance(overrides_raw, dict):
-            for key, val in overrides_raw.items():
-                name = str(key or "").strip()
-                if not name:
-                    continue
-                variable_values[name] = val
-
         if server_mode and not cred_id_int:
             return jsonify({"error": "credential_id is required for server-side execution"}), 400
-
-        if server_mode:
-            cred = _fetch_credential_with_secrets(cred_id_int)
-            if not cred:
-                return jsonify({"error": "Credential not found"}), 404
-            conn_type = (cred.get("connection_type") or "ssh").lower()
-            if conn_type not in ("ssh",):
-                return jsonify({"error": f"Credential connection '{conn_type}' not supported for server execution"}), 400
-            # Avoid keeping decrypted secrets in memory longer than necessary
-            del cred
 
         results = []
         for host in hostnames:
@@ -6499,6 +6560,9 @@ def ansible_quick_run():
                     except Exception:
                         pass
                 results.append({"hostname": host, "run_id": run_id, "status": "Failed", "activity_job_id": job_id, "error": str(ex)})
+        if credential_detail is not None:
+            # Remove decrypted secrets from scope as soon as possible
+            credential_detail.clear()
         return jsonify({"results": results})
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400

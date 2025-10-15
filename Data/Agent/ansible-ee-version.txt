@@ -1,0 +1,2 @@
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Agent/ansible-ee-version.txt
+1.0.0
