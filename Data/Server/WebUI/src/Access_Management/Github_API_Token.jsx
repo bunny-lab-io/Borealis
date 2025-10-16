@@ -10,6 +10,9 @@ import {
   Typography
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import SaveIcon from "@mui/icons-material/Save";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 
 const paperSx = {
   m: 2,
@@ -42,6 +45,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
   const [token, setToken] = useState("");
   const [inputValue, setInputValue] = useState("");
   const [fetchError, setFetchError] = useState("");
+  const [showToken, setShowToken] = useState(false);
   const [verification, setVerification] = useState({
     message: "",
     valid: null,
@@ -62,6 +66,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
       const storedToken = typeof data?.token === "string" ? data.token : "";
       setToken(storedToken);
       setInputValue(storedToken);
+      setShowToken(false);
       setVerification({
         message: typeof data?.message === "string" ? data.message : "",
         valid: data?.valid === true,
@@ -101,6 +106,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
       const storedToken = typeof data?.token === "string" ? data.token : "";
       setToken(storedToken);
       setInputValue(storedToken);
+      setShowToken(false);
       setVerification({
         message: typeof data?.message === "string" ? data.message : "",
         valid: data?.valid === true,
@@ -134,6 +140,10 @@ export default function GithubAPIToken({ isAdmin = false }) {
     }
     return { text: message, color: "#ff8080" };
   }, [dirty, verification]);
+
+  const toggleReveal = useCallback(() => {
+    setShowToken((prev) => !prev);
+  }, []);
 
   if (!isAdmin) {
     return (
@@ -197,16 +207,6 @@ export default function GithubAPIToken({ isAdmin = false }) {
           </Box>
         </Typography>
         </Box>
-        <Button
-          variant="outlined"
-          size="small"
-          startIcon={<RefreshIcon />}
-          sx={{ borderColor: "#58a6ff", color: "#58a6ff" }}
-          onClick={hydrate}
-          disabled={loading || saving}
-        >
-          Refresh
-        </Button>
       </Box>
       <Box sx={{ px: 2, py: 2, display: "flex", flexDirection: "column", gap: 1.5 }}>
         <TextField
@@ -217,17 +217,36 @@ export default function GithubAPIToken({ isAdmin = false }) {
           variant="outlined"
           sx={fieldSx}
           disabled={saving || loading}
+          type={showToken ? "text" : "password"}
           InputProps={{
             endAdornment: (
-              <InputAdornment position="end" sx={{ mr: -1 }}>
+              <InputAdornment
+                position="end"
+                sx={{ mr: -1, display: "flex", alignItems: "center", gap: 1 }}
+              >
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={toggleReveal}
+                  disabled={loading || saving}
+                  startIcon={showToken ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                  sx={{
+                    bgcolor: "#3a3a3a",
+                    color: "#f5f7fa",
+                    minWidth: 96,
+                    "&:hover": { bgcolor: "#4a4a4a" }
+                  }}
+                >
+                  {showToken ? "Hide" : "Reveal"}
+                </Button>
                 <Button
                   variant="contained"
                   size="small"
                   onClick={handleSave}
                   disabled={saving || loading}
+                  startIcon={!saving ? <SaveIcon /> : null}
                   sx={{
                     bgcolor: "#58a6ff",
-                    mr: 1,
                     color: "#0b0f19",
                     minWidth: 88,
                     "&:hover": { bgcolor: "#7db7ff" }
@@ -240,35 +259,64 @@ export default function GithubAPIToken({ isAdmin = false }) {
           }}
         />
 
-        {(verificationMessage.text || (!dirty && verification.rateLimit)) && (
-          <Typography variant="body2" sx={{ display: "inline", color: verificationMessage.color || "#7db7ff" }}>
-            {verificationMessage.text && `${verificationMessage.text} `}
-            {!dirty && verification.rateLimit && `- Hourly Request Rate Limit: ${verification.rateLimit.toLocaleString()}`}
-          </Typography>
-        )}
-
-{loading && (
         <Box
           sx={{
             display: "flex",
             alignItems: "center",
-            gap: 1,
-            color: "#7db7ff",
-            px: 2,
-            py: 1.5,
-            borderBottom: "1px solid #2a2a2a"
+            justifyContent: "space-between",
+            gap: 2
           }}
         >
-          <CircularProgress size={18} sx={{ color: "#58a6ff" }} />
-          <Typography variant="body2">Loading token…</Typography>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<RefreshIcon />}
+            sx={{ borderColor: "#58a6ff", color: "#58a6ff" }}
+            onClick={hydrate}
+            disabled={loading || saving}
+          >
+            Refresh
+          </Button>
+          {(verificationMessage.text || (!dirty && verification.rateLimit)) && (
+            <Typography
+              variant="body2"
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                color: verificationMessage.color || "#7db7ff",
+                textAlign: "right"
+              }}
+            >
+              {verificationMessage.text && `${verificationMessage.text} `}
+              {!dirty &&
+                verification.rateLimit &&
+                `- Hourly Request Rate Limit: ${verification.rateLimit.toLocaleString()}`}
+            </Typography>
+          )}
         </Box>
-      )}
 
-      {fetchError && (
-        <Box sx={{ px: 2, py: 1.5, color: "#ff8080", borderBottom: "1px solid #2a2a2a" }}>
-          <Typography variant="body2">{fetchError}</Typography>
-        </Box>
-      )}
+        {loading && (
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              color: "#7db7ff",
+              px: 2,
+              py: 1.5,
+              borderBottom: "1px solid #2a2a2a"
+            }}
+          >
+            <CircularProgress size={18} sx={{ color: "#58a6ff" }} />
+            <Typography variant="body2">Loading token…</Typography>
+          </Box>
+        )}
+
+        {fetchError && (
+          <Box sx={{ px: 2, py: 1.5, color: "#ff8080", borderBottom: "1px solid #2a2a2a" }}>
+            <Typography variant="body2">{fetchError}</Typography>
+          </Box>
+        )}
       </Box>
     </Paper>
   );
