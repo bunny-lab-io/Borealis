@@ -94,7 +94,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   export default function App() {
   const [tabs, setTabs] = useState([{ id: "flow_1", tab_name: "Flow 1", nodes: [], edges: [] }]);
   const [activeTabId, setActiveTabId] = useState("flow_1");
-  const [currentPage, setCurrentPage] = useState("devices");
+  const [currentPage, setCurrentPageState] = useState("devices");
   const [selectedDevice, setSelectedDevice] = useState(null);
 
   const [userMenuAnchorEl, setUserMenuAnchorEl] = useState(null);
@@ -111,6 +111,9 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   const [editingJob, setEditingJob] = useState(null);
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
   const [assemblyEditorState, setAssemblyEditorState] = useState(null); // { path, mode, context, nonce }
+  const [sessionResolved, setSessionResolved] = useState(false);
+  const initialPathRef = useRef(window.location.pathname + window.location.search);
+  const pendingPathRef = useRef(null);
       const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
 
       // Top-bar search state
@@ -152,6 +155,205 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           return t;
         }
       }, []);
+
+  const pageToPath = useCallback(
+    (page, options = {}) => {
+      switch (page) {
+        case "login":
+          return "/login";
+        case "sites":
+          return "/sites";
+        case "devices":
+          return "/devices";
+        case "agent_devices":
+          return "/devices/agent";
+        case "ssh_devices":
+          return "/devices/ssh";
+        case "winrm_devices":
+          return "/devices/winrm";
+        case "device_details": {
+          const device =
+            options.device ||
+            selectedDevice ||
+            (options.deviceId
+              ? { agent_guid: options.deviceId, hostname: options.deviceName || options.deviceId }
+              : null);
+          const deviceId =
+            device?.agent_guid ||
+            device?.guid ||
+            device?.summary?.agent_guid ||
+            device?.hostname ||
+            device?.id;
+          if (deviceId) {
+            return `/device/${encodeURIComponent(deviceId)}`;
+          }
+          return "/devices";
+        }
+        case "jobs":
+          return "/scheduling";
+        case "create_job":
+          return "/scheduling/create_job";
+        case "workflows":
+          return "/workflows";
+        case "workflow-editor":
+          return "/workflows/editor";
+        case "assemblies":
+          return "/assemblies";
+        case "scripts":
+        case "ansible_editor": {
+          const mode = page === "ansible_editor" ? "ansible" : "scripts";
+          const params = new URLSearchParams();
+          if (mode === "ansible") {
+            params.set("mode", "ansible");
+          }
+          const state = options.assemblyState || assemblyEditorState;
+          if (state?.path) {
+            params.set("path", state.path);
+          }
+          const query = params.toString();
+          return query ? `/assemblies/editor?${query}` : "/assemblies/editor";
+        }
+        case "access_credentials":
+          return "/access_management/credentials";
+        case "access_users":
+          return "/access_management/users";
+        case "server_info":
+          return "/admin/server_info";
+        default:
+          return "/devices";
+      }
+    },
+    [assemblyEditorState, selectedDevice]
+  );
+
+  const interpretPath = useCallback((rawPath) => {
+    try {
+      const url = new URL(rawPath || "/", window.location.origin);
+      let path = url.pathname || "/";
+      if (path.length > 1 && path.endsWith("/")) {
+        path = path.slice(0, -1);
+      }
+      const segments = path.split("/").filter(Boolean);
+      const params = url.searchParams;
+
+      if (path === "/login") return { page: "login", options: {} };
+      if (path === "/" || path === "") return { page: "devices", options: {} };
+      if (path === "/devices") return { page: "devices", options: {} };
+      if (path === "/devices/agent") return { page: "agent_devices", options: {} };
+      if (path === "/devices/ssh") return { page: "ssh_devices", options: {} };
+      if (path === "/devices/winrm") return { page: "winrm_devices", options: {} };
+      if (segments[0] === "device" && segments[1]) {
+        const id = decodeURIComponent(segments[1]);
+        return {
+          page: "device_details",
+          options: { device: { agent_guid: id, hostname: id } }
+        };
+      }
+      if (path === "/sites") return { page: "sites", options: {} };
+      if (path === "/scheduling") return { page: "jobs", options: {} };
+      if (path === "/scheduling/create_job") return { page: "create_job", options: {} };
+      if (path === "/workflows") return { page: "workflows", options: {} };
+      if (path === "/workflows/editor") return { page: "workflow-editor", options: {} };
+      if (path === "/assemblies") return { page: "assemblies", options: {} };
+      if (path === "/assemblies/editor") {
+        const mode = params.get("mode");
+        const relPath = params.get("path") || "";
+        const state = relPath
+          ? { path: relPath, mode: mode === "ansible" ? "ansible" : "scripts", nonce: Date.now() }
+          : null;
+        return {
+          page: mode === "ansible" ? "ansible_editor" : "scripts",
+          options: state ? { assemblyState: state } : {}
+        };
+      }
+      if (path === "/access_management/users") return { page: "access_users", options: {} };
+      if (path === "/access_management/credentials") return { page: "access_credentials", options: {} };
+      if (path === "/admin/server_info") return { page: "server_info", options: {} };
+      return { page: "devices", options: {} };
+    } catch {
+      return { page: "devices", options: {} };
+    }
+  }, []);
+
+  const updateStateForPage = useCallback(
+    (page, options = {}) => {
+      setCurrentPageState(page);
+      if (page === "device_details") {
+        if (options.device) {
+          setSelectedDevice(options.device);
+        } else if (options.deviceId) {
+          const fallbackId = options.deviceId;
+          const fallbackName = options.deviceName || options.deviceId;
+          setSelectedDevice((prev) => {
+            const prevId = prev?.agent_guid || prev?.guid || prev?.hostname || "";
+            if (prevId === fallbackId || prevId === fallbackName) {
+              return prev;
+            }
+            return { agent_guid: fallbackId, hostname: fallbackName };
+          });
+        }
+      } else if (!options.preserveDevice) {
+        setSelectedDevice(null);
+      }
+
+      if ((page === "scripts" || page === "ansible_editor") && options.assemblyState) {
+        setAssemblyEditorState(options.assemblyState);
+      }
+    },
+    [setAssemblyEditorState, setCurrentPageState, setSelectedDevice]
+  );
+
+  const navigateTo = useCallback(
+    (page, options = {}) => {
+      const { replace = false, allowUnauthenticated = false, suppressPending = false } = options;
+      const targetPath = pageToPath(page, options);
+
+      if (!allowUnauthenticated && !user && page !== "login") {
+        if (!suppressPending && targetPath) {
+          pendingPathRef.current = targetPath;
+        }
+        updateStateForPage("login", {});
+        const loginPath = "/login";
+        const method = replace ? "replaceState" : "pushState";
+        const current = window.location.pathname + window.location.search;
+        if (replace || current !== loginPath) {
+          window.history[method]({}, "", loginPath);
+        }
+        return;
+      }
+
+      if (page === "login") {
+        updateStateForPage("login", {});
+        const loginPath = "/login";
+        const method = replace ? "replaceState" : "pushState";
+        const current = window.location.pathname + window.location.search;
+        if (replace || current !== loginPath) {
+          window.history[method]({}, "", loginPath);
+        }
+        return;
+      }
+
+      pendingPathRef.current = null;
+      updateStateForPage(page, options);
+
+      if (targetPath) {
+        const method = replace ? "replaceState" : "pushState";
+        const current = window.location.pathname + window.location.search;
+        if (replace || current !== targetPath) {
+          window.history[method]({}, "", targetPath);
+        }
+      }
+    },
+    [pageToPath, updateStateForPage, user]
+  );
+
+  const navigateByPath = useCallback(
+    (path, { replace = false, allowUnauthenticated = false } = {}) => {
+      const { page, options } = interpretPath(path);
+      navigateTo(page, { ...(options || {}), replace, allowUnauthenticated });
+    },
+    [interpretPath, navigateTo]
+  );
 
   // Build breadcrumb items for current view
   const breadcrumbs = React.useMemo(() => {
@@ -247,38 +449,103 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     return items;
   }, [currentPage, selectedDevice, editingJob]);
 
-      useEffect(() => {
-        const session = localStorage.getItem("borealis_session");
-    if (session) {
-      try {
-        const data = JSON.parse(session);
-        if (Date.now() - data.timestamp < 3600 * 1000) {
-          setUser(data.username);
-          setUserRole(data.role || null);
-          setUserDisplayName(data.display_name || data.username);
-        } else {
+  useEffect(() => {
+    let canceled = false;
+    const hydrateSession = async () => {
+      const session = localStorage.getItem("borealis_session");
+      if (session) {
+        try {
+          const data = JSON.parse(session);
+          if (Date.now() - data.timestamp < 3600 * 1000) {
+            if (!canceled) {
+              setUser(data.username);
+              setUserRole(data.role || null);
+              setUserDisplayName(data.display_name || data.username);
+            }
+          } else {
+            localStorage.removeItem("borealis_session");
+          }
+        } catch {
           localStorage.removeItem("borealis_session");
         }
-      } catch {
-        localStorage.removeItem("borealis_session");
       }
-    }
-    (async () => {
+
       try {
         const resp = await fetch('/api/auth/me', { credentials: 'include' });
         if (resp.ok) {
           const me = await resp.json();
-          setUser(me.username);
-          setUserRole(me.role || null);
-          setUserDisplayName(me.display_name || me.username);
+          if (!canceled) {
+            setUser(me.username);
+            setUserRole(me.role || null);
+            setUserDisplayName(me.display_name || me.username);
+          }
           localStorage.setItem(
             "borealis_session",
             JSON.stringify({ username: me.username, display_name: me.display_name || me.username, role: me.role, timestamp: Date.now() })
           );
         }
       } catch {}
-    })();
-      }, []);
+
+      if (!canceled) {
+        setSessionResolved(true);
+      }
+    };
+
+    hydrateSession();
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sessionResolved) return;
+
+    if (user) {
+      const stored = initialPathRef.current;
+      const currentLocation = window.location.pathname + window.location.search;
+      const targetPath =
+        stored && stored !== "/login"
+          ? stored
+          : currentLocation === "/login" || currentLocation === ""
+          ? "/devices"
+          : currentLocation;
+      navigateByPath(targetPath, { replace: true, allowUnauthenticated: true });
+      initialPathRef.current = null;
+      pendingPathRef.current = null;
+    } else {
+      const stored = initialPathRef.current;
+      const currentLocation = window.location.pathname + window.location.search;
+      const rememberPath =
+        stored && !stored.startsWith("/login")
+          ? stored
+          : !currentLocation.startsWith("/login")
+          ? currentLocation
+          : null;
+      if (rememberPath) {
+        pendingPathRef.current = rememberPath;
+      }
+      navigateTo("login", { replace: true, allowUnauthenticated: true, suppressPending: true });
+    }
+  }, [sessionResolved, user, navigateByPath, navigateTo]);
+
+  useEffect(() => {
+    if (!sessionResolved) return;
+
+    const handlePopState = () => {
+      const path = window.location.pathname + window.location.search;
+      if (!user) {
+        if (!path.startsWith("/login")) {
+          pendingPathRef.current = path;
+        }
+        navigateTo("login", { replace: true, allowUnauthenticated: true, suppressPending: true });
+        return;
+      }
+      navigateByPath(path, { replace: true, allowUnauthenticated: true });
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [sessionResolved, user, navigateByPath, navigateTo]);
 
       // Suggest fetcher with debounce
       const fetchSuggestions = useCallback((field, q) => {
@@ -311,7 +578,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
               field === 'site_name' ? { name: q } : { description: q }
             ));
           } catch {}
-          if (navigateImmediate) setCurrentPage("sites");
+          if (navigateImmediate) navigateTo("sites");
         } else {
           // device field
           // Map API field -> Device_List filter key
@@ -327,8 +594,12 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           const qLc = String(q || '').toLowerCase();
           const exact = (suggestions.devices || []).find((d) => String(d.hostname || d.value || '').toLowerCase() === qLc);
           if (exact && (exact.hostname || '').trim()) {
-            setSelectedDevice({ hostname: exact.hostname.trim() });
-            if (navigateImmediate) setCurrentPage('device_details');
+            const device = { hostname: exact.hostname.trim() };
+            if (navigateImmediate) {
+              navigateTo('device_details', { device });
+            } else {
+              setSelectedDevice(device);
+            }
           } else if (field === 'hostname') {
             // Probe device existence and open directly if found
             try {
@@ -336,30 +607,34 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
               if (resp.ok) {
                 const data = await resp.json();
                 if (data && (data.summary?.hostname || Object.keys(data).length > 0)) {
-                  setSelectedDevice({ hostname: q });
-                  if (navigateImmediate) setCurrentPage('device_details');
+                  const device = { hostname: q };
+                  if (navigateImmediate) {
+                    navigateTo('device_details', { device });
+                  } else {
+                    setSelectedDevice(device);
+                  }
                 } else {
                   try { localStorage.setItem('device_list_initial_filters', JSON.stringify({ [k]: q })); } catch {}
-                  if (navigateImmediate) setCurrentPage('devices');
+                  if (navigateImmediate) navigateTo('devices');
                 }
               } else {
                 try { localStorage.setItem('device_list_initial_filters', JSON.stringify({ [k]: q })); } catch {}
-                if (navigateImmediate) setCurrentPage('devices');
+                if (navigateImmediate) navigateTo('devices');
               }
             } catch {
               try { localStorage.setItem('device_list_initial_filters', JSON.stringify({ [k]: q })); } catch {}
-              if (navigateImmediate) setCurrentPage('devices');
+              if (navigateImmediate) navigateTo('devices');
             }
           } else {
             try {
               const payload = (k === 'serialNumber') ? {} : { [k]: q };
               localStorage.setItem('device_list_initial_filters', JSON.stringify(payload));
             } catch {}
-            if (navigateImmediate) setCurrentPage("devices");
+            if (navigateImmediate) navigateTo("devices");
           }
         }
         setSearchOpen(false);
-      }, [SEARCH_CATEGORIES, setCurrentPage, suggestions.devices]);
+      }, [SEARCH_CATEGORIES, navigateTo, suggestions.devices]);
 
   const handleLoginSuccess = ({ username, role }) => {
     setUser(username);
@@ -383,6 +658,12 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         }
       } catch {}
     })();
+    if (pendingPathRef.current) {
+      navigateByPath(pendingPathRef.current, { replace: true, allowUnauthenticated: true });
+      pendingPathRef.current = null;
+    } else {
+      navigateTo('devices', { replace: true, allowUnauthenticated: true });
+    }
   };
 
   useEffect(() => {
@@ -440,6 +721,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     setUser(null);
     setUserRole(null);
     setUserDisplayName(null);
+    navigateTo('login', { replace: true, allowUnauthenticated: true, suppressPending: true });
   };
 
   const handleTabRightClick = (evt, tabId) => {
@@ -526,7 +808,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             }
           ]);
           setActiveTabId(newId);
-          setCurrentPage("workflow-editor");
+          navigateTo("workflow-editor");
         } catch (err) {
           console.error("Failed to import workflow:", err);
         }
@@ -534,7 +816,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       reader.readAsText(file);
       e.target.value = "";
     },
-    [setTabs]
+    [navigateTo, setTabs]
   );
 
   const handleSaveFlow = useCallback(
@@ -582,9 +864,9 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       || currentPage === 'agent_devices';
     if (!isAdmin && requiresAdmin) {
       setNotAuthorizedOpen(true);
-      setCurrentPage('devices');
+      navigateTo('devices', { replace: true, suppressPending: true });
     }
-  }, [currentPage, isAdmin]);
+  }, [currentPage, isAdmin, navigateTo]);
 
   const renderMainContent = () => {
     switch (currentPage) {
@@ -595,7 +877,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
               try {
                 localStorage.setItem('device_list_initial_site_filter', String(siteName || ''));
               } catch {}
-              setCurrentPage("devices");
+              navigateTo("devices");
             }}
           />
         );
@@ -603,8 +885,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return (
           <DeviceList
             onSelectDevice={(d) => {
-              setSelectedDevice(d);
-              setCurrentPage("device_details");
+              navigateTo("device_details", { device: d });
             }}
           />
         );
@@ -612,8 +893,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return (
           <AgentDevices
             onSelectDevice={(d) => {
-              setSelectedDevice(d);
-              setCurrentPage("device_details");
+              navigateTo("device_details", { device: d });
             }}
           />
         );
@@ -627,7 +907,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           <DeviceDetails
             device={selectedDevice}
             onBack={() => {
-              setCurrentPage("devices");
+              navigateTo("devices");
               setSelectedDevice(null);
             }}
           />
@@ -636,8 +916,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "jobs":
         return (
           <ScheduledJobsList
-            onCreateJob={() => { setEditingJob(null); setCurrentPage("create_job"); }}
-            onEditJob={(job) => { setEditingJob(job); setCurrentPage("create_job"); }}
+            onCreateJob={() => { setEditingJob(null); navigateTo("create_job"); }}
+            onEditJob={(job) => { setEditingJob(job); navigateTo("create_job"); }}
             refreshToken={jobsRefreshToken}
           />
         );
@@ -646,8 +926,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return (
           <CreateJob
             initialJob={editingJob}
-            onCancel={() => { setCurrentPage("jobs"); setEditingJob(null); }}
-            onCreated={() => { setCurrentPage("jobs"); setEditingJob(null); setJobsRefreshToken(Date.now()); }}
+            onCancel={() => { navigateTo("jobs"); setEditingJob(null); }}
+            onCreated={() => { navigateTo("jobs"); setEditingJob(null); setJobsRefreshToken(Date.now()); }}
           />
         );
 
@@ -671,7 +951,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
                 setTabs([{ id: newId, tab_name: name || "Flow", nodes: [], edges: [], folderPath: folderPath || "" }]);
               }
               setActiveTabId(newId);
-              setCurrentPage("workflow-editor");
+              navigateTo("workflow-editor");
             }}
             onOpenScript={(rel, mode, context) => {
               const nonce = Date.now();
@@ -681,7 +961,14 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
                 context: context ? { ...context, nonce } : null,
                 nonce
               });
-              setCurrentPage(mode === 'ansible' ? 'ansible_editor' : 'scripts');
+              navigateTo(mode === 'ansible' ? 'ansible_editor' : 'scripts', {
+                assemblyState: {
+                  path: rel || '',
+                  mode,
+                  context: context ? { ...context, nonce } : null,
+                  nonce
+                }
+              });
             }}
           />
         );
@@ -706,7 +993,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
                 setTabs([{ id: newId, tab_name: name || "Flow", nodes: [], edges: [], folderPath: folderPath || "" }]);
               }
               setActiveTabId(newId);
-              setCurrentPage("workflow-editor");
+              navigateTo("workflow-editor");
             }}
             onOpenScript={(rel, mode, context) => {
               const nonce = Date.now();
@@ -716,7 +1003,14 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
                 context: context ? { ...context, nonce } : null,
                 nonce
               });
-              setCurrentPage(mode === 'ansible' ? 'ansible_editor' : 'scripts');
+              navigateTo(mode === 'ansible' ? 'ansible_editor' : 'scripts', {
+                assemblyState: {
+                  path: rel || '',
+                  mode,
+                  context: context ? { ...context, nonce } : null,
+                  nonce
+                }
+              });
             }}
           />
         );
@@ -730,7 +1024,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             onConsumeInitialData={() =>
               setAssemblyEditorState((prev) => (prev && prev.mode === 'scripts' ? null : prev))
             }
-            onSaved={() => setCurrentPage('assemblies')}
+            onSaved={() => navigateTo('assemblies')}
           />
         );
 
@@ -743,7 +1037,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             onConsumeInitialData={() =>
               setAssemblyEditorState((prev) => (prev && prev.mode === 'ansible' ? null : prev))
             }
-            onSaved={() => setCurrentPage('assemblies')}
+            onSaved={() => navigateTo('assemblies')}
           />
         );
 
@@ -857,7 +1151,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
                     return (
                       <Button
                         key={idx}
-                        onClick={() => setCurrentPage(c.page)}
+                        onClick={() => navigateTo(c.page)}
                         size="small"
                         sx={{
                           color: "#7db7ff",
@@ -958,7 +1252,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
                                   ? highlightText(secVal, searchQuery)
                                   : (d.internal_ip || d.external_ip || d.description || d.last_user || '');
                                 return (
-                                  <Box key={idx} onClick={() => { setSelectedDevice({ hostname: d.hostname || d.value }); setCurrentPage('device_details'); setSearchOpen(false); }} sx={{ px: 1.2, py: 0.6, '&:hover': { bgcolor: '#22272e' }, cursor: 'pointer' }}>
+                                  <Box key={idx} onClick={() => { navigateTo('device_details', { device: { hostname: d.hostname || d.value } }); setSearchOpen(false); }} sx={{ px: 1.2, py: 0.6, '&:hover': { bgcolor: '#22272e' }, cursor: 'pointer' }}>
                                     <Typography variant="body2" sx={{ color: '#e8eaed' }}>{primary}</Typography>
                                     <Typography variant="caption" sx={{ color: '#9aa0a6' }}>
                                       {d.site_name || ''}{(d.site_name && (secVal || (d.internal_ip || d.external_ip || d.description || d.last_user))) ? ' • ' : ''}{secHighlighted}
@@ -1012,7 +1306,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           </Toolbar>
         </AppBar>
         <Box sx={{ display: "flex", flexGrow: 1, overflow: "auto", minHeight: 0 }}>
-          <NavigationSidebar currentPage={currentPage} onNavigate={setCurrentPage} isAdmin={isAdmin} />
+          <NavigationSidebar currentPage={currentPage} onNavigate={navigateTo} isAdmin={isAdmin} />
           <Box
             sx={{
               flexGrow: 1,
