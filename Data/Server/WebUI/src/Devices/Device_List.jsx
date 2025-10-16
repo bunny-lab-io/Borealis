@@ -1084,7 +1084,7 @@ export default function DeviceList({
             headerName: col.label,
             width: 410,
             minWidth: 410,
-            flex: 0,
+            flex: 1,
           };
         case "internalIp":
           return {
