@@ -294,14 +294,15 @@ export default function CredentialList({ isAdmin = false }) {
           m: 2,
           p: 0,
           bgcolor: "#1e1e1e",
-          borderRadius: 2,
           fontFamily: gridFontFamily,
           color: "#f5f7fa",
           display: "flex",
           flexDirection: "column",
+          flexGrow: 1,
+          minWidth: 0,
           minHeight: 420
         }}
-        elevation={3}
+        elevation={2}
       >
         <Box
           sx={{
@@ -367,12 +368,12 @@ export default function CredentialList({ isAdmin = false }) {
         <Box
           sx={{
             flexGrow: 1,
-            minHeight: 320,
+            minHeight: 0,
             display: "flex",
             flexDirection: "column",
-            ml: 2,
-            mr: 2,
-            mb: 2
+            mt: "10px",
+            px: 2,
+            pb: 2
           }}
         >
           <Box
@@ -384,9 +385,11 @@ export default function CredentialList({ isAdmin = false }) {
               fontFamily: gridFontFamily,
               "--ag-font-family": gridFontFamily,
               "--ag-icon-font-family": iconFontFamily,
+              "--ag-row-border-style": "solid",
+              "--ag-row-border-color": "#2a2a2a",
+              "--ag-row-border-width": "1px",
               "& .ag-root-wrapper": {
-                borderRadius: "0 0 16px 16px",
-                borderColor: "#2a2a2a",
+                borderRadius: 1,
                 minHeight: 320
               },
               "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
@@ -394,12 +397,6 @@ export default function CredentialList({ isAdmin = false }) {
               },
               "& .ag-icon": {
                 fontFamily: iconFontFamily
-              },
-              "& .ag-header": {
-                borderBottom: "1px solid #2a2a2a"
-              },
-              "& .ag-row": {
-                borderColor: "#2a2a2a"
               }
             }}
             style={{ color: "#f5f7fa" }}
