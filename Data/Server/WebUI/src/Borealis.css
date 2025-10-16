@@ -1,5 +1,11 @@
 /* ///////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Borealis.css
 
+body {
+  font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  background-color: #0b0f19;
+  color: #f5f7fa;
+}
+
 /* ======================================= */
 /* FLOW EDITOR                             */
 /* ======================================= */

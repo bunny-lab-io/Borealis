@@ -43,6 +43,8 @@ const myTheme = themeQuartz.withParams({
 });
 
 const themeClassName = myTheme.themeName || "ag-theme-quartz";
+const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
+const iconFontFamily = '"Quartz Regular"';
 
 function formatLastSeen(tsSec, offlineAfter = 300) {
   if (!tsSec) return "unknown";
@@ -188,7 +190,103 @@ export default function DeviceList({
   const gridRef = useRef(null);
 
   // Per-column filters
-  const [filters, setFilters] = useState({});
+  const [filtersState, setFiltersState] = useState({});
+
+  const sanitizeFilterModel = useCallback((raw) => {
+    if (!raw || typeof raw !== "object") return {};
+    const sanitized = {};
+    Object.entries(raw).forEach(([key, value]) => {
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed) {
+          sanitized[key] = {
+            filterType: "text",
+            type: "contains",
+            filter: trimmed,
+          };
+        }
+        return;
+      }
+      if (!value || typeof value !== "object") return;
+      const clone = JSON.parse(JSON.stringify(value));
+      if (!clone.filterType) clone.filterType = "text";
+      if (clone.filterType === "text") {
+        if (typeof clone.filter === "string") {
+          clone.filter = clone.filter.trim();
+        }
+        if (Array.isArray(clone.conditions)) {
+          clone.conditions = clone.conditions
+            .map((condition) => {
+              if (!condition || typeof condition !== "object") return null;
+              const condClone = { ...condition };
+              if (typeof condClone.filter === "string") {
+                condClone.filter = condClone.filter.trim();
+              }
+              if (
+                !condClone.filter &&
+                !["blank", "notBlank"].includes(condClone.type ?? "")
+              ) {
+                return null;
+              }
+              return condClone;
+            })
+            .filter(Boolean);
+          if (!clone.conditions.length) {
+            delete clone.conditions;
+          }
+        }
+        if (
+          !clone.filter &&
+          !clone.conditions &&
+          !["blank", "notBlank"].includes(clone.type ?? "")
+        ) {
+          return;
+        }
+      }
+      sanitized[key] = clone;
+    });
+    return sanitized;
+  }, []);
+
+  const filterModelsEqual = useCallback(
+    (a, b) => JSON.stringify(a ?? {}) === JSON.stringify(b ?? {}),
+    []
+  );
+
+  const replaceFilters = useCallback(
+    (raw) => {
+      const sanitized =
+        raw && typeof raw === "object" ? sanitizeFilterModel(raw) : {};
+      setFiltersState((prev) =>
+        filterModelsEqual(prev, sanitized) ? prev : sanitized
+      );
+    },
+    [filterModelsEqual, sanitizeFilterModel]
+  );
+
+  const mergeFilters = useCallback(
+    (raw) => {
+      if (!raw || typeof raw !== "object") return;
+      const sanitized = sanitizeFilterModel(raw);
+      if (!Object.keys(sanitized).length) return;
+      setFiltersState((prev) => {
+        const base = prev || {};
+        const next = { ...base };
+        let changed = false;
+        Object.entries(sanitized).forEach(([key, value]) => {
+          if (!value) return;
+          if (!next[key] || !filterModelsEqual(next[key], value)) {
+            next[key] = value;
+            changed = true;
+          }
+        });
+        return changed ? next : base;
+      });
+    },
+    [filterModelsEqual, sanitizeFilterModel]
+  );
+
+  const filters = filtersState;
 
   const [sites, setSites] = useState([]); // sites list for assignment
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
@@ -472,7 +570,7 @@ export default function DeviceList({
       if (json) {
         const obj = JSON.parse(json);
         if (obj && typeof obj === 'object') {
-          setFilters((prev) => ({ ...prev, ...obj }));
+          mergeFilters(obj);
           // Optionally ensure Site column exists when site filter is present
           if (obj.site) {
             setColumns((prev) => {
@@ -505,16 +603,16 @@ export default function DeviceList({
           next.splice(insertAt, 0, { id: 'site', label: COL_LABELS.site });
           return next;
         });
-        setFilters((f) => ({ ...f, site }));
+        mergeFilters({ site });
         localStorage.removeItem('device_list_initial_site_filter');
       }
     } catch {}
-  }, [COL_LABELS.site]);
+  }, [COL_LABELS.site, mergeFilters]);
 
   const applyView = useCallback((view) => {
     if (!view || view.id === "default") {
       setColumns(defaultColumns);
-      setFilters({});
+      replaceFilters({});
       return;
     }
     try {
@@ -525,12 +623,14 @@ export default function DeviceList({
         .filter((id) => COL_LABELS[id])
         .map((id) => ({ id, label: COL_LABELS[id] }));
       setColumns(mapped.length ? mapped : defaultColumns);
-      setFilters(view.filters && typeof view.filters === "object" ? view.filters : {});
+      replaceFilters(
+        view.filters && typeof view.filters === "object" ? view.filters : {}
+      );
     } catch {
       setColumns(defaultColumns);
-      setFilters({});
+      replaceFilters({});
     }
-  }, [COL_LABELS, defaultColumns]);
+  }, [COL_LABELS, defaultColumns, replaceFilters]);
 
   const statusColor = useCallback(
     (s) => (s === "Online" ? "#00d18c" : "#ff4f4f"),
@@ -551,20 +651,10 @@ export default function DeviceList({
     return created || "";
   }, []);
 
-  const filterModel = useMemo(() => {
-    const model = {};
-    Object.entries(filters).forEach(([key, value]) => {
-      const trimmed = (value || "").trim();
-      if (trimmed) {
-        model[key] = {
-          filterType: "text",
-          type: "contains",
-          filter: trimmed,
-        };
-      }
-    });
-    return model;
-  }, [filters]);
+  const filterModel = useMemo(
+    () => JSON.parse(JSON.stringify(filters || {})),
+    [filters]
+  );
 
   useEffect(() => {
     if (gridRef.current?.api) {
@@ -572,28 +662,13 @@ export default function DeviceList({
     }
   }, [filterModel]);
 
-  const handleFilterChanged = useCallback((event) => {
-    const model = event.api.getFilterModel() || {};
-    setFilters((prev) => {
-      const next = {};
-      Object.entries(model).forEach(([key, cfg]) => {
-        const filterValue =
-          cfg && typeof cfg.filter === "string" ? cfg.filter : "";
-        if (filterValue) {
-          next[key] = filterValue;
-        }
-      });
-      const prevEntries = Object.entries(prev);
-      const nextEntries = Object.entries(next);
-      if (
-        prevEntries.length === nextEntries.length &&
-        prevEntries.every(([k, v]) => next[k] === v)
-      ) {
-        return prev;
-      }
-      return next;
-    });
-  }, []);
+  const handleFilterChanged = useCallback(
+    (event) => {
+      const model = event.api.getFilterModel() || {};
+      replaceFilters(model);
+    },
+    [replaceFilters]
+  );
 
   const handleSelectionChanged = useCallback(() => {
     const api = gridRef.current?.api;
@@ -699,21 +774,27 @@ export default function DeviceList({
         <Box
           component="span"
           sx={{
-            display: "inline-block",
-            px: 1.2,
-            py: 0.25,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            minWidth: 70,
+            px: 1.5,
+            py: 0.35,
             borderRadius: 999,
             bgcolor: statusColor(status),
             color: "#fff",
             fontWeight: 600,
-            fontSize: "12px",
+            fontSize: "13px",
+            lineHeight: 1,
+            fontFamily: gridFontFamily,
+            textTransform: "capitalize",
           }}
         >
           {status}
         </Box>
       );
     },
-    [statusColor]
+    [statusColor, gridFontFamily]
   );
 
   const actionCellRenderer = useCallback(
@@ -938,7 +1019,16 @@ export default function DeviceList({
   );
 
   return (
-    <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
+    <Paper
+      sx={{
+        m: 2,
+        p: 0,
+        bgcolor: "#1e1e1e",
+        fontFamily: gridFontFamily,
+        color: "#f5f7fa",
+      }}
+      elevation={2}
+    >
       {/* Header area with title on left and controls on right */}
       <Box sx={{ p: 2, pb: 1, display: "flex", flexDirection: 'column', gap: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1083,8 +1173,17 @@ export default function DeviceList({
             width: "100%",
             height: 600,
             minHeight: 400,
+            fontFamily: gridFontFamily,
+            "--ag-font-family": gridFontFamily,
+            "--ag-icon-font-family": iconFontFamily,
             "& .ag-root-wrapper": {
               borderRadius: 1,
+            },
+            "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+              fontFamily: gridFontFamily,
+            },
+            "& .ag-icon": {
+              fontFamily: iconFontFamily,
             },
           }}
         >
@@ -1103,7 +1202,12 @@ export default function DeviceList({
             onGridReady={handleGridReady}
             getRowId={getRowId}
             theme={myTheme}
-            style={{ width: "100%", height: "100%" }}
+            style={{
+              width: "100%",
+              height: "100%",
+              fontFamily: gridFontFamily,
+              "--ag-icon-font-family": iconFontFamily,
+            }}
           />
         </Box>
       </Box>
