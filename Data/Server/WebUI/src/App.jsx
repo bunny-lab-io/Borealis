@@ -355,6 +355,14 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     [interpretPath, navigateTo]
   );
 
+  const navigateToRef = useRef(navigateTo);
+  const navigateByPathRef = useRef(navigateByPath);
+
+  useEffect(() => {
+    navigateToRef.current = navigateTo;
+    navigateByPathRef.current = navigateByPath;
+  }, [navigateTo, navigateByPath]);
+
   // Build breadcrumb items for current view
   const breadcrumbs = React.useMemo(() => {
     const items = [];
@@ -500,6 +508,9 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   useEffect(() => {
     if (!sessionResolved) return;
 
+    const navTo = navigateToRef.current;
+    const navByPath = navigateByPathRef.current;
+
     if (user) {
       const stored = initialPathRef.current;
       const currentLocation = window.location.pathname + window.location.search;
@@ -509,7 +520,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           : currentLocation === "/login" || currentLocation === ""
           ? "/devices"
           : currentLocation;
-      navigateByPath(targetPath, { replace: true, allowUnauthenticated: true });
+      navByPath(targetPath, { replace: true, allowUnauthenticated: true });
       initialPathRef.current = null;
       pendingPathRef.current = null;
     } else {
@@ -524,9 +535,9 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       if (rememberPath) {
         pendingPathRef.current = rememberPath;
       }
-      navigateTo("login", { replace: true, allowUnauthenticated: true, suppressPending: true });
+      navTo("login", { replace: true, allowUnauthenticated: true, suppressPending: true });
     }
-  }, [sessionResolved, user, navigateByPath, navigateTo]);
+  }, [sessionResolved, user]);
 
   useEffect(() => {
     if (!sessionResolved) return;
@@ -537,15 +548,15 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         if (!path.startsWith("/login")) {
           pendingPathRef.current = path;
         }
-        navigateTo("login", { replace: true, allowUnauthenticated: true, suppressPending: true });
+        navigateToRef.current("login", { replace: true, allowUnauthenticated: true, suppressPending: true });
         return;
       }
-      navigateByPath(path, { replace: true, allowUnauthenticated: true });
+      navigateByPathRef.current(path, { replace: true, allowUnauthenticated: true });
     };
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [sessionResolved, user, navigateByPath, navigateTo]);
+  }, [sessionResolved, user]);
 
       // Suggest fetcher with debounce
       const fetchSuggestions = useCallback((field, q) => {
