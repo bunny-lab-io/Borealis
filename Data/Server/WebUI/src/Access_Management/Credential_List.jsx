@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -6,14 +6,8 @@ import {
   Menu,
   MenuItem,
   Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
-  TableSortLabel,
   Typography,
-  CircularProgress
+  CircularProgress,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import AddIcon from "@mui/icons-material/Add";
@@ -21,31 +15,32 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import LockIcon from "@mui/icons-material/Lock";
 import WifiIcon from "@mui/icons-material/Wifi";
 import ComputerIcon from "@mui/icons-material/Computer";
+import { AgGridReact } from "ag-grid-react";
+import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import CredentialEditor from "./Credential_Editor.jsx";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
 
-const tablePaperSx = { m: 2, p: 0, bgcolor: "#1e1e1e", borderRadius: 2 };
-const tableSx = {
-  minWidth: 840,
-  "& th, & td": {
-    color: "#ddd",
-    borderColor: "#2a2a2a",
-    fontSize: 13,
-    py: 0.9
-  },
-  "& th .MuiTableSortLabel-root": { color: "#ddd" },
-  "& th .MuiTableSortLabel-root.Mui-active": { color: "#ddd" }
-};
+ModuleRegistry.registerModules([AllCommunityModule]);
 
-const columns = [
-  { id: "name", label: "Name" },
-  { id: "credential_type", label: "Credential Type" },
-  { id: "connection_type", label: "Connection" },
-  { id: "site_name", label: "Site" },
-  { id: "username", label: "Username" },
-  { id: "updated_at", label: "Updated" },
-  { id: "actions", label: "" }
-];
+const myTheme = themeQuartz.withParams({
+  accentColor: "#FFA6FF",
+  backgroundColor: "#1f2836",
+  browserColorScheme: "dark",
+  chromeBackgroundColor: {
+    ref: "foregroundColor",
+    mix: 0.07,
+    onto: "backgroundColor"
+  },
+  fontFamily: {
+    googleFont: "IBM Plex Sans"
+  },
+  foregroundColor: "#FFF",
+  headerFontSize: 14
+});
+
+const themeClassName = myTheme.themeName || "ag-theme-quartz";
+const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
+const iconFontFamily = '"Quartz Regular"';
 
 function formatTs(ts) {
   if (!ts) return "-";
@@ -69,8 +64,6 @@ function connectionIcon(connection) {
 
 export default function CredentialList({ isAdmin = false }) {
   const [rows, setRows] = useState([]);
-  const [orderBy, setOrderBy] = useState("name");
-  const [order, setOrder] = useState("asc");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [menuAnchor, setMenuAnchor] = useState(null);
@@ -80,18 +73,126 @@ export default function CredentialList({ isAdmin = false }) {
   const [editingCredential, setEditingCredential] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const gridApiRef = useRef(null);
 
-  const sortedRows = useMemo(() => {
-    const sorted = [...rows];
-    sorted.sort((a, b) => {
-      const aVal = (a?.[orderBy] ?? "").toString().toLowerCase();
-      const bVal = (b?.[orderBy] ?? "").toString().toLowerCase();
-      if (aVal < bVal) return order === "asc" ? -1 : 1;
-      if (aVal > bVal) return order === "asc" ? 1 : -1;
-      return 0;
-    });
-    return sorted;
-  }, [rows, order, orderBy]);
+  const openMenu = useCallback((event, row) => {
+    setMenuAnchor(event.currentTarget);
+    setMenuRow(row);
+  }, []);
+
+  const closeMenu = useCallback(() => {
+    setMenuAnchor(null);
+    setMenuRow(null);
+  }, []);
+
+  const connectionCellRenderer = useCallback((params) => {
+    const row = params.data || {};
+    const label = titleCase(row.connection_type);
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", fontFamily: gridFontFamily }}>
+        {connectionIcon(row.connection_type)}
+        <Box component="span" sx={{ color: "#f5f7fa" }}>
+          {label}
+        </Box>
+      </Box>
+    );
+  }, []);
+
+  const actionCellRenderer = useCallback(
+    (params) => {
+      const row = params.data;
+      if (!row) return null;
+      const handleClick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openMenu(event, row);
+      };
+      return (
+        <IconButton size="small" onClick={handleClick} sx={{ color: "#7db7ff" }}>
+          <MoreVertIcon fontSize="small" />
+        </IconButton>
+      );
+    },
+    [openMenu]
+  );
+
+  const columnDefs = useMemo(
+    () => [
+      {
+        headerName: "Name",
+        field: "name",
+        sort: "asc",
+        cellRenderer: (params) => params.value || "-"
+      },
+      {
+        headerName: "Credential Type",
+        field: "credential_type",
+        valueGetter: (params) => titleCase(params.data?.credential_type)
+      },
+      {
+        headerName: "Connection",
+        field: "connection_type",
+        cellRenderer: connectionCellRenderer
+      },
+      {
+        headerName: "Site",
+        field: "site_name",
+        cellRenderer: (params) => params.value || "-"
+      },
+      {
+        headerName: "Username",
+        field: "username",
+        cellRenderer: (params) => params.value || "-"
+      },
+      {
+        headerName: "Updated",
+        field: "updated_at",
+        valueGetter: (params) =>
+          formatTs(params.data?.updated_at || params.data?.created_at)
+      },
+      {
+        headerName: "",
+        field: "__actions__",
+        minWidth: 70,
+        maxWidth: 80,
+        sortable: false,
+        filter: false,
+        resizable: false,
+        suppressMenu: true,
+        cellRenderer: actionCellRenderer,
+        pinned: "right"
+      }
+    ],
+    [actionCellRenderer, connectionCellRenderer]
+  );
+
+  const defaultColDef = useMemo(
+    () => ({
+      sortable: true,
+      filter: "agTextColumnFilter",
+      resizable: true,
+      flex: 1,
+      minWidth: 140,
+      cellStyle: {
+        display: "flex",
+        alignItems: "center",
+        color: "#f5f7fa",
+        fontFamily: gridFontFamily,
+        fontSize: "13px"
+      },
+      headerClass: "credential-grid-header"
+    }),
+    []
+  );
+
+  const getRowId = useCallback(
+    (params) =>
+      params.data?.id ||
+      params.data?.name ||
+      params.data?.username ||
+      String(params.rowIndex ?? ""),
+    []
+  );
 
   const fetchCredentials = useCallback(async () => {
     setLoading(true);
@@ -114,25 +215,6 @@ export default function CredentialList({ isAdmin = false }) {
   useEffect(() => {
     fetchCredentials();
   }, [fetchCredentials]);
-
-  const handleSort = (columnId) => () => {
-    if (orderBy === columnId) {
-      setOrder((prev) => (prev === "asc" ? "desc" : "asc"));
-    } else {
-      setOrderBy(columnId);
-      setOrder("asc");
-    }
-  };
-
-  const openMenu = (event, row) => {
-    setMenuAnchor(event.currentTarget);
-    setMenuRow(row);
-  };
-
-  const closeMenu = () => {
-    setMenuAnchor(null);
-    setMenuRow(null);
-  };
 
   const handleCreate = () => {
     setEditorMode("create");
@@ -176,6 +258,22 @@ export default function CredentialList({ isAdmin = false }) {
     await fetchCredentials();
   };
 
+  const handleGridReady = useCallback((params) => {
+    gridApiRef.current = params.api;
+  }, []);
+
+  useEffect(() => {
+    const api = gridApiRef.current;
+    if (!api) return;
+    if (loading) {
+      api.showLoadingOverlay();
+    } else if (!rows.length) {
+      api.showNoRowsOverlay();
+    } else {
+      api.hideOverlay();
+    }
+  }, [loading, rows]);
+
   if (!isAdmin) {
     return (
       <Paper sx={{ m: 2, p: 3, bgcolor: "#1e1e1e" }}>
@@ -191,8 +289,30 @@ export default function CredentialList({ isAdmin = false }) {
 
   return (
     <>
-      <Paper sx={tablePaperSx} elevation={3}>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", p: 2, borderBottom: "1px solid #2a2a2a" }}>
+      <Paper
+        sx={{
+          m: 2,
+          p: 0,
+          bgcolor: "#1e1e1e",
+          fontFamily: gridFontFamily,
+          color: "#f5f7fa",
+          display: "flex",
+          flexDirection: "column",
+          flexGrow: 1,
+          minWidth: 0,
+          minHeight: 420
+        }}
+        elevation={2}
+      >
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            p: 2,
+            borderBottom: "1px solid #2a2a2a"
+          }}
+        >
           <Box>
             <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0.3 }}>
               Credentials
@@ -224,69 +344,93 @@ export default function CredentialList({ isAdmin = false }) {
           </Box>
         </Box>
         {loading && (
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "#7db7ff", px: 2, py: 1.5 }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              color: "#7db7ff",
+              px: 2,
+              py: 1.5,
+              borderBottom: "1px solid #2a2a2a"
+            }}
+          >
             <CircularProgress size={18} sx={{ color: "#58a6ff" }} />
             <Typography variant="body2">Loading credentials…</Typography>
           </Box>
         )}
         {error && (
-          <Box sx={{ px: 2, py: 1.5, color: "#ff8080" }}>
+          <Box sx={{ px: 2, py: 1.5, color: "#ff8080", borderBottom: "1px solid #2a2a2a" }}>
             <Typography variant="body2">{error}</Typography>
           </Box>
         )}
 
-        <Table size="small" sx={tableSx}>
-          <TableHead>
-            <TableRow>
-              {columns.map((col) => (
-                <TableCell key={col.id} align={col.id === "actions" ? "right" : "left"}>
-                  {col.id === "actions" ? null : (
-                    <TableSortLabel
-                      active={orderBy === col.id}
-                      direction={orderBy === col.id ? order : "asc"}
-                      onClick={handleSort(col.id)}
-                    >
-                      {col.label}
-                    </TableSortLabel>
-                  )}
-                </TableCell>
-              ))}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {!sortedRows.length && !loading ? (
-              <TableRow>
-                <TableCell colSpan={columns.length} sx={{ color: "#888", textAlign: "center", py: 4 }}>
-                  No credentials have been created yet.
-                </TableCell>
-              </TableRow>
-            ) : (
-              sortedRows.map((row) => (
-                <TableRow key={row.id} hover>
-                  <TableCell>{row.name || "-"}</TableCell>
-                  <TableCell>{titleCase(row.credential_type)}</TableCell>
-                  <TableCell>
-                    <Box sx={{ display: "flex", alignItems: "center" }}>
-                      {connectionIcon(row.connection_type)}
-                      {titleCase(row.connection_type)}
-                    </Box>
-                  </TableCell>
-                  <TableCell>{row.site_name || "-"}</TableCell>
-                  <TableCell>{row.username || "-"}</TableCell>
-                  <TableCell>{formatTs(row.updated_at || row.created_at)}</TableCell>
-                  <TableCell align="right">
-                    <IconButton size="small" onClick={(e) => openMenu(e, row)} sx={{ color: "#7db7ff" }}>
-                      <MoreVertIcon fontSize="small" />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+        <Box
+          sx={{
+            flexGrow: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            mt: "10px",
+            px: 2,
+            pb: 2
+          }}
+        >
+          <Box
+            className={themeClassName}
+            sx={{
+              width: "100%",
+              height: "100%",
+              flexGrow: 1,
+              fontFamily: gridFontFamily,
+              "--ag-font-family": gridFontFamily,
+              "--ag-icon-font-family": iconFontFamily,
+              "--ag-row-border-style": "solid",
+              "--ag-row-border-color": "#2a2a2a",
+              "--ag-row-border-width": "1px",
+              "& .ag-root-wrapper": {
+                borderRadius: 1,
+                minHeight: 320
+              },
+              "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+                fontFamily: gridFontFamily
+              },
+              "& .ag-icon": {
+                fontFamily: iconFontFamily
+              }
+            }}
+            style={{ color: "#f5f7fa" }}
+          >
+            <AgGridReact
+              rowData={rows}
+              columnDefs={columnDefs}
+              defaultColDef={defaultColDef}
+              animateRows
+              rowHeight={46}
+              headerHeight={44}
+              getRowId={getRowId}
+              overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No credentials have been created yet.</span>"
+              onGridReady={handleGridReady}
+              suppressCellFocus
+              theme={myTheme}
+              style={{
+                width: "100%",
+                height: "100%",
+                fontFamily: gridFontFamily,
+                "--ag-icon-font-family": iconFontFamily
+              }}
+            />
+          </Box>
+        </Box>
       </Paper>
 
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu} elevation={2} PaperProps={{ sx: { bgcolor: "#1f1f1f", color: "#f5f5f5" } }}>
+      <Menu
+        anchorEl={menuAnchor}
+        open={Boolean(menuAnchor)}
+        onClose={closeMenu}
+        elevation={2}
+        PaperProps={{ sx: { bgcolor: "#1f1f1f", color: "#f5f5f5" } }}
+      >
         <MenuItem onClick={() => handleEdit(menuRow)}>Edit</MenuItem>
         <MenuItem onClick={() => handleDelete(menuRow)} sx={{ color: "#ff8080" }}>
           Delete
