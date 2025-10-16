@@ -130,6 +130,134 @@ _REPO_HASH_INTERVAL = max(30, min(_REPO_HASH_INTERVAL, 3600))
 _REPO_HASH_WORKER_STARTED = False
 _REPO_HASH_WORKER_LOCK = Lock()
 
+DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "database.db"))
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+_GITHUB_TOKEN_CACHE: Dict[str, Any] = {"token": None, "loaded_at": 0.0, "known": False}
+_GITHUB_TOKEN_LOCK = Lock()
+
+
+def _set_cached_github_token(token: Optional[str]) -> None:
+    with _GITHUB_TOKEN_LOCK:
+        _GITHUB_TOKEN_CACHE["token"] = token if token else None
+        _GITHUB_TOKEN_CACHE["loaded_at"] = time.time()
+        _GITHUB_TOKEN_CACHE["known"] = True
+
+
+def _load_github_token_from_db(*, force_refresh: bool = False) -> Optional[str]:
+    now = time.time()
+    with _GITHUB_TOKEN_LOCK:
+        if (
+            not force_refresh
+            and _GITHUB_TOKEN_CACHE.get("known")
+            and now - (_GITHUB_TOKEN_CACHE.get("loaded_at") or 0.0) < 15.0
+        ):
+            return _GITHUB_TOKEN_CACHE.get("token")  # type: ignore[return-value]
+
+    conn: Optional[sqlite3.Connection] = None
+    token: Optional[str] = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        cur = conn.cursor()
+        cur.execute("SELECT token FROM github_token LIMIT 1")
+        row = cur.fetchone()
+        if row and row[0]:
+            candidate = str(row[0]).strip()
+            token = candidate or None
+    except sqlite3.OperationalError:
+        token = None
+    except Exception as exc:
+        _write_service_log("server", f"github token lookup failed: {exc}")
+        token = None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    _set_cached_github_token(token)
+    return token
+
+
+def _github_api_token(*, force_refresh: bool = False) -> Optional[str]:
+    token = _load_github_token_from_db(force_refresh=force_refresh)
+    if token:
+        return token
+    env_token = os.environ.get("BOREALIS_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if env_token:
+        env_token = env_token.strip()
+        return env_token or None
+    return None
+
+
+def _verify_github_token(token: Optional[str]) -> Dict[str, Any]:
+    if not token:
+        return {
+            "valid": False,
+            "message": "API Token Not Configured",
+            "status": "missing",
+            "rate_limit": None,
+        }
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Borealis-Server",
+        "Authorization": f"Bearer {token}",
+    }
+    try:
+        resp = requests.get(
+            f"https://api.github.com/repos/{_DEFAULT_REPO}/branches/{_DEFAULT_BRANCH}",
+            headers=headers,
+            timeout=20,
+        )
+        limit_header = resp.headers.get("X-RateLimit-Limit")
+        try:
+            limit_value = int(limit_header) if limit_header is not None else None
+        except (TypeError, ValueError):
+            limit_value = None
+
+        if resp.status_code == 200:
+            if limit_value is not None and limit_value >= 5000:
+                return {
+                    "valid": True,
+                    "message": "API Authentication Successful",
+                    "status": "ok",
+                    "rate_limit": limit_value,
+                }
+            return {
+                "valid": False,
+                "message": "API Token Invalid",
+                "status": "insufficient",
+                "rate_limit": limit_value,
+                "error": "Authenticated request did not elevate GitHub rate limits",
+            }
+
+        if resp.status_code == 401:
+            return {
+                "valid": False,
+                "message": "API Token Invalid",
+                "status": "invalid",
+                "rate_limit": limit_value,
+                "error": resp.text[:200],
+            }
+
+        return {
+            "valid": False,
+            "message": f"GitHub API error (HTTP {resp.status_code})",
+            "status": "error",
+            "rate_limit": limit_value,
+            "error": resp.text[:200],
+        }
+    except Exception as exc:
+        return {
+            "valid": False,
+            "message": f"API Token validation error: {exc}",
+            "status": "error",
+            "rate_limit": None,
+            "error": str(exc),
+        }
+
 
 def _hydrate_repo_hash_cache_from_disk() -> None:
     try:
@@ -226,7 +354,7 @@ def _fetch_repo_head(owner_repo: str, branch: str = 'main', *, ttl_seconds: int 
         'Accept': 'application/vnd.github+json',
         'User-Agent': 'Borealis-Server'
     }
-    token = os.environ.get('BOREALIS_GITHUB_TOKEN') or os.environ.get('GITHUB_TOKEN')
+    token = _github_api_token(force_refresh=force_refresh)
     if token:
         headers['Authorization'] = f'Bearer {token}'
 
@@ -1889,6 +2017,74 @@ def api_credentials_detail(credential_id: int):
 
     record = _fetch_credential_record(credential_id)
     return jsonify({"credential": record})
+
+
+# =============================================================================
+# Section: Access Management - GitHub Token
+# =============================================================================
+
+
+@app.route("/api/github/token", methods=["GET", "POST"])
+def api_github_token():
+    chk = _require_admin()
+    if chk:
+        return chk
+
+    if request.method == "GET":
+        token = _load_github_token_from_db(force_refresh=True)
+        verify = _verify_github_token(token)
+        message = verify.get("message") or ("API Token Invalid" if token else "API Token Not Configured")
+        return jsonify({
+            "token": token or "",
+            "has_token": bool(token),
+            "valid": bool(verify.get("valid")),
+            "message": message,
+            "status": verify.get("status") or ("missing" if not token else "unknown"),
+            "rate_limit": verify.get("rate_limit"),
+            "error": verify.get("error"),
+            "checked_at": _now_ts(),
+        })
+
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "").strip()
+
+    conn = None
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM github_token")
+        if token:
+            cur.execute("INSERT INTO github_token (token) VALUES (?)", (token,))
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return jsonify({"error": f"Failed to store token: {exc}"}), 500
+
+    _set_cached_github_token(token or None)
+
+    verify = _verify_github_token(token or None)
+    message = verify.get("message") or ("API Token Invalid" if token else "API Token Not Configured")
+
+    try:
+        eventlet.spawn_n(_refresh_default_repo_hash, True)
+    except Exception:
+        pass
+
+    return jsonify({
+        "token": token,
+        "has_token": bool(token),
+        "valid": bool(verify.get("valid")),
+        "message": message,
+        "status": verify.get("status") or ("missing" if not token else "unknown"),
+        "rate_limit": verify.get("rate_limit"),
+        "error": verify.get("error"),
+        "checked_at": _now_ts(),
+    })
 
 
 # =============================================================================
@@ -3564,10 +3760,6 @@ registered_agents: Dict[str, Dict] = {}
 agent_configurations: Dict[str, Dict] = {}
 latest_images: Dict[str, Dict] = {}
 
-# Database initialization (merged into a single SQLite database)
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "database.db"))
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-
 DEVICE_TABLE = "devices"
 _DEVICE_JSON_LIST_FIELDS = {
     "memory": [],
@@ -4563,6 +4755,15 @@ def init_db():
             cur.execute("ALTER TABLE credentials ADD COLUMN description TEXT")
     except Exception:
         pass
+    conn.commit()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS github_token (
+            token TEXT
+        )
+        """
+    )
     conn.commit()
 
     # Scheduled jobs table
