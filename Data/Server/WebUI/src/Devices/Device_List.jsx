@@ -5,29 +5,46 @@ import {
   Paper,
   Box,
   Typography,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
-  TableSortLabel,
-  Checkbox,
   Button,
   IconButton,
   Menu,
   MenuItem,
   Popover,
   TextField,
-  Tooltip
+  Tooltip,
+  Checkbox,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
-import FilterListIcon from "@mui/icons-material/FilterList";
 import ViewColumnIcon from "@mui/icons-material/ViewColumn";
 import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
+import { AgGridReact } from "ag-grid-react";
+import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
 import QuickJob from "../Scheduling/Quick_Job.jsx";
 import AddDevice from "./Add_Device.jsx";
+
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+const myTheme = themeQuartz.withParams({
+  accentColor: "#FFA6FF",
+  backgroundColor: "#1f2836",
+  browserColorScheme: "dark",
+  chromeBackgroundColor: {
+    ref: "foregroundColor",
+    mix: 0.07,
+    onto: "backgroundColor",
+  },
+  fontFamily: {
+    googleFont: "IBM Plex Sans",
+  },
+  foregroundColor: "#FFF",
+  headerFontSize: 14,
+});
+
+const themeClassName = myTheme.themeName || "ag-theme-quartz";
+const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
+const iconFontFamily = '"Quartz Regular"';
 
 function formatLastSeen(tsSec, offlineAfter = 300) {
   if (!tsSec) return "unknown";
@@ -76,8 +93,6 @@ export default function DeviceList({
   defaultAddType,
 }) {
   const [rows, setRows] = useState([]);
-  const [orderBy, setOrderBy] = useState("status");
-  const [order, setOrder] = useState("desc");
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [selected, setSelected] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -171,12 +186,107 @@ export default function DeviceList({
     [COL_LABELS]
   );
   const [columns, setColumns] = useState(defaultColumns);
-  const dragColId = useRef(null);
   const [colChooserAnchor, setColChooserAnchor] = useState(null);
+  const gridRef = useRef(null);
 
   // Per-column filters
-  const [filters, setFilters] = useState({});
-  const [filterAnchor, setFilterAnchor] = useState(null); // { id, anchorEl }
+  const [filtersState, setFiltersState] = useState({});
+
+  const sanitizeFilterModel = useCallback((raw) => {
+    if (!raw || typeof raw !== "object") return {};
+    const sanitized = {};
+    Object.entries(raw).forEach(([key, value]) => {
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed) {
+          sanitized[key] = {
+            filterType: "text",
+            type: "contains",
+            filter: trimmed,
+          };
+        }
+        return;
+      }
+      if (!value || typeof value !== "object") return;
+      const clone = JSON.parse(JSON.stringify(value));
+      if (!clone.filterType) clone.filterType = "text";
+      if (clone.filterType === "text") {
+        if (typeof clone.filter === "string") {
+          clone.filter = clone.filter.trim();
+        }
+        if (Array.isArray(clone.conditions)) {
+          clone.conditions = clone.conditions
+            .map((condition) => {
+              if (!condition || typeof condition !== "object") return null;
+              const condClone = { ...condition };
+              if (typeof condClone.filter === "string") {
+                condClone.filter = condClone.filter.trim();
+              }
+              if (
+                !condClone.filter &&
+                !["blank", "notBlank"].includes(condClone.type ?? "")
+              ) {
+                return null;
+              }
+              return condClone;
+            })
+            .filter(Boolean);
+          if (!clone.conditions.length) {
+            delete clone.conditions;
+          }
+        }
+        if (
+          !clone.filter &&
+          !clone.conditions &&
+          !["blank", "notBlank"].includes(clone.type ?? "")
+        ) {
+          return;
+        }
+      }
+      sanitized[key] = clone;
+    });
+    return sanitized;
+  }, []);
+
+  const filterModelsEqual = useCallback(
+    (a, b) => JSON.stringify(a ?? {}) === JSON.stringify(b ?? {}),
+    []
+  );
+
+  const replaceFilters = useCallback(
+    (raw) => {
+      const sanitized =
+        raw && typeof raw === "object" ? sanitizeFilterModel(raw) : {};
+      setFiltersState((prev) =>
+        filterModelsEqual(prev, sanitized) ? prev : sanitized
+      );
+    },
+    [filterModelsEqual, sanitizeFilterModel]
+  );
+
+  const mergeFilters = useCallback(
+    (raw) => {
+      if (!raw || typeof raw !== "object") return;
+      const sanitized = sanitizeFilterModel(raw);
+      if (!Object.keys(sanitized).length) return;
+      setFiltersState((prev) => {
+        const base = prev || {};
+        const next = { ...base };
+        let changed = false;
+        Object.entries(sanitized).forEach(([key, value]) => {
+          if (!value) return;
+          if (!next[key] || !filterModelsEqual(next[key], value)) {
+            next[key] = value;
+            changed = true;
+          }
+        });
+        return changed ? next : base;
+      });
+    },
+    [filterModelsEqual, sanitizeFilterModel]
+  );
+
+  const filters = filtersState;
 
   const [sites, setSites] = useState([]); // sites list for assignment
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
@@ -185,6 +295,8 @@ export default function DeviceList({
 
   const [repoHash, setRepoHash] = useState(null);
   const lastRepoFetchRef = useRef(0);
+
+  const gridWrapperClass = themeClassName;
 
   const fetchLatestRepoHash = useCallback(async (options = {}) => {
     const { force = false } = options || {};
@@ -458,7 +570,7 @@ export default function DeviceList({
       if (json) {
         const obj = JSON.parse(json);
         if (obj && typeof obj === 'object') {
-          setFilters((prev) => ({ ...prev, ...obj }));
+          mergeFilters(obj);
           // Optionally ensure Site column exists when site filter is present
           if (obj.site) {
             setColumns((prev) => {
@@ -491,16 +603,16 @@ export default function DeviceList({
           next.splice(insertAt, 0, { id: 'site', label: COL_LABELS.site });
           return next;
         });
-        setFilters((f) => ({ ...f, site }));
+        mergeFilters({ site });
         localStorage.removeItem('device_list_initial_site_filter');
       }
     } catch {}
-  }, [COL_LABELS.site]);
+  }, [COL_LABELS.site, mergeFilters]);
 
   const applyView = useCallback((view) => {
     if (!view || view.id === "default") {
       setColumns(defaultColumns);
-      setFilters({});
+      replaceFilters({});
       return;
     }
     try {
@@ -511,178 +623,21 @@ export default function DeviceList({
         .filter((id) => COL_LABELS[id])
         .map((id) => ({ id, label: COL_LABELS[id] }));
       setColumns(mapped.length ? mapped : defaultColumns);
-      setFilters(view.filters && typeof view.filters === "object" ? view.filters : {});
+      replaceFilters(
+        view.filters && typeof view.filters === "object" ? view.filters : {}
+      );
     } catch {
       setColumns(defaultColumns);
-      setFilters({});
+      replaceFilters({});
     }
-  }, [COL_LABELS, defaultColumns]);
+  }, [COL_LABELS, defaultColumns, replaceFilters]);
 
-  const filtered = useMemo(() => {
-    // Apply simple contains filter per column based on displayed string
-    const activeFilters = Object.entries(filters).filter(([, v]) => (v || "").trim() !== "");
-    if (!activeFilters.length) return rows;
-    const toDisplay = (colId, row) => {
-      switch (colId) {
-        case "status":
-          return row.status || "";
-        case "site":
-          return row.site || "Not Configured";
-        case "hostname":
-          return row.hostname || "";
-        case "description":
-          return row.description || "";
-        case "lastUser":
-          return row.lastUser || "";
-        case "type":
-          return row.type || "";
-        case "os":
-          return row.os || "";
-        case "agentVersion":
-          return row.agentVersion || "";
-        case "internalIp":
-          return row.internalIp || "";
-        case "externalIp":
-          return row.externalIp || "";
-        case "lastReboot":
-          return row.lastReboot || "";
-        case "created":
-          return formatCreated(row.created, row.createdTs);
-        case "lastSeen":
-          return formatLastSeen(row.lastSeen);
-        case "agentId":
-          return row.agentId || "";
-        case "agentHash":
-          return row.agentHash || "";
-        case "agentGuid":
-          return row.agentGuid || "";
-        case "domain":
-          return row.domain || "";
-        case "uptime":
-          return row.uptimeDisplay || (row.uptime ? String(row.uptime) : "");
-        case "memory":
-          return row.memoryRaw || row.memory || "";
-        case "network":
-          return row.networkRaw || row.network || "";
-        case "software":
-          return row.softwareRaw || row.software || "";
-        case "storage":
-          return row.storageRaw || row.storage || "";
-        case "cpu":
-          return row.cpuRaw || row.cpu || "";
-        case "siteDescription":
-          return row.siteDescription || "";
-        default:
-          return "";
-      }
-    };
-    return rows.filter((r) =>
-      activeFilters.every(([k, val]) =>
-        toDisplay(k, r).toLowerCase().includes(String(val).toLowerCase())
-      )
-    );
-  }, [rows, filters]);
+  const statusColor = useCallback(
+    (s) => (s === "Online" ? "#00d18c" : "#ff4f4f"),
+    []
+  );
 
-  const sorted = useMemo(() => {
-    const dir = order === "asc" ? 1 : -1;
-    return [...filtered].sort((a, b) => {
-      // Support numeric sort for created/lastSeen/uptime
-      if (orderBy === "lastSeen") return ((a.lastSeen || 0) - (b.lastSeen || 0)) * dir;
-      if (orderBy === "created") return ((a.createdTs || 0) - (b.createdTs || 0)) * dir;
-      if (orderBy === "uptime") return ((a.uptime || 0) - (b.uptime || 0)) * dir;
-      const A = a[orderBy];
-      const B = b[orderBy];
-      return String(A || "").localeCompare(String(B || "")) * dir;
-    });
-  }, [filtered, orderBy, order]);
-
-  const handleSort = (col) => {
-    if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
-    else {
-      setOrderBy(col);
-      setOrder("asc");
-    }
-  };
-
-  const statusColor = (s) => (s === "Online" ? "#00d18c" : "#ff4f4f");
-
-  const openMenu = (e, row) => {
-    setMenuAnchor(e.currentTarget);
-    setSelected(row);
-  };
-
-  const closeMenu = () => setMenuAnchor(null);
-
-  const confirmDelete = () => {
-    closeMenu();
-    setConfirmOpen(true);
-  };
-
-  const handleDelete = async () => {
-    if (!selected) return;
-    const targetAgentId = selected.agentId || selected.summary?.agent_id || selected.id;
-    try {
-      if (targetAgentId) {
-        await fetch(`/api/agent/${encodeURIComponent(targetAgentId)}`, { method: "DELETE" });
-      }
-    } catch (e) {
-      console.warn("Failed to remove agent", e);
-    }
-    setRows((r) => r.filter((x) => x.id !== selected.id));
-    setConfirmOpen(false);
-    setSelected(null);
-  };
-
-  const isAllChecked = sorted.length > 0 && sorted.every((r) => selectedIds.has(r.id));
-  const isIndeterminate = selectedIds.size > 0 && !isAllChecked;
-  const toggleAll = (e) => {
-    const checked = e.target.checked;
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (checked) sorted.forEach((r) => next.add(r.id));
-      else next.clear();
-      return next;
-    });
-  };
-
-  const toggleOne = (id) => (e) => {
-    const checked = e.target.checked;
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
-
-  // Column drag handlers
-  const onHeaderDragStart = (colId) => (e) => {
-    dragColId.current = colId;
-    try { e.dataTransfer.setData("text/plain", colId); } catch {}
-  };
-  const onHeaderDragOver = (e) => { e.preventDefault(); };
-  const onHeaderDrop = (targetColId) => (e) => {
-    e.preventDefault();
-    const fromId = dragColId.current;
-    if (!fromId || fromId === targetColId) return;
-    setColumns((prev) => {
-      const cur = [...prev];
-      const fromIdx = cur.findIndex((c) => c.id === fromId);
-      const toIdx = cur.findIndex((c) => c.id === targetColId);
-      if (fromIdx < 0 || toIdx < 0) return prev;
-      const [moved] = cur.splice(fromIdx, 1);
-      cur.splice(toIdx, 0, moved);
-      return cur;
-    });
-    dragColId.current = null;
-  };
-
-  // Filter popover handlers
-  const openFilter = (id) => (e) => setFilterAnchor({ id, anchorEl: e.currentTarget });
-  const closeFilter = () => setFilterAnchor(null);
-  const onFilterChange = (id) => (e) => setFilters((prev) => ({ ...prev, [id]: e.target.value }));
-
-  const formatCreated = (created, createdTs) => {
+  const formatCreated = useCallback((created, createdTs) => {
     if (createdTs) {
       const d = new Date(createdTs * 1000);
       const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -694,10 +649,386 @@ export default function DeviceList({
       return `${mm}/${dd}/${yyyy} @ ${hh}:${min} ${ampm}`;
     }
     return created || "";
-  };
+  }, []);
+
+  const filterModel = useMemo(
+    () => JSON.parse(JSON.stringify(filters || {})),
+    [filters]
+  );
+
+  useEffect(() => {
+    if (gridRef.current?.api) {
+      gridRef.current.api.setFilterModel(filterModel);
+    }
+  }, [filterModel]);
+
+  const handleFilterChanged = useCallback(
+    (event) => {
+      const model = event.api.getFilterModel() || {};
+      replaceFilters(model);
+    },
+    [replaceFilters]
+  );
+
+  const handleSelectionChanged = useCallback(() => {
+    const api = gridRef.current?.api;
+    if (!api) return;
+    const selectedNodes = api.getSelectedNodes();
+    const ids = selectedNodes
+      .map((node) => node.data?.id)
+      .filter((id) => id !== undefined && id !== null);
+    setSelectedIds(new Set(ids));
+  }, []);
+
+  const openMenu = useCallback((event, row) => {
+    setMenuAnchor(event.currentTarget);
+    setSelected(row);
+  }, []);
+
+  const closeMenu = useCallback(() => setMenuAnchor(null), []);
+
+  const confirmDelete = useCallback(() => {
+    closeMenu();
+    setConfirmOpen(true);
+  }, [closeMenu]);
+
+  const handleDelete = useCallback(async () => {
+    if (!selected) return;
+    const targetAgentId = selected.agentId || selected.summary?.agent_id || selected.id;
+    try {
+      if (targetAgentId) {
+        await fetch(`/api/agent/${encodeURIComponent(targetAgentId)}`, { method: "DELETE" });
+      }
+    } catch (e) {
+      console.warn("Failed to remove agent", e);
+    }
+    setRows((r) => r.filter((x) => x.id !== selected.id));
+    setSelectedIds((prev) => {
+      if (!prev.has(selected.id)) return prev;
+      const next = new Set(prev);
+      next.delete(selected.id);
+      return next;
+    });
+    setConfirmOpen(false);
+    setSelected(null);
+  }, [selected]);
+
+  const hostnameCellRenderer = useCallback(
+    (params) => {
+      const row = params.data;
+      if (!row) return null;
+      const handleClick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (onSelectDevice) onSelectDevice(row);
+      };
+      const label = row.connectionLabel || "";
+      let badgeBg = "#2d3042";
+      let badgeColor = "#a4c7ff";
+      if (label === "SSH") {
+        badgeBg = "#2a3b28";
+        badgeColor = "#7cffc4";
+      } else if (label === "WinRM") {
+        badgeBg = "#352e3b";
+        badgeColor = "#ffb6ff";
+      }
+      return (
+        <Box component="span" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          {label ? (
+            <Box
+              component="span"
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                px: 0.75,
+                py: 0.1,
+                borderRadius: 999,
+                bgcolor: badgeBg,
+                color: badgeColor,
+                fontSize: "11px",
+                fontWeight: 600,
+                textTransform: "uppercase",
+              }}
+            >
+              {label}
+            </Box>
+          ) : null}
+          <a
+            href="#"
+            onClick={handleClick}
+            style={{ color: "#58a6ff", textDecoration: "none", fontWeight: 500 }}
+          >
+            {row.hostname || ""}
+          </a>
+        </Box>
+      );
+    },
+    [onSelectDevice]
+  );
+
+  const statusCellRenderer = useCallback(
+    (params) => {
+      const status = params.value || "";
+      if (!status) return null;
+      return (
+        <Box
+          component="span"
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            minWidth: 70,
+            px: 1.5,
+            py: 0.35,
+            borderRadius: 999,
+            bgcolor: statusColor(status),
+            color: "#fff",
+            fontWeight: 600,
+            fontSize: "13px",
+            lineHeight: 1,
+            fontFamily: gridFontFamily,
+            textTransform: "capitalize",
+          }}
+        >
+          {status}
+        </Box>
+      );
+    },
+    [statusColor, gridFontFamily]
+  );
+
+  const actionCellRenderer = useCallback(
+    (params) => {
+      const row = params.data;
+      if (!row) return null;
+      const handleClick = (event) => {
+        event.stopPropagation();
+        openMenu(event, row);
+      };
+      return (
+        <IconButton size="small" onClick={handleClick} sx={{ color: "#ccc" }}>
+          <MoreVertIcon fontSize="small" />
+        </IconButton>
+      );
+    },
+    [openMenu]
+  );
+
+  const columnDefs = useMemo(() => {
+    const defs = columns.map((col) => {
+      switch (col.id) {
+        case "status":
+          return {
+            field: "status",
+            headerName: col.label,
+            cellRenderer: statusCellRenderer,
+            width: 140,
+            minWidth: 140,
+            flex: 0,
+          };
+        case "agentVersion":
+          return {
+            field: "agentVersion",
+            headerName: col.label,
+            minWidth: 160,
+          };
+        case "site":
+          return {
+            field: "site",
+            headerName: col.label,
+            valueGetter: (params) => params.data?.site || "Not Configured",
+            minWidth: 180,
+          };
+        case "hostname":
+          return {
+            field: "hostname",
+            headerName: col.label,
+            cellRenderer: hostnameCellRenderer,
+            minWidth: 220,
+          };
+        case "description":
+          return {
+            field: "description",
+            headerName: col.label,
+            minWidth: 220,
+          };
+        case "lastUser":
+          return {
+            field: "lastUser",
+            headerName: col.label,
+            minWidth: 160,
+          };
+        case "type":
+          return {
+            field: "type",
+            headerName: col.label,
+            minWidth: 140,
+          };
+        case "os":
+          return {
+            field: "os",
+            headerName: col.label,
+            minWidth: 200,
+          };
+        case "internalIp":
+          return {
+            field: "internalIp",
+            headerName: col.label,
+            minWidth: 160,
+          };
+        case "externalIp":
+          return {
+            field: "externalIp",
+            headerName: col.label,
+            minWidth: 160,
+          };
+        case "lastReboot":
+          return {
+            field: "lastReboot",
+            headerName: col.label,
+            minWidth: 200,
+          };
+        case "created":
+          return {
+            field: "created",
+            headerName: col.label,
+            valueGetter: (params) =>
+              formatCreated(params.data?.created, params.data?.createdTs),
+            comparator: (a, b, nodeA, nodeB) =>
+              (nodeA?.data?.createdTs || 0) - (nodeB?.data?.createdTs || 0),
+            minWidth: 220,
+          };
+        case "lastSeen":
+          return {
+            field: "lastSeen",
+            headerName: col.label,
+            valueGetter: (params) => formatLastSeen(params.data?.lastSeen),
+            comparator: (a, b, nodeA, nodeB) =>
+              (nodeA?.data?.lastSeen || 0) - (nodeB?.data?.lastSeen || 0),
+            minWidth: 220,
+          };
+        case "agentId":
+          return {
+            field: "agentId",
+            headerName: col.label,
+            minWidth: 200,
+          };
+        case "agentHash":
+          return {
+            field: "agentHash",
+            headerName: col.label,
+            minWidth: 220,
+          };
+        case "agentGuid":
+          return {
+            field: "agentGuid",
+            headerName: col.label,
+            minWidth: 240,
+          };
+        case "domain":
+          return {
+            field: "domain",
+            headerName: col.label,
+            minWidth: 180,
+          };
+        case "uptime":
+          return {
+            field: "uptime",
+            headerName: col.label,
+            valueGetter: (params) =>
+              params.data?.uptimeDisplay ||
+              formatUptime(params.data?.uptime || 0),
+            comparator: (a, b, nodeA, nodeB) =>
+              (nodeA?.data?.uptime || 0) - (nodeB?.data?.uptime || 0),
+            minWidth: 160,
+          };
+        case "memory":
+        case "network":
+        case "software":
+        case "storage":
+        case "cpu":
+        case "siteDescription":
+          return {
+            field: col.id,
+            headerName: col.label,
+            minWidth: 200,
+          };
+        default:
+          return {
+            field: col.id,
+            headerName: col.label,
+          };
+      }
+    });
+    return [
+      {
+        headerName: "",
+        field: "__select__",
+        width: 52,
+        maxWidth: 52,
+        checkboxSelection: true,
+        headerCheckboxSelection: true,
+        resizable: false,
+        sortable: false,
+        suppressMenu: true,
+        filter: false,
+        pinned: "left",
+        lockPosition: true,
+      },
+      ...defs,
+      {
+        headerName: "",
+        field: "__actions__",
+        width: 64,
+        maxWidth: 64,
+        resizable: false,
+        sortable: false,
+        suppressMenu: true,
+        filter: false,
+        cellRenderer: actionCellRenderer,
+        pinned: "right",
+      },
+    ];
+  }, [columns, actionCellRenderer, formatCreated, hostnameCellRenderer, statusCellRenderer]);
+
+  const defaultColDef = useMemo(
+    () => ({
+      sortable: true,
+      filter: "agTextColumnFilter",
+      resizable: true,
+      flex: 1,
+      minWidth: 160,
+    }),
+    []
+  );
+
+  const handleGridReady = useCallback(
+    (params) => {
+      params.api.setFilterModel(filterModel);
+    },
+    [filterModel]
+  );
+
+  const getRowId = useCallback(
+    (params) =>
+      params.data?.id ||
+      params.data?.agentGuid ||
+      params.data?.hostname ||
+      String(params.rowIndex ?? ""),
+    []
+  );
 
   return (
-    <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
+    <Paper
+      sx={{
+        m: 2,
+        p: 0,
+        bgcolor: "#1e1e1e",
+        fontFamily: gridFontFamily,
+        color: "#f5f7fa",
+      }}
+      elevation={2}
+    >
       {/* Header area with title on left and controls on right */}
       <Box sx={{ p: 2, pb: 1, display: "flex", flexDirection: 'column', gap: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -835,189 +1166,51 @@ export default function DeviceList({
           </Button>
         </Box>
       </Box>
-      <Table size="small" sx={{ minWidth: 820 }}>
-        <TableHead>
-          <TableRow>
-            <TableCell padding="checkbox">
-              <Checkbox
-                indeterminate={isIndeterminate}
-                checked={isAllChecked}
-                onChange={toggleAll}
-                sx={{ color: "#777" }}
-              />
-            </TableCell>
-            {columns.map((col) => (
-              <TableCell
-                key={col.id}
-                sortDirection={orderBy === col.id ? order : false}
-                draggable
-                onDragStart={onHeaderDragStart(col.id)}
-                onDragOver={onHeaderDragOver}
-                onDrop={onHeaderDrop(col.id)}
-              >
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <TableSortLabel
-                    active={orderBy === col.id}
-                    direction={orderBy === col.id ? order : "asc"}
-                    onClick={() => handleSort(col.id)}
-                  >
-                    {col.label}
-                  </TableSortLabel>
-                  <IconButton
-                    size="small"
-                    onClick={openFilter(col.id)}
-                    sx={{ color: filters[col.id] ? "#58a6ff" : "#888" }}
-                  >
-                    <FilterListIcon fontSize="inherit" />
-                  </IconButton>
-                </Box>
-              </TableCell>
-            ))}
-            <TableCell />
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {sorted.map((r, i) => (
-            <TableRow key={r.id || i} hover>
-              <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
-                <Checkbox
-                  checked={selectedIds.has(r.id)}
-                  onChange={toggleOne(r.id)}
-                  sx={{ color: "#777" }}
-                />
-              </TableCell>
-              {columns.map((col) => {
-                switch (col.id) {
-                  case "status":
-                    return (
-                      <TableCell key={col.id}>
-                        <Box
-                          sx={{
-                            display: "inline-block",
-                            px: 1.2,
-                            py: 0.25,
-                            borderRadius: 999,
-                            bgcolor: statusColor(r.status),
-                            color: "#fff",
-                            fontWeight: 600,
-                            fontSize: "12px",
-                          }}
-                        >
-                          {r.status}
-                        </Box>
-                      </TableCell>
-                    );
-                  case "agentVersion":
-                    return <TableCell key={col.id}>{r.agentVersion || ""}</TableCell>;
-                  case "site":
-                    return <TableCell key={col.id}>{r.site || "Not Configured"}</TableCell>;
-                  case "hostname":
-                    return (
-                      <TableCell
-                        key={col.id}
-                        onClick={() => onSelectDevice && onSelectDevice(r)}
-                        sx={{
-                          color: "#58a6ff",
-                          "&:hover": {
-                            cursor: onSelectDevice ? "pointer" : "default",
-                            textDecoration: onSelectDevice ? "underline" : "none",
-                          },
-                        }}
-                      >
-                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                          {r.isRemote && (
-                            <Box
-                              component="span"
-                              sx={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                px: 0.75,
-                                py: 0.1,
-                                borderRadius: 999,
-                                bgcolor: "#2a3b28",
-                                color: "#7cffc4",
-                                fontSize: "11px",
-                                fontWeight: 600
-                              }}
-                            >
-                              SSH
-                            </Box>
-                          )}
-                          <span>{r.hostname}</span>
-                        </Box>
-                      </TableCell>
-                    );
-                  case "description":
-                    return <TableCell key={col.id}>{r.description || ""}</TableCell>;
-                  case "lastUser":
-                    return <TableCell key={col.id}>{r.lastUser || ""}</TableCell>;
-                  case "type":
-                    return <TableCell key={col.id}>{r.type || ""}</TableCell>;
-                  case "os":
-                    return <TableCell key={col.id}>{r.os}</TableCell>;
-                  case "internalIp":
-                    return <TableCell key={col.id}>{r.internalIp || ""}</TableCell>;
-                  case "externalIp":
-                    return <TableCell key={col.id}>{r.externalIp || ""}</TableCell>;
-                  case "lastReboot":
-                    return <TableCell key={col.id}>{r.lastReboot || ""}</TableCell>;
-                  case "created":
-                    return (
-                      <TableCell key={col.id}>{formatCreated(r.created, r.createdTs)}</TableCell>
-                    );
-                  case "lastSeen":
-                    return (
-                      <TableCell key={col.id}>{formatLastSeen(r.lastSeen)}</TableCell>
-                    );
-                  case "agentId":
-                    return <TableCell key={col.id}>{r.agentId || ""}</TableCell>;
-                  case "agentHash":
-                    return <TableCell key={col.id}>{r.agentHash || ""}</TableCell>;
-                  case "agentGuid":
-                    return <TableCell key={col.id}>{r.agentGuid || ""}</TableCell>;
-                  case "domain":
-                    return <TableCell key={col.id}>{r.domain || ""}</TableCell>;
-                  case "uptime":
-                    return <TableCell key={col.id}>{r.uptimeDisplay || ''}</TableCell>;
-                  case "memory":
-                    return <TableCell key={col.id}>{r.memory || ""}</TableCell>;
-                  case "network":
-                    return <TableCell key={col.id}>{r.network || ""}</TableCell>;
-                  case "software":
-                    return <TableCell key={col.id}>{r.software || ""}</TableCell>;
-                  case "storage":
-                    return <TableCell key={col.id}>{r.storage || ""}</TableCell>;
-                  case "cpu":
-                    return <TableCell key={col.id}>{r.cpu || ""}</TableCell>;
-                  case "siteDescription":
-                    return <TableCell key={col.id}>{r.siteDescription || ""}</TableCell>;
-                  default:
-                    return <TableCell key={col.id}>{String(r[col.id] || "")}</TableCell>;
-                }
-              })}
-              <TableCell align="right">
-                <IconButton
-                  size="small"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openMenu(e, r);
-                  }}
-                  sx={{ color: "#ccc" }}
-                >
-                  <MoreVertIcon fontSize="small" />
-                </IconButton>
-              </TableCell>
-            </TableRow>
-          ))}
-          {sorted.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={columns.length + 2} sx={{ color: "#888" }}>
-                No agents connected.
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+      <Box sx={{ px: 2, pb: 2 }}>
+        <Box
+          className={gridWrapperClass}
+          sx={{
+            width: "100%",
+            height: 600,
+            minHeight: 400,
+            fontFamily: gridFontFamily,
+            "--ag-font-family": gridFontFamily,
+            "--ag-icon-font-family": iconFontFamily,
+            "& .ag-root-wrapper": {
+              borderRadius: 1,
+            },
+            "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+              fontFamily: gridFontFamily,
+            },
+            "& .ag-icon": {
+              fontFamily: iconFontFamily,
+            },
+          }}
+        >
+          <AgGridReact
+            ref={gridRef}
+            rowData={rows}
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
+            rowSelection="multiple"
+            rowMultiSelectWithClick
+            pagination
+            paginationPageSize={25}
+            animateRows
+            onSelectionChanged={handleSelectionChanged}
+            onFilterChanged={handleFilterChanged}
+            onGridReady={handleGridReady}
+            getRowId={getRowId}
+            theme={myTheme}
+            style={{
+              width: "100%",
+              height: "100%",
+              fontFamily: gridFontFamily,
+              "--ag-icon-font-family": iconFontFamily,
+            }}
+          />
+        </Box>
+      </Box>
       {/* View actions menu (rename/delete for custom views) */}
       <Menu
         anchorEl={viewActionAnchor}
@@ -1148,46 +1341,6 @@ export default function DeviceList({
             </Button>
           </Box>
         </Box>
-      </Popover>
-      {/* Filter popover */}
-      <Popover
-        open={Boolean(filterAnchor)}
-        anchorEl={filterAnchor?.anchorEl || null}
-        onClose={closeFilter}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        PaperProps={{ sx: { bgcolor: "#1e1e1e", p: 1 } }}
-      >
-        {filterAnchor && (
-          <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-            <TextField
-              autoFocus
-              size="small"
-              placeholder={`Filter ${columns.find((c) => c.id === filterAnchor.id)?.label || ""}`}
-              value={filters[filterAnchor.id] || ""}
-              onChange={onFilterChange(filterAnchor.id)}
-              onKeyDown={(e) => { if (e.key === "Escape") closeFilter(); }}
-              sx={{
-                input: { color: "#fff" },
-                minWidth: 220,
-                "& .MuiOutlinedInput-root": {
-                  "& fieldset": { borderColor: "#555" },
-                  "&:hover fieldset": { borderColor: "#888" },
-                },
-              }}
-            />
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => {
-                setFilters((prev) => ({ ...prev, [filterAnchor.id]: "" }));
-                closeFilter();
-              }}
-              sx={{ textTransform: "none", borderColor: "#555", color: "#bbb" }}
-            >
-              Clear
-            </Button>
-          </Box>
-        )}
       </Popover>
       <Menu
         anchorEl={menuAnchor}

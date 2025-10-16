@@ -10,10 +10,13 @@
   "dependencies": {
     "@emotion/react": "11.14.0",
     "@emotion/styled": "11.14.0",
+    "@fontsource/ibm-plex-sans": "5.0.17",
     "@mui/icons-material": "7.0.2",
     "@mui/material": "7.0.2",
     "@mui/x-date-pickers": "8.11.3",
     "@mui/x-tree-view": "8.10.0",
+    "ag-grid-community": "34.2.0",
+    "ag-grid-react": "34.2.0",
     "dayjs": "1.11.18",
     "normalize.css": "8.0.1",
     "prismjs": "1.30.0",
