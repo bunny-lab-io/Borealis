@@ -120,7 +120,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
 
   const verificationMessage = useMemo(() => {
     if (dirty) {
-      return { text: "Token has unsaved changes — save to verify.", color: "#f0c36d" };
+      return { text: "Token has not been saved yet — Save to verify.", color: "#f0c36d" };
     }
     const message = verification.message || "";
     if (!message) {
@@ -164,8 +164,38 @@ export default function GithubAPIToken({ isAdmin = false }) {
             Github API Token
           </Typography>
           <Typography variant="body2" sx={{ color: "#aaa" }}>
-            Using a Github Personal Access Token increased the Github API rate limits from 60/hr to 5000/hr.
+            Using a Github "Personal Access Token" increases the Github API rate limits from 60/hr to 5,000/hr.  This is important for production Borealis usage as it likes to hit its unauthenticated API limits sometimes despite my best efforts.
+            <br></br>Navigate to{' '}
+          <Link
+            href="https://github.com/settings/tokens"
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{ color: "#7db7ff" }}
+          >
+            https://github.com/settings/tokens
+          </Link>{' '}
+          &#10095; <b>Personal Access Tokens &#10095; Tokens (Classic) &#10095; Generate New Token &#10095; New Personal Access Token (Classic)</b>
           </Typography>
+
+        <br></br>
+        <Typography variant="body2" sx={{ color: "#ccc" }}>
+          <Box component="span" sx={{ fontWeight: 600 }}>Note:</Box>{' '}
+          <Box component="code" sx={{ bgcolor: "#222", px: 0.75, py: 0.25, borderRadius: 1, fontSize: "0.85rem" }}>
+            Borealis Automation Platform
+          </Box>
+        </Typography>
+        <Typography variant="body2" sx={{ color: "#ccc" }}>
+          <Box component="span" sx={{ fontWeight: 600 }}>Scope:</Box>{' '}
+          <Box component="code" sx={{ bgcolor: "#222", px: 0.75, py: 0.25, borderRadius: 1, fontSize: "0.85rem" }}>
+            public_repo
+          </Box>
+        </Typography>
+        <Typography variant="body2" sx={{ color: "#ccc" }}>
+          <Box component="span" sx={{ fontWeight: 600 }}>Expiration:</Box>{' '}
+          <Box component="code" sx={{ bgcolor: "#222", px: 0.75, py: 0.25, borderRadius: 1, fontSize: "0.85rem" }}>
+            No Expiration
+          </Box>
+        </Typography>
         </Box>
         <Button
           variant="outlined"
@@ -178,8 +208,46 @@ export default function GithubAPIToken({ isAdmin = false }) {
           Refresh
         </Button>
       </Box>
+      <Box sx={{ px: 2, py: 2, display: "flex", flexDirection: "column", gap: 1.5 }}>
+        <TextField
+          label="Personal Access Token"
+          value={inputValue}
+          onChange={(event) => setInputValue(event.target.value)}
+          fullWidth
+          variant="outlined"
+          sx={fieldSx}
+          disabled={saving || loading}
+          InputProps={{
+            endAdornment: (
+              <InputAdornment position="end" sx={{ mr: -1 }}>
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={handleSave}
+                  disabled={saving || loading}
+                  sx={{
+                    bgcolor: "#58a6ff",
+                    mr: 1,
+                    color: "#0b0f19",
+                    minWidth: 88,
+                    "&:hover": { bgcolor: "#7db7ff" }
+                  }}
+                >
+                  {saving ? <CircularProgress size={16} sx={{ color: "#0b0f19" }} /> : "Save"}
+                </Button>
+              </InputAdornment>
+            )
+          }}
+        />
 
-      {loading && (
+        {(verificationMessage.text || (!dirty && verification.rateLimit)) && (
+          <Typography variant="body2" sx={{ display: "inline", color: verificationMessage.color || "#7db7ff" }}>
+            {verificationMessage.text && `${verificationMessage.text} `}
+            {!dirty && verification.rateLimit && `- Hourly Request Rate Limit: ${verification.rateLimit.toLocaleString()}`}
+          </Typography>
+        )}
+
+{loading && (
         <Box
           sx={{
             display: "flex",
@@ -201,77 +269,6 @@ export default function GithubAPIToken({ isAdmin = false }) {
           <Typography variant="body2">{fetchError}</Typography>
         </Box>
       )}
-
-      <Box sx={{ px: 2, py: 2, display: "flex", flexDirection: "column", gap: 1.5 }}>
-        <Typography variant="body2" sx={{ color: "#ccc" }}>
-          Navigate to{' '}
-          <Link
-            href="https://github.com/settings/tokens"
-            target="_blank"
-            rel="noopener noreferrer"
-            sx={{ color: "#7db7ff" }}
-          >
-            https://github.com/settings/tokens
-          </Link>{' '}
-          &gt; Personal Access Tokens &gt; Tokens (Classic) &gt; Generate New Token &gt; New Personal Access Token (Classic)
-        </Typography>
-        <Typography variant="body2" sx={{ color: "#ccc" }}>
-          <Box component="span" sx={{ fontWeight: 600 }}>Note:</Box> Borealis Automation Platform
-        </Typography>
-        <Typography variant="body2" sx={{ color: "#ccc" }}>
-          <Box component="span" sx={{ fontWeight: 600 }}>Scope:</Box>{' '}
-          <Box component="code" sx={{ bgcolor: "#222", px: 0.75, py: 0.25, borderRadius: 1, fontSize: "0.85rem" }}>
-            public_repo
-          </Box>
-        </Typography>
-        <Typography variant="body2" sx={{ color: "#ccc" }}>
-          <Box component="span" sx={{ fontWeight: 600 }}>Expiration:</Box>{' '}
-          <Box component="code" sx={{ bgcolor: "#222", px: 0.75, py: 0.25, borderRadius: 1, fontSize: "0.85rem" }}>
-            No Expiration
-          </Box>
-        </Typography>
-
-        <TextField
-          label="Personal Access Token"
-          value={inputValue}
-          onChange={(event) => setInputValue(event.target.value)}
-          fullWidth
-          variant="outlined"
-          sx={fieldSx}
-          disabled={saving || loading}
-          InputProps={{
-            endAdornment: (
-              <InputAdornment position="end" sx={{ mr: -1 }}>
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={handleSave}
-                  disabled={saving || loading}
-                  sx={{
-                    bgcolor: "#58a6ff",
-                    color: "#0b0f19",
-                    minWidth: 88,
-                    "&:hover": { bgcolor: "#7db7ff" }
-                  }}
-                >
-                  {saving ? <CircularProgress size={16} sx={{ color: "#0b0f19" }} /> : "Save"}
-                </Button>
-              </InputAdornment>
-            )
-          }}
-        />
-
-        {verificationMessage.text && (
-          <Typography variant="body2" sx={{ color: verificationMessage.color }}>
-            {verificationMessage.text}
-          </Typography>
-        )}
-
-        {!dirty && verification.rateLimit && (
-          <Typography variant="caption" sx={{ color: "#7db7ff" }}>
-            Authenticated GitHub rate limit: {verification.rateLimit.toLocaleString()} requests / hour
-          </Typography>
-        )}
       </Box>
     </Paper>
   );
