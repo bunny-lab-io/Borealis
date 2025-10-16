@@ -191,7 +191,13 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
             disabled={isReadOnly}
             InputProps={{
               readOnly: isReadOnly,
-              sx: { color: "#ccc" }
+              sx: {
+                color: "#ccc",
+                backgroundColor: "#1e1e1e",
+                "& fieldset": { borderColor: "#444" },
+                "&:hover fieldset": { borderColor: "#666" },
+                "&.Mui-focused fieldset": { borderColor: "#58a6ff" }
+              }
             }}
             onChange={(e) => {
               if (isReadOnly) return;
@@ -205,15 +211,6 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
                 )
               );
               window.BorealisValueBus[nodeId] = newValue;
-            }}
-            InputProps={{
-              sx: {
-                backgroundColor: "#1e1e1e",
-                color: "#ccc",
-                "& fieldset": { borderColor: "#444" },
-                "&:hover fieldset": { borderColor: "#666" },
-                "&.Mui-focused fieldset": { borderColor: "#58a6ff" }
-              }
             }}
           />
         </Box>
