@@ -46,6 +46,151 @@ const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
+const DescriptionCellRenderer = React.memo(function DescriptionCellRenderer(props) {
+  const { value, data, onSaveDescription, fontFamily } = props;
+  const safeValue = typeof value === "string" ? value : value == null ? "" : String(value);
+  const [draft, setDraft] = useState(safeValue);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!editing && !saving) {
+      setDraft(safeValue);
+    }
+  }, [safeValue, editing, saving]);
+
+  const handleFocus = useCallback((event) => {
+    event.stopPropagation();
+    setEditing(true);
+    setError("");
+  }, []);
+
+  const handleChange = useCallback((event) => {
+    setDraft(event.target.value);
+  }, []);
+
+  const handleKeyDown = useCallback(
+    async (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const trimmed = (draft || "").trim();
+        if (trimmed === safeValue.trim()) {
+          setEditing(false);
+          setDraft(safeValue);
+          setError("");
+          return;
+        }
+        if (typeof onSaveDescription !== "function" || !data) {
+          setEditing(false);
+          setError("");
+          return;
+        }
+        setSaving(true);
+        setError("");
+        const ok = await onSaveDescription(data, trimmed);
+        setSaving(false);
+        if (ok) {
+          setEditing(false);
+        } else {
+          setError("Failed to save description");
+        }
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        setDraft(safeValue);
+        setEditing(false);
+        setError("");
+      }
+    },
+    [data, draft, onSaveDescription, safeValue]
+  );
+
+  const handleBlur = useCallback(
+    (event) => {
+      event.stopPropagation();
+      if (saving) return;
+      setEditing(false);
+      setDraft(safeValue);
+      setError("");
+    },
+    [saving, safeValue]
+  );
+
+  const stopPropagation = useCallback((event) => {
+    event.stopPropagation();
+  }, []);
+
+  const backgroundColor = saving
+    ? "rgba(255,255,255,0.04)"
+    : editing
+    ? "rgba(255,255,255,0.16)"
+    : "rgba(255,255,255,0.02)";
+
+  return (
+    <TextField
+      value={draft}
+      onFocus={handleFocus}
+      onChange={handleChange}
+      onKeyDown={handleKeyDown}
+      onBlur={handleBlur}
+      onClick={stopPropagation}
+      onMouseDown={stopPropagation}
+      variant="outlined"
+      size="small"
+      fullWidth
+      disabled={saving}
+      error={Boolean(error)}
+      helperText={error || undefined}
+      FormHelperTextProps={
+        error
+          ? { sx: { minHeight: 18, fontSize: "0.75rem" } }
+          : { sx: { display: "none" } }
+      }
+      sx={{
+        mt: 0.5,
+        mb: 0.5,
+        '& .MuiOutlinedInput-root': {
+          backgroundColor,
+          transition: "background-color 0.2s ease, border-color 0.2s ease",
+          color: "rgba(255,255,255,0.85)",
+          fontFamily: fontFamily || gridFontFamily,
+          fontSize: "0.875rem",
+          height: 34,
+          py: 0,
+          pr: 0,
+          '& fieldset': {
+            borderColor: editing ? "#FFA6FF" : "rgba(255,255,255,0.25)",
+          },
+          '&:hover fieldset': {
+            borderColor: "#FFA6FF",
+          },
+          '&.Mui-focused fieldset': {
+            borderColor: "#FFA6FF",
+          },
+          '&.Mui-disabled': {
+            backgroundColor: "rgba(255,255,255,0.08)",
+          },
+        },
+        '& .MuiOutlinedInput-input': {
+          color: "rgba(255,255,255,0.85)",
+          py: 0.75,
+          px: 1.5,
+        },
+        '& .MuiFormHelperText-root': {
+          color: "#ff7b7b",
+          mt: 0.25,
+        },
+      }}
+      inputProps={{
+        sx: {
+          textOverflow: "ellipsis",
+        },
+      }}
+    />
+  );
+});
+
 function formatLastSeen(tsSec, offlineAfter = 300) {
   if (!tsSec) return "unknown";
   const now = Date.now() / 1000;
@@ -814,6 +959,58 @@ export default function DeviceList({
     [openMenu]
   );
 
+  const handleDescriptionSave = useCallback(
+    async (row, nextDescription) => {
+      if (!row) return false;
+      const trimmed = (nextDescription || "").trim();
+      const targetHost = (row.hostname || row.summary?.hostname || "").trim();
+      if (!targetHost) return false;
+      try {
+        const resp = await fetch(`/api/device/description/${targetHost}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ description: trimmed }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const matchValue = row.id || row.agentGuid || row.hostname || targetHost;
+        setRows((prev) =>
+          prev.map((item) => {
+            const itemMatch = item.id || item.agentGuid || item.hostname || "";
+            if (itemMatch !== matchValue) return item;
+            const updated = {
+              ...item,
+              description: trimmed,
+              summary: { ...(item.summary || {}), description: trimmed },
+            };
+            if (item.details) {
+              updated.details = { ...item.details, description: trimmed };
+            }
+            return updated;
+          })
+        );
+        setSelected((prev) => {
+          if (!prev) return prev;
+          const prevMatch = prev.id || prev.agentGuid || prev.hostname || "";
+          if (prevMatch !== matchValue) return prev;
+          const updated = {
+            ...prev,
+            description: trimmed,
+            summary: { ...(prev.summary || {}), description: trimmed },
+          };
+          if (prev.details) {
+            updated.details = { ...prev.details, description: trimmed };
+          }
+          return updated;
+        });
+        return true;
+      } catch (e) {
+        console.warn("Failed to save description", e);
+        return false;
+      }
+    },
+    [setRows, setSelected]
+  );
+
   const columnDefs = useMemo(() => {
     const defs = columns.map((col) => {
       switch (col.id) {
@@ -859,6 +1056,11 @@ export default function DeviceList({
             width: 280,
             minWidth: 280,
             flex: 0,
+            cellRenderer: DescriptionCellRenderer,
+            cellRendererParams: {
+              onSaveDescription: handleDescriptionSave,
+              fontFamily: gridFontFamily,
+            },
           };
         case "lastUser":
           return {
@@ -1023,7 +1225,14 @@ export default function DeviceList({
         pinned: "right",
       },
     ];
-  }, [columns, actionCellRenderer, formatCreated, hostnameCellRenderer, statusCellRenderer]);
+  }, [
+    columns,
+    actionCellRenderer,
+    formatCreated,
+    handleDescriptionSave,
+    hostnameCellRenderer,
+    statusCellRenderer,
+  ]);
 
   const defaultColDef = useMemo(
     () => ({
