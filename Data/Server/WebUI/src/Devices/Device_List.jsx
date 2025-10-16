@@ -782,7 +782,7 @@ export default function DeviceList({
             py: 0.35,
             borderRadius: 999,
             bgcolor: statusColor(status),
-            color: "#fff",
+            color: "#000",
             fontWeight: 600,
             fontSize: "13px",
             lineHeight: 1,
@@ -822,71 +822,91 @@ export default function DeviceList({
             field: "status",
             headerName: col.label,
             cellRenderer: statusCellRenderer,
-            width: 140,
-            minWidth: 140,
+            width: 100,
+            minWidth: 100,
             flex: 0,
           };
         case "agentVersion":
           return {
             field: "agentVersion",
             headerName: col.label,
-            minWidth: 160,
+            width: 140,
+            minWidth: 150,
+            flex: 0,
           };
         case "site":
           return {
             field: "site",
             headerName: col.label,
             valueGetter: (params) => params.data?.site || "Not Configured",
-            minWidth: 180,
+            width: 170,
+            minWidth: 170,
+            flex: 0,
           };
         case "hostname":
           return {
             field: "hostname",
             headerName: col.label,
             cellRenderer: hostnameCellRenderer,
-            minWidth: 220,
+            width: 210,
+            minWidth: 210,
+            flex: 0,
           };
         case "description":
           return {
             field: "description",
             headerName: col.label,
-            minWidth: 220,
+            width: 280,
+            minWidth: 280,
+            flex: 0,
           };
         case "lastUser":
           return {
             field: "lastUser",
             headerName: col.label,
-            minWidth: 160,
+            width: 220,
+            minWidth: 220,
+            flex: 0,
           };
         case "type":
           return {
             field: "type",
             headerName: col.label,
-            minWidth: 140,
+            width: 170,
+            minWidth: 170,
+            flex: 0,
           };
         case "os":
           return {
             field: "os",
             headerName: col.label,
-            minWidth: 200,
+            width: 410,
+            minWidth: 410,
+            flex: 0,
           };
         case "internalIp":
           return {
             field: "internalIp",
             headerName: col.label,
-            minWidth: 160,
+            width: 140,
+            minWidth: 140,
+            flex: 0,
           };
         case "externalIp":
           return {
             field: "externalIp",
             headerName: col.label,
-            minWidth: 160,
+            width: 140,
+            minWidth: 140,
+            flex: 0,
           };
         case "lastReboot":
           return {
             field: "lastReboot",
             headerName: col.label,
-            minWidth: 200,
+            width: 180,
+            minWidth: 180,
+            flex: 0,
           };
         case "created":
           return {
@@ -896,7 +916,9 @@ export default function DeviceList({
               formatCreated(params.data?.created, params.data?.createdTs),
             comparator: (a, b, nodeA, nodeB) =>
               (nodeA?.data?.createdTs || 0) - (nodeB?.data?.createdTs || 0),
-            minWidth: 220,
+            width: 200,
+            minWidth: 200,
+            flex: 0,
           };
         case "lastSeen":
           return {
@@ -905,31 +927,41 @@ export default function DeviceList({
             valueGetter: (params) => formatLastSeen(params.data?.lastSeen),
             comparator: (a, b, nodeA, nodeB) =>
               (nodeA?.data?.lastSeen || 0) - (nodeB?.data?.lastSeen || 0),
-            minWidth: 220,
+            width: 200,
+            minWidth: 200,
+            flex: 0,
           };
         case "agentId":
           return {
             field: "agentId",
             headerName: col.label,
-            minWidth: 200,
+            width: 290,
+            minWidth: 290,
+            flex: 0,
           };
         case "agentHash":
           return {
             field: "agentHash",
             headerName: col.label,
-            minWidth: 220,
+            width: 365,
+            minWidth: 365,
+            flex: 0,
           };
         case "agentGuid":
           return {
             field: "agentGuid",
             headerName: col.label,
-            minWidth: 240,
+            width: 345,
+            minWidth: 345,
+            flex: 0,
           };
         case "domain":
           return {
             field: "domain",
             headerName: col.label,
-            minWidth: 180,
+            width: 160,
+            minWidth: 160,
+            flex: 0,
           };
         case "uptime":
           return {
@@ -940,7 +972,9 @@ export default function DeviceList({
               formatUptime(params.data?.uptime || 0),
             comparator: (a, b, nodeA, nodeB) =>
               (nodeA?.data?.uptime || 0) - (nodeB?.data?.uptime || 0),
-            minWidth: 160,
+            width: 140,
+            minWidth: 140,
+            flex: 0,
           };
         case "memory":
         case "network":
@@ -1026,6 +1060,11 @@ export default function DeviceList({
         bgcolor: "#1e1e1e",
         fontFamily: gridFontFamily,
         color: "#f5f7fa",
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        width: "100%",
+        height: "100%",
       }}
       elevation={2}
     >
@@ -1166,18 +1205,21 @@ export default function DeviceList({
           </Button>
         </Box>
       </Box>
-      <Box sx={{ px: 2, pb: 2 }}>
+      {/* The Size of the Grid itself and its margins relative to the overall page */}
+      <Box sx={{ mt: '10px', px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}> 
         <Box
           className={gridWrapperClass}
           sx={{
             width: "100%",
-            height: 600,
-            minHeight: 400,
+            flexGrow: 1,
+            minHeight: 0,
+            height: "100%",
             fontFamily: gridFontFamily,
             "--ag-font-family": gridFontFamily,
             "--ag-icon-font-family": iconFontFamily,
             "& .ag-root-wrapper": {
               borderRadius: 1,
+              minHeight: 400,
             },
             "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
               fontFamily: gridFontFamily,
