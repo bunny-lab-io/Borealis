@@ -42,6 +42,8 @@ const myTheme = themeQuartz.withParams({
   headerFontSize: 14,
 });
 
+const themeClassName = myTheme.themeName || "ag-theme-quartz";
+
 function formatLastSeen(tsSec, offlineAfter = 300) {
   if (!tsSec) return "unknown";
   const now = Date.now() / 1000;
@@ -195,6 +197,11 @@ export default function DeviceList({
 
   const [repoHash, setRepoHash] = useState(null);
   const lastRepoFetchRef = useRef(0);
+
+  const gridWrapperClass = useMemo(
+    () => `${themeClassName} borealis-device-grid`,
+    [themeClassName]
+  );
 
   const fetchLatestRepoHash = useCallback(async (options = {}) => {
     const { force = false } = options || {};
@@ -1074,13 +1081,38 @@ export default function DeviceList({
       </Box>
       <Box sx={{ px: 2, pb: 2 }}>
         <Box
+          className={gridWrapperClass}
           sx={{
             width: "100%",
             height: 600,
             minHeight: 400,
+            bgcolor: "#111822",
+            borderRadius: 1,
+            "& .ag-root-wrapper, & .ag-header, & .ag-cell": {
+              fontFamily: '"IBM Plex Sans", sans-serif',
+            },
             "& .ag-root-wrapper": {
-              border: "1px solid #2c3645",
               borderRadius: 1,
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              boxShadow: "0 0 0 1px rgba(0, 0, 0, 0.35)",
+            },
+            "& .ag-header": {
+              borderBottom: "1px solid rgba(255, 255, 255, 0.1)",
+            },
+            "& .ag-row": {
+              borderColor: "rgba(255, 255, 255, 0.04)",
+            },
+            "& .ag-row-hover": {
+              backgroundColor: "rgba(88, 166, 255, 0.08) !important",
+            },
+            "& .ag-row-selected": {
+              backgroundColor: "rgba(255, 166, 255, 0.12) !important",
+            },
+            "& .ag-header-cell-text": {
+              fontWeight: 600,
+            },
+            "& .ag-paging-panel": {
+              borderTop: "1px solid rgba(255, 255, 255, 0.08)",
             },
           }}
         >
