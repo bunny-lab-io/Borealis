@@ -1021,11 +1021,16 @@ export default function DeviceList({
   return (
     <Paper
       sx={{
-        m: 2,
+        m: 0,
         p: 0,
         bgcolor: "#1e1e1e",
         fontFamily: gridFontFamily,
         color: "#f5f7fa",
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        width: "100%",
+        height: "100%",
       }}
       elevation={2}
     >
@@ -1166,18 +1171,20 @@ export default function DeviceList({
           </Button>
         </Box>
       </Box>
-      <Box sx={{ px: 2, pb: 2 }}>
+      <Box sx={{ px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Box
           className={gridWrapperClass}
           sx={{
             width: "100%",
-            height: 600,
-            minHeight: 400,
+            flexGrow: 1,
+            minHeight: 0,
+            height: "100%",
             fontFamily: gridFontFamily,
             "--ag-font-family": gridFontFamily,
             "--ag-icon-font-family": iconFontFamily,
             "& .ag-root-wrapper": {
               borderRadius: 1,
+              minHeight: 400,
             },
             "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
               fontFamily: gridFontFamily,
