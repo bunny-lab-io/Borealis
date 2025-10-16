@@ -148,10 +148,12 @@ const DescriptionCellRenderer = React.memo(function DescriptionCellRenderer(prop
           : { sx: { display: "none" } }
       }
       sx={{
+        mt: 0.5,
+        mb: 0.5,
         '& .MuiOutlinedInput-root': {
           backgroundColor,
           transition: "background-color 0.2s ease, border-color 0.2s ease",
-          color: "#fff",
+          color: "rgba(255,255,255,0.85)",
           fontFamily: fontFamily || gridFontFamily,
           fontSize: "0.875rem",
           height: 34,
@@ -171,6 +173,7 @@ const DescriptionCellRenderer = React.memo(function DescriptionCellRenderer(prop
           },
         },
         '& .MuiOutlinedInput-input': {
+          color: "rgba(255,255,255,0.85)",
           py: 0.75,
           px: 1.5,
         },
