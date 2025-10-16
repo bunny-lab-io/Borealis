@@ -364,12 +364,23 @@ export default function CredentialList({ isAdmin = false }) {
           </Box>
         )}
 
-        <Box sx={{ flexGrow: 1, minHeight: 320, p: 0 }}>
+        <Box
+          sx={{
+            flexGrow: 1,
+            minHeight: 320,
+            display: "flex",
+            flexDirection: "column",
+            ml: 2,
+            mr: 2,
+            mb: 2
+          }}
+        >
           <Box
             className={themeClassName}
             sx={{
               width: "100%",
               height: "100%",
+              flexGrow: 1,
               fontFamily: gridFontFamily,
               "--ag-font-family": gridFontFamily,
               "--ag-icon-font-family": iconFontFamily,
