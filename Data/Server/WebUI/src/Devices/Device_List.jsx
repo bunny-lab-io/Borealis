@@ -1063,7 +1063,7 @@ export default function DeviceList({
         display: "flex",
         flexDirection: "column",
         flexGrow: 1,
-        width: "100%",
+        minWidth: 0,
         height: "100%",
       }}
       elevation={2}
