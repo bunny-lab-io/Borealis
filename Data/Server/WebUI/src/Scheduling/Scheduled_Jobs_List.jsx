@@ -65,14 +65,22 @@ function ResultsBar({ counts }) {
     .some((section) => Number(counts?.[section.key] || 0) > 0);
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 0.25,
+        lineHeight: 1.1,
+        fontFamily: gridFontFamily
+      }}
+    >
       <Box
         sx={{
           display: "flex",
           borderRadius: 2,
           overflow: "hidden",
-          width: 260,
-          height: 8
+          width: 220,
+          height: 6
         }}
       >
         {sections.map((section) => {
@@ -92,9 +100,10 @@ function ResultsBar({ counts }) {
         sx={{
           display: "flex",
           flexWrap: "wrap",
-          gap: 1,
+          columnGap: 0.75,
+          rowGap: 0.25,
           color: "#aaa",
-          fontSize: 12,
+          fontSize: 11,
           fontFamily: gridFontFamily
         }}
       >
@@ -108,13 +117,13 @@ function ResultsBar({ counts }) {
               <Box
                 key={section.key}
                 component="span"
-                sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}
+                sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
               >
                 <Box
                   component="span"
                   sx={{
-                    width: 8,
-                    height: 8,
+                    width: 6,
+                    height: 6,
                     borderRadius: 1,
                     backgroundColor: section.color
                   }}
