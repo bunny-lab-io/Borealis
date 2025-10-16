@@ -64,6 +64,28 @@ $symbols = @{
     Info    = [char]0x2139
 }
 
+function Set-FileUtf8Content {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter()]
+        [AllowNull()]
+        [object]$Value = ''
+    )
+
+    $text = if ($null -eq $Value) { '' } else { [string]$Value }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+    try {
+        Set-Content -Path $Path -Value $text -Encoding UTF8NoBOM -ErrorAction Stop
+    } catch [System.Management.Automation.ParameterBindingException] {
+        [System.IO.File]::WriteAllText($Path, $text, $utf8NoBom)
+    } catch {
+        [System.IO.File]::WriteAllText($Path, $text, $utf8NoBom)
+    }
+}
+
 # Admin/Elevation helpers for Agent deployment
 function Test-IsAdmin {
     try {
@@ -646,22 +668,23 @@ def lockf(*_args, **_kwargs):
 
     try {
         if (-not (Test-Path (Join-Path $supportDir '__init__.py') -PathType Leaf)) {
-            Set-Content -Path (Join-Path $supportDir '__init__.py') -Value '' -Encoding UTF8NoBOM
+            Set-FileUtf8Content -Path (Join-Path $supportDir '__init__.py') -Value ''
         }
-        Set-Content -Path $fcntlStubPath -Value $fcntlStub -Encoding UTF8NoBOM
+        Set-FileUtf8Content -Path $fcntlStubPath -Value $fcntlStub
     } catch {
         Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Failed to seed Windows fcntl compatibility shim: $($_.Exception.Message)"
     }
 
     try {
-        $metadata | ConvertTo-Json -Depth 5 | Set-Content -Path $metadataPath -Encoding UTF8NoBOM
+        $metadataJson = $metadata | ConvertTo-Json -Depth 5
+        Set-FileUtf8Content -Path $metadataPath -Value $metadataJson
     } catch {
         Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Failed to persist metadata.json: $($_.Exception.Message)"
         throw "Unable to persist Ansible execution environment metadata."
     }
 
     try {
-        Set-Content -Path $versionTxtPath -Value $expectedVersionNorm -Encoding UTF8NoBOM
+        Set-FileUtf8Content -Path $versionTxtPath -Value $expectedVersionNorm
     } catch {}
 
     Write-AgentLog -FileName $LogName -Message "[AnsibleEE] Execution environment ready at $eeRoot"
