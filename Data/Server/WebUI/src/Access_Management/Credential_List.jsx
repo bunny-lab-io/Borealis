@@ -7,7 +7,7 @@ import {
   MenuItem,
   Paper,
   Typography,
-  CircularProgress
+  CircularProgress,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import AddIcon from "@mui/icons-material/Add";
@@ -40,6 +40,7 @@ const myTheme = themeQuartz.withParams({
 
 const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
+const iconFontFamily = '"Quartz Regular"';
 
 function formatTs(ts) {
   if (!ts) return "-";
@@ -369,9 +370,19 @@ export default function CredentialList({ isAdmin = false }) {
             sx={{
               width: "100%",
               height: "100%",
+              fontFamily: gridFontFamily,
+              "--ag-font-family": gridFontFamily,
+              "--ag-icon-font-family": iconFontFamily,
               "& .ag-root-wrapper": {
                 borderRadius: "0 0 16px 16px",
-                borderColor: "#2a2a2a"
+                borderColor: "#2a2a2a",
+                minHeight: 320
+              },
+              "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+                fontFamily: gridFontFamily
+              },
+              "& .ag-icon": {
+                fontFamily: iconFontFamily
               },
               "& .ag-header": {
                 borderBottom: "1px solid #2a2a2a"
@@ -380,7 +391,7 @@ export default function CredentialList({ isAdmin = false }) {
                 borderColor: "#2a2a2a"
               }
             }}
-            style={{ fontFamily: gridFontFamily, color: "#f5f7fa" }}
+            style={{ color: "#f5f7fa" }}
           >
             <AgGridReact
               rowData={rows}
@@ -393,12 +404,25 @@ export default function CredentialList({ isAdmin = false }) {
               overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No credentials have been created yet.</span>"
               onGridReady={handleGridReady}
               suppressCellFocus
+              theme={myTheme}
+              style={{
+                width: "100%",
+                height: "100%",
+                fontFamily: gridFontFamily,
+                "--ag-icon-font-family": iconFontFamily
+              }}
             />
           </Box>
         </Box>
       </Paper>
 
-      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu} elevation={2} PaperProps={{ sx: { bgcolor: "#1f1f1f", color: "#f5f5f5" } }}>
+      <Menu
+        anchorEl={menuAnchor}
+        open={Boolean(menuAnchor)}
+        onClose={closeMenu}
+        elevation={2}
+        PaperProps={{ sx: { bgcolor: "#1f1f1f", color: "#f5f5f5" } }}
+      >
         <MenuItem onClick={() => handleEdit(menuRow)}>Edit</MenuItem>
         <MenuItem onClick={() => handleDelete(menuRow)} sx={{ color: "#ff8080" }}>
           Delete
