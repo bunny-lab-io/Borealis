@@ -70,14 +70,14 @@ function ResultsBar({ counts }) {
         display: "flex",
         flexDirection: "column",
         gap: 0.25,
-        lineHeight: 1.1,
+        lineHeight: 1.7,
         fontFamily: gridFontFamily
       }}
     >
       <Box
         sx={{
           display: "flex",
-          borderRadius: 2,
+          borderRadius: 1,
           overflow: "hidden",
           width: 220,
           height: 6
