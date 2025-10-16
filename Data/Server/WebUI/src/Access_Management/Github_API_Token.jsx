@@ -234,6 +234,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
                     bgcolor: "#3a3a3a",
                     color: "#f5f7fa",
                     minWidth: 96,
+                    mr: 0.5,
                     "&:hover": { bgcolor: "#4a4a4a" }
                   }}
                 >
@@ -249,6 +250,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
                     bgcolor: "#58a6ff",
                     color: "#0b0f19",
                     minWidth: 88,
+                    mr: 1,
                     "&:hover": { bgcolor: "#7db7ff" }
                   }}
                 >
