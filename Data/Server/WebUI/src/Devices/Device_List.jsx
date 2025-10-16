@@ -777,8 +777,27 @@ export default function DeviceList({
     }
   }, [COL_LABELS, defaultColumns, replaceFilters]);
 
-  const statusColor = useCallback(
-    (s) => (s === "Online" ? "#00d18c" : "#ff4f4f"),
+  const statusTokenTheme = useMemo(
+    () => ({
+      Online: {
+        text: "#00d18c",
+        background: "rgba(0, 209, 140, 0.16)",
+        border: "1px solid rgba(0, 209, 140, 0.45)",
+        dot: "#00d18c",
+      },
+      Offline: {
+        text: "#b0b8c8",
+        background: "rgba(176, 184, 200, 0.14)",
+        border: "1px solid rgba(176, 184, 200, 0.35)",
+        dot: "#c3cada",
+      },
+      default: {
+        text: "#e2e6f0",
+        background: "rgba(226, 230, 240, 0.12)",
+        border: "1px solid rgba(226, 230, 240, 0.25)",
+        dot: "#e2e6f0",
+      },
+    }),
     []
   );
 
@@ -915,6 +934,7 @@ export default function DeviceList({
     (params) => {
       const status = params.value || "";
       if (!status) return null;
+      const theme = statusTokenTheme[status] || statusTokenTheme.default;
       return (
         <Box
           component="span"
@@ -922,24 +942,36 @@ export default function DeviceList({
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
-            minWidth: 70,
+            minWidth: 76,
             px: 1.5,
-            py: 0.35,
+            py: 0.4,
             borderRadius: 999,
-            bgcolor: statusColor(status),
-            color: "#000",
+            backgroundColor: theme.background,
+            border: theme.border,
+            color: theme.text,
             fontWeight: 600,
             fontSize: "13px",
             lineHeight: 1,
             fontFamily: gridFontFamily,
             textTransform: "capitalize",
+            gap: 0.75,
           }}
         >
+          <Box
+            component="span"
+            sx={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              backgroundColor: theme.dot,
+              boxShadow: "0 0 0 2px rgba(0, 0, 0, 0.22)",
+            }}
+          />
           {status}
         </Box>
       );
     },
-    [statusColor, gridFontFamily]
+    [statusTokenTheme, gridFontFamily]
   );
 
   const actionCellRenderer = useCallback(
