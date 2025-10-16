@@ -336,9 +336,27 @@ from job_scheduler import set_credential_fetcher as scheduler_set_credential_fet
 # =============================================================================
 # Configure Flask, reverse-proxy awareness, CORS, and Socket.IO transport.
 
+_STATIC_CANDIDATES = [
+    os.path.join(os.path.dirname(__file__), '../web-interface/build'),
+    os.path.join(os.path.dirname(__file__), 'WebUI/build'),
+    os.path.join(os.path.dirname(__file__), '../WebUI/build'),
+]
+
+_resolved_static_folder = None
+for candidate in _STATIC_CANDIDATES:
+    absolute_candidate = os.path.abspath(candidate)
+    if os.path.isdir(absolute_candidate):
+        _resolved_static_folder = absolute_candidate
+        break
+
+if not _resolved_static_folder:
+    # Fall back to the first candidate so Flask still initialises; individual
+    # requests will 404 until a build exists, matching the previous behaviour.
+    _resolved_static_folder = os.path.abspath(_STATIC_CANDIDATES[0])
+
 app = Flask(
     __name__,
-    static_folder=os.path.join(os.path.dirname(__file__), '../web-interface/build'),
+    static_folder=_resolved_static_folder,
     static_url_path=''
 )
 
@@ -393,6 +411,34 @@ def serve_dist(path):
     else:
         # SPA entry point
         return send_from_directory(app.static_folder, 'index.html')
+
+
+@app.errorhandler(404)
+def spa_fallback(error):
+    """Serve the SPA entry point for unknown front-end routes.
+
+    When the browser refreshes on a client-side route (e.g. ``/devices``),
+    Flask would normally raise a 404 because no matching server route exists.
+    We intercept that here and return ``index.html`` so the React router can
+    take over. API and asset paths continue to surface their original 404s.
+    """
+
+    # Preserve 404s for API endpoints, websocket upgrades, and obvious asset
+    # requests (anything containing an extension).
+    request_path = (request.path or '').strip()
+    if request_path.startswith('/api') or request_path.startswith('/socket.io'):
+        return error
+    if '.' in os.path.basename(request_path):
+        return error
+    if request.method not in {'GET', 'HEAD'}:
+        return error
+
+    try:
+        return send_from_directory(app.static_folder, 'index.html')
+    except Exception:
+        # If the build is missing we fall back to the original 404 response so
+        # the caller still receives an accurate status code.
+        return error
 
 
 # Endpoint: /health — liveness probe for orchestrators.
