@@ -162,7 +162,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   const ResultsBar = ({ counts }) => {
     const total = Math.max(1, Number(counts?.total_targets || 0));
     const seg = (n) => `${Math.round(((n||0)/total)*100)}%`;
-    const styleSeg = (bg, w) => ({ display: 'inline-block', height: 8, background: bg, width: w });
+    const styleSeg = (bg, w) => ({ display: 'block', height: 8, background: bg, width: w });
     const s = counts || {};
     const sections = [
       { key: 'success', color: '#00d18c' },
@@ -174,7 +174,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     ];
     return (
       <div>
-        <div style={{ background: '#333', borderRadius: 2, overflow: 'hidden', width: 260 }}>
+        <div style={{ display: 'flex', borderRadius: 2, overflow: 'hidden', width: 260 }}>
           {sections.map(({key,color}) => (s[key] ? <span key={key} style={styleSeg(color, seg(s[key]))} /> : null))}
         </div>
         <div style={{ color: '#aaa', fontSize: 12, marginTop: 4 }}>
@@ -317,7 +317,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
                         body: JSON.stringify({ enabled: !r.enabled })
                       });
                     } catch {}
-                    setRows((prev) => prev.map((job, idx) => idx === i ? { ...job, enabled: !job.enabled } : job));
+                    setRows((prev) => prev.map((job) => (job.id === r.id ? { ...job, enabled: !job.enabled } : job)));
                   }}
                   size="small"
                 />
