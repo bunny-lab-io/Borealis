@@ -44,6 +44,7 @@ import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
 import CreateJob from "./Scheduling/Create_Job.jsx";
 import CredentialList from "./Access_Management/Credential_List.jsx";
 import UserManagement from "./Access_Management/Users.jsx";
+import GithubAPIToken from "./Access_Management/Github_API_Token.jsx";
 import ServerInfo from "./Admin/Server_Info.jsx";
 
 // Networking Imports
@@ -215,6 +216,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         }
         case "access_credentials":
           return "/access_management/credentials";
+        case "access_github_token":
+          return "/access_management/github_token";
         case "access_users":
           return "/access_management/users";
         case "server_info":
@@ -267,6 +270,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         };
       }
       if (path === "/access_management/users") return { page: "access_users", options: {} };
+      if (path === "/access_management/github_token") return { page: "access_github_token", options: {} };
       if (path === "/access_management/credentials") return { page: "access_credentials", options: {} };
       if (path === "/admin/server_info") return { page: "server_info", options: {} };
       return { page: "devices", options: {} };
@@ -433,6 +437,10 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "access_credentials":
         items.push({ label: "Access Management", page: "access_credentials" });
         items.push({ label: "Credentials", page: "access_credentials" });
+        break;
+      case "access_github_token":
+        items.push({ label: "Access Management", page: "access_credentials" });
+        items.push({ label: "GitHub API Token", page: "access_github_token" });
         break;
       case "access_users":
         items.push({ label: "Access Management", page: "access_credentials" });
@@ -869,6 +877,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   useEffect(() => {
     const requiresAdmin = currentPage === 'server_info'
       || currentPage === 'access_credentials'
+      || currentPage === 'access_github_token'
       || currentPage === 'access_users'
       || currentPage === 'ssh_devices'
       || currentPage === 'winrm_devices'
@@ -1054,6 +1063,9 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
       case "access_credentials":
         return <CredentialList isAdmin={isAdmin} />;
+
+      case "access_github_token":
+        return <GithubAPIToken isAdmin={isAdmin} />;
 
       case "access_users":
         return <UserManagement isAdmin={isAdmin} />;

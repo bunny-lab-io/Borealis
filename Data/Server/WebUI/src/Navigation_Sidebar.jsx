@@ -22,7 +22,12 @@ import {
   Apps as AssembliesIcon
 } from "@mui/icons-material";
 import { LocationCity as SitesIcon } from "@mui/icons-material";
-import { Dns as ServerInfoIcon, VpnKey as CredentialIcon, PersonOutline as UserIcon } from "@mui/icons-material";
+import {
+  Dns as ServerInfoIcon,
+  VpnKey as CredentialIcon,
+  PersonOutline as UserIcon,
+  GitHub as GitHubIcon
+} from "@mui/icons-material";
 
 function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
   const [expandedNav, setExpandedNav] = useState({
@@ -296,7 +301,10 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         {/* Access Management */}
         {(() => {
           if (!isAdmin) return null;
-          const groupActive = currentPage === "access_credentials" || currentPage === "access_users";
+          const groupActive =
+            currentPage === "access_credentials" ||
+            currentPage === "access_users" ||
+            currentPage === "access_github_token";
           return (
         <Accordion
           expanded={expandedNav.access}
@@ -334,6 +342,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
             <NavItem icon={<CredentialIcon fontSize="small" />} label="Credentials" pageKey="access_credentials" />
+            <NavItem icon={<GitHubIcon fontSize="small" />} label="GitHub API Token" pageKey="access_github_token" />
             <NavItem icon={<UserIcon fontSize="small" />} label="Users" pageKey="access_users" />
           </AccordionDetails>
         </Accordion>
