@@ -24,7 +24,7 @@ try {
     if (-not (Test-Path $agentPy)) { throw "Agent script not found: $agentPy" }
 
     $exe = if ($Console) { $py } else { if (Test-Path $pyw) { $pyw } else { $py } }
-    $args = @("`"$agentPy`"","--system-service","--config","svc")
+    $args = @("`"$agentPy`"","--system-service","--config","SYSTEM")
 
     # Launch and keep the task in Running state by waiting on the child
     $p = Start-Process -FilePath $exe -ArgumentList $args -WindowStyle Hidden -PassThru -WorkingDirectory $scriptDir `

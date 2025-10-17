@@ -96,12 +96,12 @@ All runtime logs live under `Logs/<ServiceName>` relative to the project root (`
 ## New: Agent Launch Model, Tasks, and Logging
 - SYSTEM mode is launched via a wrapper to guarantee WorkingDirectory and capture stdout/stderr:
   - `Agent\\Borealis\\launch_service.ps1` is registered as the scheduled task action for the SYSTEM agent.
-  - The wrapper runs `Agent\\Scripts\\pythonw.exe Agent\\Borealis\\agent.py --system-service --config svc` with `Set-Location` to `Agent\\Borealis` and redirects output to `%ProgramData%\\Borealis\\svc.out.log` and `svc.err.log`.
+  - The wrapper runs `Agent\\Scripts\\pythonw.exe Agent\\Borealis\\agent.py --system-service --config SYSTEM` with `Set-Location` to `Agent\\Borealis` and redirects output to `%ProgramData%\\Borealis\\svc.out.log` and `svc.err.log`.
   - This avoids 0x1/0x2 Task Scheduler errors on hosts where WorkingDirectory is ignored.
-- UserHelper (interactive) is still a direct task action to `pythonw.exe "Agent\\Borealis\\agent.py" --config user`.
+- UserHelper (interactive) is still a direct task action to `pythonw.exe "Agent\\Borealis\\agent.py" --config CURRENTUSER`.
 - Config files and inheritance:
 - Base config now lives at `<ProjectRoot>\\Agent\\Borealis\\Settings\\agent_settings.json`.
-- On first run per-suffix, the agent seeds: `Agent\\Borealis\\Settings\\agent_settings_svc.json` (SYSTEM) and `Agent\\Borealis\\Settings\\agent_settings_user.json` (interactive) from the base when present.
+- On first run per-suffix, the agent seeds: `Agent\\Borealis\\Settings\\agent_settings_SYSTEM.json` (SYSTEM) and `Agent\\Borealis\\Settings\\agent_settings_CURRENTUSER.json` (interactive) from the base when present.
 - Server URL is stored in `<ProjectRoot>\\Agent\\Borealis\\Settings\\server_url.txt`. The deployment script prompts for it on install/repair; press Enter to accept the default `http://localhost:5000`.
 - Logging:
   - Early bootstrap log: `<ProjectRoot>\\Logs\\Agent\\bootstrap.log` (helps verify launch + mode).
@@ -115,8 +115,8 @@ All runtime logs live under `Logs/<ServiceName>` relative to the project root (`
   - Dev UI separately (if needed): `cd Server\\web-interface && npm run dev`.
 - Launch/repair agent (elevated PowerShell): `.\\Borealis.ps1 -Agent -AgentAction install`.
 - Manual short-run agent checks (non-blocking):
-  - `Start-Process .\\Agent\\Scripts\\pythonw.exe -ArgumentList '".\\Agent\\Borealis\\agent.py" --system-service --config svc'`
-  - Verify logs under `Logs\\Agent` and presence of `Agent\\Borealis\\Settings\\agent_settings_svc.json` and `Agent\\Borealis\\Settings\\server_url.txt`.
+    - `Start-Process .\\Agent\\Scripts\\pythonw.exe -ArgumentList '".\\Agent\\Borealis\\agent.py" --system-service --config SYSTEM'`
+    - Verify logs under `Logs\\Agent` and presence of `Agent\\Borealis\\Settings\\agent_settings_SYSTEM.json` and `Agent\\Borealis\\Settings\\server_url.txt`.
 
 ## Troubleshooting Checklist
 - Agent task “Ready” with 0x1: ensure the SYSTEM task uses `launch_service.ps1` and that WorkingDirectory is `Agent\\Borealis`.
