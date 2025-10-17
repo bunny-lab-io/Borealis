@@ -50,10 +50,14 @@ from datetime import datetime, timezone
 
 from Modules import db_migrations
 from Modules.auth import jwt_service as jwt_service_module
+from Modules.auth.dpop import DPoPValidator
+from Modules.auth.device_auth import DeviceAuthManager
 from Modules.auth.rate_limit import SlidingWindowRateLimiter
-from Modules.crypto import certificates
+from Modules.agents import routes as agent_routes
+from Modules.crypto import certificates, signing
 from Modules.enrollment import routes as enrollment_routes
 from Modules.enrollment.nonce_store import NonceCache
+from Modules.tokens import routes as token_routes
 
 try:
     from cryptography.fernet import Fernet  # type: ignore
@@ -149,9 +153,12 @@ os.environ.setdefault("BOREALIS_TLS_KEY", TLS_KEY_PATH)
 os.environ.setdefault("BOREALIS_TLS_BUNDLE", TLS_BUNDLE_PATH)
 
 JWT_SERVICE = jwt_service_module.load_service()
+SCRIPT_SIGNER = signing.load_signer()
 IP_RATE_LIMITER = SlidingWindowRateLimiter()
 FP_RATE_LIMITER = SlidingWindowRateLimiter()
 ENROLLMENT_NONCE_CACHE = NonceCache()
+DPOP_VALIDATOR = DPoPValidator()
+DEVICE_AUTH_MANAGER: Optional[DeviceAuthManager] = None
 
 
 def _set_cached_github_token(token: Optional[str]) -> None:
@@ -1247,6 +1254,14 @@ def _db_conn():
         pass
     return conn
 
+
+if DEVICE_AUTH_MANAGER is None:
+    DEVICE_AUTH_MANAGER = DeviceAuthManager(
+        db_conn_factory=_db_conn,
+        jwt_service=JWT_SERVICE,
+        dpop_validator=DPOP_VALIDATOR,
+        log=_write_service_log,
+    )
 
 def _update_last_login(username: str) -> None:
     if not username:
@@ -4834,6 +4849,21 @@ enrollment_routes.register(
     ip_rate_limiter=IP_RATE_LIMITER,
     fp_rate_limiter=FP_RATE_LIMITER,
     nonce_cache=ENROLLMENT_NONCE_CACHE,
+)
+
+token_routes.register(
+    app,
+    db_conn_factory=_db_conn,
+    jwt_service=JWT_SERVICE,
+    dpop_validator=DPOP_VALIDATOR,
+)
+
+agent_routes.register(
+    app,
+    db_conn_factory=_db_conn,
+    auth_manager=DEVICE_AUTH_MANAGER,
+    log=_write_service_log,
+    script_signer=SCRIPT_SIGNER,
 )
 
 
