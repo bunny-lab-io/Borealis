@@ -215,7 +215,7 @@ cd "$ROOT_DIR"
 LOG_DIR="$(cd -- "$ROOT_DIR/../../Logs/Agent" && pwd 2>/dev/null || echo "$ROOT_DIR/../../Logs/Agent")"
 mkdir -p "$LOG_DIR"
 PY_BIN="${ROOT_DIR}/../bin/python3"
-exec "$PY_BIN" "$ROOT_DIR/agent.py" --system-service --config svc >>"$LOG_DIR/svc.out.log" 2>>"$LOG_DIR/svc.err.log"
+exec "$PY_BIN" "$ROOT_DIR/agent.py" --system-service --config SYSTEM >>"$LOG_DIR/svc.out.log" 2>>"$LOG_DIR/svc.err.log"
 SH
   chmod +x "${agentDest}/launch_service.sh"
 
@@ -229,7 +229,7 @@ ensure_agent_tasks() {
   # Register @reboot cron entries for system (root) and current user
   local agentDest="${SCRIPT_DIR}/Agent/Borealis"
   local sys_cmd="bash '${agentDest}/launch_service.sh'"
-  local user_cmd="bash -lc 'cd "${agentDest}" && "${SCRIPT_DIR}/Agent/bin/python3" ./agent.py --config user'"
+  local user_cmd="bash -lc 'cd "${agentDest}" && "${SCRIPT_DIR}/Agent/bin/python3" ./agent.py --config CURRENTUSER'"
 
   # Root/system entry
   if need_sudo; then
@@ -261,7 +261,7 @@ remove_agent() {
   log_agent "=== Removal start ===" Removal.log
   kill_agent_processes || true
   local sys_cmd="bash '${SCRIPT_DIR}/Agent/Borealis/launch_service.sh'"
-  local user_cmd="bash -lc 'cd "${SCRIPT_DIR}/Agent/Borealis" && "${SCRIPT_DIR}/Agent/bin/python3" ./agent.py --config user'"
+  local user_cmd="bash -lc 'cd "${SCRIPT_DIR}/Agent/Borealis" && "${SCRIPT_DIR}/Agent/bin/python3" ./agent.py --config CURRENTUSER'"
   remove_cron_entries "$sys_cmd" "$user_cmd" || true
   rm -rf "${SCRIPT_DIR}/Agent" || true
   log_agent "=== Removal end ===" Removal.log
@@ -271,7 +271,7 @@ launch_user_helper_now() {
   local py="${SCRIPT_DIR}/Agent/bin/python3"
   local helper="${SCRIPT_DIR}/Agent/Borealis/agent.py"
   if [[ -x "$py" && -f "$helper" ]]; then
-    (cd "${SCRIPT_DIR}/Agent/Borealis" && nohup "$py" -W ignore::SyntaxWarning "$helper" --config user >/dev/null 2>&1 & )
+    (cd "${SCRIPT_DIR}/Agent/Borealis" && nohup "$py" -W ignore::SyntaxWarning "$helper" --config CURRENTUSER >/dev/null 2>&1 & )
     echo -e "${GREEN}Launched user-session helper.${RESET}"
   else
     echo -e "${YELLOW}Agent venv or helper missing; run install first.${RESET}"

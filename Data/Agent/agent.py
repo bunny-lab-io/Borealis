@@ -85,6 +85,58 @@ def _argv_get(flag: str, default: str = None):
     return default
 CONFIG_NAME_SUFFIX = _argv_get('--config', None)
 
+
+def _canonical_config_suffix(raw_suffix: str) -> str:
+    try:
+        if not raw_suffix:
+            return ''
+        value = str(raw_suffix).strip()
+        if not value:
+            return ''
+        normalized = value.lower()
+        if normalized in ('svc', 'system', 'system_service', 'service'):
+            return 'SYSTEM'
+        if normalized in ('user', 'currentuser', 'interactive'):
+            return 'CURRENTUSER'
+        sanitized = ''.join(ch for ch in value if ch.isalnum() or ch in ('_', '-')).strip('_-')
+        return sanitized
+    except Exception:
+        return ''
+
+
+CONFIG_SUFFIX_CANONICAL = _canonical_config_suffix(CONFIG_NAME_SUFFIX)
+
+
+def _agent_guid_path() -> str:
+    try:
+        root = _find_project_root()
+        return os.path.join(root, 'Agent', 'Borealis', 'agent_GUID')
+    except Exception:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'agent_GUID'))
+
+
+def _persist_agent_guid_local(guid: str):
+    guid = _normalize_agent_guid(guid)
+    if not guid:
+        return
+    path = _agent_guid_path()
+    try:
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        existing = ''
+        if os.path.isfile(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as fh:
+                    existing = fh.read().strip()
+            except Exception:
+                existing = ''
+        if existing != guid:
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write(guid)
+    except Exception as exc:
+        _log_agent(f'Failed to persist agent GUID locally: {exc}', fname='agent.error.log')
+
 if not SYSTEM_SERVICE_MODE:
     # Reduce noisy Qt output and attempt to avoid Windows OleInitialize warnings
     os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false;*.debug=false")
@@ -224,21 +276,41 @@ def _resolve_config_path():
 
     # Determine filename with optional suffix
     cfg_basename = 'agent_settings.json'
-    try:
-        if CONFIG_NAME_SUFFIX:
-            suffix = ''.join(ch for ch in CONFIG_NAME_SUFFIX if ch.isalnum() or ch in ('_', '-')).strip()
-            if suffix:
-                cfg_basename = f"agent_settings_{suffix}.json"
-    except Exception:
-        pass
+    suffix = CONFIG_SUFFIX_CANONICAL
+    if suffix:
+        cfg_basename = f"agent_settings_{suffix}.json"
 
     cfg_path = os.path.join(settings_dir, cfg_basename)
     if os.path.exists(cfg_path):
         return cfg_path
 
+    # Migrate legacy suffixed config names to the new canonical form
+    legacy_map = {
+        'SYSTEM': ['agent_settings_svc.json'],
+        'CURRENTUSER': ['agent_settings_user.json'],
+    }
+    try:
+        legacy_candidates = []
+        if suffix:
+            for legacy_name in legacy_map.get(suffix.upper(), []):
+                legacy_candidates.extend([
+                    os.path.join(settings_dir, legacy_name),
+                    os.path.join(project_root, legacy_name),
+                    os.path.join(project_root, 'Agent', 'Settings', legacy_name),
+                ])
+        for legacy in legacy_candidates:
+            if os.path.exists(legacy):
+                try:
+                    shutil.move(legacy, cfg_path)
+                except Exception:
+                    shutil.copy2(legacy, cfg_path)
+                return cfg_path
+    except Exception:
+        pass
+
     # If using a suffixed config and there is a base config (new or legacy), seed from it
     try:
-        if CONFIG_NAME_SUFFIX:
+        if suffix:
             base_new = os.path.join(settings_dir, 'agent_settings.json')
             base_old_settings = os.path.join(project_root, 'Agent', 'Settings', 'agent_settings.json')
             base_legacy = os.path.join(project_root, 'agent_settings.json')
@@ -260,21 +332,28 @@ def _resolve_config_path():
 
     # Migrate legacy root configs or prior Agent/Settings into Agent/Borealis/Settings
     try:
-        legacy_root = os.path.join(project_root, cfg_basename)
+        legacy_names = [cfg_basename]
+        try:
+            if suffix:
+                legacy_names.extend(legacy_map.get(suffix.upper(), []))
+        except Exception:
+            pass
         old_settings_dir = os.path.join(project_root, 'Agent', 'Settings')
-        legacy_old_settings = os.path.join(old_settings_dir, cfg_basename)
-        if os.path.exists(legacy_root):
-            try:
-                shutil.move(legacy_root, cfg_path)
-            except Exception:
-                shutil.copy2(legacy_root, cfg_path)
-            return cfg_path
-        if os.path.exists(legacy_old_settings):
-            try:
-                shutil.move(legacy_old_settings, cfg_path)
-            except Exception:
-                shutil.copy2(legacy_old_settings, cfg_path)
-            return cfg_path
+        for legacy_name in legacy_names:
+            legacy_root = os.path.join(project_root, legacy_name)
+            if os.path.exists(legacy_root):
+                try:
+                    shutil.move(legacy_root, cfg_path)
+                except Exception:
+                    shutil.copy2(legacy_root, cfg_path)
+                return cfg_path
+            legacy_old_settings = os.path.join(old_settings_dir, legacy_name)
+            if os.path.exists(legacy_old_settings):
+                try:
+                    shutil.move(legacy_old_settings, cfg_path)
+                except Exception:
+                    shutil.copy2(legacy_old_settings, cfg_path)
+                return cfg_path
     except Exception:
         pass
 
@@ -356,18 +435,80 @@ class ConfigManager:
 CONFIG = ConfigManager(CONFIG_PATH)
 CONFIG.load()
 
-def init_agent_id():
-    if not CONFIG.data.get('agent_id'):
-        host = socket.gethostname().lower()
-        rand = uuid.uuid4().hex[:8]
-        if SYSTEM_SERVICE_MODE:
-            aid = f"{host}-agent-svc-{rand}"
-        elif (CONFIG_NAME_SUFFIX or '').lower() == 'user':
-            aid = f"{host}-agent-{rand}-script"
-        else:
-            aid = f"{host}-agent-{rand}"
-        CONFIG.data['agent_id'] = aid
+def _get_context_label() -> str:
+    return 'SYSTEM' if SYSTEM_SERVICE_MODE else 'CURRENTUSER'
+
+
+def _normalize_agent_guid(guid: str) -> str:
+    try:
+        if not guid:
+            return ''
+        value = str(guid).strip().replace('\ufeff', '')
+        if not value:
+            return ''
+        value = value.strip('{}')
+        try:
+            return str(uuid.UUID(value)).upper()
+        except Exception:
+            cleaned = ''.join(ch for ch in value if ch in string.hexdigits or ch == '-')
+            cleaned = cleaned.strip('-')
+            if cleaned:
+                try:
+                    return str(uuid.UUID(cleaned)).upper()
+                except Exception:
+                    pass
+            return value.upper()
+    except Exception:
+        return ''
+
+
+def _read_agent_guid_from_disk() -> str:
+    try:
+        path = _agent_guid_path()
+        if os.path.isfile(path):
+            with open(path, 'r', encoding='utf-8') as fh:
+                value = fh.read()
+            return _normalize_agent_guid(value)
+    except Exception:
+        pass
+    return ''
+
+
+def _ensure_agent_guid() -> str:
+    guid = _read_agent_guid_from_disk()
+    if guid:
+        return guid
+    new_guid = str(uuid.uuid4()).upper()
+    _persist_agent_guid_local(new_guid)
+    return new_guid
+
+
+def _compose_agent_id(hostname: str, guid: str, context: str) -> str:
+    host = (hostname or '').strip()
+    if not host:
+        host = 'UNKNOWN-HOST'
+    host = host.replace(' ', '-').upper()
+    normalized_guid = _normalize_agent_guid(guid) or guid or 'UNKNOWN-GUID'
+    context_label = (context or '').strip().upper() or _get_context_label()
+    return f"{host}_{normalized_guid}_{context_label}"
+
+
+def _update_agent_id_for_guid(guid: str):
+    normalized_guid = _normalize_agent_guid(guid)
+    if not normalized_guid:
+        return
+    desired = _compose_agent_id(socket.gethostname(), normalized_guid, _get_context_label())
+    existing = (CONFIG.data.get('agent_id') or '').strip()
+    if existing != desired:
+        CONFIG.data['agent_id'] = desired
         CONFIG._write()
+    global AGENT_ID
+    AGENT_ID = CONFIG.data['agent_id']
+
+
+def init_agent_id():
+    guid = _ensure_agent_guid()
+    _update_agent_id_for_guid(guid)
     return CONFIG.data['agent_id']
 
 AGENT_ID = init_agent_id()
@@ -535,37 +676,6 @@ def _settings_dir():
         return os.path.join(_find_project_root(), 'Agent', 'Borealis', 'Settings')
     except Exception:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings'))
-
-
-def _agent_guid_path() -> str:
-    try:
-        root = _find_project_root()
-        return os.path.join(root, 'Agent', 'Borealis', 'agent_GUID')
-    except Exception:
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'agent_GUID'))
-
-
-def _persist_agent_guid_local(guid: str):
-    guid = (guid or '').strip()
-    if not guid:
-        return
-    path = _agent_guid_path()
-    try:
-        directory = os.path.dirname(path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        existing = ''
-        if os.path.isfile(path):
-            try:
-                with open(path, 'r', encoding='utf-8') as fh:
-                    existing = fh.read().strip()
-            except Exception:
-                existing = ''
-        if existing != guid:
-            with open(path, 'w', encoding='utf-8') as fh:
-                fh.write(guid)
-    except Exception as exc:
-        _log_agent(f'Failed to persist agent GUID locally: {exc}', fname='agent.error.log')
 
 
 def get_server_url() -> str:
@@ -1263,6 +1373,7 @@ async def connect():
                                 guid_value = (data.get('agent_guid') or '').strip()
                                 if guid_value:
                                     _persist_agent_guid_local(guid_value)
+                                    _update_agent_id_for_guid(guid_value)
             except Exception:
                 pass
         asyncio.create_task(_svc_checkin_once())

@@ -715,7 +715,7 @@ function Ensure-AgentTasks {
 
     # Optional user-session helper for interactive roles (tray, overlays)
     $helperName = 'Borealis Agent (UserHelper)'
-    $usrArg     = ('"{0}" --config user' -f $agentPy)
+    $usrArg     = ('"{0}" --config CURRENTUSER' -f $agentPy)
     $usrAction  = New-ScheduledTaskAction -Execute $pyw -Argument $usrArg -WorkingDirectory (Split-Path $agentPy -Parent)
     $usrTrig    = New-ScheduledTaskTrigger -AtLogOn
     $usrSet     = New-ScheduledTaskSettingsSet -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
