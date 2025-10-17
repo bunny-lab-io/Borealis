@@ -58,6 +58,8 @@ from Modules.crypto import certificates, signing
 from Modules.enrollment import routes as enrollment_routes
 from Modules.enrollment.nonce_store import NonceCache
 from Modules.tokens import routes as token_routes
+from Modules.admin import routes as admin_routes
+from Modules.jobs.prune import start_prune_job
 
 try:
     from cryptography.fernet import Fernet  # type: ignore
@@ -4864,6 +4866,20 @@ agent_routes.register(
     auth_manager=DEVICE_AUTH_MANAGER,
     log=_write_service_log,
     script_signer=SCRIPT_SIGNER,
+)
+
+admin_routes.register(
+    app,
+    db_conn_factory=_db_conn,
+    require_admin=_require_admin,
+    current_user=_current_user,
+    log=_write_service_log,
+)
+
+start_prune_job(
+    socketio,
+    db_conn_factory=_db_conn,
+    log=_write_service_log,
 )
 
 

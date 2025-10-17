@@ -401,6 +401,8 @@ def register(
                 return jsonify({"status": "denied", "reason": "operator_denied"})
             if status == "expired":
                 return jsonify({"status": "expired"})
+            if status == "completed":
+                return jsonify({"status": "approved", "detail": "finalized"})
 
             if status != "approved":
                 return jsonify({"status": status or "unknown"}), 400
