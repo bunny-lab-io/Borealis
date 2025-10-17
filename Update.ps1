@@ -145,6 +145,66 @@ function Start-AgentScheduledTasks {
     }
 }
 
+function Stop-AgentPythonProcesses {
+    param(
+        [string[]]$ProcessNames = @('python', 'pythonw')
+    )
+
+    foreach ($name in ($ProcessNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+        $name = $name.Trim()
+        if (-not $name) { continue }
+
+        $processes = @()
+        try {
+            $processes = Get-Process -Name $name -ErrorAction Stop
+        } catch {
+            $processes = @()
+        }
+
+        foreach ($proc in $processes) {
+            $procId = $null
+            $procName = $null
+            try {
+                $procId = $proc.Id
+                $procName = $proc.ProcessName
+            } catch {}
+
+            if ($procId -eq $null) { continue }
+
+            if (-not $procName) { $procName = $name }
+
+            $stopped = $false
+            Write-Host "Stopping process: $procName (PID $procId)" -ForegroundColor Yellow
+
+            try {
+                Stop-Process -Id $procId -Force -ErrorAction Stop
+                $stopped = $true
+            } catch {
+                Write-Host "Unable to stop process via Stop-Process: $procName (PID $procId). $_" -ForegroundColor DarkYellow
+            }
+
+            if (-not $stopped) {
+                try {
+                    $taskkillOutput = taskkill.exe /PID $procId /F 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $stopped = $true
+                    } else {
+                        if ($taskkillOutput) {
+                            Write-Host "taskkill.exe returned exit code $LASTEXITCODE for PID $procId: $taskkillOutput" -ForegroundColor DarkYellow
+                        }
+                    }
+                } catch {
+                    Write-Host "Unable to stop process via taskkill.exe: $procName (PID $procId). $_" -ForegroundColor DarkYellow
+                }
+            }
+
+            if (-not $stopped) {
+                Write-Host "Process still running after termination attempts: $procName (PID $procId)" -ForegroundColor DarkYellow
+            }
+        }
+    }
+}
+
 function Get-BorealisServerUrl {
     param(
         [string]$AgentRoot
@@ -704,6 +764,7 @@ function Invoke-BorealisAgentUpdate {
         $staging = Join-Path $scriptDir 'Update_Staging'
 
         $managedTasks = Stop-AgentScheduledTasks -TaskNames @('Borealis Agent','Borealis Agent (UserHelper)')
+        Run-Step "Updating: Terminate Running Python Processes" { Stop-AgentPythonProcesses }
 
         $updateSucceeded = $false
         try {
