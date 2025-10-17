@@ -8,6 +8,7 @@ import "normalize.css/normalize.css";
 import "@fontsource/ibm-plex-sans/400.css";
 import "@fontsource/ibm-plex-sans/500.css";
 import "@fontsource/ibm-plex-sans/600.css";
+import "@fortawesome/fontawesome-free/css/all.min.css";
 import './Borealis.css'; // Global Theming for All of Borealis
 
 import App from './App.jsx';
