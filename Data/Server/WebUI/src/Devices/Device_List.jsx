@@ -1116,8 +1116,8 @@ export default function DeviceList({
             field: "status",
             headerName: col.label,
             cellRenderer: statusCellRenderer,
-            width: 100,
-            minWidth: 100,
+            width: 112,
+            minWidth: 112,
             flex: 0,
           };
         case "agentVersion":
