@@ -48,6 +48,10 @@ from threading import Lock
 
 from datetime import datetime, timezone
 
+from Modules import db_migrations
+from Modules.auth import jwt_service as jwt_service_module
+from Modules.crypto import certificates
+
 try:
     from cryptography.fernet import Fernet  # type: ignore
 except Exception:
@@ -135,6 +139,13 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 _GITHUB_TOKEN_CACHE: Dict[str, Any] = {"token": None, "loaded_at": 0.0, "known": False}
 _GITHUB_TOKEN_LOCK = Lock()
+
+TLS_CERT_PATH, TLS_KEY_PATH, TLS_BUNDLE_PATH = certificates.certificate_paths()
+os.environ.setdefault("BOREALIS_TLS_CERT", TLS_CERT_PATH)
+os.environ.setdefault("BOREALIS_TLS_KEY", TLS_KEY_PATH)
+os.environ.setdefault("BOREALIS_TLS_BUNDLE", TLS_BUNDLE_PATH)
+
+JWT_SERVICE = jwt_service_module.load_service()
 
 
 def _set_cached_github_token(token: Optional[str]) -> None:
@@ -509,6 +520,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE=os.environ.get('BOREALIS_COOKIE_SAMESITE', 'Lax'),  # set to 'None' when UI/API are on different sites
     SESSION_COOKIE_SECURE=(os.environ.get('BOREALIS_COOKIE_SECURE', '0').lower() in ('1', 'true', 'yes')),
 )
+app.config.setdefault("PREFERRED_URL_SCHEME", "https")
 
 # Optionally pin cookie domain if served under a fixed hostname (leave unset for host-only/IP dev)
 _cookie_domain = os.environ.get('BOREALIS_COOKIE_DOMAIN')  # e.g. ".example.com" or "borealis.bunny-lab.io"
@@ -3773,11 +3785,11 @@ _DEVICE_JSON_OBJECT_FIELDS = {
 
 
 _DEVICE_TABLE_COLUMNS = [
+    "guid",
     "hostname",
     "description",
     "created_at",
     "agent_hash",
-    "guid",
     "memory",
     "network",
     "software",
@@ -3796,6 +3808,10 @@ _DEVICE_TABLE_COLUMNS = [
     "ansible_ee_ver",
     "connection_type",
     "connection_endpoint",
+    "ssl_key_fingerprint",
+    "token_version",
+    "status",
+    "key_added_at",
 ]
 
 
@@ -4407,6 +4423,7 @@ def _secret_fingerprint(secret_blob: Optional[bytes]) -> str:
 def init_db():
     """Initialize all required tables in the unified database."""
     conn = _db_conn()
+    db_migrations.apply_all(conn)
     cur = conn.cursor()
 
     # Device table (renamed from historical device_details)
@@ -7946,4 +7963,5 @@ def relay_ansible_run(data):
 
 if __name__ == "__main__":
     # Use SocketIO runner so WebSocket transport works with eventlet.
-    socketio.run(app, host="0.0.0.0", port=5000)
+    ssl_context = certificates.build_ssl_context()
+    socketio.run(app, host="0.0.0.0", port=5000, ssl_context=ssl_context)

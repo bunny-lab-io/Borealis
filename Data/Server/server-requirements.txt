@@ -11,6 +11,7 @@ flask_socketio
 flask-cors
 eventlet
 cryptography
+PyJWT[crypto]
 pyotp
 qrcode
 
