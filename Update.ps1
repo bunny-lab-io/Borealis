@@ -162,22 +162,44 @@ function Stop-AgentPythonProcesses {
         }
 
         foreach ($proc in $processes) {
-            $pid = $null
+            $procId = $null
             $procName = $null
             try {
-                $pid = $proc.Id
+                $procId = $proc.Id
                 $procName = $proc.ProcessName
             } catch {}
 
-            if ($pid -eq $null) { continue }
+            if ($procId -eq $null) { continue }
 
             if (-not $procName) { $procName = $name }
 
+            $stopped = $false
+            Write-Host "Stopping process: $procName (PID $procId)" -ForegroundColor Yellow
+
             try {
-                Write-Host "Stopping process: $procName (PID $pid)" -ForegroundColor Yellow
-                Stop-Process -Id $pid -Force -ErrorAction Stop
+                Stop-Process -Id $procId -Force -ErrorAction Stop
+                $stopped = $true
             } catch {
-                Write-Host "Unable to stop process: $procName (PID $pid). $_" -ForegroundColor DarkYellow
+                Write-Host "Unable to stop process via Stop-Process: $procName (PID $procId). $_" -ForegroundColor DarkYellow
+            }
+
+            if (-not $stopped) {
+                try {
+                    $taskkillOutput = taskkill.exe /PID $procId /F 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $stopped = $true
+                    } else {
+                        if ($taskkillOutput) {
+                            Write-Host "taskkill.exe returned exit code $LASTEXITCODE for PID $procId: $taskkillOutput" -ForegroundColor DarkYellow
+                        }
+                    }
+                } catch {
+                    Write-Host "Unable to stop process via taskkill.exe: $procName (PID $procId). $_" -ForegroundColor DarkYellow
+                }
+            }
+
+            if (-not $stopped) {
+                Write-Host "Process still running after termination attempts: $procName (PID $procId)" -ForegroundColor DarkYellow
             }
         }
     }
