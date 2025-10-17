@@ -34,12 +34,12 @@
 ## Overview
 Borealis pairs a no-code workflow canvas with a rapidly evolving remote management stack. The long-term goal is to orchestrate scripts, schedules, and workflows against distributed agents while keeping everything self-contained and portable.
 
-Today the stable core focuses on workflow-driven API and automation scenarios. RMM-level inventory, patching, and fleet coordination exist in early form; the server orchestrator and agent heartbeat are the critical pieces Codex should prioritize.
+Today the stable core focuses on workflow-driven API and automation scenarios. RMM-level inventory, patching, and fleet coordination exist in early form.
 
 ## Architecture At A Glance
-- `Borealis.ps1` is the entry point for every component. It bootstraps dependencies, clones bundled virtual environments, and spins up server, agent, Vite, or Flask modes on demand.
-- Bundled assets live under `Data/Agent`, `Data/Server`, and `Dependencies`. Launching installs copies into sibling `Agent/` and `Server/` directories so the development tree stays clean and the runtime stays portable.
-- The server stack spans NodeJS + Vite for live development and Flask (`Data/Server/server.py`) for production APIs, backed by Python helpers (`Data/Server/Python_API_Endpoints`) for OCR, scripting, and other services.
+- `Borealis.ps1` is the starting point for every aspect of Borealis. It bootstraps dependencies, configures bundled Python virtual environments, and deploys the agents and server from a singular script.
+- Bundled assets live under `Data/Agent`, `Data/Server`, and `Dependencies`. Launching an agent or server copies the necessary data from these `Data/` directories into sibling `Agent/` and `Server/` directories so the development tree stays clean and the runtime stays portable.
+- The server stack spans NodeJS + Vite for live development and Python Flask (`Data/Server/server.py`) for the production frontend (when not using the Vite dev server) and APIs, backed by Python helpers (`Data/Server/Python_API_Endpoints`) for OCR, scripting, and other services. The `script_engines.py` helper exposes a PowerShell runner for potential server-side orchestration, but no current Flask route invokes it; agent-side script execution lives under the roles in `Data/Agent`.
 - Agents run inside the packaged Python venv (`Data/Agent` mirrored to `Agent/`). `agent.py` handles the primary connection and hot-loads roles from `Data/Agent/Roles` at startup.
 
 ## Dependencies & Packaging
