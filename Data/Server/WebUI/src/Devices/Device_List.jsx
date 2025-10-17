@@ -1133,8 +1133,8 @@ export default function DeviceList({
             field: "site",
             headerName: col.label,
             valueGetter: (params) => params.data?.site || "Not Configured",
-            width: 170,
-            minWidth: 170,
+            width: 140,
+            minWidth: 140,
             flex: 0,
           };
         case "hostname":
