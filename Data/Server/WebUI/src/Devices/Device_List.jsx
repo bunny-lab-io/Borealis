@@ -46,6 +46,34 @@ const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
+const getOsIconClass = (osName) => {
+  const value = (osName || "").toString().toLowerCase();
+  if (!value) return "";
+
+  if (value.includes("mac") || value.includes("os x") || value.includes("darwin")) {
+    return "fa-brands fa-apple";
+  }
+
+  if (value.includes("win")) {
+    return "fa-brands fa-windows";
+  }
+
+  if (
+    value.includes("linux") ||
+    value.includes("ubuntu") ||
+    value.includes("debian") ||
+    value.includes("fedora") ||
+    value.includes("red hat") ||
+    value.includes("centos") ||
+    value.includes("suse") ||
+    value.includes("rhel")
+  ) {
+    return "fa-brands fa-linux";
+  }
+
+  return "";
+};
+
 const DescriptionCellRenderer = React.memo(function DescriptionCellRenderer(props) {
   const { value, data, onSaveDescription, fontFamily } = props;
   const safeValue = typeof value === "string" ? value : value == null ? "" : String(value);
@@ -974,6 +1002,43 @@ export default function DeviceList({
     [statusTokenTheme, gridFontFamily]
   );
 
+  const osCellRenderer = useCallback((params) => {
+    const rawValue = params.value;
+    const label = typeof rawValue === "string" ? rawValue : rawValue == null ? "" : String(rawValue);
+    const display = label.trim() || "-";
+    const iconClass = getOsIconClass(label);
+
+    return (
+      <Box
+        component="span"
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 1,
+          color: "rgba(255,255,255,0.85)",
+          fontFamily: gridFontFamily,
+        }}
+      >
+        {iconClass ? (
+          <Box
+            component="i"
+            className={iconClass}
+            aria-hidden="true"
+            sx={{
+              fontSize: "1rem",
+              width: "1.5rem",
+              textAlign: "center",
+              color: "rgba(255,255,255,0.75)",
+            }}
+          />
+        ) : null}
+        <Box component="span" sx={{ lineHeight: 1.3 }}>
+          {display}
+        </Box>
+      </Box>
+    );
+  }, []);
+
   const actionCellRenderer = useCallback(
     (params) => {
       const row = params.data;
@@ -1117,6 +1182,7 @@ export default function DeviceList({
             width: 410,
             minWidth: 410,
             flex: 1,
+            cellRenderer: osCellRenderer,
           };
         case "internalIp":
           return {
