@@ -746,6 +746,7 @@ function InstallOrUpdate-BorealisAgent {
     $agentDestinationFolder = Join-Path $venvFolderPath 'Borealis'
     $agentDestinationFile   = Join-Path $agentDestinationFolder 'agent.py'
     $venvPython             = Join-Path $venvFolderPath 'Scripts\python.exe'
+    $existingServerUrl      = $null
 
     Run-Step "Create Virtual Python Environment" {
         if (-not (Test-Path (Join-Path $venvFolderPath 'Scripts\Activate'))) {
@@ -764,6 +765,20 @@ function InstallOrUpdate-BorealisAgent {
         }
         if (Test-Path $agentSourcePath) {
             # Cleanup Previous Agent Folder & Create New Folder
+            $existingServerUrlPath = Join-Path $agentDestinationFolder 'Settings\server_url.txt'
+            if (Test-Path $existingServerUrlPath) {
+                try {
+                    $candidateUrl = (Get-Content -Path $existingServerUrlPath -ErrorAction SilentlyContinue | Select-Object -First 1)
+                } catch {
+                    $candidateUrl = $null
+                }
+                if ($candidateUrl) {
+                    $candidateUrl = $candidateUrl.Trim()
+                }
+                if ($candidateUrl) {
+                    $existingServerUrl = $candidateUrl
+                }
+            }
             Remove-Item $agentDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
             New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
 
@@ -831,7 +846,9 @@ function InstallOrUpdate-BorealisAgent {
         }
         $defaultUrl = 'http://localhost:5000'
         $currentUrl = $defaultUrl
-        if (Test-Path $serverUrlPath) {
+        if ($existingServerUrl -and $existingServerUrl.Trim()) {
+            $currentUrl = $existingServerUrl.Trim()
+        } elseif (Test-Path $serverUrlPath) {
             try { $txt = (Get-Content -Path $serverUrlPath -ErrorAction SilentlyContinue | Select-Object -First 1) } catch { $txt = '' }
             if ($txt -and $txt.Trim()) { $currentUrl = $txt.Trim() }
         }
