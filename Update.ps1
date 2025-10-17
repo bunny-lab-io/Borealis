@@ -190,7 +190,7 @@ function Stop-AgentPythonProcesses {
                         $stopped = $true
                     } else {
                         if ($taskkillOutput) {
-                            Write-Host "taskkill.exe returned exit code $LASTEXITCODE for PID $procId: $taskkillOutput" -ForegroundColor DarkYellow
+                            Write-Host "taskkill.exe returned exit code ${LASTEXITCODE} for PID ${procId}: $taskkillOutput" -ForegroundColor DarkYellow
                         }
                     }
                 } catch {
