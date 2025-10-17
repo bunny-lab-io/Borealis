@@ -145,6 +145,44 @@ function Start-AgentScheduledTasks {
     }
 }
 
+function Stop-AgentPythonProcesses {
+    param(
+        [string[]]$ProcessNames = @('python', 'pythonw')
+    )
+
+    foreach ($name in ($ProcessNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+        $name = $name.Trim()
+        if (-not $name) { continue }
+
+        $processes = @()
+        try {
+            $processes = Get-Process -Name $name -ErrorAction Stop
+        } catch {
+            $processes = @()
+        }
+
+        foreach ($proc in $processes) {
+            $procId = $null
+            $procName = $null
+            try {
+                $procId = $proc.Id
+                $procName = $proc.ProcessName
+            } catch {}
+
+            if ($procId -eq $null) { continue }
+
+            if (-not $procName) { $procName = $name }
+
+            try {
+                Write-Host "Stopping process: $procName (PID $procId)" -ForegroundColor Yellow
+                Stop-Process -Id $procId -Force -ErrorAction Stop
+            } catch {
+                Write-Host "Unable to stop process: $procName (PID $procId). $_" -ForegroundColor DarkYellow
+            }
+        }
+    }
+}
+
 function Get-BorealisServerUrl {
     param(
         [string]$AgentRoot
@@ -704,6 +742,7 @@ function Invoke-BorealisAgentUpdate {
         $staging = Join-Path $scriptDir 'Update_Staging'
 
         $managedTasks = Stop-AgentScheduledTasks -TaskNames @('Borealis Agent','Borealis Agent (UserHelper)')
+        Run-Step "Updating: Terminate Running Python Processes" { Stop-AgentPythonProcesses }
 
         $updateSucceeded = $false
         try {
