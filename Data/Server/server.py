@@ -50,7 +50,10 @@ from datetime import datetime, timezone
 
 from Modules import db_migrations
 from Modules.auth import jwt_service as jwt_service_module
+from Modules.auth.rate_limit import SlidingWindowRateLimiter
 from Modules.crypto import certificates
+from Modules.enrollment import routes as enrollment_routes
+from Modules.enrollment.nonce_store import NonceCache
 
 try:
     from cryptography.fernet import Fernet  # type: ignore
@@ -146,6 +149,9 @@ os.environ.setdefault("BOREALIS_TLS_KEY", TLS_KEY_PATH)
 os.environ.setdefault("BOREALIS_TLS_BUNDLE", TLS_BUNDLE_PATH)
 
 JWT_SERVICE = jwt_service_module.load_service()
+IP_RATE_LIMITER = SlidingWindowRateLimiter()
+FP_RATE_LIMITER = SlidingWindowRateLimiter()
+ENROLLMENT_NONCE_CACHE = NonceCache()
 
 
 def _set_cached_github_token(token: Optional[str]) -> None:
@@ -4818,6 +4824,17 @@ def init_db():
 
 
 init_db()
+
+enrollment_routes.register(
+    app,
+    db_conn_factory=_db_conn,
+    log=_write_service_log,
+    jwt_service=JWT_SERVICE,
+    tls_bundle_path=TLS_BUNDLE_PATH,
+    ip_rate_limiter=IP_RATE_LIMITER,
+    fp_rate_limiter=FP_RATE_LIMITER,
+    nonce_cache=ENROLLMENT_NONCE_CACHE,
+)
 
 
 def ensure_default_admin():
