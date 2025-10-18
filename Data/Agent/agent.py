@@ -1068,6 +1068,16 @@ class AgentHttpClient:
         headers = self.auth_headers()
         response = self.session.post(url, json=payload, headers=headers, timeout=30)
         if response.status_code in (401, 403) and require_auth:
+            snippet = ""
+            try:
+                snippet = response.text[:256]
+            except Exception:
+                snippet = "<unavailable>"
+            _log_agent(
+                "Authenticated request rejected "
+                f"path={path} status={response.status_code} body_snippet={snippet}",
+                fname="agent.error.log",
+            )
             self.clear_tokens()
             self.ensure_authenticated()
             headers = self.auth_headers()
