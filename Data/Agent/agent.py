@@ -129,6 +129,33 @@ def _bootstrap_log(msg: str, *, scope: Optional[str] = None):
     except Exception:
         pass
 
+
+def _describe_exception(exc: BaseException) -> str:
+    try:
+        primary = f"{exc.__class__.__name__}: {exc}"
+    except Exception:
+        primary = repr(exc)
+    parts = [primary]
+    try:
+        cause = getattr(exc, "__cause__", None)
+        if cause and cause is not exc:
+            parts.append(f"cause={cause.__class__.__name__}: {cause}")
+    except Exception:
+        pass
+    try:
+        context = getattr(exc, "__context__", None)
+        if context and context is not exc and context is not getattr(exc, "__cause__", None):
+            parts.append(f"context={context.__class__.__name__}: {context}")
+    except Exception:
+        pass
+    try:
+        args = getattr(exc, "args", None)
+        if isinstance(args, tuple) and len(args) > 1:
+            parts.append(f"args={args!r}")
+    except Exception:
+        pass
+    return "; ".join(part for part in parts if part)
+
 # Headless/service mode flag (skip Qt and interactive UI)
 SYSTEM_SERVICE_MODE = ('--system-service' in sys.argv) or (os.environ.get('BOREALIS_AGENT_MODE') == 'system')
 SERVICE_MODE = 'system' if SYSTEM_SERVICE_MODE else 'currentuser'
@@ -820,22 +847,23 @@ class AgentHttpClient:
             if engine is None:
                 return
 
-            # python-engineio accepts either a boolean or an ``ssl.SSLContext``
-            # for TLS verification.  When we have a pinned certificate bundle
-            # on disk, prefer constructing a dedicated context that trusts that
-            # bundle so WebSocket connections succeed even with private CAs.
+            # python-engineio accepts either a boolean, a path to a CA bundle,
+            # or an ``ssl.SSLContext`` for TLS verification.  When we have a
+            # pinned certificate bundle on disk, prefer constructing a context
+            # that trusts that bundle, while also passing the explicit path so
+            # the engine falls back to the same trust store if it rebuilds the
+            # context internally.  This ensures SYSTEM services that rely on
+            # machine-scoped certificates can negotiate WebSocket TLS without
+            # tripping over default CA roots.
             if isinstance(verify, str) and os.path.isfile(verify):
+                context = None
                 try:
                     context = ssl.create_default_context(cafile=verify)
                     context.check_hostname = False
                 except Exception:
                     context = None
-                if context is not None:
-                    engine.ssl_context = context
-                    engine.ssl_verify = True
-                else:
-                    engine.ssl_context = None
-                    engine.ssl_verify = verify
+                engine.ssl_context = context
+                engine.ssl_verify = verify
             elif verify is False:
                 engine.ssl_context = None
                 engine.ssl_verify = False
@@ -2598,8 +2626,9 @@ async def connect_loop():
             )
             break
         except Exception as e:
-            print(f"[WebSocket] Server unavailable: {e}. Retrying in {retry}s...")
-            _log_agent(f'Server unavailable: {e}', fname='agent.error.log')
+            detail = _describe_exception(e)
+            print(f"[WebSocket] Server unavailable: {detail}. Retrying in {retry}s...")
+            _log_agent(f'Server unavailable: {detail}', fname='agent.error.log')
             await asyncio.sleep(retry)
 
 if __name__=='__main__':
