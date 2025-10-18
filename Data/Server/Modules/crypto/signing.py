@@ -14,9 +14,11 @@ from Modules.runtime import ensure_runtime_dir, runtime_path
 
 from .keys import base64_from_spki_der
 
-_KEY_DIR = runtime_path("keys")
+_KEY_DIR = runtime_path("script_signing_keys")
 _SIGNING_KEY_FILE = _KEY_DIR / "borealis-script-ed25519.key"
 _SIGNING_PUB_FILE = _KEY_DIR / "borealis-script-ed25519.pub"
+_LEGACY_KEY_FILE = runtime_path("keys") / "borealis-script-ed25519.key"
+_LEGACY_PUB_FILE = runtime_path("keys") / "borealis-script-ed25519.pub"
 
 
 class ScriptSigner:
@@ -43,9 +45,15 @@ def load_signer() -> ScriptSigner:
 
 
 def _load_or_create() -> ed25519.Ed25519PrivateKey:
-    ensure_runtime_dir("keys")
+    ensure_runtime_dir("script_signing_keys")
+    _migrate_legacy_material_if_present()
+
     if _SIGNING_KEY_FILE.exists():
         with _SIGNING_KEY_FILE.open("rb") as fh:
+            return serialization.load_pem_private_key(fh.read(), password=None)
+
+    if _LEGACY_KEY_FILE.exists():
+        with _LEGACY_KEY_FILE.open("rb") as fh:
             return serialization.load_pem_private_key(fh.read(), password=None)
 
     private_key = ed25519.Ed25519PrivateKey.generate()
@@ -69,4 +77,24 @@ def _load_or_create() -> ed25519.Ed25519PrivateKey:
     _SIGNING_PUB_FILE.write_bytes(pub_der)
 
     return private_key
+
+
+def _migrate_legacy_material_if_present() -> None:
+    if not _LEGACY_KEY_FILE.exists() or _SIGNING_KEY_FILE.exists():
+        return
+
+    try:
+        ensure_runtime_dir("script_signing_keys")
+        try:
+            _LEGACY_KEY_FILE.replace(_SIGNING_KEY_FILE)
+        except Exception:
+            _SIGNING_KEY_FILE.write_bytes(_LEGACY_KEY_FILE.read_bytes())
+
+        if _LEGACY_PUB_FILE.exists() and not _SIGNING_PUB_FILE.exists():
+            try:
+                _LEGACY_PUB_FILE.replace(_SIGNING_PUB_FILE)
+            except Exception:
+                _SIGNING_PUB_FILE.write_bytes(_LEGACY_PUB_FILE.read_bytes())
+    except Exception:
+        return
 

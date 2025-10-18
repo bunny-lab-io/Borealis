@@ -7,7 +7,6 @@ from __future__ import annotations
 import hashlib
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 import jwt
@@ -16,8 +15,9 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from Modules.runtime import ensure_runtime_dir, runtime_path
 
-_KEY_DIR = runtime_path("keys")
+_KEY_DIR = runtime_path("auth_keys")
 _KEY_FILE = _KEY_DIR / "borealis-jwt-ed25519.key"
+_LEGACY_KEY_FILE = runtime_path("keys") / "borealis-jwt-ed25519.key"
 
 
 class JWTService:
@@ -98,9 +98,15 @@ def load_service() -> JWTService:
 
 
 def _load_or_create_private_key() -> ed25519.Ed25519PrivateKey:
-    ensure_runtime_dir("keys")
+    ensure_runtime_dir("auth_keys")
+    _migrate_legacy_key_if_present()
+
     if _KEY_FILE.exists():
         with _KEY_FILE.open("rb") as fh:
+            return serialization.load_pem_private_key(fh.read(), password=None)
+
+    if _LEGACY_KEY_FILE.exists():
+        with _LEGACY_KEY_FILE.open("rb") as fh:
             return serialization.load_pem_private_key(fh.read(), password=None)
 
     private_key = ed25519.Ed25519PrivateKey.generate()
@@ -117,4 +123,18 @@ def _load_or_create_private_key() -> ed25519.Ed25519PrivateKey:
     except Exception:
         pass
     return private_key
+
+
+def _migrate_legacy_key_if_present() -> None:
+    if not _LEGACY_KEY_FILE.exists() or _KEY_FILE.exists():
+        return
+
+    try:
+        ensure_runtime_dir("auth_keys")
+        try:
+            _LEGACY_KEY_FILE.replace(_KEY_FILE)
+        except Exception:
+            _KEY_FILE.write_bytes(_LEGACY_KEY_FILE.read_bytes())
+    except Exception:
+        return
 
