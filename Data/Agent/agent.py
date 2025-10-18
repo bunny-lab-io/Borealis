@@ -848,6 +848,25 @@ class AgentHttpClient:
             if engine is None:
                 return
 
+            http_iface = getattr(engine, "http", None)
+
+            def _set_attr(target: Any, name: str, value: Any) -> None:
+                if target is None:
+                    return
+                try:
+                    setattr(target, name, value)
+                except Exception:
+                    pass
+
+            def _reset_cached_session() -> None:
+                if http_iface is None:
+                    return
+                try:
+                    if hasattr(http_iface, "session"):
+                        setattr(http_iface, "session", None)
+                except Exception:
+                    pass
+
             context = None
             if isinstance(verify, str) and os.path.isfile(verify):
                 try:
@@ -857,27 +876,26 @@ class AgentHttpClient:
                     context = None
 
             if context is not None:
-                try:
-                    engine.ssl_context = context
-                except Exception:
-                    pass
-                try:
-                    engine.ssl_verify = True
-                except Exception:
-                    pass
+                _set_attr(engine, "ssl_context", context)
+                _set_attr(engine, "ssl_verify", True)
+                _set_attr(engine, "verify_ssl", True)
+                _set_attr(http_iface, "ssl_context", context)
+                _set_attr(http_iface, "ssl_verify", True)
+                _set_attr(http_iface, "verify_ssl", True)
+                _reset_cached_session()
                 return
 
             # Fall back to boolean verification flags when we either do not
             # have a pinned certificate bundle or failed to build a dedicated
             # context for it.
-            try:
-                engine.ssl_context = None
-            except Exception:
-                pass
-            try:
-                engine.ssl_verify = False if verify is False else True
-            except Exception:
-                pass
+            verify_flag = False if verify is False else True
+            _set_attr(engine, "ssl_context", None)
+            _set_attr(engine, "ssl_verify", verify_flag)
+            _set_attr(engine, "verify_ssl", verify_flag)
+            _set_attr(http_iface, "ssl_context", None)
+            _set_attr(http_iface, "ssl_verify", verify_flag)
+            _set_attr(http_iface, "verify_ssl", verify_flag)
+            _reset_cached_session()
         except Exception:
             pass
 
@@ -2370,6 +2388,17 @@ async def connect():
             except Exception:
                 pass
         asyncio.create_task(_svc_checkin_once())
+    except Exception:
+        pass
+
+@sio.event
+async def connect_error(data):
+    try:
+        setattr(sio, "connection_error", data)
+    except Exception:
+        pass
+    try:
+        _log_agent(f'Socket connect_error event: {data!r}', fname='agent.error.log')
     except Exception:
         pass
 
