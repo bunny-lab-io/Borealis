@@ -39,7 +39,9 @@ def _restrict_permissions(path: str) -> None:
 def _protect(data: bytes, *, scope_system: bool) -> bytes:
     if not IS_WINDOWS or not win32crypt:
         return data
-    flags = win32crypt.CRYPTPROTECT_LOCAL_MACHINE if scope_system else 0
+    flags = 0
+    if scope_system:
+        flags = getattr(win32crypt, "CRYPTPROTECT_LOCAL_MACHINE", 0x4)
     protected = win32crypt.CryptProtectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
     return protected[1]
 
@@ -47,7 +49,9 @@ def _protect(data: bytes, *, scope_system: bool) -> bytes:
 def _unprotect(data: bytes, *, scope_system: bool) -> bytes:
     if not IS_WINDOWS or not win32crypt:
         return data
-    flags = win32crypt.CRYPTPROTECT_LOCAL_MACHINE if scope_system else 0
+    flags = 0
+    if scope_system:
+        flags = getattr(win32crypt, "CRYPTPROTECT_LOCAL_MACHINE", 0x4)
     unwrapped = win32crypt.CryptUnprotectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
     return unwrapped[1]
 

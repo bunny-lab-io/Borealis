@@ -20,6 +20,8 @@ Section Guide:
 
 import os
 import sys
+from pathlib import Path
+import ssl
 
 # Ensure the modular server package is importable when the runtime is launched
 # from a packaged directory (e.g., Server/Borealis). We look for the canonical
@@ -39,6 +41,36 @@ import eventlet
 eventlet.monkey_patch(thread=False)
 
 from eventlet import tpool
+
+try:
+    from eventlet.wsgi import HttpProtocol  # type: ignore
+except Exception:
+    HttpProtocol = None  # type: ignore[assignment]
+else:
+    _original_handle_one_request = HttpProtocol.handle_one_request
+
+    def _quiet_tls_http_mismatch(self):  # type: ignore[override]
+        try:
+            return _original_handle_one_request(self)
+        except ssl.SSLError as exc:  # type: ignore[arg-type]
+            reason = getattr(exc, "reason", "")
+            reason_text = str(reason).lower() if reason else ""
+            message = " ".join(str(arg) for arg in exc.args if arg).lower()
+            if "http_request" in message or reason_text == "http request":
+                try:
+                    self.close_connection = True  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                try:
+                    conn = getattr(self, "socket", None) or getattr(self, "connection", None)
+                    if conn:
+                        conn.close()
+                except Exception:
+                    pass
+                return None
+            raise
+
+    HttpProtocol.handle_one_request = _quiet_tls_http_mismatch  # type: ignore[assignment]
 
 import requests
 import re
@@ -167,6 +199,10 @@ TLS_CERT_PATH, TLS_KEY_PATH, TLS_BUNDLE_PATH = certificates.certificate_paths()
 os.environ.setdefault("BOREALIS_TLS_CERT", TLS_CERT_PATH)
 os.environ.setdefault("BOREALIS_TLS_KEY", TLS_KEY_PATH)
 os.environ.setdefault("BOREALIS_TLS_BUNDLE", TLS_BUNDLE_PATH)
+try:
+    os.environ.setdefault("BOREALIS_CERT_DIR", str(Path(TLS_CERT_PATH).resolve().parent))
+except Exception:
+    pass
 
 JWT_SERVICE = jwt_service_module.load_service()
 SCRIPT_SIGNER = signing.load_signer()

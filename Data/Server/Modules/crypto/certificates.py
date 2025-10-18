@@ -19,7 +19,9 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
-_CERT_DIR = Path(__file__).resolve().parent.parent / "certs"
+from Modules.runtime import ensure_runtime_dir, runtime_path
+
+_CERT_DIR = runtime_path("certs")
 _CERT_FILE = _CERT_DIR / "borealis-server-cert.pem"
 _KEY_FILE = _CERT_DIR / "borealis-server-key.pem"
 _BUNDLE_FILE = _CERT_DIR / "borealis-server-bundle.pem"
@@ -35,7 +37,7 @@ def ensure_certificate(common_name: str = "Borealis Server") -> Tuple[Path, Path
     Returns (cert_path, key_path, bundle_path).
     """
 
-    _CERT_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_runtime_dir("certs")
 
     regenerate = not (_CERT_FILE.exists() and _KEY_FILE.exists())
     if not regenerate:

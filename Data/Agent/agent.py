@@ -125,6 +125,24 @@ def _agent_guid_path() -> str:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), 'agent_GUID'))
 
 
+def _settings_dir():
+    try:
+        return os.path.join(_find_project_root(), 'Agent', 'Borealis', 'Settings')
+    except Exception:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings'))
+
+
+_KEY_STORE_INSTANCE = None
+
+
+def _key_store() -> AgentKeyStore:
+    global _KEY_STORE_INSTANCE
+    if _KEY_STORE_INSTANCE is None:
+        scope = 'SYSTEM' if SYSTEM_SERVICE_MODE else 'CURRENTUSER'
+        _KEY_STORE_INSTANCE = AgentKeyStore(_settings_dir(), scope=scope)
+    return _KEY_STORE_INSTANCE
+
+
 def _persist_agent_guid_local(guid: str):
     guid = _normalize_agent_guid(guid)
     if not guid:
@@ -1029,23 +1047,6 @@ def _collect_heartbeat_metrics() -> Dict[str, Any]:
 
 
 def _settings_dir():
-    try:
-        return os.path.join(_find_project_root(), 'Agent', 'Borealis', 'Settings')
-    except Exception:
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings'))
-
-
-_KEY_STORE_INSTANCE = None
-
-
-def _key_store() -> AgentKeyStore:
-    global _KEY_STORE_INSTANCE
-    if _KEY_STORE_INSTANCE is None:
-        scope = 'SYSTEM' if SYSTEM_SERVICE_MODE else 'CURRENTUSER'
-        _KEY_STORE_INSTANCE = AgentKeyStore(_settings_dir(), scope=scope)
-    return _KEY_STORE_INSTANCE
-
-
 SERVER_CERT_PATH = _key_store().server_certificate_path()
 
 
