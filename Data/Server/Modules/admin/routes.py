@@ -18,7 +18,7 @@ def register(
     db_conn_factory: Callable[[], sqlite3.Connection],
     require_admin: Callable[[], Optional[Any]],
     current_user: Callable[[], Optional[Dict[str, str]]],
-    log: Callable[[str, str], None],
+    log: Callable[[str, str, Optional[str]], None],
 ) -> None:
     blueprint = Blueprint("admin", __name__)
 

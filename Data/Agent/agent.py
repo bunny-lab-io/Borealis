@@ -23,6 +23,7 @@ import ssl
 import threading
 import contextlib
 import errno
+import re
 from typing import Any, Dict, Optional, List, Callable, Tuple
 
 import requests
@@ -66,15 +67,65 @@ def _rotate_daily(path: str):
 
 
 # Early bootstrap logging (goes to agent.log)
-def _bootstrap_log(msg: str):
+_AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
+_AGENT_SCOPE_PATTERN = re.compile(r"\\bscope=([A-Za-z0-9_-]+)", re.IGNORECASE)
+
+
+def _canonical_scope_value(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    value = "".join(ch for ch in str(raw) if ch.isalnum() or ch in ("_", "-"))
+    if not value:
+        return None
+    return value.upper()
+
+
+def _agent_context_default() -> Optional[str]:
+    suffix = globals().get("CONFIG_SUFFIX_CANONICAL")
+    context = _canonical_scope_value(suffix)
+    if context:
+        return context
+    service = globals().get("SERVICE_MODE_CANONICAL")
+    context = _canonical_scope_value(service)
+    if context:
+        return context
+    return None
+
+
+def _infer_agent_scope(message: str, provided_scope: Optional[str] = None) -> Optional[str]:
+    scope = _canonical_scope_value(provided_scope)
+    if scope:
+        return scope
+    match = _AGENT_SCOPE_PATTERN.search(message or "")
+    if match:
+        scope = _canonical_scope_value(match.group(1))
+        if scope:
+            return scope
+    return _agent_context_default()
+
+
+def _format_agent_log_message(message: str, fname: str, scope: Optional[str] = None) -> str:
+    context = _infer_agent_scope(message, scope)
+    if fname == "agent.error.log":
+        prefix = "[ERROR]"
+        if context:
+            prefix = f"{prefix}[CONTEXT-{context}]"
+        return f"{prefix} {message}"
+    if context:
+        return f"[CONTEXT-{context}] {message}"
+    return f"[INFO] {message}"
+
+
+def _bootstrap_log(msg: str, *, scope: Optional[str] = None):
     try:
         base = _agent_logs_root()
         os.makedirs(base, exist_ok=True)
         path = os.path.join(base, 'agent.log')
         _rotate_daily(path)
         ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        line = _format_agent_log_message(msg, 'agent.log', scope)
         with open(path, 'a', encoding='utf-8') as fh:
-            fh.write(f'[{ts}] {msg}\n')
+            fh.write(f'[{ts}] {line}\n')
     except Exception:
         pass
 
@@ -360,15 +411,16 @@ def _find_project_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # Simple file logger under Logs/Agent
-def _log_agent(message: str, fname: str = 'agent.log'):
+def _log_agent(message: str, fname: str = 'agent.log', *, scope: Optional[str] = None):
     try:
         log_dir = _agent_logs_root()
         os.makedirs(log_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         path = os.path.join(log_dir, fname)
         _rotate_daily(path)
+        line = _format_agent_log_message(message, fname, scope)
         with open(path, 'a', encoding='utf-8') as fh:
-            fh.write(f'[{ts}] {message}\n')
+            fh.write(f'[{ts}] {line}\n')
     except Exception:
         pass
 
@@ -683,6 +735,9 @@ class AgentHttpClient:
         self.key_store = _key_store()
         self.identity = IDENTITY
         self.session = requests.Session()
+        context_label = _agent_context_default()
+        if context_label:
+            self.session.headers.setdefault(_AGENT_CONTEXT_HEADER, context_label)
         self.base_url: Optional[str] = None
         self.guid: Optional[str] = None
         self.access_token: Optional[str] = None
@@ -749,9 +804,13 @@ class AgentHttpClient:
             pass
 
     def auth_headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
         if self.access_token:
-            return {"Authorization": f"Bearer {self.access_token}"}
-        return {}
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        context_label = _agent_context_default()
+        if context_label:
+            headers[_AGENT_CONTEXT_HEADER] = context_label
+        return headers
 
     def configure_socketio(self, client: "socketio.AsyncClient") -> None:
         """Align the Socket.IO engine's TLS verification with the REST client."""

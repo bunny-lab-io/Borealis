@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Callable, Optional
 
 import eventlet
 from flask_socketio import SocketIO
@@ -11,7 +11,7 @@ def start_prune_job(
     socketio: SocketIO,
     *,
     db_conn_factory: Callable[[], any],
-    log: Callable[[str, str], None],
+    log: Callable[[str, str, Optional[str]], None],
 ) -> None:
     def _job_loop():
         while True:
@@ -24,7 +24,7 @@ def start_prune_job(
     socketio.start_background_task(_job_loop)
 
 
-def _run_once(db_conn_factory: Callable[[], any], log: Callable[[str, str], None]) -> None:
+def _run_once(db_conn_factory: Callable[[], any], log: Callable[[str, str, Optional[str]], None]) -> None:
     now = datetime.now(tz=timezone.utc)
     now_iso = now.isoformat()
     stale_before = (now - timedelta(hours=24)).isoformat()

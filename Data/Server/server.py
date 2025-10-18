@@ -152,15 +152,62 @@ def _rotate_daily(path: str):
         pass
 
 
-def _write_service_log(service: str, msg: str):
+_SERVER_SCOPE_PATTERN = re.compile(r"\\b(?:scope|context|agent_context)=([A-Za-z0-9_-]+)", re.IGNORECASE)
+_SERVER_AGENT_ID_PATTERN = re.compile(r"\\bagent_id=([^\s,]+)", re.IGNORECASE)
+_AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
+
+
+def _canonical_server_scope(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    value = "".join(ch for ch in str(raw) if ch.isalnum() or ch in ("_", "-"))
+    if not value:
+        return None
+    return value.upper()
+
+
+def _scope_from_agent_id(agent_id: Optional[str]) -> Optional[str]:
+    candidate = _canonical_server_scope(agent_id)
+    if not candidate:
+        return None
+    if candidate.endswith("_SYSTEM"):
+        return "SYSTEM"
+    if candidate.endswith("_CURRENTUSER"):
+        return "CURRENTUSER"
+    return candidate
+
+
+def _infer_server_scope(message: str, explicit: Optional[str]) -> Optional[str]:
+    scope = _canonical_server_scope(explicit)
+    if scope:
+        return scope
+    match = _SERVER_SCOPE_PATTERN.search(message or "")
+    if match:
+        scope = _canonical_server_scope(match.group(1))
+        if scope:
+            return scope
+    agent_match = _SERVER_AGENT_ID_PATTERN.search(message or "")
+    if agent_match:
+        scope = _scope_from_agent_id(agent_match.group(1))
+        if scope:
+            return scope
+    return None
+
+
+def _write_service_log(service: str, msg: str, scope: Optional[str] = None, *, level: str = "INFO"):
     try:
         base = _server_logs_root()
         os.makedirs(base, exist_ok=True)
         path = os.path.join(base, f"{service}.log")
         _rotate_daily(path)
         ts = time.strftime('%Y-%m-%d %H:%M:%S')
+        resolved_scope = _infer_server_scope(msg, scope)
+        prefix_parts = [f"[{level.upper()}]"]
+        if resolved_scope:
+            prefix_parts.append(f"[CONTEXT-{resolved_scope}]")
+        prefix = "".join(prefix_parts)
         with open(path, 'a', encoding='utf-8') as fh:
-            fh.write(f'[{ts}] {msg}\n')
+            fh.write(f'[{ts}] {prefix} {msg}\n')
     except Exception:
         pass
 

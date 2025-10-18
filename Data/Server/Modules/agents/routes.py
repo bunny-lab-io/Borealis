@@ -10,13 +10,24 @@ from flask import Blueprint, jsonify, request, g
 from Modules.auth.device_auth import DeviceAuthManager, require_device_auth
 from Modules.crypto.signing import ScriptSigner
 
+AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
+
+
+def _canonical_context(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = "".join(ch for ch in str(value) if ch.isalnum() or ch in ("_", "-"))
+    if not cleaned:
+        return None
+    return cleaned.upper()
+
 
 def register(
     app,
     *,
     db_conn_factory: Callable[[], Any],
     auth_manager: DeviceAuthManager,
-    log: Callable[[str, str], None],
+    log: Callable[[str, str, Optional[str]], None],
     script_signer: ScriptSigner,
 ) -> None:
     blueprint = Blueprint("agents", __name__)
@@ -29,10 +40,15 @@ def register(
         except Exception:
             return None
 
+    def _context_hint(ctx=None) -> Optional[str]:
+        if ctx is not None and getattr(ctx, "service_mode", None):
+            return _canonical_context(getattr(ctx, "service_mode", None))
+        return _canonical_context(request.headers.get(AGENT_CONTEXT_HEADER))
+
     def _auth_context():
         ctx = getattr(g, "device_auth", None)
         if ctx is None:
-            log("server", f"device auth context missing for {request.path}")
+            log("server", f"device auth context missing for {request.path}", _context_hint())
         return ctx
 
     @blueprint.route("/api/agent/heartbeat", methods=["POST"])
@@ -42,6 +58,7 @@ def register(
         if ctx is None:
             return jsonify({"error": "auth_context_missing"}), 500
         payload = request.get_json(force=True, silent=True) or {}
+        context_label = _context_hint(ctx)
 
         now_ts = int(time.time())
         updates: Dict[str, Optional[str]] = {"last_seen": now_ts}
@@ -111,12 +128,13 @@ def register(
                             "server",
                             "heartbeat hostname collision ignored for guid="
                             f"{ctx.guid}",
+                            context_label,
                         )
                 else:
                     raise
 
             if rowcount == 0:
-                log("server", f"heartbeat missing device record guid={ctx.guid}")
+                log("server", f"heartbeat missing device record guid={ctx.guid}", context_label)
                 return jsonify({"error": "device_not_registered"}), 404
             conn.commit()
         finally:
