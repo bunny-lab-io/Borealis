@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import sqlite3
 from typing import Any, Callable, Dict, Optional
 
 from flask import Blueprint, jsonify, request, g
@@ -79,14 +80,42 @@ def register(
         conn = db_conn_factory()
         try:
             cur = conn.cursor()
-            columns = ", ".join(f"{col} = ?" for col in updates.keys())
-            params = list(updates.values())
-            params.append(ctx.guid)
-            cur.execute(
-                f"UPDATE devices SET {columns} WHERE guid = ?",
-                params,
-            )
-            if cur.rowcount == 0:
+
+            def _apply_updates() -> int:
+                if not updates:
+                    return 0
+                columns = ", ".join(f"{col} = ?" for col in updates.keys())
+                params = list(updates.values())
+                params.append(ctx.guid)
+                cur.execute(
+                    f"UPDATE devices SET {columns} WHERE guid = ?",
+                    params,
+                )
+                return cur.rowcount
+
+            try:
+                rowcount = _apply_updates()
+            except sqlite3.IntegrityError as exc:
+                if "devices.hostname" in str(exc) and "UNIQUE" in str(exc).upper():
+                    # Another device already claims this hostname; keep the existing
+                    # canonical hostname assigned during enrollment to avoid breaking
+                    # the unique constraint and continue updating the remaining fields.
+                    if "hostname" in updates:
+                        updates.pop("hostname", None)
+                    try:
+                        rowcount = _apply_updates()
+                    except sqlite3.IntegrityError:
+                        raise
+                    else:
+                        log(
+                            "server",
+                            "heartbeat hostname collision ignored for guid="
+                            f"{ctx.guid}",
+                        )
+                else:
+                    raise
+
+            if rowcount == 0:
                 log("server", f"heartbeat missing device record guid={ctx.guid}")
                 return jsonify({"error": "device_not_registered"}), 404
             conn.commit()
