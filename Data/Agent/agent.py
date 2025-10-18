@@ -931,14 +931,14 @@ class AgentHttpClient:
             context = None
             if isinstance(verify, str) and os.path.isfile(verify):
                 try:
-                    # ``create_default_context`` expects a proper CA bundle and
-                    # will reject self-signed leaf certificates that we pin on
-                    # disk. Build a dedicated client context instead and load
-                    # the pinned certificate as a trust anchor so the SYSTEM
-                    # agent can complete TLS handshakes identical to Requests.
-                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    # Mirror Requests' certificate handling by starting from a
+                    # default client context (which pre-loads the system
+                    # certificate stores) and then layering the pinned
+                    # certificate bundle on top. This matches the REST client
+                    # behaviour and ensures self-signed leaf certificates work
+                    # the same way for Socket.IO handshakes.
+                    context = ssl.create_default_context()
                     context.check_hostname = False
-                    context.verify_mode = ssl.CERT_REQUIRED
                     context.load_verify_locations(cafile=verify)
                     _log_agent(
                         f"SocketIO TLS alignment created SSLContext from cafile={verify}",
