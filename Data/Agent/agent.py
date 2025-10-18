@@ -839,39 +839,41 @@ class AgentHttpClient:
             headers[_AGENT_CONTEXT_HEADER] = context_label
         return headers
 
-    def configure_socketio(self, client: "socketio.AsyncClient") -> None:
-        """Align the Socket.IO engine's TLS verification with the REST client."""
+    def configure_socketio(self, client: "socketio.AsyncClient") -> Dict[str, Any]:
+        """Align Socket.IO TLS settings with the REST session and return connect kwargs."""
+
+        connect_kwargs: Dict[str, Any] = {}
         try:
             verify = getattr(self.session, "verify", True)
-            engine = getattr(client, "eio", None)
-            if engine is None:
-                return
-
-            # python-engineio accepts either a boolean, a path to a CA bundle,
-            # or an ``ssl.SSLContext`` for TLS verification.  When we have a
-            # pinned certificate bundle on disk, prefer constructing a context
-            # that trusts that bundle, while also passing the explicit path so
-            # the engine falls back to the same trust store if it rebuilds the
-            # context internally.  This ensures SYSTEM services that rely on
-            # machine-scoped certificates can negotiate WebSocket TLS without
-            # tripping over default CA roots.
+            context = None
             if isinstance(verify, str) and os.path.isfile(verify):
-                context = None
                 try:
                     context = ssl.create_default_context(cafile=verify)
                     context.check_hostname = False
                 except Exception:
                     context = None
-                engine.ssl_context = context
-                engine.ssl_verify = verify
-            elif verify is False:
-                engine.ssl_context = None
-                engine.ssl_verify = False
-            else:
-                engine.ssl_context = None
-                engine.ssl_verify = True
+            if context is not None:
+                connect_kwargs["ssl_context"] = context
+
+            # The AsyncClient honours ``ssl_verify`` / ``ssl_context`` parameters
+            # passed to ``connect``.  For compatibility with older engineio builds
+            # we also reflect the values onto the underlying engine instance when
+            # available so reconnect attempts use the same trust material.
+            connect_kwargs["ssl_verify"] = verify
+
+            engine = getattr(client, "eio", None)
+            if engine is not None:
+                try:
+                    engine.ssl_context = connect_kwargs.get("ssl_context")
+                except Exception:
+                    pass
+                try:
+                    engine.ssl_verify = verify
+                except Exception:
+                    pass
         except Exception:
-            pass
+            connect_kwargs.setdefault("ssl_verify", True)
+        return connect_kwargs
 
     # ------------------------------------------------------------------
     # Enrollment & token management
@@ -2615,7 +2617,11 @@ async def connect_loop():
     while True:
         try:
             client.ensure_authenticated()
-            client.configure_socketio(sio)
+            connect_kwargs = client.configure_socketio(sio) or {}
+            try:
+                setattr(sio, "connection_error", None)
+            except Exception:
+                pass
             url = client.websocket_base_url()
             print(f"[INFO] Connecting Agent to {url}...")
             _log_agent(f'Connecting to {url}...')
@@ -2623,10 +2629,17 @@ async def connect_loop():
                 url,
                 transports=['websocket'],
                 headers=client.auth_headers(),
+                **connect_kwargs,
             )
             break
         except Exception as e:
             detail = _describe_exception(e)
+            try:
+                conn_err = getattr(sio, "connection_error", None)
+            except Exception:
+                conn_err = None
+            if conn_err:
+                detail = f"{detail}; connection_error={conn_err!r}"
             print(f"[WebSocket] Server unavailable: {detail}. Retrying in {retry}s...")
             _log_agent(f'Server unavailable: {detail}', fname='agent.error.log')
             await asyncio.sleep(retry)
