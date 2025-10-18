@@ -79,6 +79,8 @@ class AgentKeyStore:
         self._access_token_path = os.path.join(self.settings_dir, "access.jwt")
         self._refresh_token_path = os.path.join(self.settings_dir, "refresh.token")
         self._token_meta_path = os.path.join(self.settings_dir, "access.meta.json")
+        self._server_certificate_path = os.path.join(self.settings_dir, "server_certificate.pem")
+        self._server_signing_key_path = os.path.join(self.settings_dir, "server_signing_key.pub")
 
     # ------------------------------------------------------------------
     # Identity management
@@ -198,6 +200,54 @@ class AgentKeyStore:
                     os.remove(path)
             except Exception:
                 pass
+    # ------------------------------------------------------------------
+    # Server certificate & signing key helpers
+    # ------------------------------------------------------------------
+    def server_certificate_path(self) -> str:
+        return self._server_certificate_path
+
+    def save_server_certificate(self, pem_text: str) -> None:
+        if not pem_text:
+            return
+        normalized = pem_text.strip()
+        if not normalized:
+            return
+        if not normalized.endswith("\n"):
+            normalized += "\n"
+        with open(self._server_certificate_path, "w", encoding="utf-8") as fh:
+            fh.write(normalized)
+        _restrict_permissions(self._server_certificate_path)
+
+    def load_server_certificate(self) -> Optional[str]:
+        try:
+            if os.path.isfile(self._server_certificate_path):
+                with open(self._server_certificate_path, "r", encoding="utf-8") as fh:
+                    return fh.read()
+        except Exception:
+            return None
+        return None
+
+    def save_server_signing_key(self, value: str) -> None:
+        if not value:
+            return
+        normalized = value.strip()
+        if not normalized:
+            return
+        with open(self._server_signing_key_path, "w", encoding="utf-8") as fh:
+            fh.write(normalized)
+            fh.write("\n")
+        _restrict_permissions(self._server_signing_key_path)
+
+    def load_server_signing_key(self) -> Optional[str]:
+        try:
+            if os.path.isfile(self._server_signing_key_path):
+                with open(self._server_signing_key_path, "r", encoding="utf-8") as fh:
+                    value = fh.read().strip()
+                    return value or None
+        except Exception:
+            return None
+        return None
+
 
     # ------------------------------------------------------------------
     # Token metadata (e.g., expiry, fingerprint binding)

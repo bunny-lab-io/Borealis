@@ -48,7 +48,17 @@ Today the stable core focuses on workflow-driven API and automation scenarios. R
 ## Agent Responsibilities
 
 ### Communication Channels
-Agents establish REST calls to the Flask backend on port 5000 and keep a WebSocket session for interactive features such as screenshot capture. Future plans include WebRTC for higher-performance remote desktop. No authentication or enrollment handshake exists yet, so agents are implicitly trusted once launched.  This will be secured in future updates to Borealis.
+Agents establish TLS-secured REST calls to the Flask backend on port 5000 and keep an authenticated WebSocket session for interactive features such as screenshot capture. Future plans include WebRTC for higher-performance remote desktop. Every agent now performs an enrollment handshake (see **Secure Enrollment & Tokens** below) prior to opening either channel; all API access is bound to short-lived Ed25519-signed JWTs.
+
+### Secure Enrollment & Tokens
+- On first launch the agent generates an Ed25519 identity and stores the private key under `Agent/Borealis/Settings/agent_key.ed25519` (protected with DPAPI on Windows or chmod 600 elsewhere). The public key is retained as SPKI DER and fingerprinted with SHA-256.
+- Enrollment starts with an installer code (minted in the Web UI) and proves key possession by signing the server nonce. Upon operator approval the server issues:
+  - The canonical device GUID (persisted to `guid.txt` alongside the key material).
+  - A short-lived access token (EdDSA/JWT) and a long-lived refresh token (stored encrypted via DPAPI and hashed server-side).
+  - The server TLS certificate and script-signing public key so the agent can pin both for future sessions.
+- Access tokens are automatically refreshed before expiry. Refresh failures trigger a re-enrollment.
+- All REST calls (heartbeat, script polling, device details, service check-in) use these tokens; WebSocket connections include the `Authorization` header as well.
+- Specify the installer code via `--installer-code <code>`, `BOREALIS_INSTALLER_CODE`, or by adding `"installer_code": "<code>"` to `Agent/Borealis/Settings/agent_settings.json`.
 
 ### Execution Contexts
 The agent runs in the interactive user session. SYSTEM-level script execution is provided by the ScriptExec SYSTEM role using ephemeral scheduled tasks; no separate supervisor or watchdog is required.
@@ -186,7 +196,6 @@ This section summarizes what is considered usable vs. experimental today.
 
 - Terminology
   - “Assemblies” consolidates Scripts/Workflows (and future Playbooks) in the UI. Treat Playbooks as non‑functional until Ansible support matures.
-
 
 
 
