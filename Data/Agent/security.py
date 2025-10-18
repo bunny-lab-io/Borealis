@@ -227,15 +227,22 @@ class AgentKeyStore:
         try:
             with open(self._refresh_token_path, "rb") as fh:
                 protected = fh.read()
-            raw = _unprotect(protected, scope_system=self.scope_system)
-            try:
-                return raw.decode("utf-8")
-            except Exception:
-                # Token may have been protected under the opposite DPAPI scope.
-                alt = _unprotect(protected, scope_system=not self.scope_system)
-                return alt.decode("utf-8")
         except Exception:
             return None
+
+        # Try both scopes (preferred first) and decode once a UTF-8 payload is recovered.
+        for scope_first in (self.scope_system, not self.scope_system):
+            try:
+                candidate = _unprotect(protected, scope_system=scope_first)
+            except Exception:
+                continue
+            if not candidate:
+                continue
+            try:
+                return candidate.decode("utf-8")
+            except Exception:
+                continue
+        return None
 
     def clear_tokens(self) -> None:
         for path in (self._access_token_path, self._refresh_token_path, self._token_meta_path):

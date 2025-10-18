@@ -684,6 +684,17 @@ class AgentHttpClient:
             self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
         else:
             self.session.headers.pop("Authorization", None)
+        try:
+            _log_agent(
+                "Reloaded tokens from disk "
+                f"guid={'yes' if self.guid else 'no'} "
+                f"access={'yes' if self.access_token else 'no'} "
+                f"refresh={'yes' if self.refresh_token else 'no'} "
+                f"expiry={self.access_expires_at}",
+                fname="agent.log",
+            )
+        except Exception:
+            pass
 
     def auth_headers(self) -> Dict[str, str]:
         if self.access_token:
