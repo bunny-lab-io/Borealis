@@ -28,10 +28,18 @@ def register(
         except Exception:
             return None
 
+    def _auth_context():
+        ctx = getattr(g, "device_auth", None)
+        if ctx is None:
+            log("server", f"device auth context missing for {request.path}")
+        return ctx
+
     @blueprint.route("/api/agent/heartbeat", methods=["POST"])
     @require_device_auth(auth_manager)
     def heartbeat():
-        ctx = getattr(g, "device_auth")
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
         payload = request.get_json(force=True, silent=True) or {}
 
         now_ts = int(time.time())
@@ -90,7 +98,9 @@ def register(
     @blueprint.route("/api/agent/script/request", methods=["POST"])
     @require_device_auth(auth_manager)
     def script_request():
-        ctx = getattr(g, "device_auth")
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
         if ctx.status != "active":
             return jsonify(
                 {
