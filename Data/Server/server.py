@@ -18,6 +18,22 @@ Section Guide:
   * WebSocket Event Handling and Entrypoint
 """
 
+import os
+import sys
+
+# Ensure the modular server package is importable when the runtime is launched
+# from a packaged directory (e.g., Server/Borealis). We look for the canonical
+# Data/Server location as well as a sibling Modules folder.
+_SERVER_DIR = os.path.abspath(os.path.dirname(__file__))
+_SEARCH_ROOTS = [
+    _SERVER_DIR,
+    os.path.abspath(os.path.join(_SERVER_DIR, "..", "..", "Data", "Server")),
+]
+for root in _SEARCH_ROOTS:
+    modules_dir = os.path.join(root, "Modules")
+    if os.path.isdir(modules_dir) and root not in sys.path:
+        sys.path.insert(0, root)
+
 import eventlet
 # Monkey-patch stdlib for cooperative sockets (keep real threads for tpool usage)
 eventlet.monkey_patch(thread=False)
@@ -34,7 +50,6 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 import time
-import os  # To Read Production ReactJS Server Folder
 import json  # For reading workflow JSON files
 import shutil  # For moving workflow files and folders
 from typing import List, Dict, Tuple, Optional, Any, Set, Sequence
@@ -8125,5 +8140,11 @@ def relay_ansible_run(data):
 
 if __name__ == "__main__":
     # Use SocketIO runner so WebSocket transport works with eventlet.
-    ssl_context = certificates.build_ssl_context()
-    socketio.run(app, host="0.0.0.0", port=5000, ssl_context=ssl_context)
+    # Eventlet's WSGI server expects raw cert/key paths rather than an ssl.SSLContext.
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=5000,
+        certfile=TLS_CERT_PATH,
+        keyfile=TLS_KEY_PATH,
+    )

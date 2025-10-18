@@ -42,7 +42,11 @@ def ensure_certificate(common_name: str = "Borealis Server") -> Tuple[Path, Path
         try:
             with _CERT_FILE.open("rb") as fh:
                 cert = x509.load_pem_x509_certificate(fh.read())
-            if cert.not_valid_after.replace(tzinfo=timezone.utc) <= datetime.now(tz=timezone.utc):
+            try:
+                expiry = cert.not_valid_after_utc  # type: ignore[attr-defined]
+            except AttributeError:
+                expiry = cert.not_valid_after.replace(tzinfo=timezone.utc)
+            if expiry <= datetime.now(tz=timezone.utc):
                 regenerate = True
         except Exception:
             regenerate = True
@@ -130,4 +134,3 @@ def build_ssl_context() -> ssl.SSLContext:
 def certificate_paths() -> Tuple[str, str, str]:
     cert_path, key_path, bundle_path = ensure_certificate()
     return str(cert_path), str(key_path), str(bundle_path)
-

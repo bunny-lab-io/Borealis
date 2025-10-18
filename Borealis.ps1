@@ -958,6 +958,7 @@ switch ($choice) {
                 New-Item -Path $dataDestination -ItemType Directory -Force | Out-Null
                 Copy-Item "$dataSource\Server\Python_API_Endpoints" $dataDestination -Recurse
                 Copy-Item "$dataSource\Server\Sounds"               $dataDestination -Recurse
+                Copy-Item "$dataSource\Server\Modules"               $dataDestination -Recurse
                 Copy-Item "$dataSource\Server\server.py"            $dataDestination
                 Copy-Item "$dataSource\Server\job_scheduler.py"     $dataDestination 
             }

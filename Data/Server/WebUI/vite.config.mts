@@ -4,13 +4,32 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import fs from 'fs';
 
-const defaultCert = path.resolve(__dirname, '../certs/borealis-server-cert.pem');
-const defaultKey = path.resolve(__dirname, '../certs/borealis-server-key.pem');
+const certCandidates = [
+  process.env.BOREALIS_TLS_CERT,
+  path.resolve(__dirname, '../certs/borealis-server-cert.pem'),
+  path.resolve(__dirname, '../../Data/Server/certs/borealis-server-cert.pem'),
+] as const;
 
-const certPath = process.env.BOREALIS_TLS_CERT ?? defaultCert;
-const keyPath = process.env.BOREALIS_TLS_KEY ?? defaultKey;
+const keyCandidates = [
+  process.env.BOREALIS_TLS_KEY,
+  path.resolve(__dirname, '../certs/borealis-server-key.pem'),
+  path.resolve(__dirname, '../../Data/Server/certs/borealis-server-key.pem'),
+] as const;
 
-const httpsOptions = fs.existsSync(certPath) && fs.existsSync(keyPath)
+const pickFirst = (candidates: readonly (string | undefined)[]) => {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+};
+
+const certPath = pickFirst(certCandidates);
+const keyPath = pickFirst(keyCandidates);
+
+const httpsOptions = certPath && keyPath
   ? {
       cert: fs.readFileSync(certPath),
       key: fs.readFileSync(keyPath),
