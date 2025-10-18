@@ -114,10 +114,12 @@ class DeviceAuthManager:
                 """,
                 (guid,),
             )
-        row = cur.fetchone()
+            row = cur.fetchone()
 
-        if not row:
-            row = self._recover_device_record(conn, guid, fingerprint, token_version, context_label)
+            if not row:
+                row = self._recover_device_record(
+                    conn, guid, fingerprint, token_version, context_label
+                )
         finally:
             conn.close()
 
