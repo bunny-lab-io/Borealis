@@ -540,12 +540,28 @@ class AgentHttpClient:
             engine = getattr(client, "eio", None)
             if engine is None:
                 return
-            # python-engineio accepts bool, path, or ssl.SSLContext for ssl_verify
+
+            # python-engineio accepts either a boolean or an ``ssl.SSLContext``
+            # for TLS verification.  When we have a pinned certificate bundle
+            # on disk, prefer constructing a dedicated context that trusts that
+            # bundle so WebSocket connections succeed even with private CAs.
             if isinstance(verify, str) and os.path.isfile(verify):
-                engine.ssl_verify = verify
+                try:
+                    context = ssl.create_default_context(cafile=verify)
+                    context.check_hostname = False
+                except Exception:
+                    context = None
+                if context is not None:
+                    engine.ssl_context = context
+                    engine.ssl_verify = True
+                else:
+                    engine.ssl_context = None
+                    engine.ssl_verify = verify
             elif verify is False:
+                engine.ssl_context = None
                 engine.ssl_verify = False
             else:
+                engine.ssl_context = None
                 engine.ssl_verify = True
         except Exception:
             pass
