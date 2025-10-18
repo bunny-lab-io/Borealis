@@ -929,25 +929,20 @@ class AgentHttpClient:
                     pass
 
             context = None
+            bundle_summary = {"count": None, "fingerprint": None}
             if isinstance(verify, str) and os.path.isfile(verify):
-                try:
-                    # Mirror Requests' certificate handling by starting from a
-                    # default client context (which pre-loads the system
-                    # certificate stores) and then layering the pinned
-                    # certificate bundle on top. This matches the REST client
-                    # behaviour and ensures self-signed leaf certificates work
-                    # the same way for Socket.IO handshakes.
-                    context = ssl.create_default_context()
-                    context.check_hostname = False
-                    context.load_verify_locations(cafile=verify)
+                bundle_count, bundle_fp = self.key_store.describe_server_certificate()
+                bundle_summary = {"count": bundle_count, "fingerprint": bundle_fp}
+                context = self.key_store.build_ssl_context()
+                if context is not None:
                     _log_agent(
-                        f"SocketIO TLS alignment created SSLContext from cafile={verify}",
+                        "SocketIO TLS alignment created SSLContext from pinned bundle "
+                        f"count={bundle_count} fp={bundle_fp or '<none>'}",
                         fname="agent.log",
                     )
-                except Exception:
-                    context = None
+                else:
                     _log_agent(
-                        f"SocketIO TLS alignment failed to build context from cafile={verify}",
+                        "SocketIO TLS alignment failed to build context from pinned bundle",  # noqa: E501
                         fname="agent.error.log",
                     )
 
@@ -960,7 +955,8 @@ class AgentHttpClient:
                 _set_attr(http_iface, "verify_ssl", True)
                 _reset_cached_session()
                 _log_agent(
-                    "SocketIO TLS alignment applied dedicated SSLContext to engine/http",
+                    "SocketIO TLS alignment applied dedicated SSLContext to engine/http "
+                    f"count={bundle_summary['count']} fp={bundle_summary['fingerprint'] or '<none>'}",
                     fname="agent.log",
                 )
                 return
