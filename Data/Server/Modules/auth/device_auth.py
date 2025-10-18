@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import sqlite3
 import time
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
@@ -103,8 +104,7 @@ class DeviceAuthManager:
 
         context_label = _canonical_context(request.headers.get(AGENT_CONTEXT_HEADER))
 
-        conn = self._db_conn_factory()
-        try:
+        with closing(self._db_conn_factory()) as conn:
             cur = conn.cursor()
             cur.execute(
                 """
@@ -120,8 +120,6 @@ class DeviceAuthManager:
                 row = self._recover_device_record(
                     conn, guid, fingerprint, token_version, context_label
                 )
-        finally:
-            conn.close()
 
         if not row:
             raise DeviceAuthError("device_not_found", status_code=403)
