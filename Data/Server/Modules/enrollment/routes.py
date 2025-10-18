@@ -54,6 +54,10 @@ def register(
     def _rate_limited(key: str, limiter: SlidingWindowRateLimiter, limit: int, window_s: float):
         decision = limiter.check(key, limit, window_s)
         if not decision.allowed:
+            log(
+                "server",
+                f"enrollment rate limited key={key} limit={limit}/{window_s}s retry_after={decision.retry_after:.2f}",
+            )
             response = jsonify({"error": "rate_limited", "retry_after": decision.retry_after})
             response.status_code = 429
             response.headers["Retry-After"] = f"{int(decision.retry_after) or 1}"
@@ -128,19 +132,63 @@ def register(
 
     def _ensure_device_record(cur: sqlite3.Cursor, guid: str, hostname: str, fingerprint: str) -> Dict[str, Any]:
         cur.execute(
-            "SELECT guid, hostname, token_version, status, ssl_key_fingerprint FROM devices WHERE guid = ?",
+            """
+            SELECT guid, hostname, token_version, status, ssl_key_fingerprint, key_added_at
+              FROM devices
+             WHERE guid = ?
+            """,
             (guid,),
         )
         row = cur.fetchone()
         if row:
-            keys = ["guid", "hostname", "token_version", "status", "ssl_key_fingerprint"]
+            keys = [
+                "guid",
+                "hostname",
+                "token_version",
+                "status",
+                "ssl_key_fingerprint",
+                "key_added_at",
+            ]
             record = dict(zip(keys, row))
-            if not record.get("ssl_key_fingerprint"):
+            stored_fp = (record.get("ssl_key_fingerprint") or "").strip().lower()
+            new_fp = (fingerprint or "").strip().lower()
+            if not stored_fp and new_fp:
                 cur.execute(
                     "UPDATE devices SET ssl_key_fingerprint = ?, key_added_at = ? WHERE guid = ?",
                     (fingerprint, _iso(_now()), guid),
                 )
                 record["ssl_key_fingerprint"] = fingerprint
+            elif new_fp and stored_fp != new_fp:
+                now_iso = _iso(_now())
+                try:
+                    current_version = int(record.get("token_version") or 1)
+                except Exception:
+                    current_version = 1
+                new_version = max(current_version + 1, 1)
+                cur.execute(
+                    """
+                    UPDATE devices
+                       SET ssl_key_fingerprint = ?,
+                           key_added_at = ?,
+                           token_version = ?,
+                           status = 'active'
+                     WHERE guid = ?
+                    """,
+                    (fingerprint, now_iso, new_version, guid),
+                )
+                cur.execute(
+                    """
+                    UPDATE refresh_tokens
+                       SET revoked_at = ?
+                     WHERE guid = ?
+                       AND revoked_at IS NULL
+                    """,
+                    (now_iso, guid),
+                )
+                record["ssl_key_fingerprint"] = fingerprint
+                record["token_version"] = new_version
+                record["status"] = "active"
+                record["key_added_at"] = now_iso
             return record
 
         resolved_hostname = _normalize_host(hostname, guid, cur)
@@ -169,6 +217,7 @@ def register(
             "token_version": 1,
             "status": "active",
             "ssl_key_fingerprint": fingerprint,
+            "key_added_at": key_added_at,
         }
 
     def _hash_refresh_token(token: str) -> str:
@@ -198,7 +247,7 @@ def register(
     @blueprint.route("/api/agent/enroll/request", methods=["POST"])
     def enrollment_request():
         remote = _remote_addr()
-        rate_error = _rate_limited(f"ip:{remote}", ip_rate_limiter, 10, 60.0)
+        rate_error = _rate_limited(f"ip:{remote}", ip_rate_limiter, 40, 60.0)
         if rate_error:
             return rate_error
 
@@ -208,32 +257,47 @@ def register(
         agent_pubkey_b64 = payload.get("agent_pubkey")
         client_nonce_b64 = payload.get("client_nonce")
 
+        log(
+            "server",
+            "enrollment request received "
+            f"ip={remote} hostname={hostname or '<missing>'} code_mask={_mask_code(enrollment_code)} "
+            f"pubkey_len={len(agent_pubkey_b64 or '')} nonce_len={len(client_nonce_b64 or '')}",
+        )
+
         if not hostname:
+            log("server", f"enrollment rejected missing_hostname ip={remote}")
             return jsonify({"error": "hostname_required"}), 400
         if not enrollment_code:
+            log("server", f"enrollment rejected missing_code ip={remote} host={hostname}")
             return jsonify({"error": "enrollment_code_required"}), 400
         if not isinstance(agent_pubkey_b64, str):
+            log("server", f"enrollment rejected missing_pubkey ip={remote} host={hostname}")
             return jsonify({"error": "agent_pubkey_required"}), 400
         if not isinstance(client_nonce_b64, str):
+            log("server", f"enrollment rejected missing_nonce ip={remote} host={hostname}")
             return jsonify({"error": "client_nonce_required"}), 400
 
         try:
             agent_pubkey_der = crypto_keys.spki_der_from_base64(agent_pubkey_b64)
         except Exception:
+            log("server", f"enrollment rejected invalid_pubkey ip={remote} host={hostname}")
             return jsonify({"error": "invalid_agent_pubkey"}), 400
 
         if len(agent_pubkey_der) < 10:
+            log("server", f"enrollment rejected short_pubkey ip={remote} host={hostname}")
             return jsonify({"error": "invalid_agent_pubkey"}), 400
 
         try:
             client_nonce_bytes = base64.b64decode(client_nonce_b64, validate=True)
         except Exception:
+            log("server", f"enrollment rejected invalid_nonce ip={remote} host={hostname}")
             return jsonify({"error": "invalid_client_nonce"}), 400
         if len(client_nonce_bytes) < 16:
+            log("server", f"enrollment rejected short_nonce ip={remote} host={hostname}")
             return jsonify({"error": "invalid_client_nonce"}), 400
 
         fingerprint = crypto_keys.fingerprint_from_spki_der(agent_pubkey_der)
-        rate_error = _rate_limited(f"fp:{fingerprint}", fp_rate_limiter, 3, 60.0)
+        rate_error = _rate_limited(f"fp:{fingerprint}", fp_rate_limiter, 12, 60.0)
         if rate_error:
             return rate_error
 
@@ -333,21 +397,33 @@ def register(
         client_nonce_b64 = payload.get("client_nonce")
         proof_sig_b64 = payload.get("proof_sig")
 
+        log(
+            "server",
+            "enrollment poll received "
+            f"ref={approval_reference} client_nonce_len={len(client_nonce_b64 or '')}"
+            f" proof_sig_len={len(proof_sig_b64 or '')}",
+        )
+
         if not isinstance(approval_reference, str) or not approval_reference:
+            log("server", "enrollment poll rejected missing_reference")
             return jsonify({"error": "approval_reference_required"}), 400
         if not isinstance(client_nonce_b64, str):
+            log("server", f"enrollment poll rejected missing_nonce ref={approval_reference}")
             return jsonify({"error": "client_nonce_required"}), 400
         if not isinstance(proof_sig_b64, str):
+            log("server", f"enrollment poll rejected missing_sig ref={approval_reference}")
             return jsonify({"error": "proof_sig_required"}), 400
 
         try:
             client_nonce_bytes = base64.b64decode(client_nonce_b64, validate=True)
         except Exception:
+            log("server", f"enrollment poll invalid_client_nonce ref={approval_reference}")
             return jsonify({"error": "invalid_client_nonce"}), 400
 
         try:
             proof_sig = base64.b64decode(proof_sig_b64, validate=True)
         except Exception:
+            log("server", f"enrollment poll invalid_sig ref={approval_reference}")
             return jsonify({"error": "invalid_proof_sig"}), 400
 
         conn = db_conn_factory()
@@ -365,6 +441,7 @@ def register(
             )
             row = cur.fetchone()
             if not row:
+                log("server", f"enrollment poll unknown_reference ref={approval_reference}")
                 return jsonify({"status": "unknown"}), 404
 
             (
@@ -383,11 +460,13 @@ def register(
             ) = row
 
             if client_nonce_stored != client_nonce_b64:
+                log("server", f"enrollment poll nonce_mismatch ref={approval_reference}")
                 return jsonify({"error": "nonce_mismatch"}), 400
 
             try:
                 server_nonce_bytes = base64.b64decode(server_nonce_b64, validate=True)
             except Exception:
+                log("server", f"enrollment poll invalid_server_nonce ref={approval_reference}")
                 return jsonify({"error": "server_nonce_invalid"}), 400
 
             message = server_nonce_bytes + approval_reference.encode("utf-8") + client_nonce_bytes
@@ -395,30 +474,58 @@ def register(
             try:
                 public_key = serialization.load_der_public_key(agent_pubkey_der)
             except Exception:
+                log("server", f"enrollment poll pubkey_load_failed ref={approval_reference}")
                 public_key = None
 
             if public_key is None:
+                log("server", f"enrollment poll invalid_pubkey ref={approval_reference}")
                 return jsonify({"error": "agent_pubkey_invalid"}), 400
 
             try:
                 public_key.verify(proof_sig, message)
             except Exception:
+                log("server", f"enrollment poll invalid_proof ref={approval_reference}")
                 return jsonify({"error": "invalid_proof"}), 400
 
             if status == "pending":
+                log(
+                    "server",
+                    f"enrollment poll pending ref={approval_reference} host={hostname_claimed}"
+                    f" fingerprint={fingerprint[:12]}",
+                )
                 return jsonify({"status": "pending", "poll_after_ms": 5000})
             if status == "denied":
+                log(
+                    "server",
+                    f"enrollment poll denied ref={approval_reference} host={hostname_claimed}",
+                )
                 return jsonify({"status": "denied", "reason": "operator_denied"})
             if status == "expired":
+                log(
+                    "server",
+                    f"enrollment poll expired ref={approval_reference} host={hostname_claimed}",
+                )
                 return jsonify({"status": "expired"})
             if status == "completed":
+                log(
+                    "server",
+                    f"enrollment poll already_completed ref={approval_reference} host={hostname_claimed}",
+                )
                 return jsonify({"status": "approved", "detail": "finalized"})
 
             if status != "approved":
+                log(
+                    "server",
+                    f"enrollment poll unexpected_status={status} ref={approval_reference}",
+                )
                 return jsonify({"status": status or "unknown"}), 400
 
             nonce_key = f"{approval_reference}:{base64.b64encode(proof_sig).decode('ascii')}"
             if not nonce_cache.consume(nonce_key):
+                log(
+                    "server",
+                    f"enrollment poll replay_detected ref={approval_reference} fingerprint={fingerprint[:12]}",
+                )
                 return jsonify({"error": "proof_replayed"}), 409
 
             # Finalize enrollment
@@ -489,3 +596,12 @@ def _load_tls_bundle(path: str) -> str:
             return fh.read()
     except Exception:
         return ""
+
+
+def _mask_code(code: str) -> str:
+    if not code:
+        return "<missing>"
+    trimmed = str(code).strip()
+    if len(trimmed) <= 6:
+        return "***"
+    return f"{trimmed[:3]}***{trimmed[-3:]}"

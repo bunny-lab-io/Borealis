@@ -20,7 +20,10 @@ import datetime
 import shutil
 import string
 import ssl
-from typing import Any, Dict, Optional, List
+import threading
+import contextlib
+import errno
+from typing import Any, Dict, Optional, List, Callable
 
 import requests
 try:
@@ -132,6 +135,133 @@ def _settings_dir():
         return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings'))
 
 
+class _CrossProcessFileLock:
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._handle = None
+
+    def acquire(
+        self,
+        *,
+        timeout: float = 120.0,
+        poll_interval: float = 0.5,
+        on_wait: Optional[Callable[[], None]] = None,
+    ) -> None:
+        directory = os.path.dirname(self.path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        deadline = time.time() + timeout if timeout else None
+        last_wait_log = 0.0
+        while True:
+            handle = open(self.path, 'a+b')
+            try:
+                self._try_lock(handle)
+                self._handle = handle
+                try:
+                    handle.seek(0)
+                    handle.truncate(0)
+                    handle.write(f"pid={os.getpid()} ts={int(time.time())}\n".encode('utf-8'))
+                    handle.flush()
+                except Exception:
+                    pass
+                return
+            except OSError as exc:
+                handle.close()
+                if not self._is_lock_unavailable(exc):
+                    raise
+                now = time.time()
+                if on_wait and (now - last_wait_log) >= 2.0:
+                    try:
+                        on_wait()
+                    except Exception:
+                        pass
+                    last_wait_log = now
+                if deadline and now >= deadline:
+                    raise TimeoutError('Timed out waiting for enrollment lock')
+                time.sleep(poll_interval)
+            except Exception:
+                handle.close()
+                raise
+
+    def release(self) -> None:
+        handle = self._handle
+        if not handle:
+            return
+        try:
+            self._unlock(handle)
+        finally:
+            try:
+                handle.close()
+            except Exception:
+                pass
+            self._handle = None
+
+    @staticmethod
+    def _is_lock_unavailable(exc: OSError) -> bool:
+        err = exc.errno
+        winerr = getattr(exc, 'winerror', None)
+        unavailable = {errno.EACCES, errno.EAGAIN, getattr(errno, 'EWOULDBLOCK', errno.EAGAIN)}
+        if err in unavailable:
+            return True
+        if winerr in (32, 33):
+            return True
+        return False
+
+    @staticmethod
+    def _try_lock(handle) -> None:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            try:
+                handle.write(b'0')
+                handle.flush()
+            except Exception:
+                pass
+        handle.seek(0)
+        if os.name == 'nt':
+            import msvcrt  # type: ignore
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                raise
+        else:
+            import fcntl  # type: ignore
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    @staticmethod
+    def _unlock(handle) -> None:
+        if os.name == 'nt':
+            import msvcrt  # type: ignore
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        else:
+            import fcntl  # type: ignore
+
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+
+
+_ENROLLMENT_FILE_LOCK: Optional[_CrossProcessFileLock] = None
+
+
+@contextlib.contextmanager
+def _acquire_enrollment_lock(*, timeout: float = 180.0, on_wait: Optional[Callable[[], None]] = None):
+    global _ENROLLMENT_FILE_LOCK
+    if _ENROLLMENT_FILE_LOCK is None:
+        _ENROLLMENT_FILE_LOCK = _CrossProcessFileLock(os.path.join(_settings_dir(), 'enrollment.lock'))
+    _ENROLLMENT_FILE_LOCK.acquire(timeout=timeout, on_wait=on_wait)
+    try:
+        yield
+    finally:
+        _ENROLLMENT_FILE_LOCK.release()
+
+
 _KEY_STORE_INSTANCE = None
 
 
@@ -240,6 +370,18 @@ def _log_agent(message: str, fname: str = 'agent.log'):
             fh.write(f'[{ts}] {message}\n')
     except Exception:
         pass
+
+
+def _mask_sensitive(value: str, *, prefix: int = 4, suffix: int = 4) -> str:
+    try:
+        if not value:
+            return ''
+        trimmed = value.strip()
+        if len(trimmed) <= prefix + suffix:
+            return '*' * len(trimmed)
+        return f"{trimmed[:prefix]}***{trimmed[-suffix:]}"
+    except Exception:
+        return '***'
 
 
 def _decode_base64_text(value):
@@ -490,14 +632,15 @@ class AgentHttpClient:
         self.identity = IDENTITY
         self.session = requests.Session()
         self.base_url: Optional[str] = None
-        self.guid: Optional[str] = self.key_store.load_guid()
-        self.access_token: Optional[str] = self.key_store.load_access_token()
-        self.refresh_token: Optional[str] = self.key_store.load_refresh_token()
-        self.access_expires_at: Optional[int] = self.key_store.get_access_expiry()
+        self.guid: Optional[str] = None
+        self.access_token: Optional[str] = None
+        self.refresh_token: Optional[str] = None
+        self.access_expires_at: Optional[int] = None
+        self._auth_lock = threading.RLock()
+        self._active_installer_code: Optional[str] = None
         self.refresh_base_url()
         self._configure_verify()
-        if self.access_token:
-            self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
+        self._reload_tokens_from_disk()
         self.session.headers.setdefault("User-Agent", "Borealis-Agent/secure")
 
     # ------------------------------------------------------------------
@@ -528,6 +671,31 @@ class AgentHttpClient:
             except Exception:
                 pass
 
+    def _reload_tokens_from_disk(self) -> None:
+        guid = self.key_store.load_guid()
+        access_token = self.key_store.load_access_token()
+        refresh_token = self.key_store.load_refresh_token()
+        access_expiry = self.key_store.get_access_expiry()
+        self.guid = guid if guid else None
+        self.access_token = access_token if access_token else None
+        self.refresh_token = refresh_token if refresh_token else None
+        self.access_expires_at = access_expiry if access_expiry else None
+        if self.access_token:
+            self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
+        else:
+            self.session.headers.pop("Authorization", None)
+        try:
+            _log_agent(
+                "Reloaded tokens from disk "
+                f"guid={'yes' if self.guid else 'no'} "
+                f"access={'yes' if self.access_token else 'no'} "
+                f"refresh={'yes' if self.refresh_token else 'no'} "
+                f"expiry={self.access_expires_at}",
+                fname="agent.log",
+            )
+        except Exception:
+            pass
+
     def auth_headers(self) -> Dict[str, str]:
         if self.access_token:
             return {"Authorization": f"Bearer {self.access_token}"}
@@ -540,12 +708,28 @@ class AgentHttpClient:
             engine = getattr(client, "eio", None)
             if engine is None:
                 return
-            # python-engineio accepts bool, path, or ssl.SSLContext for ssl_verify
+
+            # python-engineio accepts either a boolean or an ``ssl.SSLContext``
+            # for TLS verification.  When we have a pinned certificate bundle
+            # on disk, prefer constructing a dedicated context that trusts that
+            # bundle so WebSocket connections succeed even with private CAs.
             if isinstance(verify, str) and os.path.isfile(verify):
-                engine.ssl_verify = verify
+                try:
+                    context = ssl.create_default_context(cafile=verify)
+                    context.check_hostname = False
+                except Exception:
+                    context = None
+                if context is not None:
+                    engine.ssl_context = context
+                    engine.ssl_verify = True
+                else:
+                    engine.ssl_context = None
+                    engine.ssl_verify = verify
             elif verify is False:
+                engine.ssl_context = None
                 engine.ssl_verify = False
             else:
+                engine.ssl_context = None
                 engine.ssl_verify = True
         except Exception:
             pass
@@ -554,11 +738,15 @@ class AgentHttpClient:
     # Enrollment & token management
     # ------------------------------------------------------------------
     def ensure_authenticated(self) -> None:
+        with self._auth_lock:
+            self._ensure_authenticated_locked()
+
+    def _ensure_authenticated_locked(self) -> None:
         self.refresh_base_url()
         if not self.guid or not self.refresh_token:
-            self.perform_enrollment()
+            self._perform_enrollment_locked()
         if not self.access_token or self._token_expiring_soon():
-            self.refresh_access_token()
+            self._refresh_access_token_locked()
 
     def _token_expiring_soon(self) -> bool:
         if not self.access_token:
@@ -568,69 +756,199 @@ class AgentHttpClient:
         return (self.access_expires_at - time.time()) < 60
 
     def perform_enrollment(self) -> None:
+        with self._auth_lock:
+            self._perform_enrollment_locked()
+
+    def _perform_enrollment_locked(self) -> None:
+        self._reload_tokens_from_disk()
+        if self.guid and self.refresh_token:
+            return
         code = self._resolve_installer_code()
         if not code:
             raise RuntimeError(
                 "Installer code is required for enrollment. "
                 "Set BOREALIS_INSTALLER_CODE, pass --installer-code, or update agent_settings.json."
             )
-        self.refresh_base_url()
-        client_nonce = os.urandom(32)
-        payload = {
-            "hostname": socket.gethostname(),
-            "enrollment_code": code,
-            "agent_pubkey": PUBLIC_KEY_B64,
-            "client_nonce": base64.b64encode(client_nonce).decode("ascii"),
-        }
-        request_url = f"{self.base_url}/api/agent/enroll/request"
-        _log_agent("Starting enrollment request...", fname="agent.log")
-        resp = self.session.post(request_url, json=payload, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("server_certificate"):
-            self.key_store.save_server_certificate(data["server_certificate"])
-            self._configure_verify()
-        signing_key = data.get("signing_key")
-        if signing_key:
-            try:
-                self.store_server_signing_key(signing_key)
-            except Exception as exc:
-                _log_agent(f'Unable to persist signing key from enrollment handshake: {exc}', fname='agent.error.log')
-        if data.get("status") != "pending":
-            raise RuntimeError(f"Unexpected enrollment status: {data}")
-        approval_reference = data.get("approval_reference")
-        server_nonce_b64 = data.get("server_nonce")
-        if not approval_reference or not server_nonce_b64:
-            raise RuntimeError("Enrollment response missing approval_reference or server_nonce")
-        server_nonce = base64.b64decode(server_nonce_b64)
-        poll_delay = max(int(data.get("poll_after_ms", 3000)) / 1000, 1)
-        while True:
-            time.sleep(min(poll_delay, 15))
-            signature = self.identity.sign(server_nonce + approval_reference.encode("utf-8") + client_nonce)
-            poll_payload = {
-                "approval_reference": approval_reference,
-                "client_nonce": base64.b64encode(client_nonce).decode("ascii"),
-                "proof_sig": base64.b64encode(signature).decode("ascii"),
-            }
-            poll_resp = self.session.post(
-                f"{self.base_url}/api/agent/enroll/poll",
-                json=poll_payload,
-                timeout=30,
+        self._active_installer_code = code
+
+        wait_state = {"count": 0, "tokens_seen": False}
+
+        def _on_lock_wait() -> None:
+            wait_state["count"] += 1
+            _log_agent(
+                f"Enrollment waiting for shared lock scope={SERVICE_MODE} attempt={wait_state['count']}",
+                fname="agent.log",
             )
-            poll_resp.raise_for_status()
-            poll_data = poll_resp.json()
-            status = poll_data.get("status")
-            if status == "pending":
-                poll_delay = max(int(poll_data.get("poll_after_ms", 5000)) / 1000, 1)
-                continue
-            if status == "denied":
-                raise RuntimeError("Enrollment denied by operator")
-            if status in ("expired", "unknown"):
-                raise RuntimeError(f"Enrollment failed with status={status}")
-            if status in ("approved", "completed"):
-                self._finalize_enrollment(poll_data)
-                break
-            raise RuntimeError(f"Unexpected enrollment poll response: {poll_data}")
+            if not wait_state["tokens_seen"]:
+                self._reload_tokens_from_disk()
+                if self.guid and self.refresh_token:
+                    wait_state["tokens_seen"] = True
+                    _log_agent(
+                        "Enrollment credentials detected while waiting for lock; will reuse when available",
+                        fname="agent.log",
+                    )
+
+        try:
+            with _acquire_enrollment_lock(timeout=180.0, on_wait=_on_lock_wait):
+                self._reload_tokens_from_disk()
+                if self.guid and self.refresh_token:
+                    _log_agent(
+                        "Enrollment skipped after acquiring lock; credentials already present",
+                        fname="agent.log",
+                    )
+                    return
+
+                self.refresh_base_url()
+                base_url = self.base_url or "https://localhost:5000"
+                code_masked = _mask_sensitive(code)
+                _log_agent(
+                    "Enrollment handshake starting "
+                    f"base_url={base_url} scope={SERVICE_MODE} "
+                    f"fingerprint={SSL_KEY_FINGERPRINT[:16]} installer_code={code_masked}",
+                    fname="agent.log",
+                )
+                client_nonce = os.urandom(32)
+                payload = {
+                    "hostname": socket.gethostname(),
+                    "enrollment_code": code,
+                    "agent_pubkey": PUBLIC_KEY_B64,
+                    "client_nonce": base64.b64encode(client_nonce).decode("ascii"),
+                }
+                request_url = f"{self.base_url}/api/agent/enroll/request"
+                _log_agent(
+                    "Starting enrollment request... "
+                    f"url={request_url} hostname={payload['hostname']} pubkey_prefix={PUBLIC_KEY_B64[:24]}",
+                    fname="agent.log",
+                )
+                resp = self.session.post(request_url, json=payload, timeout=30)
+                _log_agent(
+                    f"Enrollment request HTTP status={resp.status_code} retry_after={resp.headers.get('Retry-After')}"
+                    f" body_len={len(resp.content)}",
+                    fname="agent.log",
+                )
+                try:
+                    resp.raise_for_status()
+                except requests.HTTPError:
+                    snippet = resp.text[:512] if hasattr(resp, "text") else ""
+                    _log_agent(
+                        f"Enrollment request failed status={resp.status_code} body_snippet={snippet}",
+                        fname="agent.error.log",
+                    )
+                    if resp.status_code == 400:
+                        try:
+                            err_payload = resp.json()
+                        except Exception:
+                            err_payload = {}
+                        if (err_payload or {}).get("error") in {"invalid_enrollment_code", "code_consumed"}:
+                            self._reload_tokens_from_disk()
+                            if self.guid and self.refresh_token:
+                                _log_agent(
+                                    "Enrollment code rejected but existing credentials are present; skipping re-enrollment",
+                                    fname="agent.log",
+                                )
+                                return
+                    raise
+                data = resp.json()
+                _log_agent(
+                    "Enrollment request accepted "
+                    f"status={data.get('status')} approval_ref={data.get('approval_reference')} "
+                    f"poll_after_ms={data.get('poll_after_ms')}"
+                    f" server_cert={'yes' if data.get('server_certificate') else 'no'}",
+                    fname="agent.log",
+                )
+                if data.get("server_certificate"):
+                    self.key_store.save_server_certificate(data["server_certificate"])
+                    self._configure_verify()
+                signing_key = data.get("signing_key")
+                if signing_key:
+                    try:
+                        self.store_server_signing_key(signing_key)
+                    except Exception as exc:
+                        _log_agent(f'Unable to persist signing key from enrollment handshake: {exc}', fname='agent.error.log')
+                if data.get("status") != "pending":
+                    raise RuntimeError(f"Unexpected enrollment status: {data}")
+                approval_reference = data.get("approval_reference")
+                server_nonce_b64 = data.get("server_nonce")
+                if not approval_reference or not server_nonce_b64:
+                    raise RuntimeError("Enrollment response missing approval_reference or server_nonce")
+                server_nonce = base64.b64decode(server_nonce_b64)
+                poll_delay = max(int(data.get("poll_after_ms", 3000)) / 1000, 1)
+                attempt = 1
+                while True:
+                    time.sleep(min(poll_delay, 15))
+                    signature = self.identity.sign(server_nonce + approval_reference.encode("utf-8") + client_nonce)
+                    poll_payload = {
+                        "approval_reference": approval_reference,
+                        "client_nonce": base64.b64encode(client_nonce).decode("ascii"),
+                        "proof_sig": base64.b64encode(signature).decode("ascii"),
+                    }
+                    _log_agent(
+                        f"Enrollment poll attempt={attempt} ref={approval_reference} delay={poll_delay}s",
+                        fname="agent.log",
+                    )
+                    poll_resp = self.session.post(
+                        f"{self.base_url}/api/agent/enroll/poll",
+                        json=poll_payload,
+                        timeout=30,
+                    )
+                    _log_agent(
+                        "Enrollment poll response "
+                        f"status_code={poll_resp.status_code} retry_after={poll_resp.headers.get('Retry-After')}"
+                        f" body_len={len(poll_resp.content)}",
+                        fname="agent.log",
+                    )
+                    try:
+                        poll_resp.raise_for_status()
+                    except requests.HTTPError:
+                        snippet = poll_resp.text[:512] if hasattr(poll_resp, "text") else ""
+                        _log_agent(
+                            f"Enrollment poll failed attempt={attempt} status={poll_resp.status_code} "
+                            f"body_snippet={snippet}",
+                            fname="agent.error.log",
+                        )
+                        raise
+                    poll_data = poll_resp.json()
+                    _log_agent(
+                        f"Enrollment poll decoded attempt={attempt} status={poll_data.get('status')}"
+                        f" next_delay={poll_data.get('poll_after_ms')}"
+                        f" guid_hint={poll_data.get('guid')}",
+                        fname="agent.log",
+                    )
+                    status = poll_data.get("status")
+                    if status == "pending":
+                        poll_delay = max(int(poll_data.get("poll_after_ms", 5000)) / 1000, 1)
+                        _log_agent(
+                            f"Enrollment still pending attempt={attempt} new_delay={poll_delay}s",
+                            fname="agent.log",
+                        )
+                        attempt += 1
+                        continue
+                    if status == "denied":
+                        _log_agent("Enrollment denied by operator", fname="agent.error.log")
+                        raise RuntimeError("Enrollment denied by operator")
+                    if status in ("expired", "unknown"):
+                        _log_agent(
+                            f"Enrollment failed status={status} attempt={attempt}",
+                            fname="agent.error.log",
+                        )
+                        raise RuntimeError(f"Enrollment failed with status={status}")
+                    if status in ("approved", "completed"):
+                        _log_agent(
+                            f"Enrollment approved attempt={attempt} ref={approval_reference}",
+                            fname="agent.log",
+                        )
+                        self._finalize_enrollment(poll_data)
+                        break
+                    raise RuntimeError(f"Unexpected enrollment poll response: {poll_data}")
+        except TimeoutError:
+            self._reload_tokens_from_disk()
+            if self.guid and self.refresh_token:
+                _log_agent(
+                    "Enrollment lock wait timed out but credentials materialized; reusing existing tokens",
+                    fname="agent.log",
+                )
+                return
+            raise
 
     def _finalize_enrollment(self, payload: Dict[str, Any]) -> None:
         server_cert = payload.get("server_certificate")
@@ -649,6 +967,12 @@ class AgentHttpClient:
         expires_in = int(payload.get("expires_in") or 900)
         if not (guid and access_token and refresh_token):
             raise RuntimeError("Enrollment approval response missing tokens or guid")
+        _log_agent(
+            "Enrollment approval payload received "
+            f"guid={guid} access_token_len={len(access_token)} refresh_token_len={len(refresh_token)} "
+            f"expires_in={expires_in}",
+            fname="agent.log",
+        )
         self.guid = str(guid).strip()
         self.access_token = access_token.strip()
         self.refresh_token = refresh_token.strip()
@@ -663,12 +987,17 @@ class AgentHttpClient:
             _update_agent_id_for_guid(self.guid)
         except Exception as exc:
             _log_agent(f"Failed to update agent id after enrollment: {exc}", fname="agent.error.log")
+        self._consume_installer_code()
         _log_agent(f"Enrollment finalized for guid={self.guid}", fname="agent.log")
 
     def refresh_access_token(self) -> None:
+        with self._auth_lock:
+            self._refresh_access_token_locked()
+
+    def _refresh_access_token_locked(self) -> None:
         if not self.refresh_token or not self.guid:
-            self.clear_tokens()
-            self.perform_enrollment()
+            self._clear_tokens_locked()
+            self._perform_enrollment_locked()
             return
         payload = {"guid": self.guid, "refresh_token": self.refresh_token}
         resp = self.session.post(
@@ -679,8 +1008,8 @@ class AgentHttpClient:
         )
         if resp.status_code in (401, 403):
             _log_agent("Refresh token rejected; re-enrolling", fname="agent.error.log")
-            self.clear_tokens()
-            self.perform_enrollment()
+            self._clear_tokens_locked()
+            self._perform_enrollment_locked()
             return
         resp.raise_for_status()
         data = resp.json()
@@ -696,6 +1025,10 @@ class AgentHttpClient:
         self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
 
     def clear_tokens(self) -> None:
+        with self._auth_lock:
+            self._clear_tokens_locked()
+
+    def _clear_tokens_locked(self) -> None:
         self.key_store.clear_tokens()
         self.access_token = None
         self.refresh_token = None
@@ -712,6 +1045,19 @@ class AgentHttpClient:
         except Exception:
             return ""
 
+    def _consume_installer_code(self) -> None:
+        # Avoid clearing explicit CLI/env overrides; only mutate persisted config.
+        self._active_installer_code = None
+        if INSTALLER_CODE_OVERRIDE:
+            return
+        try:
+            if CONFIG.data.get("installer_code"):
+                CONFIG.data["installer_code"] = ""
+                CONFIG._write()
+                _log_agent("Cleared persisted installer code after successful enrollment", fname="agent.log")
+        except Exception as exc:
+            _log_agent(f"Failed to clear installer code after enrollment: {exc}", fname="agent.error.log")
+
     # ------------------------------------------------------------------
     # HTTP helpers
     # ------------------------------------------------------------------
@@ -722,6 +1068,16 @@ class AgentHttpClient:
         headers = self.auth_headers()
         response = self.session.post(url, json=payload, headers=headers, timeout=30)
         if response.status_code in (401, 403) and require_auth:
+            snippet = ""
+            try:
+                snippet = response.text[:256]
+            except Exception:
+                snippet = "<unavailable>"
+            _log_agent(
+                "Authenticated request rejected "
+                f"path={path} status={response.status_code} body_snippet={snippet}",
+                fname="agent.error.log",
+            )
             self.clear_tokens()
             self.ensure_authenticated()
             headers = self.auth_headers()
