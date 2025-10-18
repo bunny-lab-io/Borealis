@@ -125,6 +125,24 @@ def _agent_guid_path() -> str:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), 'agent_GUID'))
 
 
+def _settings_dir():
+    try:
+        return os.path.join(_find_project_root(), 'Agent', 'Borealis', 'Settings')
+    except Exception:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings'))
+
+
+_KEY_STORE_INSTANCE = None
+
+
+def _key_store() -> AgentKeyStore:
+    global _KEY_STORE_INSTANCE
+    if _KEY_STORE_INSTANCE is None:
+        scope = 'SYSTEM' if SYSTEM_SERVICE_MODE else 'CURRENTUSER'
+        _KEY_STORE_INSTANCE = AgentKeyStore(_settings_dir(), scope=scope)
+    return _KEY_STORE_INSTANCE
+
+
 def _persist_agent_guid_local(guid: str):
     guid = _normalize_agent_guid(guid)
     if not guid:
@@ -515,21 +533,22 @@ class AgentHttpClient:
             return {"Authorization": f"Bearer {self.access_token}"}
         return {}
 
-    def websocket_kwargs(self) -> Dict[str, Any]:
-        kwargs: Dict[str, Any] = {}
-        verify = getattr(self.session, "verify", True)
-        if isinstance(verify, str) and os.path.isfile(verify):
-            try:
-                ctx = ssl.create_default_context(cafile=verify)
-                kwargs["ssl"] = ctx
-            except Exception:
-                pass
-        elif verify is False:
-            try:
-                kwargs["ssl"] = ssl._create_unverified_context()
-            except Exception:
-                pass
-        return kwargs
+    def configure_socketio(self, client: "socketio.AsyncClient") -> None:
+        """Align the Socket.IO engine's TLS verification with the REST client."""
+        try:
+            verify = getattr(self.session, "verify", True)
+            engine = getattr(client, "eio", None)
+            if engine is None:
+                return
+            # python-engineio accepts bool, path, or ssl.SSLContext for ssl_verify
+            if isinstance(verify, str) and os.path.isfile(verify):
+                engine.ssl_verify = verify
+            elif verify is False:
+                engine.ssl_verify = False
+            else:
+                engine.ssl_verify = True
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Enrollment & token management
@@ -1026,24 +1045,6 @@ def _collect_heartbeat_metrics() -> Dict[str, Any]:
         except Exception:
             pass
     return metrics
-
-
-def _settings_dir():
-    try:
-        return os.path.join(_find_project_root(), 'Agent', 'Borealis', 'Settings')
-    except Exception:
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings'))
-
-
-_KEY_STORE_INSTANCE = None
-
-
-def _key_store() -> AgentKeyStore:
-    global _KEY_STORE_INSTANCE
-    if _KEY_STORE_INSTANCE is None:
-        scope = 'SYSTEM' if SYSTEM_SERVICE_MODE else 'CURRENTUSER'
-        _KEY_STORE_INSTANCE = AgentKeyStore(_settings_dir(), scope=scope)
-    return _KEY_STORE_INSTANCE
 
 
 SERVER_CERT_PATH = _key_store().server_certificate_path()
@@ -2036,6 +2037,7 @@ async def connect_loop():
     while True:
         try:
             client.ensure_authenticated()
+            client.configure_socketio(sio)
             url = client.websocket_base_url()
             print(f"[INFO] Connecting Agent to {url}...")
             _log_agent(f'Connecting to {url}...')
@@ -2043,7 +2045,6 @@ async def connect_loop():
                 url,
                 transports=['websocket'],
                 headers=client.auth_headers(),
-                ssl_verify=client.session.verify,
             )
             break
         except Exception as e:

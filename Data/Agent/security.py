@@ -39,17 +39,41 @@ def _restrict_permissions(path: str) -> None:
 def _protect(data: bytes, *, scope_system: bool) -> bytes:
     if not IS_WINDOWS or not win32crypt:
         return data
-    flags = win32crypt.CRYPTPROTECT_LOCAL_MACHINE if scope_system else 0
-    protected = win32crypt.CryptProtectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
-    return protected[1]
+    flags = 0
+    if scope_system:
+        flags = getattr(win32crypt, "CRYPTPROTECT_LOCAL_MACHINE", 0x4)
+    try:
+        protected = win32crypt.CryptProtectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
+    except Exception:
+        return data
+    blob = protected[1]
+    if isinstance(blob, memoryview):
+        return blob.tobytes()
+    if isinstance(blob, bytearray):
+        return bytes(blob)
+    if isinstance(blob, bytes):
+        return blob
+    return data
 
 
 def _unprotect(data: bytes, *, scope_system: bool) -> bytes:
     if not IS_WINDOWS or not win32crypt:
         return data
-    flags = win32crypt.CRYPTPROTECT_LOCAL_MACHINE if scope_system else 0
-    unwrapped = win32crypt.CryptUnprotectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
-    return unwrapped[1]
+    flags = 0
+    if scope_system:
+        flags = getattr(win32crypt, "CRYPTPROTECT_LOCAL_MACHINE", 0x4)
+    try:
+        unwrapped = win32crypt.CryptUnprotectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
+    except Exception:
+        return data
+    blob = unwrapped[1]
+    if isinstance(blob, memoryview):
+        return blob.tobytes()
+    if isinstance(blob, bytearray):
+        return bytes(blob)
+    if isinstance(blob, bytes):
+        return blob
+    return data
 
 
 def _fingerprint_der(public_der: bytes) -> str:

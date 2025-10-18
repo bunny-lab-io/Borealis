@@ -8,7 +8,8 @@ param(
     [string]$AgentAction = '',
     [switch]$Vite,
     [switch]$Flask,
-    [switch]$Quick
+    [switch]$Quick,
+    [string]$InstallerCode = ''
 )
 
 # Preselect menu choices from CLI args (optional)
@@ -845,6 +846,7 @@ function InstallOrUpdate-BorealisAgent {
         $oldSettingsDir = Join-Path $scriptDir 'Agent\Settings'
         if (-not (Test-Path $settingsDir)) { New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null }
         $serverUrlPath = Join-Path $settingsDir 'server_url.txt'
+        $configPath = Join-Path $settingsDir 'agent_settings.json'
         # Migrate any prior interim location file if present
         $oldServerUrlPath = Join-Path $oldSettingsDir 'server_url.txt'
         if (-not (Test-Path $serverUrlPath) -and (Test-Path $oldServerUrlPath)) {
@@ -868,6 +870,74 @@ function InstallOrUpdate-BorealisAgent {
         # Write UTF-8 without BOM to avoid BOM being read into the URL
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::WriteAllText($serverUrlPath, $inputUrl, $utf8NoBom)
+
+        $configDefaults = [ordered]@{
+            config_file_watcher_interval = 2
+            agent_id = ''
+            regions = @{}
+            installer_code = ''
+        }
+        $config = [ordered]@{}
+        foreach ($entry in $configDefaults.GetEnumerator()) {
+            $config[$entry.Key] = $entry.Value
+        }
+        if (Test-Path $configPath) {
+            try {
+                $existingRaw = Get-Content -Path $configPath -Raw -ErrorAction Stop
+                if ($existingRaw -and $existingRaw.Trim()) {
+                    $existingJson = $existingRaw | ConvertFrom-Json -ErrorAction Stop
+                    foreach ($prop in $existingJson.PSObject.Properties) {
+                        $config[$prop.Name] = $prop.Value
+                    }
+                }
+            } catch {
+                Write-AgentLog -FileName 'Install.log' -Message ("[CONFIG] Failed to parse agent_settings.json: {0}" -f $_.Exception.Message)
+            }
+        }
+
+        if ('regions' -notin $config.Keys -or $null -eq $config['regions']) {
+            $config['regions'] = @{}
+        }
+
+        $existingInstallerCode = ''
+        if ('installer_code' -in $config.Keys -and $null -ne $config['installer_code']) {
+            $existingInstallerCode = [string]$config['installer_code']
+        }
+
+        $providedInstallerCode = ''
+        if ($InstallerCode -and $InstallerCode.Trim()) {
+            $providedInstallerCode = $InstallerCode.Trim()
+        } elseif ($env:BOREALIS_INSTALLER_CODE -and $env:BOREALIS_INSTALLER_CODE.Trim()) {
+            $providedInstallerCode = $env:BOREALIS_INSTALLER_CODE.Trim()
+        }
+
+        if (-not $providedInstallerCode) {
+            $defaultDisplay = if ($existingInstallerCode) { $existingInstallerCode } else { '' }
+            Write-Host ""; Write-Host "Optional: set an installer code for agent enrollment." -ForegroundColor DarkYellow
+            $inputCode = Read-Host ("Installer Code [{0}]" -f $defaultDisplay)
+            if ($inputCode -and $inputCode.Trim()) {
+                $providedInstallerCode = $inputCode.Trim()
+            } elseif ($defaultDisplay) {
+                $providedInstallerCode = $defaultDisplay
+            } else {
+                $providedInstallerCode = ''
+            }
+        }
+
+        $config['installer_code'] = $providedInstallerCode
+
+        try {
+            $configJson = $config | ConvertTo-Json -Depth 10
+            [System.IO.File]::WriteAllText($configPath, $configJson, $utf8NoBom)
+            if ($providedInstallerCode) {
+                Write-Host "Installer code saved to agent_settings.json." -ForegroundColor Green
+            } else {
+                Write-Host "Installer code cleared in agent_settings.json." -ForegroundColor Yellow
+            }
+        } catch {
+            Write-AgentLog -FileName 'Install.log' -Message ("[CONFIG] Failed to persist agent_settings.json: {0}" -f $_.Exception.Message)
+            Write-Host "Failed to update agent_settings.json. Check Logs/Agent/install.log for details." -ForegroundColor Red
+        }
     }
 
     Write-Host "`nConfiguring Borealis Agent (tasks)..." -ForegroundColor Blue
