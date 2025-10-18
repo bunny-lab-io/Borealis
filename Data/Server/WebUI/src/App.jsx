@@ -46,6 +46,8 @@ import CredentialList from "./Access_Management/Credential_List.jsx";
 import UserManagement from "./Access_Management/Users.jsx";
 import GithubAPIToken from "./Access_Management/Github_API_Token.jsx";
 import ServerInfo from "./Admin/Server_Info.jsx";
+import EnrollmentCodes from "./Admin/Enrollment_Codes.jsx";
+import DeviceApprovals from "./Admin/Device_Approvals.jsx";
 
 // Networking Imports
 import { io } from "socket.io-client";
@@ -216,14 +218,18 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         }
         case "access_credentials":
           return "/access_management/credentials";
-        case "access_github_token":
-          return "/access_management/github_token";
-        case "access_users":
-          return "/access_management/users";
-        case "server_info":
-          return "/admin/server_info";
-        default:
-          return "/devices";
+      case "access_github_token":
+        return "/access_management/github_token";
+      case "access_users":
+        return "/access_management/users";
+      case "server_info":
+        return "/admin/server_info";
+      case "admin_enrollment_codes":
+        return "/admin/enrollment-codes";
+      case "admin_device_approvals":
+        return "/admin/device-approvals";
+      default:
+        return "/devices";
       }
     },
     [assemblyEditorState, selectedDevice]
@@ -273,6 +279,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       if (path === "/access_management/github_token") return { page: "access_github_token", options: {} };
       if (path === "/access_management/credentials") return { page: "access_credentials", options: {} };
       if (path === "/admin/server_info") return { page: "server_info", options: {} };
+      if (path === "/admin/enrollment-codes") return { page: "admin_enrollment_codes", options: {} };
+      if (path === "/admin/device-approvals") return { page: "admin_device_approvals", options: {} };
       return { page: "devices", options: {} };
     } catch {
       return { page: "devices", options: {} };
@@ -449,6 +457,14 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "server_info":
         items.push({ label: "Admin Settings" });
         items.push({ label: "Server Info", page: "server_info" });
+        break;
+      case "admin_enrollment_codes":
+        items.push({ label: "Admin Settings", page: "server_info" });
+        items.push({ label: "Installer Codes", page: "admin_enrollment_codes" });
+        break;
+      case "admin_device_approvals":
+        items.push({ label: "Admin Settings", page: "server_info" });
+        items.push({ label: "Device Approvals", page: "admin_device_approvals" });
         break;
       case "filters":
         items.push({ label: "Filters & Groups", page: "filters" });
@@ -876,6 +892,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
   useEffect(() => {
     const requiresAdmin = currentPage === 'server_info'
+      || currentPage === 'admin_enrollment_codes'
+      || currentPage === 'admin_device_approvals'
       || currentPage === 'access_credentials'
       || currentPage === 'access_github_token'
       || currentPage === 'access_users'
@@ -1072,6 +1090,12 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
       case "server_info":
         return <ServerInfo isAdmin={isAdmin} />;
+
+      case "admin_enrollment_codes":
+        return <EnrollmentCodes />;
+
+      case "admin_device_approvals":
+        return <DeviceApprovals />;
 
       case "workflow-editor":
         return (

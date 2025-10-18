@@ -28,6 +28,7 @@ except Exception:
 import aiohttp
 
 import socketio
+from security import AgentKeyStore
 
 # Centralized logging helpers (Agent)
 def _agent_logs_root() -> str:
@@ -119,6 +120,10 @@ def _persist_agent_guid_local(guid: str):
     guid = _normalize_agent_guid(guid)
     if not guid:
         return
+    try:
+        _key_store().save_guid(guid)
+    except Exception as exc:
+        _log_agent(f'Unable to persist guid via key store: {exc}', fname='agent.error.log')
     path = _agent_guid_path()
     try:
         directory = os.path.dirname(path)
@@ -464,6 +469,9 @@ def _normalize_agent_guid(guid: str) -> str:
 
 def _read_agent_guid_from_disk() -> str:
     try:
+        ks_guid = _key_store().load_guid()
+        if ks_guid:
+            return _normalize_agent_guid(ks_guid)
         path = _agent_guid_path()
         if os.path.isfile(path):
             with open(path, 'r', encoding='utf-8') as fh:
@@ -676,6 +684,22 @@ def _settings_dir():
         return os.path.join(_find_project_root(), 'Agent', 'Borealis', 'Settings')
     except Exception:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings'))
+
+
+_KEY_STORE_INSTANCE = None
+
+
+def _key_store() -> AgentKeyStore:
+    global _KEY_STORE_INSTANCE
+    if _KEY_STORE_INSTANCE is None:
+        scope = 'SYSTEM' if SYSTEM_SERVICE_MODE else 'CURRENTUSER'
+        _KEY_STORE_INSTANCE = AgentKeyStore(_settings_dir(), scope=scope)
+    return _KEY_STORE_INSTANCE
+
+
+IDENTITY = _key_store().load_or_create_identity()
+SSL_KEY_FINGERPRINT = IDENTITY.fingerprint
+PUBLIC_KEY_B64 = IDENTITY.public_key_b64
 
 
 def get_server_url() -> str:

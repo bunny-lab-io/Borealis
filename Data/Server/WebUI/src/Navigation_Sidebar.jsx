@@ -26,7 +26,9 @@ import {
   Dns as ServerInfoIcon,
   VpnKey as CredentialIcon,
   PersonOutline as UserIcon,
-  GitHub as GitHubIcon
+  GitHub as GitHubIcon,
+  Key as KeyIcon,
+  AdminPanelSettings as AdminPanelSettingsIcon
 } from "@mui/icons-material";
 
 function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
@@ -352,7 +354,10 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         {/* Admin */}
         {(() => {
           if (!isAdmin) return null;
-          const groupActive = currentPage === "server_info";
+          const groupActive =
+            currentPage === "server_info" ||
+            currentPage === "admin_enrollment_codes" ||
+            currentPage === "admin_device_approvals";
           return (
         <Accordion
           expanded={expandedNav.admin}
@@ -390,6 +395,8 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
             <NavItem icon={<ServerInfoIcon fontSize="small" />} label="Server Info" pageKey="server_info" />
+            <NavItem icon={<KeyIcon fontSize="small" />} label="Installer Codes" pageKey="admin_enrollment_codes" />
+            <NavItem icon={<AdminPanelSettingsIcon fontSize="small" />} label="Device Approvals" pageKey="admin_device_approvals" />
           </AccordionDetails>
         </Accordion>
           );

@@ -5,6 +5,7 @@ python-socketio
 websocket-client
 eventlet
 aiohttp
+cryptography
 
 # GUI-related dependencies (Qt for GUI components)
 PyQt5
