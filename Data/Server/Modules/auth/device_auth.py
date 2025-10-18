@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import functools
+import sqlite3
+import time
+from contextlib import closing
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 import jwt
@@ -9,6 +13,17 @@ from flask import g, jsonify, request
 
 from Modules.auth.dpop import DPoPValidator, DPoPVerificationError, DPoPReplayError
 from Modules.auth.rate_limit import SlidingWindowRateLimiter
+
+AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
+
+
+def _canonical_context(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = "".join(ch for ch in str(value) if ch.isalnum() or ch in ("_", "-"))
+    if not cleaned:
+        return None
+    return cleaned.upper()
 
 
 @dataclass
@@ -20,6 +35,7 @@ class DeviceAuthContext:
     claims: Dict[str, Any]
     dpop_jkt: Optional[str]
     status: str
+    service_mode: Optional[str]
 
 
 class DeviceAuthError(Exception):
@@ -47,7 +63,7 @@ class DeviceAuthManager:
         db_conn_factory: Callable[[], Any],
         jwt_service,
         dpop_validator: Optional[DPoPValidator],
-        log: Callable[[str, str], None],
+        log: Callable[[str, str, Optional[str]], None],
         rate_limiter: Optional[SlidingWindowRateLimiter] = None,
     ) -> None:
         self._db_conn_factory = db_conn_factory
@@ -86,8 +102,9 @@ class DeviceAuthManager:
                     retry_after=decision.retry_after,
                 )
 
-        conn = self._db_conn_factory()
-        try:
+        context_label = _canonical_context(request.headers.get(AGENT_CONTEXT_HEADER))
+
+        with closing(self._db_conn_factory()) as conn:
             cur = conn.cursor()
             cur.execute(
                 """
@@ -98,8 +115,11 @@ class DeviceAuthManager:
                 (guid,),
             )
             row = cur.fetchone()
-        finally:
-            conn.close()
+
+            if not row:
+                row = self._recover_device_record(
+                    conn, guid, fingerprint, token_version, context_label
+                )
 
         if not row:
             raise DeviceAuthError("device_not_found", status_code=403)
@@ -121,7 +141,11 @@ class DeviceAuthManager:
         if status_normalized not in allowed_statuses:
             raise DeviceAuthError("device_revoked", status_code=403)
         if status_normalized == "quarantined":
-            self._log("server", f"device {guid} is quarantined; limited access for {request.path}")
+            self._log(
+                "server",
+                f"device {guid} is quarantined; limited access for {request.path}",
+                context_label,
+            )
 
         dpop_jkt: Optional[str] = None
         dpop_proof = request.headers.get("DPoP")
@@ -144,8 +168,110 @@ class DeviceAuthManager:
             claims=claims,
             dpop_jkt=dpop_jkt,
             status=status_normalized,
+            service_mode=context_label,
         )
         return ctx
+
+    def _recover_device_record(
+        self,
+        conn: sqlite3.Connection,
+        guid: str,
+        fingerprint: str,
+        token_version: int,
+        context_label: Optional[str],
+    ) -> Optional[tuple]:
+        """Attempt to recreate a missing device row for an authenticated token."""
+
+        guid = (guid or "").strip()
+        fingerprint = (fingerprint or "").strip()
+        if not guid or not fingerprint:
+            return None
+
+        cur = conn.cursor()
+        now_ts = int(time.time())
+        try:
+            now_iso = datetime.now(tz=timezone.utc).isoformat()
+        except Exception:
+            now_iso = datetime.utcnow().isoformat()  # pragma: no cover
+
+        base_hostname = f"RECOVERED-{guid[:12].upper()}" if guid else "RECOVERED"
+
+        for attempt in range(6):
+            hostname = base_hostname if attempt == 0 else f"{base_hostname}-{attempt}"
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO devices (
+                        guid,
+                        hostname,
+                        created_at,
+                        last_seen,
+                        ssl_key_fingerprint,
+                        token_version,
+                        status,
+                        key_added_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
+                    """,
+                    (
+                        guid,
+                        hostname,
+                        now_ts,
+                        now_ts,
+                        fingerprint,
+                        max(token_version or 1, 1),
+                        now_iso,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                # Hostname collision – try again with a suffixed placeholder.
+                message = str(exc).lower()
+                if "hostname" in message and "unique" in message:
+                    continue
+                self._log(
+                    "server",
+                    f"device auth failed to recover guid={guid} due to integrity error: {exc}",
+                    context_label,
+                )
+                conn.rollback()
+                return None
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self._log(
+                    "server",
+                    f"device auth unexpected error recovering guid={guid}: {exc}",
+                    context_label,
+                )
+                conn.rollback()
+                return None
+            else:
+                conn.commit()
+                break
+        else:
+            # Exhausted attempts because of hostname collisions.
+            self._log(
+                "server",
+                f"device auth could not recover guid={guid}; hostname collisions persisted",
+                context_label,
+            )
+            conn.rollback()
+            return None
+
+        cur.execute(
+            """
+            SELECT guid, ssl_key_fingerprint, token_version, status
+              FROM devices
+             WHERE guid = ?
+            """,
+            (guid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            self._log(
+                "server",
+                f"device auth recovery for guid={guid} committed but row still missing",
+                context_label,
+            )
+        return row
 
 
 def require_device_auth(manager: DeviceAuthManager):

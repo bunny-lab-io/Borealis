@@ -18,7 +18,7 @@ def register(
     db_conn_factory: Callable[[], sqlite3.Connection],
     require_admin: Callable[[], Optional[Any]],
     current_user: Callable[[], Optional[Dict[str, str]]],
-    log: Callable[[str, str], None],
+    log: Callable[[str, str, Optional[str]], None],
 ) -> None:
     blueprint = Blueprint("admin", __name__)
 
@@ -54,18 +54,27 @@ def register(
         try:
             cur = conn.cursor()
             sql = """
-                SELECT id, code, expires_at, created_by_user_id, used_at, used_by_guid
+                SELECT id,
+                       code,
+                       expires_at,
+                       created_by_user_id,
+                       used_at,
+                       used_by_guid,
+                       max_uses,
+                       use_count,
+                       last_used_at
                   FROM enrollment_install_codes
             """
             params: List[str] = []
+            now_iso = _iso(_now())
             if status_filter == "active":
-                sql += " WHERE used_at IS NULL AND expires_at > ?"
-                params.append(_iso(_now()))
+                sql += " WHERE use_count < max_uses AND expires_at > ?"
+                params.append(now_iso)
             elif status_filter == "expired":
-                sql += " WHERE used_at IS NULL AND expires_at <= ?"
-                params.append(_iso(_now()))
+                sql += " WHERE use_count < max_uses AND expires_at <= ?"
+                params.append(now_iso)
             elif status_filter == "used":
-                sql += " WHERE used_at IS NOT NULL"
+                sql += " WHERE use_count >= max_uses"
             sql += " ORDER BY expires_at ASC"
             cur.execute(sql, params)
             rows = cur.fetchall()
@@ -82,6 +91,9 @@ def register(
                     "created_by_user_id": row[3],
                     "used_at": row[4],
                     "used_by_guid": row[5],
+                    "max_uses": row[6],
+                    "use_count": row[7],
+                    "last_used_at": row[8],
                 }
             )
         return jsonify({"codes": records})
@@ -92,6 +104,18 @@ def register(
         ttl_hours = int(payload.get("ttl_hours") or 1)
         if ttl_hours not in VALID_TTL_HOURS:
             return jsonify({"error": "invalid_ttl"}), 400
+
+        max_uses_value = payload.get("max_uses")
+        if max_uses_value is None:
+            max_uses_value = payload.get("allowed_uses")
+        try:
+            max_uses = int(max_uses_value)
+        except Exception:
+            max_uses = 2
+        if max_uses < 1:
+            max_uses = 1
+        if max_uses > 10:
+            max_uses = 10
 
         user = current_user() or {}
         username = user.get("username") or ""
@@ -106,22 +130,28 @@ def register(
             cur.execute(
                 """
                 INSERT INTO enrollment_install_codes (
-                    id, code, expires_at, created_by_user_id
+                    id, code, expires_at, created_by_user_id, max_uses, use_count
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, 0)
                 """,
-                (record_id, code_value, _iso(expires_at), created_by),
+                (record_id, code_value, _iso(expires_at), created_by, max_uses),
             )
             conn.commit()
         finally:
             conn.close()
 
-        log("server", f"installer code created id={record_id} by={username} ttl={ttl_hours}h")
+        log(
+            "server",
+            f"installer code created id={record_id} by={username} ttl={ttl_hours}h max_uses={max_uses}",
+        )
         return jsonify(
             {
                 "id": record_id,
                 "code": code_value,
                 "expires_at": _iso(expires_at),
+                "max_uses": max_uses,
+                "use_count": 0,
+                "last_used_at": None,
             }
         )
 
@@ -131,7 +161,7 @@ def register(
         try:
             cur = conn.cursor()
             cur.execute(
-                "DELETE FROM enrollment_install_codes WHERE id = ? AND used_at IS NULL",
+                "DELETE FROM enrollment_install_codes WHERE id = ? AND use_count = 0",
                 (code_id,),
             )
             deleted = cur.rowcount

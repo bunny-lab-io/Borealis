@@ -152,17 +152,96 @@ def _rotate_daily(path: str):
         pass
 
 
-def _write_service_log(service: str, msg: str):
+_SERVER_SCOPE_PATTERN = re.compile(r"\\b(?:scope|context|agent_context)=([A-Za-z0-9_-]+)", re.IGNORECASE)
+_SERVER_AGENT_ID_PATTERN = re.compile(r"\\bagent_id=([^\s,]+)", re.IGNORECASE)
+_AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
+
+
+def _canonical_server_scope(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    value = "".join(ch for ch in str(raw) if ch.isalnum() or ch in ("_", "-"))
+    if not value:
+        return None
+    return value.upper()
+
+
+def _scope_from_agent_id(agent_id: Optional[str]) -> Optional[str]:
+    candidate = _canonical_server_scope(agent_id)
+    if not candidate:
+        return None
+    if candidate.endswith("_SYSTEM"):
+        return "SYSTEM"
+    if candidate.endswith("_CURRENTUSER"):
+        return "CURRENTUSER"
+    return candidate
+
+
+def _infer_server_scope(message: str, explicit: Optional[str]) -> Optional[str]:
+    scope = _canonical_server_scope(explicit)
+    if scope:
+        return scope
+    match = _SERVER_SCOPE_PATTERN.search(message or "")
+    if match:
+        scope = _canonical_server_scope(match.group(1))
+        if scope:
+            return scope
+    agent_match = _SERVER_AGENT_ID_PATTERN.search(message or "")
+    if agent_match:
+        scope = _scope_from_agent_id(agent_match.group(1))
+        if scope:
+            return scope
+    return None
+
+
+def _write_service_log(service: str, msg: str, scope: Optional[str] = None, *, level: str = "INFO"):
     try:
         base = _server_logs_root()
         os.makedirs(base, exist_ok=True)
         path = os.path.join(base, f"{service}.log")
         _rotate_daily(path)
         ts = time.strftime('%Y-%m-%d %H:%M:%S')
+        resolved_scope = _infer_server_scope(msg, scope)
+        prefix_parts = [f"[{level.upper()}]"]
+        if resolved_scope:
+            prefix_parts.append(f"[CONTEXT-{resolved_scope}]")
+        prefix = "".join(prefix_parts)
         with open(path, 'a', encoding='utf-8') as fh:
-            fh.write(f'[{ts}] {msg}\n')
+            fh.write(f'[{ts}] {prefix} {msg}\n')
     except Exception:
         pass
+
+
+def _mask_server_value(value: str, *, prefix: int = 4, suffix: int = 4) -> str:
+    try:
+        if not value:
+            return ''
+        stripped = value.strip()
+        if len(stripped) <= prefix + suffix:
+            return '*' * len(stripped)
+        return f"{stripped[:prefix]}***{stripped[-suffix:]}"
+    except Exception:
+        return '***'
+
+
+def _summarize_socket_headers(headers) -> str:
+    try:
+        rendered = []
+        for key, value in headers.items():
+            lowered = key.lower()
+            display = value
+            if lowered == 'authorization':
+                if isinstance(value, str) and value.lower().startswith('bearer '):
+                    token = value.split(' ', 1)[1]
+                    display = f"Bearer {_mask_server_value(token)}"
+                else:
+                    display = _mask_server_value(str(value))
+            elif lowered == 'cookie':
+                display = '<redacted>'
+            rendered.append(f"{key}={display}")
+        return ", ".join(rendered)
+    except Exception:
+        return '<header-summary-unavailable>'
 
 
 # =============================================================================
@@ -7968,6 +8047,55 @@ def screenshot_node_viewer(agent_id, node_id):
 # =============================================================================
 # Realtime channels for screenshots, macros, windows, and Ansible control.
 
+@socketio.on('connect')
+def socket_connect():
+    try:
+        sid = getattr(request, 'sid', '<unknown>')
+    except Exception:
+        sid = '<unknown>'
+    try:
+        remote_addr = request.remote_addr
+    except Exception:
+        remote_addr = None
+    try:
+        scope = _canonical_server_scope(request.headers.get(_AGENT_CONTEXT_HEADER))
+    except Exception:
+        scope = None
+    try:
+        query_pairs = [f"{k}={v}" for k, v in request.args.items()]  # type: ignore[attr-defined]
+        query_summary = "&".join(query_pairs) if query_pairs else "<none>"
+    except Exception:
+        query_summary = "<unavailable>"
+    header_summary = _summarize_socket_headers(getattr(request, 'headers', {}))
+    transport = request.args.get('transport') if hasattr(request, 'args') else None  # type: ignore[attr-defined]
+    _write_service_log(
+        'server',
+        f"socket.io connect sid={sid} ip={remote_addr} transport={transport!r} query={query_summary} headers={header_summary}",
+        scope=scope,
+    )
+
+
+@socketio.on('disconnect')
+def socket_disconnect():
+    try:
+        sid = getattr(request, 'sid', '<unknown>')
+    except Exception:
+        sid = '<unknown>'
+    try:
+        remote_addr = request.remote_addr
+    except Exception:
+        remote_addr = None
+    try:
+        scope = _canonical_server_scope(request.headers.get(_AGENT_CONTEXT_HEADER))
+    except Exception:
+        scope = None
+    _write_service_log(
+        'server',
+        f"socket.io disconnect sid={sid} ip={remote_addr}",
+        scope=scope,
+    )
+
+
 @socketio.on("agent_screenshot_task")
 def receive_screenshot_task(data):
     agent_id = data.get("agent_id")
@@ -7997,6 +8125,19 @@ def connect_agent(data):
     if not agent_id:
         return
     print(f"Agent connected: {agent_id}")
+    try:
+        scope = _normalize_service_mode((data or {}).get("service_mode"), agent_id)
+    except Exception:
+        scope = None
+    try:
+        sid = getattr(request, 'sid', '<unknown>')
+    except Exception:
+        sid = '<unknown>'
+    _write_service_log(
+        'server',
+        f"socket.io connect_agent agent_id={agent_id} sid={sid} service_mode={scope}",
+        scope=scope,
+    )
 
     # Join per-agent room so we can address this connection specifically
     try:
@@ -8004,7 +8145,7 @@ def connect_agent(data):
     except Exception:
         pass
 
-    service_mode = _normalize_service_mode((data or {}).get("service_mode"), agent_id)
+    service_mode = scope if scope else _normalize_service_mode((data or {}).get("service_mode"), agent_id)
     rec = registered_agents.setdefault(agent_id, {})
     rec["agent_id"] = agent_id
     rec["hostname"] = rec.get("hostname", "unknown")

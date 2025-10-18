@@ -152,7 +152,10 @@ def _ensure_install_code_table(conn: sqlite3.Connection) -> None:
             expires_at TEXT NOT NULL,
             created_by_user_id TEXT,
             used_at TEXT,
-            used_by_guid TEXT
+            used_by_guid TEXT,
+            max_uses INTEGER NOT NULL DEFAULT 1,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            last_used_at TEXT
         )
         """
     )
@@ -162,6 +165,29 @@ def _ensure_install_code_table(conn: sqlite3.Connection) -> None:
             ON enrollment_install_codes(expires_at)
         """
     )
+
+    columns = {row[1] for row in _table_info(cur, "enrollment_install_codes")}
+    if "max_uses" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes
+                ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 1
+            """
+        )
+    if "use_count" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes
+                ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0
+            """
+        )
+    if "last_used_at" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes
+                ADD COLUMN last_used_at TEXT
+            """
+        )
 
 
 def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:

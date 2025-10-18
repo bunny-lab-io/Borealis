@@ -6,7 +6,18 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone, timedelta
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
+
+AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
+
+
+def _canonical_context(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = "".join(ch for ch in str(value) if ch.isalnum() or ch in ("_", "-"))
+    if not cleaned:
+        return None
+    return cleaned.upper()
 
 from flask import Blueprint, jsonify, request
 
@@ -20,7 +31,7 @@ def register(
     app,
     *,
     db_conn_factory: Callable[[], sqlite3.Connection],
-    log: Callable[[str, str], None],
+    log: Callable[[str, str, Optional[str]], None],
     jwt_service,
     tls_bundle_path: str,
     ip_rate_limiter: SlidingWindowRateLimiter,
@@ -51,12 +62,19 @@ def register(
         except Exception:
             return ""
 
-    def _rate_limited(key: str, limiter: SlidingWindowRateLimiter, limit: int, window_s: float):
+    def _rate_limited(
+        key: str,
+        limiter: SlidingWindowRateLimiter,
+        limit: int,
+        window_s: float,
+        context_hint: Optional[str],
+    ):
         decision = limiter.check(key, limit, window_s)
         if not decision.allowed:
             log(
                 "server",
                 f"enrollment rate limited key={key} limit={limit}/{window_s}s retry_after={decision.retry_after:.2f}",
+                context_hint,
             )
             response = jsonify({"error": "rate_limited", "retry_after": decision.retry_after})
             response.status_code = 429
@@ -66,31 +84,79 @@ def register(
 
     def _load_install_code(cur: sqlite3.Cursor, code_value: str) -> Optional[Dict[str, Any]]:
         cur.execute(
-            "SELECT id, code, expires_at, used_at FROM enrollment_install_codes WHERE code = ?",
+            """
+            SELECT id,
+                   code,
+                   expires_at,
+                   used_at,
+                   used_by_guid,
+                   max_uses,
+                   use_count,
+                   last_used_at
+              FROM enrollment_install_codes
+             WHERE code = ?
+            """,
             (code_value,),
         )
         row = cur.fetchone()
         if not row:
             return None
-        keys = ["id", "code", "expires_at", "used_at"]
+        keys = [
+            "id",
+            "code",
+            "expires_at",
+            "used_at",
+            "used_by_guid",
+            "max_uses",
+            "use_count",
+            "last_used_at",
+        ]
         record = dict(zip(keys, row))
         return record
 
-    def _install_code_valid(record: Dict[str, Any]) -> bool:
+    def _install_code_valid(
+        record: Dict[str, Any], fingerprint: str, cur: sqlite3.Cursor
+    ) -> Tuple[bool, Optional[str]]:
         if not record:
-            return False
+            return False, None
         expires_at = record.get("expires_at")
         if not isinstance(expires_at, str):
-            return False
+            return False, None
         try:
             expiry = datetime.fromisoformat(expires_at)
         except Exception:
-            return False
+            return False, None
         if expiry <= _now():
-            return False
-        if record.get("used_at"):
-            return False
-        return True
+            return False, None
+        try:
+            max_uses = int(record.get("max_uses") or 1)
+        except Exception:
+            max_uses = 1
+        if max_uses < 1:
+            max_uses = 1
+        try:
+            use_count = int(record.get("use_count") or 0)
+        except Exception:
+            use_count = 0
+        if use_count < max_uses:
+            return True, None
+
+        guid = str(record.get("used_by_guid") or "").strip()
+        if not guid:
+            return False, None
+        cur.execute(
+            "SELECT ssl_key_fingerprint FROM devices WHERE guid = ?",
+            (guid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False, None
+        stored_fp = (row[0] or "").strip().lower()
+        if not stored_fp:
+            return False, None
+        if stored_fp == (fingerprint or "").strip().lower():
+            return True, guid
+        return False, None
 
     def _normalize_host(hostname: str, guid: str, cur: sqlite3.Cursor) -> str:
         base = (hostname or "").strip() or guid
@@ -247,7 +313,9 @@ def register(
     @blueprint.route("/api/agent/enroll/request", methods=["POST"])
     def enrollment_request():
         remote = _remote_addr()
-        rate_error = _rate_limited(f"ip:{remote}", ip_rate_limiter, 40, 60.0)
+        context_hint = _canonical_context(request.headers.get(AGENT_CONTEXT_HEADER))
+
+        rate_error = _rate_limited(f"ip:{remote}", ip_rate_limiter, 40, 60.0, context_hint)
         if rate_error:
             return rate_error
 
@@ -262,42 +330,43 @@ def register(
             "enrollment request received "
             f"ip={remote} hostname={hostname or '<missing>'} code_mask={_mask_code(enrollment_code)} "
             f"pubkey_len={len(agent_pubkey_b64 or '')} nonce_len={len(client_nonce_b64 or '')}",
+            context_hint,
         )
 
         if not hostname:
-            log("server", f"enrollment rejected missing_hostname ip={remote}")
+            log("server", f"enrollment rejected missing_hostname ip={remote}", context_hint)
             return jsonify({"error": "hostname_required"}), 400
         if not enrollment_code:
-            log("server", f"enrollment rejected missing_code ip={remote} host={hostname}")
+            log("server", f"enrollment rejected missing_code ip={remote} host={hostname}", context_hint)
             return jsonify({"error": "enrollment_code_required"}), 400
         if not isinstance(agent_pubkey_b64, str):
-            log("server", f"enrollment rejected missing_pubkey ip={remote} host={hostname}")
+            log("server", f"enrollment rejected missing_pubkey ip={remote} host={hostname}", context_hint)
             return jsonify({"error": "agent_pubkey_required"}), 400
         if not isinstance(client_nonce_b64, str):
-            log("server", f"enrollment rejected missing_nonce ip={remote} host={hostname}")
+            log("server", f"enrollment rejected missing_nonce ip={remote} host={hostname}", context_hint)
             return jsonify({"error": "client_nonce_required"}), 400
 
         try:
             agent_pubkey_der = crypto_keys.spki_der_from_base64(agent_pubkey_b64)
         except Exception:
-            log("server", f"enrollment rejected invalid_pubkey ip={remote} host={hostname}")
+            log("server", f"enrollment rejected invalid_pubkey ip={remote} host={hostname}", context_hint)
             return jsonify({"error": "invalid_agent_pubkey"}), 400
 
         if len(agent_pubkey_der) < 10:
-            log("server", f"enrollment rejected short_pubkey ip={remote} host={hostname}")
+            log("server", f"enrollment rejected short_pubkey ip={remote} host={hostname}", context_hint)
             return jsonify({"error": "invalid_agent_pubkey"}), 400
 
         try:
             client_nonce_bytes = base64.b64decode(client_nonce_b64, validate=True)
         except Exception:
-            log("server", f"enrollment rejected invalid_nonce ip={remote} host={hostname}")
+            log("server", f"enrollment rejected invalid_nonce ip={remote} host={hostname}", context_hint)
             return jsonify({"error": "invalid_client_nonce"}), 400
         if len(client_nonce_bytes) < 16:
-            log("server", f"enrollment rejected short_nonce ip={remote} host={hostname}")
+            log("server", f"enrollment rejected short_nonce ip={remote} host={hostname}", context_hint)
             return jsonify({"error": "invalid_client_nonce"}), 400
 
         fingerprint = crypto_keys.fingerprint_from_spki_der(agent_pubkey_der)
-        rate_error = _rate_limited(f"fp:{fingerprint}", fp_rate_limiter, 12, 60.0)
+        rate_error = _rate_limited(f"fp:{fingerprint}", fp_rate_limiter, 12, 60.0, context_hint)
         if rate_error:
             return rate_error
 
@@ -305,7 +374,14 @@ def register(
         try:
             cur = conn.cursor()
             install_code = _load_install_code(cur, enrollment_code)
-            if not _install_code_valid(install_code):
+            valid_code, reuse_guid = _install_code_valid(install_code, fingerprint, cur)
+            if not valid_code:
+                log(
+                    "server",
+                    "enrollment request invalid_code "
+                    f"host={hostname} fingerprint={fingerprint[:12]} code_mask={_mask_code(enrollment_code)}",
+                    context_hint,
+                )
                 return jsonify({"error": "invalid_enrollment_code"}), 400
 
             approval_reference: str
@@ -331,6 +407,7 @@ def register(
                     """
                     UPDATE device_approvals
                        SET hostname_claimed = ?,
+                           guid = ?,
                            enrollment_code_id = ?,
                            client_nonce = ?,
                            server_nonce = ?,
@@ -340,6 +417,7 @@ def register(
                     """,
                     (
                         hostname,
+                        reuse_guid,
                         install_code["id"],
                         client_nonce_b64,
                         server_nonce_b64,
@@ -359,11 +437,12 @@ def register(
                         status, client_nonce, server_nonce, agent_pubkey_der,
                         created_at, updated_at
                     )
-                    VALUES (?, ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                     """,
                     (
                         record_id,
                         approval_reference,
+                        reuse_guid,
                         hostname,
                         fingerprint,
                         install_code["id"],
@@ -387,7 +466,11 @@ def register(
             "server_certificate": _load_tls_bundle(tls_bundle_path),
             "signing_key": _signing_key_b64(),
         }
-        log("server", f"enrollment request queued fingerprint={fingerprint[:12]} host={hostname} ip={remote}")
+        log(
+            "server",
+            f"enrollment request queued fingerprint={fingerprint[:12]} host={hostname} ip={remote}",
+            context_hint,
+        )
         return jsonify(response)
 
     @blueprint.route("/api/agent/enroll/poll", methods=["POST"])
@@ -396,34 +479,36 @@ def register(
         approval_reference = payload.get("approval_reference")
         client_nonce_b64 = payload.get("client_nonce")
         proof_sig_b64 = payload.get("proof_sig")
+        context_hint = _canonical_context(request.headers.get(AGENT_CONTEXT_HEADER))
 
         log(
             "server",
             "enrollment poll received "
             f"ref={approval_reference} client_nonce_len={len(client_nonce_b64 or '')}"
             f" proof_sig_len={len(proof_sig_b64 or '')}",
+            context_hint,
         )
 
         if not isinstance(approval_reference, str) or not approval_reference:
-            log("server", "enrollment poll rejected missing_reference")
+            log("server", "enrollment poll rejected missing_reference", context_hint)
             return jsonify({"error": "approval_reference_required"}), 400
         if not isinstance(client_nonce_b64, str):
-            log("server", f"enrollment poll rejected missing_nonce ref={approval_reference}")
+            log("server", f"enrollment poll rejected missing_nonce ref={approval_reference}", context_hint)
             return jsonify({"error": "client_nonce_required"}), 400
         if not isinstance(proof_sig_b64, str):
-            log("server", f"enrollment poll rejected missing_sig ref={approval_reference}")
+            log("server", f"enrollment poll rejected missing_sig ref={approval_reference}", context_hint)
             return jsonify({"error": "proof_sig_required"}), 400
 
         try:
             client_nonce_bytes = base64.b64decode(client_nonce_b64, validate=True)
         except Exception:
-            log("server", f"enrollment poll invalid_client_nonce ref={approval_reference}")
+            log("server", f"enrollment poll invalid_client_nonce ref={approval_reference}", context_hint)
             return jsonify({"error": "invalid_client_nonce"}), 400
 
         try:
             proof_sig = base64.b64decode(proof_sig_b64, validate=True)
         except Exception:
-            log("server", f"enrollment poll invalid_sig ref={approval_reference}")
+            log("server", f"enrollment poll invalid_sig ref={approval_reference}", context_hint)
             return jsonify({"error": "invalid_proof_sig"}), 400
 
         conn = db_conn_factory()
@@ -441,7 +526,7 @@ def register(
             )
             row = cur.fetchone()
             if not row:
-                log("server", f"enrollment poll unknown_reference ref={approval_reference}")
+                log("server", f"enrollment poll unknown_reference ref={approval_reference}", context_hint)
                 return jsonify({"status": "unknown"}), 404
 
             (
@@ -460,13 +545,13 @@ def register(
             ) = row
 
             if client_nonce_stored != client_nonce_b64:
-                log("server", f"enrollment poll nonce_mismatch ref={approval_reference}")
+                log("server", f"enrollment poll nonce_mismatch ref={approval_reference}", context_hint)
                 return jsonify({"error": "nonce_mismatch"}), 400
 
             try:
                 server_nonce_bytes = base64.b64decode(server_nonce_b64, validate=True)
             except Exception:
-                log("server", f"enrollment poll invalid_server_nonce ref={approval_reference}")
+                log("server", f"enrollment poll invalid_server_nonce ref={approval_reference}", context_hint)
                 return jsonify({"error": "server_nonce_invalid"}), 400
 
             message = server_nonce_bytes + approval_reference.encode("utf-8") + client_nonce_bytes
@@ -474,17 +559,17 @@ def register(
             try:
                 public_key = serialization.load_der_public_key(agent_pubkey_der)
             except Exception:
-                log("server", f"enrollment poll pubkey_load_failed ref={approval_reference}")
+                log("server", f"enrollment poll pubkey_load_failed ref={approval_reference}", context_hint)
                 public_key = None
 
             if public_key is None:
-                log("server", f"enrollment poll invalid_pubkey ref={approval_reference}")
+                log("server", f"enrollment poll invalid_pubkey ref={approval_reference}", context_hint)
                 return jsonify({"error": "agent_pubkey_invalid"}), 400
 
             try:
                 public_key.verify(proof_sig, message)
             except Exception:
-                log("server", f"enrollment poll invalid_proof ref={approval_reference}")
+                log("server", f"enrollment poll invalid_proof ref={approval_reference}", context_hint)
                 return jsonify({"error": "invalid_proof"}), 400
 
             if status == "pending":
@@ -492,24 +577,28 @@ def register(
                     "server",
                     f"enrollment poll pending ref={approval_reference} host={hostname_claimed}"
                     f" fingerprint={fingerprint[:12]}",
+                    context_hint,
                 )
                 return jsonify({"status": "pending", "poll_after_ms": 5000})
             if status == "denied":
                 log(
                     "server",
                     f"enrollment poll denied ref={approval_reference} host={hostname_claimed}",
+                    context_hint,
                 )
                 return jsonify({"status": "denied", "reason": "operator_denied"})
             if status == "expired":
                 log(
                     "server",
                     f"enrollment poll expired ref={approval_reference} host={hostname_claimed}",
+                    context_hint,
                 )
                 return jsonify({"status": "expired"})
             if status == "completed":
                 log(
                     "server",
                     f"enrollment poll already_completed ref={approval_reference} host={hostname_claimed}",
+                    context_hint,
                 )
                 return jsonify({"status": "approved", "detail": "finalized"})
 
@@ -517,6 +606,7 @@ def register(
                 log(
                     "server",
                     f"enrollment poll unexpected_status={status} ref={approval_reference}",
+                    context_hint,
                 )
                 return jsonify({"status": status or "unknown"}), 400
 
@@ -525,6 +615,7 @@ def register(
                 log(
                     "server",
                     f"enrollment poll replay_detected ref={approval_reference} fingerprint={fingerprint[:12]}",
+                    context_hint,
                 )
                 return jsonify({"error": "proof_replayed"}), 409
 
@@ -538,13 +629,39 @@ def register(
             # Mark install code used
             if enrollment_code_id:
                 cur.execute(
+                    "SELECT use_count, max_uses FROM enrollment_install_codes WHERE id = ?",
+                    (enrollment_code_id,),
+                )
+                usage_row = cur.fetchone()
+                try:
+                    prior_count = int(usage_row[0]) if usage_row else 0
+                except Exception:
+                    prior_count = 0
+                try:
+                    allowed_uses = int(usage_row[1]) if usage_row else 1
+                except Exception:
+                    allowed_uses = 1
+                if allowed_uses < 1:
+                    allowed_uses = 1
+                new_count = prior_count + 1
+                consumed = new_count >= allowed_uses
+                cur.execute(
                     """
                     UPDATE enrollment_install_codes
-                       SET used_at = ?, used_by_guid = ?
+                       SET use_count = ?,
+                           used_by_guid = ?,
+                           last_used_at = ?,
+                           used_at = CASE WHEN ? THEN ? ELSE used_at END
                      WHERE id = ?
-                       AND used_at IS NULL
                     """,
-                    (now_iso, effective_guid, enrollment_code_id),
+                    (
+                        new_count,
+                        effective_guid,
+                        now_iso,
+                        1 if consumed else 0,
+                        now_iso,
+                        enrollment_code_id,
+                    ),
                 )
 
             # Update approval record with final state
@@ -573,6 +690,7 @@ def register(
         log(
             "server",
             f"enrollment finalized guid={effective_guid} fingerprint={fingerprint[:12]} host={hostname_claimed}",
+            context_hint,
         )
         return jsonify(
             {

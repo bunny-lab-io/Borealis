@@ -23,7 +23,8 @@ import ssl
 import threading
 import contextlib
 import errno
-from typing import Any, Dict, Optional, List, Callable
+import re
+from typing import Any, Dict, Optional, List, Callable, Tuple
 
 import requests
 try:
@@ -66,21 +67,120 @@ def _rotate_daily(path: str):
 
 
 # Early bootstrap logging (goes to agent.log)
-def _bootstrap_log(msg: str):
+_AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
+_AGENT_SCOPE_PATTERN = re.compile(r"\\bscope=([A-Za-z0-9_-]+)", re.IGNORECASE)
+
+
+def _canonical_scope_value(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    value = "".join(ch for ch in str(raw) if ch.isalnum() or ch in ("_", "-"))
+    if not value:
+        return None
+    return value.upper()
+
+
+def _agent_context_default() -> Optional[str]:
+    suffix = globals().get("CONFIG_SUFFIX_CANONICAL")
+    context = _canonical_scope_value(suffix)
+    if context:
+        return context
+    service = globals().get("SERVICE_MODE_CANONICAL")
+    context = _canonical_scope_value(service)
+    if context:
+        return context
+    return None
+
+
+def _infer_agent_scope(message: str, provided_scope: Optional[str] = None) -> Optional[str]:
+    scope = _canonical_scope_value(provided_scope)
+    if scope:
+        return scope
+    match = _AGENT_SCOPE_PATTERN.search(message or "")
+    if match:
+        scope = _canonical_scope_value(match.group(1))
+        if scope:
+            return scope
+    return _agent_context_default()
+
+
+def _format_agent_log_message(message: str, fname: str, scope: Optional[str] = None) -> str:
+    context = _infer_agent_scope(message, scope)
+    if fname == "agent.error.log":
+        prefix = "[ERROR]"
+        if context:
+            prefix = f"{prefix}[CONTEXT-{context}]"
+        return f"{prefix} {message}"
+    if context:
+        return f"[CONTEXT-{context}] {message}"
+    return f"[INFO] {message}"
+
+
+def _bootstrap_log(msg: str, *, scope: Optional[str] = None):
     try:
         base = _agent_logs_root()
         os.makedirs(base, exist_ok=True)
         path = os.path.join(base, 'agent.log')
         _rotate_daily(path)
         ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        line = _format_agent_log_message(msg, 'agent.log', scope)
         with open(path, 'a', encoding='utf-8') as fh:
-            fh.write(f'[{ts}] {msg}\n')
+            fh.write(f'[{ts}] {line}\n')
+    except Exception:
+        pass
+
+
+def _describe_exception(exc: BaseException) -> str:
+    try:
+        primary = f"{exc.__class__.__name__}: {exc}"
+    except Exception:
+        primary = repr(exc)
+    parts = [primary]
+    try:
+        cause = getattr(exc, "__cause__", None)
+        if cause and cause is not exc:
+            parts.append(f"cause={cause.__class__.__name__}: {cause}")
+    except Exception:
+        pass
+    try:
+        context = getattr(exc, "__context__", None)
+        if context and context is not exc and context is not getattr(exc, "__cause__", None):
+            parts.append(f"context={context.__class__.__name__}: {context}")
+    except Exception:
+        pass
+    try:
+        args = getattr(exc, "args", None)
+        if isinstance(args, tuple) and len(args) > 1:
+            parts.append(f"args={args!r}")
+    except Exception:
+        pass
+    try:
+        details = getattr(exc, "__dict__", None)
+        if isinstance(details, dict):
+            # Capture noteworthy nested attributes such as os_error/errno to help diagnose
+            # connection failures that collapse into generic ConnectionError wrappers.
+            for key in ("os_error", "errno", "code", "status"):
+                if key in details and details[key]:
+                    parts.append(f"{key}={details[key]!r}")
+    except Exception:
+        pass
+    return "; ".join(part for part in parts if part)
+
+
+def _log_exception_trace(prefix: str) -> None:
+    try:
+        tb = traceback.format_exc()
+        if not tb:
+            return
+        for line in tb.rstrip().splitlines():
+            _log_agent(f"{prefix} trace: {line}", fname="agent.error.log")
     except Exception:
         pass
 
 # Headless/service mode flag (skip Qt and interactive UI)
 SYSTEM_SERVICE_MODE = ('--system-service' in sys.argv) or (os.environ.get('BOREALIS_AGENT_MODE') == 'system')
 SERVICE_MODE = 'system' if SYSTEM_SERVICE_MODE else 'currentuser'
+SERVICE_MODE_CANONICAL = SERVICE_MODE.upper()
 _bootstrap_log(f'agent.py loaded; SYSTEM_SERVICE_MODE={SYSTEM_SERVICE_MODE}; argv={sys.argv!r}')
 def _argv_get(flag: str, default: str = None):
     try:
@@ -359,15 +459,16 @@ def _find_project_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # Simple file logger under Logs/Agent
-def _log_agent(message: str, fname: str = 'agent.log'):
+def _log_agent(message: str, fname: str = 'agent.log', *, scope: Optional[str] = None):
     try:
         log_dir = _agent_logs_root()
         os.makedirs(log_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         path = os.path.join(log_dir, fname)
         _rotate_daily(path)
+        line = _format_agent_log_message(message, fname, scope)
         with open(path, 'a', encoding='utf-8') as fh:
-            fh.write(f'[{ts}] {message}\n')
+            fh.write(f'[{ts}] {line}\n')
     except Exception:
         pass
 
@@ -382,6 +483,31 @@ def _mask_sensitive(value: str, *, prefix: int = 4, suffix: int = 4) -> str:
         return f"{trimmed[:prefix]}***{trimmed[-suffix:]}"
     except Exception:
         return '***'
+
+
+def _format_debug_pairs(pairs: Dict[str, Any]) -> str:
+    try:
+        parts = []
+        for key, value in pairs.items():
+            parts.append(f"{key}={value!r}")
+        return ", ".join(parts)
+    except Exception:
+        return repr(pairs)
+
+
+def _summarize_headers(headers: Dict[str, str]) -> str:
+    try:
+        rendered: List[str] = []
+        for key, value in headers.items():
+            lowered = key.lower()
+            display = value
+            if lowered == 'authorization':
+                token = value.split()[-1] if value and ' ' in value else value
+                display = f"Bearer {_mask_sensitive(token)}"
+            rendered.append(f"{key}={display}")
+        return ", ".join(rendered)
+    except Exception:
+        return '<unavailable>'
 
 
 def _decode_base64_text(value):
@@ -571,6 +697,57 @@ DEFAULT_CONFIG = {
     "installer_code": ""
 }
 
+
+def _load_installer_code_from_file(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return ""
+    value = data.get("installer_code") if isinstance(data, dict) else ""
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+
+def _fallback_installer_code(current_path: str) -> str:
+    settings_dir = os.path.dirname(current_path)
+    candidates: List[str] = []
+    suffix = CONFIG_SUFFIX_CANONICAL
+    sibling_map = {
+        "SYSTEM": "agent_settings_CURRENTUSER.json",
+        "CURRENTUSER": "agent_settings_SYSTEM.json",
+    }
+    sibling_name = sibling_map.get(suffix or "")
+    if sibling_name:
+        candidates.append(os.path.join(settings_dir, sibling_name))
+    # Prefer the shared/base config next
+    candidates.append(os.path.join(settings_dir, "agent_settings.json"))
+    # Legacy location fallback
+    try:
+        project_root = _find_project_root()
+        legacy_dir = os.path.join(project_root, "Agent", "Settings")
+        if sibling_name:
+            candidates.append(os.path.join(legacy_dir, sibling_name))
+        candidates.append(os.path.join(legacy_dir, "agent_settings.json"))
+    except Exception:
+        pass
+
+    current_abspath = os.path.abspath(current_path)
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            candidate_path = os.path.abspath(candidate)
+        except Exception:
+            continue
+        if candidate_path == current_abspath or not os.path.isfile(candidate_path):
+            continue
+        code = _load_installer_code_from_file(candidate_path)
+        if code:
+            return code
+    return ""
+
 class ConfigManager:
     def __init__(self, path):
         self.path = path
@@ -631,6 +808,9 @@ class AgentHttpClient:
         self.key_store = _key_store()
         self.identity = IDENTITY
         self.session = requests.Session()
+        context_label = _agent_context_default()
+        if context_label:
+            self.session.headers.setdefault(_AGENT_CONTEXT_HEADER, context_label)
         self.base_url: Optional[str] = None
         self.guid: Optional[str] = None
         self.access_token: Optional[str] = None
@@ -697,42 +877,115 @@ class AgentHttpClient:
             pass
 
     def auth_headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
         if self.access_token:
-            return {"Authorization": f"Bearer {self.access_token}"}
-        return {}
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        context_label = _agent_context_default()
+        if context_label:
+            headers[_AGENT_CONTEXT_HEADER] = context_label
+        return headers
 
     def configure_socketio(self, client: "socketio.AsyncClient") -> None:
         """Align the Socket.IO engine's TLS verification with the REST client."""
+
         try:
             verify = getattr(self.session, "verify", True)
             engine = getattr(client, "eio", None)
             if engine is None:
+                _log_agent(
+                    "SocketIO TLS alignment skipped; AsyncClient.eio missing",
+                    fname="agent.error.log",
+                )
                 return
 
-            # python-engineio accepts either a boolean or an ``ssl.SSLContext``
-            # for TLS verification.  When we have a pinned certificate bundle
-            # on disk, prefer constructing a dedicated context that trusts that
-            # bundle so WebSocket connections succeed even with private CAs.
+            http_iface = getattr(engine, "http", None)
+
+            debug_info = {
+                "verify_type": type(verify).__name__,
+                "verify_value": verify,
+                "engine_type": type(engine).__name__,
+                "http_iface_present": http_iface is not None,
+            }
+            _log_agent(
+                f"SocketIO TLS alignment start: {_format_debug_pairs(debug_info)}",
+                fname="agent.log",
+            )
+
+            def _set_attr(target: Any, name: str, value: Any) -> None:
+                if target is None:
+                    return
+                try:
+                    setattr(target, name, value)
+                except Exception:
+                    pass
+
+            def _reset_cached_session() -> None:
+                if http_iface is None:
+                    return
+                try:
+                    if hasattr(http_iface, "session"):
+                        setattr(http_iface, "session", None)
+                except Exception:
+                    pass
+
+            context = None
             if isinstance(verify, str) and os.path.isfile(verify):
                 try:
-                    context = ssl.create_default_context(cafile=verify)
+                    # Mirror Requests' certificate handling by starting from a
+                    # default client context (which pre-loads the system
+                    # certificate stores) and then layering the pinned
+                    # certificate bundle on top. This matches the REST client
+                    # behaviour and ensures self-signed leaf certificates work
+                    # the same way for Socket.IO handshakes.
+                    context = ssl.create_default_context()
                     context.check_hostname = False
+                    context.load_verify_locations(cafile=verify)
+                    _log_agent(
+                        f"SocketIO TLS alignment created SSLContext from cafile={verify}",
+                        fname="agent.log",
+                    )
                 except Exception:
                     context = None
-                if context is not None:
-                    engine.ssl_context = context
-                    engine.ssl_verify = True
-                else:
-                    engine.ssl_context = None
-                    engine.ssl_verify = verify
-            elif verify is False:
-                engine.ssl_context = None
-                engine.ssl_verify = False
-            else:
-                engine.ssl_context = None
-                engine.ssl_verify = True
+                    _log_agent(
+                        f"SocketIO TLS alignment failed to build context from cafile={verify}",
+                        fname="agent.error.log",
+                    )
+
+            if context is not None:
+                _set_attr(engine, "ssl_context", context)
+                _set_attr(engine, "ssl_verify", True)
+                _set_attr(engine, "verify_ssl", True)
+                _set_attr(http_iface, "ssl_context", context)
+                _set_attr(http_iface, "ssl_verify", True)
+                _set_attr(http_iface, "verify_ssl", True)
+                _reset_cached_session()
+                _log_agent(
+                    "SocketIO TLS alignment applied dedicated SSLContext to engine/http",
+                    fname="agent.log",
+                )
+                return
+
+            # Fall back to boolean verification flags when we either do not
+            # have a pinned certificate bundle or failed to build a dedicated
+            # context for it.
+            verify_flag = False if verify is False else True
+            _set_attr(engine, "ssl_context", None)
+            _set_attr(engine, "ssl_verify", verify_flag)
+            _set_attr(engine, "verify_ssl", verify_flag)
+            _set_attr(http_iface, "ssl_context", None)
+            _set_attr(http_iface, "ssl_verify", verify_flag)
+            _set_attr(http_iface, "verify_ssl", verify_flag)
+            _reset_cached_session()
+            _log_agent(
+                f"SocketIO TLS alignment fallback verify_flag={verify_flag}",
+                fname="agent.log",
+            )
         except Exception:
-            pass
+            _log_agent(
+                "SocketIO TLS alignment encountered unexpected error",
+                fname="agent.error.log",
+            )
+            _log_exception_trace("configure_socketio")
 
     # ------------------------------------------------------------------
     # Enrollment & token management
@@ -1007,10 +1260,22 @@ class AgentHttpClient:
             timeout=20,
         )
         if resp.status_code in (401, 403):
-            _log_agent("Refresh token rejected; re-enrolling", fname="agent.error.log")
-            self._clear_tokens_locked()
-            self._perform_enrollment_locked()
-            return
+            error_code, snippet = self._error_details(resp)
+            if resp.status_code == 401 and self._should_retry_auth(resp.status_code, error_code):
+                _log_agent(
+                    "Refresh token rejected; attempting re-enrollment"
+                    f" error={error_code or '<unknown>'}",
+                    fname="agent.error.log",
+                )
+                self._clear_tokens_locked()
+                self._perform_enrollment_locked()
+                return
+            _log_agent(
+                "Refresh token request forbidden "
+                f"status={resp.status_code} error={error_code or '<unknown>'}"
+                f" body_snippet={snippet}",
+                fname="agent.error.log",
+            )
         resp.raise_for_status()
         data = resp.json()
         access_token = data.get("access_token")
@@ -1036,14 +1301,79 @@ class AgentHttpClient:
         self.guid = self.key_store.load_guid()
         self.session.headers.pop("Authorization", None)
 
+    def _error_details(self, response: requests.Response) -> Tuple[Optional[str], str]:
+        error_code: Optional[str] = None
+        snippet = ""
+        try:
+            snippet = response.text[:256]
+        except Exception:
+            snippet = "<unavailable>"
+        try:
+            data = response.json()
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            for key in ("error", "code", "status"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    error_code = value.strip()
+                    break
+        return error_code, snippet
+
+    def _should_retry_auth(self, status_code: int, error_code: Optional[str]) -> bool:
+        if status_code == 401:
+            return True
+        retryable_forbidden = {"fingerprint_mismatch"}
+        if status_code == 403 and error_code in retryable_forbidden:
+            return True
+        return False
+
     def _resolve_installer_code(self) -> str:
         if INSTALLER_CODE_OVERRIDE:
-            return INSTALLER_CODE_OVERRIDE
+            code = INSTALLER_CODE_OVERRIDE.strip()
+            if code:
+                try:
+                    self.key_store.cache_installer_code(code, consumer=SERVICE_MODE_CANONICAL)
+                except Exception:
+                    pass
+            return code
+        code = ""
         try:
             code = (CONFIG.data.get("installer_code") or "").strip()
-            return code
         except Exception:
-            return ""
+            code = ""
+        if code:
+            try:
+                self.key_store.cache_installer_code(code, consumer=SERVICE_MODE_CANONICAL)
+            except Exception:
+                pass
+            return code
+        try:
+            cached = self.key_store.load_cached_installer_code()
+        except Exception:
+            cached = None
+        if cached:
+            try:
+                self.key_store.cache_installer_code(cached, consumer=SERVICE_MODE_CANONICAL)
+            except Exception:
+                pass
+            return cached
+        fallback = _fallback_installer_code(CONFIG.path)
+        if fallback:
+            try:
+                CONFIG.data["installer_code"] = fallback
+                CONFIG._write()
+                _log_agent(
+                    "Adopted installer code from sibling configuration", fname="agent.log"
+                )
+            except Exception:
+                pass
+            try:
+                self.key_store.cache_installer_code(fallback, consumer=SERVICE_MODE_CANONICAL)
+            except Exception:
+                pass
+            return fallback
+        return ""
 
     def _consume_installer_code(self) -> None:
         # Avoid clearing explicit CLI/env overrides; only mutate persisted config.
@@ -1057,6 +1387,13 @@ class AgentHttpClient:
                 _log_agent("Cleared persisted installer code after successful enrollment", fname="agent.log")
         except Exception as exc:
             _log_agent(f"Failed to clear installer code after enrollment: {exc}", fname="agent.error.log")
+        try:
+            self.key_store.mark_installer_code_consumed(SERVICE_MODE_CANONICAL)
+        except Exception as exc:
+            _log_agent(
+                f"Failed to update shared installer code cache: {exc}",
+                fname="agent.error.log",
+            )
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -1068,20 +1405,19 @@ class AgentHttpClient:
         headers = self.auth_headers()
         response = self.session.post(url, json=payload, headers=headers, timeout=30)
         if response.status_code in (401, 403) and require_auth:
-            snippet = ""
-            try:
-                snippet = response.text[:256]
-            except Exception:
-                snippet = "<unavailable>"
-            _log_agent(
-                "Authenticated request rejected "
-                f"path={path} status={response.status_code} body_snippet={snippet}",
-                fname="agent.error.log",
-            )
-            self.clear_tokens()
-            self.ensure_authenticated()
-            headers = self.auth_headers()
-            response = self.session.post(url, json=payload, headers=headers, timeout=30)
+            error_code, snippet = self._error_details(response)
+            if self._should_retry_auth(response.status_code, error_code):
+                self.clear_tokens()
+                self.ensure_authenticated()
+                headers = self.auth_headers()
+                response = self.session.post(url, json=payload, headers=headers, timeout=30)
+            else:
+                _log_agent(
+                    "Authenticated request rejected "
+                    f"path={path} status={response.status_code} error={error_code or '<unknown>'}"
+                    f" body_snippet={snippet}",
+                    fname="agent.error.log",
+                )
         response.raise_for_status()
         if response.headers.get("Content-Type", "").lower().startswith("application/json"):
             return response.json()
@@ -2107,6 +2443,15 @@ async def send_agent_details_once():
 async def connect():
     print(f"[INFO] Successfully Connected to Borealis Server!")
     _log_agent('Connected to server.')
+    try:
+        sid = getattr(sio, 'sid', None)
+        transport = getattr(sio, 'transport', None)
+        _log_agent(
+            f'WebSocket handshake established sid={sid!r} transport={transport!r}',
+            fname='agent.log',
+        )
+    except Exception:
+        pass
     await sio.emit('connect_agent', {"agent_id": AGENT_ID, "service_mode": SERVICE_MODE})
 
     # Send an immediate heartbeat via authenticated REST call.
@@ -2140,6 +2485,17 @@ async def connect():
             except Exception:
                 pass
         asyncio.create_task(_svc_checkin_once())
+    except Exception:
+        pass
+
+@sio.event
+async def connect_error(data):
+    try:
+        setattr(sio, "connection_error", data)
+    except Exception:
+        pass
+    try:
+        _log_agent(f'Socket connect_error event: {data!r}', fname='agent.error.log')
     except Exception:
         pass
 
@@ -2390,22 +2746,64 @@ if not SYSTEM_SERVICE_MODE:
 async def connect_loop():
     retry = 5
     client = http_client()
+    attempt = 0
     while True:
+        attempt += 1
         try:
+            _log_agent(
+                f'connect_loop attempt={attempt} starting authentication phase',
+                fname='agent.log',
+            )
             client.ensure_authenticated()
+            auth_snapshot = {
+                'guid_present': bool(client.guid),
+                'access_token': bool(client.access_token),
+                'refresh_token': bool(client.refresh_token),
+                'access_expiry': client.access_expires_at,
+            }
+            _log_agent(
+                f"connect_loop attempt={attempt} auth snapshot: {_format_debug_pairs(auth_snapshot)}",
+                fname='agent.log',
+            )
             client.configure_socketio(sio)
+            try:
+                setattr(sio, "connection_error", None)
+            except Exception:
+                pass
             url = client.websocket_base_url()
+            headers = client.auth_headers()
+            header_summary = _summarize_headers(headers)
+            verify_value = getattr(client.session, 'verify', None)
+            _log_agent(
+                f"connect_loop attempt={attempt} dialing websocket url={url} transports=['websocket'] verify={verify_value!r} headers={header_summary}",
+                fname='agent.log',
+            )
             print(f"[INFO] Connecting Agent to {url}...")
-            _log_agent(f'Connecting to {url}...')
             await sio.connect(
                 url,
                 transports=['websocket'],
-                headers=client.auth_headers(),
+                headers=headers,
+            )
+            _log_agent(
+                f'connect_loop attempt={attempt} sio.connect completed successfully',
+                fname='agent.log',
             )
             break
         except Exception as e:
-            print(f"[WebSocket] Server unavailable: {e}. Retrying in {retry}s...")
-            _log_agent(f'Server unavailable: {e}', fname='agent.error.log')
+            detail = _describe_exception(e)
+            try:
+                conn_err = getattr(sio, "connection_error", None)
+            except Exception:
+                conn_err = None
+            if conn_err:
+                detail = f"{detail}; connection_error={conn_err!r}"
+            message = (
+                f"connect_loop attempt={attempt} server unavailable: {detail}. "
+                f"Retrying in {retry}s..."
+            )
+            print(f"[WebSocket] {message}")
+            _log_agent(message, fname='agent.error.log')
+            _log_exception_trace(f'connect_loop attempt={attempt}')
             await asyncio.sleep(retry)
 
 if __name__=='__main__':
