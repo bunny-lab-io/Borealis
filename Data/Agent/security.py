@@ -39,40 +39,55 @@ def _restrict_permissions(path: str) -> None:
 def _protect(data: bytes, *, scope_system: bool) -> bytes:
     if not IS_WINDOWS or not win32crypt:
         return data
-    flags = 0
+    scopes = [scope_system]
+    # Always include the alternate scope so we can fall back if the preferred
+    # protection attempt fails (e.g., running under a limited account that
+    # lacks access to the desired DPAPI scope).
     if scope_system:
-        flags = getattr(win32crypt, "CRYPTPROTECT_LOCAL_MACHINE", 0x4)
-    try:
-        protected = win32crypt.CryptProtectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
-    except Exception:
-        return data
-    blob = protected[1]
-    if isinstance(blob, memoryview):
-        return blob.tobytes()
-    if isinstance(blob, bytearray):
-        return bytes(blob)
-    if isinstance(blob, bytes):
-        return blob
+        scopes.append(False)
+    else:
+        scopes.append(True)
+    for scope in scopes:
+        flags = 0
+        if scope:
+            flags = getattr(win32crypt, "CRYPTPROTECT_LOCAL_MACHINE", 0x4)
+        try:
+            protected = win32crypt.CryptProtectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
+        except Exception:
+            continue
+        blob = protected[1]
+        if isinstance(blob, memoryview):
+            return blob.tobytes()
+        if isinstance(blob, bytearray):
+            return bytes(blob)
+        if isinstance(blob, bytes):
+            return blob
     return data
 
 
 def _unprotect(data: bytes, *, scope_system: bool) -> bytes:
     if not IS_WINDOWS or not win32crypt:
         return data
-    flags = 0
+    scopes = [scope_system]
     if scope_system:
-        flags = getattr(win32crypt, "CRYPTPROTECT_LOCAL_MACHINE", 0x4)
-    try:
-        unwrapped = win32crypt.CryptUnprotectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
-    except Exception:
-        return data
-    blob = unwrapped[1]
-    if isinstance(blob, memoryview):
-        return blob.tobytes()
-    if isinstance(blob, bytearray):
-        return bytes(blob)
-    if isinstance(blob, bytes):
-        return blob
+        scopes.append(False)
+    else:
+        scopes.append(True)
+    for scope in scopes:
+        flags = 0
+        if scope:
+            flags = getattr(win32crypt, "CRYPTPROTECT_LOCAL_MACHINE", 0x4)
+        try:
+            unwrapped = win32crypt.CryptUnprotectData(data, None, None, None, None, flags)  # type: ignore[attr-defined]
+        except Exception:
+            continue
+        blob = unwrapped[1]
+        if isinstance(blob, memoryview):
+            return blob.tobytes()
+        if isinstance(blob, bytearray):
+            return bytes(blob)
+        if isinstance(blob, bytes):
+            return blob
     return data
 
 
@@ -213,7 +228,12 @@ class AgentKeyStore:
             with open(self._refresh_token_path, "rb") as fh:
                 protected = fh.read()
             raw = _unprotect(protected, scope_system=self.scope_system)
-            return raw.decode("utf-8")
+            try:
+                return raw.decode("utf-8")
+            except Exception:
+                # Token may have been protected under the opposite DPAPI scope.
+                alt = _unprotect(protected, scope_system=not self.scope_system)
+                return alt.decode("utf-8")
         except Exception:
             return None
 
