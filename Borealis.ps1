@@ -791,7 +791,7 @@ function InstallOrUpdate-BorealisAgent {
                 (Join-Path $agentSourceRoot 'agent.py'),
                 (Join-Path $agentSourceRoot 'ansible-ee-version.txt'),
                 (Join-Path $agentSourceRoot 'Borealis.ico'),
-                (Join-Path $agentSourceRoot 'fcntl_stud.py'),
+                (Join-Path $agentSourceRoot 'fcntl_stub.py'),
                 (Join-Path $agentSourceRoot 'launch_service.ps1'),
                 (Join-Path $agentSourceRoot 'role_manager.py'),
                 (Join-Path $agentSourceRoot 'security.py'),
