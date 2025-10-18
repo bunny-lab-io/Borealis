@@ -243,6 +243,18 @@ def _log_agent(message: str, fname: str = 'agent.log'):
         pass
 
 
+def _mask_sensitive(value: str, *, prefix: int = 4, suffix: int = 4) -> str:
+    try:
+        if not value:
+            return ''
+        trimmed = value.strip()
+        if len(trimmed) <= prefix + suffix:
+            return '*' * len(trimmed)
+        return f"{trimmed[:prefix]}***{trimmed[-suffix:]}"
+    except Exception:
+        return '***'
+
+
 def _decode_base64_text(value):
     if not isinstance(value, str):
         return None
@@ -603,6 +615,14 @@ class AgentHttpClient:
                 "Set BOREALIS_INSTALLER_CODE, pass --installer-code, or update agent_settings.json."
             )
         self.refresh_base_url()
+        base_url = self.base_url or "https://localhost:5000"
+        code_masked = _mask_sensitive(code)
+        _log_agent(
+            "Enrollment handshake starting "
+            f"base_url={base_url} scope={SERVICE_MODE} "
+            f"fingerprint={SSL_KEY_FINGERPRINT[:16]} installer_code={code_masked}",
+            fname="agent.log",
+        )
         client_nonce = os.urandom(32)
         payload = {
             "hostname": socket.gethostname(),
@@ -611,10 +631,34 @@ class AgentHttpClient:
             "client_nonce": base64.b64encode(client_nonce).decode("ascii"),
         }
         request_url = f"{self.base_url}/api/agent/enroll/request"
-        _log_agent("Starting enrollment request...", fname="agent.log")
+        _log_agent(
+            "Starting enrollment request... "
+            f"url={request_url} hostname={payload['hostname']} pubkey_prefix={PUBLIC_KEY_B64[:24]}",
+            fname="agent.log",
+        )
         resp = self.session.post(request_url, json=payload, timeout=30)
-        resp.raise_for_status()
+        _log_agent(
+            f"Enrollment request HTTP status={resp.status_code} retry_after={resp.headers.get('Retry-After')}"
+            f" body_len={len(resp.content)}",
+            fname="agent.log",
+        )
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError:
+            snippet = resp.text[:512] if hasattr(resp, "text") else ""
+            _log_agent(
+                f"Enrollment request failed status={resp.status_code} body_snippet={snippet}",
+                fname="agent.error.log",
+            )
+            raise
         data = resp.json()
+        _log_agent(
+            "Enrollment request accepted "
+            f"status={data.get('status')} approval_ref={data.get('approval_reference')} "
+            f"poll_after_ms={data.get('poll_after_ms')}"
+            f" server_cert={'yes' if data.get('server_certificate') else 'no'}",
+            fname="agent.log",
+        )
         if data.get("server_certificate"):
             self.key_store.save_server_certificate(data["server_certificate"])
             self._configure_verify()
@@ -632,6 +676,7 @@ class AgentHttpClient:
             raise RuntimeError("Enrollment response missing approval_reference or server_nonce")
         server_nonce = base64.b64decode(server_nonce_b64)
         poll_delay = max(int(data.get("poll_after_ms", 3000)) / 1000, 1)
+        attempt = 1
         while True:
             time.sleep(min(poll_delay, 15))
             signature = self.identity.sign(server_nonce + approval_reference.encode("utf-8") + client_nonce)
@@ -640,22 +685,61 @@ class AgentHttpClient:
                 "client_nonce": base64.b64encode(client_nonce).decode("ascii"),
                 "proof_sig": base64.b64encode(signature).decode("ascii"),
             }
+            _log_agent(
+                f"Enrollment poll attempt={attempt} ref={approval_reference} delay={poll_delay}s",
+                fname="agent.log",
+            )
             poll_resp = self.session.post(
                 f"{self.base_url}/api/agent/enroll/poll",
                 json=poll_payload,
                 timeout=30,
             )
-            poll_resp.raise_for_status()
+            _log_agent(
+                "Enrollment poll response "
+                f"status_code={poll_resp.status_code} retry_after={poll_resp.headers.get('Retry-After')}"
+                f" body_len={len(poll_resp.content)}",
+                fname="agent.log",
+            )
+            try:
+                poll_resp.raise_for_status()
+            except requests.HTTPError:
+                snippet = poll_resp.text[:512] if hasattr(poll_resp, "text") else ""
+                _log_agent(
+                    f"Enrollment poll failed attempt={attempt} status={poll_resp.status_code} "
+                    f"body_snippet={snippet}",
+                    fname="agent.error.log",
+                )
+                raise
             poll_data = poll_resp.json()
+            _log_agent(
+                f"Enrollment poll decoded attempt={attempt} status={poll_data.get('status')}"
+                f" next_delay={poll_data.get('poll_after_ms')}"
+                f" guid_hint={poll_data.get('guid')}",
+                fname="agent.log",
+            )
             status = poll_data.get("status")
             if status == "pending":
                 poll_delay = max(int(poll_data.get("poll_after_ms", 5000)) / 1000, 1)
+                _log_agent(
+                    f"Enrollment still pending attempt={attempt} new_delay={poll_delay}s",
+                    fname="agent.log",
+                )
+                attempt += 1
                 continue
             if status == "denied":
+                _log_agent("Enrollment denied by operator", fname="agent.error.log")
                 raise RuntimeError("Enrollment denied by operator")
             if status in ("expired", "unknown"):
+                _log_agent(
+                    f"Enrollment failed status={status} attempt={attempt}",
+                    fname="agent.error.log",
+                )
                 raise RuntimeError(f"Enrollment failed with status={status}")
             if status in ("approved", "completed"):
+                _log_agent(
+                    f"Enrollment approved attempt={attempt} ref={approval_reference}",
+                    fname="agent.log",
+                )
                 self._finalize_enrollment(poll_data)
                 break
             raise RuntimeError(f"Unexpected enrollment poll response: {poll_data}")
@@ -677,6 +761,12 @@ class AgentHttpClient:
         expires_in = int(payload.get("expires_in") or 900)
         if not (guid and access_token and refresh_token):
             raise RuntimeError("Enrollment approval response missing tokens or guid")
+        _log_agent(
+            "Enrollment approval payload received "
+            f"guid={guid} access_token_len={len(access_token)} refresh_token_len={len(refresh_token)} "
+            f"expires_in={expires_in}",
+            fname="agent.log",
+        )
         self.guid = str(guid).strip()
         self.access_token = access_token.strip()
         self.refresh_token = refresh_token.strip()
