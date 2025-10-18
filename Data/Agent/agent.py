@@ -2039,11 +2039,12 @@ async def connect_loop():
             url = client.websocket_base_url()
             print(f"[INFO] Connecting Agent to {url}...")
             _log_agent(f'Connecting to {url}...')
+            ws_kwargs = client.websocket_kwargs()
             await sio.connect(
                 url,
                 transports=['websocket'],
                 headers=client.auth_headers(),
-                ssl_verify=client.session.verify,
+                **ws_kwargs,
             )
             break
         except Exception as e:
