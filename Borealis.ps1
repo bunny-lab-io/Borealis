@@ -784,13 +784,19 @@ function InstallOrUpdate-BorealisAgent {
 
             # Copy Agent Files to Virtual Python Environment
             $coreAgentFiles = @(
-                (Join-Path $agentSourceRoot 'agent.py'),
                 (Join-Path $agentSourceRoot 'Python_API_Endpoints'),
+                (Join-Path $agentSourceRoot 'Roles'),
+                (Join-Path $agentSourceRoot 'Scripts'),
                 (Join-Path $agentSourceRoot 'agent_deployment.py'),
+                (Join-Path $agentSourceRoot 'agent.py'),
+                (Join-Path $agentSourceRoot 'ansible-ee-version.txt'),
                 (Join-Path $agentSourceRoot 'Borealis.ico'),
+                (Join-Path $agentSourceRoot 'fcntl_stub.py'),
                 (Join-Path $agentSourceRoot 'launch_service.ps1'),
                 (Join-Path $agentSourceRoot 'role_manager.py'),
-                (Join-Path $agentSourceRoot 'Roles')
+                (Join-Path $agentSourceRoot 'security.py'),
+                (Join-Path $agentSourceRoot 'sitecustomize.py'),
+                (Join-Path $agentSourceRoot 'termios_stub.py')
             )
 
             Copy-Item $coreAgentFiles -Destination $agentDestinationFolder -Recurse -Force
