@@ -929,15 +929,24 @@ class AgentHttpClient:
                     pass
 
             context = None
-            bundle_summary = {"count": None, "fingerprint": None}
+            bundle_summary = {"count": None, "fingerprint": None, "layered_default": None}
             if isinstance(verify, str) and os.path.isfile(verify):
-                bundle_count, bundle_fp = self.key_store.describe_server_certificate()
-                bundle_summary = {"count": bundle_count, "fingerprint": bundle_fp}
+                bundle_count, bundle_fp, layered_default = self.key_store.summarize_server_certificate()
+                bundle_summary = {
+                    "count": bundle_count,
+                    "fingerprint": bundle_fp,
+                    "layered_default": layered_default,
+                }
                 context = self.key_store.build_ssl_context()
                 if context is not None:
+                    if bundle_summary["layered_default"] is None:
+                        bundle_summary["layered_default"] = getattr(
+                            context, "_borealis_layered_default", None
+                        )
                     _log_agent(
                         "SocketIO TLS alignment created SSLContext from pinned bundle "
-                        f"count={bundle_count} fp={bundle_fp or '<none>'}",
+                        f"count={bundle_count} fp={bundle_fp or '<none>'} "
+                        f"layered_default={bundle_summary['layered_default']}",
                         fname="agent.log",
                     )
                 else:
@@ -956,7 +965,9 @@ class AgentHttpClient:
                 _reset_cached_session()
                 _log_agent(
                     "SocketIO TLS alignment applied dedicated SSLContext to engine/http "
-                    f"count={bundle_summary['count']} fp={bundle_summary['fingerprint'] or '<none>'}",
+                    f"count={bundle_summary['count']} "
+                    f"fp={bundle_summary['fingerprint'] or '<none>'} "
+                    f"layered_default={bundle_summary['layered_default']}",
                     fname="agent.log",
                 )
                 return
