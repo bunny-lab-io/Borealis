@@ -14,7 +14,9 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-_KEY_DIR = Path(__file__).resolve().parent.parent / "keys"
+from Modules.runtime import ensure_runtime_dir, runtime_path
+
+_KEY_DIR = runtime_path("keys")
 _KEY_FILE = _KEY_DIR / "borealis-jwt-ed25519.key"
 
 
@@ -96,7 +98,7 @@ def load_service() -> JWTService:
 
 
 def _load_or_create_private_key() -> ed25519.Ed25519PrivateKey:
-    _KEY_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_runtime_dir("keys")
     if _KEY_FILE.exists():
         with _KEY_FILE.open("rb") as fh:
             return serialization.load_pem_private_key(fh.read(), password=None)

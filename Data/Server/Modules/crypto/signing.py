@@ -10,9 +10,11 @@ from typing import Tuple
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+from Modules.runtime import ensure_runtime_dir, runtime_path
+
 from .keys import base64_from_spki_der
 
-_KEY_DIR = Path(__file__).resolve().parent.parent / "keys"
+_KEY_DIR = runtime_path("keys")
 _SIGNING_KEY_FILE = _KEY_DIR / "borealis-script-ed25519.key"
 _SIGNING_PUB_FILE = _KEY_DIR / "borealis-script-ed25519.pub"
 
@@ -41,7 +43,7 @@ def load_signer() -> ScriptSigner:
 
 
 def _load_or_create() -> ed25519.Ed25519PrivateKey:
-    _KEY_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_runtime_dir("keys")
     if _SIGNING_KEY_FILE.exists():
         with _SIGNING_KEY_FILE.open("rb") as fh:
             return serialization.load_pem_private_key(fh.read(), password=None)

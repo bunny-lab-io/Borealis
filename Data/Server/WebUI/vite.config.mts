@@ -4,16 +4,20 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import fs from 'fs';
 
+const runtimeCertDir = process.env.BOREALIS_CERT_DIR;
+
 const certCandidates = [
   process.env.BOREALIS_TLS_CERT,
+  runtimeCertDir && path.resolve(runtimeCertDir, 'borealis-server-cert.pem'),
   path.resolve(__dirname, '../certs/borealis-server-cert.pem'),
-  path.resolve(__dirname, '../../Data/Server/certs/borealis-server-cert.pem'),
+  path.resolve(__dirname, '../../../Server/Borealis/certs/borealis-server-cert.pem'),
 ] as const;
 
 const keyCandidates = [
   process.env.BOREALIS_TLS_KEY,
+  runtimeCertDir && path.resolve(runtimeCertDir, 'borealis-server-key.pem'),
   path.resolve(__dirname, '../certs/borealis-server-key.pem'),
-  path.resolve(__dirname, '../../Data/Server/certs/borealis-server-key.pem'),
+  path.resolve(__dirname, '../../../Server/Borealis/certs/borealis-server-key.pem'),
 ] as const;
 
 const pickFirst = (candidates: readonly (string | undefined)[]) => {

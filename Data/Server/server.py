@@ -20,6 +20,7 @@ Section Guide:
 
 import os
 import sys
+from pathlib import Path
 
 # Ensure the modular server package is importable when the runtime is launched
 # from a packaged directory (e.g., Server/Borealis). We look for the canonical
@@ -167,6 +168,10 @@ TLS_CERT_PATH, TLS_KEY_PATH, TLS_BUNDLE_PATH = certificates.certificate_paths()
 os.environ.setdefault("BOREALIS_TLS_CERT", TLS_CERT_PATH)
 os.environ.setdefault("BOREALIS_TLS_KEY", TLS_KEY_PATH)
 os.environ.setdefault("BOREALIS_TLS_BUNDLE", TLS_BUNDLE_PATH)
+try:
+    os.environ.setdefault("BOREALIS_CERT_DIR", str(Path(TLS_CERT_PATH).resolve().parent))
+except Exception:
+    pass
 
 JWT_SERVICE = jwt_service_module.load_service()
 SCRIPT_SIGNER = signing.load_signer()
