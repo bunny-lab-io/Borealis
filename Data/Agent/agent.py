@@ -1046,7 +1046,6 @@ def _collect_heartbeat_metrics() -> Dict[str, Any]:
     return metrics
 
 
-def _settings_dir():
 SERVER_CERT_PATH = _key_store().server_certificate_path()
 
 
