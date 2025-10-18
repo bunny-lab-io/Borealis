@@ -839,50 +839,47 @@ class AgentHttpClient:
             headers[_AGENT_CONTEXT_HEADER] = context_label
         return headers
 
-    def configure_socketio(self, client: "socketio.AsyncClient") -> Dict[str, Any]:
-        """Align Socket.IO TLS settings with the REST session and return connect kwargs."""
+    def configure_socketio(self, client: "socketio.AsyncClient") -> None:
+        """Align the Socket.IO engine's TLS verification with the REST client."""
 
-        connect_kwargs: Dict[str, Any] = {}
         try:
             verify = getattr(self.session, "verify", True)
-            ssl_value: Any
-            context = None
+            engine = getattr(client, "eio", None)
+            if engine is None:
+                return
 
-            if isinstance(verify, bool):
-                ssl_value = verify
-            elif isinstance(verify, str) and os.path.isfile(verify):
+            context = None
+            if isinstance(verify, str) and os.path.isfile(verify):
                 try:
                     context = ssl.create_default_context(cafile=verify)
                     context.check_hostname = False
-                    ssl_value = context
                 except Exception:
-                    ssl_value = True
-            else:
-                ssl_value = True
+                    context = None
 
-            connect_kwargs["ssl"] = ssl_value
-
-            engine = getattr(client, "eio", None)
-            if engine is not None:
+            if context is not None:
                 try:
-                    setattr(engine, "ssl", ssl_value)
+                    engine.ssl_context = context
                 except Exception:
                     pass
-                if context is not None:
-                    for attr in ("ssl_context", "ssl_verify"):
-                        try:
-                            setattr(engine, attr, context if attr == "ssl_context" else True)
-                        except Exception:
-                            pass
-                elif isinstance(ssl_value, bool):
-                    for attr in ("ssl_verify", "ssl_context"):
-                        try:
-                            setattr(engine, attr, ssl_value if attr == "ssl_verify" else None)
-                        except Exception:
-                            pass
+                try:
+                    engine.ssl_verify = True
+                except Exception:
+                    pass
+                return
+
+            # Fall back to boolean verification flags when we either do not
+            # have a pinned certificate bundle or failed to build a dedicated
+            # context for it.
+            try:
+                engine.ssl_context = None
+            except Exception:
+                pass
+            try:
+                engine.ssl_verify = False if verify is False else True
+            except Exception:
+                pass
         except Exception:
-            connect_kwargs.setdefault("ssl", True)
-        return connect_kwargs
+            pass
 
     # ------------------------------------------------------------------
     # Enrollment & token management
@@ -2626,7 +2623,7 @@ async def connect_loop():
     while True:
         try:
             client.ensure_authenticated()
-            connect_kwargs = client.configure_socketio(sio) or {}
+            client.configure_socketio(sio)
             try:
                 setattr(sio, "connection_error", None)
             except Exception:
@@ -2638,7 +2635,6 @@ async def connect_loop():
                 url,
                 transports=['websocket'],
                 headers=client.auth_headers(),
-                **connect_kwargs,
             )
             break
         except Exception as e:
