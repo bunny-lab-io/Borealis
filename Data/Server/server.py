@@ -212,6 +212,38 @@ def _write_service_log(service: str, msg: str, scope: Optional[str] = None, *, l
         pass
 
 
+def _mask_server_value(value: str, *, prefix: int = 4, suffix: int = 4) -> str:
+    try:
+        if not value:
+            return ''
+        stripped = value.strip()
+        if len(stripped) <= prefix + suffix:
+            return '*' * len(stripped)
+        return f"{stripped[:prefix]}***{stripped[-suffix:]}"
+    except Exception:
+        return '***'
+
+
+def _summarize_socket_headers(headers) -> str:
+    try:
+        rendered = []
+        for key, value in headers.items():
+            lowered = key.lower()
+            display = value
+            if lowered == 'authorization':
+                if isinstance(value, str) and value.lower().startswith('bearer '):
+                    token = value.split(' ', 1)[1]
+                    display = f"Bearer {_mask_server_value(token)}"
+                else:
+                    display = _mask_server_value(str(value))
+            elif lowered == 'cookie':
+                display = '<redacted>'
+            rendered.append(f"{key}={display}")
+        return ", ".join(rendered)
+    except Exception:
+        return '<header-summary-unavailable>'
+
+
 # =============================================================================
 # Section: Repository Hash Tracking
 # =============================================================================
@@ -8015,6 +8047,55 @@ def screenshot_node_viewer(agent_id, node_id):
 # =============================================================================
 # Realtime channels for screenshots, macros, windows, and Ansible control.
 
+@socketio.on('connect')
+def socket_connect():
+    try:
+        sid = getattr(request, 'sid', '<unknown>')
+    except Exception:
+        sid = '<unknown>'
+    try:
+        remote_addr = request.remote_addr
+    except Exception:
+        remote_addr = None
+    try:
+        scope = _canonical_server_scope(request.headers.get(_AGENT_CONTEXT_HEADER))
+    except Exception:
+        scope = None
+    try:
+        query_pairs = [f"{k}={v}" for k, v in request.args.items()]  # type: ignore[attr-defined]
+        query_summary = "&".join(query_pairs) if query_pairs else "<none>"
+    except Exception:
+        query_summary = "<unavailable>"
+    header_summary = _summarize_socket_headers(getattr(request, 'headers', {}))
+    transport = request.args.get('transport') if hasattr(request, 'args') else None  # type: ignore[attr-defined]
+    _write_service_log(
+        'server',
+        f"socket.io connect sid={sid} ip={remote_addr} transport={transport!r} query={query_summary} headers={header_summary}",
+        scope=scope,
+    )
+
+
+@socketio.on('disconnect')
+def socket_disconnect():
+    try:
+        sid = getattr(request, 'sid', '<unknown>')
+    except Exception:
+        sid = '<unknown>'
+    try:
+        remote_addr = request.remote_addr
+    except Exception:
+        remote_addr = None
+    try:
+        scope = _canonical_server_scope(request.headers.get(_AGENT_CONTEXT_HEADER))
+    except Exception:
+        scope = None
+    _write_service_log(
+        'server',
+        f"socket.io disconnect sid={sid} ip={remote_addr}",
+        scope=scope,
+    )
+
+
 @socketio.on("agent_screenshot_task")
 def receive_screenshot_task(data):
     agent_id = data.get("agent_id")
@@ -8044,6 +8125,19 @@ def connect_agent(data):
     if not agent_id:
         return
     print(f"Agent connected: {agent_id}")
+    try:
+        scope = _normalize_service_mode((data or {}).get("service_mode"), agent_id)
+    except Exception:
+        scope = None
+    try:
+        sid = getattr(request, 'sid', '<unknown>')
+    except Exception:
+        sid = '<unknown>'
+    _write_service_log(
+        'server',
+        f"socket.io connect_agent agent_id={agent_id} sid={sid} service_mode={scope}",
+        scope=scope,
+    )
 
     # Join per-agent room so we can address this connection specifically
     try:
@@ -8051,7 +8145,7 @@ def connect_agent(data):
     except Exception:
         pass
 
-    service_mode = _normalize_service_mode((data or {}).get("service_mode"), agent_id)
+    service_mode = scope if scope else _normalize_service_mode((data or {}).get("service_mode"), agent_id)
     rec = registered_agents.setdefault(agent_id, {})
     rec["agent_id"] = agent_id
     rec["hostname"] = rec.get("hostname", "unknown")

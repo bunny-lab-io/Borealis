@@ -154,7 +154,28 @@ def _describe_exception(exc: BaseException) -> str:
             parts.append(f"args={args!r}")
     except Exception:
         pass
+    try:
+        details = getattr(exc, "__dict__", None)
+        if isinstance(details, dict):
+            # Capture noteworthy nested attributes such as os_error/errno to help diagnose
+            # connection failures that collapse into generic ConnectionError wrappers.
+            for key in ("os_error", "errno", "code", "status"):
+                if key in details and details[key]:
+                    parts.append(f"{key}={details[key]!r}")
+    except Exception:
+        pass
     return "; ".join(part for part in parts if part)
+
+
+def _log_exception_trace(prefix: str) -> None:
+    try:
+        tb = traceback.format_exc()
+        if not tb:
+            return
+        for line in tb.rstrip().splitlines():
+            _log_agent(f"{prefix} trace: {line}", fname="agent.error.log")
+    except Exception:
+        pass
 
 # Headless/service mode flag (skip Qt and interactive UI)
 SYSTEM_SERVICE_MODE = ('--system-service' in sys.argv) or (os.environ.get('BOREALIS_AGENT_MODE') == 'system')
@@ -462,6 +483,31 @@ def _mask_sensitive(value: str, *, prefix: int = 4, suffix: int = 4) -> str:
         return f"{trimmed[:prefix]}***{trimmed[-suffix:]}"
     except Exception:
         return '***'
+
+
+def _format_debug_pairs(pairs: Dict[str, Any]) -> str:
+    try:
+        parts = []
+        for key, value in pairs.items():
+            parts.append(f"{key}={value!r}")
+        return ", ".join(parts)
+    except Exception:
+        return repr(pairs)
+
+
+def _summarize_headers(headers: Dict[str, str]) -> str:
+    try:
+        rendered: List[str] = []
+        for key, value in headers.items():
+            lowered = key.lower()
+            display = value
+            if lowered == 'authorization':
+                token = value.split()[-1] if value and ' ' in value else value
+                display = f"Bearer {_mask_sensitive(token)}"
+            rendered.append(f"{key}={display}")
+        return ", ".join(rendered)
+    except Exception:
+        return '<unavailable>'
 
 
 def _decode_base64_text(value):
@@ -846,9 +892,24 @@ class AgentHttpClient:
             verify = getattr(self.session, "verify", True)
             engine = getattr(client, "eio", None)
             if engine is None:
+                _log_agent(
+                    "SocketIO TLS alignment skipped; AsyncClient.eio missing",
+                    fname="agent.error.log",
+                )
                 return
 
             http_iface = getattr(engine, "http", None)
+
+            debug_info = {
+                "verify_type": type(verify).__name__,
+                "verify_value": verify,
+                "engine_type": type(engine).__name__,
+                "http_iface_present": http_iface is not None,
+            }
+            _log_agent(
+                f"SocketIO TLS alignment start: {_format_debug_pairs(debug_info)}",
+                fname="agent.log",
+            )
 
             def _set_attr(target: Any, name: str, value: Any) -> None:
                 if target is None:
@@ -872,8 +933,16 @@ class AgentHttpClient:
                 try:
                     context = ssl.create_default_context(cafile=verify)
                     context.check_hostname = False
+                    _log_agent(
+                        f"SocketIO TLS alignment created SSLContext from cafile={verify}",
+                        fname="agent.log",
+                    )
                 except Exception:
                     context = None
+                    _log_agent(
+                        f"SocketIO TLS alignment failed to build context from cafile={verify}",
+                        fname="agent.error.log",
+                    )
 
             if context is not None:
                 _set_attr(engine, "ssl_context", context)
@@ -883,6 +952,10 @@ class AgentHttpClient:
                 _set_attr(http_iface, "ssl_verify", True)
                 _set_attr(http_iface, "verify_ssl", True)
                 _reset_cached_session()
+                _log_agent(
+                    "SocketIO TLS alignment applied dedicated SSLContext to engine/http",
+                    fname="agent.log",
+                )
                 return
 
             # Fall back to boolean verification flags when we either do not
@@ -896,8 +969,16 @@ class AgentHttpClient:
             _set_attr(http_iface, "ssl_verify", verify_flag)
             _set_attr(http_iface, "verify_ssl", verify_flag)
             _reset_cached_session()
+            _log_agent(
+                f"SocketIO TLS alignment fallback verify_flag={verify_flag}",
+                fname="agent.log",
+            )
         except Exception:
-            pass
+            _log_agent(
+                "SocketIO TLS alignment encountered unexpected error",
+                fname="agent.error.log",
+            )
+            _log_exception_trace("configure_socketio")
 
     # ------------------------------------------------------------------
     # Enrollment & token management
@@ -2355,6 +2436,15 @@ async def send_agent_details_once():
 async def connect():
     print(f"[INFO] Successfully Connected to Borealis Server!")
     _log_agent('Connected to server.')
+    try:
+        sid = getattr(sio, 'sid', None)
+        transport = getattr(sio, 'transport', None)
+        _log_agent(
+            f'WebSocket handshake established sid={sid!r} transport={transport!r}',
+            fname='agent.log',
+        )
+    except Exception:
+        pass
     await sio.emit('connect_agent', {"agent_id": AGENT_ID, "service_mode": SERVICE_MODE})
 
     # Send an immediate heartbeat via authenticated REST call.
@@ -2649,21 +2739,47 @@ if not SYSTEM_SERVICE_MODE:
 async def connect_loop():
     retry = 5
     client = http_client()
+    attempt = 0
     while True:
+        attempt += 1
         try:
+            _log_agent(
+                f'connect_loop attempt={attempt} starting authentication phase',
+                fname='agent.log',
+            )
             client.ensure_authenticated()
+            auth_snapshot = {
+                'guid_present': bool(client.guid),
+                'access_token': bool(client.access_token),
+                'refresh_token': bool(client.refresh_token),
+                'access_expiry': client.access_expires_at,
+            }
+            _log_agent(
+                f"connect_loop attempt={attempt} auth snapshot: {_format_debug_pairs(auth_snapshot)}",
+                fname='agent.log',
+            )
             client.configure_socketio(sio)
             try:
                 setattr(sio, "connection_error", None)
             except Exception:
                 pass
             url = client.websocket_base_url()
+            headers = client.auth_headers()
+            header_summary = _summarize_headers(headers)
+            verify_value = getattr(client.session, 'verify', None)
+            _log_agent(
+                f"connect_loop attempt={attempt} dialing websocket url={url} transports=['websocket'] verify={verify_value!r} headers={header_summary}",
+                fname='agent.log',
+            )
             print(f"[INFO] Connecting Agent to {url}...")
-            _log_agent(f'Connecting to {url}...')
             await sio.connect(
                 url,
                 transports=['websocket'],
-                headers=client.auth_headers(),
+                headers=headers,
+            )
+            _log_agent(
+                f'connect_loop attempt={attempt} sio.connect completed successfully',
+                fname='agent.log',
             )
             break
         except Exception as e:
@@ -2674,8 +2790,13 @@ async def connect_loop():
                 conn_err = None
             if conn_err:
                 detail = f"{detail}; connection_error={conn_err!r}"
-            print(f"[WebSocket] Server unavailable: {detail}. Retrying in {retry}s...")
-            _log_agent(f'Server unavailable: {detail}', fname='agent.error.log')
+            message = (
+                f"connect_loop attempt={attempt} server unavailable: {detail}. "
+                f"Retrying in {retry}s..."
+            )
+            print(f"[WebSocket] {message}")
+            _log_agent(message, fname='agent.error.log')
+            _log_exception_trace(f'connect_loop attempt={attempt}')
             await asyncio.sleep(retry)
 
 if __name__=='__main__':
