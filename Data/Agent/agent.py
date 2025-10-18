@@ -845,34 +845,43 @@ class AgentHttpClient:
         connect_kwargs: Dict[str, Any] = {}
         try:
             verify = getattr(self.session, "verify", True)
+            ssl_value: Any
             context = None
-            if isinstance(verify, str) and os.path.isfile(verify):
+
+            if isinstance(verify, bool):
+                ssl_value = verify
+            elif isinstance(verify, str) and os.path.isfile(verify):
                 try:
                     context = ssl.create_default_context(cafile=verify)
                     context.check_hostname = False
+                    ssl_value = context
                 except Exception:
-                    context = None
-            if context is not None:
-                connect_kwargs["ssl_context"] = context
+                    ssl_value = True
+            else:
+                ssl_value = True
 
-            # The AsyncClient honours ``ssl_verify`` / ``ssl_context`` parameters
-            # passed to ``connect``.  For compatibility with older engineio builds
-            # we also reflect the values onto the underlying engine instance when
-            # available so reconnect attempts use the same trust material.
-            connect_kwargs["ssl_verify"] = verify
+            connect_kwargs["ssl"] = ssl_value
 
             engine = getattr(client, "eio", None)
             if engine is not None:
                 try:
-                    engine.ssl_context = connect_kwargs.get("ssl_context")
+                    setattr(engine, "ssl", ssl_value)
                 except Exception:
                     pass
-                try:
-                    engine.ssl_verify = verify
-                except Exception:
-                    pass
+                if context is not None:
+                    for attr in ("ssl_context", "ssl_verify"):
+                        try:
+                            setattr(engine, attr, context if attr == "ssl_context" else True)
+                        except Exception:
+                            pass
+                elif isinstance(ssl_value, bool):
+                    for attr in ("ssl_verify", "ssl_context"):
+                        try:
+                            setattr(engine, attr, ssl_value if attr == "ssl_verify" else None)
+                        except Exception:
+                            pass
         except Exception:
-            connect_kwargs.setdefault("ssl_verify", True)
+            connect_kwargs.setdefault("ssl", True)
         return connect_kwargs
 
     # ------------------------------------------------------------------
