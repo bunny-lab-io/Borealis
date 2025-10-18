@@ -637,6 +637,7 @@ class AgentHttpClient:
         self.refresh_token: Optional[str] = None
         self.access_expires_at: Optional[int] = None
         self._auth_lock = threading.RLock()
+        self._active_installer_code: Optional[str] = None
         self.refresh_base_url()
         self._configure_verify()
         self._reload_tokens_from_disk()
@@ -757,6 +758,7 @@ class AgentHttpClient:
                 "Installer code is required for enrollment. "
                 "Set BOREALIS_INSTALLER_CODE, pass --installer-code, or update agent_settings.json."
             )
+        self._active_installer_code = code
 
         wait_state = {"count": 0, "tokens_seen": False}
 
@@ -821,6 +823,19 @@ class AgentHttpClient:
                         f"Enrollment request failed status={resp.status_code} body_snippet={snippet}",
                         fname="agent.error.log",
                     )
+                    if resp.status_code == 400:
+                        try:
+                            err_payload = resp.json()
+                        except Exception:
+                            err_payload = {}
+                        if (err_payload or {}).get("error") in {"invalid_enrollment_code", "code_consumed"}:
+                            self._reload_tokens_from_disk()
+                            if self.guid and self.refresh_token:
+                                _log_agent(
+                                    "Enrollment code rejected but existing credentials are present; skipping re-enrollment",
+                                    fname="agent.log",
+                                )
+                                return
                     raise
                 data = resp.json()
                 _log_agent(
@@ -961,6 +976,7 @@ class AgentHttpClient:
             _update_agent_id_for_guid(self.guid)
         except Exception as exc:
             _log_agent(f"Failed to update agent id after enrollment: {exc}", fname="agent.error.log")
+        self._consume_installer_code()
         _log_agent(f"Enrollment finalized for guid={self.guid}", fname="agent.log")
 
     def refresh_access_token(self) -> None:
@@ -1017,6 +1033,19 @@ class AgentHttpClient:
             return code
         except Exception:
             return ""
+
+    def _consume_installer_code(self) -> None:
+        # Avoid clearing explicit CLI/env overrides; only mutate persisted config.
+        self._active_installer_code = None
+        if INSTALLER_CODE_OVERRIDE:
+            return
+        try:
+            if CONFIG.data.get("installer_code"):
+                CONFIG.data["installer_code"] = ""
+                CONFIG._write()
+                _log_agent("Cleared persisted installer code after successful enrollment", fname="agent.log")
+        except Exception as exc:
+            _log_agent(f"Failed to clear installer code after enrollment: {exc}", fname="agent.error.log")
 
     # ------------------------------------------------------------------
     # HTTP helpers
