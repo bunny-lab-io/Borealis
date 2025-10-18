@@ -929,25 +929,40 @@ class AgentHttpClient:
                     pass
 
             context = None
+            bundle_summary = {
+                "count": None,
+                "fingerprint": None,
+                "layered_default": None,
+                "trusted_first": None,
+            }
             if isinstance(verify, str) and os.path.isfile(verify):
-                try:
-                    # Mirror Requests' certificate handling by starting from a
-                    # default client context (which pre-loads the system
-                    # certificate stores) and then layering the pinned
-                    # certificate bundle on top. This matches the REST client
-                    # behaviour and ensures self-signed leaf certificates work
-                    # the same way for Socket.IO handshakes.
-                    context = ssl.create_default_context()
-                    context.check_hostname = False
-                    context.load_verify_locations(cafile=verify)
+                bundle_count, bundle_fp, layered_default = self.key_store.summarize_server_certificate()
+                bundle_summary = {
+                    "count": bundle_count,
+                    "fingerprint": bundle_fp,
+                    "layered_default": layered_default,
+                    "trusted_first": None,
+                }
+                context = self.key_store.build_ssl_context()
+                if context is not None:
+                    if bundle_summary["layered_default"] is None:
+                        bundle_summary["layered_default"] = getattr(
+                            context, "_borealis_layered_default", None
+                        )
+                    if bundle_summary["trusted_first"] is None:
+                        bundle_summary["trusted_first"] = getattr(
+                            context, "_borealis_trusted_first", None
+                        )
                     _log_agent(
-                        f"SocketIO TLS alignment created SSLContext from cafile={verify}",
+                        "SocketIO TLS alignment created SSLContext from pinned bundle "
+                        f"count={bundle_count} fp={bundle_fp or '<none>'} "
+                        f"layered_default={bundle_summary['layered_default']} "
+                        f"trusted_first={bundle_summary['trusted_first']}",
                         fname="agent.log",
                     )
-                except Exception:
-                    context = None
+                else:
                     _log_agent(
-                        f"SocketIO TLS alignment failed to build context from cafile={verify}",
+                        "SocketIO TLS alignment failed to build context from pinned bundle",  # noqa: E501
                         fname="agent.error.log",
                     )
 
@@ -960,7 +975,11 @@ class AgentHttpClient:
                 _set_attr(http_iface, "verify_ssl", True)
                 _reset_cached_session()
                 _log_agent(
-                    "SocketIO TLS alignment applied dedicated SSLContext to engine/http",
+                    "SocketIO TLS alignment applied dedicated SSLContext to engine/http "
+                    f"count={bundle_summary['count']} "
+                    f"fp={bundle_summary['fingerprint'] or '<none>'} "
+                    f"layered_default={bundle_summary['layered_default']} "
+                    f"trusted_first={bundle_summary['trusted_first']}",
                     fname="agent.log",
                 )
                 return
