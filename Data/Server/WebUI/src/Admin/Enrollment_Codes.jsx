@@ -65,7 +65,9 @@ const formatDateTime = (value) => {
 
 const determineStatus = (record) => {
   if (!record) return "expired";
-  if (record.used_at) return "used";
+  const maxUses = Number.isFinite(record?.max_uses) ? record.max_uses : 1;
+  const useCount = Number.isFinite(record?.use_count) ? record.use_count : 0;
+  if (useCount >= Math.max(1, maxUses || 1)) return "used";
   if (!record.expires_at) return "expired";
   const expires = new Date(record.expires_at);
   if (Number.isNaN(expires.getTime())) return "expired";
@@ -80,6 +82,7 @@ function EnrollmentCodes() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [ttlHours, setTtlHours] = useState(6);
   const [generating, setGenerating] = useState(false);
+  const [maxUses, setMaxUses] = useState(2);
 
   const filteredCodes = useMemo(() => {
     if (statusFilter === "all") return codes;
@@ -119,7 +122,7 @@ function EnrollmentCodes() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ttl_hours: ttlHours }),
+        body: JSON.stringify({ ttl_hours: ttlHours, max_uses: maxUses }),
       });
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
@@ -133,7 +136,7 @@ function EnrollmentCodes() {
     } finally {
       setGenerating(false);
     }
-  }, [fetchCodes, ttlHours]);
+  }, [fetchCodes, ttlHours, maxUses]);
 
   const handleDelete = useCallback(
     async (id) => {
@@ -216,11 +219,27 @@ function EnrollmentCodes() {
               labelId="ttl-select-label"
               label="Duration"
               value={ttlHours}
-              onChange={(event) => setTtlHours(event.target.value)}
+              onChange={(event) => setTtlHours(Number(event.target.value))}
             >
               {TTL_PRESETS.map((preset) => (
                 <MenuItem key={preset.value} value={preset.value}>
                   {preset.label}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <FormControl size="small" sx={{ minWidth: 160 }}>
+            <InputLabel id="uses-select-label">Allowed Uses</InputLabel>
+            <Select
+              labelId="uses-select-label"
+              label="Allowed Uses"
+              value={maxUses}
+              onChange={(event) => setMaxUses(Number(event.target.value))}
+            >
+              {[1, 2, 3, 5].map((uses) => (
+                <MenuItem key={uses} value={uses}>
+                  {uses === 1 ? "Single use" : `${uses} uses`}
                 </MenuItem>
               ))}
             </Select>
@@ -270,7 +289,9 @@ function EnrollmentCodes() {
                 <TableCell>Installer Code</TableCell>
                 <TableCell>Expires At</TableCell>
                 <TableCell>Created By</TableCell>
-                <TableCell>Used At</TableCell>
+                <TableCell>Usage</TableCell>
+                <TableCell>Last Used</TableCell>
+                <TableCell>Consumed At</TableCell>
                 <TableCell>Used By GUID</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
@@ -296,13 +317,17 @@ function EnrollmentCodes() {
               ) : (
                 filteredCodes.map((record) => {
                   const status = determineStatus(record);
-                  const disableDelete = status !== "active";
+                  const maxAllowed = Math.max(1, Number.isFinite(record?.max_uses) ? record.max_uses : 1);
+                  const usageCount = Math.max(0, Number.isFinite(record?.use_count) ? record.use_count : 0);
+                  const disableDelete = usageCount !== 0;
                   return (
                     <TableRow hover key={record.id}>
                       <TableCell>{renderStatusChip(record)}</TableCell>
                       <TableCell sx={{ fontFamily: "monospace" }}>{maskCode(record.code)}</TableCell>
                       <TableCell>{formatDateTime(record.expires_at)}</TableCell>
                       <TableCell>{record.created_by_user_id || "—"}</TableCell>
+                      <TableCell sx={{ fontFamily: "monospace" }}>{`${usageCount} / ${maxAllowed}`}</TableCell>
+                      <TableCell>{formatDateTime(record.last_used_at)}</TableCell>
                       <TableCell>{formatDateTime(record.used_at)}</TableCell>
                       <TableCell sx={{ fontFamily: "monospace" }}>
                         {record.used_by_guid || "—"}

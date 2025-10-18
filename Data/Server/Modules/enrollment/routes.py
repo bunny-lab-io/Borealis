@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone, timedelta
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from flask import Blueprint, jsonify, request
 
@@ -66,31 +66,79 @@ def register(
 
     def _load_install_code(cur: sqlite3.Cursor, code_value: str) -> Optional[Dict[str, Any]]:
         cur.execute(
-            "SELECT id, code, expires_at, used_at FROM enrollment_install_codes WHERE code = ?",
+            """
+            SELECT id,
+                   code,
+                   expires_at,
+                   used_at,
+                   used_by_guid,
+                   max_uses,
+                   use_count,
+                   last_used_at
+              FROM enrollment_install_codes
+             WHERE code = ?
+            """,
             (code_value,),
         )
         row = cur.fetchone()
         if not row:
             return None
-        keys = ["id", "code", "expires_at", "used_at"]
+        keys = [
+            "id",
+            "code",
+            "expires_at",
+            "used_at",
+            "used_by_guid",
+            "max_uses",
+            "use_count",
+            "last_used_at",
+        ]
         record = dict(zip(keys, row))
         return record
 
-    def _install_code_valid(record: Dict[str, Any]) -> bool:
+    def _install_code_valid(
+        record: Dict[str, Any], fingerprint: str, cur: sqlite3.Cursor
+    ) -> Tuple[bool, Optional[str]]:
         if not record:
-            return False
+            return False, None
         expires_at = record.get("expires_at")
         if not isinstance(expires_at, str):
-            return False
+            return False, None
         try:
             expiry = datetime.fromisoformat(expires_at)
         except Exception:
-            return False
+            return False, None
         if expiry <= _now():
-            return False
-        if record.get("used_at"):
-            return False
-        return True
+            return False, None
+        try:
+            max_uses = int(record.get("max_uses") or 1)
+        except Exception:
+            max_uses = 1
+        if max_uses < 1:
+            max_uses = 1
+        try:
+            use_count = int(record.get("use_count") or 0)
+        except Exception:
+            use_count = 0
+        if use_count < max_uses:
+            return True, None
+
+        guid = str(record.get("used_by_guid") or "").strip()
+        if not guid:
+            return False, None
+        cur.execute(
+            "SELECT ssl_key_fingerprint FROM devices WHERE guid = ?",
+            (guid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False, None
+        stored_fp = (row[0] or "").strip().lower()
+        if not stored_fp:
+            return False, None
+        if stored_fp == (fingerprint or "").strip().lower():
+            return True, guid
+        return False, None
 
     def _normalize_host(hostname: str, guid: str, cur: sqlite3.Cursor) -> str:
         base = (hostname or "").strip() or guid
@@ -305,7 +353,13 @@ def register(
         try:
             cur = conn.cursor()
             install_code = _load_install_code(cur, enrollment_code)
-            if not _install_code_valid(install_code):
+            valid_code, reuse_guid = _install_code_valid(install_code, fingerprint, cur)
+            if not valid_code:
+                log(
+                    "server",
+                    "enrollment request invalid_code "
+                    f"host={hostname} fingerprint={fingerprint[:12]} code_mask={_mask_code(enrollment_code)}",
+                )
                 return jsonify({"error": "invalid_enrollment_code"}), 400
 
             approval_reference: str
@@ -331,6 +385,7 @@ def register(
                     """
                     UPDATE device_approvals
                        SET hostname_claimed = ?,
+                           guid = ?,
                            enrollment_code_id = ?,
                            client_nonce = ?,
                            server_nonce = ?,
@@ -340,6 +395,7 @@ def register(
                     """,
                     (
                         hostname,
+                        reuse_guid,
                         install_code["id"],
                         client_nonce_b64,
                         server_nonce_b64,
@@ -359,11 +415,12 @@ def register(
                         status, client_nonce, server_nonce, agent_pubkey_der,
                         created_at, updated_at
                     )
-                    VALUES (?, ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                     """,
                     (
                         record_id,
                         approval_reference,
+                        reuse_guid,
                         hostname,
                         fingerprint,
                         install_code["id"],
@@ -538,13 +595,39 @@ def register(
             # Mark install code used
             if enrollment_code_id:
                 cur.execute(
+                    "SELECT use_count, max_uses FROM enrollment_install_codes WHERE id = ?",
+                    (enrollment_code_id,),
+                )
+                usage_row = cur.fetchone()
+                try:
+                    prior_count = int(usage_row[0]) if usage_row else 0
+                except Exception:
+                    prior_count = 0
+                try:
+                    allowed_uses = int(usage_row[1]) if usage_row else 1
+                except Exception:
+                    allowed_uses = 1
+                if allowed_uses < 1:
+                    allowed_uses = 1
+                new_count = prior_count + 1
+                consumed = new_count >= allowed_uses
+                cur.execute(
                     """
                     UPDATE enrollment_install_codes
-                       SET used_at = ?, used_by_guid = ?
+                       SET use_count = ?,
+                           used_by_guid = ?,
+                           last_used_at = ?,
+                           used_at = CASE WHEN ? THEN ? ELSE used_at END
                      WHERE id = ?
-                       AND used_at IS NULL
                     """,
-                    (now_iso, effective_guid, enrollment_code_id),
+                    (
+                        new_count,
+                        effective_guid,
+                        now_iso,
+                        1 if consumed else 0,
+                        now_iso,
+                        enrollment_code_id,
+                    ),
                 )
 
             # Update approval record with final state

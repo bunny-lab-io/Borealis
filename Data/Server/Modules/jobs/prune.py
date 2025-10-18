@@ -34,7 +34,7 @@ def _run_once(db_conn_factory: Callable[[], any], log: Callable[[str, str], None
         cur.execute(
             """
             DELETE FROM enrollment_install_codes
-             WHERE used_at IS NULL
+             WHERE use_count = 0
                AND expires_at < ?
             """,
             (now_iso,),
@@ -52,7 +52,10 @@ def _run_once(db_conn_factory: Callable[[], any], log: Callable[[str, str], None
                         SELECT 1
                           FROM enrollment_install_codes c
                          WHERE c.id = device_approvals.enrollment_code_id
-                           AND c.expires_at < ?
+                           AND (
+                               c.expires_at < ?
+                               OR c.use_count >= c.max_uses
+                           )
                      )
                     OR created_at < ?
                )
