@@ -8,6 +8,7 @@ import jwt
 from flask import g, jsonify, request
 
 from Modules.auth.dpop import DPoPValidator, DPoPVerificationError, DPoPReplayError
+from Modules.auth.rate_limit import SlidingWindowRateLimiter
 
 
 @dataclass
@@ -25,11 +26,18 @@ class DeviceAuthError(Exception):
     status_code = 401
     error_code = "unauthorized"
 
-    def __init__(self, message: str = "unauthorized", *, status_code: Optional[int] = None):
+    def __init__(
+        self,
+        message: str = "unauthorized",
+        *,
+        status_code: Optional[int] = None,
+        retry_after: Optional[float] = None,
+    ):
         super().__init__(message)
         if status_code is not None:
             self.status_code = status_code
         self.message = message
+        self.retry_after = retry_after
 
 
 class DeviceAuthManager:
@@ -40,11 +48,13 @@ class DeviceAuthManager:
         jwt_service,
         dpop_validator: Optional[DPoPValidator],
         log: Callable[[str, str], None],
+        rate_limiter: Optional[SlidingWindowRateLimiter] = None,
     ) -> None:
         self._db_conn_factory = db_conn_factory
         self._jwt_service = jwt_service
         self._dpop_validator = dpop_validator
         self._log = log
+        self._rate_limiter = rate_limiter
 
     def authenticate(self) -> DeviceAuthContext:
         auth_header = request.headers.get("Authorization", "")
@@ -66,6 +76,15 @@ class DeviceAuthManager:
         token_version = int(claims.get("token_version") or 0)
         if not guid or not fingerprint or token_version <= 0:
             raise DeviceAuthError("invalid_claims")
+
+        if self._rate_limiter:
+            decision = self._rate_limiter.check(f"fp:{fingerprint}", 60, 60.0)
+            if not decision.allowed:
+                raise DeviceAuthError(
+                    "rate_limited",
+                    status_code=429,
+                    retry_after=decision.retry_after,
+                )
 
         conn = self._db_conn_factory()
         try:
@@ -138,6 +157,12 @@ def require_device_auth(manager: DeviceAuthManager):
             except DeviceAuthError as exc:
                 response = jsonify({"error": exc.message})
                 response.status_code = exc.status_code
+                retry_after = getattr(exc, "retry_after", None)
+                if retry_after:
+                    try:
+                        response.headers["Retry-After"] = str(max(1, int(retry_after)))
+                    except Exception:
+                        response.headers["Retry-After"] = "1"
                 return response
 
             g.device_auth = ctx

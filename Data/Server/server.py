@@ -27,7 +27,7 @@ from eventlet import tpool
 import requests
 import re
 import base64
-from flask import Flask, request, jsonify, Response, send_from_directory, make_response, session
+from flask import Flask, request, jsonify, Response, send_from_directory, make_response, session, g
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -51,7 +51,7 @@ from datetime import datetime, timezone
 from Modules import db_migrations
 from Modules.auth import jwt_service as jwt_service_module
 from Modules.auth.dpop import DPoPValidator
-from Modules.auth.device_auth import DeviceAuthManager
+from Modules.auth.device_auth import DeviceAuthManager, require_device_auth
 from Modules.auth.rate_limit import SlidingWindowRateLimiter
 from Modules.agents import routes as agent_routes
 from Modules.crypto import certificates, signing
@@ -95,9 +95,8 @@ def _rotate_daily(path: str):
             dt = _dt.datetime.fromtimestamp(mtime)
             today = _dt.datetime.now().date()
             if dt.date() != today:
-                base, ext = os.path.splitext(path)
                 suffix = dt.strftime('%Y-%m-%d')
-                newp = f"{base}.{suffix}{ext}"
+                newp = f"{path}.{suffix}"
                 try:
                     os.replace(path, newp)
                 except Exception:
@@ -158,6 +157,7 @@ JWT_SERVICE = jwt_service_module.load_service()
 SCRIPT_SIGNER = signing.load_signer()
 IP_RATE_LIMITER = SlidingWindowRateLimiter()
 FP_RATE_LIMITER = SlidingWindowRateLimiter()
+AUTH_RATE_LIMITER = SlidingWindowRateLimiter()
 ENROLLMENT_NONCE_CACHE = NonceCache()
 DPOP_VALIDATOR = DPoPValidator()
 DEVICE_AUTH_MANAGER: Optional[DeviceAuthManager] = None
@@ -1263,6 +1263,7 @@ if DEVICE_AUTH_MANAGER is None:
         jwt_service=JWT_SERVICE,
         dpop_validator=DPOP_VALIDATOR,
         log=_write_service_log,
+        rate_limiter=AUTH_RATE_LIMITER,
     )
 
 def _update_last_login(username: str) -> None:
@@ -4851,6 +4852,7 @@ enrollment_routes.register(
     ip_rate_limiter=IP_RATE_LIMITER,
     fp_rate_limiter=FP_RATE_LIMITER,
     nonce_cache=ENROLLMENT_NONCE_CACHE,
+    script_signer=SCRIPT_SIGNER,
 )
 
 token_routes.register(
@@ -6254,6 +6256,7 @@ def _deep_merge_preserve(prev: dict, incoming: dict) -> dict:
 # Endpoint: /api/agent/details — methods POST.
 
 @app.route("/api/agent/details", methods=["POST"])
+@require_device_auth(DEVICE_AUTH_MANAGER)
 def save_agent_details():
     data = request.get_json(silent=True) or {}
     hostname = data.get("hostname")
@@ -6264,11 +6267,9 @@ def save_agent_details():
         agent_hash = agent_hash.strip() or None
     else:
         agent_hash = None
-    agent_guid = data.get("agent_guid")
-    if isinstance(agent_guid, str):
-        agent_guid = agent_guid.strip() or None
-    else:
-        agent_guid = None
+    ctx = getattr(g, "device_auth")
+    auth_guid = _normalize_guid(ctx.guid)
+    fingerprint = (ctx.ssl_key_fingerprint or "").strip()
     if not hostname and isinstance(details, dict):
         hostname = (details.get("summary") or {}).get("hostname")
     if not hostname or not isinstance(details, dict):
@@ -6285,6 +6286,13 @@ def save_agent_details():
         created_at = int(snapshot.get("created_at") or 0)
         existing_guid = (snapshot.get("agent_guid") or "").strip() or None
         existing_agent_hash = (snapshot.get("agent_hash") or "").strip() or None
+        db_fp = (snapshot.get("ssl_key_fingerprint") or "").strip().lower()
+        if db_fp and fingerprint and db_fp != fingerprint.lower():
+            return jsonify({"error": "fingerprint_mismatch"}), 403
+
+        normalized_existing_guid = _normalize_guid(existing_guid) if existing_guid else None
+        if normalized_existing_guid and auth_guid and normalized_existing_guid != auth_guid:
+            return jsonify({"error": "guid_mismatch"}), 403
 
         # Ensure summary exists and attach hostname/agent_id if missing
         incoming_summary = details.setdefault("summary", {})
@@ -6300,10 +6308,12 @@ def save_agent_details():
                 incoming_summary["agent_hash"] = agent_hash
             except Exception:
                 pass
-        effective_guid = agent_guid or existing_guid
-        normalized_effective_guid = _normalize_guid(effective_guid) if effective_guid else None
+        effective_guid = auth_guid or existing_guid
+        normalized_effective_guid = auth_guid or normalized_existing_guid
         if normalized_effective_guid:
             incoming_summary["agent_guid"] = normalized_effective_guid
+        if fingerprint:
+            incoming_summary.setdefault("ssl_key_fingerprint", fingerprint)
 
         # Preserve last_seen if incoming omitted it
         if not incoming_summary.get("last_seen"):
@@ -6366,6 +6376,24 @@ def save_agent_details():
             agent_hash=agent_hash or existing_agent_hash,
             guid=normalized_effective_guid,
         )
+        if normalized_effective_guid and fingerprint:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            cur.execute(
+                """
+                UPDATE devices
+                   SET ssl_key_fingerprint = ?,
+                       key_added_at = COALESCE(key_added_at, ?)
+                 WHERE guid = ?
+                """,
+                (fingerprint, now_iso, normalized_effective_guid),
+            )
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO device_keys (id, guid, ssl_key_fingerprint, added_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (str(uuid.uuid4()), normalized_effective_guid, fingerprint, now_iso),
+            )
         conn.commit()
         conn.close()
 
@@ -7149,16 +7177,28 @@ def _service_acct_set(conn, agent_id: str, username: str, plaintext_password: st
 # Endpoint: /api/agent/checkin — methods POST.
 
 @app.route('/api/agent/checkin', methods=['POST'])
+@require_device_auth(DEVICE_AUTH_MANAGER)
 def api_agent_checkin():
     payload = request.get_json(silent=True) or {}
     agent_id = (payload.get('agent_id') or '').strip()
     if not agent_id:
         return jsonify({'error': 'agent_id required'}), 400
+
+    ctx = getattr(g, "device_auth")
+    auth_guid = _normalize_guid(ctx.guid)
+    fingerprint = (ctx.ssl_key_fingerprint or "").strip()
     raw_username = (payload.get('username') or '').strip()
     username = raw_username or DEFAULT_SERVICE_ACCOUNT
     if username in LEGACY_SERVICE_ACCOUNTS:
         username = DEFAULT_SERVICE_ACCOUNT
     hostname = (payload.get('hostname') or '').strip()
+
+    reg = registered_agents.get(agent_id) or {}
+    reg_guid = _normalize_guid(reg.get("agent_guid") or "")
+    if reg_guid and auth_guid and reg_guid != auth_guid:
+        return jsonify({'error': 'guid_mismatch'}), 403
+
+    conn = None
     try:
         conn = _db_conn()
         row = _service_acct_get(conn, agent_id)
@@ -7189,38 +7229,92 @@ def api_agent_checkin():
                     'password': plain,
                     'last_rotated_utc': row[3] or _now_iso_utc(),
                 }
-        conn.close()
-        _ansible_log_server(f"[checkin] return creds agent_id={agent_id} user={out['username']}")
+
+        now_ts = int(time.time())
         try:
             if hostname:
-                _persist_last_seen(hostname, int(time.time()), agent_id)
+                _persist_last_seen(hostname, now_ts, agent_id)
         except Exception:
             pass
-        agent_guid = _ensure_agent_guid(agent_id, hostname or None)
-        if agent_guid and agent_id:
-            rec = registered_agents.setdefault(agent_id, {})
-            rec['agent_guid'] = agent_guid
-        else:
-            agent_guid = agent_guid or ''
-        return jsonify({
-            'username': out['username'],
-            'password': out['password'],
-            'policy': { 'force_rotation_minutes': 43200 },
-            'agent_guid': agent_guid or None,
-        })
+
+        try:
+            cur = conn.cursor()
+            if auth_guid:
+                cur.execute(
+                    """
+                    UPDATE devices
+                       SET agent_id = COALESCE(?, agent_id),
+                           ssl_key_fingerprint = COALESCE(?, ssl_key_fingerprint),
+                           last_seen = ?
+                     WHERE guid = ?
+                    """,
+                    (agent_id or None, fingerprint or None, now_ts, auth_guid),
+                )
+                if cur.rowcount == 0 and hostname:
+                    cur.execute(
+                        """
+                        UPDATE devices
+                           SET guid = ?,
+                               agent_id = COALESCE(?, agent_id),
+                               ssl_key_fingerprint = COALESCE(?, ssl_key_fingerprint),
+                               last_seen = ?
+                         WHERE hostname = ?
+                        """,
+                        (auth_guid, agent_id or None, fingerprint or None, now_ts, hostname),
+                    )
+                if fingerprint:
+                    cur.execute(
+                        """
+                        INSERT OR IGNORE INTO device_keys (id, guid, ssl_key_fingerprint, added_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (str(uuid.uuid4()), auth_guid, fingerprint, datetime.now(timezone.utc).isoformat()),
+                    )
+            conn.commit()
+        except Exception as exc:
+            _write_service_log("server", f"device update during checkin failed: {exc}")
+
+        registered = registered_agents.setdefault(agent_id, {})
+        if auth_guid:
+            registered["agent_guid"] = auth_guid
+
+        _ansible_log_server(f"[checkin] return creds agent_id={agent_id} user={out['username']}")
+        return jsonify(
+            {
+                'username': out['username'],
+                'password': out['password'],
+                'policy': {'force_rotation_minutes': 43200},
+                'agent_guid': auth_guid or None,
+            }
+        )
     except Exception as e:
         _ansible_log_server(f"[checkin] error agent_id={agent_id} err={e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 # Endpoint: /api/agent/service-account/rotate — methods POST.
 
 @app.route('/api/agent/service-account/rotate', methods=['POST'])
+@require_device_auth(DEVICE_AUTH_MANAGER)
 def api_agent_service_account_rotate():
     payload = request.get_json(silent=True) or {}
     agent_id = (payload.get('agent_id') or '').strip()
     if not agent_id:
         return jsonify({'error': 'agent_id required'}), 400
+
+    ctx = getattr(g, "device_auth")
+    auth_guid = _normalize_guid(ctx.guid)
+    reg = registered_agents.get(agent_id) or {}
+    reg_guid = _normalize_guid(reg.get("agent_guid") or "")
+    if reg_guid and auth_guid and reg_guid != auth_guid:
+        return jsonify({'error': 'guid_mismatch'}), 403
+
     requested_username = (payload.get('username') or '').strip()
     try:
         conn = _db_conn()
@@ -7234,7 +7328,12 @@ def api_agent_service_account_rotate():
             _ansible_log_server(f"[rotate] upgrading legacy service user for agent_id={agent_id}")
         pw_new = _gen_strong_password()
         out = _service_acct_set(conn, agent_id, user_eff, pw_new)
-        conn.close()
+        try:
+            registered = registered_agents.setdefault(agent_id, {})
+            if auth_guid:
+                registered["agent_guid"] = auth_guid
+        finally:
+            conn.close()
         _ansible_log_server(f"[rotate] rotated agent_id={agent_id} user={out['username']} at={out['last_rotated_utc']}")
         return jsonify({
             'username': out['username'],

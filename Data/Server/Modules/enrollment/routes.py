@@ -26,6 +26,7 @@ def register(
     ip_rate_limiter: SlidingWindowRateLimiter,
     fp_rate_limiter: SlidingWindowRateLimiter,
     nonce_cache: NonceCache,
+    script_signer,
 ) -> None:
     blueprint = Blueprint("enrollment", __name__)
 
@@ -41,6 +42,14 @@ def register(
             return forwarded.split(",")[0].strip()
         addr = request.remote_addr or "unknown"
         return addr.strip()
+
+    def _signing_key_b64() -> str:
+        if not script_signer:
+            return ""
+        try:
+            return script_signer.public_base64_spki()
+        except Exception:
+            return ""
 
     def _rate_limited(key: str, limiter: SlidingWindowRateLimiter, limit: int, window_s: float):
         decision = limiter.check(key, limit, window_s)
@@ -312,6 +321,7 @@ def register(
             "server_nonce": server_nonce_b64,
             "poll_after_ms": 3000,
             "server_certificate": _load_tls_bundle(tls_bundle_path),
+            "signing_key": _signing_key_b64(),
         }
         log("server", f"enrollment request queued fingerprint={fingerprint[:12]} host={hostname} ip={remote}")
         return jsonify(response)
@@ -466,6 +476,7 @@ def register(
                 "refresh_token": refresh_info["token"],
                 "token_type": "Bearer",
                 "server_certificate": _load_tls_bundle(tls_bundle_path),
+                "signing_key": _signing_key_b64(),
             }
         )
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 import eventlet
@@ -25,7 +25,9 @@ def start_prune_job(
 
 
 def _run_once(db_conn_factory: Callable[[], any], log: Callable[[str, str], None]) -> None:
-    now_iso = datetime.now(tz=timezone.utc).isoformat()
+    now = datetime.now(tz=timezone.utc)
+    now_iso = now.isoformat()
+    stale_before = (now - timedelta(hours=24)).isoformat()
     conn = db_conn_factory()
     try:
         cur = conn.cursor()
@@ -55,7 +57,7 @@ def _run_once(db_conn_factory: Callable[[], any], log: Callable[[str, str], None
                     OR created_at < ?
                )
             """,
-            (now_iso, now_iso, now_iso),
+            (now_iso, now_iso, stale_before),
         )
         approvals_marked = cur.rowcount or 0
 

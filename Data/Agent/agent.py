@@ -20,7 +20,7 @@ import datetime
 import shutil
 import string
 import ssl
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import requests
 try:
@@ -31,6 +31,9 @@ import aiohttp
 
 import socketio
 from security import AgentKeyStore
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 # Centralized logging helpers (Agent)
 def _agent_logs_root() -> str:
@@ -49,9 +52,8 @@ def _rotate_daily(path: str):
             dt = _dt.datetime.fromtimestamp(mtime)
             today = _dt.datetime.now().date()
             if dt.date() != today:
-                base, ext = os.path.splitext(path)
                 suffix = dt.strftime('%Y-%m-%d')
-                newp = f"{base}.{suffix}{ext}"
+                newp = f"{path}.{suffix}"
                 try:
                     os.replace(path, newp)
                 except Exception:
@@ -239,6 +241,21 @@ def _decode_base64_text(value):
         return decoded.decode('utf-8')
     except Exception:
         return decoded.decode('utf-8', errors='replace')
+
+
+def _decode_base64_bytes(value):
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return b""
+    cleaned = ''.join(stripped.split())
+    if not cleaned:
+        return b""
+    try:
+        return base64.b64decode(cleaned, validate=True)
+    except Exception:
+        return None
 
 
 def _decode_script_payload(content, encoding_hint):
@@ -554,6 +571,12 @@ class AgentHttpClient:
         if data.get("server_certificate"):
             self.key_store.save_server_certificate(data["server_certificate"])
             self._configure_verify()
+        signing_key = data.get("signing_key")
+        if signing_key:
+            try:
+                self.store_server_signing_key(signing_key)
+            except Exception as exc:
+                _log_agent(f'Unable to persist signing key from enrollment handshake: {exc}', fname='agent.error.log')
         if data.get("status") != "pending":
             raise RuntimeError(f"Unexpected enrollment status: {data}")
         approval_reference = data.get("approval_reference")
@@ -595,6 +618,12 @@ class AgentHttpClient:
         if server_cert:
             self.key_store.save_server_certificate(server_cert)
             self._configure_verify()
+        signing_key = payload.get("signing_key")
+        if signing_key:
+            try:
+                self.store_server_signing_key(signing_key)
+            except Exception as exc:
+                _log_agent(f'Unable to persist signing key from enrollment approval: {exc}', fname='agent.error.log')
         guid = payload.get("guid")
         access_token = payload.get("access_token")
         refresh_token = payload.get("refresh_token")
@@ -691,7 +720,8 @@ class AgentHttpClient:
         require_auth: bool = True,
     ) -> Any:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.post_json, path, payload, require_auth)
+        task = partial(self.post_json, path, payload, require_auth=require_auth)
+        return await loop.run_in_executor(None, task)
 
     def websocket_base_url(self) -> str:
         self.refresh_base_url()
@@ -1324,6 +1354,47 @@ async def send_heartbeat():
         await asyncio.sleep(60)
 
 
+def _verify_and_store_script_signature(
+    client: AgentHttpClient,
+    script_bytes: bytes,
+    signature_b64: str,
+    signing_key_hint: Optional[str] = None,
+) -> bool:
+    candidates: List[str] = []
+    if isinstance(signing_key_hint, str) and signing_key_hint.strip():
+        candidates.append(signing_key_hint.strip())
+    stored_key = client.load_server_signing_key()
+    if stored_key:
+        key_text = stored_key.strip()
+        if key_text and key_text not in candidates:
+            candidates.append(key_text)
+    for key_b64 in candidates:
+        try:
+            key_der = base64.b64decode(key_b64, validate=True)
+        except Exception:
+            continue
+        try:
+            public_key = serialization.load_der_public_key(key_der)
+        except Exception:
+            continue
+        if not isinstance(public_key, ed25519.Ed25519PublicKey):
+            continue
+        try:
+            signature = base64.b64decode(signature_b64, validate=True)
+        except Exception:
+            return False
+        try:
+            public_key.verify(signature, script_bytes)
+            if stored_key and stored_key.strip() != key_b64:
+                client.store_server_signing_key(key_b64)
+            elif not stored_key:
+                client.store_server_signing_key(key_b64)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 async def poll_script_requests():
     await asyncio.sleep(20)
     client = http_client()
@@ -1334,9 +1405,33 @@ async def poll_script_requests():
             response = await client.async_post_json("/api/agent/script/request", payload, require_auth=True)
             if isinstance(response, dict):
                 signing_key = response.get("signing_key")
-                if signing_key:
-                    client.store_server_signing_key(signing_key)
-                # Placeholder: future script execution handling lives here.
+                script_b64 = response.get("script")
+                signature_b64 = response.get("signature")
+                sig_alg = (response.get("sig_alg") or "").lower()
+                if script_b64 and signature_b64:
+                    script_bytes = _decode_base64_bytes(script_b64)
+                    if script_bytes is None:
+                        _log_agent('received script payload with invalid base64 encoding', fname='agent.error.log')
+                    elif sig_alg and sig_alg not in ("ed25519", "eddsa"):
+                        _log_agent(f'unsupported script signature algorithm: {sig_alg}', fname='agent.error.log')
+                    else:
+                        existing_key = client.load_server_signing_key()
+                        key_available = bool(
+                            (isinstance(signing_key, str) and signing_key.strip())
+                            or (isinstance(existing_key, str) and existing_key.strip())
+                        )
+                        if not key_available:
+                            _log_agent('no server signing key available to verify script payload', fname='agent.error.log')
+                        elif _verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
+                            _log_agent('received signed script payload (verification succeeded); awaiting executor integration')
+                        else:
+                            _log_agent('rejected script payload due to invalid signature', fname='agent.error.log')
+                elif signing_key:
+                    # No script content, but we may need to persist updated signing key.
+                    try:
+                        client.store_server_signing_key(signing_key)
+                    except Exception as exc:
+                        _log_agent(f'failed to persist server signing key: {exc}', fname='agent.error.log')
         except Exception as exc:
             _log_agent(f'script request poll failed: {exc}', fname='agent.error.log')
         await asyncio.sleep(30)

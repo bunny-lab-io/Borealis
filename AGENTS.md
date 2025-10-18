@@ -56,6 +56,7 @@ Agents establish TLS-secured REST calls to the Flask backend on port 5000 and ke
   - The canonical device GUID (persisted to `guid.txt` alongside the key material).
   - A short-lived access token (EdDSA/JWT) and a long-lived refresh token (stored encrypted via DPAPI and hashed server-side).
   - The server TLS certificate and script-signing public key so the agent can pin both for future sessions.
+- Scripts delivered over REST are signed with the server's Ed25519 code-signing key. The agent validates the signature before anything is queued for execution.
 - Access tokens are automatically refreshed before expiry. Refresh failures trigger a re-enrollment.
 - All REST calls (heartbeat, script polling, device details, service check-in) use these tokens; WebSocket connections include the `Authorization` header as well.
 - Specify the installer code via `--installer-code <code>`, `BOREALIS_INSTALLER_CODE`, or by adding `"installer_code": "<code>"` to `Agent/Borealis/Settings/agent_settings.json`.
@@ -64,7 +65,7 @@ Agents establish TLS-secured REST calls to the Flask backend on port 5000 and ke
 The agent runs in the interactive user session. SYSTEM-level script execution is provided by the ScriptExec SYSTEM role using ephemeral scheduled tasks; no separate supervisor or watchdog is required.
 
 ### Logging & State
-All runtime logs live under `Logs/<ServiceName>` relative to the project root (`Logs/Agent` for the agent family). The project avoids writing to `%ProgramData%`, `%AppData%`, or other system directories so the entire footprint stays under the Borealis folder. Log rotation is not yet implemented; contributions should consider a built-in retention strategy. Configuration and state currently live alongside the agent code.
+All runtime logs live under `Logs/<ServiceName>` relative to the project root (`Logs/Agent` for the agent family). Logs rotate daily and adopt the `<service>.log.YYYY-MM-DD` suffix on rollover; nothing is deleted automatically. The project avoids writing to `%ProgramData%`, `%AppData%`, or other system directories so the entire footprint stays under the Borealis folder. Configuration and state currently live alongside the agent code.
 
 ## Roles & Extensibility
 - Roles live under `Data/Agent/Roles/` and are auto‑discovered at startup; no changes are needed in `agent.py` when adding new roles.
@@ -196,7 +197,6 @@ This section summarizes what is considered usable vs. experimental today.
 
 - Terminology
   - “Assemblies” consolidates Scripts/Workflows (and future Playbooks) in the UI. Treat Playbooks as non‑functional until Ansible support matures.
-
 
 
 
