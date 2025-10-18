@@ -23,7 +23,7 @@ import ssl
 import threading
 import contextlib
 import errno
-from typing import Any, Dict, Optional, List, Callable
+from typing import Any, Dict, Optional, List, Callable, Tuple
 
 import requests
 try:
@@ -1007,10 +1007,22 @@ class AgentHttpClient:
             timeout=20,
         )
         if resp.status_code in (401, 403):
-            _log_agent("Refresh token rejected; re-enrolling", fname="agent.error.log")
-            self._clear_tokens_locked()
-            self._perform_enrollment_locked()
-            return
+            error_code, snippet = self._error_details(resp)
+            if resp.status_code == 401 and self._should_retry_auth(resp.status_code, error_code):
+                _log_agent(
+                    "Refresh token rejected; attempting re-enrollment"
+                    f" error={error_code or '<unknown>'}",
+                    fname="agent.error.log",
+                )
+                self._clear_tokens_locked()
+                self._perform_enrollment_locked()
+                return
+            _log_agent(
+                "Refresh token request forbidden "
+                f"status={resp.status_code} error={error_code or '<unknown>'}"
+                f" body_snippet={snippet}",
+                fname="agent.error.log",
+            )
         resp.raise_for_status()
         data = resp.json()
         access_token = data.get("access_token")
@@ -1035,6 +1047,33 @@ class AgentHttpClient:
         self.access_expires_at = None
         self.guid = self.key_store.load_guid()
         self.session.headers.pop("Authorization", None)
+
+    def _error_details(self, response: requests.Response) -> Tuple[Optional[str], str]:
+        error_code: Optional[str] = None
+        snippet = ""
+        try:
+            snippet = response.text[:256]
+        except Exception:
+            snippet = "<unavailable>"
+        try:
+            data = response.json()
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            for key in ("error", "code", "status"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    error_code = value.strip()
+                    break
+        return error_code, snippet
+
+    def _should_retry_auth(self, status_code: int, error_code: Optional[str]) -> bool:
+        if status_code == 401:
+            return True
+        retryable_forbidden = {"fingerprint_mismatch"}
+        if status_code == 403 and error_code in retryable_forbidden:
+            return True
+        return False
 
     def _resolve_installer_code(self) -> str:
         if INSTALLER_CODE_OVERRIDE:
@@ -1068,20 +1107,19 @@ class AgentHttpClient:
         headers = self.auth_headers()
         response = self.session.post(url, json=payload, headers=headers, timeout=30)
         if response.status_code in (401, 403) and require_auth:
-            snippet = ""
-            try:
-                snippet = response.text[:256]
-            except Exception:
-                snippet = "<unavailable>"
-            _log_agent(
-                "Authenticated request rejected "
-                f"path={path} status={response.status_code} body_snippet={snippet}",
-                fname="agent.error.log",
-            )
-            self.clear_tokens()
-            self.ensure_authenticated()
-            headers = self.auth_headers()
-            response = self.session.post(url, json=payload, headers=headers, timeout=30)
+            error_code, snippet = self._error_details(response)
+            if self._should_retry_auth(response.status_code, error_code):
+                self.clear_tokens()
+                self.ensure_authenticated()
+                headers = self.auth_headers()
+                response = self.session.post(url, json=payload, headers=headers, timeout=30)
+            else:
+                _log_agent(
+                    "Authenticated request rejected "
+                    f"path={path} status={response.status_code} error={error_code or '<unknown>'}"
+                    f" body_snippet={snippet}",
+                    fname="agent.error.log",
+                )
         response.raise_for_status()
         if response.headers.get("Content-Type", "").lower().startswith("application/json"):
             return response.json()

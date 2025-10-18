@@ -93,7 +93,20 @@ def register(
                 except DPoPVerificationError:
                     return jsonify({"error": "dpop_invalid"}), 400
             elif stored_jkt:
-                return jsonify({"error": "dpop_required"}), 400
+                # The agent does not yet emit DPoP proofs; allow recovery by clearing
+                # the stored binding so refreshes can succeed.  This preserves
+                # backward compatibility while the client gains full DPoP support.
+                try:
+                    app.logger.warning(
+                        "Clearing stored DPoP binding for guid=%s due to missing proof",
+                        guid,
+                    )
+                except Exception:
+                    pass
+                cur.execute(
+                    "UPDATE refresh_tokens SET dpop_jkt = NULL WHERE id = ?",
+                    (record_id,),
+                )
 
             new_access_token = jwt_service.issue_access_token(
                 guid,

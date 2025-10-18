@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import functools
+import sqlite3
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 import jwt
@@ -98,6 +101,9 @@ class DeviceAuthManager:
                 (guid,),
             )
             row = cur.fetchone()
+
+            if not row:
+                row = self._recover_device_record(conn, guid, fingerprint, token_version)
         finally:
             conn.close()
 
@@ -146,6 +152,102 @@ class DeviceAuthManager:
             status=status_normalized,
         )
         return ctx
+
+    def _recover_device_record(
+        self,
+        conn: sqlite3.Connection,
+        guid: str,
+        fingerprint: str,
+        token_version: int,
+    ) -> Optional[tuple]:
+        """Attempt to recreate a missing device row for an authenticated token."""
+
+        guid = (guid or "").strip()
+        fingerprint = (fingerprint or "").strip()
+        if not guid or not fingerprint:
+            return None
+
+        cur = conn.cursor()
+        now_ts = int(time.time())
+        try:
+            now_iso = datetime.now(tz=timezone.utc).isoformat()
+        except Exception:
+            now_iso = datetime.utcnow().isoformat()  # pragma: no cover
+
+        base_hostname = f"RECOVERED-{guid[:12].upper()}" if guid else "RECOVERED"
+
+        for attempt in range(6):
+            hostname = base_hostname if attempt == 0 else f"{base_hostname}-{attempt}"
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO devices (
+                        guid,
+                        hostname,
+                        created_at,
+                        last_seen,
+                        ssl_key_fingerprint,
+                        token_version,
+                        status,
+                        key_added_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
+                    """,
+                    (
+                        guid,
+                        hostname,
+                        now_ts,
+                        now_ts,
+                        fingerprint,
+                        max(token_version or 1, 1),
+                        now_iso,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                # Hostname collision – try again with a suffixed placeholder.
+                message = str(exc).lower()
+                if "hostname" in message and "unique" in message:
+                    continue
+                self._log(
+                    "server",
+                    f"device auth failed to recover guid={guid} due to integrity error: {exc}",
+                )
+                conn.rollback()
+                return None
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self._log(
+                    "server",
+                    f"device auth unexpected error recovering guid={guid}: {exc}",
+                )
+                conn.rollback()
+                return None
+            else:
+                conn.commit()
+                break
+        else:
+            # Exhausted attempts because of hostname collisions.
+            self._log(
+                "server",
+                f"device auth could not recover guid={guid}; hostname collisions persisted",
+            )
+            conn.rollback()
+            return None
+
+        cur.execute(
+            """
+            SELECT guid, ssl_key_fingerprint, token_version, status
+              FROM devices
+             WHERE guid = ?
+            """,
+            (guid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            self._log(
+                "server",
+                f"device auth recovery for guid={guid} committed but row still missing",
+            )
+        return row
 
 
 def require_device_auth(manager: DeviceAuthManager):
