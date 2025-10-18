@@ -81,6 +81,7 @@ def _bootstrap_log(msg: str):
 # Headless/service mode flag (skip Qt and interactive UI)
 SYSTEM_SERVICE_MODE = ('--system-service' in sys.argv) or (os.environ.get('BOREALIS_AGENT_MODE') == 'system')
 SERVICE_MODE = 'system' if SYSTEM_SERVICE_MODE else 'currentuser'
+SERVICE_MODE_CANONICAL = SERVICE_MODE.upper()
 _bootstrap_log(f'agent.py loaded; SYSTEM_SERVICE_MODE={SYSTEM_SERVICE_MODE}; argv={sys.argv!r}')
 def _argv_get(flag: str, default: str = None):
     try:
@@ -570,6 +571,57 @@ DEFAULT_CONFIG = {
     "regions": {},
     "installer_code": ""
 }
+
+
+def _load_installer_code_from_file(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return ""
+    value = data.get("installer_code") if isinstance(data, dict) else ""
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+
+def _fallback_installer_code(current_path: str) -> str:
+    settings_dir = os.path.dirname(current_path)
+    candidates: List[str] = []
+    suffix = CONFIG_SUFFIX_CANONICAL
+    sibling_map = {
+        "SYSTEM": "agent_settings_CURRENTUSER.json",
+        "CURRENTUSER": "agent_settings_SYSTEM.json",
+    }
+    sibling_name = sibling_map.get(suffix or "")
+    if sibling_name:
+        candidates.append(os.path.join(settings_dir, sibling_name))
+    # Prefer the shared/base config next
+    candidates.append(os.path.join(settings_dir, "agent_settings.json"))
+    # Legacy location fallback
+    try:
+        project_root = _find_project_root()
+        legacy_dir = os.path.join(project_root, "Agent", "Settings")
+        if sibling_name:
+            candidates.append(os.path.join(legacy_dir, sibling_name))
+        candidates.append(os.path.join(legacy_dir, "agent_settings.json"))
+    except Exception:
+        pass
+
+    current_abspath = os.path.abspath(current_path)
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            candidate_path = os.path.abspath(candidate)
+        except Exception:
+            continue
+        if candidate_path == current_abspath or not os.path.isfile(candidate_path):
+            continue
+        code = _load_installer_code_from_file(candidate_path)
+        if code:
+            return code
+    return ""
 
 class ConfigManager:
     def __init__(self, path):
@@ -1077,12 +1129,50 @@ class AgentHttpClient:
 
     def _resolve_installer_code(self) -> str:
         if INSTALLER_CODE_OVERRIDE:
-            return INSTALLER_CODE_OVERRIDE
+            code = INSTALLER_CODE_OVERRIDE.strip()
+            if code:
+                try:
+                    self.key_store.cache_installer_code(code, consumer=SERVICE_MODE_CANONICAL)
+                except Exception:
+                    pass
+            return code
+        code = ""
         try:
             code = (CONFIG.data.get("installer_code") or "").strip()
-            return code
         except Exception:
-            return ""
+            code = ""
+        if code:
+            try:
+                self.key_store.cache_installer_code(code, consumer=SERVICE_MODE_CANONICAL)
+            except Exception:
+                pass
+            return code
+        try:
+            cached = self.key_store.load_cached_installer_code()
+        except Exception:
+            cached = None
+        if cached:
+            try:
+                self.key_store.cache_installer_code(cached, consumer=SERVICE_MODE_CANONICAL)
+            except Exception:
+                pass
+            return cached
+        fallback = _fallback_installer_code(CONFIG.path)
+        if fallback:
+            try:
+                CONFIG.data["installer_code"] = fallback
+                CONFIG._write()
+                _log_agent(
+                    "Adopted installer code from sibling configuration", fname="agent.log"
+                )
+            except Exception:
+                pass
+            try:
+                self.key_store.cache_installer_code(fallback, consumer=SERVICE_MODE_CANONICAL)
+            except Exception:
+                pass
+            return fallback
+        return ""
 
     def _consume_installer_code(self) -> None:
         # Avoid clearing explicit CLI/env overrides; only mutate persisted config.
@@ -1096,6 +1186,13 @@ class AgentHttpClient:
                 _log_agent("Cleared persisted installer code after successful enrollment", fname="agent.log")
         except Exception as exc:
             _log_agent(f"Failed to clear installer code after enrollment: {exc}", fname="agent.error.log")
+        try:
+            self.key_store.mark_installer_code_consumed(SERVICE_MODE_CANONICAL)
+        except Exception as exc:
+            _log_agent(
+                f"Failed to update shared installer code cache: {exc}",
+                fname="agent.error.log",
+            )
 
     # ------------------------------------------------------------------
     # HTTP helpers
