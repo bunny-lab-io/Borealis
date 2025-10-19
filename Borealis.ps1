@@ -1030,13 +1030,40 @@ switch ($choice) {
         Run-Step "Create Borealis Virtual Python Environment" {
             if (-not (Test-Path "$venvFolder\Scripts\Activate")) { & $pythonExe -m venv $venvFolder | Out-Null }
             if (Test-Path $dataSource) {
-                Remove-Item $dataDestination -Recurse -Force -ErrorAction SilentlyContinue
+                $preserveItems = @('auth_keys','server_secret.key','cache')
+                $preserveRoot = Join-Path $venvFolder '.__borealis_preserve'
+                if (Test-Path $dataDestination) {
+                    Remove-Item $preserveRoot -Recurse -Force -ErrorAction SilentlyContinue
+                    New-Item -Path $preserveRoot -ItemType Directory -Force | Out-Null
+                    foreach ($item in $preserveItems) {
+                        $sourcePath = Join-Path $dataDestination $item
+                        if (Test-Path $sourcePath) {
+                            $targetPath = Join-Path $preserveRoot $item
+                            $targetParent = Split-Path $targetPath -Parent
+                            if (-not (Test-Path $targetParent)) {
+                                New-Item -Path $targetParent -ItemType Directory -Force | Out-Null
+                            }
+                            Move-Item -Path $sourcePath -Destination $targetPath -Force
+                        }
+                    }
+                    Remove-Item $dataDestination -Recurse -Force -ErrorAction SilentlyContinue
+                }
                 New-Item -Path $dataDestination -ItemType Directory -Force | Out-Null
                 Copy-Item "$dataSource\Server\Python_API_Endpoints" $dataDestination -Recurse
                 Copy-Item "$dataSource\Server\Sounds"               $dataDestination -Recurse
                 Copy-Item "$dataSource\Server\Modules"               $dataDestination -Recurse
                 Copy-Item "$dataSource\Server\server.py"            $dataDestination
                 Copy-Item "$dataSource\Server\job_scheduler.py"     $dataDestination 
+                if (Test-Path $preserveRoot) {
+                    Get-ChildItem -Path $preserveRoot -Force | ForEach-Object {
+                        $target = Join-Path $dataDestination $_.Name
+                        if (Test-Path $target) {
+                            Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+                        }
+                        Move-Item -Path $_.FullName -Destination $target -Force
+                    }
+                    Remove-Item $preserveRoot -Recurse -Force -ErrorAction SilentlyContinue
+                }
             }
             . "$venvFolder\Scripts\Activate"
         }

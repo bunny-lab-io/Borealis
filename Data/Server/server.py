@@ -113,7 +113,7 @@ from datetime import datetime, timezone
 from Modules import db_migrations
 from Modules.auth import jwt_service as jwt_service_module
 from Modules.auth.dpop import DPoPValidator
-from Modules.auth.device_auth import DeviceAuthManager, require_device_auth
+from Modules.auth.device_auth import DeviceAuthContext, DeviceAuthError, DeviceAuthManager, require_device_auth
 from Modules.auth.rate_limit import SlidingWindowRateLimiter
 from Modules.agents import routes as agent_routes
 from Modules.crypto import certificates, signing
@@ -752,6 +752,9 @@ def health():
 # Endpoint: /api/repo/current_hash — cached GitHub head lookup for agents.
 @app.route("/api/repo/current_hash", methods=["GET"])
 def api_repo_current_hash():
+    _, error = _authenticate_agent_request()
+    if error is not None:
+        return error
     try:
         repo = (request.args.get('repo') or _DEFAULT_REPO).strip()
         branch = (request.args.get('branch') or _DEFAULT_BRANCH).strip()
@@ -1091,12 +1094,50 @@ def _collect_agent_hash_records() -> List[Dict[str, Any]]:
     return sanitized
 
 
-def _apply_agent_hash_update(agent_id: str, agent_hash: str, agent_guid: Optional[str] = None) -> Tuple[Dict[str, Any], int]:
+def _authenticate_agent_request() -> Tuple[Optional[DeviceAuthContext], Optional["flask.wrappers.Response"]]:
+    """
+    Lightweight helper mirroring require_device_auth for endpoints declared before DEVICE_AUTH_MANAGER is initialised.
+
+    Returns a tuple of (context, error_response).  Callers should return the response immediately when present.
+    """
+    if DEVICE_AUTH_MANAGER is None:
+        response = jsonify({"error": "auth_unavailable"})
+        response.status_code = 503
+        return None, response
+    try:
+        ctx = DEVICE_AUTH_MANAGER.authenticate()
+        g.device_auth = ctx
+        return ctx, None
+    except DeviceAuthError as exc:
+        response = jsonify({"error": exc.message})
+        response.status_code = exc.status_code
+        retry_after = getattr(exc, "retry_after", None)
+        if retry_after:
+            try:
+                response.headers["Retry-After"] = str(max(1, int(retry_after)))
+            except Exception:
+                response.headers["Retry-After"] = "1"
+        return None, response
+
+
+def _apply_agent_hash_update(
+    agent_id: str,
+    agent_hash: str,
+    agent_guid: Optional[str] = None,
+    auth_ctx: Optional[DeviceAuthContext] = None,
+) -> Tuple[Dict[str, Any], int]:
     agent_id = (agent_id or '').strip()
     agent_hash = (agent_hash or '').strip()
     normalized_guid = _normalize_guid(agent_guid)
     if not agent_hash or (not agent_id and not normalized_guid):
         return {'error': 'agent_hash and agent_guid or agent_id required'}, 400
+
+    auth_guid = _normalize_guid(getattr(auth_ctx, "guid", None)) if auth_ctx else None
+    if auth_guid:
+        if normalized_guid and normalized_guid != auth_guid:
+            return {'error': 'guid_mismatch'}, 403
+        if not normalized_guid:
+            normalized_guid = auth_guid
 
     conn = None
     hostname = None
@@ -1117,6 +1158,9 @@ def _apply_agent_hash_update(agent_id: str, agent_hash: str, agent_guid: Optiona
                 updated_via_guid = True
                 record = _row_to_device_dict(row, _DEVICE_TABLE_COLUMNS)
                 snapshot = _assemble_device_snapshot(record)
+                record_guid = _normalize_guid(record.get('guid'))
+                if auth_guid and record_guid and record_guid != auth_guid:
+                    return {'error': 'guid_mismatch'}, 403
                 hostname = snapshot.get('hostname')
                 description = snapshot.get('description')
                 details = snapshot.get('details', {})
@@ -1162,6 +1206,9 @@ def _apply_agent_hash_update(agent_id: str, agent_hash: str, agent_guid: Optiona
                     'agent_hash': agent_hash,
                 }
             else:
+                target_guid_norm = _normalize_guid(target.get('guid')) if target.get('guid') else None
+                if auth_guid and target_guid_norm and target_guid_norm != auth_guid:
+                    return {'error': 'guid_mismatch'}, 403
                 hostname = target.get('hostname')
                 details = target.get('details') or {}
                 summary = details.setdefault('summary', {})
@@ -1257,6 +1304,12 @@ def _apply_agent_hash_update(agent_id: str, agent_hash: str, agent_guid: Optiona
 
 @app.route("/api/agent/hash", methods=["GET", "POST"])
 def api_agent_hash():
+    ctx, error = _authenticate_agent_request()
+    if error is not None:
+        return error
+    auth_guid = _normalize_guid(getattr(ctx, "guid", None))
+    if not auth_guid:
+        return jsonify({'error': 'guid_required'}), 403
     if request.method == 'GET':
         agent_guid = _normalize_guid(request.args.get('agent_guid'))
         agent_id = (request.args.get('agent_id') or request.args.get('id') or '').strip()
@@ -1264,16 +1317,32 @@ def api_agent_hash():
             data = request.get_json(silent=True) or {}
             agent_guid = _normalize_guid(data.get('agent_guid')) if data else agent_guid
             agent_id = (data.get('agent_id') or '').strip() if data else agent_id
+        if agent_guid and agent_guid != auth_guid:
+            return jsonify({'error': 'guid_mismatch'}), 403
+        effective_guid = agent_guid or auth_guid
         try:
             record = None
-            if agent_guid:
-                record = _lookup_agent_hash_by_guid(agent_guid)
+            if effective_guid:
+                record = _lookup_agent_hash_by_guid(effective_guid)
             if not record and agent_id:
                 record = _lookup_agent_hash_record(agent_id)
+                if record:
+                    candidate_guid = _normalize_guid(record.get('agent_guid'))
+                    if candidate_guid and candidate_guid != auth_guid:
+                        return jsonify({'error': 'guid_mismatch'}), 403
+                    if not candidate_guid and effective_guid:
+                        record = dict(record)
+                        record['agent_guid'] = effective_guid
         except Exception as exc:
             _write_service_log('server', f'/api/agent/hash lookup error: {exc}')
             return jsonify({'error': 'internal error'}), 500
         if record:
+            record_guid = _normalize_guid(record.get('agent_guid')) if record.get('agent_guid') else None
+            if record_guid and record_guid != auth_guid:
+                return jsonify({'error': 'guid_mismatch'}), 403
+            if not record_guid:
+                record = dict(record)
+                record['agent_guid'] = auth_guid
             return jsonify(record)
         return jsonify({'error': 'agent hash not found'}), 404
 
@@ -1281,7 +1350,10 @@ def api_agent_hash():
     agent_id = (data.get('agent_id') or '').strip()
     agent_hash = (data.get('agent_hash') or '').strip()
     agent_guid = _normalize_guid(data.get('agent_guid')) if data else None
-    payload, status = _apply_agent_hash_update(agent_id, agent_hash, agent_guid)
+    if agent_guid and agent_guid != auth_guid:
+        return jsonify({'error': 'guid_mismatch'}), 403
+    effective_guid = agent_guid or auth_guid
+    payload, status = _apply_agent_hash_update(agent_id, agent_hash, effective_guid, auth_ctx=ctx)
     return jsonify(payload), status
 
 

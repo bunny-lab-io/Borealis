@@ -262,11 +262,22 @@ function Get-AgentGuid {
         [string]$AgentRoot
     )
 
-    $candidates = @()
     if (-not $AgentRoot) { $AgentRoot = $scriptDir }
-    if ($AgentRoot) { $candidates += (Join-Path $AgentRoot 'agent_GUID') }
-    $defaultPath = Join-Path $scriptDir 'Agent\Borealis\agent_GUID'
-    if ($defaultPath -and ($candidates -notcontains $defaultPath)) { $candidates += $defaultPath }
+    $candidates = @()
+    if ($AgentRoot) {
+        $settingsDir = Join-Path $AgentRoot 'Settings'
+        if ($settingsDir) {
+            $settingsGuid = Join-Path $settingsDir 'Agent_GUID.txt'
+            if ($candidates -notcontains $settingsGuid) { $candidates += $settingsGuid }
+        }
+        $legacyPath = Join-Path $AgentRoot 'agent_GUID'
+        if ($candidates -notcontains $legacyPath) { $candidates += $legacyPath }
+    }
+
+    $projectSettingsGuid = Join-Path $scriptDir 'Agent\Borealis\Settings\Agent_GUID.txt'
+    if ($candidates -notcontains $projectSettingsGuid) { $candidates += $projectSettingsGuid }
+    $projectLegacyGuid = Join-Path $scriptDir 'Agent\Borealis\agent_GUID'
+    if ($candidates -notcontains $projectLegacyGuid) { $candidates += $projectLegacyGuid }
 
     foreach ($path in ($candidates | Select-Object -Unique)) {
         try {
@@ -280,6 +291,164 @@ function Get-AgentGuid {
     return ''
 }
 
+function Get-AgentSettingsDirectory {
+    param(
+        [string]$AgentRoot
+    )
+
+    if (-not $AgentRoot) { $AgentRoot = $scriptDir }
+    $settingsDir = Join-Path $AgentRoot 'Settings'
+    if ($settingsDir -and (Test-Path $settingsDir -PathType Container)) {
+        return $settingsDir
+    }
+    return ''
+}
+
+function Get-ProtectedTokenString {
+    param(
+        [string]$Path
+    )
+
+    if (-not $Path -or -not (Test-Path $Path -PathType Leaf)) {
+        return ''
+    }
+
+    try {
+        $protected = [System.IO.File]::ReadAllBytes($Path)
+        if (-not $protected -or $protected.Length -eq 0) { return '' }
+    } catch {
+        return ''
+    }
+
+    $scopes = @(
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser,
+        [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+    )
+
+    foreach ($scope in $scopes) {
+        try {
+            $unprotected = [System.Security.Cryptography.ProtectedData]::Unprotect($protected, $null, $scope)
+            if ($unprotected -and $unprotected.Length -gt 0) {
+                return [System.Text.Encoding]::UTF8.GetString($unprotected)
+            }
+        } catch {
+            continue
+        }
+    }
+
+    return ''
+}
+
+function Invoke-AgentTokenRefresh {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ServerBaseUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AgentGuid,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RefreshToken
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ServerBaseUrl) -or [string]::IsNullOrWhiteSpace($AgentGuid) -or [string]::IsNullOrWhiteSpace($RefreshToken)) {
+        return $null
+    }
+
+    $base = $ServerBaseUrl.TrimEnd('/')
+    $uri = "$base/api/agent/token/refresh"
+    $payload = @{
+        guid = $AgentGuid
+        refresh_token = $RefreshToken
+    } | ConvertTo-Json
+    $headers = @{
+        'User-Agent'    = 'borealis-agent-updater'
+        'Content-Type'  = 'application/json'
+    }
+
+    try {
+        $resp = Invoke-WebRequest -Uri $uri -Method Post -Body $payload -Headers $headers -UseBasicParsing -ErrorAction Stop
+        $json = $resp.Content | ConvertFrom-Json
+        if ($json -and $json.access_token) {
+            $expiresIn = 900
+            try {
+                if ($json.expires_in) {
+                    $expiresIn = [int]$json.expires_in
+                }
+            } catch {}
+            $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            $expiresAt = $now + [Math]::Max(0, $expiresIn - 5)
+            return [pscustomobject]@{
+                AccessToken = ($json.access_token).Trim()
+                ExpiresAt   = $expiresAt
+            }
+        }
+    } catch {
+        return $null
+    }
+
+    return $null
+}
+
+function Get-AgentAccessTokenContext {
+    param(
+        [string]$AgentRoot,
+        [string]$ServerBaseUrl,
+        [string]$AgentGuid
+    )
+
+    $settingsDir = Get-AgentSettingsDirectory -AgentRoot $AgentRoot
+    if (-not $settingsDir) { return $null }
+
+    $accessPath = Join-Path $settingsDir 'access.jwt'
+    $metaPath   = Join-Path $settingsDir 'access.meta.json'
+    $refreshPath = Join-Path $settingsDir 'refresh.token'
+
+    $accessToken = ''
+    $expiresAt = 0
+
+    if (Test-Path $accessPath -PathType Leaf) {
+        try {
+            $accessToken = (Get-Content -Path $accessPath -Raw -ErrorAction Stop).Trim()
+        } catch {
+            $accessToken = ''
+        }
+    }
+
+    if (Test-Path $metaPath -PathType Leaf) {
+        try {
+            $metaRaw = Get-Content -Path $metaPath -Raw -ErrorAction Stop
+            if ($metaRaw) {
+                $metaJson = $metaRaw | ConvertFrom-Json -ErrorAction Stop
+                if ($metaJson -and $metaJson.access_expires_at) {
+                    $expiresAt = [int]$metaJson.access_expires_at
+                }
+            }
+        } catch {
+            $expiresAt = 0
+        }
+    }
+
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if ($accessToken -and $expiresAt -gt ($now + 30)) {
+        return [pscustomobject]@{
+            AccessToken = $accessToken
+            ExpiresAt   = $expiresAt
+        }
+    }
+
+    $refreshToken = Get-ProtectedTokenString -Path $refreshPath
+    if (-not $refreshToken) {
+        return $null
+    }
+
+    $refreshResult = Invoke-AgentTokenRefresh -ServerBaseUrl $ServerBaseUrl -AgentGuid $AgentGuid -RefreshToken $refreshToken
+    if ($refreshResult -and $refreshResult.AccessToken) {
+        return $refreshResult
+    }
+
+    return $null
+}
 function Get-RepositoryCommitHash {
     param(
         [Parameter(Mandatory = $true)]
@@ -441,7 +610,8 @@ function Set-GitFetchHeadHash {
 function Get-ServerCurrentRepoHash {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$ServerBaseUrl
+        [string]$ServerBaseUrl,
+        [string]$AuthToken
     )
 
     if ([string]::IsNullOrWhiteSpace($ServerBaseUrl)) { return $null }
@@ -449,6 +619,9 @@ function Get-ServerCurrentRepoHash {
     $base = $ServerBaseUrl.TrimEnd('/')
     $uri = "$base/api/repo/current_hash"
     $headers = @{ 'User-Agent' = 'borealis-agent-updater' }
+    if ($AuthToken -and $AuthToken.Trim()) {
+        $headers['Authorization'] = "Bearer $AuthToken"
+    }
 
     try {
         $resp = Invoke-WebRequest -Uri $uri -Method Get -Headers $headers -UseBasicParsing -ErrorAction Stop
@@ -470,7 +643,9 @@ function Submit-AgentHash {
         [Parameter(Mandatory = $true)]
         [string]$AgentHash,
 
-        [string]$AgentGuid
+        [string]$AgentGuid,
+
+        [string]$AuthToken
     )
 
     if ([string]::IsNullOrWhiteSpace($ServerBaseUrl) -or [string]::IsNullOrWhiteSpace($AgentHash)) {
@@ -484,6 +659,9 @@ function Submit-AgentHash {
     if (-not [string]::IsNullOrWhiteSpace($AgentGuid)) { $payloadBody.agent_guid = $AgentGuid }
     $payload = $payloadBody | ConvertTo-Json -Depth 3
     $headers = @{ 'User-Agent' = 'borealis-agent-updater' }
+    if ($AuthToken -and $AuthToken.Trim()) {
+        $headers['Authorization'] = "Bearer $AuthToken"
+    }
 
     $resp = Invoke-WebRequest -Uri $uri -Method Post -Headers $headers -Body $payload -ContentType 'application/json' -UseBasicParsing -ErrorAction Stop
     try {
@@ -502,6 +680,7 @@ function Sync-AgentHashRecord {
         [string]$ServerBaseUrl,
         [string]$AgentId,
         [string]$AgentGuid,
+        [string]$AuthToken = '',
         [string]$BranchName = 'main'
     )
 
@@ -524,16 +703,16 @@ function Sync-AgentHashRecord {
     }
 
     try {
-        $submitResult = Submit-AgentHash -ServerBaseUrl $ServerBaseUrl -AgentId $AgentId -AgentHash $AgentHash -AgentGuid $AgentGuid
+        $submitResult = Submit-AgentHash -ServerBaseUrl $ServerBaseUrl -AgentId $AgentId -AgentHash $AgentHash -AgentGuid $AgentGuid -AuthToken $AuthToken
         if ($submitResult -and ($submitResult.status -eq 'ok')) {
-            Write-Host "Server agent_hash database record updated successfully."
+            Write-Host "The server-side agent hash database record was updated successfully."
         } elseif ($submitResult -and ($submitResult.status -eq 'ignored')) {
-            Write-Host "Server ignored agent_hash update (agent not registered)." -ForegroundColor DarkYellow
+            Write-Host "Server ignored the agent hash update (the agent is not enrolled with the server)." -ForegroundColor DarkYellow
         } elseif ($submitResult) {
-            Write-Host "Server agent_hash update response unrecognized." -ForegroundColor DarkYellow
+            Write-Host "Server agent_hash update response unrecognized.  We don't know what to do here. (Panic)" -ForegroundColor DarkYellow
         }
     } catch {
-        Write-Verbose ("Failed to submit agent hash: {0}" -f $_.Exception.Message)
+        Write-Verbose ("Failed to Submit Agent Hash: {0}" -f $_.Exception.Message)
     }
 }
 
@@ -696,7 +875,15 @@ function Invoke-BorealisAgentUpdate {
     $serverBaseUrl = Get-BorealisServerUrl -AgentRoot $agentRoot
     $agentId = Get-AgentServiceId -AgentRoot $agentRoot
 
-    $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl
+    $authContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
+    if (-not $authContext -or -not $authContext.AccessToken) {
+        Write-Host "Unable to obtain agent authentication token. Ensure the agent is running and enrolled, then rerun the updater." -ForegroundColor Yellow
+        Write-Host "⚠️ Borealis update aborted."
+        return
+    }
+    $authToken = $authContext.AccessToken
+
+    $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken
     $serverHash = ''
     $serverBranch = 'main'
     if ($serverRepoInfo) {
@@ -736,7 +923,7 @@ function Invoke-BorealisAgentUpdate {
         return
     } elseif (-not $needsUpdate) {
         Write-Host "Local agent files already match the server repository hash." -ForegroundColor Green
-        Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -BranchName $serverBranch
+        Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
         Write-Host "✅ Borealis - Automation Platform Already Up-to-Date"
         return
     } else {
@@ -780,7 +967,11 @@ function Invoke-BorealisAgentUpdate {
             throw 'Borealis update failed.'
         }
 
-        $postUpdateInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl
+        $refreshedContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
+        if ($refreshedContext -and $refreshedContext.AccessToken) {
+            $authToken = $refreshedContext.AccessToken
+        }
+        $postUpdateInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken
         if ($postUpdateInfo) {
             try {
                 $refreshedSha = (($postUpdateInfo.sha) -as [string]).Trim()
@@ -805,7 +996,7 @@ function Invoke-BorealisAgentUpdate {
         }
 
         if ($newHash) {
-            Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -BranchName $serverBranch
+            Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
         } else {
             Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
         }

@@ -198,6 +198,8 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             </Typography>
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
+            <NavItem icon={<AdminPanelSettingsIcon fontSize="small" />} label="Device Approvals" pageKey="admin_device_approvals" />
+            <NavItem icon={<KeyIcon fontSize="small" />} label="Enrollment Codes" pageKey="admin_enrollment_codes" indent />
             <NavItem icon={<DevicesIcon fontSize="small" />} label="Devices" pageKey="devices" />
             <NavItem icon={<DevicesIcon fontSize="small" />} label="Agent Devices" pageKey="agent_devices" indent />
             <NavItem icon={<DevicesIcon fontSize="small" />} label="SSH Devices" pageKey="ssh_devices" indent />
@@ -395,8 +397,6 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
           </AccordionSummary>
           <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
             <NavItem icon={<ServerInfoIcon fontSize="small" />} label="Server Info" pageKey="server_info" />
-            <NavItem icon={<KeyIcon fontSize="small" />} label="Installer Codes" pageKey="admin_enrollment_codes" />
-            <NavItem icon={<AdminPanelSettingsIcon fontSize="small" />} label="Device Approvals" pageKey="admin_device_approvals" />
           </AccordionDetails>
         </Accordion>
           );
