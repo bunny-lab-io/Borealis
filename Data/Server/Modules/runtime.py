@@ -76,3 +76,31 @@ def ensure_runtime_dir(*parts: str) -> Path:
     path = runtime_path(*parts)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+@lru_cache(maxsize=None)
+def certificates_root() -> Path:
+    """Base directory for persisted certificate material."""
+
+    env = _env_path("BOREALIS_CERT_ROOT")
+    if env:
+        env.mkdir(parents=True, exist_ok=True)
+        return env
+
+    root = project_root() / "Certificates"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def certificates_path(*parts: str) -> Path:
+    """Return a path under the certificates root."""
+
+    return certificates_root().joinpath(*parts)
+
+
+def ensure_certificates_dir(*parts: str) -> Path:
+    """Create (if required) and return a certificates subdirectory."""
+
+    path = certificates_path(*parts)
+    path.mkdir(parents=True, exist_ok=True)
+    return path

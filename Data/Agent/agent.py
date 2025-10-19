@@ -24,6 +24,7 @@ import threading
 import contextlib
 import errno
 import re
+from urllib.parse import urlparse
 from typing import Any, Dict, Optional, List, Callable, Tuple
 
 import requests
@@ -38,6 +39,18 @@ from security import AgentKeyStore
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
+
+def _iter_exception_chain(exc: BaseException):
+    seen = set()
+    while exc and exc not in seen:
+        yield exc
+        seen.add(exc)
+        if exc.__cause__ is not None:
+            exc = exc.__cause__
+        elif exc.__context__ is not None:
+            exc = exc.__context__
+        else:
+            break
 
 # Centralized logging helpers (Agent)
 def _agent_logs_root() -> str:
@@ -819,6 +832,8 @@ class AgentHttpClient:
         self._auth_lock = threading.RLock()
         self._active_installer_code: Optional[str] = None
         self._cached_ssl_context: Optional[ssl.SSLContext] = None
+        self._socketio_http_session = None
+        self._socketio_session_mode: Optional[Tuple[str, Optional[str]]] = None
         self.refresh_base_url()
         self._configure_verify()
         self._reload_tokens_from_disk()
@@ -979,6 +994,7 @@ class AgentHttpClient:
                     f"layered_default={bundle_summary['layered_default']}",
                     fname="agent.log",
                 )
+                self._apply_socketio_transport(client, context, verify=True, fingerprint=bundle_summary["fingerprint"])
                 return
 
             # Fall back to boolean verification flags when we either do not
@@ -993,6 +1009,7 @@ class AgentHttpClient:
             _set_attr(http_iface, "ssl_verify", verify_flag)
             _set_attr(http_iface, "verify_ssl", verify_flag)
             _reset_cached_session()
+            self._apply_socketio_transport(client, None if verify_flag else False, verify=verify_flag, fingerprint=None)
             _log_agent(
                 f"SocketIO TLS alignment fallback verify_flag={verify_flag}",
                 fname="agent.log",
@@ -1005,32 +1022,155 @@ class AgentHttpClient:
             _log_exception_trace("configure_socketio")
 
     def socketio_ssl_params(self) -> Dict[str, Any]:
-        verify = getattr(self.session, "verify", True)
-        if isinstance(verify, str) and os.path.isfile(verify):
-            context = self._cached_ssl_context
-            if context is None:
-                context = self.key_store.build_ssl_context()
-                if context is not None:
-                    self._cached_ssl_context = context
-            if context is not None:
-                return {"ssl_verify": verify}
+        # Socket.IO AsyncClient.connect does not accept SSL kwargs; configuration is
+        # handled via the Engine.IO client setup in configure_socketio.
+        return {}
+
+    def _schedule_socketio_session_close(self, session) -> None:
+        if session is None:
+            return
+        try:
+            if session.closed:
+                return
+        except Exception:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(session.close())
+        except RuntimeError:
             try:
-                fallback = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
-                fallback.load_verify_locations(cafile=verify)
-                self._cached_ssl_context = fallback
-                return {"ssl_verify": verify}
+                asyncio.run(session.close())
+            except Exception:
+                pass
+
+    def _set_socketio_http_session(
+        self,
+        client: "socketio.AsyncClient",
+        session,
+        mode: Optional[Tuple[str, Optional[str]]],
+    ) -> None:
+        engine = getattr(client, "eio", None)
+        if engine is None:
+            return
+        if self._socketio_http_session is not session and self._socketio_http_session is not None:
+            self._schedule_socketio_session_close(self._socketio_http_session)
+        self._socketio_http_session = session
+        self._socketio_session_mode = mode
+        if session is None:
+            engine.http = None
+            engine.external_http = False
+        else:
+            engine.http = session
+            engine.external_http = True
+
+    def _apply_socketio_transport(
+        self,
+        client: "socketio.AsyncClient",
+        ssl_context,
+        *,
+        verify: bool,
+        fingerprint: Optional[str],
+    ) -> None:
+        engine = getattr(client, "eio", None)
+        if engine is None:
+            return
+        options = getattr(engine, "websocket_extra_options", {}) or {}
+        options = dict(options)
+        options.pop("ssl", None)
+
+        try:
+            import aiohttp  # type: ignore
+        except Exception as exc:
+            _log_agent(
+                f"aiohttp unavailable for socket transport configuration: {exc}",
+                fname="agent.error.log",
+            )
+            self._set_socketio_http_session(client, None, None)
+            engine.ssl_verify = verify
+            engine.websocket_extra_options = options
+            return
+
+        if ssl_context is False or not verify:
+            options["ssl"] = False
+            engine.ssl_verify = False
+            try:
+                connector = aiohttp.TCPConnector(ssl=False)
+                session = aiohttp.ClientSession(connector=connector)
             except Exception as exc:
-                self._cached_ssl_context = None
                 _log_agent(
-                    f"SocketIO TLS fallback context build failed: {exc}; disabling verification",
+                    f"SocketIO TLS disabled but failed to create aiohttp session: {exc}",
                     fname="agent.error.log",
                 )
-                return {"ssl_verify": False}
-        if verify is False:
+                self._set_socketio_http_session(client, None, None)
+            else:
+                self._set_socketio_http_session(client, session, ("noverify", None))
+        elif isinstance(ssl_context, ssl.SSLContext):
+            options.pop("ssl", None)
+            engine.ssl_verify = True
+            try:
+                connector = aiohttp.TCPConnector(ssl=ssl_context)
+                session = aiohttp.ClientSession(connector=connector)
+            except Exception as exc:
+                _log_agent(
+                    f"SocketIO TLS session creation failed; falling back to default handling: {exc}",
+                    fname="agent.error.log",
+                )
+                self._set_socketio_http_session(client, None, None)
+            else:
+                mode = ("context", fingerprint or "<unknown>")
+                self._set_socketio_http_session(client, session, mode)
+        else:
+            options.pop("ssl", None)
+            engine.ssl_verify = True
+            self._set_socketio_http_session(client, None, None)
+
+        engine.websocket_extra_options = options
+
+    def refresh_pinned_certificate(self) -> bool:
+        url = self.base_url or ""
+        parsed = urlparse(url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port
+        if not port:
+            port = 443 if (parsed.scheme or "").lower() == "https" else 80
+
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with socket.create_connection((host, port), timeout=5) as sock:
+                with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                    der = ssock.getpeercert(binary_form=True)
+        except Exception as exc:
+            _log_agent(
+                f"Server certificate probe failed host={host} port={port} error={exc}",
+                fname="agent.error.log",
+            )
+            return False
+
+        try:
+            pem_text = ssl.DER_cert_to_PEM_cert(der)
+        except Exception as exc:
+            _log_agent(
+                f"Unable to convert probed certificate to PEM: {exc}",
+                fname="agent.error.log",
+            )
+            return False
+
+        try:
+            self.key_store.save_server_certificate(pem_text)
             self._cached_ssl_context = None
-            return {"ssl_verify": False}
-        self._cached_ssl_context = None
-        return {}
+            _log_agent(
+                "Refreshed pinned server certificate after TLS failure",
+                fname="agent.log",
+            )
+            return True
+        except Exception as exc:
+            _log_agent(
+                f"Failed to persist refreshed server certificate: {exc}",
+                fname="agent.error.log",
+            )
+            return False
 
     # ------------------------------------------------------------------
     # Enrollment & token management
@@ -2851,6 +2991,36 @@ async def connect_loop():
                 conn_err = None
             if conn_err:
                 detail = f"{detail}; connection_error={conn_err!r}"
+
+            tls_error = False
+            for exc in _iter_exception_chain(e):
+                if isinstance(exc, aiohttp.client_exceptions.ClientConnectorCertificateError):
+                    tls_error = True
+                    break
+                message = str(exc)
+                if "CERTIFICATE_VERIFY_FAILED" in message.upper():
+                    tls_error = True
+                    break
+
+            if not tls_error and conn_err and isinstance(conn_err, Exception):
+                for exc in _iter_exception_chain(conn_err):
+                    if isinstance(exc, aiohttp.client_exceptions.ClientConnectorCertificateError):
+                        tls_error = True
+                        break
+                    message = str(exc)
+                    if "CERTIFICATE_VERIFY_FAILED" in message.upper():
+                        tls_error = True
+                        break
+
+            if tls_error:
+                if client.refresh_pinned_certificate():
+                    _log_agent(
+                        f"connect_loop attempt={attempt} refreshed server certificate after TLS failure; retrying immediately",
+                        fname="agent.log",
+                    )
+                    await asyncio.sleep(1)
+                    continue
+
             message = (
                 f"connect_loop attempt={attempt} server unavailable: {detail}. "
                 f"Retrying in {retry}s..."
