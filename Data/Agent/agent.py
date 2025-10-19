@@ -2994,6 +2994,10 @@ async def connect_loop():
                 detail = f"{detail}; connection_error={conn_err!r}"
 
             tls_error = False
+            _log_agent(
+                f"connect_loop attempt={attempt} raw failure detail={detail}",
+                fname="agent.error.log",
+            )
             for exc in _iter_exception_chain(e):
                 if isinstance(exc, aiohttp.client_exceptions.ClientConnectorCertificateError):
                     tls_error = True
@@ -3014,6 +3018,11 @@ async def connect_loop():
                         break
 
             if tls_error:
+                _log_agent(
+                    f"connect_loop attempt={attempt} TLS failure detected detail={detail}",
+                    fname="agent.error.log",
+                )
+                _log_exception_trace(f"connect_loop attempt={attempt} TLS failure")
                 if client.refresh_pinned_certificate():
                     _log_agent(
                         f"connect_loop attempt={attempt} refreshed server certificate after TLS failure; retrying immediately",
