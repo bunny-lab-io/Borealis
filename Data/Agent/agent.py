@@ -236,9 +236,9 @@ INSTALLER_CODE_OVERRIDE = (
 def _agent_guid_path() -> str:
     try:
         root = _find_project_root()
-        return os.path.join(root, 'Agent', 'Borealis', 'agent_GUID')
+        return os.path.join(root, 'Agent', 'Borealis', 'Settings', 'Agent_GUID.txt')
     except Exception:
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'agent_GUID'))
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings', 'Agent_GUID.txt'))
 
 
 def _settings_dir():
@@ -3068,7 +3068,11 @@ if __name__=='__main__':
         _log_agent(f'Authentication bootstrap failed: {exc}', fname='agent.error.log')
         print(f"[WARN] Authentication bootstrap failed: {exc}")
     try:
-        base_hooks = {'send_service_control': send_service_control, 'get_server_url': get_server_url}
+        base_hooks = {
+            'send_service_control': send_service_control,
+            'get_server_url': get_server_url,
+            'http_client': http_client,
+        }
         if not SYSTEM_SERVICE_MODE:
             # Load interactive-context roles (tray/UI, current-user execution, screenshot, etc.)
             hooks_interactive = {**base_hooks, 'service_mode': 'currentuser'}

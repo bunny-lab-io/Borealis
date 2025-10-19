@@ -99,6 +99,51 @@ def _resolve_agent_certificate_dir(settings_dir: str, scope: str) -> str:
     return str(target)
 
 
+def _resolve_agent_identity_dir(settings_dir: str, scope: str) -> str:
+    scope_name = (scope or "CURRENTUSER").strip().upper() or "CURRENTUSER"
+
+    def _as_path(value: Optional[str]) -> Optional[Path]:
+        if not value:
+            return None
+        try:
+            return Path(value).expanduser().resolve()
+        except Exception:
+            try:
+                return Path(value).expanduser()
+            except Exception:
+                return Path(value)
+
+    env_agent_root = _as_path(os.environ.get("BOREALIS_AGENT_CERT_ROOT"))
+    env_cert_root = _as_path(os.environ.get("BOREALIS_CERTIFICATES_ROOT")) or _as_path(
+        os.environ.get("BOREALIS_CERT_ROOT")
+    )
+
+    if env_agent_root is not None:
+        base = env_agent_root
+    elif env_cert_root is not None:
+        base = env_cert_root / "Agent"
+    else:
+        settings_path = Path(settings_dir).resolve()
+        try:
+            project_root = settings_path.parents[2]
+        except Exception:
+            project_root = settings_path.parent
+        base = project_root / "Certificates" / "Agent"
+
+    target = base / "Identity"
+    if scope_name in {"SYSTEM", "CURRENTUSER"}:
+        target = target / scope_name
+    elif scope_name:
+        target = target / scope_name
+
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    return str(target)
+
+
 class _FileLock:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -274,9 +319,11 @@ class AgentKeyStore:
         self.scope_system = self.scope_name == "SYSTEM"
         _ensure_dir(self.settings_dir)
         self._certificate_dir = _resolve_agent_certificate_dir(self.settings_dir, self.scope_name)
-        self._private_path = os.path.join(self.settings_dir, "agent_key.ed25519")
-        self._public_path = os.path.join(self.settings_dir, "agent_key.pub")
-        self._guid_path = os.path.join(self.settings_dir, "guid.txt")
+        self._identity_dir = _resolve_agent_identity_dir(self.settings_dir, self.scope_name)
+        _ensure_dir(self._identity_dir)
+        self._private_path = os.path.join(self._identity_dir, "agent_identity_private.ed25519")
+        self._public_path = os.path.join(self._identity_dir, "agent_identity_public.ed25519")
+        self._guid_path = os.path.join(self.settings_dir, "Agent_GUID.txt")
         self._access_token_path = os.path.join(self.settings_dir, "access.jwt")
         self._refresh_token_path = os.path.join(self.settings_dir, "refresh.token")
         self._token_meta_path = os.path.join(self.settings_dir, "access.meta.json")
@@ -316,6 +363,7 @@ class AgentKeyStore:
         return AgentIdentity(private_key=private_key, public_key_der=public_der, public_key_b64=public_b64, fingerprint=fingerprint)
 
     def _create_identity(self) -> AgentIdentity:
+        _ensure_dir(os.path.dirname(self._private_path))
         private_key = ed25519.Ed25519PrivateKey.generate()
         private_bytes = private_key.private_bytes(
             serialization.Encoding.PEM,

@@ -51,7 +51,7 @@ Today the stable core focuses on workflow-driven API and automation scenarios. R
 Agents establish TLS-secured REST calls to the Flask backend on port 5000 and keep an authenticated WebSocket session for interactive features such as screenshot capture. Future plans include WebRTC for higher-performance remote desktop. Every agent now performs an enrollment handshake (see **Secure Enrollment & Tokens** below) prior to opening either channel; all API access is bound to short-lived Ed25519-signed JWTs.
 
 ### Secure Enrollment & Tokens
-- On first launch the agent generates an Ed25519 identity and stores the private key under `Agent/Borealis/Settings/agent_key.ed25519` (protected with DPAPI on Windows or chmod 600 elsewhere). The public key is retained as SPKI DER and fingerprinted with SHA-256.
+- On first launch the agent generates an Ed25519 identity and stores the private key under `Certificates/Agent/Identity/<Context>/agent_identity_private.ed25519` (protected with DPAPI on Windows or chmod 600 elsewhere). The public key is retained alongside it as Base64 (`agent_identity_public.ed25519`) and fingerprinted with SHA-256.
 - Enrollment starts with an installer code (minted in the Web UI) and proves key possession by signing the server nonce. Upon operator approval the server issues:
   - The canonical device GUID (persisted to `guid.txt` alongside the key material).
   - A short-lived access token (EdDSA/JWT) and a long-lived refresh token (stored encrypted via DPAPI and hashed server-side).
@@ -197,7 +197,6 @@ This section summarizes what is considered usable vs. experimental today.
 
 - Terminology
   - “Assemblies” consolidates Scripts/Workflows (and future Playbooks) in the UI. Treat Playbooks as non‑functional until Ansible support matures.
-
 
 
 

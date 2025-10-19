@@ -983,13 +983,30 @@ class Role:
                 # Always post the latest available details (possibly cached)
                 details_to_send = self._last_details or {'summary': collect_summary(self.ctx.config)}
                 get_url = (self.ctx.hooks.get('get_server_url') if isinstance(self.ctx.hooks, dict) else None) or (lambda: 'http://localhost:5000')
-                url = (get_url() or '').rstrip('/') + '/api/agent/details'
                 payload = {
                     'agent_id': self.ctx.agent_id,
                     'hostname': details_to_send.get('summary', {}).get('hostname', socket.gethostname()),
                     'details': details_to_send,
                 }
+                client_factory = None
+                if isinstance(self.ctx.hooks, dict):
+                    client_factory = self.ctx.hooks.get('http_client')
+
+                if callable(client_factory):
+                    try:
+                        client = client_factory()
+                    except Exception:
+                        client = None
+                    else:
+                        try:
+                            await client.async_post_json("/api/agent/details", payload, require_auth=True)
+                            await asyncio.sleep(interval_sec)
+                            continue
+                        except Exception:
+                            pass
+
                 if aiohttp is not None:
+                    url = (get_url() or '').rstrip('/') + '/api/agent/details'
                     async with aiohttp.ClientSession() as session:
                         await session.post(url, json=payload, timeout=10)
             except Exception:
