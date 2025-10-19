@@ -1013,22 +1013,22 @@ class AgentHttpClient:
                 if context is not None:
                     self._cached_ssl_context = context
             if context is not None:
-                return {"ssl": context}
+                return {"ssl_verify": verify}
             try:
                 fallback = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
                 fallback.load_verify_locations(cafile=verify)
                 self._cached_ssl_context = fallback
-                return {"ssl": fallback}
+                return {"ssl_verify": verify}
             except Exception as exc:
                 self._cached_ssl_context = None
                 _log_agent(
                     f"SocketIO TLS fallback context build failed: {exc}; disabling verification",
                     fname="agent.error.log",
                 )
-                return {"ssl": False}
+                return {"ssl_verify": False}
         if verify is False:
             self._cached_ssl_context = None
-            return {"ssl": False}
+            return {"ssl_verify": False}
         self._cached_ssl_context = None
         return {}
 
