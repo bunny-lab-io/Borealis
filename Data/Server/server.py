@@ -8323,6 +8323,6 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=5000,
-        certfile=TLS_CERT_PATH,
+        certfile=TLS_BUNDLE_PATH,
         keyfile=TLS_KEY_PATH,
     )
