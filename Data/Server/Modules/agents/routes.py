@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request, g
 
 from Modules.auth.device_auth import DeviceAuthManager, require_device_auth
 from Modules.crypto.signing import ScriptSigner
+from Modules.guid_utils import normalize_guid
 
 AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
 
@@ -102,13 +103,36 @@ def register(
                 if not updates:
                     return 0
                 columns = ", ".join(f"{col} = ?" for col in updates.keys())
-                params = list(updates.values())
-                params.append(ctx.guid)
+                values = list(updates.values())
+                normalized_guid = normalize_guid(ctx.guid)
+                selected_guid: Optional[str] = None
+                if normalized_guid:
+                    cur.execute(
+                        "SELECT guid FROM devices WHERE UPPER(guid) = ?",
+                        (normalized_guid,),
+                    )
+                    rows = cur.fetchall()
+                    for (stored_guid,) in rows or []:
+                        if stored_guid == ctx.guid:
+                            selected_guid = stored_guid
+                            break
+                    if not selected_guid and rows:
+                        selected_guid = rows[0][0]
+                target_guid = selected_guid or ctx.guid
                 cur.execute(
                     f"UPDATE devices SET {columns} WHERE guid = ?",
-                    params,
+                    values + [target_guid],
                 )
-                return cur.rowcount
+                updated = cur.rowcount
+                if updated > 0 and normalized_guid and target_guid != normalized_guid:
+                    try:
+                        cur.execute(
+                            "UPDATE devices SET guid = ? WHERE guid = ?",
+                            (normalized_guid, target_guid),
+                        )
+                    except sqlite3.IntegrityError:
+                        pass
+                return updated
 
             try:
                 rowcount = _apply_updates()

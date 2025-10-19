@@ -102,6 +102,7 @@ from Modules.auth.device_auth import DeviceAuthManager, require_device_auth
 from Modules.auth.rate_limit import SlidingWindowRateLimiter
 from Modules.agents import routes as agent_routes
 from Modules.crypto import certificates, signing
+from Modules.guid_utils import normalize_guid
 from Modules.enrollment import routes as enrollment_routes
 from Modules.enrollment.nonce_store import NonceCache
 from Modules.tokens import routes as token_routes
@@ -6063,22 +6064,7 @@ def _persist_last_seen(hostname: str, last_seen: int, agent_id: str = None):
 
 
 def _normalize_guid(value: Optional[str]) -> str:
-    candidate = (value or "").strip()
-    if not candidate:
-        return ""
-    candidate = candidate.replace("{", "").replace("}", "")
-    try:
-        upper = candidate.upper()
-        if upper.count("-") == 4 and len(upper) == 36:
-            return upper
-        if len(candidate) == 32 and all(c in "0123456789abcdefABCDEF" for c in candidate):
-            grouped = "-".join(
-                [candidate[0:8], candidate[8:12], candidate[12:16], candidate[16:20], candidate[20:32]]
-            )
-            return grouped.upper()
-    except Exception:
-        pass
-    return candidate.upper()
+    return normalize_guid(value)
 
 
 def load_agents_from_db():

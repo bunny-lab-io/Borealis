@@ -13,6 +13,7 @@ from flask import g, jsonify, request
 
 from Modules.auth.dpop import DPoPValidator, DPoPVerificationError, DPoPReplayError
 from Modules.auth.rate_limit import SlidingWindowRateLimiter
+from Modules.guid_utils import normalize_guid
 
 AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
 
@@ -87,7 +88,8 @@ class DeviceAuthManager:
         except Exception:
             raise DeviceAuthError("invalid_token")
 
-        guid = str(claims.get("guid") or "").strip()
+        raw_guid = str(claims.get("guid") or "").strip()
+        guid = normalize_guid(raw_guid)
         fingerprint = str(claims.get("ssl_key_fingerprint") or "").lower().strip()
         token_version = int(claims.get("token_version") or 0)
         if not guid or not fingerprint or token_version <= 0:
@@ -110,11 +112,19 @@ class DeviceAuthManager:
                 """
                 SELECT guid, ssl_key_fingerprint, token_version, status
                   FROM devices
-                 WHERE guid = ?
+                 WHERE UPPER(guid) = ?
                 """,
                 (guid,),
             )
-            row = cur.fetchone()
+            rows = cur.fetchall()
+            row = None
+            for candidate in rows or []:
+                candidate_guid = normalize_guid(candidate[0])
+                if candidate_guid == guid:
+                    row = candidate
+                    break
+            if row is None and rows:
+                row = rows[0]
 
             if not row:
                 row = self._recover_device_record(
@@ -125,8 +135,9 @@ class DeviceAuthManager:
             raise DeviceAuthError("device_not_found", status_code=403)
 
         db_guid, db_fp, db_token_version, status = row
+        db_guid_normalized = normalize_guid(db_guid)
 
-        if str(db_guid or "").lower() != guid.lower():
+        if not db_guid_normalized or db_guid_normalized != guid:
             raise DeviceAuthError("device_guid_mismatch", status_code=403)
 
         db_fp = (db_fp or "").lower().strip()
@@ -182,7 +193,7 @@ class DeviceAuthManager:
     ) -> Optional[tuple]:
         """Attempt to recreate a missing device row for an authenticated token."""
 
-        guid = (guid or "").strip()
+        guid = normalize_guid(guid)
         fingerprint = (fingerprint or "").strip()
         if not guid or not fingerprint:
             return None

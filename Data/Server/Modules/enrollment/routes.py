@@ -24,6 +24,7 @@ from flask import Blueprint, jsonify, request
 from Modules.auth.rate_limit import SlidingWindowRateLimiter
 from Modules.crypto import keys as crypto_keys
 from Modules.enrollment.nonce_store import NonceCache
+from Modules.guid_utils import normalize_guid
 from cryptography.hazmat.primitives import serialization
 
 
@@ -141,11 +142,11 @@ def register(
         if use_count < max_uses:
             return True, None
 
-        guid = str(record.get("used_by_guid") or "").strip()
+        guid = normalize_guid(record.get("used_by_guid"))
         if not guid:
             return False, None
         cur.execute(
-            "SELECT ssl_key_fingerprint FROM devices WHERE guid = ?",
+            "SELECT ssl_key_fingerprint FROM devices WHERE UPPER(guid) = ?",
             (guid,),
         )
         row = cur.fetchone()
@@ -159,31 +160,36 @@ def register(
         return False, None
 
     def _normalize_host(hostname: str, guid: str, cur: sqlite3.Cursor) -> str:
-        base = (hostname or "").strip() or guid
+        guid_norm = normalize_guid(guid)
+        base = (hostname or "").strip() or guid_norm
         base = base[:253]
         candidate = base
         suffix = 1
         while True:
             cur.execute(
-                "SELECT guid FROM devices WHERE hostname = ? AND guid != ?",
-                (candidate, guid),
+                "SELECT guid FROM devices WHERE hostname = ?",
+                (candidate,),
             )
             row = cur.fetchone()
             if not row:
                 return candidate
+            existing_guid = normalize_guid(row[0])
+            if existing_guid == guid_norm:
+                return candidate
             candidate = f"{base}-{suffix}"
             suffix += 1
             if suffix > 50:
-                return f"{guid}"
+                return guid_norm
 
     def _store_device_key(cur: sqlite3.Cursor, guid: str, fingerprint: str) -> None:
+        guid_norm = normalize_guid(guid)
         added_at = _iso(_now())
         cur.execute(
             """
             INSERT OR IGNORE INTO device_keys (id, guid, ssl_key_fingerprint, added_at)
             VALUES (?, ?, ?, ?)
             """,
-            (str(uuid.uuid4()), guid, fingerprint, added_at),
+            (str(uuid.uuid4()), guid_norm, fingerprint, added_at),
         )
         cur.execute(
             """
@@ -193,17 +199,18 @@ def register(
                AND ssl_key_fingerprint != ?
                AND retired_at IS NULL
             """,
-            (_iso(_now()), guid, fingerprint),
+            (_iso(_now()), guid_norm, fingerprint),
         )
 
     def _ensure_device_record(cur: sqlite3.Cursor, guid: str, hostname: str, fingerprint: str) -> Dict[str, Any]:
+        guid_norm = normalize_guid(guid)
         cur.execute(
             """
             SELECT guid, hostname, token_version, status, ssl_key_fingerprint, key_added_at
               FROM devices
-             WHERE guid = ?
+             WHERE UPPER(guid) = ?
             """,
-            (guid,),
+            (guid_norm,),
         )
         row = cur.fetchone()
         if row:
@@ -216,12 +223,13 @@ def register(
                 "key_added_at",
             ]
             record = dict(zip(keys, row))
+            record["guid"] = normalize_guid(record.get("guid"))
             stored_fp = (record.get("ssl_key_fingerprint") or "").strip().lower()
             new_fp = (fingerprint or "").strip().lower()
             if not stored_fp and new_fp:
                 cur.execute(
                     "UPDATE devices SET ssl_key_fingerprint = ?, key_added_at = ? WHERE guid = ?",
-                    (fingerprint, _iso(_now()), guid),
+                    (fingerprint, _iso(_now()), record["guid"]),
                 )
                 record["ssl_key_fingerprint"] = fingerprint
             elif new_fp and stored_fp != new_fp:
@@ -240,7 +248,7 @@ def register(
                            status = 'active'
                      WHERE guid = ?
                     """,
-                    (fingerprint, now_iso, new_version, guid),
+                    (fingerprint, now_iso, new_version, record["guid"]),
                 )
                 cur.execute(
                     """
@@ -249,7 +257,7 @@ def register(
                      WHERE guid = ?
                        AND revoked_at IS NULL
                     """,
-                    (now_iso, guid),
+                    (now_iso, record["guid"]),
                 )
                 record["ssl_key_fingerprint"] = fingerprint
                 record["token_version"] = new_version
@@ -257,7 +265,7 @@ def register(
                 record["key_added_at"] = now_iso
             return record
 
-        resolved_hostname = _normalize_host(hostname, guid, cur)
+        resolved_hostname = _normalize_host(hostname, guid_norm, cur)
         created_at = int(time.time())
         key_added_at = _iso(_now())
         cur.execute(
@@ -269,7 +277,7 @@ def register(
             VALUES (?, ?, ?, ?, ?, 1, 'active', ?)
             """,
             (
-                guid,
+                guid_norm,
                 resolved_hostname,
                 created_at,
                 created_at,
@@ -278,7 +286,7 @@ def register(
             ),
         )
         return {
-            "guid": guid,
+            "guid": guid_norm,
             "hostname": resolved_hostname,
             "token_version": 1,
             "status": "active",
@@ -620,7 +628,7 @@ def register(
                 return jsonify({"error": "proof_replayed"}), 409
 
             # Finalize enrollment
-            effective_guid = guid or str(uuid.uuid4())
+            effective_guid = normalize_guid(guid) if guid else normalize_guid(str(uuid.uuid4()))
             now_iso = _iso(_now())
 
             device_record = _ensure_device_record(cur, effective_guid, hostname_claimed, fingerprint)

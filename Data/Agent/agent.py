@@ -818,6 +818,7 @@ class AgentHttpClient:
         self.access_expires_at: Optional[int] = None
         self._auth_lock = threading.RLock()
         self._active_installer_code: Optional[str] = None
+        self._cached_ssl_context: Optional[ssl.SSLContext] = None
         self.refresh_base_url()
         self._configure_verify()
         self._reload_tokens_from_disk()
@@ -852,11 +853,17 @@ class AgentHttpClient:
                 pass
 
     def _reload_tokens_from_disk(self) -> None:
-        guid = self.key_store.load_guid()
+        raw_guid = self.key_store.load_guid()
+        normalized_guid = _normalize_agent_guid(raw_guid) if raw_guid else ''
         access_token = self.key_store.load_access_token()
         refresh_token = self.key_store.load_refresh_token()
         access_expiry = self.key_store.get_access_expiry()
-        self.guid = guid if guid else None
+        if normalized_guid and normalized_guid != (raw_guid or ""):
+            try:
+                self.key_store.save_guid(normalized_guid)
+            except Exception:
+                pass
+        self.guid = normalized_guid or None
         self.access_token = access_token if access_token else None
         self.refresh_token = refresh_token if refresh_token else None
         self.access_expires_at = access_expiry if access_expiry else None
@@ -930,6 +937,7 @@ class AgentHttpClient:
 
             context = None
             bundle_summary = {"count": None, "fingerprint": None, "layered_default": None}
+            context = None
             if isinstance(verify, str) and os.path.isfile(verify):
                 bundle_count, bundle_fp, layered_default = self.key_store.summarize_server_certificate()
                 bundle_summary = {
@@ -939,6 +947,7 @@ class AgentHttpClient:
                 }
                 context = self.key_store.build_ssl_context()
                 if context is not None:
+                    self._cached_ssl_context = context
                     if bundle_summary["layered_default"] is None:
                         bundle_summary["layered_default"] = getattr(
                             context, "_borealis_layered_default", None
@@ -975,6 +984,7 @@ class AgentHttpClient:
             # Fall back to boolean verification flags when we either do not
             # have a pinned certificate bundle or failed to build a dedicated
             # context for it.
+            self._cached_ssl_context = None
             verify_flag = False if verify is False else True
             _set_attr(engine, "ssl_context", None)
             _set_attr(engine, "ssl_verify", verify_flag)
@@ -993,6 +1003,34 @@ class AgentHttpClient:
                 fname="agent.error.log",
             )
             _log_exception_trace("configure_socketio")
+
+    def socketio_ssl_params(self) -> Dict[str, Any]:
+        verify = getattr(self.session, "verify", True)
+        if isinstance(verify, str) and os.path.isfile(verify):
+            context = self._cached_ssl_context
+            if context is None:
+                context = self.key_store.build_ssl_context()
+                if context is not None:
+                    self._cached_ssl_context = context
+            if context is not None:
+                return {"ssl": context}
+            try:
+                fallback = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
+                fallback.load_verify_locations(cafile=verify)
+                self._cached_ssl_context = fallback
+                return {"ssl": fallback}
+            except Exception as exc:
+                self._cached_ssl_context = None
+                _log_agent(
+                    f"SocketIO TLS fallback context build failed: {exc}; disabling verification",
+                    fname="agent.error.log",
+                )
+                return {"ssl": False}
+        if verify is False:
+            self._cached_ssl_context = None
+            return {"ssl": False}
+        self._cached_ssl_context = None
+        return {}
 
     # ------------------------------------------------------------------
     # Enrollment & token management
@@ -1221,7 +1259,7 @@ class AgentHttpClient:
                 self.store_server_signing_key(signing_key)
             except Exception as exc:
                 _log_agent(f'Unable to persist signing key from enrollment approval: {exc}', fname='agent.error.log')
-        guid = payload.get("guid")
+        guid = _normalize_agent_guid(payload.get("guid"))
         access_token = payload.get("access_token")
         refresh_token = payload.get("refresh_token")
         expires_in = int(payload.get("expires_in") or 900)
@@ -1233,7 +1271,7 @@ class AgentHttpClient:
             f"expires_in={expires_in}",
             fname="agent.log",
         )
-        self.guid = str(guid).strip()
+        self.guid = guid
         self.access_token = access_token.strip()
         self.refresh_token = refresh_token.strip()
         expiry = int(time.time()) + max(expires_in - 5, 0)
@@ -2781,8 +2819,16 @@ async def connect_loop():
             headers = client.auth_headers()
             header_summary = _summarize_headers(headers)
             verify_value = getattr(client.session, 'verify', None)
+            ssl_kwargs = client.socketio_ssl_params()
+            ssl_summary: Dict[str, Any] = {}
+            for key, value in ssl_kwargs.items():
+                if isinstance(value, ssl.SSLContext):
+                    ssl_summary[key] = "SSLContext"
+                else:
+                    ssl_summary[key] = value
             _log_agent(
-                f"connect_loop attempt={attempt} dialing websocket url={url} transports=['websocket'] verify={verify_value!r} headers={header_summary}",
+                f"connect_loop attempt={attempt} dialing websocket url={url} transports=['websocket'] "
+                f"verify={verify_value!r} headers={header_summary} ssl={ssl_summary or '{}'}",
                 fname='agent.log',
             )
             print(f"[INFO] Connecting Agent to {url}...")
@@ -2790,6 +2836,7 @@ async def connect_loop():
                 url,
                 transports=['websocket'],
                 headers=headers,
+                **ssl_kwargs,
             )
             _log_agent(
                 f'connect_loop attempt={attempt} sio.connect completed successfully',
