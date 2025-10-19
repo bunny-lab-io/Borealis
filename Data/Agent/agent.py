@@ -1106,6 +1106,7 @@ class AgentHttpClient:
                 self._set_socketio_http_session(client, session, ("noverify", None))
         elif isinstance(ssl_context, ssl.SSLContext):
             options.pop("ssl", None)
+            options["ssl"] = ssl_context
             engine.ssl_verify = True
             try:
                 connector = aiohttp.TCPConnector(ssl=ssl_context)
