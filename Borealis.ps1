@@ -852,7 +852,7 @@ function InstallOrUpdate-BorealisAgent {
         if (-not (Test-Path $serverUrlPath) -and (Test-Path $oldServerUrlPath)) {
             try { Move-Item -Path $oldServerUrlPath -Destination $serverUrlPath -Force } catch { try { Copy-Item $oldServerUrlPath $serverUrlPath -Force } catch {} }
         }
-        $defaultUrl = 'http://localhost:5000'
+        $defaultUrl = 'https://localhost:5000'
         $currentUrl = $defaultUrl
         if ($existingServerUrl -and $existingServerUrl.Trim()) {
             $currentUrl = $existingServerUrl.Trim()

@@ -7,8 +7,11 @@ Borealis-Server.exe
 # Production Deployment Folders
 /Agent/
 /Server/
+/Certificates/
 /ElectronApp/
 /Logs/
+/Temp/
+database.db
 
 # On-the-Fly Downloaded Dependencies
 /Dependencies/NodeJS/
@@ -20,11 +23,4 @@ Borealis-Server.exe
 # Misc Files/Folders
 .vs/s
 __pycache__
-/Agent/Python_API_Endpoints/__pycache__/
 /Update_Staging/
-agent_settings.json
-agent_settings_svc.json
-agent_settings_user.json
-users.json
-database.db
-/Temp/

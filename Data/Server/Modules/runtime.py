@@ -82,12 +82,46 @@ def ensure_runtime_dir(*parts: str) -> Path:
 def certificates_root() -> Path:
     """Base directory for persisted certificate material."""
 
-    env = _env_path("BOREALIS_CERT_ROOT")
+    env = _env_path("BOREALIS_CERTIFICATES_ROOT") or _env_path("BOREALIS_CERT_ROOT")
     if env:
         env.mkdir(parents=True, exist_ok=True)
         return env
 
     root = project_root() / "Certificates"
+    root.mkdir(parents=True, exist_ok=True)
+    # Ensure expected subdirectories exist for agent and server material.
+    try:
+        (root / "Server").mkdir(parents=True, exist_ok=True)
+        (root / "Agent").mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return root
+
+
+@lru_cache(maxsize=None)
+def server_certificates_root() -> Path:
+    """Base directory for server certificate material."""
+
+    env = _env_path("BOREALIS_SERVER_CERT_ROOT")
+    if env:
+        env.mkdir(parents=True, exist_ok=True)
+        return env
+
+    root = certificates_root() / "Server"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+@lru_cache(maxsize=None)
+def agent_certificates_root() -> Path:
+    """Base directory for agent certificate material."""
+
+    env = _env_path("BOREALIS_AGENT_CERT_ROOT")
+    if env:
+        env.mkdir(parents=True, exist_ok=True)
+        return env
+
+    root = certificates_root() / "Agent"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -102,5 +136,33 @@ def ensure_certificates_dir(*parts: str) -> Path:
     """Create (if required) and return a certificates subdirectory."""
 
     path = certificates_path(*parts)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def server_certificates_path(*parts: str) -> Path:
+    """Return a path under the server certificates root."""
+
+    return server_certificates_root().joinpath(*parts)
+
+
+def ensure_server_certificates_dir(*parts: str) -> Path:
+    """Create (if required) and return a server certificates subdirectory."""
+
+    path = server_certificates_path(*parts)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def agent_certificates_path(*parts: str) -> Path:
+    """Return a path under the agent certificates root."""
+
+    return agent_certificates_root().joinpath(*parts)
+
+
+def ensure_agent_certificates_dir(*parts: str) -> Path:
+    """Create (if required) and return an agent certificates subdirectory."""
+
+    path = agent_certificates_path(*parts)
     path.mkdir(parents=True, exist_ok=True)
     return path

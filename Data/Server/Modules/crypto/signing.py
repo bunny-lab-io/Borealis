@@ -10,15 +10,22 @@ from typing import Tuple
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from Modules.runtime import ensure_runtime_dir, runtime_path
+from Modules.runtime import (
+    ensure_server_certificates_dir,
+    server_certificates_path,
+    runtime_path,
+)
 
 from .keys import base64_from_spki_der
 
-_KEY_DIR = runtime_path("script_signing_keys")
+_KEY_DIR = server_certificates_path("Code-Signing")
 _SIGNING_KEY_FILE = _KEY_DIR / "borealis-script-ed25519.key"
 _SIGNING_PUB_FILE = _KEY_DIR / "borealis-script-ed25519.pub"
 _LEGACY_KEY_FILE = runtime_path("keys") / "borealis-script-ed25519.key"
 _LEGACY_PUB_FILE = runtime_path("keys") / "borealis-script-ed25519.pub"
+_OLD_RUNTIME_KEY_DIR = runtime_path("script_signing_keys")
+_OLD_RUNTIME_KEY_FILE = _OLD_RUNTIME_KEY_DIR / "borealis-script-ed25519.key"
+_OLD_RUNTIME_PUB_FILE = _OLD_RUNTIME_KEY_DIR / "borealis-script-ed25519.pub"
 
 
 class ScriptSigner:
@@ -45,7 +52,7 @@ def load_signer() -> ScriptSigner:
 
 
 def _load_or_create() -> ed25519.Ed25519PrivateKey:
-    ensure_runtime_dir("script_signing_keys")
+    ensure_server_certificates_dir("Code-Signing")
     _migrate_legacy_material_if_present()
 
     if _SIGNING_KEY_FILE.exists():
@@ -80,11 +87,30 @@ def _load_or_create() -> ed25519.Ed25519PrivateKey:
 
 
 def _migrate_legacy_material_if_present() -> None:
+    if _SIGNING_KEY_FILE.exists():
+        return
+
+    # First migrate from legacy runtime path embedded in Server runtime.
+    try:
+        if _OLD_RUNTIME_KEY_FILE.exists() and not _SIGNING_KEY_FILE.exists():
+            ensure_server_certificates_dir("Code-Signing")
+            try:
+                _OLD_RUNTIME_KEY_FILE.replace(_SIGNING_KEY_FILE)
+            except Exception:
+                _SIGNING_KEY_FILE.write_bytes(_OLD_RUNTIME_KEY_FILE.read_bytes())
+            if _OLD_RUNTIME_PUB_FILE.exists() and not _SIGNING_PUB_FILE.exists():
+                try:
+                    _OLD_RUNTIME_PUB_FILE.replace(_SIGNING_PUB_FILE)
+                except Exception:
+                    _SIGNING_PUB_FILE.write_bytes(_OLD_RUNTIME_PUB_FILE.read_bytes())
+    except Exception:
+        pass
+
     if not _LEGACY_KEY_FILE.exists() or _SIGNING_KEY_FILE.exists():
         return
 
     try:
-        ensure_runtime_dir("script_signing_keys")
+        ensure_server_certificates_dir("Code-Signing")
         try:
             _LEGACY_KEY_FILE.replace(_SIGNING_KEY_FILE)
         except Exception:
@@ -97,4 +123,3 @@ def _migrate_legacy_material_if_present() -> None:
                 _SIGNING_PUB_FILE.write_bytes(_LEGACY_PUB_FILE.read_bytes())
     except Exception:
         return
-

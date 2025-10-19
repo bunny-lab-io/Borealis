@@ -141,6 +141,18 @@ def register(
                     # Another device already claims this hostname; keep the existing
                     # canonical hostname assigned during enrollment to avoid breaking
                     # the unique constraint and continue updating the remaining fields.
+                    existing_guid_for_hostname: Optional[str] = None
+                    if "hostname" in updates:
+                        try:
+                            cur.execute(
+                                "SELECT guid FROM devices WHERE hostname = ?",
+                                (updates["hostname"],),
+                            )
+                            row = cur.fetchone()
+                            if row and row[0]:
+                                existing_guid_for_hostname = normalize_guid(row[0])
+                        except Exception:
+                            existing_guid_for_hostname = None
                     if "hostname" in updates:
                         updates.pop("hostname", None)
                     try:
@@ -148,12 +160,23 @@ def register(
                     except sqlite3.IntegrityError:
                         raise
                     else:
-                        log(
-                            "server",
-                            "heartbeat hostname collision ignored for guid="
-                            f"{ctx.guid}",
-                            context_label,
-                        )
+                        try:
+                            current_guid = normalize_guid(ctx.guid)
+                        except Exception:
+                            current_guid = ctx.guid
+                        if (
+                            existing_guid_for_hostname
+                            and current_guid
+                            and existing_guid_for_hostname == current_guid
+                        ):
+                            pass  # Same device contexts; no log needed.
+                        else:
+                            log(
+                                "server",
+                                "heartbeat hostname collision ignored for guid="
+                                f"{ctx.guid}",
+                                context_label,
+                            )
                 else:
                     raise
 

@@ -19,12 +19,17 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
-from Modules.runtime import ensure_runtime_dir, runtime_path
+from Modules.runtime import ensure_server_certificates_dir, server_certificates_path, runtime_path
 
-_CERT_DIR = runtime_path("certs")
+_CERT_DIR = server_certificates_path()
 _CERT_FILE = _CERT_DIR / "borealis-server-cert.pem"
 _KEY_FILE = _CERT_DIR / "borealis-server-key.pem"
 _BUNDLE_FILE = _CERT_DIR / "borealis-server-bundle.pem"
+
+_LEGACY_CERT_DIR = runtime_path("certs")
+_LEGACY_CERT_FILE = _LEGACY_CERT_DIR / "borealis-server-cert.pem"
+_LEGACY_KEY_FILE = _LEGACY_CERT_DIR / "borealis-server-key.pem"
+_LEGACY_BUNDLE_FILE = _LEGACY_CERT_DIR / "borealis-server-bundle.pem"
 
 # 100-year lifetime (effectively "never" for self-signed deployments).
 _CERT_VALIDITY = timedelta(days=365 * 100)
@@ -37,7 +42,8 @@ def ensure_certificate(common_name: str = "Borealis Server") -> Tuple[Path, Path
     Returns (cert_path, key_path, bundle_path).
     """
 
-    ensure_runtime_dir("certs")
+    ensure_server_certificates_dir()
+    _migrate_legacy_material_if_present()
 
     regenerate = not (_CERT_FILE.exists() and _KEY_FILE.exists())
     if not regenerate:
@@ -60,6 +66,38 @@ def ensure_certificate(common_name: str = "Borealis Server") -> Tuple[Path, Path
         _BUNDLE_FILE.write_bytes(_CERT_FILE.read_bytes())
 
     return _CERT_FILE, _KEY_FILE, _BUNDLE_FILE
+
+
+def _migrate_legacy_material_if_present() -> None:
+    if _CERT_FILE.exists() and _KEY_FILE.exists():
+        return
+
+    legacy_cert = _LEGACY_CERT_FILE
+    legacy_key = _LEGACY_KEY_FILE
+    legacy_bundle = _LEGACY_BUNDLE_FILE
+
+    if not legacy_cert.exists() or not legacy_key.exists():
+        return
+
+    try:
+        ensure_server_certificates_dir()
+        if not _CERT_FILE.exists():
+            try:
+                legacy_cert.replace(_CERT_FILE)
+            except Exception:
+                _CERT_FILE.write_bytes(legacy_cert.read_bytes())
+        if not _KEY_FILE.exists():
+            try:
+                legacy_key.replace(_KEY_FILE)
+            except Exception:
+                _KEY_FILE.write_bytes(legacy_key.read_bytes())
+        if legacy_bundle.exists() and not _BUNDLE_FILE.exists():
+            try:
+                legacy_bundle.replace(_BUNDLE_FILE)
+            except Exception:
+                _BUNDLE_FILE.write_bytes(legacy_bundle.read_bytes())
+    except Exception:
+        return
 
 
 def _generate_certificate(common_name: str) -> None:

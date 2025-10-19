@@ -12,6 +12,7 @@ import platform
 import stat
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import ssl
@@ -53,6 +54,49 @@ def _restrict_permissions(path: str) -> None:
             os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
     except Exception:
         pass
+
+
+def _resolve_agent_certificate_dir(settings_dir: str, scope: str) -> str:
+    scope_name = (scope or "CURRENTUSER").strip().upper() or "CURRENTUSER"
+
+    def _as_path(value: Optional[str]) -> Optional[Path]:
+        if not value:
+            return None
+        try:
+            return Path(value).expanduser().resolve()
+        except Exception:
+            try:
+                return Path(value).expanduser()
+            except Exception:
+                return Path(value)
+
+    env_agent_root = _as_path(os.environ.get("BOREALIS_AGENT_CERT_ROOT"))
+    env_cert_root = _as_path(os.environ.get("BOREALIS_CERTIFICATES_ROOT")) or _as_path(
+        os.environ.get("BOREALIS_CERT_ROOT")
+    )
+
+    if env_agent_root is not None:
+        base = env_agent_root
+    elif env_cert_root is not None:
+        base = env_cert_root / "Agent"
+    else:
+        settings_path = Path(settings_dir).resolve()
+        try:
+            project_root = settings_path.parents[2]
+        except Exception:
+            project_root = settings_path.parent
+        base = project_root / "Certificates" / "Agent"
+
+    target = base / "Trusted_Server_Cert"
+    if scope_name not in {"SYSTEM", "CURRENTUSER"}:
+        target = target / scope_name
+
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    return str(target)
 
 
 class _FileLock:
@@ -226,15 +270,17 @@ class AgentIdentity:
 class AgentKeyStore:
     def __init__(self, settings_dir: str, scope: str = "CURRENTUSER") -> None:
         self.settings_dir = settings_dir
-        self.scope_system = scope.upper() == "SYSTEM"
+        self.scope_name = (scope or "CURRENTUSER").strip().upper() or "CURRENTUSER"
+        self.scope_system = self.scope_name == "SYSTEM"
         _ensure_dir(self.settings_dir)
+        self._certificate_dir = _resolve_agent_certificate_dir(self.settings_dir, self.scope_name)
         self._private_path = os.path.join(self.settings_dir, "agent_key.ed25519")
         self._public_path = os.path.join(self.settings_dir, "agent_key.pub")
         self._guid_path = os.path.join(self.settings_dir, "guid.txt")
         self._access_token_path = os.path.join(self.settings_dir, "access.jwt")
         self._refresh_token_path = os.path.join(self.settings_dir, "refresh.token")
         self._token_meta_path = os.path.join(self.settings_dir, "access.meta.json")
-        self._server_certificate_path = os.path.join(self.settings_dir, "server_certificate.pem")
+        self._server_certificate_path = os.path.join(self._certificate_dir, "server_certificate.pem")
         self._server_signing_key_path = os.path.join(self.settings_dir, "server_signing_key.pub")
         self._identity_lock_path = os.path.join(self.settings_dir, "identity.lock")
         self._installer_cache_path = os.path.join(self.settings_dir, "installer_code.shared.json")

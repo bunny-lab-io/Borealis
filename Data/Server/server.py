@@ -50,25 +50,40 @@ else:
     _original_handle_one_request = HttpProtocol.handle_one_request
 
     def _quiet_tls_http_mismatch(self):  # type: ignore[override]
+        def _close_connection_quietly():
+            try:
+                self.close_connection = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                conn = getattr(self, "socket", None) or getattr(self, "connection", None)
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
+
         try:
             return _original_handle_one_request(self)
         except ssl.SSLError as exc:  # type: ignore[arg-type]
             reason = getattr(exc, "reason", "")
             reason_text = str(reason).lower() if reason else ""
             message = " ".join(str(arg) for arg in exc.args if arg).lower()
-            if "http_request" in message or reason_text == "http request":
-                try:
-                    self.close_connection = True  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-                try:
-                    conn = getattr(self, "socket", None) or getattr(self, "connection", None)
-                    if conn:
-                        conn.close()
-                except Exception:
-                    pass
+            if (
+                "http_request" in message
+                or reason_text == "http request"
+                or "unknown ca" in message
+                or reason_text == "unknown ca"
+                or "unknown_ca" in message
+            ):
+                _close_connection_quietly()
                 return None
             raise
+        except ssl.SSLEOFError:
+            _close_connection_quietly()
+            return None
+        except ConnectionAbortedError:
+            _close_connection_quietly()
+            return None
 
     HttpProtocol.handle_one_request = _quiet_tls_http_mismatch  # type: ignore[assignment]
 
