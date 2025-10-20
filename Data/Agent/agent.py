@@ -36,6 +36,7 @@ import aiohttp
 
 import socketio
 from security import AgentKeyStore
+from signature_utils import decode_script_bytes as _decode_script_bytes, verify_and_store_script_signature as _verify_and_store_script_signature
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -2339,47 +2340,6 @@ async def send_heartbeat():
         await asyncio.sleep(60)
 
 
-def _verify_and_store_script_signature(
-    client: AgentHttpClient,
-    script_bytes: bytes,
-    signature_b64: str,
-    signing_key_hint: Optional[str] = None,
-) -> bool:
-    candidates: List[str] = []
-    if isinstance(signing_key_hint, str) and signing_key_hint.strip():
-        candidates.append(signing_key_hint.strip())
-    stored_key = client.load_server_signing_key()
-    if stored_key:
-        key_text = stored_key.strip()
-        if key_text and key_text not in candidates:
-            candidates.append(key_text)
-    for key_b64 in candidates:
-        try:
-            key_der = base64.b64decode(key_b64, validate=True)
-        except Exception:
-            continue
-        try:
-            public_key = serialization.load_der_public_key(key_der)
-        except Exception:
-            continue
-        if not isinstance(public_key, ed25519.Ed25519PublicKey):
-            continue
-        try:
-            signature = base64.b64decode(signature_b64, validate=True)
-        except Exception:
-            return False
-        try:
-            public_key.verify(signature, script_bytes)
-            if stored_key and stored_key.strip() != key_b64:
-                client.store_server_signing_key(key_b64)
-            elif not stored_key:
-                client.store_server_signing_key(key_b64)
-            return True
-        except Exception:
-            continue
-    return False
-
-
 async def poll_script_requests():
     await asyncio.sleep(20)
     client = http_client()
@@ -2394,9 +2354,9 @@ async def poll_script_requests():
                 signature_b64 = response.get("signature")
                 sig_alg = (response.get("sig_alg") or "").lower()
                 if script_b64 and signature_b64:
-                    script_bytes = _decode_base64_bytes(script_b64)
+                    script_bytes = _decode_script_bytes(script_b64, "base64")
                     if script_bytes is None:
-                        _log_agent('received script payload with invalid base64 encoding', fname='agent.error.log')
+                        _log_agent('received script payload with invalid encoding', fname='agent.error.log')
                     elif sig_alg and sig_alg not in ("ed25519", "eddsa"):
                         _log_agent(f'unsupported script signature algorithm: {sig_alg}', fname='agent.error.log')
                     else:
@@ -3233,8 +3193,54 @@ if __name__=='__main__':
                     return
                 job_id = payload.get('job_id')
                 script_type = (payload.get('script_type') or '').lower()
-                content = _decode_script_payload(payload.get('script_content'), payload.get('script_encoding'))
+                encoding_hint = payload.get('script_encoding')
+                script_bytes = _decode_script_bytes(payload.get('script_content'), encoding_hint)
                 run_mode = (payload.get('run_mode') or 'current_user').lower()
+                if script_bytes is None:
+                    err = 'Invalid script payload (unable to decode)'
+                    await sio.emit('quick_job_result', {
+                        'job_id': job_id,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': err,
+                    })
+                    _log_agent(err, fname='agent.error.log')
+                    return
+                signature_b64 = payload.get('signature')
+                sig_alg = (payload.get('sig_alg') or 'ed25519').lower()
+                signing_key = payload.get('signing_key')
+                if sig_alg and sig_alg not in ('ed25519', 'eddsa'):
+                    err = f"Unsupported script signature algorithm: {sig_alg}"
+                    await sio.emit('quick_job_result', {
+                        'job_id': job_id,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': err,
+                    })
+                    _log_agent(err, fname='agent.error.log')
+                    return
+                if not isinstance(signature_b64, str) or not signature_b64.strip():
+                    err = 'Missing script signature; rejecting payload'
+                    await sio.emit('quick_job_result', {
+                        'job_id': job_id,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': err,
+                    })
+                    _log_agent(err, fname='agent.error.log')
+                    return
+                client = http_client()
+                if not _verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
+                    err = 'Rejected script payload due to invalid signature'
+                    await sio.emit('quick_job_result', {
+                        'job_id': job_id,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': err,
+                    })
+                    _log_agent(err, fname='agent.error.log')
+                    return
+                content = script_bytes.decode('utf-8', errors='replace')
                 if script_type != 'powershell':
                     await sio.emit('quick_job_result', { 'job_id': job_id, 'status': 'Failed', 'stdout': '', 'stderr': f"Unsupported type: {script_type}" })
                     return

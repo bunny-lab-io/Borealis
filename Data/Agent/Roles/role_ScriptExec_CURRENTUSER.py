@@ -8,6 +8,7 @@ import base64
 from typing import Dict, List, Optional
 from PyQt5 import QtWidgets, QtGui
 
+from signature_utils import decode_script_bytes, verify_and_store_script_signature
 
 ROLE_NAME = 'script_exec_currentuser'
 ROLE_CONTEXTS = ['interactive']
@@ -277,7 +278,55 @@ class Role:
                 job_id = payload.get('job_id')
                 script_type = (payload.get('script_type') or '').lower()
                 run_mode = (payload.get('run_mode') or 'current_user').lower()
-                content = _decode_script_content(payload.get('script_content'), payload.get('script_encoding'))
+                if run_mode == 'system':
+                    return
+                script_bytes = decode_script_bytes(payload.get('script_content'), payload.get('script_encoding'))
+                if script_bytes is None:
+                    await sio.emit('quick_job_result', {
+                        'job_id': job_id,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': 'Invalid script payload (unable to decode)',
+                    })
+                    return
+                signature_b64 = payload.get('signature')
+                sig_alg = (payload.get('sig_alg') or 'ed25519').lower()
+                signing_key = payload.get('signing_key')
+                if sig_alg and sig_alg not in ('ed25519', 'eddsa'):
+                    await sio.emit('quick_job_result', {
+                        'job_id': job_id,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': f'Unsupported script signature algorithm: {sig_alg}',
+                    })
+                    return
+                if not isinstance(signature_b64, str) or not signature_b64.strip():
+                    await sio.emit('quick_job_result', {
+                        'job_id': job_id,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': 'Missing script signature; rejecting payload',
+                    })
+                    return
+                http_client_fn = getattr(self.ctx, 'hooks', {}).get('http_client') if hasattr(self.ctx, 'hooks') else None
+                client = http_client_fn() if callable(http_client_fn) else None
+                if client is None:
+                    await sio.emit('quick_job_result', {
+                        'job_id': job_id,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': 'Signature verification unavailable (client missing)',
+                    })
+                    return
+                if not verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
+                    await sio.emit('quick_job_result', {
+                        'job_id': job_id,
+                        'status': 'Failed',
+                        'stdout': '',
+                        'stderr': 'Rejected script payload due to invalid signature',
+                    })
+                    return
+                content = script_bytes.decode('utf-8', errors='replace')
                 raw_env = payload.get('environment')
                 env_map = _sanitize_env_map(raw_env)
                 variables = payload.get('variables') if isinstance(payload.get('variables'), list) else []
@@ -302,8 +351,6 @@ class Role:
                     timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
                 except Exception:
                     timeout_seconds = 0
-                if run_mode == 'system':
-                    return
                 if script_type != 'powershell':
                     await sio.emit('quick_job_result', { 'job_id': job_id, 'status': 'Failed', 'stdout': '', 'stderr': f"Unsupported type: {script_type}" })
                     return

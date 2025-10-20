@@ -5153,7 +5153,7 @@ ensure_default_admin()
 # =============================================================================
 # Connect the Flask app to the background job scheduler and helpers.
 
-job_scheduler = register_job_scheduler(app, socketio, DB_PATH)
+job_scheduler = register_job_scheduler(app, socketio, DB_PATH, script_signer=SCRIPT_SIGNER)
 scheduler_set_server_runner(job_scheduler, _queue_server_ansible_run)
 scheduler_set_credential_fetcher(job_scheduler, _fetch_credential_with_secrets)
 job_scheduler.start()
@@ -6922,7 +6922,19 @@ def scripts_quick_run():
 
     env_map, variables, literal_lookup = _prepare_variable_context(doc_variables, overrides)
     content = _rewrite_powershell_script(content, literal_lookup)
-    encoded_content = _encode_script_content(content)
+    normalized_script = (content or "").replace("\r\n", "\n")
+    script_bytes = normalized_script.encode("utf-8")
+    encoded_content = base64.b64encode(script_bytes).decode("ascii") if script_bytes or normalized_script == "" else ""
+    signature_b64 = ""
+    signing_key_b64 = ""
+    if SCRIPT_SIGNER:
+        try:
+            signature_raw = SCRIPT_SIGNER.sign(script_bytes)
+            signature_b64 = base64.b64encode(signature_raw).decode("ascii")
+            signing_key_b64 = SCRIPT_SIGNER.public_base64_spki()
+        except Exception:
+            signature_b64 = ""
+            signing_key_b64 = ""
     timeout_seconds = 0
     try:
         timeout_seconds = max(0, int(doc.get("timeout_seconds") or 0))
@@ -6975,6 +6987,11 @@ def scripts_quick_run():
             "admin_user": admin_user,
             "admin_pass": admin_pass,
         }
+        if signature_b64:
+            payload["signature"] = signature_b64
+            payload["sig_alg"] = "ed25519"
+        if signing_key_b64:
+            payload["signing_key"] = signing_key_b64
         # Broadcast to all connected clients; no broadcast kw in python-socketio v5
         socketio.emit("quick_job_run", payload)
         try:

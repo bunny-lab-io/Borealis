@@ -322,10 +322,11 @@ def _to_dt_tuple(ts: int) -> Tuple[int, int, int, int, int, int]:
 
 
 class JobScheduler:
-    def __init__(self, app, socketio, db_path: str):
+    def __init__(self, app, socketio, db_path: str, script_signer=None):
         self.app = app
         self.socketio = socketio
         self.db_path = db_path
+        self._script_signer = script_signer
         self._running = False
         # Simulated run duration to hold jobs in "Running" before Success
         self.SIMULATED_RUN_SECONDS = int(os.environ.get("BOREALIS_SIM_RUN_SECONDS", "30"))
@@ -545,7 +546,22 @@ class JobScheduler:
                 return None
             doc = self._load_assembly_document(abs_path, "ansible")
             content = doc.get("script") or ""
-            encoded_content = _encode_script_content(content)
+            normalized_script = (content or "").replace("\r\n", "\n")
+            script_bytes = normalized_script.encode("utf-8")
+            encoded_content = base64.b64encode(script_bytes).decode("ascii") if script_bytes or normalized_script == "" else ""
+            signature_b64: Optional[str] = None
+            sig_alg: Optional[str] = None
+            signing_key_b64: Optional[str] = None
+            if self._script_signer is not None:
+                try:
+                    signature = self._script_signer.sign(script_bytes)
+                    signature_b64 = base64.b64encode(signature).decode("ascii")
+                    sig_alg = "ed25519"
+                    signing_key_b64 = self._script_signer.public_base64_spki()
+                except Exception:
+                    signature_b64 = None
+                    sig_alg = None
+                    signing_key_b64 = None
             variables = doc.get("variables") or []
             files = doc.get("files") or []
             run_mode_norm = (run_mode or "system").strip().lower()
@@ -765,6 +781,12 @@ class JobScheduler:
                 "admin_user": "",
                 "admin_pass": "",
             }
+            if signature_b64:
+                payload["signature"] = signature_b64
+            if sig_alg:
+                payload["sig_alg"] = sig_alg
+            if signing_key_b64:
+                payload["signing_key"] = signing_key_b64
             try:
                 self.socketio.emit("quick_job_run", payload)
             except Exception:
@@ -1799,9 +1821,9 @@ class JobScheduler:
             return {}
 
 
-def register(app, socketio, db_path: str) -> JobScheduler:
+def register(app, socketio, db_path: str, script_signer=None) -> JobScheduler:
     """Factory to create and return a JobScheduler instance."""
-    return JobScheduler(app, socketio, db_path)
+    return JobScheduler(app, socketio, db_path, script_signer=script_signer)
 
 
 def set_online_lookup(scheduler: JobScheduler, fn: Callable[[], List[str]]):
