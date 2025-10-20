@@ -8,6 +8,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from flask import Blueprint, jsonify, request
 
+from Modules.guid_utils import normalize_guid
+
 
 VALID_TTL_HOURS = {1, 3, 6, 12, 24}
 
@@ -39,6 +41,72 @@ def register(
         if row:
             return str(row[0])
         return None
+
+    def _hostname_conflict(
+        cur: sqlite3.Cursor,
+        hostname: Optional[str],
+        pending_guid: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        if not hostname:
+            return None
+        cur.execute(
+            """
+            SELECT d.guid, ds.site_id, s.name
+              FROM devices d
+         LEFT JOIN device_sites ds ON ds.device_hostname = d.hostname
+         LEFT JOIN sites s ON s.id = ds.site_id
+             WHERE d.hostname = ?
+            """,
+            (hostname,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        existing_guid = normalize_guid(row[0])
+        pending_norm = normalize_guid(pending_guid)
+        if existing_guid and pending_norm and existing_guid == pending_norm:
+            return None
+        site_id_raw = row[1]
+        site_id = None
+        if site_id_raw is not None:
+            try:
+                site_id = int(site_id_raw)
+            except (TypeError, ValueError):
+                site_id = None
+        site_name = row[2] or ""
+        return {
+            "guid": existing_guid or None,
+            "site_id": site_id,
+            "site_name": site_name,
+        }
+
+    def _suggest_alternate_hostname(
+        cur: sqlite3.Cursor,
+        hostname: Optional[str],
+        pending_guid: Optional[str],
+    ) -> Optional[str]:
+        base = (hostname or "").strip()
+        if not base:
+            return None
+        base = base[:253]
+        candidate = base
+        pending_norm = normalize_guid(pending_guid)
+        suffix = 1
+        while True:
+            cur.execute(
+                "SELECT guid FROM devices WHERE hostname = ?",
+                (candidate,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return candidate
+            existing_guid = normalize_guid(row[0])
+            if pending_norm and existing_guid == pending_norm:
+                return candidate
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+            if suffix > 50:
+                return pending_norm or candidate
 
     @blueprint.before_request
     def _check_admin():
@@ -177,6 +245,7 @@ def register(
     @blueprint.route("/api/admin/device-approvals", methods=["GET"])
     def list_device_approvals():
         status = request.args.get("status", "pending")
+        approvals: List[Dict[str, Any]] = []
         conn = db_conn_factory()
         try:
             cur = conn.cursor()
@@ -203,30 +272,42 @@ def register(
             sql += " ORDER BY created_at ASC"
             cur.execute(sql, params)
             rows = cur.fetchall()
+            for row in rows:
+                record_guid = row[2]
+                hostname = row[3]
+                conflict = _hostname_conflict(cur, hostname, record_guid)
+                approvals.append(
+                    {
+                        "id": row[0],
+                        "approval_reference": row[1],
+                        "guid": record_guid,
+                        "hostname_claimed": hostname,
+                        "ssl_key_fingerprint_claimed": row[4],
+                        "enrollment_code_id": row[5],
+                        "status": row[6],
+                        "client_nonce": row[7],
+                        "server_nonce": row[8],
+                        "created_at": row[9],
+                        "updated_at": row[10],
+                        "approved_by_user_id": row[11],
+                        "hostname_conflict": conflict,
+                        "alternate_hostname": _suggest_alternate_hostname(cur, hostname, record_guid)
+                        if conflict
+                        else None,
+                    }
+                )
         finally:
             conn.close()
 
-        approvals = []
-        for row in rows:
-            approvals.append(
-                {
-                    "id": row[0],
-                    "approval_reference": row[1],
-                    "guid": row[2],
-                    "hostname_claimed": row[3],
-                    "ssl_key_fingerprint_claimed": row[4],
-                    "enrollment_code_id": row[5],
-                    "status": row[6],
-                    "client_nonce": row[7],
-                    "server_nonce": row[8],
-                    "created_at": row[9],
-                    "updated_at": row[10],
-                    "approved_by_user_id": row[11],
-                }
-            )
         return jsonify({"approvals": approvals})
 
-    def _set_approval_status(approval_id: str, status: str, guid: Optional[str] = None):
+    def _set_approval_status(
+        approval_id: str,
+        status: str,
+        *,
+        guid: Optional[str] = None,
+        resolution: Optional[str] = None,
+    ):
         user = current_user() or {}
         username = user.get("username") or ""
 
@@ -268,8 +349,12 @@ def register(
             conn.commit()
         finally:
             conn.close()
-        log("server", f"device approval {approval_id} -> {status} by {username}")
-        return {"status": status}, 200
+        resolution_note = f" ({resolution})" if resolution else ""
+        log("server", f"device approval {approval_id} -> {status}{resolution_note} by {username}")
+        payload: Dict[str, Any] = {"status": status}
+        if resolution:
+            payload["conflict_resolution"] = resolution
+        return payload, 200
 
     @blueprint.route("/api/admin/device-approvals/<approval_id>/approve", methods=["POST"])
     def approve_device(approval_id: str):
@@ -277,7 +362,18 @@ def register(
         guid = payload.get("guid")
         if guid:
             guid = str(guid).strip()
-        result, status_code = _set_approval_status(approval_id, "approved", guid=guid)
+        resolution_val = payload.get("conflict_resolution")
+        resolution = None
+        if isinstance(resolution_val, str):
+            cleaned = resolution_val.strip().lower()
+            if cleaned:
+                resolution = cleaned
+        result, status_code = _set_approval_status(
+            approval_id,
+            "approved",
+            guid=guid,
+            resolution=resolution,
+        )
         return jsonify(result), status_code
 
     @blueprint.route("/api/admin/device-approvals/<approval_id>/deny", methods=["POST"])

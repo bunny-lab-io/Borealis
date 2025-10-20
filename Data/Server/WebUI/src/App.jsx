@@ -46,8 +46,8 @@ import CredentialList from "./Access_Management/Credential_List.jsx";
 import UserManagement from "./Access_Management/Users.jsx";
 import GithubAPIToken from "./Access_Management/Github_API_Token.jsx";
 import ServerInfo from "./Admin/Server_Info.jsx";
-import EnrollmentCodes from "./Admin/Enrollment_Codes.jsx";
-import DeviceApprovals from "./Admin/Device_Approvals.jsx";
+import EnrollmentCodes from "./Devices/Enrollment_Codes.jsx";
+import DeviceApprovals from "./Devices/Device_Approvals.jsx";
 
 // Networking Imports
 import { io } from "socket.io-client";
