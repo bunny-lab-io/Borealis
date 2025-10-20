@@ -266,6 +266,17 @@ class Role:
 
     def register_events(self):
         sio = self.ctx.sio
+        hooks = getattr(self.ctx, 'hooks', {}) or {}
+        log_agent_hook = hooks.get('log_agent')
+
+        def _log(message: str, *, error: bool = False) -> None:
+            if callable(log_agent_hook):
+                try:
+                    log_agent_hook(message)
+                    if error:
+                        log_agent_hook(message, fname='agent.error.log')
+                except Exception:
+                    pass
 
         @sio.on('quick_job_run')
         async def _on_quick_job_run(payload):
@@ -280,8 +291,11 @@ class Role:
                 run_mode = (payload.get('run_mode') or 'current_user').lower()
                 if run_mode == 'system':
                     return
+                job_label = job_id if job_id is not None else 'unknown'
+                _log(f"quick_job_run(currentuser) received payload job_id={job_label}")
                 script_bytes = decode_script_bytes(payload.get('script_content'), payload.get('script_encoding'))
                 if script_bytes is None:
+                    _log(f"quick_job_run(currentuser) invalid script payload job_id={job_label}", error=True)
                     await sio.emit('quick_job_result', {
                         'job_id': job_id,
                         'status': 'Failed',
@@ -293,6 +307,7 @@ class Role:
                 sig_alg = (payload.get('sig_alg') or 'ed25519').lower()
                 signing_key = payload.get('signing_key')
                 if sig_alg and sig_alg not in ('ed25519', 'eddsa'):
+                    _log(f"quick_job_run(currentuser) unsupported signature algorithm job_id={job_label} alg={sig_alg}", error=True)
                     await sio.emit('quick_job_result', {
                         'job_id': job_id,
                         'status': 'Failed',
@@ -301,6 +316,7 @@ class Role:
                     })
                     return
                 if not isinstance(signature_b64, str) or not signature_b64.strip():
+                    _log(f"quick_job_run(currentuser) missing signature job_id={job_label}", error=True)
                     await sio.emit('quick_job_result', {
                         'job_id': job_id,
                         'status': 'Failed',
@@ -311,6 +327,7 @@ class Role:
                 http_client_fn = getattr(self.ctx, 'hooks', {}).get('http_client') if hasattr(self.ctx, 'hooks') else None
                 client = http_client_fn() if callable(http_client_fn) else None
                 if client is None:
+                    _log(f"quick_job_run(currentuser) missing http_client hook job_id={job_label}", error=True)
                     await sio.emit('quick_job_result', {
                         'job_id': job_id,
                         'status': 'Failed',
@@ -319,6 +336,7 @@ class Role:
                     })
                     return
                 if not verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
+                    _log(f"quick_job_run(currentuser) signature verification failed job_id={job_label}", error=True)
                     await sio.emit('quick_job_result', {
                         'job_id': job_id,
                         'status': 'Failed',
@@ -326,6 +344,7 @@ class Role:
                         'stderr': 'Rejected script payload due to invalid signature',
                     })
                     return
+                _log(f"quick_job_run(currentuser) signature verified job_id={job_label}")
                 content = script_bytes.decode('utf-8', errors='replace')
                 raw_env = payload.get('environment')
                 env_map = _sanitize_env_map(raw_env)

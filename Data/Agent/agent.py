@@ -3138,6 +3138,7 @@ if __name__=='__main__':
             'send_service_control': send_service_control,
             'get_server_url': get_server_url,
             'http_client': http_client,
+            'log_agent': lambda message, **kwargs: _log_agent(message, **kwargs),
         }
         if not SYSTEM_SERVICE_MODE:
             # Load interactive-context roles (tray/UI, current-user execution, screenshot, etc.)
@@ -3192,10 +3193,12 @@ if __name__=='__main__':
                 if target and target not in ('unknown', '*', '(unknown)') and target != hostname.lower():
                     return
                 job_id = payload.get('job_id')
+                job_label = job_id if job_id is not None else 'unknown'
                 script_type = (payload.get('script_type') or '').lower()
                 encoding_hint = payload.get('script_encoding')
                 script_bytes = _decode_script_bytes(payload.get('script_content'), encoding_hint)
                 run_mode = (payload.get('run_mode') or 'current_user').lower()
+                _log_agent(f"quick_job_run received payload job_id={job_label} run_mode={run_mode}")
                 if script_bytes is None:
                     err = 'Invalid script payload (unable to decode)'
                     await sio.emit('quick_job_result', {
@@ -3204,6 +3207,7 @@ if __name__=='__main__':
                         'stdout': '',
                         'stderr': err,
                     })
+                    _log_agent(err)
                     _log_agent(err, fname='agent.error.log')
                     return
                 signature_b64 = payload.get('signature')
@@ -3217,6 +3221,7 @@ if __name__=='__main__':
                         'stdout': '',
                         'stderr': err,
                     })
+                    _log_agent(err)
                     _log_agent(err, fname='agent.error.log')
                     return
                 if not isinstance(signature_b64, str) or not signature_b64.strip():
@@ -3227,6 +3232,7 @@ if __name__=='__main__':
                         'stdout': '',
                         'stderr': err,
                     })
+                    _log_agent(err)
                     _log_agent(err, fname='agent.error.log')
                     return
                 client = http_client()
@@ -3238,8 +3244,10 @@ if __name__=='__main__':
                         'stdout': '',
                         'stderr': err,
                     })
+                    _log_agent(err)
                     _log_agent(err, fname='agent.error.log')
                     return
+                _log_agent(f"quick_job_run signature verified job_id={job_label}")
                 content = script_bytes.decode('utf-8', errors='replace')
                 if script_type != 'powershell':
                     await sio.emit('quick_job_result', { 'job_id': job_id, 'status': 'Failed', 'stdout': '', 'stderr': f"Unsupported type: {script_type}" })
@@ -3248,6 +3256,7 @@ if __name__=='__main__':
                 if run_mode == 'system':
                     if not SYSTEM_SERVICE_MODE:
                         # Let the SYSTEM service handle these exclusively
+                        _log_agent(f"quick_job_run ignored job_id={job_label} (system payload routed to SYSTEM service)")
                         return
                     try:
                         # Save last SYSTEM script for debugging
