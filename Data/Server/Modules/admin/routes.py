@@ -246,7 +246,8 @@ def register(
 
     @blueprint.route("/api/admin/device-approvals", methods=["GET"])
     def list_device_approvals():
-        status = request.args.get("status", "pending")
+        status_raw = request.args.get("status")
+        status = (status_raw or "").strip().lower()
         approvals: List[Dict[str, Any]] = []
         conn = db_conn_factory()
         try:
@@ -268,8 +269,8 @@ def register(
                     approved_by_user_id
                   FROM device_approvals
             """
-            if status:
-                sql += " WHERE status = ?"
+            if status and status != "all":
+                sql += " WHERE LOWER(status) = ?"
                 params.append(status)
             sql += " ORDER BY created_at ASC"
             cur.execute(sql, params)

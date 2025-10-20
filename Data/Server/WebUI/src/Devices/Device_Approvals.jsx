@@ -37,12 +37,12 @@ import {
 } from "@mui/icons-material";
 
 const STATUS_OPTIONS = [
+  { value: "all", label: "All" },
   { value: "pending", label: "Pending" },
   { value: "approved", label: "Approved" },
   { value: "completed", label: "Completed" },
   { value: "denied", label: "Denied" },
   { value: "expired", label: "Expired" },
-  { value: "all", label: "All" },
 ];
 
 const statusChipColor = {
@@ -75,7 +75,7 @@ const normalizeStatus = (status) => {
 
 function DeviceApprovals() {
   const [approvals, setApprovals] = useState([]);
-  const [statusFilter, setStatusFilter] = useState("pending");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState(null);
