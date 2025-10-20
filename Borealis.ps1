@@ -796,6 +796,7 @@ function InstallOrUpdate-BorealisAgent {
                 (Join-Path $agentSourceRoot 'launch_service.ps1'),
                 (Join-Path $agentSourceRoot 'role_manager.py'),
                 (Join-Path $agentSourceRoot 'security.py'),
+                (Join-Path $agentSourceRoot 'signature_utils.py'),
                 (Join-Path $agentSourceRoot 'sitecustomize.py'),
                 (Join-Path $agentSourceRoot 'termios_stub.py')
             )
