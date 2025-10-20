@@ -1116,6 +1116,7 @@ export default function DeviceList({
             field: "status",
             headerName: col.label,
             cellRenderer: statusCellRenderer,
+            cellClass: "status-pill-cell",
             width: 112,
             minWidth: 112,
             flex: 0,
@@ -1533,6 +1534,30 @@ export default function DeviceList({
             },
             "& .ag-icon": {
               fontFamily: iconFontFamily,
+            },
+            "& .status-pill-cell": {
+              display: "flex",
+              alignItems: "center",
+            },
+            "& .status-pill-cell .ag-cell-wrapper": {
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              height: "100%",
+              paddingTop: 0,
+              paddingBottom: 0,
+              lineHeight: "normal",
+            },
+            "& .status-pill-cell .ag-cell-value": {
+              width: "100%",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              height: "100%",
+            },
+            "& .status-pill-cell .ag-cell-value > span": {
+              margin: 0,
             },
           }}
         >
