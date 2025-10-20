@@ -32,13 +32,64 @@
       "problemMatcher": []
     },
     {
-      "label": "Borealis - Agent",
+      "label": "Borealis - Agent - Deploy",
       "type": "shell",
       "command": "powershell.exe",
       "args": [
         "-ExecutionPolicy", "Bypass",
         "-File", "${workspaceFolder}/Borealis.ps1",
         "-Agent"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Borealis - Agent - Stop SYSTEM & CURRENTUSER Agents",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "& {\n    $taskNames = @('Borealis Agent','Borealis Agent (UserHelper)');\n    foreach ($name in $taskNames) {\n        $taskExists = $false;\n        try { Get-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null; $taskExists = $true } catch {\n            try { schtasks.exe /Query /TN $name 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { $taskExists = $true } } catch {}\n        };\n        if (-not $taskExists) { continue };\n        Write-Host ('Stopping scheduled task: {0}' -f $name);\n        try { Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue } catch {}\n        try { schtasks.exe /End /TN $name /F 2>$null | Out-Null } catch {}\n        try {\n            for ($i = 0; $i -lt 20; $i++) {\n                $info = Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop;\n                if ($info.State -ne 'Running' -and $info.State -ne 'Queued') { break }\n                Start-Sleep -Milliseconds 500\n            }\n        } catch {}\n    };\n    foreach ($procName in @('python','pythonw')) {\n        try { $procs = Get-Process -Name $procName -ErrorAction Stop } catch { continue };\n        foreach ($proc in $procs) {\n            Write-Host ('Terminating process: {0} (PID {1})' -f $proc.ProcessName, $proc.Id);\n            try { if (-not $proc.HasExited) { $null = $proc.CloseMainWindow(); Start-Sleep -Milliseconds 500 } } catch {}\n            try { if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit(2000) | Out-Null } } catch {}\n            if (-not $proc.HasExited) {\n                $taskkillOutput = taskkill.exe /PID $($proc.Id) /F 2>&1;\n                if ($LASTEXITCODE -ne 0 -and $taskkillOutput) {\n                    Write-Host ('taskkill.exe returned exit code {0} for PID {1}: {2}' -f $LASTEXITCODE, $proc.Id, $taskkillOutput)\n                }\n            }\n        }\n    }\n}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Borealis - Agent - Start SYSTEM & CURRENTUSER Agents",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "& {\n    $taskNames = @('Borealis Agent','Borealis Agent (UserHelper)');\n    foreach ($name in $taskNames) {\n        Write-Host ('Starting scheduled task: {0}' -f $name);\n        $started = $false;\n        try {\n            Start-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null\n            $started = $true\n        } catch {}\n        if (-not $started) {\n            try { schtasks.exe /Run /TN $name 2>$null | Out-Null; $started = $true } catch {}\n        }\n        if (-not $started) {\n            Write-Host ('Unable to start scheduled task: {0}' -f $name) -ForegroundColor DarkYellow\n        }\n    }\n}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Borealis - Kill All Component Processes",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "taskkill.exe /IM node.exe /IM pythonw.exe /IM python.exe /F"
       ],
       "presentation": {
         "reveal": "always",
