@@ -165,6 +165,20 @@ function DeviceApprovals() {
         });
         const body = await resp.json().catch(() => ({}));
         if (!resp.ok) {
+          if (resp.status === 409 && body.error === "conflict_resolution_required") {
+            const conflict = record.hostname_conflict;
+            const fallbackAlternate =
+              record.alternate_hostname ||
+              (record.hostname_claimed ? `${record.hostname_claimed}-1` : "");
+            if (conflict) {
+              setConflictPrompt({
+                record,
+                conflict,
+                alternate: fallbackAlternate || "",
+              });
+            }
+            return;
+          }
           throw new Error(body.error || `Approval failed (${resp.status})`);
         }
         const appliedResolution = (body.conflict_resolution || payload.conflict_resolution || "").toLowerCase();
@@ -173,6 +187,8 @@ function DeviceApprovals() {
           successMessage = "Enrollment approved; existing device overwritten";
         } else if (appliedResolution === "coexist") {
           successMessage = "Enrollment approved; devices will co-exist";
+        } else if (appliedResolution === "auto_merge_fingerprint") {
+          successMessage = "Enrollment approved; device reconnected with its existing identity";
         }
         setFeedback({ type: "success", message: successMessage });
         await loadApprovals();
@@ -192,7 +208,8 @@ function DeviceApprovals() {
       if (status !== "pending") return;
       const manualGuid = (guidInputs[record.id] || "").trim();
       const conflict = record.hostname_conflict;
-      if (conflict && !manualGuid) {
+      const requiresPrompt = Boolean(conflict?.requires_prompt ?? record.conflict_requires_prompt);
+      if (requiresPrompt && !manualGuid) {
         const fallbackAlternate =
           record.alternate_hostname ||
           (record.hostname_claimed ? `${record.hostname_claimed}-1` : "");
