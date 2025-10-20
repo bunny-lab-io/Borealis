@@ -90,7 +90,7 @@ else:
 import requests
 import re
 import base64
-from flask import Flask, request, jsonify, Response, send_from_directory, make_response, session, g
+from flask import Flask, Request, request, jsonify, Response, send_from_directory, make_response, session, g
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -208,6 +208,25 @@ def _infer_server_scope(message: str, explicit: Optional[str]) -> Optional[str]:
         if scope:
             return scope
     return None
+
+
+def _is_internal_request(req: Request) -> bool:
+    """Return True if the HTTP request originated from the local server host."""
+    try:
+        remote_addr = (req.remote_addr or "").strip()
+        if not remote_addr:
+            return False
+        if remote_addr in {"127.0.0.1", "::1"}:
+            return True
+        if remote_addr.startswith("127."):
+            return True
+        if remote_addr.startswith("::ffff:"):
+            mapped = remote_addr.split("::ffff:", 1)[-1]
+            if mapped in {"127.0.0.1"} or mapped.startswith("127."):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _write_service_log(service: str, msg: str, scope: Optional[str] = None, *, level: str = "INFO"):
@@ -1361,6 +1380,14 @@ def api_agent_hash():
 
 @app.route("/api/agent/hash_list", methods=["GET"])
 def api_agent_hash_list():
+    if not _is_internal_request(request):
+        remote_addr = (request.remote_addr or "unknown").strip() or "unknown"
+        _write_service_log(
+            "server",
+            f"/api/agent/hash_list denied non-local request from {remote_addr}",
+            level="WARN",
+        )
+        return jsonify({"error": "forbidden"}), 403
     try:
         records = _collect_agent_hash_records()
         return jsonify({'agents': records})
