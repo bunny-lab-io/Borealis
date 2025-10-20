@@ -255,24 +255,30 @@ def register(
             params: List[str] = []
             sql = """
                 SELECT
-                    id,
-                    approval_reference,
-                    guid,
-                    hostname_claimed,
-                    ssl_key_fingerprint_claimed,
-                    enrollment_code_id,
-                    status,
-                    client_nonce,
-                    server_nonce,
-                    created_at,
-                    updated_at,
-                    approved_by_user_id
-                  FROM device_approvals
+                    da.id,
+                    da.approval_reference,
+                    da.guid,
+                    da.hostname_claimed,
+                    da.ssl_key_fingerprint_claimed,
+                    da.enrollment_code_id,
+                    da.status,
+                    da.client_nonce,
+                    da.server_nonce,
+                    da.created_at,
+                    da.updated_at,
+                    da.approved_by_user_id,
+                    u.username AS approved_by_username
+                  FROM device_approvals AS da
+             LEFT JOIN users AS u
+                    ON (
+                        CAST(da.approved_by_user_id AS TEXT) = CAST(u.id AS TEXT)
+                        OR LOWER(da.approved_by_user_id) = LOWER(u.username)
+                    )
             """
             if status and status != "all":
-                sql += " WHERE LOWER(status) = ?"
+                sql += " WHERE LOWER(da.status) = ?"
                 params.append(status)
-            sql += " ORDER BY created_at ASC"
+            sql += " ORDER BY da.created_at ASC"
             cur.execute(sql, params)
             rows = cur.fetchall()
             for row in rows:
@@ -316,6 +322,7 @@ def register(
                         "alternate_hostname": alternate_hostname,
                         "conflict_requires_prompt": requires_prompt,
                         "fingerprint_match": fingerprint_match,
+                        "approved_by_username": row[12],
                     }
                 )
         finally:

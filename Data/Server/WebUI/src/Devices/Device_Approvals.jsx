@@ -381,6 +381,7 @@ function DeviceApprovals() {
                   const status = normalizeStatus(record.status);
                   const showActions = status === "pending";
                   const guidValue = guidInputs[record.id] || "";
+                  const approverDisplay = record.approved_by_username || record.approved_by_user_id;
                   return (
                     <TableRow hover key={record.id}>
                       <TableCell>
@@ -400,7 +401,7 @@ function DeviceApprovals() {
                       </TableCell>
                       <TableCell>{formatDateTime(record.created_at)}</TableCell>
                       <TableCell>{formatDateTime(record.updated_at)}</TableCell>
-                      <TableCell>{record.approved_by_user_id || "—"}</TableCell>
+                      <TableCell>{approverDisplay || "—"}</TableCell>
                       <TableCell align="right">
                         {showActions ? (
                           <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="center">
