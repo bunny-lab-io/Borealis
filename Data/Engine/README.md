@@ -130,13 +130,16 @@ The service container now wires `github_service`, giving other interfaces and ba
 ## Final parity checklist
 
 Step 12 tracks the final integration work required before switching over to the
-Engine entrypoint:
+Engine entrypoint. Use the detailed playbook in
+[`Data/Engine/STAGING_GUIDE.md`](./STAGING_GUIDE.md) to coordinate each
+staging run:
 
 1. Stand up the Engine in a staging environment and exercise enrollment, token
    refresh, scheduler operations, and the agent real-time channel side-by-side
    with the legacy server.
-2. Capture any behavioural differences uncovered during staging and file them
-   for follow-up fixes before the cut-over.
+2. Capture any behavioural differences uncovered during staging using the
+   divergence table in the staging guide and file them for follow-up fixes
+   before the cut-over.
 3. When satisfied with parity, coordinate the entrypoint swap (point production
    tooling at `Data/Engine/bootstrapper.py`) and plan the deprecation of
    `Data/Server`.
