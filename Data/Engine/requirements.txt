@@ -1,0 +1,11 @@
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/requirements.txt
+# Core web stack
+Flask
+flask_socketio
+flask-cors
+eventlet
+requests
+
+# Auth & security
+PyJWT[crypto]
+cryptography

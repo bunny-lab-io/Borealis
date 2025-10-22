@@ -65,6 +65,10 @@ The Engine mirrors the legacy defaults so it can boot without additional configu
 
 As migration continues, services, repositories, interfaces, and integrations will live under their respective subpackages while maintaining isolation from the legacy server.
 
+## Python dependencies
+
+`Data/Engine/requirements.txt` mirrors the minimal runtime stack (Flask, Flask-SocketIO, CORS, requests, PyJWT, and cryptography) needed by the Engine entrypoint.  The PowerShell launcher consumes this file when preparing the `Engine/` virtual environment so parity tests always run against an environment with the expected web and security packages preinstalled.
+
 ## HTTP interfaces
 
 The Engine now exposes working HTTP routes alongside the remaining scaffolding:

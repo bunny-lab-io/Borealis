@@ -60,10 +60,8 @@
 - 11.3 Commit after integration tests (or mocked unit tests) confirm API workflows.
 
 [IN PROGRESS] 12. Final parity verification
-- 12.1 Follow the staging playbook in `Data/Engine/STAGING_GUIDE.md` to stand up the Engine end-to-end and exercise enrollment,
-  token refresh, agent connections, GitHub integration, and scheduler flows.
+- 12.1 Follow the staging playbook in `Data/Engine/STAGING_GUIDE.md` to stand up the Engine end-to-end and exercise enrollment, token refresh, agent connections, GitHub integration, and scheduler flows.
 - 12.2 Record any divergences in the staging guide’s table and address them with follow-up commits before cut-over.
-- 12.3 Once parity is confirmed, coordinate entrypoint switching (point deployment at `Data/Engine/bootstrapper.py`) and plan
-  the legacy server deprecation.
-- Supporting documentation and unit tests live in `Data/Engine/README.md`, `Data/Engine/STAGING_GUIDE.md`, and
-  `Data/Engine/tests/` to guide the remaining staging work.
+- 12.3 Once parity is confirmed, coordinate entrypoint switching (point deployment at `Data/Engine/bootstrapper.py`) and plan the legacy server deprecation.
+- Supporting documentation and unit tests live in `Data/Engine/README.md`, `Data/Engine/STAGING_GUIDE.md`, and `Data/Engine/tests/` to guide the remaining staging work.
+- Engine deployment now installs dependencies via `Data/Engine/requirements.txt` so parity runs include Flask, Socket.IO, and security packages.
