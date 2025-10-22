@@ -21,7 +21,7 @@
 - 4.3 Wire migrations to run during Engine bootstrap (behind a flag) and confirm tables initialize in a sandbox DB.
 - 4.4 Commit once DB connection + migrations succeed independently of legacy server.
 
-5. Extract authentication/enrollment domain surface
+[COMPLETED] 5. Extract authentication/enrollment domain surface
 - 5.1 Define immutable dataclasses in `domain/device_auth.py`, `domain/device_enrollment.py` for tokens, GUIDs, approvals.
 - 5.2 Map legacy error codes/enums into domain exceptions or enums in the same modules.
 - 5.3 Commit after unit tests (or doctests) validate dataclass invariants.
