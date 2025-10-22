@@ -8,16 +8,28 @@ from .device_auth import (
     RefreshTokenRequest,
     RefreshTokenRequestBuilder,
 )
-from .device_enrollment import (
-    EnrollmentRequestBuilder,
-    ProofChallengeBuilder,
-)
 
 __all__ = [
     "DeviceAuthRequest",
     "DeviceAuthRequestBuilder",
     "RefreshTokenRequest",
     "RefreshTokenRequestBuilder",
-    "EnrollmentRequestBuilder",
-    "ProofChallengeBuilder",
 ]
+
+try:  # pragma: no cover - optional dependency shim
+    from .device_enrollment import (
+        EnrollmentRequestBuilder,
+        ProofChallengeBuilder,
+    )
+except ModuleNotFoundError as exc:  # pragma: no cover - executed when crypto deps missing
+    _missing_reason = str(exc)
+
+    def _missing_builder(*_args: object, **_kwargs: object) -> None:
+        raise ModuleNotFoundError(
+            "device enrollment builders require optional cryptography dependencies"
+        ) from exc
+
+    EnrollmentRequestBuilder = _missing_builder  # type: ignore[assignment]
+    ProofChallengeBuilder = _missing_builder  # type: ignore[assignment]
+else:
+    __all__ += ["EnrollmentRequestBuilder", "ProofChallengeBuilder"]

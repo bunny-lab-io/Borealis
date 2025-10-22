@@ -63,3 +63,5 @@
 - 12.1 Stand up Engine end-to-end in a staging environment, exercising enrollment, token refresh, agent connections, and jobs.
 - 12.2 Document any divergences and address them with follow-up commits.
 - 12.3 Once satisfied, coordinate cut-over steps (switch entrypoint, deprecate legacy server) as a future initiative.
+- Documentation and test coverage for this phase now live in `Data/Engine/README.md` and `Data/Engine/tests/` to guide the
+  remaining staging work.

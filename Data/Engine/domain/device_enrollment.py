@@ -45,7 +45,6 @@ def _require(value: Optional[str], field: str) -> str:
 class EnrollmentCode:
     """Installer code metadata loaded from the persistence layer."""
 
-    record_id: Optional[str] = None
     code: str
     expires_at: datetime
     max_uses: int
@@ -53,6 +52,7 @@ class EnrollmentCode:
     used_by_guid: Optional[DeviceGuid]
     last_used_at: Optional[datetime]
     used_at: Optional[datetime]
+    record_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.code:
@@ -69,7 +69,6 @@ class EnrollmentCode:
         used_by = record.get("used_by_guid")
         used_by_guid = DeviceGuid(used_by) if used_by else None
         return cls(
-            record_id=str(record.get("id") or "") or None,
             code=_require(record.get("code"), "code"),
             expires_at=_parse_iso8601(record.get("expires_at")) or datetime.now(tz=timezone.utc),
             max_uses=int(record.get("max_uses") or 1),
@@ -77,6 +76,7 @@ class EnrollmentCode:
             used_by_guid=used_by_guid,
             last_used_at=_parse_iso8601(record.get("last_used_at")),
             used_at=_parse_iso8601(record.get("used_at")),
+            record_id=str(record.get("id") or "") or None,
         )
 
     @property

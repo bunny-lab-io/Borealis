@@ -9,12 +9,7 @@ from .connection import (
     connection_factory,
     connection_scope,
 )
-from .device_repository import SQLiteDeviceRepository
-from .enrollment_repository import SQLiteEnrollmentRepository
-from .github_repository import SQLiteGitHubRepository
-from .job_repository import SQLiteJobRepository
 from .migrations import apply_all
-from .token_repository import SQLiteRefreshTokenRepository
 
 __all__ = [
     "SQLiteConnectionFactory",
@@ -22,10 +17,31 @@ __all__ = [
     "connect",
     "connection_factory",
     "connection_scope",
-    "SQLiteDeviceRepository",
-    "SQLiteRefreshTokenRepository",
-    "SQLiteJobRepository",
-    "SQLiteEnrollmentRepository",
-    "SQLiteGitHubRepository",
     "apply_all",
 ]
+
+try:  # pragma: no cover - optional dependency shim
+    from .device_repository import SQLiteDeviceRepository
+    from .enrollment_repository import SQLiteEnrollmentRepository
+    from .github_repository import SQLiteGitHubRepository
+    from .job_repository import SQLiteJobRepository
+    from .token_repository import SQLiteRefreshTokenRepository
+except ModuleNotFoundError as exc:  # pragma: no cover - triggered when auth deps missing
+    def _missing_repo(*_args: object, **_kwargs: object) -> None:
+        raise ModuleNotFoundError(
+            "Engine SQLite repositories require optional authentication dependencies"
+        ) from exc
+
+    SQLiteDeviceRepository = _missing_repo  # type: ignore[assignment]
+    SQLiteEnrollmentRepository = _missing_repo  # type: ignore[assignment]
+    SQLiteGitHubRepository = _missing_repo  # type: ignore[assignment]
+    SQLiteJobRepository = _missing_repo  # type: ignore[assignment]
+    SQLiteRefreshTokenRepository = _missing_repo  # type: ignore[assignment]
+else:
+    __all__ += [
+        "SQLiteDeviceRepository",
+        "SQLiteRefreshTokenRepository",
+        "SQLiteJobRepository",
+        "SQLiteEnrollmentRepository",
+        "SQLiteGitHubRepository",
+    ]

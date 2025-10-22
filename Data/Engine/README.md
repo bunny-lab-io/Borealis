@@ -2,6 +2,37 @@
 
 The Engine is an additive server stack that will ultimately replace the legacy Flask app under `Data/Server`.  It is safe to run the Engine entrypoint (`Data/Engine/bootstrapper.py`) side-by-side with the legacy server while we migrate functionality feature-by-feature.
 
+## Architectural roles
+
+The Engine is organized around explicit dependency layers so each concern stays
+testable and replaceable:
+
+- **Configuration (`Data/Engine/config/`)** parses environment variables into
+  immutable settings objects that the bootstrapper hands to factories and
+  integrations.
+- **Builders (`Data/Engine/builders/`)** transform external inputs (HTTP
+  headers, JSON payloads, scheduled job definitions) into validated immutable
+  records that services can trust.
+- **Domain models (`Data/Engine/domain/`)** house pure value objects, enums, and
+  error types with no I/O so services can express intent without depending on
+  Flask or SQLite.
+- **Repositories (`Data/Engine/repositories/`)** encapsulate all SQLite access
+  and expose protocol methods that return domain models.  They are injected into
+  services through the container so persistence can be swapped or mocked.
+- **Services (`Data/Engine/services/`)** host business logic such as device
+  authentication, enrollment, job scheduling, GitHub artifact lookups, and
+  real-time agent coordination.  Services depend only on repositories,
+  integrations, and builders.
+- **Integrations (`Data/Engine/integrations/`)** wrap external systems (GitHub
+  today) and keep HTTP/token handling outside the services that consume them.
+- **Interfaces (`Data/Engine/interfaces/`)** provide thin HTTP/Socket.IO
+  adapters that translate requests to builder/service calls and serialize
+  responses.  They contain no business rules of their own.
+
+The runtime factory (`Data/Engine/runtime.py`) wires these layers together and
+attaches the resulting container to the Flask app created in
+`Data/Engine/server.py`.
+
 ## Environment configuration
 
 The Engine mirrors the legacy defaults so it can boot without additional configuration.  These environment variables are read by `Data/Engine/config/environment.py`:
@@ -95,3 +126,50 @@ Step 11 migrates the GitHub artifact provider into the Engine:
 - `Data/Engine/interfaces/http/github.py` exposes `/api/repo/current_hash` and `/api/github/token` through the Engine stack while keeping business logic in the service layer.
 
 The service container now wires `github_service`, giving other interfaces and background jobs a clean entry point for GitHub functionality.
+
+## Final parity checklist
+
+Step 12 tracks the final integration work required before switching over to the
+Engine entrypoint:
+
+1. Stand up the Engine in a staging environment and exercise enrollment, token
+   refresh, scheduler operations, and the agent real-time channel side-by-side
+   with the legacy server.
+2. Capture any behavioural differences uncovered during staging and file them
+   for follow-up fixes before the cut-over.
+3. When satisfied with parity, coordinate the entrypoint swap (point production
+   tooling at `Data/Engine/bootstrapper.py`) and plan the deprecation of
+   `Data/Server`.
+
+## Performing unit tests
+
+Targeted unit tests cover the most important domain, builder, repository, and
+migration behaviours without requiring Flask or external services.  Run them
+with the standard library test runner:
+
+```bash
+python -m unittest discover Data/Engine/tests
+```
+
+The suite currently validates:
+
+- Domain normalization helpers for GUIDs, fingerprints, and authentication
+  failures.
+- Device authentication and refresh-token builders, including error handling for
+  malformed requests.
+- SQLite schema migrations to ensure the Engine can provision required tables in
+  a fresh database.
+
+Successful execution prints a summary similar to:
+
+```
+.............
+----------------------------------------------------------------------
+Ran 13 tests in <N>.<M>s
+
+OK
+```
+
+Additional tests should follow the same pattern and live under
+`Data/Engine/tests/` so this command remains the single entry point for Engine
+unit verification.
