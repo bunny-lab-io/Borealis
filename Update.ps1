@@ -736,7 +736,7 @@ function Invoke-BorealisUpdate {
         throw 'Target commit hash is required for Borealis update.'
     }
 
-    $preservePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
+    $preservePath = Join-Path $scriptDir "Data\Server\API\Tesseract-OCR"
     $preserveBackupPath = Join-Path $scriptDir "Update_Staging\Tesseract-OCR"
     $ansibleEePath = Join-Path $scriptDir "Agent\Ansible_EE"
     $ansibleEeBackupPath = Join-Path $scriptDir "Update_Staging\Ansible_EE"
@@ -822,7 +822,7 @@ function Invoke-BorealisUpdate {
     }
 
     Run-Step "Updating: Restore Tesseract-OCR Folder" {
-        $restorePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints"
+        $restorePath = Join-Path $scriptDir "Data\Server\API"
         if (Test-Path $preserveBackupPath) {
             if (-not (Test-Path $restorePath)) { New-Item -ItemType Directory -Force -Path $restorePath | Out-Null }
             Move-Item -Path $preserveBackupPath -Destination $restorePath -Force

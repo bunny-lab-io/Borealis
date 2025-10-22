@@ -286,7 +286,7 @@ copy_server_payload() {
   python3 -m venv "$venvFolder" 2>/dev/null || true
   mkdir -p "$dataDestination"
   rm -rf "${dataDestination:?}"/*
-  cp -r "${dataSource}/Python_API_Endpoints" "$dataDestination/"
+  cp -r "${dataSource}/API" "$dataDestination/"
   cp -r "${dataSource}/Sounds"               "$dataDestination/"
   [ -f "${dataSource}/server.py" ] && cp "${dataSource}/server.py" "$dataDestination/"
   [ -f "${dataSource}/job_scheduler.py" ] && cp "${dataSource}/job_scheduler.py" "$dataDestination/"
@@ -407,7 +407,7 @@ update_borealis() {
   local staging="${SCRIPT_DIR}/Update_Staging"
   local updateZip="${staging}/main.zip"
   local updateDir="${staging}/Borealis-main"
-  local preservePath="${SCRIPT_DIR}/Data/Server/Python_API_Endpoints/Tesseract-OCR"
+  local preservePath="${SCRIPT_DIR}/Data/Server/API/Tesseract-OCR"
   local preserveBackupPath="${staging}/Tesseract-OCR"
   mkdir -p "$staging"
 
@@ -427,7 +427,7 @@ update_borealis() {
     cp -r '${updateDir}/'* '${SCRIPT_DIR}/'
   "
   run_step "Updating: Restore Tesseract-OCR" bash -c "
-    [ -d '${preserveBackupPath}' ] && { mkdir -p 'Data/Server/Python_API_Endpoints'; mv '${preserveBackupPath}' 'Data/Server/Python_API_Endpoints/'; } || true
+    [ -d '${preserveBackupPath}' ] && { mkdir -p 'Data/Server/API'; mv '${preserveBackupPath}' 'Data/Server/API/'; } || true
   "
   run_step "Updating: Clean staging" bash -c "rm -rf '${staging}'"
   echo -e "\n${GREEN}Update Complete! Re-launch Borealis.${RESET}"

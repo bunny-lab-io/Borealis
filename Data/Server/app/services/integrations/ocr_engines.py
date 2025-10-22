@@ -1,9 +1,10 @@
-#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Python_API_Endpoints/ocr_engines.py
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/API/ocr_engines.py
 
 import os
 import io
 import sys
 import base64
+from pathlib import Path
 import torch
 import pytesseract
 import easyocr
@@ -16,15 +17,24 @@ from PIL import Image
 # ---------------------------------------------------------------------
 SYSTEM = platform.system()
 
+def _candidate_tesseract_folders():
+    base_dir = Path(__file__).resolve().parent
+    yield base_dir / "Tesseract-OCR"
+    yield base_dir.parent.parent / "API" / "Tesseract-OCR"
+    yield Path(__file__).resolve().parents[4] / "Data" / "Server" / "API" / "Tesseract-OCR"
+
+
 def get_tesseract_folder():
     if getattr(sys, 'frozen', False):
         # PyInstaller EXE
-        base_path = sys._MEIPASS
-        return os.path.join(base_path, "Borealis", "Python_API_Endpoints", "Tesseract-OCR")
-    else:
-        # Normal Python environment
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base_dir, "Tesseract-OCR")
+        base_path = Path(sys._MEIPASS)
+        return str(base_path / "Borealis" / "API" / "Tesseract-OCR")
+    # Normal Python environment
+    for candidate in _candidate_tesseract_folders():
+        if candidate.is_dir():
+            return str(candidate)
+    # Fall back to path adjacent to this module so development installs work
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "Tesseract-OCR")
 
 if SYSTEM == "Windows":
     TESSERACT_FOLDER = get_tesseract_folder()

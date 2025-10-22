@@ -356,7 +356,7 @@ function Install_Server_Dependencies {
     Run-Step "Dependency: Tesseract-OCR" {
         $tessExeUrl     = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
         $tessExePath    = Join-Path $depsRoot "tesseract-installer.exe"
-        $tessInstallDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
+        $tessInstallDir = Join-Path $scriptDir "Data\Server\API\Tesseract-OCR"
 
         if (-not (Test-Path (Join-Path $tessInstallDir "tesseract.exe"))) {
             # Download the installer if it doesn't exist
@@ -383,7 +383,7 @@ function Install_Server_Dependencies {
 
     # Tesseract Language Data
     Run-Step "Dependency: Tesseract-OCR - Pre-Trained Model Data" {
-        $langDataDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR\tessdata"
+        $langDataDir = Join-Path $scriptDir "Data\Server\API\Tesseract-OCR\tessdata"
         $engPath     = Join-Path $langDataDir "eng.traineddata"
         $osdPath     = Join-Path $langDataDir "osd.traineddata"
 
@@ -1050,7 +1050,7 @@ switch ($choice) {
                     Remove-Item $dataDestination -Recurse -Force -ErrorAction SilentlyContinue
                 }
                 New-Item -Path $dataDestination -ItemType Directory -Force | Out-Null
-                Copy-Item "$dataSource\Server\Python_API_Endpoints" $dataDestination -Recurse
+                Copy-Item "$dataSource\Server\API" $dataDestination -Recurse
                 Copy-Item "$dataSource\Server\Sounds"               $dataDestination -Recurse
                 Copy-Item "$dataSource\Server\Modules"               $dataDestination -Recurse
                 Copy-Item "$dataSource\Server\server.py"            $dataDestination

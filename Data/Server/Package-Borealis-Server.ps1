@@ -20,9 +20,9 @@ $iconPath         = Join-Path $scriptDir "Borealis.ico"
 #   - the compiled React build under Server/web-interface/build
 $staticBuildSrc   = Join-Path $projectRoot "Server\web-interface\build"
 $staticBuildDst   = "web-interface/build"
-#   - Tesseract-OCR folder must be nested under 'Borealis/Python_API_Endpoints/Tesseract-OCR'
-$ocrSrc           = Join-Path $scriptDir "Python_API_Endpoints\Tesseract-OCR"
-$ocrDst           = "Borealis/Python_API_Endpoints/Tesseract-OCR"
+#   - Tesseract-OCR folder must be nested under 'Borealis/API/Tesseract-OCR'
+$ocrSrc           = Join-Path $scriptDir "API\Tesseract-OCR"
+$ocrDst           = "Borealis/API/Tesseract-OCR"
 $soundsSrc        = Join-Path $scriptDir "Sounds"
 $soundsDst        = "Sounds"
 

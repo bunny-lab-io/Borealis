@@ -119,3 +119,16 @@ Important: The Ansible integration is not production‑ready. Do not rely on it 
   - First‑class selection of connection types (local | PSRP | WinRM) from the UI and scheduler, with per‑run credential binding.
   - Reliable live output and cancel semantics; hardened recap ingestion and history.
   - Verified packaging of required Ansible components and Windows collections inside the agent venv.
+
+## Server Package Structure
+- `Data/Server/bootstrapper.py` configures logging first and exposes `bootstrap()` for consumers that need a fully wired runtime tuple `(app, socketio, services, scheduler)`.
+- `Data/Server/app/` holds the modular server implementation:
+  - `config.py` defines the production vs. development profiles.
+  - `logging.py` centralises the logging policy (daily rotation under `Logs/Server`).
+  - `services/` exposes a lightweight dependency container and wraps Python API integrations under `services/integrations/`.
+  - `builders/` contains the HTTP/WebSocket builders that apply configuration during bootstrap.
+  - `runtime/` retains the current Flask implementation and job scheduler while migrations proceed.
+  - `scheduler/` provides a coordinator shim around the active scheduler instance.
+- `Data/Server/API/` holds the bundled OCR and scripting adapters (previously `Python_API_Endpoints/`). Import aliases keep the
+  old module path available for compatibility while new code adopts the shorter package name.
+- `Data/Server/server.py` now acts as the runtime entry point and re-exports the bootstrapped `app`/`socketio` objects for compatibility.
