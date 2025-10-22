@@ -7,6 +7,7 @@ from typing import Any, Optional
 from flask import Flask
 
 from ...config import SocketIOSettings
+from ...services.container import EngineServiceContainer
 from .agents import register as register_agent_events
 from .job_management import register as register_job_events
 
@@ -33,14 +34,14 @@ def create_socket_server(app: Flask, settings: SocketIOSettings) -> Optional[Soc
     return socketio
 
 
-def register_ws_interfaces(socketio: Any) -> None:
-    """Attach placeholder namespaces for the Engine Socket.IO server."""
+def register_ws_interfaces(socketio: Any, services: EngineServiceContainer) -> None:
+    """Attach namespaces for the Engine Socket.IO server."""
 
     if socketio is None:  # pragma: no cover - guard
         return
 
     for registrar in (register_agent_events, register_job_events):
-        registrar(socketio)
+        registrar(socketio, services)
 
 
 __all__ = ["create_socket_server", "register_ws_interfaces"]

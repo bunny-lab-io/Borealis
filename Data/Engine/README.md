@@ -39,7 +39,15 @@ The Engine now exposes working HTTP routes alongside the remaining scaffolding:
 - `Data/Engine/interfaces/http/enrollment.py` handles the enrollment handshake (`/api/agent/enroll/request` and `/api/agent/enroll/poll`) with rate limiting, nonce protection, and repository-backed approvals.
 - The admin and agent blueprints remain placeholders until their services migrate.
 
-WebSocket namespaces continue to follow the same pattern in `Data/Engine/interfaces/ws/`, with feature-oriented modules (e.g., `agents`, `job_management`) registered by `bootstrapper.bootstrap()` when Socket.IO is available.
+## WebSocket interfaces
+
+Step 9 introduces real-time handlers backed by the new service container:
+
+- `Data/Engine/services/realtime/agent_registry.py` manages connected-agent state, last-seen persistence, collector updates, and screenshot caches without sharing globals with the legacy server.
+- `Data/Engine/interfaces/ws/agents/events.py` ports the agent namespace, handling connect/disconnect logging, heartbeat reconciliation, screenshot relays, macro status broadcasts, and provisioning lookups through the realtime service.
+- `Data/Engine/interfaces/ws/job_management/events.py` registers the job namespace; detailed scheduler coordination will arrive with the Step 10 migration.
+
+The WebSocket factory (`Data/Engine/interfaces/ws/__init__.py`) now accepts the Engine service container so namespaces can resolve dependencies just like their HTTP counterparts.
 
 ## Authentication services
 

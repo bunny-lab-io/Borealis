@@ -18,6 +18,7 @@ from .enrollment import (
     EnrollmentValidationError,
     PollingResult,
 )
+from .realtime import AgentRealtimeService, AgentRecord
 
 __all__ = [
     "DeviceAuthService",
@@ -32,4 +33,6 @@ __all__ = [
     "EnrollmentTokenBundle",
     "EnrollmentValidationError",
     "PollingResult",
+    "AgentRealtimeService",
+    "AgentRecord",
 ]

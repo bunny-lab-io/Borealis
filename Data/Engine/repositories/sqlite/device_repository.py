@@ -280,6 +280,77 @@ class SQLiteDeviceRepository:
             )
             conn.commit()
 
+    def update_device_summary(
+        self,
+        *,
+        hostname: Optional[str],
+        last_seen: Optional[int] = None,
+        agent_id: Optional[str] = None,
+        operating_system: Optional[str] = None,
+        last_user: Optional[str] = None,
+    ) -> None:
+        if not hostname:
+            return
+
+        normalized_hostname = (hostname or "").strip()
+        if not normalized_hostname:
+            return
+
+        fields = []
+        params = []
+
+        if last_seen is not None:
+            try:
+                fields.append("last_seen = ?")
+                params.append(int(last_seen))
+            except Exception:
+                pass
+
+        if agent_id:
+            try:
+                candidate = agent_id.strip()
+            except Exception:
+                candidate = agent_id
+            if candidate:
+                fields.append("agent_id = ?")
+                params.append(candidate)
+
+        if operating_system:
+            try:
+                os_value = operating_system.strip()
+            except Exception:
+                os_value = operating_system
+            if os_value:
+                fields.append("operating_system = ?")
+                params.append(os_value)
+
+        if last_user:
+            try:
+                user_value = last_user.strip()
+            except Exception:
+                user_value = last_user
+            if user_value:
+                fields.append("last_user = ?")
+                params.append(user_value)
+
+        if not fields:
+            return
+
+        params.append(normalized_hostname)
+
+        with closing(self._connections()) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE devices SET {', '.join(fields)} WHERE LOWER(hostname) = LOWER(?)",
+                params,
+            )
+            if cur.rowcount == 0 and agent_id:
+                cur.execute(
+                    f"UPDATE devices SET {', '.join(fields)} WHERE agent_id = ?",
+                    params[:-1] + [agent_id],
+                )
+            conn.commit()
+
     def _row_to_record(self, row: tuple) -> Optional[DeviceRecord]:
         try:
             guid = DeviceGuid(row[0])

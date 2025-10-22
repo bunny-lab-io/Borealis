@@ -26,6 +26,7 @@ from Data.Engine.services.crypto.signing import ScriptSigner, load_signer
 from Data.Engine.services.enrollment import EnrollmentService
 from Data.Engine.services.enrollment.nonce_cache import NonceCache
 from Data.Engine.services.rate_limit import SlidingWindowRateLimiter
+from Data.Engine.services.realtime import AgentRealtimeService
 
 __all__ = ["EngineServiceContainer", "build_service_container"]
 
@@ -37,6 +38,7 @@ class EngineServiceContainer:
     enrollment_service: EnrollmentService
     jwt_service: JWTService
     dpop_validator: DPoPValidator
+    agent_realtime: AgentRealtimeService
 
 
 def build_service_container(
@@ -84,12 +86,18 @@ def build_service_container(
         dpop_validator=dpop_validator,
     )
 
+    agent_realtime = AgentRealtimeService(
+        device_repository=device_repo,
+        logger=log.getChild("agent_realtime"),
+    )
+
     return EngineServiceContainer(
         device_auth=device_auth,
         token_service=token_service,
         enrollment_service=enrollment_service,
         jwt_service=jwt_service,
         dpop_validator=dpop_validator,
+        agent_realtime=agent_realtime,
     )
 
 

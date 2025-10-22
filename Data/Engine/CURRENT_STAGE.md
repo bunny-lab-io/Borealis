@@ -43,7 +43,7 @@
 - 8.3 Register blueprints through Engine `server.py`; confirm endpoints respond via manual or automated tests.
 - 8.4 Commit after each major blueprint migration for clear milestones.
 
-9. Rebuild WebSocket interfaces
+[COMPLETED] 9. Rebuild WebSocket interfaces
 - 9.1 Establish feature-scoped modules (e.g., `interfaces/ws/agents/events.py`) and copy event handlers.
 - 9.2 Replace global state with repository/service calls where feasible; otherwise encapsulate in Engine-managed caches.
 - 9.3 Validate namespace registration with Socket.IO test clients before committing.
