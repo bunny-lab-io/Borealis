@@ -32,7 +32,7 @@
 - 6.3 Mirror refresh token issuance into `services/auth/token_service.py`; use `builders/device_enrollment.py` for payload assembly.
 - 6.4 Commit once services pass targeted unit tests and integrate with placeholder repositories.
 
-7. Implement SQLite repositories
+[COMPLETED] 7. Implement SQLite repositories
 - 7.1 Introduce `repositories/sqlite/device_repository.py`, `token_repository.py`, `enrollment_repository.py` using copied SQL.
 - 7.2 Write integration tests exercising CRUD against a temporary SQLite file.
 - 7.3 Commit when repositories provide the required ports used by services.

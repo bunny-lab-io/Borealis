@@ -9,7 +9,10 @@ from .connection import (
     connection_factory,
     connection_scope,
 )
+from .device_repository import SQLiteDeviceRepository
+from .enrollment_repository import SQLiteEnrollmentRepository
 from .migrations import apply_all
+from .token_repository import SQLiteRefreshTokenRepository
 
 __all__ = [
     "SQLiteConnectionFactory",
@@ -17,5 +20,8 @@ __all__ = [
     "connect",
     "connection_factory",
     "connection_scope",
+    "SQLiteDeviceRepository",
+    "SQLiteRefreshTokenRepository",
+    "SQLiteEnrollmentRepository",
     "apply_all",
 ]

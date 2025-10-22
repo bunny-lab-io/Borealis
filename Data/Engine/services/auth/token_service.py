@@ -49,7 +49,7 @@ class TokenRefreshError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class RefreshTokenRecord:
-    record_id: int
+    record_id: str
     guid: DeviceGuid
     token_hash: str
     dpop_jkt: Optional[str]
@@ -61,7 +61,7 @@ class RefreshTokenRecord:
     def from_row(
         cls,
         *,
-        record_id: int,
+        record_id: str,
         guid: DeviceGuid,
         token_hash: str,
         dpop_jkt: Optional[str],
@@ -84,10 +84,10 @@ class RefreshTokenRepository(Protocol):
     def fetch(self, guid: DeviceGuid, token_hash: str) -> Optional[RefreshTokenRecord]:  # pragma: no cover - protocol
         ...
 
-    def clear_dpop_binding(self, record_id: int) -> None:  # pragma: no cover - protocol
+    def clear_dpop_binding(self, record_id: str) -> None:  # pragma: no cover - protocol
         ...
 
-    def touch(self, record_id: int, *, last_used_at: datetime, dpop_jkt: Optional[str]) -> None:  # pragma: no cover - protocol
+    def touch(self, record_id: str, *, last_used_at: datetime, dpop_jkt: Optional[str]) -> None:  # pragma: no cover - protocol
         ...
 
 
