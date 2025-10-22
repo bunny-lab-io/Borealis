@@ -14,6 +14,7 @@ def register(socketio: Any, services: EngineServiceContainer) -> None:
 
     handlers = _JobEventHandlers(socketio, services)
     socketio.on_event("quick_job_result", handlers.on_quick_job_result)
+    socketio.on_event("job_status_request", handlers.on_job_status_request)
 
 
 class _JobEventHandlers:
@@ -25,6 +26,13 @@ class _JobEventHandlers:
     def on_quick_job_result(self, data: Optional[dict]) -> None:
         self._log.info("quick-job-result received; scheduler migration pending")
         # Step 10 will introduce full persistence + broadcast logic.
+
+    def on_job_status_request(self, _: Optional[dict]) -> None:
+        jobs = self._services.scheduler_service.list_jobs()
+        try:
+            self._socketio.emit("job_status", {"jobs": jobs})
+        except Exception:
+            self._log.debug("job-status emit failed")
 
 
 __all__ = ["register"]

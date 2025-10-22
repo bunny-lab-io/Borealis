@@ -51,6 +51,7 @@ def bootstrap() -> EngineRuntime:
     register_http_interfaces(app, services)
     socketio = create_socket_server(app, settings.socketio)
     register_ws_interfaces(socketio, services)
+    services.scheduler_service.start(socketio)
     logger.info("bootstrap-complete")
     return EngineRuntime(app=app, settings=settings, socketio=socketio, db_factory=db_factory)
 

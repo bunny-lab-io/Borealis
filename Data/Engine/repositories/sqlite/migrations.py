@@ -27,6 +27,8 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_refresh_token_table(conn)
     _ensure_install_code_table(conn)
     _ensure_device_approval_table(conn)
+    _ensure_scheduled_jobs_table(conn)
+    _ensure_scheduled_job_run_tables(conn)
 
     conn.commit()
 
@@ -222,6 +224,97 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
             ON device_approvals(ssl_key_fingerprint_claimed, status)
         """
     )
+
+
+def _ensure_scheduled_jobs_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            components_json TEXT NOT NULL,
+            targets_json TEXT NOT NULL,
+            schedule_type TEXT NOT NULL,
+            start_ts INTEGER,
+            duration_stop_enabled INTEGER DEFAULT 0,
+            expiration TEXT,
+            execution_context TEXT NOT NULL,
+            credential_id INTEGER,
+            use_service_account INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER DEFAULT 1,
+            created_at INTEGER,
+            updated_at INTEGER
+        )
+        """
+    )
+
+    try:
+        columns = {row[1] for row in _table_info(cur, "scheduled_jobs")}
+        if "credential_id" not in columns:
+            cur.execute("ALTER TABLE scheduled_jobs ADD COLUMN credential_id INTEGER")
+        if "use_service_account" not in columns:
+            cur.execute(
+                "ALTER TABLE scheduled_jobs ADD COLUMN use_service_account INTEGER NOT NULL DEFAULT 1"
+            )
+    except Exception:
+        # Legacy deployments may fail the ALTER TABLE calls; ignore silently.
+        pass
+
+
+def _ensure_scheduled_job_run_tables(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            scheduled_ts INTEGER,
+            started_ts INTEGER,
+            finished_ts INTEGER,
+            status TEXT,
+            error TEXT,
+            created_at INTEGER,
+            updated_at INTEGER,
+            target_hostname TEXT,
+            FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    try:
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runs_job_sched_target ON scheduled_job_runs(job_id, scheduled_ts, target_hostname)"
+        )
+    except Exception:
+        pass
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_job_run_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            activity_id INTEGER NOT NULL,
+            component_kind TEXT,
+            script_type TEXT,
+            component_path TEXT,
+            component_name TEXT,
+            created_at INTEGER,
+            FOREIGN KEY(run_id) REFERENCES scheduled_job_runs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    try:
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_run_activity_run ON scheduled_job_run_activity(run_id)"
+        )
+    except Exception:
+        pass
+    try:
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_run_activity_activity ON scheduled_job_run_activity(activity_id)"
+        )
+    except Exception:
+        pass
 
 
 def _create_devices_table(cur: sqlite3.Cursor) -> None:

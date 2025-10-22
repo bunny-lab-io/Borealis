@@ -48,7 +48,7 @@
 - 9.2 Replace global state with repository/service calls where feasible; otherwise encapsulate in Engine-managed caches.
 - 9.3 Validate namespace registration with Socket.IO test clients before committing.
 
-10. Scheduler & job management
+[COMPLETED] 10. Scheduler & job management
 - 10.1 Port scheduler core into `services/jobs/scheduler_service.py`; wrap job state persistence via new repositories.
 - 10.2 Implement `builders/job_fabricator.py` for manifest assembly; ensure immutability and validation.
 - 10.3 Expose HTTP orchestration via `interfaces/http/job_management.py` and WS notifications via dedicated modules.

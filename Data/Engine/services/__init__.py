@@ -18,6 +18,7 @@ from .enrollment import (
     EnrollmentValidationError,
     PollingResult,
 )
+from .jobs.scheduler_service import SchedulerService
 from .realtime import AgentRealtimeService, AgentRecord
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "PollingResult",
     "AgentRealtimeService",
     "AgentRecord",
+    "SchedulerService",
 ]

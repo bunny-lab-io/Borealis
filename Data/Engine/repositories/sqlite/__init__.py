@@ -11,6 +11,7 @@ from .connection import (
 )
 from .device_repository import SQLiteDeviceRepository
 from .enrollment_repository import SQLiteEnrollmentRepository
+from .job_repository import SQLiteJobRepository
 from .migrations import apply_all
 from .token_repository import SQLiteRefreshTokenRepository
 
@@ -22,6 +23,7 @@ __all__ = [
     "connection_scope",
     "SQLiteDeviceRepository",
     "SQLiteRefreshTokenRepository",
+    "SQLiteJobRepository",
     "SQLiteEnrollmentRepository",
     "apply_all",
 ]

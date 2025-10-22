@@ -13,6 +13,7 @@ from Data.Engine.repositories.sqlite import (
     SQLiteConnectionFactory,
     SQLiteDeviceRepository,
     SQLiteEnrollmentRepository,
+    SQLiteJobRepository,
     SQLiteRefreshTokenRepository,
 )
 from Data.Engine.services.auth import (
@@ -25,6 +26,7 @@ from Data.Engine.services.auth import (
 from Data.Engine.services.crypto.signing import ScriptSigner, load_signer
 from Data.Engine.services.enrollment import EnrollmentService
 from Data.Engine.services.enrollment.nonce_cache import NonceCache
+from Data.Engine.services.jobs import SchedulerService
 from Data.Engine.services.rate_limit import SlidingWindowRateLimiter
 from Data.Engine.services.realtime import AgentRealtimeService
 
@@ -39,6 +41,7 @@ class EngineServiceContainer:
     jwt_service: JWTService
     dpop_validator: DPoPValidator
     agent_realtime: AgentRealtimeService
+    scheduler_service: SchedulerService
 
 
 def build_service_container(
@@ -52,6 +55,7 @@ def build_service_container(
     device_repo = SQLiteDeviceRepository(db_factory, logger=log.getChild("devices"))
     token_repo = SQLiteRefreshTokenRepository(db_factory, logger=log.getChild("tokens"))
     enrollment_repo = SQLiteEnrollmentRepository(db_factory, logger=log.getChild("enrollment"))
+    job_repo = SQLiteJobRepository(db_factory, logger=log.getChild("jobs"))
 
     jwt_service = load_jwt_service()
     dpop_validator = DPoPValidator()
@@ -91,6 +95,12 @@ def build_service_container(
         logger=log.getChild("agent_realtime"),
     )
 
+    scheduler_service = SchedulerService(
+        job_repository=job_repo,
+        assemblies_root=settings.project_root / "Assemblies",
+        logger=log.getChild("scheduler"),
+    )
+
     return EngineServiceContainer(
         device_auth=device_auth,
         token_service=token_service,
@@ -98,6 +108,7 @@ def build_service_container(
         jwt_service=jwt_service,
         dpop_validator=dpop_validator,
         agent_realtime=agent_realtime,
+        scheduler_service=scheduler_service,
     )
 
 

@@ -6,13 +6,14 @@ from flask import Flask
 
 from Data.Engine.services.container import EngineServiceContainer
 
-from . import admin, agents, enrollment, health, tokens
+from . import admin, agents, enrollment, health, job_management, tokens
 
 _REGISTRARS = (
     health.register,
     agents.register,
     enrollment.register,
     tokens.register,
+    job_management.register,
     admin.register,
 )
 
