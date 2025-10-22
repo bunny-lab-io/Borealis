@@ -1,10 +1,9 @@
-"""Application services for the Borealis Engine."""
+"""Authentication services for the Borealis Engine."""
 
 from __future__ import annotations
 
-from .auth import (
-    DeviceAuthService,
-    DeviceRecord,
+from .device_auth_service import DeviceAuthService, DeviceRecord
+from .token_service import (
     RefreshTokenRecord,
     TokenRefreshError,
     TokenRefreshErrorCode,

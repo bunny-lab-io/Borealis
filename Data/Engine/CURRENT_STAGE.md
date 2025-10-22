@@ -26,7 +26,7 @@
 - 5.2 Map legacy error codes/enums into domain exceptions or enums in the same modules.
 - 5.3 Commit after unit tests (or doctests) validate dataclass invariants.
 
-6. Port authentication services
+[COMPLETED] 6. Port authentication services
 - 6.1 Copy `DeviceAuthManager` logic into `services/auth/device_auth_service.py`, refactoring to use new repositories and domain types.
 - 6.2 Create `builders/device_auth.py` to assemble `DeviceAuthContext` from headers/DPoP proof.
 - 6.3 Mirror refresh token issuance into `services/auth/token_service.py`; use `builders/device_enrollment.py` for payload assembly.

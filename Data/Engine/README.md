@@ -33,3 +33,14 @@ As migration continues, services, repositories, interfaces, and integrations wil
 ## Interface scaffolding
 
 The Engine currently exposes placeholder HTTP blueprints under `Data/Engine/interfaces/http/` (agents, enrollment, tokens, admin, and health) so that future commits can drop in real routes without reshaping the bootstrap wiring. WebSocket namespaces follow the same pattern in `Data/Engine/interfaces/ws/`, with feature-oriented modules (e.g., `agents`, `job_management`) registered by `bootstrapper.bootstrap()` when Socket.IO is available. These stubs intentionally contain no business logic yet—they merely ensure the application factory exercises the full wiring path.
+
+## Authentication services
+
+Step 6 introduces the first real Engine services:
+
+- `Data/Engine/builders/device_auth.py` normalizes headers for access-token authentication and token refresh payloads.
+- `Data/Engine/builders/device_enrollment.py` prepares enrollment payloads and nonce proof challenges for future migration steps.
+- `Data/Engine/services/auth/device_auth_service.py` ports the legacy `DeviceAuthManager` into a repository-driven service that emits `DeviceAuthContext` instances from the new domain layer.
+- `Data/Engine/services/auth/token_service.py` issues refreshed access tokens while enforcing DPoP bindings and repository lookups.
+
+Interfaces will begin consuming these services once the repository adapters land in the next milestone.
