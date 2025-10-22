@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from flask import Flask, request, send_from_directory
 from flask_cors import CORS
@@ -10,6 +11,12 @@ from werkzeug.exceptions import NotFound
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import EngineSettings
+
+
+from .repositories.sqlite.connection import (
+    SQLiteConnectionFactory,
+    connection_factory as create_sqlite_connection_factory,
+)
 
 
 def _resolve_static_folder(static_root: Path) -> tuple[str, str]:
@@ -51,8 +58,15 @@ def _register_spa_routes(app: Flask, assets_root: Path) -> None:
             return error
 
 
-def create_app(settings: EngineSettings) -> Flask:
+def create_app(
+    settings: EngineSettings,
+    *,
+    db_factory: Optional[SQLiteConnectionFactory] = None,
+) -> Flask:
     """Create the Flask application instance for the Engine."""
+
+    if db_factory is None:
+        db_factory = create_sqlite_connection_factory(settings.database_path)
 
     static_folder, static_url_path = _resolve_static_folder(settings.flask.static_root)
     app = Flask(
@@ -68,6 +82,7 @@ def create_app(settings: EngineSettings) -> Flask:
         SESSION_COOKIE_SECURE=not settings.debug,
         SESSION_COOKIE_SAMESITE="Lax",
         ENGINE_DATABASE_PATH=str(settings.database_path),
+        ENGINE_DB_CONN_FACTORY=db_factory,
     )
     app.config.setdefault("PREFERRED_URL_SCHEME", "https")
 

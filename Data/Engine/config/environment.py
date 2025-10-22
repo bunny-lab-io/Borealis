@@ -13,6 +13,7 @@ class DatabaseSettings:
     """SQLite database configuration for the Engine."""
 
     path: Path
+    apply_migrations: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,12 @@ class EngineSettings:
 
         return self.database.path
 
+    @property
+    def apply_migrations(self) -> bool:
+        """Return whether schema migrations should run at bootstrap."""
+
+        return self.database.apply_migrations
+
 
 def _resolve_project_root() -> Path:
     candidate = os.getenv("BOREALIS_ROOT")
@@ -75,6 +82,11 @@ def _resolve_database_path(project_root: Path) -> Path:
     if candidate:
         return Path(candidate).expanduser().resolve()
     return (project_root / "database.db").resolve()
+
+
+def _should_apply_migrations() -> bool:
+    raw = os.getenv("BOREALIS_ENGINE_AUTO_MIGRATE", "true")
+    return raw.lower() in {"1", "true", "yes", "on"}
 
 
 def _resolve_static_root(project_root: Path) -> Path:
@@ -110,7 +122,10 @@ def load_environment() -> EngineSettings:
     """Load Engine settings from environment variables and filesystem hints."""
 
     project_root = _resolve_project_root()
-    database = DatabaseSettings(path=_resolve_database_path(project_root))
+    database = DatabaseSettings(
+        path=_resolve_database_path(project_root),
+        apply_migrations=_should_apply_migrations(),
+    )
     cors_allowed_origins = _parse_origins(os.getenv("BOREALIS_CORS_ALLOWED_ORIGINS"))
     flask_settings = FlaskSettings(
         secret_key=os.getenv("BOREALIS_FLASK_SECRET_KEY", "change-me"),

@@ -13,6 +13,8 @@ from .interfaces import (
     register_http_interfaces,
     register_ws_interfaces,
 )
+from .repositories.sqlite import connection as sqlite_connection
+from .repositories.sqlite import migrations as sqlite_migrations
 from .server import create_app
 
 
@@ -23,6 +25,7 @@ class EngineRuntime:
     app: Flask
     settings: EngineSettings
     socketio: Optional[object]
+    db_factory: sqlite_connection.SQLiteConnectionFactory
 
 
 def bootstrap() -> EngineRuntime:
@@ -31,12 +34,22 @@ def bootstrap() -> EngineRuntime:
     settings = load_environment()
     logger = configure_logging(settings)
     logger.info("bootstrap-started")
-    app = create_app(settings)
+
+    db_factory = sqlite_connection.connection_factory(settings.database_path)
+    if settings.apply_migrations:
+        logger.info("migrations-start")
+        with sqlite_connection.connection_scope(settings.database_path) as conn:
+            sqlite_migrations.apply_all(conn)
+        logger.info("migrations-complete")
+    else:
+        logger.info("migrations-skipped")
+
+    app = create_app(settings, db_factory=db_factory)
     register_http_interfaces(app)
     socketio = create_socket_server(app, settings.socketio)
     register_ws_interfaces(socketio)
     logger.info("bootstrap-complete")
-    return EngineRuntime(app=app, settings=settings, socketio=socketio)
+    return EngineRuntime(app=app, settings=settings, socketio=socketio, db_factory=db_factory)
 
 
 def main() -> None:

@@ -15,7 +15,7 @@
 - 3.2 Stub out blueprint/Socket.IO registration hooks that mirror names from legacy code (no logic yet).
 - 3.3 Smoke-test app startup via `python Data/Engine/bootstrapper.py` (or Flask CLI) to ensure no regressions.
 
-4. Establish SQLite infrastructure
+[COMPLETED] 4. Establish SQLite infrastructure
 - 4.1 Copy `_db_conn` logic into `repositories/sqlite/connection.py`, parameterized by database path (`<root>/database.db`).
 - 4.2 Port migration helpers into `repositories/sqlite/migrations.py`; expose an `apply_all()` callable.
 - 4.3 Wire migrations to run during Engine bootstrap (behind a flag) and confirm tables initialize in a sandbox DB.
