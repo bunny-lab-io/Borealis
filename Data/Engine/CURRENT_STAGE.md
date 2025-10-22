@@ -54,7 +54,7 @@
 - 10.3 Expose HTTP orchestration via `interfaces/http/job_management.py` and WS notifications via dedicated modules.
 - 10.4 Commit after scheduler can run a no-op job loop independently.
 
-11. GitHub integration
+[COMPLETED] 11. GitHub integration
 - 11.1 Copy GitHub helper logic into `integrations/github/artifact_provider.py` with proper configuration injection.
 - 11.2 Provide repository/service hooks for fetching artifacts or repo heads; add resilience logging.
 - 11.3 Commit after integration tests (or mocked unit tests) confirm API workflows.

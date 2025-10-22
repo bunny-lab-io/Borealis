@@ -20,6 +20,12 @@ from .device_enrollment import (  # noqa: F401
     EnrollmentRequest,
     ProofChallenge,
 )
+from .github import (  # noqa: F401
+    GitHubRateLimit,
+    GitHubRepoRef,
+    GitHubTokenStatus,
+    RepoHeadSnapshot,
+)
 
 __all__ = [
     "AccessTokenClaims",
@@ -35,5 +41,9 @@ __all__ = [
     "EnrollmentCode",
     "EnrollmentRequest",
     "ProofChallenge",
+    "GitHubRateLimit",
+    "GitHubRepoRef",
+    "GitHubTokenStatus",
+    "RepoHeadSnapshot",
     "sanitize_service_context",
 ]

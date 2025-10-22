@@ -17,6 +17,10 @@ The Engine mirrors the legacy defaults so it can boot without additional configu
 | `BOREALIS_DEBUG` | Enables debug logging, disables secure-cookie requirements, and allows Werkzeug debug mode. | `false` |
 | `BOREALIS_HOST` | Bind address for the HTTP/Socket.IO server. | `127.0.0.1` |
 | `BOREALIS_PORT` | Bind port for the HTTP/Socket.IO server. | `5000` |
+| `BOREALIS_REPO` | Default GitHub repository (`owner/name`) for artifact lookups. | `bunny-lab-io/Borealis` |
+| `BOREALIS_REPO_BRANCH` | Default branch tracked by the Engine GitHub integration. | `main` |
+| `BOREALIS_REPO_HASH_REFRESH` | Seconds between default repository head refresh attempts (clamped 30-3600). | `60` |
+| `BOREALIS_CACHE_DIR` | Directory used to persist Engine cache files (GitHub repo head cache). | `<project_root>/Data/Engine/cache` |
 
 ## Logging expectations
 
@@ -80,3 +84,14 @@ Step 10 migrates the foundational job scheduler into the Engine:
 - `Data/Engine/interfaces/http/job_management.py` mirrors the legacy REST surface for creating, updating, toggling, and inspecting scheduled jobs and their run history.
 
 The scheduler service starts automatically from `Data/Engine/bootstrapper.py` once the Engine runtime builds the service container, ensuring a no-op scheduling loop executes independently of the legacy server.
+
+## GitHub integration
+
+Step 11 migrates the GitHub artifact provider into the Engine:
+
+- `Data/Engine/integrations/github/artifact_provider.py` caches branch head lookups, verifies API tokens, and optionally refreshes the default repository in the background.
+- `Data/Engine/repositories/sqlite/github_repository.py` persists the GitHub API token so HTTP handlers do not speak to SQLite directly.
+- `Data/Engine/services/github/github_service.py` coordinates token caching, verification, and repo head lookups for both HTTP and background refresh flows.
+- `Data/Engine/interfaces/http/github.py` exposes `/api/repo/current_hash` and `/api/github/token` through the Engine stack while keeping business logic in the service layer.
+
+The service container now wires `github_service`, giving other interfaces and background jobs a clean entry point for GitHub functionality.

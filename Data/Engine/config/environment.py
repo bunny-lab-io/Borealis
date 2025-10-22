@@ -41,6 +41,22 @@ class ServerSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class GitHubSettings:
+    """Configuration surface for GitHub repository interactions."""
+
+    default_repo: str
+    default_branch: str
+    refresh_interval_seconds: int
+    cache_root: Path
+
+    @property
+    def cache_file(self) -> Path:
+        """Location of the persisted repository-head cache."""
+
+        return self.cache_root / "repo_hash_cache.json"
+
+
+@dataclass(frozen=True, slots=True)
 class EngineSettings:
     """Immutable container describing the Engine runtime configuration."""
 
@@ -50,6 +66,7 @@ class EngineSettings:
     flask: FlaskSettings
     socketio: SocketIOSettings
     server: ServerSettings
+    github: GitHubSettings
 
     @property
     def logs_root(self) -> Path:
@@ -110,6 +127,23 @@ def _resolve_static_root(project_root: Path) -> Path:
     return candidates[0].resolve()
 
 
+def _resolve_github_cache_root(project_root: Path) -> Path:
+    candidate = os.getenv("BOREALIS_CACHE_DIR")
+    if candidate:
+        return Path(candidate).expanduser().resolve()
+    return (project_root / "Data" / "Engine" / "cache").resolve()
+
+
+def _parse_refresh_interval(raw: str | None) -> int:
+    if not raw:
+        return 60
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 60
+    return max(30, min(value, 3600))
+
+
 def _parse_origins(raw: str | None) -> Tuple[str, ...]:
     if not raw:
         return ("*",)
@@ -140,6 +174,12 @@ def load_environment() -> EngineSettings:
     except ValueError:
         port = 5000
     server_settings = ServerSettings(host=host, port=port)
+    github_settings = GitHubSettings(
+        default_repo=os.getenv("BOREALIS_REPO", "bunny-lab-io/Borealis"),
+        default_branch=os.getenv("BOREALIS_REPO_BRANCH", "main"),
+        refresh_interval_seconds=_parse_refresh_interval(os.getenv("BOREALIS_REPO_HASH_REFRESH")),
+        cache_root=_resolve_github_cache_root(project_root),
+    )
 
     return EngineSettings(
         project_root=project_root,
@@ -148,6 +188,7 @@ def load_environment() -> EngineSettings:
         flask=flask_settings,
         socketio=socket_settings,
         server=server_settings,
+        github=github_settings,
     )
 
 
@@ -155,6 +196,7 @@ __all__ = [
     "DatabaseSettings",
     "EngineSettings",
     "FlaskSettings",
+    "GitHubSettings",
     "SocketIOSettings",
     "ServerSettings",
     "load_environment",

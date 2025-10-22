@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from Data.Engine.config import EngineSettings
+from Data.Engine.integrations.github import GitHubArtifactProvider
 from Data.Engine.repositories.sqlite import (
     SQLiteConnectionFactory,
     SQLiteDeviceRepository,
     SQLiteEnrollmentRepository,
+    SQLiteGitHubRepository,
     SQLiteJobRepository,
     SQLiteRefreshTokenRepository,
 )
@@ -26,6 +28,7 @@ from Data.Engine.services.auth import (
 from Data.Engine.services.crypto.signing import ScriptSigner, load_signer
 from Data.Engine.services.enrollment import EnrollmentService
 from Data.Engine.services.enrollment.nonce_cache import NonceCache
+from Data.Engine.services.github import GitHubService
 from Data.Engine.services.jobs import SchedulerService
 from Data.Engine.services.rate_limit import SlidingWindowRateLimiter
 from Data.Engine.services.realtime import AgentRealtimeService
@@ -42,6 +45,7 @@ class EngineServiceContainer:
     dpop_validator: DPoPValidator
     agent_realtime: AgentRealtimeService
     scheduler_service: SchedulerService
+    github_service: GitHubService
 
 
 def build_service_container(
@@ -56,6 +60,7 @@ def build_service_container(
     token_repo = SQLiteRefreshTokenRepository(db_factory, logger=log.getChild("tokens"))
     enrollment_repo = SQLiteEnrollmentRepository(db_factory, logger=log.getChild("enrollment"))
     job_repo = SQLiteJobRepository(db_factory, logger=log.getChild("jobs"))
+    github_repo = SQLiteGitHubRepository(db_factory, logger=log.getChild("github_repo"))
 
     jwt_service = load_jwt_service()
     dpop_validator = DPoPValidator()
@@ -101,6 +106,20 @@ def build_service_container(
         logger=log.getChild("scheduler"),
     )
 
+    github_provider = GitHubArtifactProvider(
+        cache_file=settings.github.cache_file,
+        default_repo=settings.github.default_repo,
+        default_branch=settings.github.default_branch,
+        refresh_interval=settings.github.refresh_interval_seconds,
+        logger=log.getChild("github.provider"),
+    )
+    github_service = GitHubService(
+        repository=github_repo,
+        provider=github_provider,
+        logger=log.getChild("github"),
+    )
+    github_service.start_background_refresh()
+
     return EngineServiceContainer(
         device_auth=device_auth,
         token_service=token_service,
@@ -109,6 +128,7 @@ def build_service_container(
         dpop_validator=dpop_validator,
         agent_realtime=agent_realtime,
         scheduler_service=scheduler_service,
+        github_service=github_service,
     )
 
 

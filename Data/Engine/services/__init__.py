@@ -19,6 +19,7 @@ from .enrollment import (
     PollingResult,
 )
 from .jobs.scheduler_service import SchedulerService
+from .github import GitHubService, GitHubTokenPayload
 from .realtime import AgentRealtimeService, AgentRecord
 
 __all__ = [
@@ -37,4 +38,6 @@ __all__ = [
     "AgentRealtimeService",
     "AgentRecord",
     "SchedulerService",
+    "GitHubService",
+    "GitHubTokenPayload",
 ]

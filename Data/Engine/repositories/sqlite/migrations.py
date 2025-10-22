@@ -27,6 +27,7 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_refresh_token_table(conn)
     _ensure_install_code_table(conn)
     _ensure_device_approval_table(conn)
+    _ensure_github_token_table(conn)
     _ensure_scheduled_jobs_table(conn)
     _ensure_scheduled_job_run_tables(conn)
 
@@ -222,6 +223,17 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_da_fp_status
             ON device_approvals(ssl_key_fingerprint_claimed, status)
+        """
+    )
+
+
+def _ensure_github_token_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS github_token (
+            token TEXT
+        )
         """
     )
 
