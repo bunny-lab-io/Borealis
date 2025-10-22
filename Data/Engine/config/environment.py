@@ -81,7 +81,21 @@ def _resolve_static_root(project_root: Path) -> Path:
     candidate = os.getenv("BOREALIS_STATIC_ROOT")
     if candidate:
         return Path(candidate).expanduser().resolve()
-    return (project_root / "Data" / "Server" / "dist").resolve()
+
+    candidates = (
+        project_root / "Data" / "Server" / "web-interface" / "build",
+        project_root / "Data" / "Server" / "WebUI" / "build",
+        project_root / "Data" / "WebUI" / "build",
+    )
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved.is_dir():
+            return resolved
+
+    # Fall back to the first candidate even if it does not yet exist so the
+    # Flask factory still initialises; individual requests will surface 404s
+    # until an asset build is available, matching the legacy behaviour.
+    return candidates[0].resolve()
 
 
 def _parse_origins(raw: str | None) -> Tuple[str, ...]:

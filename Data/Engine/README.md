@@ -10,7 +10,7 @@ The Engine mirrors the legacy defaults so it can boot without additional configu
 | --- | --- | --- |
 | `BOREALIS_ROOT` | Overrides automatic project root detection.  Useful when running from a packaged location. | Directory two levels above `Data/Engine/` |
 | `BOREALIS_DATABASE_PATH` | Path to the SQLite database. | `<project_root>/database.db` |
-| `BOREALIS_STATIC_ROOT` | Directory that serves static assets for the SPA. | `<project_root>/Data/Server/dist` |
+| `BOREALIS_STATIC_ROOT` | Directory that serves static assets for the SPA. | First existing path among `Data/Server/web-interface/build`, `Data/Server/WebUI/build`, `Data/WebUI/build` |
 | `BOREALIS_CORS_ALLOWED_ORIGINS` | Comma-delimited list of origins granted CORS access. Use `*` for all origins. | `*` |
 | `BOREALIS_FLASK_SECRET_KEY` | Secret key for Flask session signing. | `change-me` |
 | `BOREALIS_DEBUG` | Enables debug logging, disables secure-cookie requirements, and allows Werkzeug debug mode. | `false` |
@@ -28,3 +28,7 @@ The Engine mirrors the legacy defaults so it can boot without additional configu
 3. The resulting runtime object exposes the Flask app, resolved settings, and optional Socket.IO server.  `bootstrapper.main()` runs the appropriate server based on whether Socket.IO is present.
 
 As migration continues, services, repositories, interfaces, and integrations will live under their respective subpackages while maintaining isolation from the legacy server.
+
+## Interface scaffolding
+
+The Engine currently exposes placeholder HTTP blueprints under `Data/Engine/interfaces/http/` (agents, enrollment, tokens, admin, and health) so that future commits can drop in real routes without reshaping the bootstrap wiring. WebSocket namespaces follow the same pattern in `Data/Engine/interfaces/ws/`, with feature-oriented modules (e.g., `agents`, `job_management`) registered by `bootstrapper.bootstrap()` when Socket.IO is available. These stubs intentionally contain no business logic yet—they merely ensure the application factory exercises the full wiring path.

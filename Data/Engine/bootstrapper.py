@@ -8,7 +8,11 @@ from typing import Optional
 from flask import Flask
 
 from .config import EngineSettings, configure_logging, load_environment
-from .interfaces import create_socket_server, register_http_interfaces
+from .interfaces import (
+    create_socket_server,
+    register_http_interfaces,
+    register_ws_interfaces,
+)
 from .server import create_app
 
 
@@ -30,6 +34,7 @@ def bootstrap() -> EngineRuntime:
     app = create_app(settings)
     register_http_interfaces(app)
     socketio = create_socket_server(app, settings.socketio)
+    register_ws_interfaces(socketio)
     logger.info("bootstrap-complete")
     return EngineRuntime(app=app, settings=settings, socketio=socketio)
 

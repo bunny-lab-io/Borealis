@@ -4,6 +4,16 @@ from __future__ import annotations
 
 from flask import Flask
 
+from . import admin, agents, enrollment, health, tokens
+
+_REGISTRARS = (
+    health.register,
+    agents.register,
+    enrollment.register,
+    tokens.register,
+    admin.register,
+)
+
 
 def register_http_interfaces(app: Flask) -> None:
     """Attach HTTP blueprints to *app*.
@@ -11,8 +21,8 @@ def register_http_interfaces(app: Flask) -> None:
     The implementation is intentionally minimal for the initial scaffolding.
     """
 
-    # Future phases will import and register blueprints here.
-    return None
+    for registrar in _REGISTRARS:
+        registrar(app)
 
 
 __all__ = ["register_http_interfaces"]

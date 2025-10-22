@@ -4,17 +4,51 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flask import Flask
+from flask import Flask, request, send_from_directory
 from flask_cors import CORS
+from werkzeug.exceptions import NotFound
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import EngineSettings
 
 
-def _resolve_static_folder(static_root: Path) -> tuple[str | None, str]:
-    if static_root.exists():
-        return str(static_root), "/"
-    return None, "/static"
+def _resolve_static_folder(static_root: Path) -> tuple[str, str]:
+    return str(static_root), ""
+
+
+def _register_spa_routes(app: Flask, assets_root: Path) -> None:
+    """Serve the Borealis single-page application from *assets_root*.
+
+    The logic mirrors the legacy server by routing any unknown front-end paths
+    back to ``index.html`` so the React router can take over.
+    """
+
+    static_folder = assets_root
+
+    @app.route("/", defaults={"path": ""})
+    @app.route("/<path:path>")
+    def serve_frontend(path: str) -> object:
+        candidate = (static_folder / path).resolve()
+        if path and candidate.is_file():
+            return send_from_directory(str(static_folder), path)
+        try:
+            return send_from_directory(str(static_folder), "index.html")
+        except Exception as exc:  # pragma: no cover - passthrough
+            raise NotFound() from exc
+
+    @app.errorhandler(404)
+    def spa_fallback(error: Exception) -> object:  # pragma: no cover - routing
+        request_path = (request.path or "").strip()
+        if request_path.startswith("/api") or request_path.startswith("/socket.io"):
+            return error
+        if "." in Path(request_path).name:
+            return error
+        if request.method not in {"GET", "HEAD"}:
+            return error
+        try:
+            return send_from_directory(str(static_folder), "index.html")
+        except Exception:
+            return error
 
 
 def create_app(settings: EngineSettings) -> Flask:
@@ -35,6 +69,7 @@ def create_app(settings: EngineSettings) -> Flask:
         SESSION_COOKIE_SAMESITE="Lax",
         ENGINE_DATABASE_PATH=str(settings.database_path),
     )
+    app.config.setdefault("PREFERRED_URL_SCHEME", "https")
 
     # Respect upstream proxy headers when Borealis is hosted behind a TLS terminator.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)  # type: ignore[assignment]
@@ -44,6 +79,8 @@ def create_app(settings: EngineSettings) -> Flask:
         resources={r"/*": {"origins": list(settings.flask.cors_allowed_origins)}},
         supports_credentials=True,
     )
+
+    _register_spa_routes(app, Path(static_folder))
 
     return app
 

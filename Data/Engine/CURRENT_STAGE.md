@@ -10,7 +10,7 @@
 - 2.2 Add settings dataclasses for Flask, Socket.IO, and DB paths; inject them via `server.py`.
 - 2.3 Commit once the Engine can start with equivalent config but no real routes.
 
-3. Copy Flask application scaffolding
+[COMPLETED] 3. Copy Flask application scaffolding
 - 3.1 Port proxy/CORS/static setup from `Data/Server/server.py` into Engine `server.py` using dependency injection.
 - 3.2 Stub out blueprint/Socket.IO registration hooks that mirror names from legacy code (no logic yet).
 - 3.3 Smoke-test app startup via `python Data/Engine/bootstrapper.py` (or Flask CLI) to ensure no regressions.
