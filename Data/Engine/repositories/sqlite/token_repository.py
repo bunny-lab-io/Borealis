@@ -78,6 +78,35 @@ class SQLiteRefreshTokenRepository:
             )
             conn.commit()
 
+    def create(
+        self,
+        *,
+        record_id: str,
+        guid: DeviceGuid,
+        token_hash: str,
+        created_at: datetime,
+        expires_at: Optional[datetime],
+    ) -> None:
+        created_iso = self._isoformat(created_at)
+        expires_iso = self._isoformat(expires_at) if expires_at else None
+
+        with closing(self._connections()) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO refresh_tokens (
+                    id,
+                    guid,
+                    token_hash,
+                    created_at,
+                    expires_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (record_id, guid.value, token_hash, created_iso, expires_iso),
+            )
+            conn.commit()
+
     def _row_to_record(self, row: tuple) -> Optional[RefreshTokenRecord]:
         try:
             guid = DeviceGuid(row[1])

@@ -37,7 +37,7 @@
 - 7.2 Write integration tests exercising CRUD against a temporary SQLite file.
 - 7.3 Commit when repositories provide the required ports used by services.
 
-8. Recreate HTTP interfaces
+[COMPLETED] 8. Recreate HTTP interfaces
 - 8.1 Port health/enrollment/token blueprints into `interfaces/http/<feature>/routes.py`, calling Engine services only.
 - 8.2 Ensure request validation occurs via builders; response schemas stay aligned with legacy JSON.
 - 8.3 Register blueprints through Engine `server.py`; confirm endpoints respond via manual or automated tests.

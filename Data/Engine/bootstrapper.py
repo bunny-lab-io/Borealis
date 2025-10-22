@@ -16,6 +16,7 @@ from .interfaces import (
 from .repositories.sqlite import connection as sqlite_connection
 from .repositories.sqlite import migrations as sqlite_migrations
 from .server import create_app
+from .services.container import build_service_container
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +46,9 @@ def bootstrap() -> EngineRuntime:
         logger.info("migrations-skipped")
 
     app = create_app(settings, db_factory=db_factory)
-    register_http_interfaces(app)
+    services = build_service_container(settings, db_factory=db_factory, logger=logger.getChild("services"))
+    app.extensions["engine_services"] = services
+    register_http_interfaces(app, services)
     socketio = create_socket_server(app, settings.socketio)
     register_ws_interfaces(socketio)
     logger.info("bootstrap-complete")

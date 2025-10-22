@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from flask import Flask
 
+from Data.Engine.services.container import EngineServiceContainer
+
 from . import admin, agents, enrollment, health, tokens
 
 _REGISTRARS = (
@@ -15,14 +17,14 @@ _REGISTRARS = (
 )
 
 
-def register_http_interfaces(app: Flask) -> None:
+def register_http_interfaces(app: Flask, services: EngineServiceContainer) -> None:
     """Attach HTTP blueprints to *app*.
 
     The implementation is intentionally minimal for the initial scaffolding.
     """
 
     for registrar in _REGISTRARS:
-        registrar(app)
+        registrar(app, services)
 
 
 __all__ = ["register_http_interfaces"]

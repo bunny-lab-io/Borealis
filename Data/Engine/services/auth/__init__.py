@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from .device_auth_service import DeviceAuthService, DeviceRecord
+from .dpop import DPoPReplayError, DPoPVerificationError, DPoPValidator
+from .jwt_service import JWTService, load_service as load_jwt_service
 from .token_service import (
     RefreshTokenRecord,
     TokenRefreshError,
@@ -13,6 +15,11 @@ from .token_service import (
 __all__ = [
     "DeviceAuthService",
     "DeviceRecord",
+    "DPoPReplayError",
+    "DPoPVerificationError",
+    "DPoPValidator",
+    "JWTService",
+    "load_jwt_service",
     "RefreshTokenRecord",
     "TokenRefreshError",
     "TokenRefreshErrorCode",

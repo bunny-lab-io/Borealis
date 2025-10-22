@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+import uuid
 from contextlib import closing
 from datetime import datetime, timezone
 from typing import Optional
@@ -152,6 +153,133 @@ class SQLiteDeviceRepository:
 
         return self._row_to_record(row)
 
+    def ensure_device_record(
+        self,
+        *,
+        guid: DeviceGuid,
+        hostname: str,
+        fingerprint: DeviceFingerprint,
+    ) -> DeviceRecord:
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        now_ts = int(time.time())
+
+        with closing(self._connections()) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT guid, hostname, token_version, status, ssl_key_fingerprint, key_added_at
+                  FROM devices
+                 WHERE UPPER(guid) = ?
+                """,
+                (guid.value.upper(),),
+            )
+            row = cur.fetchone()
+
+            if row:
+                stored_fp = (row[4] or "").strip().lower()
+                new_fp = fingerprint.value
+                if not stored_fp:
+                    cur.execute(
+                        "UPDATE devices SET ssl_key_fingerprint = ?, key_added_at = ? WHERE guid = ?",
+                        (new_fp, now_iso, row[0]),
+                    )
+                elif stored_fp != new_fp:
+                    token_version = self._coerce_int(row[2], default=1) + 1
+                    cur.execute(
+                        """
+                        UPDATE devices
+                           SET ssl_key_fingerprint = ?,
+                               key_added_at = ?,
+                               token_version = ?,
+                               status = 'active'
+                         WHERE guid = ?
+                        """,
+                        (new_fp, now_iso, token_version, row[0]),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE refresh_tokens
+                           SET revoked_at = ?
+                         WHERE guid = ?
+                           AND revoked_at IS NULL
+                        """,
+                        (now_iso, row[0]),
+                    )
+                conn.commit()
+            else:
+                resolved_hostname = self._resolve_hostname(cur, hostname, guid)
+                cur.execute(
+                    """
+                    INSERT INTO devices (
+                        guid,
+                        hostname,
+                        created_at,
+                        last_seen,
+                        ssl_key_fingerprint,
+                        token_version,
+                        status,
+                        key_added_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, 1, 'active', ?)
+                    """,
+                    (
+                        guid.value,
+                        resolved_hostname,
+                        now_ts,
+                        now_ts,
+                        fingerprint.value,
+                        now_iso,
+                    ),
+                )
+                conn.commit()
+
+            cur.execute(
+                """
+                SELECT guid, ssl_key_fingerprint, token_version, status
+                  FROM devices
+                 WHERE UPPER(guid) = ?
+                """,
+                (guid.value.upper(),),
+            )
+            latest = cur.fetchone()
+
+        if not latest:
+            raise RuntimeError("device record could not be ensured")
+
+        record = self._row_to_record(latest)
+        if record is None:
+            raise RuntimeError("device record invalid after ensure")
+        return record
+
+    def record_device_key(
+        self,
+        *,
+        guid: DeviceGuid,
+        fingerprint: DeviceFingerprint,
+        added_at: datetime,
+    ) -> None:
+        added_iso = added_at.astimezone(timezone.utc).isoformat()
+        with closing(self._connections()) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO device_keys (id, guid, ssl_key_fingerprint, added_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (str(uuid.uuid4()), guid.value, fingerprint.value, added_iso),
+            )
+            cur.execute(
+                """
+                UPDATE device_keys
+                   SET retired_at = ?
+                 WHERE guid = ?
+                   AND ssl_key_fingerprint != ?
+                   AND retired_at IS NULL
+                """,
+                (added_iso, guid.value, fingerprint.value),
+            )
+            conn.commit()
+
     def _row_to_record(self, row: tuple) -> Optional[DeviceRecord]:
         try:
             guid = DeviceGuid(row[0])
@@ -181,3 +309,31 @@ class SQLiteDeviceRepository:
             token_version=max(token_version, 1),
             status=status,
         )
+
+    @staticmethod
+    def _coerce_int(value: object, *, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return default
+
+    def _resolve_hostname(self, cur: sqlite3.Cursor, hostname: str, guid: DeviceGuid) -> str:
+        base = (hostname or "").strip() or guid.value
+        base = base[:253]
+        candidate = base
+        suffix = 1
+        while True:
+            cur.execute(
+                "SELECT guid FROM devices WHERE hostname = ?",
+                (candidate,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return candidate
+            existing = (row[0] or "").strip().upper()
+            if existing == guid.value:
+                return candidate
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+            if suffix > 50:
+                return guid.value

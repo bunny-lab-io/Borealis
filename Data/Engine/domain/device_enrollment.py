@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import base64
 from enum import Enum
 from typing import Any, Mapping, Optional
 
@@ -44,6 +45,7 @@ def _require(value: Optional[str], field: str) -> str:
 class EnrollmentCode:
     """Installer code metadata loaded from the persistence layer."""
 
+    record_id: Optional[str] = None
     code: str
     expires_at: datetime
     max_uses: int
@@ -67,6 +69,7 @@ class EnrollmentCode:
         used_by = record.get("used_by_guid")
         used_by_guid = DeviceGuid(used_by) if used_by else None
         return cls(
+            record_id=str(record.get("id") or "") or None,
             code=_require(record.get("code"), "code"),
             expires_at=_parse_iso8601(record.get("expires_at")) or datetime.now(tz=timezone.utc),
             max_uses=int(record.get("max_uses") or 1),
@@ -87,6 +90,10 @@ class EnrollmentCode:
     @property
     def is_expired(self) -> bool:
         return self.expires_at <= datetime.now(tz=timezone.utc)
+
+    @property
+    def identifier(self) -> Optional[str]:
+        return self.record_id
 
 
 class EnrollmentApprovalStatus(str, Enum):
@@ -181,6 +188,9 @@ class EnrollmentApproval:
     enrollment_code_id: Optional[str]
     created_at: datetime
     updated_at: datetime
+    client_nonce_b64: str
+    server_nonce_b64: str
+    agent_pubkey_der: bytes
     guid: Optional[DeviceGuid] = None
     approved_by: Optional[str] = None
 
@@ -207,6 +217,9 @@ class EnrollmentApproval:
             updated_at=_parse_iso8601(record.get("updated_at")) or datetime.now(tz=timezone.utc),
             guid=DeviceGuid(guid_raw) if guid_raw else None,
             approved_by=(approved_raw or None),
+            client_nonce_b64=_require(record.get("client_nonce"), "client_nonce"),
+            server_nonce_b64=_require(record.get("server_nonce"), "server_nonce"),
+            agent_pubkey_der=bytes(record.get("agent_pubkey_der") or b""),
         )
 
     @property
@@ -219,3 +232,11 @@ class EnrollmentApproval:
             EnrollmentApprovalStatus.APPROVED,
             EnrollmentApprovalStatus.COMPLETED,
         }
+
+    @property
+    def client_nonce_bytes(self) -> bytes:
+        return base64.b64decode(self.client_nonce_b64.encode("ascii"), validate=True)
+
+    @property
+    def server_nonce_bytes(self) -> bytes:
+        return base64.b64decode(self.server_nonce_b64.encode("ascii"), validate=True)

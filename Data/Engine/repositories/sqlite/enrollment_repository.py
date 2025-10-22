@@ -78,6 +78,50 @@ class SQLiteEnrollmentRepository:
             self._log.warning("invalid enrollment code record for code=%s: %s", code_value, exc)
             return None
 
+    def fetch_install_code_by_id(self, record_id: str) -> Optional[EnrollmentCode]:
+        record_value = (record_id or "").strip()
+        if not record_value:
+            return None
+
+        with closing(self._connections()) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id,
+                       code,
+                       expires_at,
+                       used_at,
+                       used_by_guid,
+                       max_uses,
+                       use_count,
+                       last_used_at
+                  FROM enrollment_install_codes
+                 WHERE id = ?
+                """,
+                (record_value,),
+            )
+            row = cur.fetchone()
+
+        if not row:
+            return None
+
+        record = {
+            "id": row[0],
+            "code": row[1],
+            "expires_at": row[2],
+            "used_at": row[3],
+            "used_by_guid": row[4],
+            "max_uses": row[5],
+            "use_count": row[6],
+            "last_used_at": row[7],
+        }
+
+        try:
+            return EnrollmentCode.from_mapping(record)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self._log.warning("invalid enrollment code record for id=%s: %s", record_value, exc)
+            return None
+
     def update_install_code_usage(
         self,
         record_id: str,
@@ -135,6 +179,53 @@ class SQLiteEnrollmentRepository:
             return None
         return self._fetch_device_approval("id = ?", (record_value,))
 
+    def fetch_pending_approval_by_fingerprint(
+        self, fingerprint: DeviceFingerprint
+    ) -> Optional[EnrollmentApproval]:
+        return self._fetch_device_approval(
+            "ssl_key_fingerprint_claimed = ? AND status = 'pending'",
+            (fingerprint.value,),
+        )
+
+    def update_pending_approval(
+        self,
+        record_id: str,
+        *,
+        hostname: str,
+        guid: Optional[DeviceGuid],
+        enrollment_code_id: Optional[str],
+        client_nonce_b64: str,
+        server_nonce_b64: str,
+        agent_pubkey_der: bytes,
+        updated_at: datetime,
+    ) -> None:
+        with closing(self._connections()) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE device_approvals
+                   SET hostname_claimed = ?,
+                       guid = ?,
+                       enrollment_code_id = ?,
+                       client_nonce = ?,
+                       server_nonce = ?,
+                       agent_pubkey_der = ?,
+                       updated_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    hostname,
+                    guid.value if guid else None,
+                    enrollment_code_id,
+                    client_nonce_b64,
+                    server_nonce_b64,
+                    agent_pubkey_der,
+                    self._isoformat(updated_at),
+                    record_id,
+                ),
+            )
+            conn.commit()
+
     def create_device_approval(
         self,
         *,
@@ -143,8 +234,8 @@ class SQLiteEnrollmentRepository:
         claimed_hostname: str,
         claimed_fingerprint: DeviceFingerprint,
         enrollment_code_id: Optional[str],
-        client_nonce: bytes,
-        server_nonce: bytes,
+        client_nonce_b64: str,
+        server_nonce_b64: str,
         agent_pubkey_der: bytes,
         created_at: datetime,
         status: EnrollmentApprovalStatus = EnrollmentApprovalStatus.PENDING,
@@ -183,8 +274,8 @@ class SQLiteEnrollmentRepository:
                     status.value,
                     created_iso,
                     created_iso,
-                    client_nonce,
-                    server_nonce,
+                    client_nonce_b64,
+                    server_nonce_b64,
                     agent_pubkey_der,
                 ),
             )
@@ -244,7 +335,10 @@ class SQLiteEnrollmentRepository:
                        created_at,
                        updated_at,
                        status,
-                       approved_by_user_id
+                       approved_by_user_id,
+                       client_nonce,
+                       server_nonce,
+                       agent_pubkey_der
                   FROM device_approvals
                  WHERE {where}
                 """,
@@ -266,6 +360,9 @@ class SQLiteEnrollmentRepository:
             "updated_at": row[7],
             "status": row[8],
             "approved_by_user_id": row[9],
+            "client_nonce": row[10],
+            "server_nonce": row[11],
+            "agent_pubkey_der": row[12],
         }
 
         try:

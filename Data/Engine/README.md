@@ -25,14 +25,21 @@ The Engine mirrors the legacy defaults so it can boot without additional configu
 ## Bootstrapping flow
 
 1. `Data/Engine/bootstrapper.py` loads the environment, configures logging, prepares the SQLite connection factory, optionally applies schema migrations, and builds the Flask application via `Data/Engine/server.py`.
-2. Placeholder HTTP and Socket.IO registration hooks run so the Engine can start without any migrated routes yet.
-3. The resulting runtime object exposes the Flask app, resolved settings, optional Socket.IO server, and the configured database connection factory.  `bootstrapper.main()` runs the appropriate server based on whether Socket.IO is present.
+2. A service container is assembled (`Data/Engine/services/container.py`) that wires repositories, JWT/DPoP helpers, and Engine services (device auth, token refresh, enrollment). The container is stored on the Flask app for interface modules to consume.
+3. HTTP and Socket.IO interfaces register against the new service container.  The resulting runtime object exposes the Flask app, resolved settings, optional Socket.IO server, and the configured database connection factory.  `bootstrapper.main()` runs the appropriate server based on whether Socket.IO is present.
 
 As migration continues, services, repositories, interfaces, and integrations will live under their respective subpackages while maintaining isolation from the legacy server.
 
-## Interface scaffolding
+## HTTP interfaces
 
-The Engine currently exposes placeholder HTTP blueprints under `Data/Engine/interfaces/http/` (agents, enrollment, tokens, admin, and health) so that future commits can drop in real routes without reshaping the bootstrap wiring. WebSocket namespaces follow the same pattern in `Data/Engine/interfaces/ws/`, with feature-oriented modules (e.g., `agents`, `job_management`) registered by `bootstrapper.bootstrap()` when Socket.IO is available. These stubs intentionally contain no business logic yet—they merely ensure the application factory exercises the full wiring path.
+The Engine now exposes working HTTP routes alongside the remaining scaffolding:
+
+- `Data/Engine/interfaces/http/health.py` implements `GET /health` for liveness probes.
+- `Data/Engine/interfaces/http/tokens.py` ports the refresh-token endpoint (`POST /api/agent/token/refresh`) using the Engine `TokenService` and request builders.
+- `Data/Engine/interfaces/http/enrollment.py` handles the enrollment handshake (`/api/agent/enroll/request` and `/api/agent/enroll/poll`) with rate limiting, nonce protection, and repository-backed approvals.
+- The admin and agent blueprints remain placeholders until their services migrate.
+
+WebSocket namespaces continue to follow the same pattern in `Data/Engine/interfaces/ws/`, with feature-oriented modules (e.g., `agents`, `job_management`) registered by `bootstrapper.bootstrap()` when Socket.IO is available.
 
 ## Authentication services
 
@@ -43,7 +50,7 @@ Step 6 introduces the first real Engine services:
 - `Data/Engine/services/auth/device_auth_service.py` ports the legacy `DeviceAuthManager` into a repository-driven service that emits `DeviceAuthContext` instances from the new domain layer.
 - `Data/Engine/services/auth/token_service.py` issues refreshed access tokens while enforcing DPoP bindings and repository lookups.
 
-Interfaces will begin consuming these services once the repository adapters land in the next milestone.
+Interfaces now consume these services via the shared container, keeping business logic inside the Engine service layer while HTTP modules remain thin request/response translators.
 
 ## SQLite repositories
 

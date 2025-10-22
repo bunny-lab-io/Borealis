@@ -10,6 +10,14 @@ from .auth import (
     TokenRefreshErrorCode,
     TokenService,
 )
+from .enrollment import (
+    EnrollmentRequestResult,
+    EnrollmentService,
+    EnrollmentStatus,
+    EnrollmentTokenBundle,
+    EnrollmentValidationError,
+    PollingResult,
+)
 
 __all__ = [
     "DeviceAuthService",
@@ -18,4 +26,10 @@ __all__ = [
     "TokenRefreshError",
     "TokenRefreshErrorCode",
     "TokenService",
+    "EnrollmentService",
+    "EnrollmentRequestResult",
+    "EnrollmentStatus",
+    "EnrollmentTokenBundle",
+    "EnrollmentValidationError",
+    "PollingResult",
 ]
