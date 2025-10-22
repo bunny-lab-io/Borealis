@@ -8,6 +8,13 @@ try:  # pragma: no cover - import shim for script execution
     from .bootstrapper import bootstrap  # type: ignore
     from .app.runtime import monolith as active_monolith  # type: ignore
 except ImportError:  # pragma: no cover - executed when run as script
+    import pathlib
+    import sys
+
+    current_dir = pathlib.Path(__file__).resolve().parent
+    if str(current_dir) not in sys.path:
+        sys.path.insert(0, str(current_dir))
+
     from bootstrapper import bootstrap  # type: ignore
     from app.runtime import monolith as active_monolith  # type: ignore
 
