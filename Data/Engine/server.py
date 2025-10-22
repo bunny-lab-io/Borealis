@@ -20,7 +20,7 @@ def _resolve_static_folder(static_root: Path) -> tuple[str | None, str]:
 def create_app(settings: EngineSettings) -> Flask:
     """Create the Flask application instance for the Engine."""
 
-    static_folder, static_url_path = _resolve_static_folder(settings.static_root)
+    static_folder, static_url_path = _resolve_static_folder(settings.flask.static_root)
     app = Flask(
         __name__,
         static_folder=static_folder,
@@ -28,7 +28,7 @@ def create_app(settings: EngineSettings) -> Flask:
     )
 
     app.config.update(
-        SECRET_KEY=settings.secret_key,
+        SECRET_KEY=settings.flask.secret_key,
         JSON_SORT_KEYS=False,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SECURE=not settings.debug,
@@ -41,7 +41,7 @@ def create_app(settings: EngineSettings) -> Flask:
 
     CORS(
         app,
-        resources={r"/*": {"origins": list(settings.cors_allowed_origins)}},
+        resources={r"/*": {"origins": list(settings.flask.cors_allowed_origins)}},
         supports_credentials=True,
     )
 

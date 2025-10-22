@@ -5,7 +5,7 @@
 - 1.2 Document environment variables/settings expected by the Engine to keep parity with legacy defaults.
 - 1.3 Verify Engine logging produces `Logs/Server/engine.log` entries alongside the legacy server.
 
-2. Introduce configuration & dependency wiring
+[COMPLETED] 2. Introduce configuration & dependency wiring
 - 2.1 Create `config/environment.py` loaders mirroring legacy defaults (TLS paths, feature flags).
 - 2.2 Add settings dataclasses for Flask, Socket.IO, and DB paths; inject them via `server.py`.
 - 2.3 Commit once the Engine can start with equivalent config but no real routes.

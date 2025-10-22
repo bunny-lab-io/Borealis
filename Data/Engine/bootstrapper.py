@@ -29,7 +29,7 @@ def bootstrap() -> EngineRuntime:
     logger.info("bootstrap-started")
     app = create_app(settings)
     register_http_interfaces(app)
-    socketio = create_socket_server(app, settings)
+    socketio = create_socket_server(app, settings.socketio)
     logger.info("bootstrap-complete")
     return EngineRuntime(app=app, settings=settings, socketio=socketio)
 
@@ -40,14 +40,14 @@ def main() -> None:
     if socketio is not None:
         socketio.run(  # type: ignore[call-arg]
             runtime.app,
-            host=runtime.settings.host,
-            port=runtime.settings.port,
+            host=runtime.settings.server.host,
+            port=runtime.settings.server.port,
             debug=runtime.settings.debug,
         )
     else:
         runtime.app.run(
-            host=runtime.settings.host,
-            port=runtime.settings.port,
+            host=runtime.settings.server.host,
+            port=runtime.settings.server.port,
             debug=runtime.settings.debug,
         )
 

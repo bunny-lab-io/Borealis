@@ -6,7 +6,7 @@ from typing import Optional
 
 from flask import Flask
 
-from ...config import EngineSettings
+from ...config import SocketIOSettings
 
 try:  # pragma: no cover - import guard
     from flask_socketio import SocketIO
@@ -14,7 +14,7 @@ except Exception:  # pragma: no cover - optional dependency
     SocketIO = None  # type: ignore[assignment]
 
 
-def create_socket_server(app: Flask, settings: EngineSettings) -> Optional[SocketIO]:
+def create_socket_server(app: Flask, settings: SocketIOSettings) -> Optional[SocketIO]:
     """Create a Socket.IO server bound to *app* if dependencies are available."""
 
     if SocketIO is None:
