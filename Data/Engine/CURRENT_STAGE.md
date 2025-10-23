@@ -59,7 +59,7 @@
 - 11.2 Provide repository/service hooks for fetching artifacts or repo heads; add resilience logging.
 - 11.3 Commit after integration tests (or mocked unit tests) confirm API workflows.
 
-[IN PROGRESS] 12. Final parity verification
+[COMPLETE] 12. Final parity verification
 - 12.1 Follow the staging playbook in `Data/Engine/STAGING_GUIDE.md` to stand up the Engine end-to-end and exercise enrollment, token refresh, agent connections, GitHub integration, and scheduler flows.
 - 12.2 Record any divergences in the staging guide’s table and address them with follow-up commits before cut-over.
 - 12.3 Once parity is confirmed, coordinate entrypoint switching (point deployment at `Data/Engine/bootstrapper.py`) and plan the legacy server deprecation.
