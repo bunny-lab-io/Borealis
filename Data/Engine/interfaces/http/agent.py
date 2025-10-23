@@ -11,7 +11,10 @@ from flask import Blueprint, Flask, current_app, g, jsonify, request
 from Data.Engine.builders.device_auth import DeviceAuthRequestBuilder
 from Data.Engine.domain.device_auth import DeviceAuthContext, DeviceAuthFailure
 from Data.Engine.services.container import EngineServiceContainer
-from Data.Engine.services.devices.device_inventory_service import DeviceHeartbeatError
+from Data.Engine.services.devices.device_inventory_service import (
+    DeviceDetailsError,
+    DeviceHeartbeatError,
+)
 
 AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
 
@@ -110,4 +113,36 @@ def script_request() -> Any:
     return jsonify(response)
 
 
-__all__ = ["register", "blueprint", "heartbeat", "script_request", "require_device_auth"]
+@blueprint.route("/api/agent/details", methods=["POST"])
+@require_device_auth
+def save_details() -> Any:
+    services = _services()
+    payload = request.get_json(force=True, silent=True) or {}
+    context = cast(DeviceAuthContext, g.device_auth)
+
+    try:
+        services.device_inventory.save_agent_details(context=context, payload=payload)
+    except DeviceDetailsError as exc:
+        error_payload = {"error": exc.code}
+        if exc.code == "invalid_payload":
+            return jsonify(error_payload), 400
+        if exc.code in {"fingerprint_mismatch", "guid_mismatch"}:
+            return jsonify(error_payload), 403
+        if exc.code == "device_not_registered":
+            return jsonify(error_payload), 404
+        current_app.logger.exception(
+            "device-details-error guid=%s code=%s", context.identity.guid.value, exc.code
+        )
+        return jsonify(error_payload), 500
+
+    return jsonify({"status": "ok"})
+
+
+__all__ = [
+    "register",
+    "blueprint",
+    "heartbeat",
+    "script_request",
+    "save_details",
+    "require_device_auth",
+]

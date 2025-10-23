@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+import uuid
 from contextlib import closing
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -158,8 +159,12 @@ class SQLiteDeviceInventoryRepository:
                 agent_id,
                 ansible_ee_ver,
                 connection_type,
-                connection_endpoint
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                connection_endpoint,
+                ssl_key_fingerprint,
+                token_version,
+                status,
+                key_added_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(hostname) DO UPDATE SET
                 description=excluded.description,
                 created_at=COALESCE({DEVICE_TABLE}.created_at, excluded.created_at),
@@ -182,7 +187,11 @@ class SQLiteDeviceInventoryRepository:
                 agent_id=COALESCE(NULLIF(excluded.agent_id, ''), {DEVICE_TABLE}.agent_id),
                 ansible_ee_ver=COALESCE(NULLIF(excluded.ansible_ee_ver, ''), {DEVICE_TABLE}.ansible_ee_ver),
                 connection_type=COALESCE(NULLIF(excluded.connection_type, ''), {DEVICE_TABLE}.connection_type),
-                connection_endpoint=COALESCE(NULLIF(excluded.connection_endpoint, ''), {DEVICE_TABLE}.connection_endpoint)
+                connection_endpoint=COALESCE(NULLIF(excluded.connection_endpoint, ''), {DEVICE_TABLE}.connection_endpoint),
+                ssl_key_fingerprint=COALESCE(NULLIF(excluded.ssl_key_fingerprint, ''), {DEVICE_TABLE}.ssl_key_fingerprint),
+                token_version=COALESCE(NULLIF(excluded.token_version, 0), {DEVICE_TABLE}.token_version),
+                status=COALESCE(NULLIF(excluded.status, ''), {DEVICE_TABLE}.status),
+                key_added_at=COALESCE(NULLIF(excluded.key_added_at, ''), {DEVICE_TABLE}.key_added_at)
         """
 
         params: List[Any] = [
@@ -209,6 +218,10 @@ class SQLiteDeviceInventoryRepository:
             column_values.get("ansible_ee_ver"),
             column_values.get("connection_type"),
             column_values.get("connection_endpoint"),
+            column_values.get("ssl_key_fingerprint"),
+            column_values.get("token_version"),
+            column_values.get("status"),
+            column_values.get("key_added_at"),
         ]
 
         with closing(self._connections()) as conn:
@@ -221,6 +234,42 @@ class SQLiteDeviceInventoryRepository:
             cur = conn.cursor()
             cur.execute("DELETE FROM device_sites WHERE device_hostname = ?", (hostname,))
             cur.execute(f"DELETE FROM {DEVICE_TABLE} WHERE hostname = ?", (hostname,))
+            conn.commit()
+
+    def record_device_fingerprint(self, guid: Optional[str], fingerprint: Optional[str], added_at: str) -> None:
+        normalized_guid = clean_device_str(guid)
+        normalized_fp = clean_device_str(fingerprint)
+        if not normalized_guid or not normalized_fp:
+            return
+
+        with closing(self._connections()) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO device_keys (id, guid, ssl_key_fingerprint, added_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (str(uuid.uuid4()), normalized_guid, normalized_fp.lower(), added_at),
+            )
+            cur.execute(
+                """
+                UPDATE device_keys
+                   SET retired_at = ?
+                 WHERE guid = ?
+                   AND ssl_key_fingerprint != ?
+                   AND retired_at IS NULL
+                """,
+                (added_at, normalized_guid, normalized_fp.lower()),
+            )
+            cur.execute(
+                """
+                UPDATE devices
+                   SET ssl_key_fingerprint = COALESCE(LOWER(?), ssl_key_fingerprint),
+                       key_added_at = COALESCE(key_added_at, ?)
+                 WHERE LOWER(guid) = LOWER(?)
+                """,
+                (normalized_fp, added_at, normalized_guid),
+            )
             conn.commit()
 
     def _extract_device_columns(self, details: Dict[str, Any]) -> Dict[str, Any]:
@@ -250,4 +299,8 @@ class SQLiteDeviceInventoryRepository:
         payload["connection_endpoint"] = clean_device_str(
             summary.get("connection_endpoint") or summary.get("endpoint")
         )
+        payload["ssl_key_fingerprint"] = clean_device_str(summary.get("ssl_key_fingerprint"))
+        payload["token_version"] = coerce_int(summary.get("token_version")) or 0
+        payload["status"] = clean_device_str(summary.get("status"))
+        payload["key_added_at"] = clean_device_str(summary.get("key_added_at"))
         return payload

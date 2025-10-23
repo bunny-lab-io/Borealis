@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import time
+from datetime import datetime, timezone
 from collections.abc import Mapping
 from typing import Any, Dict, List, Optional
 
 from Data.Engine.repositories.sqlite.device_inventory_repository import (
     SQLiteDeviceInventoryRepository,
 )
-from Data.Engine.domain.device_auth import DeviceAuthContext
+from Data.Engine.domain.device_auth import DeviceAuthContext, normalize_guid
 from Data.Engine.domain.devices import clean_device_str, coerce_int
 
-__all__ = ["DeviceInventoryService", "RemoteDeviceError", "DeviceHeartbeatError"]
+__all__ = [
+    "DeviceInventoryService",
+    "RemoteDeviceError",
+    "DeviceHeartbeatError",
+    "DeviceDetailsError",
+    "DeviceDescriptionError",
+]
 
 
 class RemoteDeviceError(Exception):
@@ -24,6 +32,18 @@ class RemoteDeviceError(Exception):
 
 
 class DeviceHeartbeatError(Exception):
+    def __init__(self, code: str, message: Optional[str] = None) -> None:
+        super().__init__(message or code)
+        self.code = code
+
+
+class DeviceDetailsError(Exception):
+    def __init__(self, code: str, message: Optional[str] = None) -> None:
+        super().__init__(message or code)
+        self.code = code
+
+
+class DeviceDescriptionError(Exception):
     def __init__(self, code: str, message: Optional[str] = None) -> None:
         super().__init__(message or code)
         self.code = code
@@ -220,7 +240,7 @@ class DeviceInventoryService:
         summary["hostname"] = hostname
 
         if metrics:
-            last_user = metrics.get("last_user") or metrics.get("username")
+            last_user = metrics.get("last_user")
             if last_user:
                 cleaned_user = clean_device_str(last_user)
                 if cleaned_user:
@@ -300,3 +320,182 @@ class DeviceInventoryService:
             )
             raise DeviceHeartbeatError("storage_error", "failed to persist heartbeat") from exc
 
+    # ------------------------------------------------------------------
+    # Agent details
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _is_empty(value: Any) -> bool:
+        return value in (None, "", [], {})
+
+    @classmethod
+    def _deep_merge_preserve(cls, prev: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+        merged: Dict[str, Any] = dict(prev or {})
+        for key, value in (incoming or {}).items():
+            if isinstance(value, Mapping):
+                existing = merged.get(key)
+                if not isinstance(existing, Mapping):
+                    existing = {}
+                merged[key] = cls._deep_merge_preserve(dict(existing), dict(value))
+            elif isinstance(value, list):
+                if value:
+                    merged[key] = value
+            else:
+                if cls._is_empty(value):
+                    continue
+                merged[key] = value
+        return merged
+
+    def save_agent_details(
+        self,
+        *,
+        context: DeviceAuthContext,
+        payload: Mapping[str, Any],
+    ) -> None:
+        hostname = clean_device_str(payload.get("hostname"))
+        details_raw = payload.get("details")
+        agent_id = clean_device_str(payload.get("agent_id"))
+        agent_hash = clean_device_str(payload.get("agent_hash"))
+
+        if not isinstance(details_raw, Mapping):
+            raise DeviceDetailsError("invalid_payload", "details object required")
+
+        details_dict: Dict[str, Any]
+        try:
+            details_dict = json.loads(json.dumps(details_raw))
+        except Exception:
+            details_dict = dict(details_raw)
+
+        incoming_summary = dict(details_dict.get("summary") or {})
+        if not hostname:
+            hostname = clean_device_str(incoming_summary.get("hostname"))
+        if not hostname:
+            raise DeviceDetailsError("invalid_payload", "hostname required")
+
+        snapshot = self._repo.load_snapshot(hostname=hostname)
+        if not snapshot:
+            snapshot = {}
+
+        previous_details = snapshot.get("details")
+        if isinstance(previous_details, Mapping):
+            try:
+                prev_details = json.loads(json.dumps(previous_details))
+            except Exception:
+                prev_details = dict(previous_details)
+        else:
+            prev_details = {}
+
+        prev_summary = dict(prev_details.get("summary") or {})
+
+        existing_guid = clean_device_str(snapshot.get("guid") or snapshot.get("summary", {}).get("agent_guid"))
+        normalized_existing_guid = normalize_guid(existing_guid)
+        auth_guid = context.identity.guid.value
+
+        if normalized_existing_guid and normalized_existing_guid != auth_guid:
+            raise DeviceDetailsError("guid_mismatch", "device guid mismatch")
+
+        fingerprint = context.identity.fingerprint.value.lower()
+        stored_fp = clean_device_str(snapshot.get("summary", {}).get("ssl_key_fingerprint"))
+        if stored_fp and stored_fp.lower() != fingerprint:
+            raise DeviceDetailsError("fingerprint_mismatch", "device fingerprint mismatch")
+
+        incoming_summary.setdefault("hostname", hostname)
+        if agent_id and not incoming_summary.get("agent_id"):
+            incoming_summary["agent_id"] = agent_id
+        if agent_hash:
+            incoming_summary["agent_hash"] = agent_hash
+        incoming_summary["agent_guid"] = auth_guid
+        if fingerprint:
+            incoming_summary["ssl_key_fingerprint"] = fingerprint
+        if not incoming_summary.get("last_seen") and prev_summary.get("last_seen"):
+            incoming_summary["last_seen"] = prev_summary.get("last_seen")
+
+        details_dict["summary"] = incoming_summary
+        merged_details = self._deep_merge_preserve(prev_details, details_dict)
+        merged_summary = merged_details.setdefault("summary", {})
+
+        if not merged_summary.get("last_user") and prev_summary.get("last_user"):
+            merged_summary["last_user"] = prev_summary.get("last_user")
+
+        created_at = coerce_int(merged_summary.get("created_at"))
+        if created_at is None:
+            created_at = coerce_int(snapshot.get("created_at"))
+        if created_at is None:
+            created_at = int(time.time())
+        merged_summary["created_at"] = created_at
+
+        if fingerprint:
+            merged_summary["ssl_key_fingerprint"] = fingerprint
+            if not merged_summary.get("key_added_at"):
+                merged_summary["key_added_at"] = datetime.now(timezone.utc).isoformat()
+        if merged_summary.get("token_version") is None:
+            merged_summary["token_version"] = 1
+        if not merged_summary.get("status") and snapshot.get("summary", {}).get("status"):
+            merged_summary["status"] = snapshot.get("summary", {}).get("status")
+
+        description = clean_device_str(merged_summary.get("description"))
+        existing_description = snapshot.get("description") if snapshot else ""
+        description_to_store = description if description is not None else (existing_description or "")
+
+        existing_hash = clean_device_str(snapshot.get("agent_hash") or snapshot.get("summary", {}).get("agent_hash"))
+        effective_hash = agent_hash or existing_hash
+
+        try:
+            self._repo.upsert_device(
+                hostname,
+                description_to_store,
+                merged_details,
+                created_at,
+                agent_hash=effective_hash,
+                guid=auth_guid,
+            )
+        except sqlite3.DatabaseError as exc:
+            raise DeviceDetailsError("storage_error", str(exc)) from exc
+
+        added_at = merged_summary.get("key_added_at") or datetime.now(timezone.utc).isoformat()
+        self._repo.record_device_fingerprint(auth_guid, fingerprint, added_at)
+
+    # ------------------------------------------------------------------
+    # Description management
+    # ------------------------------------------------------------------
+    def update_device_description(self, hostname: str, description: Optional[str]) -> None:
+        normalized_host = clean_device_str(hostname)
+        if not normalized_host:
+            raise DeviceDescriptionError("invalid_hostname", "invalid hostname")
+
+        snapshot = self._repo.load_snapshot(hostname=normalized_host)
+        if not snapshot:
+            raise DeviceDescriptionError("not_found", "device not found")
+
+        details = snapshot.get("details")
+        if isinstance(details, Mapping):
+            try:
+                existing = json.loads(json.dumps(details))
+            except Exception:
+                existing = dict(details)
+        else:
+            existing = {}
+
+        summary = dict(existing.get("summary") or {})
+        summary["description"] = description or ""
+        existing["summary"] = summary
+
+        created_at = coerce_int(summary.get("created_at"))
+        if created_at is None:
+            created_at = coerce_int(snapshot.get("created_at"))
+        if created_at is None:
+            created_at = int(time.time())
+
+        agent_hash = clean_device_str(summary.get("agent_hash") or snapshot.get("agent_hash"))
+        guid = clean_device_str(summary.get("agent_guid") or snapshot.get("guid"))
+
+        try:
+            self._repo.upsert_device(
+                normalized_host,
+                description or (snapshot.get("description") or ""),
+                existing,
+                created_at,
+                agent_hash=agent_hash,
+                guid=guid,
+            )
+        except sqlite3.DatabaseError as exc:
+            raise DeviceDescriptionError("storage_error", str(exc)) from exc

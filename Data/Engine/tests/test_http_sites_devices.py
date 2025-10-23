@@ -1,5 +1,6 @@
-import sqlite3
 from datetime import datetime, timezone
+import sqlite3
+import time
 
 import pytest
 
@@ -106,3 +107,45 @@ def test_credentials_list_requires_admin(prepared_app):
     resp = client.get("/api/credentials")
     assert resp.status_code == 200
     assert resp.get_json() == {"credentials": []}
+
+
+def test_device_description_update(prepared_app, engine_settings):
+    client = prepared_app.test_client()
+    hostname = "device-desc"
+    guid = "A3D3F1E5-9B8C-4C6F-80F1-4D5E6F7A8B9C"
+
+    now = int(time.time())
+    conn = sqlite3.connect(engine_settings.database.path)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO devices (
+            guid,
+            hostname,
+            description,
+            created_at,
+            last_seen
+        ) VALUES (?, ?, '', ?, ?)
+        """,
+        (guid, hostname, now, now),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = client.post(
+        f"/api/device/description/{hostname}",
+        json={"description": "Primary workstation"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok"}
+
+    conn = sqlite3.connect(engine_settings.database.path)
+    row = conn.execute(
+        "SELECT description FROM devices WHERE hostname = ?",
+        (hostname,),
+    ).fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row[0] == "Primary workstation"

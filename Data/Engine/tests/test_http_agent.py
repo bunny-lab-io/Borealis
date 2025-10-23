@@ -232,3 +232,101 @@ def test_script_request_reports_status_and_signing_key(prepared_app, monkeypatch
     assert resp.get_json()["status"] == "quarantined"
     assert resp.get_json()["poll_after_ms"] == 60000
 
+
+def test_agent_details_persists_inventory(prepared_app, monkeypatch):
+    client = prepared_app.test_client()
+    guid = "5C9D76E4-4C5A-4A5D-9B5D-1C2E3F4A5B6C"
+    fingerprint = "aa:bb:cc:dd"
+    hostname = "device-details"
+    _insert_device(prepared_app, guid, fingerprint, hostname)
+
+    services = prepared_app.extensions["engine_services"]
+    context = _build_context(guid, fingerprint)
+    monkeypatch.setattr(services.device_auth, "authenticate", lambda request, path: context)
+
+    payload = {
+        "hostname": hostname,
+        "agent_id": "AGENT-01",
+        "agent_hash": "hash-value",
+        "details": {
+            "summary": {
+                "hostname": hostname,
+                "device_type": "Laptop",
+                "last_user": "BUNNY-LAB\\nicole.rappe",
+                "operating_system": "Windows 11",
+                "description": "Primary workstation",
+            },
+            "memory": [{"slot": "DIMM0", "capacity": 17179869184}],
+            "storage": [{"model": "NVMe", "size": 512}],
+            "network": [{"adapter": "Ethernet", "ips": ["192.168.1.50"]}],
+        },
+    }
+
+    resp = client.post(
+        "/api/agent/details",
+        json=payload,
+        headers={"Authorization": "Bearer token"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok"}
+
+    db_path = Path(prepared_app.config["ENGINE_DATABASE_PATH"])
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT device_type, last_user, memory, storage, network, description
+              FROM devices
+             WHERE guid = ?
+            """,
+            (guid,),
+        ).fetchone()
+
+    assert row is not None
+    device_type, last_user, memory_json, storage_json, network_json, description = row
+    assert device_type == "Laptop"
+    assert last_user == "BUNNY-LAB\\nicole.rappe"
+    assert description == "Primary workstation"
+    assert json.loads(memory_json)[0]["capacity"] == 17179869184
+    assert json.loads(storage_json)[0]["model"] == "NVMe"
+    assert json.loads(network_json)[0]["ips"][0] == "192.168.1.50"
+
+
+def test_heartbeat_preserves_last_user_from_details(prepared_app, monkeypatch):
+    client = prepared_app.test_client()
+    guid = "7E8F90A1-B2C3-4D5E-8F90-A1B2C3D4E5F6"
+    fingerprint = "11:22:33:44"
+    hostname = "device-preserve"
+    _insert_device(prepared_app, guid, fingerprint, hostname)
+
+    services = prepared_app.extensions["engine_services"]
+    context = _build_context(guid, fingerprint)
+    monkeypatch.setattr(services.device_auth, "authenticate", lambda request, path: context)
+
+    client.post(
+        "/api/agent/details",
+        json={
+            "hostname": hostname,
+            "details": {
+                "summary": {"hostname": hostname, "last_user": "BUNNY-LAB\\nicole.rappe"}
+            },
+        },
+        headers={"Authorization": "Bearer token"},
+    )
+
+    client.post(
+        "/api/agent/heartbeat",
+        json={"hostname": hostname, "metrics": {"uptime": 120}},
+        headers={"Authorization": "Bearer token"},
+    )
+
+    db_path = Path(prepared_app.config["ENGINE_DATABASE_PATH"])
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT last_user FROM devices WHERE guid = ?",
+            (guid,),
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == "BUNNY-LAB\\nicole.rappe"
+

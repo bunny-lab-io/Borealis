@@ -5,7 +5,7 @@ from ipaddress import ip_address
 from flask import Blueprint, Flask, current_app, jsonify, request, session
 
 from Data.Engine.services.container import EngineServiceContainer
-from Data.Engine.services.devices import RemoteDeviceError
+from Data.Engine.services.devices import DeviceDescriptionError, RemoteDeviceError
 
 blueprint = Blueprint("engine_devices", __name__)
 
@@ -62,6 +62,24 @@ def get_device_by_guid(guid: str) -> object:
     if not device:
         return jsonify({"error": "not found"}), 404
     return jsonify(device)
+
+
+@blueprint.route("/api/device/description/<hostname>", methods=["POST"])
+def set_device_description(hostname: str) -> object:
+    payload = request.get_json(silent=True) or {}
+    description = payload.get("description")
+    try:
+        _inventory().update_device_description(hostname, description)
+    except DeviceDescriptionError as exc:
+        if exc.code == "invalid_hostname":
+            return jsonify({"error": "invalid hostname"}), 400
+        if exc.code == "not_found":
+            return jsonify({"error": "not found"}), 404
+        current_app.logger.exception(
+            "device-description-error host=%s code=%s", hostname, exc.code
+        )
+        return jsonify({"error": "internal error"}), 500
+    return jsonify({"status": "ok"})
 
 
 @blueprint.route("/api/agent_devices", methods=["GET"])

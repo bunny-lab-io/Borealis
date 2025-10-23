@@ -228,6 +228,10 @@ def assemble_device_snapshot(record: Mapping[str, Any]) -> Dict[str, Any]:
         "agent_guid": record.get("guid") or record.get("agent_guid") or "",
         "connection_type": record.get("connection_type") or "",
         "connection_endpoint": record.get("connection_endpoint") or "",
+        "ssl_key_fingerprint": record.get("ssl_key_fingerprint") or "",
+        "status": record.get("status") or "",
+        "token_version": record.get("token_version") or 0,
+        "key_added_at": record.get("key_added_at") or "",
         "created_at": record.get("created_at") or 0,
     }
 
