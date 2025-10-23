@@ -18,7 +18,7 @@ from .interfaces import (
 from .interfaces.eventlet_compat import apply_eventlet_patches
 from .repositories.sqlite import connection as sqlite_connection
 from .repositories.sqlite import migrations as sqlite_migrations
-from .server import attach_legacy_bridge, create_app
+from .server import create_app
 from .services.container import build_service_container
 from .services.crypto.certificates import ensure_certificate
 
@@ -71,19 +71,13 @@ def bootstrap() -> EngineRuntime:
     logger.info("default-admin-ensured")
 
     app = create_app(settings, db_factory=db_factory)
-    attach_legacy_bridge(app, settings, logger=logger)
     services = build_service_container(settings, db_factory=db_factory, logger=logger.getChild("services"))
     app.extensions["engine_services"] = services
     register_http_interfaces(app, services)
 
-    legacy_active = bool(app.config.get("ENGINE_LEGACY_BRIDGE_ACTIVE"))
-    if legacy_active:
-        socketio = None
-        logger.info("legacy-ws-deferred")
-    else:
-        socketio = create_socket_server(app, settings.socketio)
-        register_ws_interfaces(socketio, services)
-        services.scheduler_service.start(socketio)
+    socketio = create_socket_server(app, settings.socketio)
+    register_ws_interfaces(socketio, services)
+    services.scheduler_service.start(socketio)
     logger.info("bootstrap-complete")
     return EngineRuntime(
         app=app,

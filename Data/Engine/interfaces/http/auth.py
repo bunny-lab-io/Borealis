@@ -90,6 +90,36 @@ def register(app: Flask, services: EngineServiceContainer) -> None:
         _set_auth_cookie(response, "", expires=0)
         return response
 
+    @bp.route("/api/auth/me", methods=["GET"])
+    def me() -> Any:
+        service = _service(services)
+
+        account = None
+        username = session.get("username")
+        if isinstance(username, str) and username:
+            account = service.fetch_account(username)
+
+        if account is None:
+            token = request.cookies.get("borealis_auth", "")
+            if not token:
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.lower().startswith("bearer "):
+                    token = auth_header.split(None, 1)[1]
+            account = service.resolve_token(token)
+            if account is not None:
+                session["username"] = account.username
+                session["role"] = account.role or "User"
+
+        if account is None:
+            return jsonify({"error": "not_authenticated"}), 401
+
+        payload = {
+            "username": account.username,
+            "display_name": account.display_name or account.username,
+            "role": account.role,
+        }
+        return jsonify(payload)
+
     @bp.route("/api/auth/mfa/verify", methods=["POST"])
     def verify_mfa() -> Any:
         pending = session.get("mfa_pending")

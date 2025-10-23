@@ -20,7 +20,7 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - gracefully degrade when unavailable
     qrcode = None  # type: ignore
 
-from itsdangerous import URLSafeTimedSerializer
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from Data.Engine.builders.operator_auth import (
     OperatorLoginRequest,
@@ -118,6 +118,33 @@ class OperatorAuthService:
         serializer = self._token_serializer()
         payload = {"u": username, "r": role or "User", "ts": int(time.time())}
         return serializer.dumps(payload)
+
+    def resolve_token(self, token: str, *, max_age: int = 30 * 24 * 3600) -> Optional[OperatorAccount]:
+        """Return the account associated with *token* if it is valid."""
+
+        token = (token or "").strip()
+        if not token:
+            return None
+
+        serializer = self._token_serializer()
+        try:
+            payload = serializer.loads(token, max_age=max_age)
+        except (BadSignature, SignatureExpired):
+            return None
+
+        username = str(payload.get("u") or "").strip()
+        if not username:
+            return None
+
+        return self._repository.fetch_by_username(username)
+
+    def fetch_account(self, username: str) -> Optional[OperatorAccount]:
+        """Return the operator account for *username* if it exists."""
+
+        username = (username or "").strip()
+        if not username:
+            return None
+        return self._repository.fetch_by_username(username)
 
     def _finalize_login(self, account: OperatorAccount) -> OperatorLoginSuccess:
         now = int(time.time())
