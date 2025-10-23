@@ -169,11 +169,11 @@ class EnrollmentTokenBundle:
 @dataclass(frozen=True, slots=True)
 class EnrollmentRequestResult:
     status: EnrollmentStatus
+    server_certificate: str
+    signing_key: str
     approval_reference: Optional[str] = None
     server_nonce: Optional[str] = None
     poll_after_ms: Optional[int] = None
-    server_certificate: str
-    signing_key: str
     http_status: int = 200
     retry_after: Optional[float] = None
 
