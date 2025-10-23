@@ -8,11 +8,29 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional
 
+from dataclasses import dataclass
+
+from Data.Engine.domain.device_auth import DeviceGuid, normalize_guid
+from Data.Engine.domain.device_enrollment import EnrollmentApprovalStatus
 from Data.Engine.domain.enrollment_admin import DeviceApprovalRecord, EnrollmentCodeRecord
 from Data.Engine.repositories.sqlite.enrollment_repository import SQLiteEnrollmentRepository
 from Data.Engine.repositories.sqlite.user_repository import SQLiteUserRepository
 
-__all__ = ["EnrollmentAdminService"]
+__all__ = ["EnrollmentAdminService", "DeviceApprovalActionResult"]
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceApprovalActionResult:
+    """Outcome metadata returned after mutating an approval."""
+
+    status: str
+    conflict_resolution: Optional[str] = None
+
+    def to_dict(self) -> dict[str, str]:
+        payload = {"status": self.status}
+        if self.conflict_resolution:
+            payload["conflict_resolution"] = self.conflict_resolution
+        return payload
 
 
 class EnrollmentAdminService:
@@ -91,6 +109,36 @@ class EnrollmentAdminService:
     def list_device_approvals(self, *, status: Optional[str] = None) -> List[DeviceApprovalRecord]:
         return self._repository.list_device_approvals(status=status)
 
+    def approve_device_approval(
+        self,
+        record_id: str,
+        *,
+        actor: Optional[str],
+        guid: Optional[str] = None,
+        conflict_resolution: Optional[str] = None,
+    ) -> DeviceApprovalActionResult:
+        return self._set_device_approval_status(
+            record_id,
+            EnrollmentApprovalStatus.APPROVED,
+            actor=actor,
+            guid=guid,
+            conflict_resolution=conflict_resolution,
+        )
+
+    def deny_device_approval(
+        self,
+        record_id: str,
+        *,
+        actor: Optional[str],
+    ) -> DeviceApprovalActionResult:
+        return self._set_device_approval_status(
+            record_id,
+            EnrollmentApprovalStatus.DENIED,
+            actor=actor,
+            guid=None,
+            conflict_resolution=None,
+        )
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -110,4 +158,88 @@ class EnrollmentAdminService:
         if count > 10:
             return 10
         return count
+
+    def _set_device_approval_status(
+        self,
+        record_id: str,
+        status: EnrollmentApprovalStatus,
+        *,
+        actor: Optional[str],
+        guid: Optional[str],
+        conflict_resolution: Optional[str],
+    ) -> DeviceApprovalActionResult:
+        approval = self._repository.fetch_device_approval(record_id)
+        if approval is None:
+            raise LookupError("not_found")
+
+        if approval.status is not EnrollmentApprovalStatus.PENDING:
+            raise ValueError("approval_not_pending")
+
+        normalized_guid = normalize_guid(guid) or (approval.guid.value if approval.guid else "")
+        resolution_normalized = (conflict_resolution or "").strip().lower() or None
+
+        fingerprint_match = False
+        conflict_guid: Optional[str] = None
+
+        if status is EnrollmentApprovalStatus.APPROVED:
+            pending_records = self._repository.list_device_approvals(status="pending")
+            current_record = next(
+                (record for record in pending_records if record.record_id == approval.record_id),
+                None,
+            )
+
+            conflict = current_record.hostname_conflict if current_record else None
+            if conflict:
+                conflict_guid = normalize_guid(conflict.guid)
+                fingerprint_match = bool(conflict.fingerprint_match)
+
+                if fingerprint_match:
+                    normalized_guid = conflict_guid or normalized_guid or ""
+                    if resolution_normalized is None:
+                        resolution_normalized = "auto_merge_fingerprint"
+                elif resolution_normalized == "overwrite":
+                    normalized_guid = conflict_guid or normalized_guid or ""
+                elif resolution_normalized == "coexist":
+                    pass
+                else:
+                    raise ValueError("conflict_resolution_required")
+
+        if normalized_guid:
+            try:
+                guid_value = DeviceGuid(normalized_guid)
+            except ValueError as exc:
+                raise ValueError("invalid_guid") from exc
+        else:
+            guid_value = None
+
+        actor_identifier = None
+        if actor:
+            actor_identifier = self._users.resolve_identifier(actor)
+            if not actor_identifier:
+                actor_identifier = actor.strip() or None
+        if not actor_identifier:
+            actor_identifier = "system"
+
+        self._repository.update_device_approval_status(
+            approval.record_id,
+            status=status,
+            updated_at=self._clock(),
+            approved_by=actor_identifier,
+            guid=guid_value,
+        )
+
+        if status is EnrollmentApprovalStatus.APPROVED:
+            self._log.info(
+                "device approval %s approved resolution=%s guid=%s",
+                approval.record_id,
+                resolution_normalized or "",
+                guid_value.value if guid_value else normalized_guid or "",
+            )
+        else:
+            self._log.info("device approval %s denied", approval.record_id)
+
+        return DeviceApprovalActionResult(
+            status=status.value,
+            conflict_resolution=resolution_normalized,
+        )
 

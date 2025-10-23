@@ -19,6 +19,8 @@ from . import (
     sites,
     devices,
     credentials,
+    assemblies,
+    server_info,
 )
 
 _REGISTRARS = (
@@ -34,6 +36,8 @@ _REGISTRARS = (
     sites.register,
     devices.register,
     credentials.register,
+    assemblies.register,
+    server_info.register,
 )
 
 

@@ -113,4 +113,61 @@ def list_device_approvals() -> object:
     return jsonify({"approvals": [record.to_dict() for record in records]})
 
 
+@blueprint.route("/device-approvals/<approval_id>/approve", methods=["POST"])
+def approve_device_approval(approval_id: str) -> object:
+    guard = _require_admin()
+    if guard:
+        return guard
+
+    payload = request.get_json(silent=True) or {}
+    guid = payload.get("guid")
+    resolution_raw = payload.get("conflict_resolution") or payload.get("resolution")
+    resolution = resolution_raw.strip().lower() if isinstance(resolution_raw, str) else None
+
+    actor = session.get("username") if isinstance(session.get("username"), str) else None
+
+    try:
+        result = _admin_service().approve_device_approval(
+            approval_id,
+            actor=actor,
+            guid=guid,
+            conflict_resolution=resolution,
+        )
+    except LookupError:
+        return jsonify({"error": "not_found"}), 404
+    except ValueError as exc:
+        code = str(exc)
+        if code == "approval_not_pending":
+            return jsonify({"error": "approval_not_pending"}), 409
+        if code == "conflict_resolution_required":
+            return jsonify({"error": "conflict_resolution_required"}), 409
+        if code == "invalid_guid":
+            return jsonify({"error": "invalid_guid"}), 400
+        raise
+
+    response = jsonify(result.to_dict())
+    response.status_code = 200
+    return response
+
+
+@blueprint.route("/device-approvals/<approval_id>/deny", methods=["POST"])
+def deny_device_approval(approval_id: str) -> object:
+    guard = _require_admin()
+    if guard:
+        return guard
+
+    actor = session.get("username") if isinstance(session.get("username"), str) else None
+
+    try:
+        result = _admin_service().deny_device_approval(approval_id, actor=actor)
+    except LookupError:
+        return jsonify({"error": "not_found"}), 404
+    except ValueError as exc:
+        if str(exc) == "approval_not_pending":
+            return jsonify({"error": "approval_not_pending"}), 409
+        raise
+
+    return jsonify(result.to_dict())
+
+
 __all__ = ["register", "blueprint"]

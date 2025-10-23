@@ -44,6 +44,7 @@ from Data.Engine.services.jobs import SchedulerService
 from Data.Engine.services.rate_limit import SlidingWindowRateLimiter
 from Data.Engine.services.realtime import AgentRealtimeService
 from Data.Engine.services.sites import SiteService
+from Data.Engine.services.assemblies import AssemblyService
 
 __all__ = ["EngineServiceContainer", "build_service_container"]
 
@@ -65,6 +66,7 @@ class EngineServiceContainer:
     github_service: GitHubService
     operator_auth_service: OperatorAuthService
     operator_account_service: OperatorAccountService
+    assembly_service: AssemblyService
 
 
 def build_service_container(
@@ -167,6 +169,11 @@ def build_service_container(
         logger=log.getChild("sites"),
     )
 
+    assembly_service = AssemblyService(
+        root=settings.project_root / "Assemblies",
+        logger=log.getChild("assemblies"),
+    )
+
     github_provider = GitHubArtifactProvider(
         cache_file=settings.github.cache_file,
         default_repo=settings.github.default_repo,
@@ -197,6 +204,7 @@ def build_service_container(
         device_view_service=device_view_service,
         credential_service=credential_service,
         site_service=site_service,
+        assembly_service=assembly_service,
     )
 
 

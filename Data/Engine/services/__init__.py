@@ -28,6 +28,10 @@ __all__ = [
     "DeviceInventoryService",
     "DeviceViewService",
     "CredentialService",
+    "AssemblyService",
+    "AssemblyListing",
+    "AssemblyLoadResult",
+    "AssemblyMutationResult",
 ]
 
 _LAZY_TARGETS: Dict[str, Tuple[str, str]] = {
@@ -64,6 +68,22 @@ _LAZY_TARGETS: Dict[str, Tuple[str, str]] = {
     "CredentialService": (
         "Data.Engine.services.credentials.credential_service",
         "CredentialService",
+    ),
+    "AssemblyService": (
+        "Data.Engine.services.assemblies.assembly_service",
+        "AssemblyService",
+    ),
+    "AssemblyListing": (
+        "Data.Engine.services.assemblies.assembly_service",
+        "AssemblyListing",
+    ),
+    "AssemblyLoadResult": (
+        "Data.Engine.services.assemblies.assembly_service",
+        "AssemblyLoadResult",
+    ),
+    "AssemblyMutationResult": (
+        "Data.Engine.services.assemblies.assembly_service",
+        "AssemblyMutationResult",
     ),
 }
 
