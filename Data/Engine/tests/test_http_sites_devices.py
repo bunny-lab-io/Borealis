@@ -1,0 +1,108 @@
+import sqlite3
+from datetime import datetime, timezone
+
+import pytest
+
+pytest.importorskip("flask")
+
+from .test_http_auth import _login, prepared_app, engine_settings
+
+
+def _ensure_admin_session(client):
+    _login(client)
+
+
+def test_sites_crud_flow(prepared_app):
+    client = prepared_app.test_client()
+    _ensure_admin_session(client)
+
+    resp = client.get("/api/sites")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"sites": []}
+
+    create = client.post("/api/sites", json={"name": "HQ", "description": "Primary"})
+    assert create.status_code == 201
+    created = create.get_json()
+    assert created["name"] == "HQ"
+
+    listing = client.get("/api/sites")
+    sites = listing.get_json()["sites"]
+    assert len(sites) == 1
+
+    resp = client.post("/api/sites/assign", json={"site_id": created["id"], "hostnames": ["device-1"]})
+    assert resp.status_code == 200
+
+    mapping = client.get("/api/sites/device_map?hostnames=device-1")
+    data = mapping.get_json()["mapping"]
+    assert data["device-1"]["site_id"] == created["id"]
+
+    rename = client.post("/api/sites/rename", json={"id": created["id"], "new_name": "Main"})
+    assert rename.status_code == 200
+    assert rename.get_json()["name"] == "Main"
+
+    delete = client.post("/api/sites/delete", json={"ids": [created["id"]]})
+    assert delete.status_code == 200
+    assert delete.get_json()["deleted"] == 1
+
+
+def test_devices_listing(prepared_app, engine_settings):
+    client = prepared_app.test_client()
+    _ensure_admin_session(client)
+
+    now = datetime.now(tz=timezone.utc)
+    conn = sqlite3.connect(engine_settings.database.path)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO devices (
+            guid,
+            hostname,
+            description,
+            created_at,
+            agent_hash,
+            last_seen,
+            connection_type,
+            connection_endpoint
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "11111111-1111-1111-1111-111111111111",
+            "test-device",
+            "Test Device",
+            int(now.timestamp()),
+            "hashvalue",
+            int(now.timestamp()),
+            "",
+            "",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = client.get("/api/devices")
+    assert resp.status_code == 200
+    devices = resp.get_json()["devices"]
+    assert any(device["hostname"] == "test-device" for device in devices)
+
+
+def test_agent_hash_list_requires_local_request(prepared_app):
+    client = prepared_app.test_client()
+    _ensure_admin_session(client)
+
+    resp = client.get("/api/agent/hash_list", environ_overrides={"REMOTE_ADDR": "203.0.113.5"})
+    assert resp.status_code == 403
+
+    resp = client.get("/api/agent/hash_list", environ_overrides={"REMOTE_ADDR": "127.0.0.1"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"agents": []}
+
+
+def test_credentials_list_requires_admin(prepared_app):
+    client = prepared_app.test_client()
+    resp = client.get("/api/credentials")
+    assert resp.status_code == 401
+
+    _ensure_admin_session(client)
+    resp = client.get("/api/credentials")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"credentials": []}

@@ -24,6 +24,10 @@ __all__ = [
     "GitHubService",
     "GitHubTokenPayload",
     "EnrollmentAdminService",
+    "SiteService",
+    "DeviceInventoryService",
+    "DeviceViewService",
+    "CredentialService",
 ]
 
 _LAZY_TARGETS: Dict[str, Tuple[str, str]] = {
@@ -47,6 +51,19 @@ _LAZY_TARGETS: Dict[str, Tuple[str, str]] = {
     "EnrollmentAdminService": (
         "Data.Engine.services.enrollment.admin_service",
         "EnrollmentAdminService",
+    ),
+    "SiteService": ("Data.Engine.services.sites.site_service", "SiteService"),
+    "DeviceInventoryService": (
+        "Data.Engine.services.devices.device_inventory_service",
+        "DeviceInventoryService",
+    ),
+    "DeviceViewService": (
+        "Data.Engine.services.devices.device_view_service",
+        "DeviceViewService",
+    ),
+    "CredentialService": (
+        "Data.Engine.services.credentials.credential_service",
+        "CredentialService",
     ),
 }
 
