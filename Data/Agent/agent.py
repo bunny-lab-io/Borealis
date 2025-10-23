@@ -37,6 +37,7 @@ import aiohttp
 import socketio
 from security import AgentKeyStore
 from signature_utils import decode_script_bytes as _decode_script_bytes, verify_and_store_script_signature as _verify_and_store_script_signature
+from Data.Agent.services.device_inventory import DeviceInventoryCollector
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -2382,314 +2383,43 @@ async def poll_script_requests():
         await asyncio.sleep(30)
 
 # ---------------- Detailed Agent Data ----------------
-## Moved to agent_info module
 
-def collect_summary():
-    # migrated to role_DeviceInventory
-    return {}
+_inventory_collector: Optional[DeviceInventoryCollector] = None
 
-def collect_software():
-    # migrated to role_DeviceInventory
-    return []
 
-def collect_memory():
-    # migrated to role_DeviceInventory
-    entries = []
-    plat = platform.system().lower()
-    try:
-        if plat == "windows":
-            try:
-                out = subprocess.run(
-                    ["wmic", "memorychip", "get", "BankLabel,Speed,SerialNumber,Capacity"],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                lines = [l for l in out.stdout.splitlines() if l.strip() and "BankLabel" not in l]
-                for line in lines:
-                    parts = [p for p in line.split() if p]
-                    if len(parts) >= 4:
-                        entries.append({
-                            "slot": parts[0],
-                            "speed": parts[1],
-                            "serial": parts[2],
-                            "capacity": parts[3],
-                        })
-            except FileNotFoundError:
-                ps_cmd = (
-                    "Get-CimInstance Win32_PhysicalMemory | "
-                    "Select-Object BankLabel,Speed,SerialNumber,Capacity | ConvertTo-Json"
-                )
-                out = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", ps_cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                data = json.loads(out.stdout or "[]")
-                if isinstance(data, dict):
-                    data = [data]
-                for stick in data:
-                    entries.append({
-                        "slot": stick.get("BankLabel", "unknown"),
-                        "speed": str(stick.get("Speed", "unknown")),
-                        "serial": stick.get("SerialNumber", "unknown"),
-                        "capacity": stick.get("Capacity", "unknown"),
-                    })
-        elif plat == "linux":
-            out = subprocess.run(["dmidecode", "-t", "17"], capture_output=True, text=True)
-            slot = speed = serial = capacity = None
-            for line in out.stdout.splitlines():
-                line = line.strip()
-                if line.startswith("Locator:"):
-                    slot = line.split(":", 1)[1].strip()
-                elif line.startswith("Speed:"):
-                    speed = line.split(":", 1)[1].strip()
-                elif line.startswith("Serial Number:"):
-                    serial = line.split(":", 1)[1].strip()
-                elif line.startswith("Size:"):
-                    capacity = line.split(":", 1)[1].strip()
-                elif not line and slot:
-                    entries.append({
-                        "slot": slot,
-                        "speed": speed or "unknown",
-                        "serial": serial or "unknown",
-                        "capacity": capacity or "unknown",
-                    })
-                    slot = speed = serial = capacity = None
-            if slot:
-                entries.append({
-                    "slot": slot,
-                    "speed": speed or "unknown",
-                    "serial": serial or "unknown",
-                    "capacity": capacity or "unknown",
-                })
-    except Exception as e:
-        print(f"[WARN] collect_memory failed: {e}")
+def _inventory_collector_instance() -> DeviceInventoryCollector:
+    global _inventory_collector
+    if _inventory_collector is None:
+        _inventory_collector = DeviceInventoryCollector(CONFIG)
+    return _inventory_collector
 
-    if not entries:
-        try:
-            if psutil:
-                vm = psutil.virtual_memory()
-                entries.append({
-                    "slot": "physical",
-                    "speed": "unknown",
-                    "serial": "unknown",
-                    "capacity": vm.total,
-                })
-        except Exception:
-            pass
-    return entries
 
-def collect_storage():
-    # migrated to role_DeviceInventory
-    disks = []
-    plat = platform.system().lower()
-    try:
-        if psutil:
-            for part in psutil.disk_partitions():
-                try:
-                    usage = psutil.disk_usage(part.mountpoint)
-                except Exception:
-                    continue
-                disks.append({
-                    "drive": part.device,
-                    "disk_type": "Removable" if "removable" in part.opts.lower() else "Fixed Disk",
-                    "usage": usage.percent,
-                    "total": usage.total,
-                    "free": usage.free,
-                    "used": usage.used,
-                })
-        elif plat == "windows":
-            found = False
-            for letter in string.ascii_uppercase:
-                drive = f"{letter}:\\"
-                if os.path.exists(drive):
-                    try:
-                        usage = shutil.disk_usage(drive)
-                    except Exception:
-                        continue
-                    disks.append({
-                        "drive": drive,
-                        "disk_type": "Fixed Disk",
-                        "usage": (usage.used / usage.total * 100) if usage.total else 0,
-                        "total": usage.total,
-                        "free": usage.free,
-                        "used": usage.used,
-                    })
-                    found = True
-            if not found:
-                try:
-                    out = subprocess.run(
-                        ["wmic", "logicaldisk", "get", "DeviceID,Size,FreeSpace"],
-                        capture_output=True,
-                        text=True,
-                        timeout=60,
-                    )
-                    lines = [l for l in out.stdout.splitlines() if l.strip()][1:]
-                    for line in lines:
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            drive, free, size = parts[0], parts[1], parts[2]
-                            try:
-                                total = float(size)
-                                free_bytes = float(free)
-                                used = total - free_bytes
-                                usage = (used / total * 100) if total else 0
-                                disks.append({
-                                    "drive": drive,
-                                    "disk_type": "Fixed Disk",
-                                    "usage": usage,
-                                    "total": total,
-                                    "free": free_bytes,
-                                    "used": used,
-                                })
-                            except Exception:
-                                pass
-                except FileNotFoundError:
-                    ps_cmd = (
-                        "Get-PSDrive -PSProvider FileSystem | "
-                        "Select-Object Name,Free,Used,Capacity,Root | ConvertTo-Json"
-                    )
-                    out = subprocess.run(
-                        ["powershell", "-NoProfile", "-Command", ps_cmd],
-                        capture_output=True,
-                        text=True,
-                        timeout=60,
-                    )
-                    data = json.loads(out.stdout or "[]")
-                    if isinstance(data, dict):
-                        data = [data]
-                    for d in data:
-                        total = d.get("Capacity") or 0
-                        used = d.get("Used") or 0
-                        free_bytes = d.get("Free") or max(total - used, 0)
-                        usage = (used / total * 100) if total else 0
-                        drive = d.get("Root") or f"{d.get('Name','')}:"
-                        disks.append({
-                            "drive": drive,
-                            "disk_type": "Fixed Disk",
-                            "usage": usage,
-                            "total": total,
-                            "free": free_bytes,
-                            "used": used,
-                        })
-        else:
-            out = subprocess.run(
-                ["df", "-kP"], capture_output=True, text=True, timeout=60
-            )
-            lines = out.stdout.strip().splitlines()[1:]
-            for line in lines:
-                parts = line.split()
-                if len(parts) >= 6:
-                    total = int(parts[1]) * 1024
-                    used = int(parts[2]) * 1024
-                    free_bytes = int(parts[3]) * 1024
-                    usage = float(parts[4].rstrip("%"))
-                    disks.append({
-                        "drive": parts[5],
-                        "disk_type": "Fixed Disk",
-                        "usage": usage,
-                        "total": total,
-                        "free": free_bytes,
-                        "used": used,
-                    })
-    except Exception as e:
-        print(f"[WARN] collect_storage failed: {e}")
-    return disks
+async def send_agent_details() -> None:
+    """Collect detailed agent data and send to the Engine periodically."""
 
-def collect_network():
-    # migrated to role_DeviceInventory
-    adapters = []
-    plat = platform.system().lower()
-    try:
-        if psutil:
-            for name, addrs in psutil.net_if_addrs().items():
-                ips = [a.address for a in addrs if getattr(a, "family", None) == socket.AF_INET]
-                mac = next((a.address for a in addrs if getattr(a, "family", None) == getattr(psutil, "AF_LINK", object)), "unknown")
-                adapters.append({"adapter": name, "ips": ips, "mac": mac})
-        elif plat == "windows":
-            ps_cmd = (
-                "Get-NetIPConfiguration | "
-                "Select-Object InterfaceAlias,@{Name='IPv4';Expression={$_.IPv4Address.IPAddress}},"
-                "@{Name='MAC';Expression={$_.NetAdapter.MacAddress}} | ConvertTo-Json"
-            )
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_cmd],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            data = json.loads(out.stdout or "[]")
-            if isinstance(data, dict):
-                data = [data]
-            for a in data:
-                ip = a.get("IPv4")
-                adapters.append({
-                    "adapter": a.get("InterfaceAlias", "unknown"),
-                    "ips": [ip] if ip else [],
-                    "mac": a.get("MAC", "unknown"),
-                })
-        else:
-            out = subprocess.run(
-                ["ip", "-o", "-4", "addr", "show"],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            for line in out.stdout.splitlines():
-                parts = line.split()
-                if len(parts) >= 4:
-                    name = parts[1]
-                    ip = parts[3].split("/")[0]
-                    adapters.append({"adapter": name, "ips": [ip], "mac": "unknown"})
-    except Exception as e:
-        print(f"[WARN] collect_network failed: {e}")
-    return adapters
-
-async def send_agent_details():
-    """Collect detailed agent data and send to server periodically."""
+    interval = 300
     while True:
         try:
-            details = {
-                "summary": collect_summary(),
-                "software": collect_software(),
-                "memory": collect_memory(),
-                "storage": collect_storage(),
-                "network": collect_network(),
-            }
-            payload = {
-                "agent_id": AGENT_ID,
-                "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
-                "details": details,
-            }
+            collector = _inventory_collector_instance()
+            payload = collector.build_payload(AGENT_ID)
             client = http_client()
             await client.async_post_json("/api/agent/details", payload, require_auth=True)
             _log_agent('Posted agent details to server.')
-        except Exception as e:
-            print(f"[WARN] Failed to send agent details: {e}")
-            _log_agent(f'Failed to send agent details: {e}', fname='agent.error.log')
-        await asyncio.sleep(300)
+        except Exception as exc:
+            print(f"[WARN] Failed to send agent details: {exc}")
+            _log_agent(f'Failed to send agent details: {exc}', fname='agent.error.log')
+        await asyncio.sleep(interval)
 
-async def send_agent_details_once():
+
+async def send_agent_details_once() -> None:
+    collector = _inventory_collector_instance()
     try:
-        details = {
-            "summary": collect_summary(),
-            "software": collect_software(),
-            "memory": collect_memory(),
-            "storage": collect_storage(),
-            "network": collect_network(),
-        }
-        payload = {
-            "agent_id": AGENT_ID,
-            "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
-            "details": details,
-        }
+        payload = collector.build_payload(AGENT_ID)
         client = http_client()
         await client.async_post_json("/api/agent/details", payload, require_auth=True)
         _log_agent('Posted agent details (once) to server.')
-    except Exception as e:
-        _log_agent(f'Failed to post agent details once: {e}', fname='agent.error.log')
+    except Exception as exc:
+        _log_agent(f'Failed to post agent details once: {exc}', fname='agent.error.log')
 
 @sio.event
 async def connect():
@@ -2721,7 +2451,9 @@ async def connect():
         _log_agent(f'Initial REST heartbeat failed: {exc}', fname='agent.error.log')
 
     await sio.emit('request_config', {"agent_id": AGENT_ID})
-    # Inventory details posting is managed by the DeviceAudit role (SYSTEM). No one-shot post here.
+    if not SYSTEM_SERVICE_MODE:
+        await send_agent_details_once()
+
     # Fire-and-forget service account check-in so server can provision WinRM credentials
     try:
         async def _svc_checkin_once():
@@ -3179,9 +2911,9 @@ if __name__=='__main__':
         # Start periodic heartbeats
         background_tasks.append(loop.create_task(send_heartbeat()))
         background_tasks.append(loop.create_task(poll_script_requests()))
-        # Inventory upload is handled by the DeviceAudit role running in SYSTEM context.
-        # Do not schedule the legacy agent-level details poster to avoid duplicates.
-        
+        if not SYSTEM_SERVICE_MODE:
+            background_tasks.append(loop.create_task(send_agent_details()))
+
         # Register unified Quick Job handler last to avoid role override issues
         @sio.on('quick_job_run')
         async def _quick_job_dispatch(payload):
