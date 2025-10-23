@@ -114,10 +114,15 @@ def _resolve_static_root(project_root: Path) -> Path:
     candidates = (
         project_root / "Engine" / "web-interface" / "build",
         project_root / "Engine" / "web-interface" / "dist",
+        project_root / "Engine" / "web-interface",
         project_root / "Data" / "Engine" / "WebUI" / "build",
+        project_root / "Data" / "Engine" / "WebUI",
         project_root / "Data" / "Server" / "web-interface" / "build",
+        project_root / "Data" / "Server" / "web-interface",
         project_root / "Data" / "Server" / "WebUI" / "build",
+        project_root / "Data" / "Server" / "WebUI",
         project_root / "Data" / "WebUI" / "build",
+        project_root / "Data" / "WebUI",
     )
     for path in candidates:
         resolved = path.resolve()
