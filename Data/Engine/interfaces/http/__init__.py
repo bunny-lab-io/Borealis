@@ -6,16 +6,40 @@ from flask import Flask
 
 from Data.Engine.services.container import EngineServiceContainer
 
-from . import admin, agents, enrollment, github, health, job_management, tokens
+from . import (
+    admin,
+    agent,
+    agents,
+    auth,
+    enrollment,
+    github,
+    health,
+    job_management,
+    tokens,
+    users,
+    sites,
+    devices,
+    credentials,
+    assemblies,
+    server_info,
+)
 
 _REGISTRARS = (
     health.register,
+    agent.register,
     agents.register,
     enrollment.register,
     tokens.register,
     job_management.register,
     github.register,
+    auth.register,
     admin.register,
+    users.register,
+    sites.register,
+    devices.register,
+    credentials.register,
+    assemblies.register,
+    server_info.register,
 )
 
 

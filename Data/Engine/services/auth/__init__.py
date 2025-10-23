@@ -11,6 +11,26 @@ from .token_service import (
     TokenRefreshErrorCode,
     TokenService,
 )
+from .operator_account_service import (
+    AccountNotFoundError,
+    CannotModifySelfError,
+    InvalidPasswordHashError,
+    InvalidRoleError,
+    LastAdminError,
+    LastUserError,
+    OperatorAccountError,
+    OperatorAccountRecord,
+    OperatorAccountService,
+    UsernameAlreadyExistsError,
+)
+from .operator_auth_service import (
+    InvalidCredentialsError,
+    InvalidMFACodeError,
+    MFAUnavailableError,
+    MFASessionError,
+    OperatorAuthError,
+    OperatorAuthService,
+)
 
 __all__ = [
     "DeviceAuthService",
@@ -24,4 +44,20 @@ __all__ = [
     "TokenRefreshError",
     "TokenRefreshErrorCode",
     "TokenService",
+    "OperatorAccountService",
+    "OperatorAccountError",
+    "OperatorAccountRecord",
+    "UsernameAlreadyExistsError",
+    "AccountNotFoundError",
+    "LastAdminError",
+    "LastUserError",
+    "CannotModifySelfError",
+    "InvalidRoleError",
+    "InvalidPasswordHashError",
+    "OperatorAuthService",
+    "OperatorAuthError",
+    "InvalidCredentialsError",
+    "InvalidMFACodeError",
+    "MFAUnavailableError",
+    "MFASessionError",
 ]

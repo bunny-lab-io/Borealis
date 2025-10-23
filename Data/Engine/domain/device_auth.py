@@ -18,6 +18,7 @@ __all__ = [
     "AccessTokenClaims",
     "DeviceAuthContext",
     "sanitize_service_context",
+    "normalize_guid",
 ]
 
 
@@ -71,6 +72,12 @@ class DeviceGuid:
 
     def __str__(self) -> str:
         return self.value
+
+
+def normalize_guid(value: Optional[str]) -> str:
+    """Expose GUID normalization for administrative helpers."""
+
+    return _normalize_guid(value)
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,12 +8,22 @@ from .device_auth import (
     RefreshTokenRequest,
     RefreshTokenRequestBuilder,
 )
+from .operator_auth import (
+    OperatorLoginRequest,
+    OperatorMFAVerificationRequest,
+    build_login_request,
+    build_mfa_request,
+)
 
 __all__ = [
     "DeviceAuthRequest",
     "DeviceAuthRequestBuilder",
     "RefreshTokenRequest",
     "RefreshTokenRequestBuilder",
+    "OperatorLoginRequest",
+    "OperatorMFAVerificationRequest",
+    "build_login_request",
+    "build_mfa_request",
 ]
 
 try:  # pragma: no cover - optional dependency shim

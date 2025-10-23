@@ -23,6 +23,15 @@ __all__ = [
     "SchedulerService",
     "GitHubService",
     "GitHubTokenPayload",
+    "EnrollmentAdminService",
+    "SiteService",
+    "DeviceInventoryService",
+    "DeviceViewService",
+    "CredentialService",
+    "AssemblyService",
+    "AssemblyListing",
+    "AssemblyLoadResult",
+    "AssemblyMutationResult",
 ]
 
 _LAZY_TARGETS: Dict[str, Tuple[str, str]] = {
@@ -43,6 +52,39 @@ _LAZY_TARGETS: Dict[str, Tuple[str, str]] = {
     "SchedulerService": ("Data.Engine.services.jobs.scheduler_service", "SchedulerService"),
     "GitHubService": ("Data.Engine.services.github.github_service", "GitHubService"),
     "GitHubTokenPayload": ("Data.Engine.services.github.github_service", "GitHubTokenPayload"),
+    "EnrollmentAdminService": (
+        "Data.Engine.services.enrollment.admin_service",
+        "EnrollmentAdminService",
+    ),
+    "SiteService": ("Data.Engine.services.sites.site_service", "SiteService"),
+    "DeviceInventoryService": (
+        "Data.Engine.services.devices.device_inventory_service",
+        "DeviceInventoryService",
+    ),
+    "DeviceViewService": (
+        "Data.Engine.services.devices.device_view_service",
+        "DeviceViewService",
+    ),
+    "CredentialService": (
+        "Data.Engine.services.credentials.credential_service",
+        "CredentialService",
+    ),
+    "AssemblyService": (
+        "Data.Engine.services.assemblies.assembly_service",
+        "AssemblyService",
+    ),
+    "AssemblyListing": (
+        "Data.Engine.services.assemblies.assembly_service",
+        "AssemblyListing",
+    ),
+    "AssemblyLoadResult": (
+        "Data.Engine.services.assemblies.assembly_service",
+        "AssemblyLoadResult",
+    ),
+    "AssemblyMutationResult": (
+        "Data.Engine.services.assemblies.assembly_service",
+        "AssemblyMutationResult",
+    ),
 }
 
 

@@ -13,25 +13,38 @@ from Data.Engine.integrations.github import GitHubArtifactProvider
 from Data.Engine.repositories.sqlite import (
     SQLiteConnectionFactory,
     SQLiteDeviceRepository,
+    SQLiteDeviceInventoryRepository,
+    SQLiteDeviceViewRepository,
+    SQLiteCredentialRepository,
     SQLiteEnrollmentRepository,
     SQLiteGitHubRepository,
     SQLiteJobRepository,
     SQLiteRefreshTokenRepository,
+    SQLiteSiteRepository,
+    SQLiteUserRepository,
 )
 from Data.Engine.services.auth import (
     DeviceAuthService,
     DPoPValidator,
+    OperatorAccountService,
+    OperatorAuthService,
     JWTService,
     TokenService,
     load_jwt_service,
 )
 from Data.Engine.services.crypto.signing import ScriptSigner, load_signer
 from Data.Engine.services.enrollment import EnrollmentService
+from Data.Engine.services.enrollment.admin_service import EnrollmentAdminService
 from Data.Engine.services.enrollment.nonce_cache import NonceCache
+from Data.Engine.services.devices import DeviceInventoryService
+from Data.Engine.services.devices import DeviceViewService
+from Data.Engine.services.credentials import CredentialService
 from Data.Engine.services.github import GitHubService
 from Data.Engine.services.jobs import SchedulerService
 from Data.Engine.services.rate_limit import SlidingWindowRateLimiter
 from Data.Engine.services.realtime import AgentRealtimeService
+from Data.Engine.services.sites import SiteService
+from Data.Engine.services.assemblies import AssemblyService
 
 __all__ = ["EngineServiceContainer", "build_service_container"]
 
@@ -39,13 +52,22 @@ __all__ = ["EngineServiceContainer", "build_service_container"]
 @dataclass(frozen=True, slots=True)
 class EngineServiceContainer:
     device_auth: DeviceAuthService
+    device_inventory: DeviceInventoryService
+    device_view_service: DeviceViewService
+    credential_service: CredentialService
     token_service: TokenService
     enrollment_service: EnrollmentService
+    enrollment_admin_service: EnrollmentAdminService
+    site_service: SiteService
     jwt_service: JWTService
     dpop_validator: DPoPValidator
     agent_realtime: AgentRealtimeService
     scheduler_service: SchedulerService
     github_service: GitHubService
+    operator_auth_service: OperatorAuthService
+    operator_account_service: OperatorAccountService
+    assembly_service: AssemblyService
+    script_signer: Optional[ScriptSigner]
 
 
 def build_service_container(
@@ -57,10 +79,21 @@ def build_service_container(
     log = logger or logging.getLogger("borealis.engine.services")
 
     device_repo = SQLiteDeviceRepository(db_factory, logger=log.getChild("devices"))
+    device_inventory_repo = SQLiteDeviceInventoryRepository(
+        db_factory, logger=log.getChild("devices.inventory")
+    )
+    device_view_repo = SQLiteDeviceViewRepository(
+        db_factory, logger=log.getChild("devices.views")
+    )
+    credential_repo = SQLiteCredentialRepository(
+        db_factory, logger=log.getChild("credentials.repo")
+    )
     token_repo = SQLiteRefreshTokenRepository(db_factory, logger=log.getChild("tokens"))
     enrollment_repo = SQLiteEnrollmentRepository(db_factory, logger=log.getChild("enrollment"))
     job_repo = SQLiteJobRepository(db_factory, logger=log.getChild("jobs"))
     github_repo = SQLiteGitHubRepository(db_factory, logger=log.getChild("github_repo"))
+    site_repo = SQLiteSiteRepository(db_factory, logger=log.getChild("sites.repo"))
+    user_repo = SQLiteUserRepository(db_factory, logger=log.getChild("users"))
 
     jwt_service = load_jwt_service()
     dpop_validator = DPoPValidator()
@@ -74,6 +107,8 @@ def build_service_container(
         logger=log.getChild("token_service"),
     )
 
+    script_signer = _load_script_signer(log)
+
     enrollment_service = EnrollmentService(
         device_repository=device_repo,
         enrollment_repository=enrollment_repo,
@@ -83,8 +118,14 @@ def build_service_container(
         ip_rate_limiter=SlidingWindowRateLimiter(),
         fingerprint_rate_limiter=SlidingWindowRateLimiter(),
         nonce_cache=NonceCache(),
-        script_signer=_load_script_signer(log),
+        script_signer=script_signer,
         logger=log.getChild("enrollment"),
+    )
+
+    enrollment_admin_service = EnrollmentAdminService(
+        repository=enrollment_repo,
+        user_repository=user_repo,
+        logger=log.getChild("enrollment_admin"),
     )
 
     device_auth = DeviceAuthService(
@@ -106,6 +147,36 @@ def build_service_container(
         logger=log.getChild("scheduler"),
     )
 
+    operator_auth_service = OperatorAuthService(
+        repository=user_repo,
+        logger=log.getChild("operator_auth"),
+    )
+    operator_account_service = OperatorAccountService(
+        repository=user_repo,
+        logger=log.getChild("operator_accounts"),
+    )
+    device_inventory = DeviceInventoryService(
+        repository=device_inventory_repo,
+        logger=log.getChild("device_inventory"),
+    )
+    device_view_service = DeviceViewService(
+        repository=device_view_repo,
+        logger=log.getChild("device_views"),
+    )
+    credential_service = CredentialService(
+        repository=credential_repo,
+        logger=log.getChild("credentials"),
+    )
+    site_service = SiteService(
+        repository=site_repo,
+        logger=log.getChild("sites"),
+    )
+
+    assembly_service = AssemblyService(
+        root=settings.project_root / "Assemblies",
+        logger=log.getChild("assemblies"),
+    )
+
     github_provider = GitHubArtifactProvider(
         cache_file=settings.github.cache_file,
         default_repo=settings.github.default_repo,
@@ -124,11 +195,20 @@ def build_service_container(
         device_auth=device_auth,
         token_service=token_service,
         enrollment_service=enrollment_service,
+        enrollment_admin_service=enrollment_admin_service,
         jwt_service=jwt_service,
         dpop_validator=dpop_validator,
         agent_realtime=agent_realtime,
         scheduler_service=scheduler_service,
         github_service=github_service,
+        operator_auth_service=operator_auth_service,
+        operator_account_service=operator_account_service,
+        device_inventory=device_inventory,
+        device_view_service=device_view_service,
+        credential_service=credential_service,
+        site_service=site_service,
+        assembly_service=assembly_service,
+        script_signer=script_signer,
     )
 
 
