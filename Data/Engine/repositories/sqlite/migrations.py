@@ -15,6 +15,10 @@ from typing import List, Optional, Sequence, Tuple
 
 
 DEVICE_TABLE = "devices"
+_DEFAULT_ADMIN_USERNAME = "admin"
+_DEFAULT_ADMIN_PASSWORD_SHA512 = (
+    "e6c83b282aeb2e022844595721cc00bbda47cb24537c1779f9bb84f04039e1676e6ba8573e588da1052510e3aa0a32a9e55879ae22b0c2d62136fc0a3e85f8bb"
+)
 
 
 def apply_all(conn: sqlite3.Connection) -> None:
@@ -30,6 +34,8 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_github_token_table(conn)
     _ensure_scheduled_jobs_table(conn)
     _ensure_scheduled_job_run_tables(conn)
+    _ensure_users_table(conn)
+    _ensure_default_admin(conn)
 
     conn.commit()
 
@@ -504,4 +510,86 @@ def _normalized_guid(value: Optional[str]) -> str:
         return ""
     return str(value).strip()
 
-__all__ = ["apply_all"]
+def _ensure_users_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            display_name TEXT,
+            password_sha512 TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'Admin',
+            last_login INTEGER,
+            created_at INTEGER,
+            updated_at INTEGER,
+            mfa_enabled INTEGER NOT NULL DEFAULT 0,
+            mfa_secret TEXT
+        )
+        """
+    )
+
+    try:
+        cur.execute("PRAGMA table_info(users)")
+        columns = [row[1] for row in cur.fetchall()]
+        if "mfa_enabled" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN mfa_enabled INTEGER NOT NULL DEFAULT 0")
+        if "mfa_secret" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN mfa_secret TEXT")
+    except sqlite3.Error:
+        # Aligning the schema is best-effort; older deployments may lack ALTER
+        # TABLE privileges but can continue using existing columns.
+        pass
+
+
+def _ensure_default_admin(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users WHERE LOWER(role)='admin'")
+    row = cur.fetchone()
+    if row and (row[0] or 0):
+        return
+
+    now = int(datetime.now(timezone.utc).timestamp())
+    cur.execute(
+        "SELECT COUNT(*) FROM users WHERE LOWER(username)=LOWER(?)",
+        (_DEFAULT_ADMIN_USERNAME,),
+    )
+    existing = cur.fetchone()
+    if not existing or not (existing[0] or 0):
+        cur.execute(
+            """
+            INSERT INTO users (
+                username, display_name, password_sha512, role,
+                last_login, created_at, updated_at, mfa_enabled, mfa_secret
+            ) VALUES (?, ?, ?, 'Admin', 0, ?, ?, 0, NULL)
+            """,
+            (
+                _DEFAULT_ADMIN_USERNAME,
+                "Administrator",
+                _DEFAULT_ADMIN_PASSWORD_SHA512,
+                now,
+                now,
+            ),
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE users
+               SET role='Admin',
+                   updated_at=?
+             WHERE LOWER(username)=LOWER(?)
+               AND LOWER(role)!='admin'
+            """,
+            (now, _DEFAULT_ADMIN_USERNAME),
+        )
+
+
+def ensure_default_admin(conn: sqlite3.Connection) -> None:
+    """Guarantee that at least one admin account exists."""
+
+    _ensure_users_table(conn)
+    _ensure_default_admin(conn)
+    conn.commit()
+
+
+__all__ = ["apply_all", "ensure_default_admin"]

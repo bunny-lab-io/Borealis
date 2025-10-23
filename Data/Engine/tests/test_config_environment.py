@@ -63,6 +63,23 @@ def test_static_root_falls_back_to_legacy_source(tmp_path, monkeypatch):
     monkeypatch.delenv("BOREALIS_ROOT", raising=False)
 
 
+def test_static_root_considers_runtime_copy(tmp_path, monkeypatch):
+    """Runtime Server/WebUI copies should be considered when Data assets are missing."""
+
+    runtime_source = tmp_path / "Server" / "WebUI"
+    runtime_source.mkdir(parents=True)
+    (runtime_source / "index.html").write_text("runtime", encoding="utf-8")
+
+    monkeypatch.setenv("BOREALIS_ROOT", str(tmp_path))
+    monkeypatch.delenv("BOREALIS_STATIC_ROOT", raising=False)
+
+    settings = load_environment()
+
+    assert settings.flask.static_root == runtime_source.resolve()
+
+    monkeypatch.delenv("BOREALIS_ROOT", raising=False)
+
+
 def test_resolve_project_root_defaults_to_repository(monkeypatch):
     """The project root should resolve to the repository checkout."""
 

@@ -9,7 +9,7 @@ from .connection import (
     connection_factory,
     connection_scope,
 )
-from .migrations import apply_all
+from .migrations import apply_all, ensure_default_admin
 
 __all__ = [
     "SQLiteConnectionFactory",
@@ -18,6 +18,7 @@ __all__ = [
     "connection_factory",
     "connection_scope",
     "apply_all",
+    "ensure_default_admin",
 ]
 
 try:  # pragma: no cover - optional dependency shim

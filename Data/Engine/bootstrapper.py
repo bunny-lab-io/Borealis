@@ -66,6 +66,10 @@ def bootstrap() -> EngineRuntime:
     else:
         logger.info("migrations-skipped")
 
+    with sqlite_connection.connection_scope(settings.database_path) as conn:
+        sqlite_migrations.ensure_default_admin(conn)
+    logger.info("default-admin-ensured")
+
     app = create_app(settings, db_factory=db_factory)
     services = build_service_container(settings, db_factory=db_factory, logger=logger.getChild("services"))
     app.extensions["engine_services"] = services
