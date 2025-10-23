@@ -299,3 +299,33 @@ class AgentRealtimeService:
             )
         except Exception as exc:  # pragma: no cover - defensive logging
             self._log.debug("failed to persist device activity for %s: %s", hostname, exc)
+
+    # ------------------------------------------------------------------
+    # Snapshot helpers
+    # ------------------------------------------------------------------
+    def snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """Return a shallow copy of the current agent registry."""
+
+        now = time.time()
+        snapshot: Dict[str, Dict[str, Any]] = {}
+        for agent_id, record in self._agents.items():
+            collector_active = False
+            if record.collector_active_ts:
+                try:
+                    collector_active = (now - float(record.collector_active_ts)) < 130
+                except Exception:
+                    collector_active = False
+
+            snapshot[agent_id] = {
+                "agent_id": agent_id,
+                "hostname": record.hostname or "unknown",
+                "agent_operating_system": record.agent_operating_system or "-",
+                "last_seen": int(record.last_seen or 0),
+                "service_mode": record.service_mode or "currentuser",
+                "status": record.status or "",
+                "is_script_agent": bool(record.is_script_agent),
+                "collector_active": collector_active,
+                "collector_active_ts": record.collector_active_ts,
+            }
+
+        return snapshot

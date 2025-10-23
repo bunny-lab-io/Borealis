@@ -236,3 +236,68 @@ def test_device_details_returns_inventory(prepared_app, engine_settings):
     assert data["uptime"] == 7200
     assert data["summary"]["hostname"] == hostname
     assert data["details"]["memory"] == memory
+
+
+def test_device_activity_endpoints(prepared_app, engine_settings):
+    client = prepared_app.test_client()
+    hostname = "activity-host"
+    now = int(time.time())
+
+    with sqlite3.connect(engine_settings.database.path) as conn:
+        conn.execute(
+            """
+            INSERT INTO activity_history (
+                hostname,
+                script_path,
+                script_name,
+                script_type,
+                ran_at,
+                status,
+                stdout,
+                stderr
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                hostname,
+                "Scripts/Test.ps1",
+                "Test Script",
+                "powershell",
+                now,
+                "Running",
+                "output",
+                "error",
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT id FROM activity_history WHERE hostname = ?",
+            (hostname,),
+        ).fetchone()
+        assert row is not None
+        activity_id = row[0]
+
+    listing = client.get(f"/api/device/activity/{hostname}")
+    assert listing.status_code == 200
+    body = listing.get_json()
+    assert isinstance(body.get("history"), list)
+    assert body["history"][0]["id"] == activity_id
+    assert body["history"][0]["has_stdout"] is True
+    assert body["history"][0]["has_stderr"] is True
+
+    detail = client.get(f"/api/device/activity/job/{activity_id}")
+    assert detail.status_code == 200
+    detail_payload = detail.get_json()
+    assert detail_payload["hostname"] == hostname
+    assert detail_payload["stdout"] == "output"
+    assert detail_payload["stderr"] == "error"
+
+    cleared = client.delete(f"/api/device/activity/{hostname}")
+    assert cleared.status_code == 200
+    assert cleared.get_json() == {"status": "ok"}
+
+    with sqlite3.connect(engine_settings.database.path) as conn:
+        remaining = conn.execute(
+            "SELECT COUNT(1) FROM activity_history WHERE hostname = ?",
+            (hostname,),
+        ).fetchone()[0]
+        assert remaining == 0

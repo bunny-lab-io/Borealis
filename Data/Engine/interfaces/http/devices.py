@@ -30,6 +30,10 @@ def _views():
     return _services().device_view_service
 
 
+def _activity():
+    return _services().device_activity
+
+
 def _require_admin():
     username = session.get("username")
     role = (session.get("role") or "").strip().lower()
@@ -95,6 +99,24 @@ def list_agent_devices() -> object:
         return guard
     devices = _inventory().list_agent_devices()
     return jsonify({"devices": devices})
+
+
+@blueprint.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
+def device_activity(hostname: str) -> object:
+    if request.method == "DELETE":
+        _activity().clear_history(hostname)
+        return jsonify({"status": "ok"})
+
+    history = _activity().list_history(hostname)
+    return jsonify({"history": history})
+
+
+@blueprint.route("/api/device/activity/job/<int:activity_id>", methods=["GET"])
+def device_activity_job(activity_id: int) -> object:
+    record = _activity().get_activity(activity_id)
+    if not record:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(record)
 
 
 @blueprint.route("/api/ssh_devices", methods=["GET", "POST"])
