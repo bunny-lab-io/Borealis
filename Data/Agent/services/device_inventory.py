@@ -18,6 +18,7 @@ class DeviceInventoryCollector:
         self._module = audit_module
         self._config = config
         self._log = logger or logging.getLogger(LOGGER_NAME)
+        self._external_ip_cache: Dict[str, Any] = {"value": None, "timestamp": 0.0}
 
     def _call_module(self, name: str, *args: Any, **kwargs: Any) -> Any:
         func = getattr(self._module, name, None)
@@ -106,6 +107,18 @@ class DeviceInventoryCollector:
         host = summary.get("hostname")
         if not isinstance(host, str) or not host.strip():
             summary["hostname"] = socket.gethostname()
+
+        try:
+            normalized = self._call_module(
+                "normalize_inventory_details",
+                details,
+                external_ip_cache=self._external_ip_cache,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self._log.exception("device-inventory-normalize-error", exc_info=exc)
+        else:
+            if isinstance(normalized, dict):
+                details = normalized
 
         return details
 
