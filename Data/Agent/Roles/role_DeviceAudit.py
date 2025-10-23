@@ -10,6 +10,7 @@ import string
 import asyncio
 import re
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 try:
     import psutil  # type: ignore
@@ -27,6 +28,155 @@ ROLE_CONTEXTS = ['system']
 
 
 IS_WINDOWS = os.name == 'nt'
+
+
+def _lookup_external_ip() -> str:
+    try:
+        import urllib.request  # type: ignore
+    except Exception:
+        return ''
+
+    for url in (
+        'https://api.ipify.org',
+        'https://checkip.amazonaws.com',
+    ):
+        try:
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                txt = (resp.read() or b'').decode('utf-8', errors='ignore').strip()
+            if not txt:
+                continue
+            if '\n' in txt:
+                txt = txt.split('\n', 1)[0].strip()
+            if '{' in txt:
+                try:
+                    obj = json.loads(txt)
+                    txt = (obj.get('ip') or '').strip()
+                except Exception:
+                    txt = ''
+            if txt:
+                return txt
+        except Exception:
+            continue
+    return ''
+
+
+def normalize_inventory_details(details: Any, *, external_ip_cache: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if not isinstance(details, dict):
+        details = {}
+    normalized = dict(details)
+    summary = normalized.get('summary')
+    if not isinstance(summary, dict):
+        summary = {}
+    summary = dict(summary)
+    normalized['summary'] = summary
+
+    try:
+        if not summary.get('operating_system') and summary.get('os'):
+            summary['operating_system'] = summary.get('os')
+    except Exception:
+        pass
+
+    try:
+        dt = (summary.get('device_type') or '').strip()
+        if not dt:
+            dt = (detect_device_type() or '').strip()
+            if dt:
+                summary['device_type'] = dt
+    except Exception:
+        pass
+
+    try:
+        if not summary.get('internal_ip'):
+            net = normalized.get('network') or []
+            ipv4s = []
+            for adapter in net:
+                if not isinstance(adapter, dict):
+                    continue
+                for ip in adapter.get('ips') or []:
+                    try:
+                        if (
+                            ip
+                            and isinstance(ip, str)
+                            and ip.count('.') == 3
+                            and not ip.startswith('169.254.')
+                            and ip != '127.0.0.1'
+                        ):
+                            ipv4s.append(ip)
+                    except Exception:
+                        pass
+            if ipv4s:
+                summary['internal_ip'] = ipv4s[0]
+    except Exception:
+        pass
+
+    try:
+        current = (summary.get('external_ip') or '').strip()
+        cache = external_ip_cache if isinstance(external_ip_cache, dict) else None
+        now = time.time()
+        if current:
+            if cache is not None:
+                cache['value'] = current
+                cache['timestamp'] = now
+        else:
+            cached_val = ''
+            cached_ts = 0.0
+            if cache is not None:
+                cached_val = (cache.get('value') or '').strip()
+                try:
+                    cached_ts = float(cache.get('timestamp') or 0)
+                except Exception:
+                    cached_ts = 0.0
+            if cached_val and (now - cached_ts) <= 900:
+                summary['external_ip'] = cached_val
+            else:
+                fetched = _lookup_external_ip()
+                if fetched:
+                    summary['external_ip'] = fetched
+                    if cache is not None:
+                        cache['value'] = fetched
+                        cache['timestamp'] = now
+    except Exception:
+        pass
+
+    try:
+        val = (summary.get('last_reboot') or '').strip()
+        if not val or val.lower() == 'unknown':
+            if psutil and hasattr(psutil, 'boot_time'):
+                from datetime import datetime, timezone
+
+                summary['last_reboot'] = datetime.fromtimestamp(psutil.boot_time(), timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            elif IS_WINDOWS:
+                ps = (
+                    "$b=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime; "
+                    "(Get-Date $b).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')"
+                )
+                out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=10)
+                s = (out.stdout or '').strip()
+                if s:
+                    summary['last_reboot'] = s.splitlines()[0].strip()
+    except Exception:
+        pass
+
+    try:
+        lu = (summary.get('last_user') or '').strip()
+
+        def _contains_machine_accounts(text: str) -> bool:
+            try:
+                for part in text.split(','):
+                    if part.strip().endswith('$'):
+                        return True
+            except Exception:
+                pass
+            return False
+
+        if (not lu) or (lu.lower() == 'unknown') or _contains_machine_accounts(lu):
+            lu2 = _collect_last_user_registry().strip()
+            summary['last_user'] = lu2 if lu2 else 'No Users Logged In'
+    except Exception:
+        pass
+
+    normalized['summary'] = summary
+    return normalized
 
 
 def detect_agent_os():
@@ -1014,112 +1164,16 @@ class Role:
             await asyncio.sleep(interval_sec)
 
     def _normalize_details(self, details: dict) -> dict:
-        if not isinstance(details, dict):
-            return {}
-        details.setdefault('summary', {})
-        summary = details['summary']
-        # Map legacy 'os' to 'operating_system'
-        try:
-            if not summary.get('operating_system') and summary.get('os'):
-                summary['operating_system'] = summary.get('os')
-        except Exception:
-            pass
-
-        # Device type fallback
-        try:
-            dt = (summary.get('device_type') or '').strip()
-            if not dt:
-                dt = detect_device_type() or ''
-                if dt:
-                    summary['device_type'] = dt
-        except Exception:
-            pass
-
-        # Internal IP fallback from network list
-        try:
-            if not summary.get('internal_ip'):
-                net = details.get('network') or []
-                ipv4s = []
-                for a in net:
-                    for ip in (a.get('ips') or []):
-                        try:
-                            if ip and isinstance(ip, str) and ip.count('.') == 3 and not ip.startswith('169.254.') and ip != '127.0.0.1':
-                                ipv4s.append(ip)
-                        except Exception:
-                            pass
-                summary['internal_ip'] = ipv4s[0] if ipv4s else ''
-        except Exception:
-            pass
-
-        # External IP best-effort (cache ~15 min) if still missing
-        try:
-            now = time.time()
-            ext = (summary.get('external_ip') or '').strip()
-            if not ext and (now - self._ext_ip_ts > 900):
-                # lightweight fetch without blocking forever
-                import urllib.request  # lazy import
-                for url in (
-                    'https://api.ipify.org',
-                    'https://checkip.amazonaws.com',
-                ):
-                    try:
-                        with urllib.request.urlopen(url, timeout=3) as resp:
-                            txt = (resp.read() or b'').decode('utf-8', errors='ignore').strip()
-                            if txt and '\n' in txt:
-                                txt = txt.split('\n', 1)[0].strip()
-                            # api.ipify.org returns plain IP by default; if JSON was served, handle a small case
-                            if '{' in txt:
-                                try:
-                                    obj = json.loads(txt)
-                                    txt = (obj.get('ip') or '').strip()
-                                except Exception:
-                                    pass
-                            if txt:
-                                self._ext_ip = txt
-                                self._ext_ip_ts = now
-                                break
-                    except Exception:
-                        continue
-            if not ext and self._ext_ip:
-                summary['external_ip'] = self._ext_ip
-        except Exception:
-            pass
-
-        # Last reboot (UTC string) if missing/unknown
-        try:
-            val = (summary.get('last_reboot') or '').strip()
-            if not val or val.lower() == 'unknown':
-                if psutil and hasattr(psutil, 'boot_time'):
-                    from datetime import datetime, timezone
-                    summary['last_reboot'] = datetime.fromtimestamp(psutil.boot_time(), timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                elif IS_WINDOWS:
-                    ps = (
-                        "$b=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime; "
-                        "(Get-Date $b).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')"
-                    )
-                    out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=10)
-                    s = (out.stdout or '').strip()
-                    if s:
-                        summary['last_reboot'] = s.splitlines()[0].strip()
-        except Exception:
-            pass
-
-        # Last user fix-up: compute if missing/unknown or contains machine account entries
-        try:
-            lu = (summary.get('last_user') or '').strip()
-            def _contains_machine_accounts(s: str) -> bool:
-                try:
-                    for part in s.split(','):
-                        if part.strip().endswith('$'):
-                            return True
-                except Exception:
-                    pass
-                return False
-            if (not lu) or (lu.lower() == 'unknown') or _contains_machine_accounts(lu):
-                lu2 = _collect_last_user_registry().strip()
-                summary['last_user'] = lu2 if lu2 else 'No Users Logged In'
-        except Exception:
-            pass
-
-        details['summary'] = summary
-        return details
+        cache = {'value': self._ext_ip, 'timestamp': self._ext_ip_ts}
+        normalized = normalize_inventory_details(details, external_ip_cache=cache)
+        if cache.get('value'):
+            self._ext_ip = cache['value']
+        ts = cache.get('timestamp')
+        if ts:
+            try:
+                self._ext_ip_ts = float(ts)
+            except Exception:
+                pass
+        if isinstance(normalized, dict):
+            return normalized
+        return {}

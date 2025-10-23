@@ -30,6 +30,10 @@ def _views():
     return _services().device_view_service
 
 
+def _activity():
+    return _services().device_activity
+
+
 def _require_admin():
     username = session.get("username")
     role = (session.get("role") or "").strip().lower()
@@ -64,6 +68,12 @@ def get_device_by_guid(guid: str) -> object:
     return jsonify(device)
 
 
+@blueprint.route("/api/device/details/<hostname>", methods=["GET"])
+def get_device_details(hostname: str) -> object:
+    payload = _inventory().get_device_details(hostname)
+    return jsonify(payload)
+
+
 @blueprint.route("/api/device/description/<hostname>", methods=["POST"])
 def set_device_description(hostname: str) -> object:
     payload = request.get_json(silent=True) or {}
@@ -89,6 +99,24 @@ def list_agent_devices() -> object:
         return guard
     devices = _inventory().list_agent_devices()
     return jsonify({"devices": devices})
+
+
+@blueprint.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
+def device_activity(hostname: str) -> object:
+    if request.method == "DELETE":
+        _activity().clear_history(hostname)
+        return jsonify({"status": "ok"})
+
+    history = _activity().list_history(hostname)
+    return jsonify({"history": history})
+
+
+@blueprint.route("/api/device/activity/job/<int:activity_id>", methods=["GET"])
+def device_activity_job(activity_id: int) -> object:
+    record = _activity().get_activity(activity_id)
+    if not record:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(record)
 
 
 @blueprint.route("/api/ssh_devices", methods=["GET", "POST"])

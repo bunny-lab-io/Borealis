@@ -1,3 +1,4 @@
+from .device_activity_service import DeviceActivityService
 from .device_inventory_service import (
     DeviceDescriptionError,
     DeviceDetailsError,
@@ -12,4 +13,5 @@ __all__ = [
     "DeviceViewService",
     "DeviceDetailsError",
     "DeviceDescriptionError",
+    "DeviceActivityService",
 ]

@@ -22,6 +22,7 @@ from Data.Engine.repositories.sqlite import (
     SQLiteRefreshTokenRepository,
     SQLiteSiteRepository,
     SQLiteUserRepository,
+    SQLiteDeviceActivityRepository,
 )
 from Data.Engine.services.auth import (
     DeviceAuthService,
@@ -37,6 +38,7 @@ from Data.Engine.services.enrollment import EnrollmentService
 from Data.Engine.services.enrollment.admin_service import EnrollmentAdminService
 from Data.Engine.services.enrollment.nonce_cache import NonceCache
 from Data.Engine.services.devices import DeviceInventoryService
+from Data.Engine.services.devices import DeviceActivityService
 from Data.Engine.services.devices import DeviceViewService
 from Data.Engine.services.credentials import CredentialService
 from Data.Engine.services.github import GitHubService
@@ -54,6 +56,7 @@ class EngineServiceContainer:
     device_auth: DeviceAuthService
     device_inventory: DeviceInventoryService
     device_view_service: DeviceViewService
+    device_activity: DeviceActivityService
     credential_service: CredentialService
     token_service: TokenService
     enrollment_service: EnrollmentService
@@ -81,6 +84,9 @@ def build_service_container(
     device_repo = SQLiteDeviceRepository(db_factory, logger=log.getChild("devices"))
     device_inventory_repo = SQLiteDeviceInventoryRepository(
         db_factory, logger=log.getChild("devices.inventory")
+    )
+    activity_repo = SQLiteDeviceActivityRepository(
+        db_factory, logger=log.getChild("devices.activity_repo")
     )
     device_view_repo = SQLiteDeviceViewRepository(
         db_factory, logger=log.getChild("devices.views")
@@ -159,6 +165,10 @@ def build_service_container(
         repository=device_inventory_repo,
         logger=log.getChild("device_inventory"),
     )
+    device_activity = DeviceActivityService(
+        repository=activity_repo,
+        logger=log.getChild("device_activity"),
+    )
     device_view_service = DeviceViewService(
         repository=device_view_repo,
         logger=log.getChild("device_views"),
@@ -209,6 +219,7 @@ def build_service_container(
         site_service=site_service,
         assembly_service=assembly_service,
         script_signer=script_signer,
+        device_activity=device_activity,
     )
 
 

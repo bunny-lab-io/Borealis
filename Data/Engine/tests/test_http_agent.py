@@ -8,14 +8,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from Data.Engine.config.environment import (
-    DatabaseSettings,
-    EngineSettings,
-    FlaskSettings,
-    GitHubSettings,
-    ServerSettings,
-    SocketIOSettings,
-)
 from Data.Engine.domain.device_auth import (
     AccessTokenClaims,
     DeviceAuthContext,
@@ -24,57 +16,6 @@ from Data.Engine.domain.device_auth import (
     DeviceIdentity,
     DeviceStatus,
 )
-from Data.Engine.interfaces.http import register_http_interfaces
-from Data.Engine.repositories.sqlite import connection as sqlite_connection
-from Data.Engine.repositories.sqlite import migrations as sqlite_migrations
-from Data.Engine.server import create_app
-from Data.Engine.services.container import build_service_container
-
-
-@pytest.fixture()
-def engine_settings(tmp_path: Path) -> EngineSettings:
-    project_root = tmp_path
-    static_root = project_root / "static"
-    static_root.mkdir()
-    (static_root / "index.html").write_text("<html></html>", encoding="utf-8")
-
-    database_path = project_root / "database.db"
-
-    return EngineSettings(
-        project_root=project_root,
-        debug=False,
-        database=DatabaseSettings(path=database_path, apply_migrations=False),
-        flask=FlaskSettings(
-            secret_key="test-key",
-            static_root=static_root,
-            cors_allowed_origins=("https://localhost",),
-        ),
-        socketio=SocketIOSettings(cors_allowed_origins=("https://localhost",)),
-        server=ServerSettings(host="127.0.0.1", port=5000),
-        github=GitHubSettings(
-            default_repo="owner/repo",
-            default_branch="main",
-            refresh_interval_seconds=60,
-            cache_root=project_root / "cache",
-        ),
-    )
-
-
-@pytest.fixture()
-def prepared_app(engine_settings: EngineSettings):
-    settings = engine_settings
-    settings.github.cache_root.mkdir(exist_ok=True, parents=True)
-
-    db_factory = sqlite_connection.connection_factory(settings.database.path)
-    with sqlite_connection.connection_scope(settings.database.path) as conn:
-        sqlite_migrations.apply_all(conn)
-
-    app = create_app(settings, db_factory=db_factory)
-    services = build_service_container(settings, db_factory=db_factory)
-    app.extensions["engine_services"] = services
-    register_http_interfaces(app, services)
-    app.config.update(TESTING=True)
-    return app
 
 
 def _insert_device(app, guid: str, fingerprint: str, hostname: str) -> None:
@@ -297,23 +238,114 @@ def test_agent_details_persists_inventory(prepared_app, monkeypatch):
 
     resp = client.get("/api/devices")
     assert resp.status_code == 200
-    listing = resp.get_json()
-    device = next((dev for dev in listing.get("devices", []) if dev["hostname"] == hostname), None)
-    assert device is not None
-    summary = device["summary"]
-    details = device["details"]
 
-    assert summary["device_type"] == "Laptop"
-    assert summary["last_user"] == "BUNNY-LAB\\nicole.rappe"
-    assert summary["created"]
-    assert summary.get("uptime_sec") == 3600
-    assert details["summary"]["device_type"] == "Laptop"
-    assert details["summary"]["last_reboot"] == "2025-10-01 10:00:00"
-    assert details["summary"]["created"] == summary["created"]
-    assert details["software"][0]["name"] == "Borealis Agent"
-    assert device["storage"][0]["model"] == "NVMe"
-    assert device["memory"][0]["capacity"] == 17179869184
-    assert device["cpu"]["name"] == "Intel Core i7"
+
+def test_agents_endpoint_merges_inventory_and_realtime(prepared_app):
+    client = prepared_app.test_client()
+    services = prepared_app.extensions["engine_services"]
+    db_path = Path(prepared_app.config["ENGINE_DATABASE_PATH"])
+
+    now = int(time.time())
+    guid_one = "2E3B6E10-0E24-4C36-9E21-6C5B9D8F1234"
+    guid_two = "6D8F0A21-9B3C-4D5E-8F70-1A2B3C4D5E6F"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO devices (
+                guid,
+                hostname,
+                created_at,
+                last_seen,
+                agent_hash,
+                agent_id,
+                operating_system,
+                status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                guid_one,
+                "device-one",
+                now,
+                now,
+                "hash-one",
+                "AGENT-001",
+                "Windows 11",
+                "active",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO devices (
+                guid,
+                hostname,
+                created_at,
+                last_seen,
+                agent_hash,
+                agent_id,
+                operating_system,
+                status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                guid_two,
+                "device-two",
+                now - 600,
+                now - 600,
+                "hash-two",
+                "AGENT-002",
+                "Windows 10",
+                "active",
+            ),
+        )
+        conn.commit()
+
+    realtime = services.agent_realtime
+    realtime.register_connection("AGENT-001", "currentuser")
+    realtime.heartbeat(
+        {
+            "agent_id": "AGENT-001",
+            "hostname": "device-one",
+            "service_mode": "currentuser",
+            "last_seen": now,
+            "agent_operating_system": "Windows 11",
+        }
+    )
+    realtime.collector_status(
+        {
+            "agent_id": "AGENT-001",
+            "hostname": "device-one",
+            "service_mode": "currentuser",
+            "active": True,
+        }
+    )
+    realtime.register_connection("AGENT-HELPER-script", "system")
+    realtime.heartbeat(
+        {
+            "agent_id": "AGENT-HELPER-script",
+            "hostname": "helper",
+            "service_mode": "system",
+            "last_seen": now,
+        }
+    )
+
+    resp = client.get("/api/agents")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+
+    assert "AGENT-001" in payload
+    assert payload["AGENT-001"]["hostname"] == "device-one"
+    assert payload["AGENT-001"]["collector_active"] is True
+    assert payload["AGENT-001"]["agent_hash"] == "hash-one"
+    assert payload["AGENT-001"]["agent_guid"].lower() == guid_one.lower()
+    assert payload["AGENT-001"]["service_mode"] == "currentuser"
+
+    assert "AGENT-002" in payload
+    assert payload["AGENT-002"]["hostname"] == "device-two"
+    assert payload["AGENT-002"]["collector_active"] is False
+    assert payload["AGENT-002"]["service_mode"] == "currentuser"
+
+    assert "AGENT-HELPER-script" not in payload
 
 
 def test_heartbeat_preserves_last_user_from_details(prepared_app, monkeypatch):

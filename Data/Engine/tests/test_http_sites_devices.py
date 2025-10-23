@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 import sqlite3
 import time
@@ -6,7 +7,7 @@ import pytest
 
 pytest.importorskip("flask")
 
-from .test_http_auth import _login, prepared_app, engine_settings
+from .test_http_auth import _login
 
 
 def _ensure_admin_session(client):
@@ -149,3 +150,154 @@ def test_device_description_update(prepared_app, engine_settings):
 
     assert row is not None
     assert row[0] == "Primary workstation"
+
+
+def test_device_details_returns_inventory(prepared_app, engine_settings):
+    client = prepared_app.test_client()
+    _ensure_admin_session(client)
+
+    hostname = "inventory-1"
+    guid = "B9F0A1C2-D3E4-5F67-890A-BCDEF1234567"
+    now = int(time.time())
+
+    memory = [{"slot": "DIMM1", "size_gb": 16}]
+    network = [{"name": "Ethernet", "mac": "AA:BB:CC:DD:EE:FF"}]
+    software = [{"name": "Agent", "version": "1.0.0"}]
+    storage = [{"model": "Disk", "size_gb": 512}]
+    cpu = {"model": "Intel", "cores": 8}
+
+    conn = sqlite3.connect(engine_settings.database.path)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO devices (
+            guid,
+            hostname,
+            description,
+            created_at,
+            agent_hash,
+            memory,
+            network,
+            software,
+            storage,
+            cpu,
+            device_type,
+            domain,
+            external_ip,
+            internal_ip,
+            last_reboot,
+            last_seen,
+            last_user,
+            operating_system,
+            uptime,
+            agent_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            guid,
+            hostname,
+            "Workstation",
+            now,
+            "hashvalue",
+            json.dumps(memory),
+            json.dumps(network),
+            json.dumps(software),
+            json.dumps(storage),
+            json.dumps(cpu),
+            "Laptop",
+            "ACME",
+            "203.0.113.10",
+            "192.0.2.10",
+            "2024-01-01 12:00:00",
+            now,
+            "ACME\\tech",
+            "Windows 11",
+            7200,
+            "agent-001",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = client.get(f"/api/device/details/{hostname}")
+    assert resp.status_code == 200
+    data = resp.get_json()
+
+    assert data["memory"] == memory
+    assert data["network"] == network
+    assert data["software"] == software
+    assert data["storage"] == storage
+    assert data["cpu"] == cpu
+    assert data["description"] == "Workstation"
+    assert data["agent_hash"] == "hashvalue"
+    assert data["agent_guid"].lower() == guid.lower()
+    assert data["last_user"] == "ACME\\tech"
+    assert data["operating_system"] == "Windows 11"
+    assert data["uptime"] == 7200
+    assert data["summary"]["hostname"] == hostname
+    assert data["details"]["memory"] == memory
+
+
+def test_device_activity_endpoints(prepared_app, engine_settings):
+    client = prepared_app.test_client()
+    hostname = "activity-host"
+    now = int(time.time())
+
+    with sqlite3.connect(engine_settings.database.path) as conn:
+        conn.execute(
+            """
+            INSERT INTO activity_history (
+                hostname,
+                script_path,
+                script_name,
+                script_type,
+                ran_at,
+                status,
+                stdout,
+                stderr
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                hostname,
+                "Scripts/Test.ps1",
+                "Test Script",
+                "powershell",
+                now,
+                "Running",
+                "output",
+                "error",
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT id FROM activity_history WHERE hostname = ?",
+            (hostname,),
+        ).fetchone()
+        assert row is not None
+        activity_id = row[0]
+
+    listing = client.get(f"/api/device/activity/{hostname}")
+    assert listing.status_code == 200
+    body = listing.get_json()
+    assert isinstance(body.get("history"), list)
+    assert body["history"][0]["id"] == activity_id
+    assert body["history"][0]["has_stdout"] is True
+    assert body["history"][0]["has_stderr"] is True
+
+    detail = client.get(f"/api/device/activity/job/{activity_id}")
+    assert detail.status_code == 200
+    detail_payload = detail.get_json()
+    assert detail_payload["hostname"] == hostname
+    assert detail_payload["stdout"] == "output"
+    assert detail_payload["stderr"] == "error"
+
+    cleared = client.delete(f"/api/device/activity/{hostname}")
+    assert cleared.status_code == 200
+    assert cleared.get_json() == {"status": "ok"}
+
+    with sqlite3.connect(engine_settings.database.path) as conn:
+        remaining = conn.execute(
+            "SELECT COUNT(1) FROM activity_history WHERE hostname = ?",
+            (hostname,),
+        ).fetchone()[0]
+        assert remaining == 0

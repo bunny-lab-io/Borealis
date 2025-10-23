@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
-from .test_http_auth import _login, prepared_app
+from .test_http_auth import _login
 
 
 def test_list_users_requires_authentication(prepared_app):

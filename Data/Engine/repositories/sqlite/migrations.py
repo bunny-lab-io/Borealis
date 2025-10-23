@@ -27,6 +27,7 @@ def apply_all(conn: sqlite3.Connection) -> None:
     """
 
     _ensure_devices_table(conn)
+    _ensure_activity_history_table(conn)
     _ensure_device_aux_tables(conn)
     _ensure_refresh_token_table(conn)
     _ensure_install_code_table(conn)
@@ -94,6 +95,28 @@ def _ensure_devices_table(conn: sqlite3.Connection) -> None:
         _ensure_column_defaults(cur)
 
     _ensure_device_indexes(cur)
+
+
+def _ensure_activity_history_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hostname TEXT,
+            script_path TEXT,
+            script_name TEXT,
+            script_type TEXT,
+            ran_at INTEGER,
+            status TEXT,
+            stdout TEXT,
+            stderr TEXT
+        )
+        """
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_activity_history_hostname ON activity_history(hostname)"
+    )
 
 
 def _ensure_device_aux_tables(conn: sqlite3.Connection) -> None:

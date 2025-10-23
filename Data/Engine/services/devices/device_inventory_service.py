@@ -75,6 +75,70 @@ class DeviceInventoryService:
         devices = self._repo.fetch_devices(hostname=snapshot.get("hostname"))
         return devices[0] if devices else None
 
+    def get_device_details(self, hostname: str) -> Dict[str, object]:
+        normalized_host = clean_device_str(hostname)
+        if not normalized_host:
+            return {}
+
+        snapshot = self._repo.load_snapshot(hostname=normalized_host)
+        if not snapshot:
+            return {}
+
+        summary = dict(snapshot.get("summary") or {})
+
+        payload: Dict[str, Any] = {
+            "details": snapshot.get("details", {}),
+            "summary": summary,
+            "description": snapshot.get("description")
+            or summary.get("description")
+            or "",
+            "created_at": snapshot.get("created_at") or 0,
+            "agent_hash": snapshot.get("agent_hash")
+            or summary.get("agent_hash")
+            or "",
+            "agent_guid": snapshot.get("agent_guid")
+            or summary.get("agent_guid")
+            or "",
+            "memory": snapshot.get("memory", []),
+            "network": snapshot.get("network", []),
+            "software": snapshot.get("software", []),
+            "storage": snapshot.get("storage", []),
+            "cpu": snapshot.get("cpu", {}),
+            "device_type": snapshot.get("device_type")
+            or summary.get("device_type")
+            or "",
+            "domain": snapshot.get("domain")
+            or summary.get("domain")
+            or "",
+            "external_ip": snapshot.get("external_ip")
+            or summary.get("external_ip")
+            or "",
+            "internal_ip": snapshot.get("internal_ip")
+            or summary.get("internal_ip")
+            or "",
+            "last_reboot": snapshot.get("last_reboot")
+            or summary.get("last_reboot")
+            or "",
+            "last_seen": snapshot.get("last_seen")
+            or summary.get("last_seen")
+            or 0,
+            "last_user": snapshot.get("last_user")
+            or summary.get("last_user")
+            or "",
+            "operating_system": snapshot.get("operating_system")
+            or summary.get("operating_system")
+            or summary.get("agent_operating_system")
+            or "",
+            "uptime": snapshot.get("uptime")
+            or summary.get("uptime")
+            or 0,
+            "agent_id": snapshot.get("agent_id")
+            or summary.get("agent_id")
+            or "",
+        }
+
+        return payload
+
     def collect_agent_hash_records(self) -> List[Dict[str, object]]:
         records: List[Dict[str, object]] = []
         key_to_index: Dict[str, int] = {}

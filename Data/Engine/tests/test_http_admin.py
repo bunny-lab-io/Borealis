@@ -2,7 +2,7 @@ import base64
 import sqlite3
 from datetime import datetime, timezone
 
-from .test_http_auth import _login, prepared_app
+from .test_http_auth import _login
 
 
 def test_enrollment_codes_require_authentication(prepared_app):
