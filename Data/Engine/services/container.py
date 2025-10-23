@@ -67,6 +67,7 @@ class EngineServiceContainer:
     operator_auth_service: OperatorAuthService
     operator_account_service: OperatorAccountService
     assembly_service: AssemblyService
+    script_signer: Optional[ScriptSigner]
 
 
 def build_service_container(
@@ -106,6 +107,8 @@ def build_service_container(
         logger=log.getChild("token_service"),
     )
 
+    script_signer = _load_script_signer(log)
+
     enrollment_service = EnrollmentService(
         device_repository=device_repo,
         enrollment_repository=enrollment_repo,
@@ -115,7 +118,7 @@ def build_service_container(
         ip_rate_limiter=SlidingWindowRateLimiter(),
         fingerprint_rate_limiter=SlidingWindowRateLimiter(),
         nonce_cache=NonceCache(),
-        script_signer=_load_script_signer(log),
+        script_signer=script_signer,
         logger=log.getChild("enrollment"),
     )
 
@@ -205,6 +208,7 @@ def build_service_container(
         credential_service=credential_service,
         site_service=site_service,
         assembly_service=assembly_service,
+        script_signer=script_signer,
     )
 
 

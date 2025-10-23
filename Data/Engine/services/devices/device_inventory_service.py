@@ -4,16 +4,26 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import Dict, List, Optional
+import time
+from collections.abc import Mapping
+from typing import Any, Dict, List, Optional
 
 from Data.Engine.repositories.sqlite.device_inventory_repository import (
     SQLiteDeviceInventoryRepository,
 )
+from Data.Engine.domain.device_auth import DeviceAuthContext
+from Data.Engine.domain.devices import clean_device_str, coerce_int
 
-__all__ = ["DeviceInventoryService", "RemoteDeviceError"]
+__all__ = ["DeviceInventoryService", "RemoteDeviceError", "DeviceHeartbeatError"]
 
 
 class RemoteDeviceError(Exception):
+    def __init__(self, code: str, message: Optional[str] = None) -> None:
+        super().__init__(message or code)
+        self.code = code
+
+
+class DeviceHeartbeatError(Exception):
     def __init__(self, code: str, message: Optional[str] = None) -> None:
         super().__init__(message or code)
         self.code = code
@@ -175,4 +185,118 @@ class DeviceInventoryService:
         if (existing_type or "").strip().lower() != (connection_type or "").strip().lower():
             raise RemoteDeviceError("not_found", "device not found")
         self._repo.delete_device_by_hostname(normalized_host)
+
+    # ------------------------------------------------------------------
+    # Agent heartbeats
+    # ------------------------------------------------------------------
+    def record_heartbeat(
+        self,
+        *,
+        context: DeviceAuthContext,
+        payload: Mapping[str, Any],
+    ) -> None:
+        guid = context.identity.guid.value
+        snapshot = self._repo.load_snapshot(guid=guid)
+        if not snapshot:
+            raise DeviceHeartbeatError("device_not_registered", "device not registered")
+
+        summary = dict(snapshot.get("summary") or {})
+        details = dict(snapshot.get("details") or {})
+
+        now_ts = int(time.time())
+        summary["last_seen"] = now_ts
+        summary["agent_guid"] = guid
+
+        existing_hostname = clean_device_str(summary.get("hostname")) or clean_device_str(
+            snapshot.get("hostname")
+        )
+        incoming_hostname = clean_device_str(payload.get("hostname"))
+        raw_metrics = payload.get("metrics")
+        metrics = raw_metrics if isinstance(raw_metrics, Mapping) else {}
+        metrics_hostname = clean_device_str(metrics.get("hostname")) if metrics else None
+        hostname = incoming_hostname or metrics_hostname or existing_hostname
+        if not hostname:
+            hostname = f"RECOVERED-{guid[:12]}"
+        summary["hostname"] = hostname
+
+        if metrics:
+            last_user = metrics.get("last_user") or metrics.get("username")
+            if last_user:
+                cleaned_user = clean_device_str(last_user)
+                if cleaned_user:
+                    summary["last_user"] = cleaned_user
+            operating_system = metrics.get("operating_system")
+            if operating_system:
+                cleaned_os = clean_device_str(operating_system)
+                if cleaned_os:
+                    summary["operating_system"] = cleaned_os
+            uptime = metrics.get("uptime")
+            if uptime is not None:
+                coerced = coerce_int(uptime)
+                if coerced is not None:
+                    summary["uptime"] = coerced
+            agent_id = metrics.get("agent_id")
+            if agent_id:
+                cleaned_agent = clean_device_str(agent_id)
+                if cleaned_agent:
+                    summary["agent_id"] = cleaned_agent
+
+        for field in ("external_ip", "internal_ip", "device_type"):
+            value = payload.get(field)
+            cleaned = clean_device_str(value)
+            if cleaned:
+                summary[field] = cleaned
+
+        summary.setdefault("description", summary.get("description") or "")
+        created_at = coerce_int(summary.get("created_at"))
+        if created_at is None:
+            created_at = coerce_int(snapshot.get("created_at"))
+        if created_at is None:
+            created_at = now_ts
+        summary["created_at"] = created_at
+
+        raw_inventory = payload.get("inventory")
+        inventory = raw_inventory if isinstance(raw_inventory, Mapping) else {}
+        memory = inventory.get("memory") if isinstance(inventory.get("memory"), list) else details.get("memory")
+        network = inventory.get("network") if isinstance(inventory.get("network"), list) else details.get("network")
+        software = (
+            inventory.get("software") if isinstance(inventory.get("software"), list) else details.get("software")
+        )
+        storage = inventory.get("storage") if isinstance(inventory.get("storage"), list) else details.get("storage")
+        cpu = inventory.get("cpu") if isinstance(inventory.get("cpu"), Mapping) else details.get("cpu")
+
+        merged_details: Dict[str, Any] = {
+            "summary": summary,
+            "memory": memory,
+            "network": network,
+            "software": software,
+            "storage": storage,
+            "cpu": cpu,
+        }
+
+        try:
+            self._repo.upsert_device(
+                summary["hostname"],
+                summary.get("description"),
+                merged_details,
+                summary.get("created_at"),
+                agent_hash=clean_device_str(summary.get("agent_hash")),
+                guid=guid,
+            )
+        except sqlite3.IntegrityError as exc:
+            self._log.warning(
+                "device-heartbeat-conflict guid=%s hostname=%s error=%s",
+                guid,
+                summary["hostname"],
+                exc,
+            )
+            raise DeviceHeartbeatError("storage_conflict", str(exc)) from exc
+        except Exception as exc:  # pragma: no cover - defensive
+            self._log.exception(
+                "device-heartbeat-failure guid=%s hostname=%s",
+                guid,
+                summary["hostname"],
+                exc_info=exc,
+            )
+            raise DeviceHeartbeatError("storage_error", "failed to persist heartbeat") from exc
 

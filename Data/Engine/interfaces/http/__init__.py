@@ -8,6 +8,7 @@ from Data.Engine.services.container import EngineServiceContainer
 
 from . import (
     admin,
+    agent,
     agents,
     auth,
     enrollment,
@@ -25,6 +26,7 @@ from . import (
 
 _REGISTRARS = (
     health.register,
+    agent.register,
     agents.register,
     enrollment.register,
     tokens.register,
