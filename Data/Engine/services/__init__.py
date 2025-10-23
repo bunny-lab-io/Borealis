@@ -15,9 +15,9 @@ from .enrollment import (
     EnrollmentService,
     EnrollmentStatus,
     EnrollmentTokenBundle,
-    EnrollmentValidationError,
     PollingResult,
 )
+from Data.Engine.domain.device_enrollment import EnrollmentValidationError
 from .jobs.scheduler_service import SchedulerService
 from .github import GitHubService, GitHubTokenPayload
 from .realtime import AgentRealtimeService, AgentRecord

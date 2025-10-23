@@ -23,10 +23,10 @@ from Data.Engine.domain.device_enrollment import (
     EnrollmentApproval,
     EnrollmentApprovalStatus,
     EnrollmentCode,
+    EnrollmentValidationError,
 )
 from Data.Engine.services.auth.device_auth_service import DeviceRecord
 from Data.Engine.services.auth.token_service import JWTIssuer
-from Data.Engine.services.enrollment.errors import EnrollmentValidationError
 from Data.Engine.services.enrollment.nonce_cache import NonceCache
 from Data.Engine.services.rate_limit import SlidingWindowRateLimiter
 

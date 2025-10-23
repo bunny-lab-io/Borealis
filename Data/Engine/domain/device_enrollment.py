@@ -15,6 +15,7 @@ __all__ = [
     "EnrollmentApprovalStatus",
     "EnrollmentApproval",
     "EnrollmentRequest",
+    "EnrollmentValidationError",
     "ProofChallenge",
 ]
 
@@ -39,6 +40,24 @@ def _require(value: Optional[str], field: str) -> str:
     if not text:
         raise ValueError(f"{field} is required")
     return text
+
+
+@dataclass(frozen=True, slots=True)
+class EnrollmentValidationError(Exception):
+    """Raised when enrollment input fails validation."""
+
+    code: str
+    http_status: int = 400
+    retry_after: Optional[float] = None
+
+    def to_response(self) -> dict[str, object]:
+        payload: dict[str, object] = {"error": self.code}
+        if self.retry_after is not None:
+            payload["retry_after"] = self.retry_after
+        return payload
+
+    def __str__(self) -> str:  # pragma: no cover - debug helper
+        return f"{self.code} (status={self.http_status})"
 
 
 @dataclass(frozen=True, slots=True)

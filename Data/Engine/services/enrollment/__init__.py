@@ -7,9 +7,9 @@ from .enrollment_service import (
     EnrollmentService,
     EnrollmentStatus,
     EnrollmentTokenBundle,
-    EnrollmentValidationError,
     PollingResult,
 )
+from Data.Engine.domain.device_enrollment import EnrollmentValidationError
 
 __all__ = [
     "EnrollmentRequestResult",

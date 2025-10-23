@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 from Data.Engine.domain.device_auth import DeviceFingerprint, sanitize_service_context
-from Data.Engine.domain.device_enrollment import ProofChallenge
+from Data.Engine.domain.device_enrollment import (
+    EnrollmentValidationError,
+    ProofChallenge,
+)
 from Data.Engine.integrations.crypto import keys as crypto_keys
-from Data.Engine.services.enrollment.errors import EnrollmentValidationError
 
 __all__ = [
     "EnrollmentRequestBuilder",
