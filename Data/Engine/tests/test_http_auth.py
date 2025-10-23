@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("flask")
+pytest.importorskip("jwt")
 
 from Data.Engine.config.environment import (
     DatabaseSettings,

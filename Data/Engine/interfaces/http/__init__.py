@@ -6,7 +6,7 @@ from flask import Flask
 
 from Data.Engine.services.container import EngineServiceContainer
 
-from . import admin, agents, auth, enrollment, github, health, job_management, tokens
+from . import admin, agents, auth, enrollment, github, health, job_management, tokens, users
 
 _REGISTRARS = (
     health.register,
@@ -17,6 +17,7 @@ _REGISTRARS = (
     github.register,
     auth.register,
     admin.register,
+    users.register,
 )
 
 

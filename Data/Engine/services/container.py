@@ -22,6 +22,7 @@ from Data.Engine.repositories.sqlite import (
 from Data.Engine.services.auth import (
     DeviceAuthService,
     DPoPValidator,
+    OperatorAccountService,
     OperatorAuthService,
     JWTService,
     TokenService,
@@ -49,6 +50,7 @@ class EngineServiceContainer:
     scheduler_service: SchedulerService
     github_service: GitHubService
     operator_auth_service: OperatorAuthService
+    operator_account_service: OperatorAccountService
 
 
 def build_service_container(
@@ -114,6 +116,10 @@ def build_service_container(
         repository=user_repo,
         logger=log.getChild("operator_auth"),
     )
+    operator_account_service = OperatorAccountService(
+        repository=user_repo,
+        logger=log.getChild("operator_accounts"),
+    )
 
     github_provider = GitHubArtifactProvider(
         cache_file=settings.github.cache_file,
@@ -139,6 +145,7 @@ def build_service_container(
         scheduler_service=scheduler_service,
         github_service=github_service,
         operator_auth_service=operator_auth_service,
+        operator_account_service=operator_account_service,
     )
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterable, Optional
 
 from Data.Engine.domain import OperatorAccount
 
@@ -64,20 +64,172 @@ class SQLiteUserRepository:
             if not row:
                 return None
             record = _UserRow(*row)
-            return OperatorAccount(
-                username=record.username,
-                display_name=record.display_name or record.username,
-                password_sha512=(record.password_sha512 or "").lower(),
-                role=record.role or "User",
-                last_login=int(record.last_login or 0),
-                created_at=int(record.created_at or 0),
-                updated_at=int(record.updated_at or 0),
-                mfa_enabled=bool(record.mfa_enabled),
-                mfa_secret=(record.mfa_secret or "") or None,
-            )
+            return _row_to_account(record)
         except sqlite3.Error as exc:  # pragma: no cover - defensive
             self._log.error("failed to load user %s: %s", username, exc)
             return None
+        finally:
+            conn.close()
+
+    def list_accounts(self) -> list[OperatorAccount]:
+        conn = self._connection_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    username,
+                    display_name,
+                    COALESCE(password_sha512, '') as password_sha512,
+                    COALESCE(role, 'User') as role,
+                    COALESCE(last_login, 0) as last_login,
+                    COALESCE(created_at, 0) as created_at,
+                    COALESCE(updated_at, 0) as updated_at,
+                    COALESCE(mfa_enabled, 0) as mfa_enabled,
+                    COALESCE(mfa_secret, '') as mfa_secret
+                FROM users
+                ORDER BY LOWER(username) ASC
+                """
+            )
+            rows = [_UserRow(*row) for row in cur.fetchall()]
+            return [_row_to_account(row) for row in rows]
+        except sqlite3.Error as exc:  # pragma: no cover - defensive
+            self._log.error("failed to enumerate users: %s", exc)
+            return []
+        finally:
+            conn.close()
+
+    def create_account(
+        self,
+        *,
+        username: str,
+        display_name: str,
+        password_sha512: str,
+        role: str,
+        timestamp: int,
+    ) -> None:
+        conn = self._connection_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO users (
+                    username,
+                    display_name,
+                    password_sha512,
+                    role,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (username, display_name, password_sha512, role, timestamp, timestamp),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete_account(self, username: str) -> bool:
+        conn = self._connection_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM users WHERE LOWER(username) = LOWER(?)", (username,))
+            deleted = cur.rowcount > 0
+            conn.commit()
+            return deleted
+        except sqlite3.Error as exc:  # pragma: no cover - defensive
+            self._log.error("failed to delete user %s: %s", username, exc)
+            return False
+        finally:
+            conn.close()
+
+    def update_password(self, username: str, password_sha512: str, *, timestamp: int) -> bool:
+        conn = self._connection_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE users
+                   SET password_sha512 = ?,
+                       updated_at = ?
+                 WHERE LOWER(username) = LOWER(?)
+                """,
+                (password_sha512, timestamp, username),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        except sqlite3.Error as exc:  # pragma: no cover - defensive
+            self._log.error("failed to update password for %s: %s", username, exc)
+            return False
+        finally:
+            conn.close()
+
+    def update_role(self, username: str, role: str, *, timestamp: int) -> bool:
+        conn = self._connection_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE users
+                   SET role = ?,
+                       updated_at = ?
+                 WHERE LOWER(username) = LOWER(?)
+                """,
+                (role, timestamp, username),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        except sqlite3.Error as exc:  # pragma: no cover - defensive
+            self._log.error("failed to update role for %s: %s", username, exc)
+            return False
+        finally:
+            conn.close()
+
+    def update_mfa(
+        self,
+        username: str,
+        *,
+        enabled: bool,
+        reset_secret: bool,
+        timestamp: int,
+    ) -> bool:
+        conn = self._connection_factory()
+        try:
+            cur = conn.cursor()
+            secret_clause = "mfa_secret = NULL" if reset_secret else None
+            assignments: list[str] = ["mfa_enabled = ?", "updated_at = ?"]
+            params: list[object] = [1 if enabled else 0, timestamp]
+            if secret_clause is not None:
+                assignments.append(secret_clause)
+            query = "UPDATE users SET " + ", ".join(assignments) + " WHERE LOWER(username) = LOWER(?)"
+            params.append(username)
+            cur.execute(query, tuple(params))
+            conn.commit()
+            return cur.rowcount > 0
+        except sqlite3.Error as exc:  # pragma: no cover - defensive
+            self._log.error("failed to update MFA for %s: %s", username, exc)
+            return False
+        finally:
+            conn.close()
+
+    def count_accounts(self) -> int:
+        return self._scalar("SELECT COUNT(*) FROM users", ())
+
+    def count_admins(self) -> int:
+        return self._scalar("SELECT COUNT(*) FROM users WHERE LOWER(role) = 'admin'", ())
+
+    def _scalar(self, query: str, params: Iterable[object]) -> int:
+        conn = self._connection_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(query, tuple(params))
+            row = cur.fetchone()
+            if not row:
+                return 0
+            return int(row[0] or 0)
+        except sqlite3.Error as exc:  # pragma: no cover - defensive
+            self._log.error("scalar query failed: %s", exc)
+            return 0
         finally:
             conn.close()
 
@@ -121,3 +273,17 @@ class SQLiteUserRepository:
 
 
 __all__ = ["SQLiteUserRepository"]
+
+
+def _row_to_account(record: _UserRow) -> OperatorAccount:
+    return OperatorAccount(
+        username=record.username,
+        display_name=record.display_name or record.username,
+        password_sha512=(record.password_sha512 or "").lower(),
+        role=record.role or "User",
+        last_login=int(record.last_login or 0),
+        created_at=int(record.created_at or 0),
+        updated_at=int(record.updated_at or 0),
+        mfa_enabled=bool(record.mfa_enabled),
+        mfa_secret=(record.mfa_secret or "") or None,
+    )
