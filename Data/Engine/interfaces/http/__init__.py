@@ -26,7 +26,11 @@ def register_http_interfaces(app: Flask, services: EngineServiceContainer) -> No
     The implementation is intentionally minimal for the initial scaffolding.
     """
 
-    for registrar in _REGISTRARS:
+    registrars = list(_REGISTRARS)
+    if app.config.get("ENGINE_LEGACY_BRIDGE_ACTIVE"):
+        registrars = [r for r in registrars if r is not job_management.register]
+
+    for registrar in registrars:
         registrar(app, services)
 
 
