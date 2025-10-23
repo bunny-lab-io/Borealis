@@ -30,6 +30,7 @@ from Data.Engine.services.auth import (
 )
 from Data.Engine.services.crypto.signing import ScriptSigner, load_signer
 from Data.Engine.services.enrollment import EnrollmentService
+from Data.Engine.services.enrollment.admin_service import EnrollmentAdminService
 from Data.Engine.services.enrollment.nonce_cache import NonceCache
 from Data.Engine.services.github import GitHubService
 from Data.Engine.services.jobs import SchedulerService
@@ -44,6 +45,7 @@ class EngineServiceContainer:
     device_auth: DeviceAuthService
     token_service: TokenService
     enrollment_service: EnrollmentService
+    enrollment_admin_service: EnrollmentAdminService
     jwt_service: JWTService
     dpop_validator: DPoPValidator
     agent_realtime: AgentRealtimeService
@@ -93,6 +95,12 @@ def build_service_container(
         logger=log.getChild("enrollment"),
     )
 
+    enrollment_admin_service = EnrollmentAdminService(
+        repository=enrollment_repo,
+        user_repository=user_repo,
+        logger=log.getChild("enrollment_admin"),
+    )
+
     device_auth = DeviceAuthService(
         device_repository=device_repo,
         jwt_service=jwt_service,
@@ -139,6 +147,7 @@ def build_service_container(
         device_auth=device_auth,
         token_service=token_service,
         enrollment_service=enrollment_service,
+        enrollment_admin_service=enrollment_admin_service,
         jwt_service=jwt_service,
         dpop_validator=dpop_validator,
         agent_realtime=agent_realtime,

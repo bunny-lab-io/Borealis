@@ -31,6 +31,9 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_refresh_token_table(conn)
     _ensure_install_code_table(conn)
     _ensure_device_approval_table(conn)
+    _ensure_device_list_views_table(conn)
+    _ensure_sites_tables(conn)
+    _ensure_credentials_table(conn)
     _ensure_github_token_table(conn)
     _ensure_scheduled_jobs_table(conn)
     _ensure_scheduled_job_run_tables(conn)
@@ -229,6 +232,73 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_da_fp_status
             ON device_approvals(ssl_key_fingerprint_claimed, status)
+        """
+    )
+
+
+def _ensure_device_list_views_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_list_views (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            columns_json TEXT NOT NULL,
+            filters_json TEXT,
+            created_at INTEGER,
+            updated_at INTEGER
+        )
+        """
+    )
+
+
+def _ensure_sites_tables(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_at INTEGER
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_sites (
+            device_hostname TEXT UNIQUE NOT NULL,
+            site_id INTEGER NOT NULL,
+            assigned_at INTEGER,
+            FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def _ensure_credentials_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS credentials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            site_id INTEGER,
+            credential_type TEXT NOT NULL DEFAULT 'machine',
+            connection_type TEXT NOT NULL DEFAULT 'ssh',
+            username TEXT,
+            password_encrypted BLOB,
+            private_key_encrypted BLOB,
+            private_key_passphrase_encrypted BLOB,
+            become_method TEXT,
+            become_username TEXT,
+            become_password_encrypted BLOB,
+            metadata_json TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE SET NULL
+        )
         """
     )
 

@@ -71,6 +71,57 @@ class SQLiteUserRepository:
         finally:
             conn.close()
 
+    def resolve_identifier(self, username: str) -> Optional[str]:
+        normalized = (username or "").strip()
+        if not normalized:
+            return None
+
+        conn = self._connection_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id FROM users WHERE LOWER(username) = LOWER(?)",
+                (normalized,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return str(row[0]) if row[0] is not None else None
+        except sqlite3.Error as exc:  # pragma: no cover - defensive
+            self._log.error("failed to resolve identifier for %s: %s", username, exc)
+            return None
+        finally:
+            conn.close()
+
+    def username_for_identifier(self, identifier: str) -> Optional[str]:
+        token = (identifier or "").strip()
+        if not token:
+            return None
+
+        conn = self._connection_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT username
+                  FROM users
+                 WHERE CAST(id AS TEXT) = ?
+                    OR LOWER(username) = LOWER(?)
+                 LIMIT 1
+                """,
+                (token, token),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            username = str(row[0] or "").strip()
+            return username or None
+        except sqlite3.Error as exc:  # pragma: no cover - defensive
+            self._log.error("failed to resolve username for %s: %s", identifier, exc)
+            return None
+        finally:
+            conn.close()
+
     def list_accounts(self) -> list[OperatorAccount]:
         conn = self._connection_factory()
         try:
