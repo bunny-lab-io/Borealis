@@ -42,7 +42,7 @@ The Engine mirrors the legacy defaults so it can boot without additional configu
 | `BOREALIS_ROOT` | Overrides automatic project root detection.  Useful when running from a packaged location. | Directory two levels above `Data/Engine/` |
 | `BOREALIS_DATABASE_PATH` | Path to the SQLite database. | `<project_root>/database.db` |
 | `BOREALIS_ENGINE_AUTO_MIGRATE` | Run Engine-managed schema migrations during bootstrap (`true`/`false`). | `true` |
-| `BOREALIS_STATIC_ROOT` | Directory that serves static assets for the SPA. | First existing path among `Data/Server/web-interface/build`, `Data/Server/WebUI/build`, `Data/WebUI/build` |
+| `BOREALIS_STATIC_ROOT` | Directory that serves static assets for the SPA. | First existing path among `Engine/web-interface/build`, `Engine/web-interface/dist`, `Data/Engine/WebUI/build`, `Data/Server/web-interface/build`, `Data/Server/WebUI/build`, `Data/WebUI/build` |
 | `BOREALIS_CORS_ALLOWED_ORIGINS` | Comma-delimited list of origins granted CORS access. Use `*` for all origins. | `*` |
 | `BOREALIS_FLASK_SECRET_KEY` | Secret key for Flask session signing. | `change-me` |
 | `BOREALIS_DEBUG` | Enables debug logging, disables secure-cookie requirements, and allows Werkzeug debug mode. | `false` |
