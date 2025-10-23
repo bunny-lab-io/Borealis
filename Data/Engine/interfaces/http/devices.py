@@ -64,6 +64,12 @@ def get_device_by_guid(guid: str) -> object:
     return jsonify(device)
 
 
+@blueprint.route("/api/device/details/<hostname>", methods=["GET"])
+def get_device_details(hostname: str) -> object:
+    payload = _inventory().get_device_details(hostname)
+    return jsonify(payload)
+
+
 @blueprint.route("/api/device/description/<hostname>", methods=["POST"])
 def set_device_description(hostname: str) -> object:
     payload = request.get_json(silent=True) or {}
