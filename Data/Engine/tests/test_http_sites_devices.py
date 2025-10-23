@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("flask")
 
-from .test_http_auth import _login, prepared_app, engine_settings
+from .test_http_auth import _login
 
 
 def _ensure_admin_session(client):

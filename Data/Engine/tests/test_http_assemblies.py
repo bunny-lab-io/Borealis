@@ -2,7 +2,7 @@ import pytest
 
 pytest.importorskip("flask")
 
-from .test_http_auth import _login, prepared_app
+from .test_http_auth import _login
 
 
 def test_assembly_crud_flow(prepared_app, engine_settings):
