@@ -17,10 +17,12 @@ from Data.Engine.repositories.sqlite import (
     SQLiteGitHubRepository,
     SQLiteJobRepository,
     SQLiteRefreshTokenRepository,
+    SQLiteUserRepository,
 )
 from Data.Engine.services.auth import (
     DeviceAuthService,
     DPoPValidator,
+    OperatorAuthService,
     JWTService,
     TokenService,
     load_jwt_service,
@@ -46,6 +48,7 @@ class EngineServiceContainer:
     agent_realtime: AgentRealtimeService
     scheduler_service: SchedulerService
     github_service: GitHubService
+    operator_auth_service: OperatorAuthService
 
 
 def build_service_container(
@@ -61,6 +64,7 @@ def build_service_container(
     enrollment_repo = SQLiteEnrollmentRepository(db_factory, logger=log.getChild("enrollment"))
     job_repo = SQLiteJobRepository(db_factory, logger=log.getChild("jobs"))
     github_repo = SQLiteGitHubRepository(db_factory, logger=log.getChild("github_repo"))
+    user_repo = SQLiteUserRepository(db_factory, logger=log.getChild("users"))
 
     jwt_service = load_jwt_service()
     dpop_validator = DPoPValidator()
@@ -106,6 +110,11 @@ def build_service_container(
         logger=log.getChild("scheduler"),
     )
 
+    operator_auth_service = OperatorAuthService(
+        repository=user_repo,
+        logger=log.getChild("operator_auth"),
+    )
+
     github_provider = GitHubArtifactProvider(
         cache_file=settings.github.cache_file,
         default_repo=settings.github.default_repo,
@@ -129,6 +138,7 @@ def build_service_container(
         agent_realtime=agent_realtime,
         scheduler_service=scheduler_service,
         github_service=github_service,
+        operator_auth_service=operator_auth_service,
     )
 
 

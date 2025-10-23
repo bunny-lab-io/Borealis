@@ -26,6 +26,7 @@ try:  # pragma: no cover - optional dependency shim
     from .github_repository import SQLiteGitHubRepository
     from .job_repository import SQLiteJobRepository
     from .token_repository import SQLiteRefreshTokenRepository
+    from .user_repository import SQLiteUserRepository
 except ModuleNotFoundError as exc:  # pragma: no cover - triggered when auth deps missing
     def _missing_repo(*_args: object, **_kwargs: object) -> None:
         raise ModuleNotFoundError(
@@ -44,4 +45,5 @@ else:
         "SQLiteJobRepository",
         "SQLiteEnrollmentRepository",
         "SQLiteGitHubRepository",
+        "SQLiteUserRepository",
     ]

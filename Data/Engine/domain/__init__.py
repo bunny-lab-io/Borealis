@@ -26,6 +26,11 @@ from .github import (  # noqa: F401
     GitHubTokenStatus,
     RepoHeadSnapshot,
 )
+from .operator import (  # noqa: F401
+    OperatorAccount,
+    OperatorLoginSuccess,
+    OperatorMFAChallenge,
+)
 
 __all__ = [
     "AccessTokenClaims",
@@ -45,5 +50,8 @@ __all__ = [
     "GitHubRepoRef",
     "GitHubTokenStatus",
     "RepoHeadSnapshot",
+    "OperatorAccount",
+    "OperatorLoginSuccess",
+    "OperatorMFAChallenge",
     "sanitize_service_context",
 ]

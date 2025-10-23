@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from Data.Engine.config.environment import load_environment
 
 
@@ -59,3 +61,14 @@ def test_static_root_falls_back_to_legacy_source(tmp_path, monkeypatch):
     assert settings.flask.static_root == legacy_source.resolve()
 
     monkeypatch.delenv("BOREALIS_ROOT", raising=False)
+
+
+def test_resolve_project_root_defaults_to_repository(monkeypatch):
+    """The project root should resolve to the repository checkout."""
+
+    monkeypatch.delenv("BOREALIS_ROOT", raising=False)
+    from Data.Engine.config import environment as env_module
+
+    expected = Path(env_module.__file__).resolve().parents[3]
+
+    assert env_module._resolve_project_root() == expected

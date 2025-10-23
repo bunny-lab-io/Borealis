@@ -11,6 +11,14 @@ from .token_service import (
     TokenRefreshErrorCode,
     TokenService,
 )
+from .operator_auth_service import (
+    InvalidCredentialsError,
+    InvalidMFACodeError,
+    MFAUnavailableError,
+    MFASessionError,
+    OperatorAuthError,
+    OperatorAuthService,
+)
 
 __all__ = [
     "DeviceAuthService",
@@ -24,4 +32,10 @@ __all__ = [
     "TokenRefreshError",
     "TokenRefreshErrorCode",
     "TokenService",
+    "OperatorAuthService",
+    "OperatorAuthError",
+    "InvalidCredentialsError",
+    "InvalidMFACodeError",
+    "MFAUnavailableError",
+    "MFASessionError",
 ]

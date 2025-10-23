@@ -91,7 +91,12 @@ def _resolve_project_root() -> Path:
     candidate = os.getenv("BOREALIS_ROOT")
     if candidate:
         return Path(candidate).expanduser().resolve()
-    return Path(__file__).resolve().parents[2]
+    # ``environment.py`` lives under ``Data/Engine/config``.  The project
+    # root is three levels above this module (the repository checkout).  The
+    # previous implementation only walked up two levels which incorrectly
+    # treated ``Data/`` as the root, breaking all filesystem discovery logic
+    # that expects peers such as ``Data/Server`` to be available.
+    return Path(__file__).resolve().parents[3]
 
 
 def _resolve_database_path(project_root: Path) -> Path:

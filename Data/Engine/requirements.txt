@@ -9,3 +9,5 @@ requests
 # Auth & security
 PyJWT[crypto]
 cryptography
+pyotp
+qrcode
