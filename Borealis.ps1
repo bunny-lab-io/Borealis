@@ -977,6 +977,8 @@ if (-not $choice) {
     Write-Host "[Experimental]" -ForegroundColor Red
     Write-Host " 4) Package Self-Contained EXE of Server or Agent " -NoNewline -ForegroundColor DarkGray
     Write-Host "[Experimental]" -ForegroundColor Red
+    Write-Host " 5) Borealis Engine " -NoNewline -ForegroundColor DarkGray
+    Write-Host "[In Development]" -ForegroundColor Cyan
     # (Removed) AutoHotKey experimental testing
     Write-Host "Type a number and press " -NoNewLine
     Write-Host "<ENTER>" -ForegroundColor DarkCyan
@@ -1211,6 +1213,162 @@ switch ($choice) {
                 & (Join-Path -Path $agentScriptDir -ChildPath "Package_Borealis-Agent.ps1")
             }
             default { Write-Host "Invalid Choice. Exiting..." -ForegroundColor Red; exit 1 }
+        }
+    }
+
+    "5" {
+        $host.UI.RawUI.WindowTitle = "Borealis Engine"
+        Write-Host "Ensuring Engine Dependencies Exist..." -ForegroundColor DarkCyan
+
+        Install_Shared_Dependencies
+        Install_Server_Dependencies
+
+        foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
+            if (-not (Test-Path $tool)) {
+                Write-Host "`r$($symbols.Fail) Bundled executable not found at '$tool'." -ForegroundColor Red
+                exit 1
+            }
+        }
+        $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), (Split-Path $nodeExe), $env:PATH
+
+        Write-Host " "
+        Write-Host "Configure Borealis Engine Mode:" -ForegroundColor DarkYellow
+        Write-Host " 1) Build & Launch > Production Flask Server @ http://localhost:5001" -ForegroundColor DarkCyan
+        Write-Host " 2) [Skip Build] & Immediately Launch > Production Flask Server @ http://localhost:5001" -ForegroundColor DarkCyan
+        Write-Host " 3) Launch > [Hotload-Ready] Vite Dev Server @ http://localhost:5173" -ForegroundColor DarkCyan
+        $engineModeChoice = Read-Host "Enter choice [1/2/3]"
+
+        $engineOperationMode = "production"
+        $engineImmediateLaunch = $false
+        switch ($engineModeChoice) {
+            "1" { $engineOperationMode = "production" }
+            "2" { $engineImmediateLaunch = $true }
+            "3" { $engineOperationMode = "developer" }
+            default {
+                Write-Host "Invalid mode choice: $engineModeChoice" -ForegroundColor Red
+                break
+            }
+        }
+
+        if ($engineModeChoice -notin @('1','2','3')) {
+            break
+        }
+
+        if ($engineImmediateLaunch) {
+            Run-Step "Borealis Engine: Launch Flask Server" {
+                Push-Location (Join-Path $scriptDir "Engine")
+                $py = Join-Path $scriptDir "Engine\Scripts\python.exe"
+                Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
+                Write-Host "===================================================================================="
+                Write-Host "$($symbols.Running) Engine Socket Server Started..."
+                & $py -m Data.Engine.bootstrapper
+                Pop-Location
+            }
+            break
+        }
+
+        Write-Host "Deploying Borealis Engine in '$engineOperationMode' mode" -ForegroundColor Blue
+
+        $venvFolder            = "Engine"
+        $dataSource            = "Data"
+        $engineSource          = "$dataSource\Engine"
+        $engineDataDestination = "$venvFolder\Data\Engine"
+        $webUIFallbackSource   = "$dataSource\Server\WebUI"
+        $webUIDestination      = "$venvFolder\web-interface"
+        $venvPython            = Join-Path $venvFolder 'Scripts\python.exe'
+        $engineSourceAbsolute  = Join-Path $scriptDir $engineSource
+        $webUIFallbackAbsolute = Join-Path $scriptDir $webUIFallbackSource
+
+        Run-Step "Create Borealis Engine Virtual Python Environment" {
+            $venvActivate = Join-Path $venvFolder 'Scripts\Activate'
+            if (-not (Test-Path $venvActivate)) {
+                & $pythonExe -m venv $venvFolder | Out-Null
+            }
+
+            $engineDataRoot = Join-Path $venvFolder 'Data'
+            if (-not (Test-Path $engineDataRoot)) {
+                New-Item -Path $engineDataRoot -ItemType Directory -Force | Out-Null
+            }
+
+            if (Test-Path (Join-Path $scriptDir $engineDataDestination)) {
+                Remove-Item (Join-Path $scriptDir $engineDataDestination) -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            New-Item -Path (Join-Path $scriptDir $engineDataDestination) -ItemType Directory -Force | Out-Null
+
+            if (-not (Test-Path $engineSourceAbsolute)) {
+                throw "Engine source directory '$engineSourceAbsolute' not found."
+            }
+            Copy-Item (Join-Path $engineSourceAbsolute '*') (Join-Path $scriptDir $engineDataDestination) -Recurse -Force
+
+            . (Join-Path $venvFolder 'Scripts\Activate')
+        }
+
+        Run-Step "Install Engine Python Dependencies into Virtual Python Environment" {
+            $engineRequirements = @(
+                (Join-Path $engineSourceAbsolute 'engine-requirements.txt'),
+                (Join-Path $engineSourceAbsolute 'requirements.txt')
+            )
+            $requirementsPath = $engineRequirements | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($requirementsPath) {
+                & $venvPython -m pip install --disable-pip-version-check -q -r $requirementsPath | Out-Null
+            }
+        }
+
+        Run-Step "Copy Borealis Engine WebUI Files into: $webUIDestination" {
+            $engineWebUISource = Join-Path $engineSourceAbsolute 'WebUI'
+            if (Test-Path $engineWebUISource) {
+                $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
+                if (Test-Path $webUIDestinationAbsolute) {
+                    Remove-Item (Join-Path $webUIDestinationAbsolute '*') -Recurse -Force -ErrorAction SilentlyContinue
+                } else {
+                    New-Item -Path $webUIDestinationAbsolute -ItemType Directory -Force | Out-Null
+                }
+                Copy-Item (Join-Path $engineWebUISource '*') $webUIDestinationAbsolute -Recurse -Force
+            } elseif (-not (Test-Path (Join-Path $scriptDir $webUIDestination)) -or -not (Get-ChildItem -Path (Join-Path $scriptDir $webUIDestination) -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+                if (Test-Path $webUIFallbackAbsolute) {
+                    $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
+                    if (-not (Test-Path $webUIDestinationAbsolute)) {
+                        New-Item -Path $webUIDestinationAbsolute -ItemType Directory -Force | Out-Null
+                    }
+                    Copy-Item (Join-Path $webUIFallbackAbsolute '*') $webUIDestinationAbsolute -Recurse -Force
+                } else {
+                    Write-Host "Fallback WebUI source not found at '$webUIFallbackAbsolute'." -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "Existing Engine web interface detected; skipping fallback copy." -ForegroundColor DarkYellow
+            }
+        }
+
+        Run-Step "Vite Web Frontend: Install NPM Packages" {
+            $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
+            if (Test-Path $webUIDestinationAbsolute) {
+                Push-Location $webUIDestinationAbsolute
+                $env:npm_config_loglevel = "silent"
+                & $npmCmd install --silent --no-fund --audit=false | Out-Null
+                Pop-Location
+            } else {
+                Write-Host "Web interface destination '$webUIDestinationAbsolute' not found." -ForegroundColor Yellow
+            }
+        }
+
+        Run-Step "Vite Web Frontend: Start ($engineOperationMode)" {
+            $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
+            if (Test-Path $webUIDestinationAbsolute) {
+                Push-Location $webUIDestinationAbsolute
+                if ($engineOperationMode -eq "developer") { $viteSubCommand = "dev" } else { $viteSubCommand = "build" }
+                Start-Process -NoNewWindow -FilePath $npmCmd -ArgumentList @("run", $viteSubCommand)
+                Pop-Location
+            }
+        }
+
+        Run-Step "Borealis Engine: Launch Flask Server" {
+            Push-Location (Join-Path $scriptDir "Engine")
+            $py = Join-Path $scriptDir "Engine\Scripts\python.exe"
+            Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
+            Write-Host "===================================================================================="
+            Write-Host "$($symbols.Running) Engine Socket Server Started..."
+            & $py -m Data.Engine.bootstrapper
+            Pop-Location
         }
     }
 

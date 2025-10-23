@@ -1,0 +1,44 @@
+"""Tests for environment configuration helpers."""
+
+from __future__ import annotations
+
+from Data.Engine.config.environment import load_environment
+
+
+def test_static_root_prefers_engine_runtime(tmp_path, monkeypatch):
+    """Engine static root should prefer the staged web-interface build."""
+
+    engine_build = tmp_path / "Engine" / "web-interface" / "build"
+    engine_build.mkdir(parents=True)
+    (engine_build / "index.html").write_text("<html></html>", encoding="utf-8")
+
+    # Ensure other fallbacks exist but should not be selected while the Engine
+    # runtime assets are present.
+    legacy_build = tmp_path / "Data" / "Server" / "WebUI" / "build"
+    legacy_build.mkdir(parents=True)
+    (legacy_build / "index.html").write_text("legacy", encoding="utf-8")
+
+    monkeypatch.setenv("BOREALIS_ROOT", str(tmp_path))
+    monkeypatch.delenv("BOREALIS_STATIC_ROOT", raising=False)
+
+    settings = load_environment()
+
+    assert settings.flask.static_root == engine_build.resolve()
+
+
+def test_static_root_env_override(tmp_path, monkeypatch):
+    """Explicit overrides should win over filesystem detection."""
+
+    override = tmp_path / "custom" / "build"
+    override.mkdir(parents=True)
+    (override / "index.html").write_text("override", encoding="utf-8")
+
+    monkeypatch.setenv("BOREALIS_ROOT", str(tmp_path))
+    monkeypatch.setenv("BOREALIS_STATIC_ROOT", str(override))
+
+    settings = load_environment()
+
+    assert settings.flask.static_root == override.resolve()
+
+    monkeypatch.delenv("BOREALIS_STATIC_ROOT", raising=False)
+    monkeypatch.delenv("BOREALIS_ROOT", raising=False)
