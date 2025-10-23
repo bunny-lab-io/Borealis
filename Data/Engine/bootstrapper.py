@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from flask import Flask
@@ -13,10 +15,15 @@ from .interfaces import (
     register_http_interfaces,
     register_ws_interfaces,
 )
+from .interfaces.eventlet_compat import apply_eventlet_patches
 from .repositories.sqlite import connection as sqlite_connection
 from .repositories.sqlite import migrations as sqlite_migrations
 from .server import create_app
 from .services.container import build_service_container
+from .services.crypto.certificates import ensure_certificate
+
+
+apply_eventlet_patches()
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +34,9 @@ class EngineRuntime:
     settings: EngineSettings
     socketio: Optional[object]
     db_factory: sqlite_connection.SQLiteConnectionFactory
+    tls_certificate: Path
+    tls_key: Path
+    tls_bundle: Path
 
 
 def bootstrap() -> EngineRuntime:
@@ -35,6 +45,17 @@ def bootstrap() -> EngineRuntime:
     settings = load_environment()
     logger = configure_logging(settings)
     logger.info("bootstrap-started")
+
+    cert_path, key_path, bundle_path = ensure_certificate()
+    os.environ.setdefault("BOREALIS_TLS_BUNDLE", str(bundle_path))
+    logger.info(
+        "tls-material-ready",
+        extra={
+            "cert_path": str(cert_path),
+            "key_path": str(key_path),
+            "bundle_path": str(bundle_path),
+        },
+    )
 
     db_factory = sqlite_connection.connection_factory(settings.database_path)
     if settings.apply_migrations:
@@ -53,24 +74,38 @@ def bootstrap() -> EngineRuntime:
     register_ws_interfaces(socketio, services)
     services.scheduler_service.start(socketio)
     logger.info("bootstrap-complete")
-    return EngineRuntime(app=app, settings=settings, socketio=socketio, db_factory=db_factory)
+    return EngineRuntime(
+        app=app,
+        settings=settings,
+        socketio=socketio,
+        db_factory=db_factory,
+        tls_certificate=cert_path,
+        tls_key=key_path,
+        tls_bundle=bundle_path,
+    )
 
 
 def main() -> None:
     runtime = bootstrap()
     socketio = runtime.socketio
+    certfile = str(runtime.tls_bundle)
+    keyfile = str(runtime.tls_key)
+
     if socketio is not None:
         socketio.run(  # type: ignore[call-arg]
             runtime.app,
             host=runtime.settings.server.host,
             port=runtime.settings.server.port,
             debug=runtime.settings.debug,
+            certfile=certfile,
+            keyfile=keyfile,
         )
     else:
         runtime.app.run(
             host=runtime.settings.server.host,
             port=runtime.settings.server.port,
             debug=runtime.settings.debug,
+            ssl_context=(certfile, keyfile),
         )
 
 

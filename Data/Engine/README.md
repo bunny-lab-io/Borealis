@@ -52,6 +52,26 @@ The Engine mirrors the legacy defaults so it can boot without additional configu
 | `BOREALIS_REPO_BRANCH` | Default branch tracked by the Engine GitHub integration. | `main` |
 | `BOREALIS_REPO_HASH_REFRESH` | Seconds between default repository head refresh attempts (clamped 30-3600). | `60` |
 | `BOREALIS_CACHE_DIR` | Directory used to persist Engine cache files (GitHub repo head cache). | `<project_root>/Data/Engine/cache` |
+| `BOREALIS_CERTIFICATES_ROOT` | Overrides where TLS certificates (root CA + leaf) are stored. | `<project_root>/Certificates` |
+| `BOREALIS_SERVER_CERT_ROOT` | Directly points to the Engine server certificate directory if certificates are staged elsewhere. | `<project_root>/Certificates/Server` |
+
+## TLS and transport stack
+
+`Data/Engine/services/crypto/certificates.py` mirrors the legacy certificate
+generator so the Engine always serves HTTPS with a self-managed root CA and
+leaf certificate.  During bootstrap the Engine:
+
+1. Runs the certificate helper to ensure the root CA, server key, and bundle
+   exist under `Certificates/Server/` (or the configured override path).
+2. Exposes the resulting bundle via `BOREALIS_TLS_BUNDLE` so enrollment flows
+   can deliver the pinned certificate to agents.
+3. Launches Socket.IO/Eventlet with the generated cert/key pair.  A fallback to
+   Werkzeug’s TLS support keeps HTTPS available even if Socket.IO is disabled.
+
+`Data/Engine/interfaces/eventlet_compat.py` applies the same Eventlet monkey
+patch as the legacy server so TLS handshakes presented to the HTTP listener are
+handled quietly instead of surfacing `400 Bad Request` noise when non-TLS
+clients connect.
 
 ## Logging expectations
 
@@ -166,6 +186,8 @@ The suite currently validates:
   malformed requests.
 - SQLite schema migrations to ensure the Engine can provision required tables in
   a fresh database.
+- TLS certificate provisioning helpers to guarantee HTTPS material exists before
+  the Engine starts serving requests.
 
 Successful execution prints a summary similar to:
 
