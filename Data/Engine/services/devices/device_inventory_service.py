@@ -14,7 +14,7 @@ from Data.Engine.repositories.sqlite.device_inventory_repository import (
     SQLiteDeviceInventoryRepository,
 )
 from Data.Engine.domain.device_auth import DeviceAuthContext, normalize_guid
-from Data.Engine.domain.devices import clean_device_str, coerce_int
+from Data.Engine.domain.devices import clean_device_str, coerce_int, ts_to_human
 
 __all__ = [
     "DeviceInventoryService",
@@ -240,7 +240,7 @@ class DeviceInventoryService:
         summary["hostname"] = hostname
 
         if metrics:
-            last_user = metrics.get("last_user")
+            last_user = metrics.get("last_user") or metrics.get("username") or metrics.get("user")
             if last_user:
                 cleaned_user = clean_device_str(last_user)
                 if cleaned_user:
@@ -422,6 +422,8 @@ class DeviceInventoryService:
         if created_at is None:
             created_at = int(time.time())
         merged_summary["created_at"] = created_at
+        if not merged_summary.get("created"):
+            merged_summary["created"] = ts_to_human(created_at)
 
         if fingerprint:
             merged_summary["ssl_key_fingerprint"] = fingerprint
@@ -431,6 +433,14 @@ class DeviceInventoryService:
             merged_summary["token_version"] = 1
         if not merged_summary.get("status") and snapshot.get("summary", {}).get("status"):
             merged_summary["status"] = snapshot.get("summary", {}).get("status")
+        uptime_val = merged_summary.get("uptime")
+        if merged_summary.get("uptime_sec") is None and uptime_val is not None:
+            coerced = coerce_int(uptime_val)
+            if coerced is not None:
+                merged_summary["uptime_sec"] = coerced
+                merged_summary.setdefault("uptime_seconds", coerced)
+        if merged_summary.get("uptime_seconds") is None and merged_summary.get("uptime_sec") is not None:
+            merged_summary["uptime_seconds"] = merged_summary.get("uptime_sec")
 
         description = clean_device_str(merged_summary.get("description"))
         existing_description = snapshot.get("description") if snapshot else ""

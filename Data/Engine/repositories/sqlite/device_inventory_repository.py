@@ -278,28 +278,60 @@ class SQLiteDeviceInventoryRepository:
         for field in ("memory", "network", "software", "storage"):
             payload[field] = serialize_device_json(details.get(field), [])
         payload["cpu"] = serialize_device_json(summary.get("cpu") or details.get("cpu"), {})
-        payload["device_type"] = clean_device_str(summary.get("device_type") or summary.get("type"))
-        payload["domain"] = clean_device_str(summary.get("domain"))
-        payload["external_ip"] = clean_device_str(summary.get("external_ip") or summary.get("public_ip"))
-        payload["internal_ip"] = clean_device_str(summary.get("internal_ip") or summary.get("private_ip"))
-        payload["last_reboot"] = clean_device_str(summary.get("last_reboot") or summary.get("last_boot"))
-        payload["last_seen"] = coerce_int(summary.get("last_seen"))
+        payload["device_type"] = clean_device_str(
+            summary.get("device_type")
+            or summary.get("type")
+            or summary.get("device_class")
+        )
+        payload["domain"] = clean_device_str(
+            summary.get("domain") or summary.get("domain_name")
+        )
+        payload["external_ip"] = clean_device_str(
+            summary.get("external_ip") or summary.get("public_ip")
+        )
+        payload["internal_ip"] = clean_device_str(
+            summary.get("internal_ip") or summary.get("private_ip")
+        )
+        payload["last_reboot"] = clean_device_str(
+            summary.get("last_reboot") or summary.get("last_boot")
+        )
+        payload["last_seen"] = coerce_int(
+            summary.get("last_seen") or summary.get("last_seen_epoch")
+        )
         payload["last_user"] = clean_device_str(
             summary.get("last_user")
             or summary.get("last_user_name")
             or summary.get("logged_in_user")
+            or summary.get("username")
+            or summary.get("user")
         )
         payload["operating_system"] = clean_device_str(
-            summary.get("operating_system") or summary.get("os")
+            summary.get("operating_system")
+            or summary.get("agent_operating_system")
+            or summary.get("os")
         )
-        payload["uptime"] = coerce_int(summary.get("uptime"))
+        uptime_value = (
+            summary.get("uptime_sec")
+            or summary.get("uptime_seconds")
+            or summary.get("uptime")
+        )
+        payload["uptime"] = coerce_int(uptime_value)
         payload["agent_id"] = clean_device_str(summary.get("agent_id"))
         payload["ansible_ee_ver"] = clean_device_str(summary.get("ansible_ee_ver"))
-        payload["connection_type"] = clean_device_str(summary.get("connection_type"))
-        payload["connection_endpoint"] = clean_device_str(
-            summary.get("connection_endpoint") or summary.get("endpoint")
+        payload["connection_type"] = clean_device_str(
+            summary.get("connection_type") or summary.get("remote_type")
         )
-        payload["ssl_key_fingerprint"] = clean_device_str(summary.get("ssl_key_fingerprint"))
+        payload["connection_endpoint"] = clean_device_str(
+            summary.get("connection_endpoint")
+            or summary.get("endpoint")
+            or summary.get("connection_address")
+            or summary.get("address")
+            or summary.get("external_ip")
+            or summary.get("internal_ip")
+        )
+        payload["ssl_key_fingerprint"] = clean_device_str(
+            summary.get("ssl_key_fingerprint")
+        )
         payload["token_version"] = coerce_int(summary.get("token_version")) or 0
         payload["status"] = clean_device_str(summary.get("status"))
         payload["key_added_at"] = clean_device_str(summary.get("key_added_at"))

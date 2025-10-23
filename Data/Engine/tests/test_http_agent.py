@@ -255,10 +255,14 @@ def test_agent_details_persists_inventory(prepared_app, monkeypatch):
                 "last_user": "BUNNY-LAB\\nicole.rappe",
                 "operating_system": "Windows 11",
                 "description": "Primary workstation",
+                "last_reboot": "2025-10-01 10:00:00",
+                "uptime": 3600,
             },
             "memory": [{"slot": "DIMM0", "capacity": 17179869184}],
             "storage": [{"model": "NVMe", "size": 512}],
             "network": [{"adapter": "Ethernet", "ips": ["192.168.1.50"]}],
+            "software": [{"name": "Borealis Agent", "version": "2.0"}],
+            "cpu": {"name": "Intel Core i7", "logical_cores": 8, "base_clock_ghz": 3.4},
         },
     }
 
@@ -290,6 +294,26 @@ def test_agent_details_persists_inventory(prepared_app, monkeypatch):
     assert json.loads(memory_json)[0]["capacity"] == 17179869184
     assert json.loads(storage_json)[0]["model"] == "NVMe"
     assert json.loads(network_json)[0]["ips"][0] == "192.168.1.50"
+
+    resp = client.get("/api/devices")
+    assert resp.status_code == 200
+    listing = resp.get_json()
+    device = next((dev for dev in listing.get("devices", []) if dev["hostname"] == hostname), None)
+    assert device is not None
+    summary = device["summary"]
+    details = device["details"]
+
+    assert summary["device_type"] == "Laptop"
+    assert summary["last_user"] == "BUNNY-LAB\\nicole.rappe"
+    assert summary["created"]
+    assert summary.get("uptime_sec") == 3600
+    assert details["summary"]["device_type"] == "Laptop"
+    assert details["summary"]["last_reboot"] == "2025-10-01 10:00:00"
+    assert details["summary"]["created"] == summary["created"]
+    assert details["software"][0]["name"] == "Borealis Agent"
+    assert device["storage"][0]["model"] == "NVMe"
+    assert device["memory"][0]["capacity"] == 17179869184
+    assert device["cpu"]["name"] == "Intel Core i7"
 
 
 def test_heartbeat_preserves_last_user_from_details(prepared_app, monkeypatch):
@@ -329,4 +353,33 @@ def test_heartbeat_preserves_last_user_from_details(prepared_app, monkeypatch):
 
     assert row is not None
     assert row[0] == "BUNNY-LAB\\nicole.rappe"
+
+
+def test_heartbeat_uses_username_when_last_user_missing(prepared_app, monkeypatch):
+    client = prepared_app.test_client()
+    guid = "802A4E5F-1B2C-4D5E-8F90-A1B2C3D4E5F7"
+    fingerprint = "55:66:77:88"
+    hostname = "device-username"
+    _insert_device(prepared_app, guid, fingerprint, hostname)
+
+    services = prepared_app.extensions["engine_services"]
+    context = _build_context(guid, fingerprint)
+    monkeypatch.setattr(services.device_auth, "authenticate", lambda request, path: context)
+
+    resp = client.post(
+        "/api/agent/heartbeat",
+        json={"hostname": hostname, "metrics": {"username": "BUNNY-LAB\\alice.smith"}},
+        headers={"Authorization": "Bearer token"},
+    )
+    assert resp.status_code == 200
+
+    db_path = Path(prepared_app.config["ENGINE_DATABASE_PATH"])
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT last_user FROM devices WHERE guid = ?",
+            (guid,),
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == "BUNNY-LAB\\alice.smith"
 

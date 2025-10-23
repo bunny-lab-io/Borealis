@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from Data.Engine.domain.device_auth import normalize_guid
+
 __all__ = [
     "DEVICE_TABLE_COLUMNS",
     "DEVICE_TABLE",
@@ -91,8 +93,13 @@ class DeviceSnapshot:
     operating_system: str
     uptime: int
     agent_id: str
+    ansible_ee_ver: str
     connection_type: str
     connection_endpoint: str
+    ssl_key_fingerprint: str
+    token_version: int
+    status: str
+    key_added_at: str
     details: Dict[str, Any]
     summary: Dict[str, Any]
 
@@ -121,8 +128,13 @@ class DeviceSnapshot:
             "operating_system": self.operating_system,
             "uptime": self.uptime,
             "agent_id": self.agent_id,
+            "ansible_ee_ver": self.ansible_ee_ver,
             "connection_type": self.connection_type,
             "connection_endpoint": self.connection_endpoint,
+            "ssl_key_fingerprint": self.ssl_key_fingerprint,
+            "token_version": self.token_version,
+            "status": self.status,
+            "key_added_at": self.key_added_at,
             "details": self.details,
             "summary": self.summary,
         }
@@ -211,33 +223,16 @@ def row_to_device_dict(row: Sequence[Any], columns: Sequence[str]) -> Dict[str, 
 
 
 def assemble_device_snapshot(record: Mapping[str, Any]) -> Dict[str, Any]:
-    summary = {
-        "hostname": record.get("hostname") or "",
-        "description": record.get("description") or "",
-        "device_type": record.get("device_type") or "",
-        "domain": record.get("domain") or "",
-        "external_ip": record.get("external_ip") or "",
-        "internal_ip": record.get("internal_ip") or "",
-        "last_reboot": record.get("last_reboot") or "",
-        "last_seen": record.get("last_seen") or 0,
-        "last_user": record.get("last_user") or "",
-        "operating_system": record.get("operating_system") or "",
-        "uptime": record.get("uptime") or 0,
-        "agent_id": record.get("agent_id") or "",
-        "agent_hash": record.get("agent_hash") or "",
-        "agent_guid": record.get("guid") or record.get("agent_guid") or "",
-        "connection_type": record.get("connection_type") or "",
-        "connection_endpoint": record.get("connection_endpoint") or "",
-        "ssl_key_fingerprint": record.get("ssl_key_fingerprint") or "",
-        "status": record.get("status") or "",
-        "token_version": record.get("token_version") or 0,
-        "key_added_at": record.get("key_added_at") or "",
-        "created_at": record.get("created_at") or 0,
-    }
+    hostname = clean_device_str(record.get("hostname")) or ""
+    description = clean_device_str(record.get("description")) or ""
+    agent_hash = clean_device_str(record.get("agent_hash")) or ""
+    raw_guid = clean_device_str(record.get("guid"))
+    normalized_guid = normalize_guid(raw_guid)
 
-    created_ts = coerce_int(summary.get("created_at")) or 0
-    last_seen_ts = coerce_int(summary.get("last_seen")) or 0
-    uptime_val = coerce_int(summary.get("uptime")) or 0
+    created_ts = coerce_int(record.get("created_at")) or 0
+    last_seen_ts = coerce_int(record.get("last_seen")) or 0
+    uptime_val = coerce_int(record.get("uptime")) or 0
+    token_version = coerce_int(record.get("token_version")) or 0
 
     parsed_lists = {
         key: _parse_device_json(record.get(key), default)
@@ -245,20 +240,48 @@ def assemble_device_snapshot(record: Mapping[str, Any]) -> Dict[str, Any]:
     }
     cpu_obj = _parse_device_json(record.get("cpu"), DEVICE_JSON_OBJECT_FIELDS["cpu"])
 
+    summary: Dict[str, Any] = {
+        "hostname": hostname,
+        "description": description,
+        "agent_hash": agent_hash,
+        "agent_guid": normalized_guid or "",
+        "agent_id": clean_device_str(record.get("agent_id")) or "",
+        "device_type": clean_device_str(record.get("device_type")) or "",
+        "domain": clean_device_str(record.get("domain")) or "",
+        "external_ip": clean_device_str(record.get("external_ip")) or "",
+        "internal_ip": clean_device_str(record.get("internal_ip")) or "",
+        "last_reboot": clean_device_str(record.get("last_reboot")) or "",
+        "last_seen": last_seen_ts,
+        "last_user": clean_device_str(record.get("last_user")) or "",
+        "operating_system": clean_device_str(record.get("operating_system")) or "",
+        "uptime": uptime_val,
+        "uptime_sec": uptime_val,
+        "ansible_ee_ver": clean_device_str(record.get("ansible_ee_ver")) or "",
+        "connection_type": clean_device_str(record.get("connection_type")) or "",
+        "connection_endpoint": clean_device_str(record.get("connection_endpoint")) or "",
+        "ssl_key_fingerprint": clean_device_str(record.get("ssl_key_fingerprint")) or "",
+        "status": clean_device_str(record.get("status")) or "",
+        "token_version": token_version,
+        "key_added_at": clean_device_str(record.get("key_added_at")) or "",
+        "created_at": created_ts,
+        "created": ts_to_human(created_ts),
+    }
+
     details = {
         "memory": parsed_lists["memory"],
         "network": parsed_lists["network"],
         "software": parsed_lists["software"],
         "storage": parsed_lists["storage"],
         "cpu": cpu_obj,
+        "summary": dict(summary),
     }
 
     payload: Dict[str, Any] = {
-        "hostname": summary["hostname"],
-        "description": summary.get("description", ""),
+        "hostname": hostname,
+        "description": description,
         "created_at": created_ts,
         "created_at_iso": ts_to_iso(created_ts),
-        "agent_hash": summary.get("agent_hash", ""),
+        "agent_hash": agent_hash,
         "agent_guid": summary.get("agent_guid", ""),
         "guid": summary.get("agent_guid", ""),
         "memory": parsed_lists["memory"],
@@ -277,8 +300,13 @@ def assemble_device_snapshot(record: Mapping[str, Any]) -> Dict[str, Any]:
         "operating_system": summary.get("operating_system", ""),
         "uptime": uptime_val,
         "agent_id": summary.get("agent_id", ""),
+        "ansible_ee_ver": summary.get("ansible_ee_ver", ""),
         "connection_type": summary.get("connection_type", ""),
         "connection_endpoint": summary.get("connection_endpoint", ""),
+        "ssl_key_fingerprint": summary.get("ssl_key_fingerprint", ""),
+        "token_version": summary.get("token_version", 0),
+        "status": summary.get("status", ""),
+        "key_added_at": summary.get("key_added_at", ""),
         "details": details,
         "summary": summary,
     }
