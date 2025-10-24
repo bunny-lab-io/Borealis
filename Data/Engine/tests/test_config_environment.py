@@ -63,6 +63,23 @@ def test_static_root_falls_back_to_legacy_source(tmp_path, monkeypatch):
     monkeypatch.delenv("BOREALIS_ROOT", raising=False)
 
 
+def test_static_root_handles_data_root_override(tmp_path, monkeypatch):
+    """A Data/ override should still discover the legacy WebUI assets."""
+
+    legacy_source = tmp_path / "Data" / "Server" / "WebUI"
+    legacy_source.mkdir(parents=True)
+    (legacy_source / "index.html").write_text("<html></html>", encoding="utf-8")
+
+    monkeypatch.setenv("BOREALIS_ROOT", str(tmp_path / "Data"))
+    monkeypatch.delenv("BOREALIS_STATIC_ROOT", raising=False)
+
+    settings = load_environment()
+
+    assert settings.flask.static_root == legacy_source.resolve()
+
+    monkeypatch.delenv("BOREALIS_ROOT", raising=False)
+
+
 def test_static_root_considers_runtime_copy(tmp_path, monkeypatch):
     """Runtime Server/WebUI copies should be considered when Data assets are missing."""
 
@@ -89,3 +106,30 @@ def test_resolve_project_root_defaults_to_repository(monkeypatch):
     expected = Path(env_module.__file__).resolve().parents[3]
 
     assert env_module._resolve_project_root() == expected
+
+
+def test_resolve_project_root_normalizes_data_dir(monkeypatch, tmp_path):
+    """Explicit Data/ overrides should collapse to the repository root."""
+
+    data_root = tmp_path / "Data"
+    engine_root = data_root / "Engine"
+    engine_root.mkdir(parents=True)
+
+    monkeypatch.setenv("BOREALIS_ROOT", str(data_root))
+
+    from Data.Engine.config import environment as env_module
+
+    assert env_module._resolve_project_root() == tmp_path
+
+
+def test_resolve_project_root_normalizes_engine_dir(monkeypatch, tmp_path):
+    """Explicit Data/Engine overrides should collapse to the repository root."""
+
+    engine_root = tmp_path / "Data" / "Engine"
+    engine_root.mkdir(parents=True)
+
+    monkeypatch.setenv("BOREALIS_ROOT", str(engine_root))
+
+    from Data.Engine.config import environment as env_module
+
+    assert env_module._resolve_project_root() == tmp_path
