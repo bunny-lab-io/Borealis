@@ -178,8 +178,9 @@ class GitHubArtifactProvider:
             "Authorization": f"Bearer {token}",
             "User-Agent": "Borealis-Engine",
         }
+        url = f"https://api.github.com/repos/{self._default_repo}/branches/{self._default_branch}"
         try:
-            response: Response = requests.get("https://api.github.com/rate_limit", headers=headers, timeout=10)
+            response: Response = requests.get(url, headers=headers, timeout=20)
         except Exception as exc:  # pragma: no cover - defensive logging
             message = f"GitHub token verification raised: {exc}"
             self._log.warning("github-token-verify error=%s", message)
@@ -192,35 +193,57 @@ class GitHubArtifactProvider:
                 error=message,
             )
 
-        if response.status_code != 200:
-            message = f"GitHub API error (HTTP {response.status_code})"
-            self._log.warning("github-token-verify http_status=%s", response.status_code)
+        limit = _safe_int(response.headers.get("X-RateLimit-Limit"))
+        remaining = _safe_int(response.headers.get("X-RateLimit-Remaining"))
+        reset = _safe_int(response.headers.get("X-RateLimit-Reset"))
+        used = _safe_int(response.headers.get("X-RateLimit-Used"))
+        rate_limit = GitHubRateLimit(limit=limit, remaining=remaining, reset_epoch=reset, used=used)
+
+        if response.status_code == 200:
+            if rate_limit.limit is not None and rate_limit.limit >= 5000:
+                return GitHubTokenStatus(
+                    has_token=True,
+                    valid=True,
+                    status="ok",
+                    message="API Authentication Successful",
+                    rate_limit=rate_limit,
+                    error=None,
+                )
+
+            error_message = "Authenticated request did not elevate GitHub rate limits"
+            self._log.warning("github-token-verify insufficient-limit limit=%s", rate_limit.limit)
             return GitHubTokenStatus(
                 has_token=True,
                 valid=False,
-                status="error",
+                status="insufficient",
                 message="API Token Invalid",
-                rate_limit=None,
-                error=message,
+                rate_limit=rate_limit,
+                error=error_message,
             )
 
-        data = response.json()
-        core = (data.get("resources", {}).get("core", {}) if isinstance(data, dict) else {})
-        rate_limit = GitHubRateLimit(
-            limit=_safe_int(core.get("limit")),
-            remaining=_safe_int(core.get("remaining")),
-            reset_epoch=_safe_int(core.get("reset")),
-            used=_safe_int(core.get("used")),
-        )
+        if response.status_code == 401:
+            error_message = response.text[:200]
+            self._log.warning("github-token-verify unauthorized")
+            return GitHubTokenStatus(
+                has_token=True,
+                valid=False,
+                status="invalid",
+                message="API Token Invalid",
+                rate_limit=rate_limit,
+                error=error_message,
+            )
 
-        message = "API Token Valid" if rate_limit.remaining is not None else "API Token Verified"
+        message = f"GitHub API error (HTTP {response.status_code})"
+        self._log.warning(
+            "github-token-verify http_status=%s", response.status_code
+        )
         return GitHubTokenStatus(
             has_token=True,
-            valid=True,
-            status="valid",
-            message=message,
+            valid=False,
+            status="error",
+            message="API Token Invalid",
             rate_limit=rate_limit,
-            error=None,
+            error=message,
         )
 
     def start_background_refresh(self) -> None:
