@@ -49,7 +49,7 @@ class _AgentEventHandlers:
     # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
-    def on_connect(self) -> None:
+    def on_connect(self, auth: Optional[Dict[str, Any]] = None) -> None:
         sid = getattr(request, "sid", "<unknown>")
         remote_addr = getattr(request, "remote_addr", None)
         transport = None

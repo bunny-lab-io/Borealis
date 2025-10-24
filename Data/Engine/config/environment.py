@@ -90,7 +90,19 @@ class EngineSettings:
 def _resolve_project_root() -> Path:
     candidate = os.getenv("BOREALIS_ROOT")
     if candidate:
-        return Path(candidate).expanduser().resolve()
+        path = Path(candidate).expanduser().resolve()
+        # Normalise common overrides that point to the ``Data`` staging tree.
+        # Launch scripts historically exported ``BOREALIS_ROOT`` as either the
+        # ``Data`` directory itself or ``Data/Engine``.  In both cases we need
+        # to surface the repository checkout (one level above ``Data``) so the
+        # static asset resolver can discover the web interface alongside the
+        # server code.
+        lower_name = path.name.lower()
+        if lower_name == "engine" and path.parent.name.lower() == "data":
+            return path.parent.parent
+        if lower_name == "data":
+            return path.parent
+        return path
     # ``environment.py`` lives under ``Data/Engine/config``.  The project
     # root is three levels above this module (the repository checkout).  The
     # previous implementation only walked up two levels which incorrectly
@@ -117,6 +129,9 @@ def _resolve_static_root(project_root: Path) -> Path:
         return Path(candidate).expanduser().resolve()
 
     candidates = (
+        project_root / "web-interface" / "build",
+        project_root / "web-interface" / "dist",
+        project_root / "web-interface",
         project_root / "Engine" / "web-interface" / "build",
         project_root / "Engine" / "web-interface" / "dist",
         project_root / "Engine" / "web-interface",
