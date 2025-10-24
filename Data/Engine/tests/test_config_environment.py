@@ -80,6 +80,24 @@ def test_static_root_handles_data_root_override(tmp_path, monkeypatch):
     monkeypatch.delenv("BOREALIS_ROOT", raising=False)
 
 
+def test_static_root_handles_engine_root_override(tmp_path, monkeypatch):
+    """An Engine/ override should resolve assets within the runtime copy."""
+
+    runtime_root = tmp_path / "Engine"
+    assets_root = runtime_root / "web-interface" / "build"
+    assets_root.mkdir(parents=True)
+    (assets_root / "index.html").write_text("runtime", encoding="utf-8")
+
+    monkeypatch.setenv("BOREALIS_ROOT", str(runtime_root))
+    monkeypatch.delenv("BOREALIS_STATIC_ROOT", raising=False)
+
+    settings = load_environment()
+
+    assert settings.flask.static_root == assets_root.resolve()
+
+    monkeypatch.delenv("BOREALIS_ROOT", raising=False)
+
+
 def test_static_root_considers_runtime_copy(tmp_path, monkeypatch):
     """Runtime Server/WebUI copies should be considered when Data assets are missing."""
 

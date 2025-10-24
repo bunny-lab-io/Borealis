@@ -129,6 +129,9 @@ def _resolve_static_root(project_root: Path) -> Path:
         return Path(candidate).expanduser().resolve()
 
     candidates = (
+        project_root / "web-interface" / "build",
+        project_root / "web-interface" / "dist",
+        project_root / "web-interface",
         project_root / "Engine" / "web-interface" / "build",
         project_root / "Engine" / "web-interface" / "dist",
         project_root / "Engine" / "web-interface",
