@@ -14,6 +14,42 @@ import SaveIcon from "@mui/icons-material/Save";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 
+const coerceNumber = (value) => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+const normalizeRateLimit = (raw) => {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  if (typeof raw === "number") {
+    const limit = coerceNumber(raw);
+    return limit === null
+      ? null
+      : { limit, remaining: null, reset: null, used: null };
+  }
+  if (typeof raw === "object") {
+    const limit = coerceNumber(raw.limit);
+    const remaining = coerceNumber(raw.remaining);
+    const reset = coerceNumber(raw.reset);
+    const used = coerceNumber(raw.used);
+    if (limit === null && remaining === null && reset === null && used === null) {
+      return null;
+    }
+    return { limit, remaining, reset, used };
+  }
+  return null;
+};
+
 const paperSx = {
   m: 2,
   p: 0,
@@ -54,6 +90,14 @@ export default function GithubAPIToken({ isAdmin = false }) {
     error: ""
   });
 
+  const mapVerification = useCallback((data) => ({
+    message: typeof data?.message === "string" ? data.message : "",
+    valid: data?.valid === true,
+    status: typeof data?.status === "string" ? data.status : "",
+    rateLimit: normalizeRateLimit(data?.rate_limit),
+    error: typeof data?.error === "string" ? data.error : ""
+  }), []);
+
   const hydrate = useCallback(async () => {
     setLoading(true);
     setFetchError("");
@@ -67,13 +111,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
       setToken(storedToken);
       setInputValue(storedToken);
       setShowToken(false);
-      setVerification({
-        message: typeof data?.message === "string" ? data.message : "",
-        valid: data?.valid === true,
-        status: typeof data?.status === "string" ? data.status : "",
-        rateLimit: typeof data?.rate_limit === "number" ? data.rate_limit : null,
-        error: typeof data?.error === "string" ? data.error : ""
-      });
+      setVerification(mapVerification(data));
     } catch (err) {
       const message = err && typeof err.message === "string" ? err.message : String(err);
       setFetchError(message);
@@ -83,7 +121,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [mapVerification]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -107,20 +145,14 @@ export default function GithubAPIToken({ isAdmin = false }) {
       setToken(storedToken);
       setInputValue(storedToken);
       setShowToken(false);
-      setVerification({
-        message: typeof data?.message === "string" ? data.message : "",
-        valid: data?.valid === true,
-        status: typeof data?.status === "string" ? data.status : "",
-        rateLimit: typeof data?.rate_limit === "number" ? data.rate_limit : null,
-        error: typeof data?.error === "string" ? data.error : ""
-      });
+      setVerification(mapVerification(data));
     } catch (err) {
       const message = err && typeof err.message === "string" ? err.message : String(err);
       setFetchError(message);
     } finally {
       setSaving(false);
     }
-  }, [inputValue]);
+  }, [inputValue, mapVerification]);
 
   const dirty = useMemo(() => inputValue !== token, [inputValue, token]);
 
@@ -140,6 +172,20 @@ export default function GithubAPIToken({ isAdmin = false }) {
     }
     return { text: message, color: "#ff8080" };
   }, [dirty, verification]);
+
+  const rateLimitSummary = useMemo(() => {
+    if (dirty || !verification.rateLimit) {
+      return "";
+    }
+    const parts = [];
+    if (typeof verification.rateLimit.limit === "number") {
+      parts.push(`Hourly Request Rate Limit: ${verification.rateLimit.limit.toLocaleString()}`);
+    }
+    if (typeof verification.rateLimit.remaining === "number") {
+      parts.push(`Remaining: ${verification.rateLimit.remaining.toLocaleString()}`);
+    }
+    return parts.join(" · ");
+  }, [dirty, verification.rateLimit]);
 
   const toggleReveal = useCallback(() => {
     setShowToken((prev) => !prev);
@@ -279,7 +325,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
           >
             Refresh
           </Button>
-          {(verificationMessage.text || (!dirty && verification.rateLimit)) && (
+          {(verificationMessage.text || rateLimitSummary) && (
             <Typography
               variant="body2"
               sx={{
@@ -290,9 +336,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
               }}
             >
               {verificationMessage.text && `${verificationMessage.text} `}
-              {!dirty &&
-                verification.rateLimit &&
-                `- Hourly Request Rate Limit: ${verification.rateLimit.toLocaleString()}`}
+              {rateLimitSummary}
             </Typography>
           )}
         </Box>
