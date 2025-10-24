@@ -187,6 +187,16 @@ export default function GithubAPIToken({ isAdmin = false }) {
     return parts.join(" · ");
   }, [dirty, verification.rateLimit]);
 
+  const verificationDetail = useMemo(() => {
+    if (dirty) {
+      return "";
+    }
+    if (!verification.valid && verification.error) {
+      return verification.error;
+    }
+    return "";
+  }, [dirty, verification.error, verification.valid]);
+
   const toggleReveal = useCallback(() => {
     setShowToken((prev) => !prev);
   }, []);
@@ -325,18 +335,27 @@ export default function GithubAPIToken({ isAdmin = false }) {
           >
             Refresh
           </Button>
-          {(verificationMessage.text || rateLimitSummary) && (
+          {(verificationMessage.text || rateLimitSummary || verificationDetail) && (
             <Typography
               variant="body2"
               sx={{
                 display: "inline-flex",
                 alignItems: "center",
                 color: verificationMessage.color || "#7db7ff",
-                textAlign: "right"
+                textAlign: "right",
+                flexDirection: "column",
+                gap: 0.5
               }}
             >
-              {verificationMessage.text && `${verificationMessage.text} `}
-              {rateLimitSummary}
+              <span>
+                {verificationMessage.text && `${verificationMessage.text} `}
+                {rateLimitSummary}
+              </span>
+              {verificationDetail && (
+                <span style={{ color: "#f0c36d", whiteSpace: "pre-line" }}>
+                  {verificationDetail}
+                </span>
+              )}
             </Typography>
           )}
         </Box>

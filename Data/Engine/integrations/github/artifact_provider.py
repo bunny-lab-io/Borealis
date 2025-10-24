@@ -193,14 +193,16 @@ class GitHubArtifactProvider:
                 error=message,
             )
 
-        limit = _safe_int(response.headers.get("X-RateLimit-Limit"))
-        remaining = _safe_int(response.headers.get("X-RateLimit-Remaining"))
-        reset = _safe_int(response.headers.get("X-RateLimit-Reset"))
-        used = _safe_int(response.headers.get("X-RateLimit-Used"))
-        rate_limit = GitHubRateLimit(limit=limit, remaining=remaining, reset_epoch=reset, used=used)
+        rate_limit = _rate_limit_from_headers(response)
+        oauth_scopes = response.headers.get("X-OAuth-Scopes")
 
         if response.status_code == 200:
-            if rate_limit.limit is not None and rate_limit.limit >= 5000:
+            if _is_authenticated_limit(rate_limit):
+                self._log.info(
+                    "github-token-verify success limit=%s remaining=%s",
+                    rate_limit.limit,
+                    rate_limit.remaining,
+                )
                 return GitHubTokenStatus(
                     has_token=True,
                     valid=True,
@@ -210,20 +212,49 @@ class GitHubArtifactProvider:
                     error=None,
                 )
 
-            error_message = "Authenticated request did not elevate GitHub rate limits"
-            self._log.warning("github-token-verify insufficient-limit limit=%s", rate_limit.limit)
+            fallback_limit = _fetch_rate_limit(headers)
+            if fallback_limit is not None:
+                rate_limit = fallback_limit
+                if _is_authenticated_limit(rate_limit):
+                    self._log.info(
+                        "github-token-verify fallback-success limit=%s remaining=%s",
+                        rate_limit.limit,
+                        rate_limit.remaining,
+                    )
+                    return GitHubTokenStatus(
+                        has_token=True,
+                        valid=True,
+                        status="ok",
+                        message="API Authentication Successful",
+                        rate_limit=rate_limit,
+                        error=None,
+                    )
+
+            error_details = "Authenticated request did not elevate GitHub rate limits"
+            if oauth_scopes:
+                error_details = (
+                    f"{error_details}. Token scopes reported by GitHub: {oauth_scopes}."
+                )
+            if fallback_limit is None:
+                error_details = f"{error_details} (rate_limit fallback unavailable)"
+            self._log.warning(
+                "github-token-verify insufficient-limit limit=%s remaining=%s scopes=%s",
+                rate_limit.limit,
+                rate_limit.remaining,
+                oauth_scopes,
+            )
             return GitHubTokenStatus(
                 has_token=True,
                 valid=False,
                 status="insufficient",
                 message="API Token Invalid",
                 rate_limit=rate_limit,
-                error=error_message,
+                error=error_details,
             )
 
         if response.status_code == 401:
             error_message = response.text[:200]
-            self._log.warning("github-token-verify unauthorized")
+            self._log.warning("github-token-verify unauthorized scopes=%s", oauth_scopes)
             return GitHubTokenStatus(
                 has_token=True,
                 valid=False,
@@ -235,7 +266,7 @@ class GitHubArtifactProvider:
 
         message = f"GitHub API error (HTTP {response.status_code})"
         self._log.warning(
-            "github-token-verify http_status=%s", response.status_code
+            "github-token-verify http_status=%s scopes=%s", response.status_code, oauth_scopes
         )
         return GitHubTokenStatus(
             has_token=True,
@@ -295,4 +326,51 @@ def _safe_int(value: object) -> Optional[int]:
         return int(value)
     except Exception:
         return None
+
+
+def _rate_limit_from_headers(response: "Response") -> GitHubRateLimit:
+    limit = _safe_int(response.headers.get("X-RateLimit-Limit"))
+    remaining = _safe_int(response.headers.get("X-RateLimit-Remaining"))
+    reset = _safe_int(response.headers.get("X-RateLimit-Reset"))
+    used = _safe_int(response.headers.get("X-RateLimit-Used"))
+    return GitHubRateLimit(limit=limit, remaining=remaining, reset_epoch=reset, used=used)
+
+
+def _fetch_rate_limit(headers: Dict[str, str]) -> Optional[GitHubRateLimit]:
+    if requests is None:
+        return None
+
+    log = logging.getLogger("borealis.engine.integrations.github")
+    try:
+        response: Response = requests.get(
+            "https://api.github.com/rate_limit", headers=headers, timeout=10
+        )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        log.warning("github-token-verify fallback-error=%s", exc)
+        return None
+
+    if response.status_code != 200:
+        log.warning("github-token-verify fallback-http-status=%s", response.status_code)
+        return _rate_limit_from_headers(response)
+
+    try:
+        payload = response.json()
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning("github-token-verify fallback-json-error")
+        return _rate_limit_from_headers(response)
+
+    core = payload.get("resources", {}).get("core", {}) if isinstance(payload, dict) else {}
+    if not isinstance(core, dict):
+        return _rate_limit_from_headers(response)
+
+    return GitHubRateLimit(
+        limit=_safe_int(core.get("limit")),
+        remaining=_safe_int(core.get("remaining")),
+        reset_epoch=_safe_int(core.get("reset")),
+        used=_safe_int(core.get("used")),
+    )
+
+
+def _is_authenticated_limit(limit: GitHubRateLimit) -> bool:
+    return bool(limit.limit is not None and limit.limit >= 5000)
 
