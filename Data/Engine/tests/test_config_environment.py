@@ -65,6 +65,24 @@ def test_static_root_falls_back_to_legacy_source(tmp_path, monkeypatch):
     monkeypatch.delenv("BOREALIS_ROOT", raising=False)
 
 
+def test_static_root_handles_data_root_hint(tmp_path, monkeypatch):
+    """Static discovery should work even when BOREALIS_ROOT points at Data/."""
+
+    data_root = tmp_path / "Data"
+    legacy_source = data_root / "Server" / "WebUI"
+    legacy_source.mkdir(parents=True)
+    (legacy_source / "index.html").write_text("data-root", encoding="utf-8")
+
+    monkeypatch.setenv("BOREALIS_ROOT", str(data_root))
+    monkeypatch.delenv("BOREALIS_STATIC_ROOT", raising=False)
+
+    settings = load_environment()
+
+    assert settings.flask.static_root == legacy_source.resolve()
+
+    monkeypatch.delenv("BOREALIS_ROOT", raising=False)
+
+
 def test_static_root_considers_runtime_copy(tmp_path, monkeypatch):
     """Runtime Server/WebUI copies should be considered when Data assets are missing."""
 

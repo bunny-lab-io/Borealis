@@ -6,19 +6,46 @@ import fs from 'fs';
 
 const runtimeCertDir = process.env.BOREALIS_CERT_DIR;
 
-const certCandidates = [
-  process.env.BOREALIS_TLS_CERT,
-  runtimeCertDir && path.resolve(runtimeCertDir, 'borealis-server-cert.pem'),
-  path.resolve(__dirname, '../certs/borealis-server-cert.pem'),
-  path.resolve(__dirname, '../../../Server/Borealis/certs/borealis-server-cert.pem'),
-] as const;
+const guessCertificateDirectories = () => {
+  const hints = new Set<string>();
 
-const keyCandidates = [
-  process.env.BOREALIS_TLS_KEY,
-  runtimeCertDir && path.resolve(runtimeCertDir, 'borealis-server-key.pem'),
-  path.resolve(__dirname, '../certs/borealis-server-key.pem'),
-  path.resolve(__dirname, '../../../Server/Borealis/certs/borealis-server-key.pem'),
-] as const;
+  if (runtimeCertDir) {
+    hints.add(runtimeCertDir);
+  }
+
+  const rootHint = process.env.BOREALIS_ROOT;
+  if (rootHint) {
+    hints.add(path.resolve(rootHint, 'Certificates', 'Server'));
+    hints.add(path.resolve(rootHint, 'Data', 'Certificates', 'Server'));
+  }
+
+  const repoRoot = path.resolve(__dirname, '../../..');
+  hints.add(path.resolve(repoRoot, 'Certificates', 'Server'));
+  hints.add(path.resolve(repoRoot, 'Data', 'Certificates', 'Server'));
+  hints.add(path.resolve(repoRoot, 'Server', 'Borealis', 'certs'));
+
+  const cwd = process.cwd();
+  hints.add(path.resolve(cwd, 'Certificates', 'Server'));
+  hints.add(path.resolve(cwd, 'Data', 'Certificates', 'Server'));
+
+  hints.add(path.resolve(__dirname, '../certs'));
+
+  return Array.from(hints);
+};
+
+const expandCandidates = (fileName: string, explicit?: string) => {
+  const directories = guessCertificateDirectories();
+  const candidates: (string | undefined)[] = directories.map((dir) =>
+    path.resolve(dir, fileName)
+  );
+  if (explicit) {
+    candidates.unshift(explicit);
+  }
+  return candidates;
+};
+
+const certCandidates = expandCandidates('borealis-server-cert.pem', process.env.BOREALIS_TLS_CERT);
+const keyCandidates = expandCandidates('borealis-server-key.pem', process.env.BOREALIS_TLS_KEY);
 
 const pickFirst = (candidates: readonly (string | undefined)[]) => {
   for (const candidate of candidates) {
@@ -39,6 +66,13 @@ const httpsOptions = certPath && keyPath
       key: fs.readFileSync(keyPath),
     }
   : undefined;
+
+if (!httpsOptions) {
+  console.warn(
+    '[Borealis] TLS certificate material not found for Vite dev server; falling back to HTTP. '
+    + 'Ensure the Engine is running so certificates are provisioned, or set BOREALIS_CERT_DIR explicitly.'
+  );
+}
 
 export default defineConfig({
   plugins: [react()],

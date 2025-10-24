@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional, Sequence, Tuple
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,27 +144,61 @@ def _looks_like_compiled_assets(path: Path) -> bool:
     return False
 
 
+def _iter_static_search_roots(project_root: Path) -> Sequence[Path]:
+    """Return potential base directories that might contain frontend assets."""
+
+    # Operators frequently set ``BOREALIS_ROOT`` to either the repository root
+    # *or* to ``<root>/Data`` (mirroring the legacy packaging layout).  We
+    # consider both possibilities plus their siblings so filesystem discovery
+    # succeeds regardless of which convention is in effect.
+    bases = [project_root]
+
+    parent = project_root.parent
+    if parent != project_root:
+        bases.append(parent)
+
+    bases.append(project_root / "Data")
+    if parent != project_root:
+        bases.append(parent / "Data")
+
+    seen: list[Path] = []
+    results: list[Path] = []
+    for base in bases:
+        resolved = base.resolve()
+        if resolved in seen:
+            continue
+        seen.append(resolved)
+        results.append(resolved)
+
+    return tuple(results)
+
+
 def _resolve_static_root(project_root: Path) -> Path:
     candidate = os.getenv("BOREALIS_STATIC_ROOT")
     if candidate:
         return Path(candidate).expanduser().resolve()
 
-    candidates = (
-        project_root / "Engine" / "web-interface" / "build",
-        project_root / "Engine" / "web-interface" / "dist",
-        project_root / "Engine" / "web-interface",
-        project_root / "Data" / "Engine" / "WebUI" / "build",
-        project_root / "Data" / "Engine" / "WebUI",
-        project_root / "Server" / "web-interface" / "build",
-        project_root / "Server" / "web-interface",
-        project_root / "Server" / "WebUI" / "build",
-        project_root / "Server" / "WebUI",
-        project_root / "Data" / "Server" / "web-interface" / "build",
-        project_root / "Data" / "Server" / "web-interface",
-        project_root / "Data" / "Server" / "WebUI" / "build",
-        project_root / "Data" / "Server" / "WebUI",
-        project_root / "Data" / "WebUI" / "build",
-        project_root / "Data" / "WebUI",
+    search_roots = _iter_static_search_roots(project_root)
+    candidates: tuple[Path, ...] = tuple(
+        root / suffix
+        for root in search_roots
+        for suffix in (
+            Path("Engine") / "web-interface" / "build",
+            Path("Engine") / "web-interface" / "dist",
+            Path("Engine") / "web-interface",
+            Path("Data") / "Engine" / "WebUI" / "build",
+            Path("Data") / "Engine" / "WebUI",
+            Path("Server") / "web-interface" / "build",
+            Path("Server") / "web-interface",
+            Path("Server") / "WebUI" / "build",
+            Path("Server") / "WebUI",
+            Path("Data") / "Server" / "web-interface" / "build",
+            Path("Data") / "Server" / "web-interface",
+            Path("Data") / "Server" / "WebUI" / "build",
+            Path("Data") / "Server" / "WebUI",
+            Path("Data") / "WebUI" / "build",
+            Path("Data") / "WebUI",
+        )
     )
 
     fallback: Optional[Path] = None
@@ -177,15 +211,9 @@ def _resolve_static_root(project_root: Path) -> Path:
         if _looks_like_compiled_assets(resolved):
             return resolved
 
-    # If no compiled assets are present we fall back to the first directory we
-    # discovered.  This mirrors the legacy server behaviour so the application
-    # can still start even if the operator has not yet built the frontend.
     if fallback is not None:
         return fallback
 
-    # Fall back to the first candidate even if it does not yet exist so the
-    # Flask factory still initialises; individual requests will surface 404s
-    # until an asset build is available, matching the legacy behaviour.
     return candidates[0].resolve()
 
 
