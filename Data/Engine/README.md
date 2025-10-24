@@ -73,6 +73,16 @@ patch as the legacy server so TLS handshakes presented to the HTTP listener are
 handled quietly instead of surfacing `400 Bad Request` noise when non-TLS
 clients connect.
 
+### Sharing TLS material with the Vite development server
+
+When the Engine bootstrapper provisions certificates it now also publishes the
+resulting paths via the `BOREALIS_TLS_CERT`, `BOREALIS_TLS_KEY`, and
+`BOREALIS_CERT_DIR` environment variables.  The Vite configuration under
+`Data/Server/WebUI/vite.config.mts` consumes these values automatically, so
+starting the dev server with `npm run dev` after the Engine is running will
+serve the React UI over HTTPS with the exact same certificates as the Flask
+API.
+
 ## Logging expectations
 
 `Data/Engine/config/logging.py` configures a timed rotating file handler that writes to `Logs/Server/engine.log`.  Each entry follows the `<timestamp>-engine-<message>` format required by the project logging policy.  The handler is attached to both the Engine logger (`borealis.engine`) and the root logger so that third-party frameworks share the same log destination.

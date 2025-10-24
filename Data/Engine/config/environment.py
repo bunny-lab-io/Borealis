@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Iterable, Optional, Tuple
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +111,39 @@ def _should_apply_migrations() -> bool:
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
+def _looks_like_compiled_assets(path: Path) -> bool:
+    """Return ``True`` when *path* resembles a built frontend bundle."""
+
+    index_file = path / "index.html"
+    if not index_file.is_file():
+        return False
+
+    # Vite builds always emit an ``assets`` directory containing the hashed
+    # JavaScript/CSS bundles alongside ``index.html``.  Checking for this keeps
+    # us from accidentally serving the raw source tree (which still has an
+    # ``index.html`` entry point but depends on the Vite dev server to transform
+    # imports at runtime).
+    if (path / "assets").is_dir():
+        return True
+
+    # Some packaging flows rename the output folder (for example ``dist``) but
+    # still emit a manifest describing the bundled assets.  Presence of either
+    # ``manifest.json`` or Vite's ``.vite/manifest.json`` indicates we are
+    # looking at compiled output.
+    if (path / "manifest.json").is_file():
+        return True
+    if (path / ".vite" / "manifest.json").is_file():
+        return True
+
+    # As a last resort, treat directories without a ``src`` tree and without a
+    # ``package.json`` file as potential compiled artefacts.  This still allows
+    # packaged builds that were flattened during staging to be discovered.
+    if not (path / "src").exists() and not (path / "package.json").exists():
+        return True
+
+    return False
+
+
 def _resolve_static_root(project_root: Path) -> Path:
     candidate = os.getenv("BOREALIS_STATIC_ROOT")
     if candidate:
@@ -133,10 +166,22 @@ def _resolve_static_root(project_root: Path) -> Path:
         project_root / "Data" / "WebUI" / "build",
         project_root / "Data" / "WebUI",
     )
+
+    fallback: Optional[Path] = None
     for path in candidates:
         resolved = path.resolve()
-        if resolved.is_dir():
+        if not resolved.is_dir():
+            continue
+        if fallback is None:
+            fallback = resolved
+        if _looks_like_compiled_assets(resolved):
             return resolved
+
+    # If no compiled assets are present we fall back to the first directory we
+    # discovered.  This mirrors the legacy server behaviour so the application
+    # can still start even if the operator has not yet built the frontend.
+    if fallback is not None:
+        return fallback
 
     # Fall back to the first candidate even if it does not yet exist so the
     # Flask factory still initialises; individual requests will surface 404s

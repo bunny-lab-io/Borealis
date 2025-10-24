@@ -13,12 +13,14 @@ def test_static_root_prefers_engine_runtime(tmp_path, monkeypatch):
     engine_build = tmp_path / "Engine" / "web-interface" / "build"
     engine_build.mkdir(parents=True)
     (engine_build / "index.html").write_text("<html></html>", encoding="utf-8")
+    (engine_build / "assets").mkdir()
 
     # Ensure other fallbacks exist but should not be selected while the Engine
     # runtime assets are present.
     legacy_build = tmp_path / "Data" / "Server" / "WebUI" / "build"
     legacy_build.mkdir(parents=True)
     (legacy_build / "index.html").write_text("legacy", encoding="utf-8")
+    (legacy_build / "assets").mkdir()
 
     monkeypatch.setenv("BOREALIS_ROOT", str(tmp_path))
     monkeypatch.delenv("BOREALIS_STATIC_ROOT", raising=False)

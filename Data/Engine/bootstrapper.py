@@ -47,6 +47,12 @@ def bootstrap() -> EngineRuntime:
     logger.info("bootstrap-started")
 
     cert_path, key_path, bundle_path = ensure_certificate()
+    os.environ.setdefault("BOREALIS_TLS_CERT", str(cert_path))
+    os.environ.setdefault("BOREALIS_TLS_KEY", str(key_path))
+    try:
+        os.environ.setdefault("BOREALIS_CERT_DIR", str(cert_path.resolve().parent))
+    except Exception:
+        pass
     os.environ.setdefault("BOREALIS_TLS_BUNDLE", str(bundle_path))
     logger.info(
         "tls-material-ready",
