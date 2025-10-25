@@ -21,6 +21,7 @@ from .repositories.sqlite import migrations as sqlite_migrations
 from .server import create_app
 from .services.container import build_service_container
 from .services.crypto.certificates import ensure_certificate
+from .webui.staging import stage_web_interface
 
 
 apply_eventlet_patches()
@@ -42,9 +43,39 @@ class EngineRuntime:
 def bootstrap() -> EngineRuntime:
     """Construct the Flask application and supporting infrastructure."""
 
+    preliminary_settings = load_environment()
+    staging_result = stage_web_interface(preliminary_settings.project_root)
     settings = load_environment()
     logger = configure_logging(settings)
     logger.info("bootstrap-started")
+    if staging_result.copied:
+        logger.info(
+            "webui-staged",
+            extra={
+                "source": str(staging_result.source),
+                "destination": str(staging_result.destination),
+            },
+        )
+    else:
+        logger.warning(
+            "webui-staging-skipped",
+            extra={
+                "source": str(staging_result.source),
+                "destination": str(staging_result.destination),
+                "reason": staging_result.reason or "unknown",
+            },
+        )
+
+    staged_root = staging_result.destination.resolve()
+    static_root = settings.flask.static_root.resolve()
+    if staged_root != static_root:
+        logger.warning(
+            "webui-static-root-mismatch",
+            extra={
+                "expected": str(staged_root),
+                "configured": str(static_root),
+            },
+        )
 
     cert_path, key_path, bundle_path = ensure_certificate()
     os.environ.setdefault("BOREALIS_TLS_BUNDLE", str(bundle_path))
