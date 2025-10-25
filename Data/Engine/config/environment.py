@@ -91,12 +91,20 @@ def _resolve_project_root() -> Path:
     candidate = os.getenv("BOREALIS_ROOT")
     if candidate:
         return Path(candidate).expanduser().resolve()
-    # ``environment.py`` lives under ``Data/Engine/config``.  The project
-    # root is three levels above this module (the repository checkout).  The
-    # previous implementation only walked up two levels which incorrectly
-    # treated ``Data/`` as the root, breaking all filesystem discovery logic
-    # that expects peers such as ``Data/Server`` to be available.
-    return Path(__file__).resolve().parents[3]
+
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / "Borealis.ps1").exists() or (parent / ".git").is_dir():
+            return parent
+
+    # Fall back to the immediate parent of the config package if the
+    # repository sentinels are not present.  This matches the legacy
+    # behaviour while still keeping the function resilient in packaged
+    # environments.
+    try:
+        return current.parents[1]
+    except IndexError:
+        return current.parent
 
 
 def _resolve_database_path(project_root: Path) -> Path:

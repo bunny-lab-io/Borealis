@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from Data.Engine import runtime
 from Data.Engine.config.environment import load_environment
 
 
@@ -86,6 +87,6 @@ def test_resolve_project_root_defaults_to_repository(monkeypatch):
     monkeypatch.delenv("BOREALIS_ROOT", raising=False)
     from Data.Engine.config import environment as env_module
 
-    expected = Path(env_module.__file__).resolve().parents[3]
+    expected = runtime.project_root()
 
     assert env_module._resolve_project_root() == expected

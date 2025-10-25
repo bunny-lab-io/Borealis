@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,46 @@ class WebUIStagingResult:
     reason: Optional[str] = None
 
 
+def _resolve_repository_root(project_root: Path) -> Path:
+    """Return the repository checkout that contains *project_root*.
+
+    When the Engine is executed from its runtime copy (``<root>/Engine``)
+    ``project_root`` may already point at that directory.  To avoid staging
+    into ``Engine/Engine/web-interface`` we walk up the tree until we locate
+    the checkout root that contains the ``Data`` directory.
+    """
+
+    resolved = project_root.resolve()
+    if (resolved / "Data").is_dir():
+        return resolved
+
+    for parent in resolved.parents:
+        if (parent / "Data").is_dir():
+            return parent
+
+    return resolved
+
+
+def _resolve_runtime_root(project_root: Path, repo_root: Path) -> Path:
+    """Determine where the Engine should materialise staged assets."""
+
+    # Honour explicit runtime overrides so staging aligns with the rest of
+    # the Engine filesystem helpers.
+    override = (
+        os.getenv("BOREALIS_ENGINE_ROOT")
+        or os.getenv("BOREALIS_SERVER_ROOT")
+    )
+    if override:
+        return Path(override).expanduser().resolve()
+
+    candidate = project_root.resolve()
+    runtime_root = repo_root / "Engine"
+    if candidate == runtime_root:
+        return candidate
+
+    return runtime_root
+
+
 def stage_web_interface(project_root: Path) -> WebUIStagingResult:
     """Populate the Engine web-interface directory from the legacy assets.
 
@@ -27,8 +68,11 @@ def stage_web_interface(project_root: Path) -> WebUIStagingResult:
     Engine staging directory before copying.
     """
 
-    source = (project_root / "Data" / "Server" / "WebUI").resolve()
-    destination = (project_root / "Engine" / "web-interface").resolve()
+    repo_root = _resolve_repository_root(project_root)
+    runtime_root = _resolve_runtime_root(project_root, repo_root)
+
+    source = (repo_root / "Data" / "Server" / "WebUI").resolve()
+    destination = (runtime_root / "web-interface").resolve()
 
     destination.parent.mkdir(parents=True, exist_ok=True)
 
