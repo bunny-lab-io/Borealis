@@ -657,8 +657,8 @@ from job_scheduler import set_credential_fetcher as scheduler_set_credential_fet
 
 _STATIC_CANDIDATES = [
     os.path.join(os.path.dirname(__file__), '../web-interface/build'),
-    os.path.join(os.path.dirname(__file__), 'WebUI/build'),
-    os.path.join(os.path.dirname(__file__), '../WebUI/build'),
+    os.path.join(os.path.dirname(__file__), '../web-interface/dist'),
+    os.path.join(os.path.dirname(__file__), '../web-interface'),
 ]
 
 _resolved_static_folder = None
