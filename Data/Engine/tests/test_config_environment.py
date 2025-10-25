@@ -46,27 +46,27 @@ def test_static_root_env_override(tmp_path, monkeypatch):
     monkeypatch.delenv("BOREALIS_ROOT", raising=False)
 
 
-def test_static_root_falls_back_to_legacy_source(tmp_path, monkeypatch):
-    """Legacy WebUI source should be served when no build assets exist."""
+def test_static_root_falls_back_to_engine_source(tmp_path, monkeypatch):
+    """Engine data assets should serve when no build output exists."""
 
-    legacy_source = tmp_path / "Data" / "Server" / "WebUI"
-    legacy_source.mkdir(parents=True)
-    (legacy_source / "index.html").write_text("<html></html>", encoding="utf-8")
+    engine_source = tmp_path / "Data" / "Engine" / "web-interface"
+    engine_source.mkdir(parents=True)
+    (engine_source / "index.html").write_text("<html></html>", encoding="utf-8")
 
     monkeypatch.setenv("BOREALIS_ROOT", str(tmp_path))
     monkeypatch.delenv("BOREALIS_STATIC_ROOT", raising=False)
 
     settings = load_environment()
 
-    assert settings.flask.static_root == legacy_source.resolve()
+    assert settings.flask.static_root == engine_source.resolve()
 
     monkeypatch.delenv("BOREALIS_ROOT", raising=False)
 
 
 def test_static_root_considers_runtime_copy(tmp_path, monkeypatch):
-    """Runtime Server/WebUI copies should be considered when Data assets are missing."""
+    """Runtime Server/web-interface copies should be considered when Data assets are missing."""
 
-    runtime_source = tmp_path / "Server" / "WebUI"
+    runtime_source = tmp_path / "Server" / "web-interface"
     runtime_source.mkdir(parents=True)
     (runtime_source / "index.html").write_text("runtime", encoding="utf-8")
 
@@ -76,7 +76,22 @@ def test_static_root_considers_runtime_copy(tmp_path, monkeypatch):
     settings = load_environment()
 
     assert settings.flask.static_root == runtime_source.resolve()
+    monkeypatch.delenv("BOREALIS_ROOT", raising=False)
 
+
+def test_static_root_falls_back_to_legacy_assets(tmp_path, monkeypatch):
+    """Legacy Data/Server/WebUI assets remain a valid fallback."""
+
+    legacy_source = tmp_path / "Data" / "Server" / "WebUI"
+    legacy_source.mkdir(parents=True)
+    (legacy_source / "index.html").write_text("legacy", encoding="utf-8")
+
+    monkeypatch.setenv("BOREALIS_ROOT", str(tmp_path))
+    monkeypatch.delenv("BOREALIS_STATIC_ROOT", raising=False)
+
+    settings = load_environment()
+
+    assert settings.flask.static_root == legacy_source.resolve()
     monkeypatch.delenv("BOREALIS_ROOT", raising=False)
 
 

@@ -144,6 +144,67 @@ function Write-AgentLog {
     "[$ts] $Message" | Out-File -FilePath $path -Append -Encoding UTF8
 }
 
+function Ensure-EngineTlsMaterial {
+    param(
+        [string]$PythonPath,
+        [string]$CertificateRoot
+    )
+
+    if (-not (Test-Path $CertificateRoot)) {
+        New-Item -Path $CertificateRoot -ItemType Directory -Force | Out-Null
+    }
+
+    if (Test-Path $PythonPath) {
+        $code = @'
+from Data.Engine.services.crypto import certificates
+certificates.ensure_certificate()
+'@
+        try {
+            & $PythonPath -c $code | Out-Null
+        } catch {
+            Write-Host "Failed to pre-generate Engine TLS certificates: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    $env:BOREALIS_CERT_DIR   = $CertificateRoot
+    $env:BOREALIS_TLS_CERT   = Join-Path $CertificateRoot 'borealis-server-cert.pem'
+    $env:BOREALIS_TLS_KEY    = Join-Path $CertificateRoot 'borealis-server-key.pem'
+    $env:BOREALIS_TLS_BUNDLE = Join-Path $CertificateRoot 'borealis-server-bundle.pem'
+}
+
+function Ensure-EngineWebInterface {
+    param(
+        [string]$ProjectRoot
+    )
+
+    $engineSource = Join-Path $ProjectRoot 'Data\Engine\web-interface'
+    $legacySource = Join-Path $ProjectRoot 'Data\Server\WebUI'
+
+    if (-not (Test-Path $legacySource)) {
+        return
+    }
+
+    $enginePackage = Join-Path $engineSource 'package.json'
+    $engineSrcDir  = Join-Path $engineSource 'src'
+    if ((Test-Path $enginePackage) -and (Test-Path $engineSrcDir)) {
+        return
+    }
+
+    if (-not (Test-Path $engineSource)) {
+        New-Item -Path $engineSource -ItemType Directory -Force | Out-Null
+    }
+
+    $preserve = @('.gitignore','README.md')
+    Get-ChildItem -Path $engineSource -Force | Where-Object { $preserve -notcontains $_.Name } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+    Copy-Item (Join-Path $legacySource '*') $engineSource -Recurse -Force
+
+    if (-not (Test-Path $enginePackage)) {
+        throw "Failed to stage Engine web interface into '$engineSource'."
+    }
+}
+
 $script:Utf8CodePageChanged = $false
 
 function Ensure-SystemUtf8CodePage {
@@ -1026,7 +1087,7 @@ switch ($choice) {
         $venvFolder       = "Server"
         $dataSource       = "Data"
         $dataDestination  = "$venvFolder\Borealis"
-        $customUIPath     = "$dataSource\Server\WebUI"
+        $customUIPath     = "$dataSource\Engine\web-interface"
         $webUIDestination = "$venvFolder\web-interface"
         $venvPython       = Join-Path $venvFolder 'Scripts\python.exe'
 
@@ -1076,12 +1137,14 @@ switch ($choice) {
         }
 
         Run-Step "Copy Borealis WebUI Files into: $webUIDestination" {
+            Ensure-EngineWebInterface -ProjectRoot $scriptDir
             if (Test-Path $webUIDestination) {
                 Remove-Item "$webUIDestination\public\*" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item "$webUIDestination\src\*"    -Recurse -Force -ErrorAction SilentlyContinue
             } else {
                 New-Item -Path $webUIDestination -ItemType Directory -Force | Out-Null
             }
+            if (-not (Test-Path $customUIPath)) { throw "Web interface source '$customUIPath' not found." }
             Copy-Item "$customUIPath\*" $webUIDestination -Recurse -Force
         }
 
@@ -1095,6 +1158,8 @@ switch ($choice) {
         Run-Step "Vite Web Frontend: Start ($borealis_operation_mode)" {
             Push-Location $webUIDestination
             if ($borealis_operation_mode -eq "developer") { $viteSubCommand = "dev" } else { $viteSubCommand = "build" }
+            $certRoot = Join-Path $scriptDir 'Certificates\Server'
+            Ensure-EngineTlsMaterial -PythonPath $venvPython -CertificateRoot $certRoot
             Start-Process -NoNewWindow -FilePath $npmCmd -ArgumentList @("run",$viteSubCommand)
             Pop-Location
         }
@@ -1273,7 +1338,7 @@ switch ($choice) {
         $dataSource            = "Data"
         $engineSource          = "$dataSource\Engine"
         $engineDataDestination = "$venvFolder\Data\Engine"
-        $webUIFallbackSource   = "$dataSource\Server\WebUI"
+        $webUIFallbackSource   = "$dataSource\Server\web-interface"
         $webUIDestination      = "$venvFolder\web-interface"
         $venvPython            = Join-Path $venvFolder 'Scripts\python.exe'
         $engineSourceAbsolute  = Join-Path $scriptDir $engineSource
@@ -1315,7 +1380,8 @@ switch ($choice) {
         }
 
         Run-Step "Copy Borealis Engine WebUI Files into: $webUIDestination" {
-            $engineWebUISource = Join-Path $engineSourceAbsolute 'WebUI'
+            Ensure-EngineWebInterface -ProjectRoot $scriptDir
+            $engineWebUISource = Join-Path $engineSourceAbsolute 'web-interface'
             if (Test-Path $engineWebUISource) {
                 $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
                 if (Test-Path $webUIDestinationAbsolute) {
@@ -1356,6 +1422,8 @@ switch ($choice) {
             if (Test-Path $webUIDestinationAbsolute) {
                 Push-Location $webUIDestinationAbsolute
                 if ($engineOperationMode -eq "developer") { $viteSubCommand = "dev" } else { $viteSubCommand = "build" }
+                $certRoot = Join-Path $scriptDir 'Certificates\Server'
+                Ensure-EngineTlsMaterial -PythonPath $venvPython -CertificateRoot $certRoot
                 Start-Process -NoNewWindow -FilePath $npmCmd -ArgumentList @("run", $viteSubCommand)
                 Pop-Location
             }

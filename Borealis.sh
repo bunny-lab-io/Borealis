@@ -296,9 +296,45 @@ copy_server_payload() {
   fi
 }
 
+ensure_engine_tls_material() {
+  local python_bin="${SCRIPT_DIR}/Server/bin/python3"
+  local cert_dir="${SCRIPT_DIR}/Certificates/Server"
+  mkdir -p "$cert_dir"
+  if [[ -x "$python_bin" ]]; then
+    "$python_bin" - <<'PY'
+from Data.Engine.services.crypto import certificates
+certificates.ensure_certificate()
+PY
+  fi
+  export BOREALIS_CERT_DIR="$cert_dir"
+  export BOREALIS_TLS_CERT="${cert_dir}/borealis-server-cert.pem"
+  export BOREALIS_TLS_KEY="${cert_dir}/borealis-server-key.pem"
+}
+
+ensure_engine_webui_source() {
+  local engineSource="Data/Engine/web-interface"
+  local legacySource="Data/Server/WebUI"
+  if [[ -d "${engineSource}/src" && -f "${engineSource}/package.json" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$legacySource" ]]; then
+    echo "${RED}Legacy WebUI source '$legacySource' not found.${RESET}" >&2
+    return 1
+  fi
+  mkdir -p "$engineSource"
+  find "$engineSource" -mindepth 1 -maxdepth 1 \
+    ! -name '.gitignore' ! -name 'README.md' -exec rm -rf {} +
+  cp -a "$legacySource/." "$engineSource/"
+  if [[ ! -f "${engineSource}/package.json" ]]; then
+    echo "${RED}Failed to stage Engine web interface into '$engineSource'.${RESET}" >&2
+    return 1
+  fi
+}
+
 prepare_webui() {
-  local customUIPath="Data/Server/WebUI"
+  local customUIPath="Data/Engine/web-interface"
   local webUIDestination="Server/web-interface"
+  ensure_engine_webui_source || return 1
   mkdir -p "$webUIDestination"
   rm -rf "${webUIDestination}/public" "${webUIDestination}/src" "${webUIDestination}/build" 2>/dev/null || true
   cp -r "${customUIPath}/"* "$webUIDestination/"
@@ -311,6 +347,7 @@ vite_start() {
   local webUIDestination="Server/web-interface"
   local subcmd="build"; [[ "$mode" == "developer" ]] && subcmd="dev"
   ensure_node_bins
+  ensure_engine_tls_material
   ( cd "$webUIDestination" && nohup "$NPM_BIN" run "$subcmd" >/dev/null 2>&1 & )
 }
 
