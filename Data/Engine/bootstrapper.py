@@ -8,15 +8,21 @@ legacy server defaults by binding to ``0.0.0.0:5001`` and honouring the
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 from .server import EngineContext, create_app
 
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 5001
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
 
 def _build_runtime_config() -> Dict[str, Any]:
@@ -27,6 +33,55 @@ def _build_runtime_config() -> Dict[str, Any]:
         "TLS_KEY_PATH": os.environ.get("BOREALIS_TLS_KEY"),
         "TLS_BUNDLE_PATH": os.environ.get("BOREALIS_TLS_BUNDLE"),
     }
+
+
+def _stage_web_interface_assets(logger: logging.Logger) -> None:
+    project_root = _project_root()
+    engine_web_root = project_root / "Engine" / "web-interface"
+    legacy_source = project_root / "Data" / "Server" / "WebUI"
+
+    package_json = engine_web_root / "package.json"
+    src_dir = engine_web_root / "src"
+
+    if package_json.is_file() and src_dir.is_dir():
+        return
+
+    if not legacy_source.is_dir():
+        logger.warning(
+            "Legacy WebUI source missing; unable to stage Engine web interface from %s",
+            legacy_source,
+        )
+        return
+
+    engine_web_root.mkdir(parents=True, exist_ok=True)
+
+    preserved: Set[str] = {".gitignore", "README.md"}
+    for child in engine_web_root.iterdir():
+        if child.name in preserved:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            try:
+                child.unlink()
+            except FileNotFoundError:
+                continue
+
+    for item in legacy_source.iterdir():
+        destination = engine_web_root / item.name
+        if item.is_dir():
+            shutil.copytree(item, destination, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, destination)
+
+    if not package_json.is_file() or not src_dir.is_dir():
+        raise RuntimeError(
+            f"Failed to stage Engine web interface assets into {engine_web_root}"
+        )
+
+    logger.info(
+        "Engine web interface staged from %s to %s", legacy_source, engine_web_root
+    )
 
 
 def _ensure_tls_material(context: EngineContext) -> None:
@@ -95,6 +150,12 @@ def _prepare_tls_run_kwargs(context: EngineContext) -> Dict[str, Any]:
 def main() -> None:
     config = _build_runtime_config()
     app, socketio, context = create_app(config)
+
+    try:
+        _stage_web_interface_assets(context.logger)
+    except Exception as exc:
+        context.logger.error("Failed to stage Engine web interface: %s", exc)
+        raise
 
     host = config.get("HOST", DEFAULT_HOST)
     port = int(config.get("PORT", DEFAULT_PORT))
