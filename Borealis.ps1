@@ -1323,10 +1323,16 @@ switch ($choice) {
             Run-Step "Borealis Engine: Launch Flask Server" {
                 Push-Location (Join-Path $scriptDir "Engine")
                 $py = Join-Path $scriptDir "Engine\Scripts\python.exe"
+                $previousEngineMode = $env:BOREALIS_ENGINE_MODE
+                $previousEnginePort = $env:BOREALIS_ENGINE_PORT
+                $env:BOREALIS_ENGINE_MODE = $engineOperationMode
+                $env:BOREALIS_ENGINE_PORT = "5001"
                 Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
                 Write-Host "===================================================================================="
                 Write-Host "$($symbols.Running) Engine Socket Server Started..."
                 & $py -m Data.Engine.bootstrapper
+                if ($previousEngineMode) { $env:BOREALIS_ENGINE_MODE = $previousEngineMode } else { Remove-Item Env:BOREALIS_ENGINE_MODE -ErrorAction SilentlyContinue }
+                if ($previousEnginePort) { $env:BOREALIS_ENGINE_PORT = $previousEnginePort } else { Remove-Item Env:BOREALIS_ENGINE_PORT -ErrorAction SilentlyContinue }
                 Pop-Location
             }
             break
@@ -1432,10 +1438,16 @@ switch ($choice) {
         Run-Step "Borealis Engine: Launch Flask Server" {
             Push-Location (Join-Path $scriptDir "Engine")
             $py = Join-Path $scriptDir "Engine\Scripts\python.exe"
+            $previousEngineMode = $env:BOREALIS_ENGINE_MODE
+            $previousEnginePort = $env:BOREALIS_ENGINE_PORT
+            $env:BOREALIS_ENGINE_MODE = $engineOperationMode
+            $env:BOREALIS_ENGINE_PORT = "5001"
             Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
             Write-Host "===================================================================================="
             Write-Host "$($symbols.Running) Engine Socket Server Started..."
             & $py -m Data.Engine.bootstrapper
+            if ($previousEngineMode) { $env:BOREALIS_ENGINE_MODE = $previousEngineMode } else { Remove-Item Env:BOREALIS_ENGINE_MODE -ErrorAction SilentlyContinue }
+            if ($previousEnginePort) { $env:BOREALIS_ENGINE_PORT = $previousEnginePort } else { Remove-Item Env:BOREALIS_ENGINE_PORT -ErrorAction SilentlyContinue }
             Pop-Location
         }
     }
