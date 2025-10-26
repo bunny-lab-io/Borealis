@@ -22,11 +22,11 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [x] Create domain-focused API blueprints and register_api entry point.
   - [x] Mirror route behaviour from the legacy server via service adapters.
   - [x] Add configuration toggles for enabling API groups incrementally.
-- [ ] **Stage 4 — Build unit and smoke tests for Engine APIs**
-  - [ ] Add pytest modules under Data/Engine/Unit_Tests exercising API blueprints.
-  - [ ] Provide fixtures that mirror the legacy SQLite schema and seed data.
-  - [ ] Assert HTTP status codes, payloads, and side effects for parity.
-  - [ ] Integrate Engine API tests into CI/local workflows.
+- [x] **Stage 4 — Build unit and smoke tests for Engine APIs**
+  - [x] Add pytest modules under Data/Engine/Unit_Tests exercising API blueprints.
+  - [x] Provide fixtures that mirror the legacy SQLite schema and seed data.
+  - [x] Assert HTTP status codes, payloads, and side effects for parity.
+  - [x] Integrate Engine API tests into CI/local workflows.
 - [ ] **Stage 5 — Bridge the legacy server to Engine APIs**
   - [ ] Delegate API blueprint registration to the Engine factory from the legacy server.
   - [ ] Replace legacy API routes with Engine-provided blueprints gated by a flag.
@@ -43,5 +43,5 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [ ] Update legacy server to consume Engine WebSocket registration.
 
 ## Current Status
-- **Stage:** Stage 3 — Introduce API blueprints and service adapters (completed)
+- **Stage:** Stage 4 — Build unit and smoke tests for Engine APIs (completed)
 - **Active Task:** Awaiting next stage instructions.

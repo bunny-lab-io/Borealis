@@ -9,6 +9,7 @@ param(
     [switch]$Vite,
     [switch]$Flask,
     [switch]$Quick,
+    [switch]$EngineTests,
     [string]$InstallerCode = ''
 )
 
@@ -16,6 +17,26 @@ param(
 $choice = $null
 $modeChoice = $null
 $agentSubChoice = $null
+
+$scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
+
+if ($EngineTests) {
+    Set-Location -Path $scriptDir
+    $env:BOREALIS_PROJECT_ROOT = $scriptDir
+
+    $python = Get-Command python3 -ErrorAction SilentlyContinue
+    if (-not $python) {
+        $python = Get-Command python -ErrorAction SilentlyContinue
+    }
+
+    if (-not $python) {
+        Write-Host "Python interpreter not found. Install Python 3 to run Engine tests." -ForegroundColor Red
+        exit 1
+    }
+
+    & $python.Source -m pytest 'Data/Engine/Unit_Tests'
+    exit $LASTEXITCODE
+}
 
 if ($Server -and $Agent) {
     Write-Host "Cannot use -Server and -Agent together." -ForegroundColor Red

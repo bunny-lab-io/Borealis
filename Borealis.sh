@@ -25,6 +25,7 @@ AGENT_ACTION=""
 VITE_FLAG=0
 FLASK_FLAG=0
 QUICK_FLAG=0
+ENGINE_TESTS_FLAG=0
 
 while (( "$#" )); do
   case "$1" in
@@ -34,10 +35,28 @@ while (( "$#" )); do
     -Vite|--vite) VITE_FLAG=1 ;;
     -Flask|--flask) FLASK_FLAG=1 ;;
     -Quick|--quick) QUICK_FLAG=1 ;;
+    -EngineTests|--engine-tests) ENGINE_TESTS_FLAG=1 ;;
     *) ;; # ignore unknown for flexibility
   esac
   shift || true
 done
+
+if (( ENGINE_TESTS_FLAG )); then
+  cd "$SCRIPT_DIR"
+  export BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}"
+
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python)"
+  else
+    echo -e "${RED}Python interpreter not found. Install Python 3 to run Engine tests.${RESET}" >&2
+    exit 1
+  fi
+
+  "$PYTHON_BIN" -m pytest Data/Engine/Unit_Tests
+  exit $?
+fi
 
 # ---- Banner ----
 clear || true
