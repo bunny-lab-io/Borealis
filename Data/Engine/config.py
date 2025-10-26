@@ -37,7 +37,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 try:  # pragma: no-cover - optional dependency during early migration stages.
     from Modules.crypto import certificates  # type: ignore
@@ -139,6 +139,7 @@ class EngineSettings:
     tls_key_path: Optional[str]
     tls_bundle_path: Optional[str]
     log_file: str
+    api_groups: Tuple[str, ...]
     raw: MutableMapping[str, Any] = field(default_factory=dict)
 
     def to_flask_config(self) -> MutableMapping[str, Any]:
@@ -156,6 +157,19 @@ class EngineSettings:
         data = asdict(self)
         data["raw"] = dict(self.raw)
         return data
+
+
+def _parse_api_groups(raw: Optional[Any]) -> Tuple[str, ...]:
+    if raw is None:
+        return tuple()
+    if isinstance(raw, str):
+        parts: Iterable[str] = (part.strip() for part in raw.split(","))
+    elif isinstance(raw, Sequence):
+        parts = (str(part).strip() for part in raw)
+    else:
+        return tuple()
+    cleaned = [part.lower() for part in parts if part]
+    return tuple(dict.fromkeys(cleaned))
 
 
 def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> EngineSettings:
@@ -205,6 +219,12 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
     log_file = str(runtime_config.get("LOG_FILE") or LOG_FILE_PATH)
     _ensure_parent(Path(log_file))
 
+    api_groups = _parse_api_groups(
+        runtime_config.get("API_GROUPS") or os.environ.get("BOREALIS_API_GROUPS")
+    )
+    if not api_groups:
+        api_groups = ("tokens", "enrollment")
+
     settings = EngineSettings(
         database_path=database_path,
         static_folder=static_folder,
@@ -217,6 +237,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         tls_key_path=tls_key_path if tls_key_path else None,
         tls_bundle_path=tls_bundle_path if tls_bundle_path else None,
         log_file=str(log_file),
+        api_groups=api_groups,
         raw=runtime_config,
     )
     return settings

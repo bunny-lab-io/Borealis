@@ -18,10 +18,10 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [x] Verify context parity between Engine and legacy startup.
   - [x] Initialize logging to Logs/Server/server.log when Engine mode is active.
   - [x] Document Engine launch paths and configuration requirements in module docstrings.
-- [ ] **Stage 3 — Introduce API blueprints and service adapters**
-  - [ ] Create domain-focused API blueprints and register_api entry point.
-  - [ ] Mirror route behaviour from the legacy server via service adapters.
-  - [ ] Add configuration toggles for enabling API groups incrementally.
+- [x] **Stage 3 — Introduce API blueprints and service adapters**
+  - [x] Create domain-focused API blueprints and register_api entry point.
+  - [x] Mirror route behaviour from the legacy server via service adapters.
+  - [x] Add configuration toggles for enabling API groups incrementally.
 - [ ] **Stage 4 — Build unit and smoke tests for Engine APIs**
   - [ ] Add pytest modules under Data/Engine/Unit_Tests exercising API blueprints.
   - [ ] Provide fixtures that mirror the legacy SQLite schema and seed data.
@@ -43,5 +43,5 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [ ] Update legacy server to consume Engine WebSocket registration.
 
 ## Current Status
-- **Stage:** Stage 2 — Port configuration and dependency loading into the Engine factory (completed)
+- **Stage:** Stage 3 — Introduce API blueprints and service adapters (completed)
 - **Active Task:** Awaiting next stage instructions.
