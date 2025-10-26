@@ -33,6 +33,7 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [x] Emit transitional logging when Engine handles requests.
 - [ ] **Stage 6 — Plan WebUI migration**
   - [ ] Move static/template handling into Data/Engine/services/WebUI.
+  - [x] Ensure that data from /Data/Server/WebUI is copied into /Engine/web-interface during engine Deployment via Borealis.ps1
   - [ ] Preserve TLS-aware URL generation and caching.
   - [ ] Add migration switch in the legacy server for WebUI delegation.
   - [ ] Extend tests to cover critical WebUI routes.
