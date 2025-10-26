@@ -9,6 +9,7 @@ error log) to align with the project's operational practices.
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
 import ssl
 import sys
@@ -16,72 +17,74 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
-try:  # pragma: no-cover - optional dependency when running without eventlet
-    import eventlet  # type: ignore
-except Exception:  # pragma: no-cover - fall back to threading mode
-    eventlet = None  # type: ignore[assignment]
-    logging.getLogger(__name__).warning(
-        "Eventlet is not available; Engine will run Socket.IO in threading mode."
-    )
-else:  # pragma: no-cover - monkey patch only when eventlet is present
-    eventlet.monkey_patch(thread=False)
 
-from flask import Flask, request
-from flask_cors import CORS
-from flask_socketio import SocketIO
-from werkzeug.middleware.proxy_fix import ProxyFix
+def _require_dependency(module: str, friendly_name: str) -> None:
+    if importlib.util.find_spec(module) is None:  # pragma: no cover - import check
+        raise RuntimeError(
+            f"{friendly_name} (Python module '{module}') is required for the Borealis Engine runtime. "
+            "Install the packaged dependencies by running Borealis.ps1 or ensure the module is present in the active environment."
+        )
 
-if eventlet:
-    try:  # pragma: no-cover - defensive import mirroring the legacy runtime.
-        from eventlet.wsgi import HttpProtocol  # type: ignore
-    except Exception:  # pragma: no-cover - the Engine should still operate without it.
-        HttpProtocol = None  # type: ignore[assignment]
-    else:
-        _original_handle_one_request = HttpProtocol.handle_one_request
 
-        def _quiet_tls_http_mismatch(self):  # type: ignore[override]
-            """Mirror the legacy suppression of noisy TLS handshake errors."""
+_require_dependency("eventlet", "Eventlet")
+_require_dependency("flask", "Flask")
+_require_dependency("flask_socketio", "Flask-SocketIO")
 
-            def _close_connection_quietly():
-                try:
-                    self.close_connection = True  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-                try:
-                    conn = getattr(self, "socket", None) or getattr(self, "connection", None)
-                    if conn:
-                        conn.close()
-                except Exception:
-                    pass
+import eventlet  # type: ignore  # noqa: E402  # pragma: no cover - import guarded above
+from eventlet import wsgi as eventlet_wsgi  # type: ignore  # noqa: E402  # pragma: no cover
 
+from flask import Flask, request  # noqa: E402
+from flask_cors import CORS  # noqa: E402
+from flask_socketio import SocketIO  # noqa: E402
+from werkzeug.middleware.proxy_fix import ProxyFix  # noqa: E402
+
+eventlet.monkey_patch(thread=False)  # pragma: no cover - aligns with legacy runtime
+
+HttpProtocol = getattr(eventlet_wsgi, "HttpProtocol", None)
+if HttpProtocol is not None:  # pragma: no branch - attribute exists in supported versions
+    _original_handle_one_request = HttpProtocol.handle_one_request
+
+    def _quiet_tls_http_mismatch(self):  # type: ignore[override]
+        """Mirror the legacy suppression of noisy TLS handshake errors."""
+
+        def _close_connection_quietly():
             try:
-                return _original_handle_one_request(self)
-            except ssl.SSLError as exc:  # type: ignore[arg-type]
-                reason = getattr(exc, "reason", "")
-                reason_text = str(reason).lower() if reason else ""
-                message = " ".join(str(arg) for arg in exc.args if arg).lower()
-                if (
-                    "http_request" in message
-                    or reason_text == "http request"
-                    or "unknown ca" in message
-                    or reason_text == "unknown ca"
-                    or "unknown_ca" in message
-                ):
-                    _close_connection_quietly()
-                    return None
-                raise
-            except ssl.SSLEOFError:
+                self.close_connection = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                conn = getattr(self, "socket", None) or getattr(self, "connection", None)
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
+
+        try:
+            return _original_handle_one_request(self)
+        except ssl.SSLError as exc:  # type: ignore[arg-type]
+            reason = getattr(exc, "reason", "")
+            reason_text = str(reason).lower() if reason else ""
+            message = " ".join(str(arg) for arg in exc.args if arg).lower()
+            if (
+                "http_request" in message
+                or reason_text == "http request"
+                or "unknown ca" in message
+                or reason_text == "unknown ca"
+                or "unknown_ca" in message
+            ):
                 _close_connection_quietly()
                 return None
-            except ConnectionAbortedError:
-                _close_connection_quietly()
-                return None
+            raise
+        except ssl.SSLEOFError:
+            _close_connection_quietly()
+            return None
+        except ConnectionAbortedError:
+            _close_connection_quietly()
+            return None
 
-        HttpProtocol.handle_one_request = _quiet_tls_http_mismatch  # type: ignore[assignment]
-else:
-    HttpProtocol = None  # type: ignore[assignment]
+    HttpProtocol.handle_one_request = _quiet_tls_http_mismatch  # type: ignore[assignment]
 
-_SOCKETIO_ASYNC_MODE = "eventlet" if eventlet else "threading"
+_SOCKETIO_ASYNC_MODE = "eventlet"
 
 
 # Ensure the legacy ``Modules`` package is importable when running from the
