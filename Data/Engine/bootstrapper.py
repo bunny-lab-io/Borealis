@@ -18,6 +18,7 @@ from .interfaces import (
 from .interfaces.eventlet_compat import apply_eventlet_patches
 from .repositories.sqlite import connection as sqlite_connection
 from .repositories.sqlite import migrations as sqlite_migrations
+from .runtime_layout import normalise_runtime_layout
 from .server import create_app
 from .services.container import build_service_container
 from .services.crypto.certificates import ensure_certificate
@@ -44,6 +45,7 @@ def bootstrap() -> EngineRuntime:
     """Construct the Flask application and supporting infrastructure."""
 
     preliminary_settings = load_environment()
+    layout_result = normalise_runtime_layout(preliminary_settings.runtime_root)
     staging_result = stage_web_interface(
         preliminary_settings.project_root,
         preliminary_settings.runtime_root,
@@ -51,6 +53,23 @@ def bootstrap() -> EngineRuntime:
     settings = load_environment()
     logger = configure_logging(settings)
     logger.info("bootstrap-started")
+    if layout_result.changed:
+        logger.info(
+            "runtime-layout-normalised",
+            extra={
+                "legacy_root": str(layout_result.legacy_root),
+                "moved": len(layout_result.moves),
+                "removed": len(layout_result.removed),
+            },
+        )
+    elif layout_result.reason:
+        logger.debug(
+            "runtime-layout-unchanged",
+            extra={
+                "legacy_root": str(layout_result.legacy_root),
+                "reason": layout_result.reason,
+            },
+        )
     if staging_result.copied:
         logger.info(
             "webui-staged",
