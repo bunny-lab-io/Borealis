@@ -39,7 +39,7 @@ class StageWebInterfaceTests(unittest.TestCase):
         destination.mkdir(parents=True)
         (destination / "stale.txt").write_text("stale", encoding="utf-8")
 
-        result = stage_web_interface(self.tmpdir)
+        result = stage_web_interface(self.tmpdir, self.tmpdir / "Engine")
 
         self.assertIsInstance(result, WebUIStagingResult)
         self.assertTrue(result.copied)
@@ -50,7 +50,7 @@ class StageWebInterfaceTests(unittest.TestCase):
     def test_handles_missing_source_directory(self) -> None:
         destination = self.tmpdir / "Engine" / "web-interface"
 
-        result = stage_web_interface(self.tmpdir)
+        result = stage_web_interface(self.tmpdir, self.tmpdir / "Engine")
 
         self.assertFalse(result.copied)
         self.assertEqual(result.reason, "source-missing")
@@ -66,7 +66,7 @@ class StageWebInterfaceTests(unittest.TestCase):
 
         runtime_root.mkdir(parents=True)
 
-        result = stage_web_interface(runtime_root)
+        result = stage_web_interface(repo_root, runtime_root)
 
         expected_destination = (runtime_root / "web-interface").resolve()
         self.assertEqual(result.destination, expected_destination)

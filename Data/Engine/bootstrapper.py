@@ -44,7 +44,10 @@ def bootstrap() -> EngineRuntime:
     """Construct the Flask application and supporting infrastructure."""
 
     preliminary_settings = load_environment()
-    staging_result = stage_web_interface(preliminary_settings.project_root)
+    staging_result = stage_web_interface(
+        preliminary_settings.project_root,
+        preliminary_settings.runtime_root,
+    )
     settings = load_environment()
     logger = configure_logging(settings)
     logger.info("bootstrap-started")

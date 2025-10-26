@@ -61,6 +61,7 @@ class EngineSettings:
     """Immutable container describing the Engine runtime configuration."""
 
     project_root: Path
+    runtime_root: Path
     debug: bool
     database: DatabaseSettings
     flask: FlaskSettings
@@ -107,11 +108,19 @@ def _resolve_project_root() -> Path:
         return current.parent
 
 
-def _resolve_database_path(project_root: Path) -> Path:
+def _resolve_runtime_root(project_root: Path) -> Path:
+    candidate = os.getenv("BOREALIS_ENGINE_ROOT") or os.getenv("BOREALIS_SERVER_ROOT")
+    if candidate:
+        return Path(candidate).expanduser().resolve()
+
+    return (project_root / "Engine").resolve()
+
+
+def _resolve_database_path(runtime_root: Path) -> Path:
     candidate = os.getenv("BOREALIS_DATABASE_PATH")
     if candidate:
         return Path(candidate).expanduser().resolve()
-    return (project_root / "database.db").resolve()
+    return (runtime_root / "database.db").resolve()
 
 
 def _should_apply_migrations() -> bool:
@@ -119,15 +128,15 @@ def _should_apply_migrations() -> bool:
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
-def _resolve_static_root(project_root: Path) -> Path:
+def _resolve_static_root(runtime_root: Path, project_root: Path) -> Path:
     candidate = os.getenv("BOREALIS_STATIC_ROOT")
     if candidate:
         return Path(candidate).expanduser().resolve()
 
     candidates = (
-        project_root / "Engine" / "web-interface" / "build",
-        project_root / "Engine" / "web-interface" / "dist",
-        project_root / "Engine" / "web-interface",
+        runtime_root / "web-interface" / "build",
+        runtime_root / "web-interface" / "dist",
+        runtime_root / "web-interface",
         project_root / "Data" / "Engine" / "WebUI" / "build",
         project_root / "Data" / "Engine" / "WebUI",
         project_root / "Server" / "web-interface" / "build",
@@ -181,14 +190,15 @@ def load_environment() -> EngineSettings:
     """Load Engine settings from environment variables and filesystem hints."""
 
     project_root = _resolve_project_root()
+    runtime_root = _resolve_runtime_root(project_root)
     database = DatabaseSettings(
-        path=_resolve_database_path(project_root),
+        path=_resolve_database_path(runtime_root),
         apply_migrations=_should_apply_migrations(),
     )
     cors_allowed_origins = _parse_origins(os.getenv("BOREALIS_CORS_ALLOWED_ORIGINS"))
     flask_settings = FlaskSettings(
         secret_key=os.getenv("BOREALIS_FLASK_SECRET_KEY", "change-me"),
-        static_root=_resolve_static_root(project_root),
+        static_root=_resolve_static_root(runtime_root, project_root),
         cors_allowed_origins=cors_allowed_origins,
     )
     socket_settings = SocketIOSettings(cors_allowed_origins=cors_allowed_origins)
@@ -208,6 +218,7 @@ def load_environment() -> EngineSettings:
 
     return EngineSettings(
         project_root=project_root,
+        runtime_root=runtime_root,
         debug=debug,
         database=database,
         flask=flask_settings,

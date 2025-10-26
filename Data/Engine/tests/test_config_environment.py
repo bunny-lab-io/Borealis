@@ -90,3 +90,17 @@ def test_resolve_project_root_defaults_to_repository(monkeypatch):
     expected = runtime.project_root()
 
     assert env_module._resolve_project_root() == expected
+
+
+def test_runtime_root_defaults_to_engine_dir(tmp_path, monkeypatch):
+    """Runtime root should default to the Engine directory under the repo."""
+
+    monkeypatch.setenv("BOREALIS_ROOT", str(tmp_path))
+    monkeypatch.delenv("BOREALIS_ENGINE_ROOT", raising=False)
+    monkeypatch.delenv("BOREALIS_SERVER_ROOT", raising=False)
+
+    settings = load_environment()
+
+    assert settings.runtime_root == (tmp_path / "Engine").resolve()
+
+    monkeypatch.delenv("BOREALIS_ROOT", raising=False)

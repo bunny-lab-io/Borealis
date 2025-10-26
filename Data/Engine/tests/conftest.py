@@ -30,10 +30,13 @@ def engine_settings(tmp_path: Path) -> EngineSettings:
     static_root.mkdir()
     (static_root / "index.html").write_text("<html></html>", encoding="utf-8")
 
-    database_path = project_root / "database.db"
+    runtime_root = project_root / "Engine"
+    runtime_root.mkdir()
+    database_path = runtime_root / "database.db"
 
     return EngineSettings(
         project_root=project_root,
+        runtime_root=runtime_root,
         debug=False,
         database=DatabaseSettings(path=database_path, apply_migrations=False),
         flask=FlaskSettings(
