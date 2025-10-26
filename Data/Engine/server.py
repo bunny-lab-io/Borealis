@@ -14,7 +14,7 @@ import ssl
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 import eventlet
 from flask import Flask
@@ -103,6 +103,7 @@ class EngineContext:
     tls_key_path: Optional[str]
     tls_bundle_path: Optional[str]
     config: Mapping[str, Any]
+    api_groups: Sequence[str]
 
 
 __all__ = ["EngineContext", "create_app"]
@@ -154,6 +155,7 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
         tls_key_path=tls_key_path,
         tls_bundle_path=tls_bundle_path,
         config=settings.as_dict(),
+        api_groups=settings.api_groups,
     )
 
     from .services import API, WebSocket, WebUI  # Local import to avoid circular deps during bootstrap
