@@ -112,8 +112,10 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     key_path.write_text("test-key", encoding="utf-8")
     bundle_path.write_text(bundle_contents, encoding="utf-8")
 
-    log_path = tmp_path / "logs" / "server.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / "server.log"
+    error_log_path = logs_dir / "error.log"
 
     config = {
         "DATABASE_PATH": str(db_path),
@@ -121,6 +123,7 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         "TLS_KEY_PATH": str(key_path),
         "TLS_BUNDLE_PATH": str(bundle_path),
         "LOG_FILE": str(log_path),
+        "ERROR_LOG_FILE": str(error_log_path),
         "API_GROUPS": ("tokens", "enrollment"),
     }
 

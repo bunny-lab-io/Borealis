@@ -331,7 +331,7 @@ PY
 }
 
 ensure_engine_webui_source() {
-  local engineSource="Data/Engine/web-interface"
+  local engineSource="Engine/web-interface"
   local legacySource="Data/Server/WebUI"
   if [[ -d "${engineSource}/src" && -f "${engineSource}/package.json" ]]; then
     return 0
@@ -351,7 +351,7 @@ ensure_engine_webui_source() {
 }
 
 prepare_webui() {
-  local customUIPath="Data/Engine/web-interface"
+  local customUIPath="Engine/web-interface"
   local webUIDestination="Server/web-interface"
   ensure_engine_webui_source || return 1
   mkdir -p "$webUIDestination"

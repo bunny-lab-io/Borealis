@@ -4,8 +4,8 @@ Stage 1 introduced the structural skeleton for the Engine runtime.  Stage 2
 builds upon that foundation by centralising configuration handling and logging
 initialisation so the Engine mirrors the legacy server's start-up behaviour.
 The factory delegates configuration resolution to :mod:`Data.Engine.config`
-and emits structured logs to ``Logs/Server/server.log`` to align with the
-project's operational practices.
+and emits structured logs to ``Logs/Engine/engine.log`` (with an accompanying
+error log) to align with the project's operational practices.
 """
 from __future__ import annotations
 
@@ -16,63 +16,72 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
-import eventlet
+try:  # pragma: no-cover - optional dependency when running without eventlet
+    import eventlet  # type: ignore
+except Exception:  # pragma: no-cover - fall back to threading mode
+    eventlet = None  # type: ignore[assignment]
+    logging.getLogger(__name__).warning(
+        "Eventlet is not available; Engine will run Socket.IO in threading mode."
+    )
+else:  # pragma: no-cover - monkey patch only when eventlet is present
+    eventlet.monkey_patch(thread=False)
+
 from flask import Flask, request
 from flask_cors import CORS
 from flask_socketio import SocketIO
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-# Eventlet ensures Socket.IO long-polling and WebSocket support parity with the
-# legacy server. We keep thread pools enabled for compatibility with blocking
-# filesystem/database operations.
-eventlet.monkey_patch(thread=False)
+if eventlet:
+    try:  # pragma: no-cover - defensive import mirroring the legacy runtime.
+        from eventlet.wsgi import HttpProtocol  # type: ignore
+    except Exception:  # pragma: no-cover - the Engine should still operate without it.
+        HttpProtocol = None  # type: ignore[assignment]
+    else:
+        _original_handle_one_request = HttpProtocol.handle_one_request
 
-try:  # pragma: no-cover - defensive import mirroring the legacy runtime.
-    from eventlet.wsgi import HttpProtocol  # type: ignore
-except Exception:  # pragma: no-cover - the Engine should still operate without it.
-    HttpProtocol = None  # type: ignore[assignment]
-else:
-    _original_handle_one_request = HttpProtocol.handle_one_request
+        def _quiet_tls_http_mismatch(self):  # type: ignore[override]
+            """Mirror the legacy suppression of noisy TLS handshake errors."""
 
-    def _quiet_tls_http_mismatch(self):  # type: ignore[override]
-        """Mirror the legacy suppression of noisy TLS handshake errors."""
+            def _close_connection_quietly():
+                try:
+                    self.close_connection = True  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                try:
+                    conn = getattr(self, "socket", None) or getattr(self, "connection", None)
+                    if conn:
+                        conn.close()
+                except Exception:
+                    pass
 
-        def _close_connection_quietly():
             try:
-                self.close_connection = True  # type: ignore[attr-defined]
-            except Exception:
-                pass
-            try:
-                conn = getattr(self, "socket", None) or getattr(self, "connection", None)
-                if conn:
-                    conn.close()
-            except Exception:
-                pass
-
-        try:
-            return _original_handle_one_request(self)
-        except ssl.SSLError as exc:  # type: ignore[arg-type]
-            reason = getattr(exc, "reason", "")
-            reason_text = str(reason).lower() if reason else ""
-            message = " ".join(str(arg) for arg in exc.args if arg).lower()
-            if (
-                "http_request" in message
-                or reason_text == "http request"
-                or "unknown ca" in message
-                or reason_text == "unknown ca"
-                or "unknown_ca" in message
-            ):
+                return _original_handle_one_request(self)
+            except ssl.SSLError as exc:  # type: ignore[arg-type]
+                reason = getattr(exc, "reason", "")
+                reason_text = str(reason).lower() if reason else ""
+                message = " ".join(str(arg) for arg in exc.args if arg).lower()
+                if (
+                    "http_request" in message
+                    or reason_text == "http request"
+                    or "unknown ca" in message
+                    or reason_text == "unknown ca"
+                    or "unknown_ca" in message
+                ):
+                    _close_connection_quietly()
+                    return None
+                raise
+            except ssl.SSLEOFError:
                 _close_connection_quietly()
                 return None
-            raise
-        except ssl.SSLEOFError:
-            _close_connection_quietly()
-            return None
-        except ConnectionAbortedError:
-            _close_connection_quietly()
-            return None
+            except ConnectionAbortedError:
+                _close_connection_quietly()
+                return None
 
-    HttpProtocol.handle_one_request = _quiet_tls_http_mismatch  # type: ignore[assignment]
+        HttpProtocol.handle_one_request = _quiet_tls_http_mismatch  # type: ignore[assignment]
+else:
+    HttpProtocol = None  # type: ignore[assignment]
+
+_SOCKETIO_ASYNC_MODE = "eventlet" if eventlet else "threading"
 
 
 # Ensure the legacy ``Modules`` package is importable when running from the
@@ -171,7 +180,7 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
     socketio = SocketIO(
         app,
         cors_allowed_origins="*",
-        async_mode="eventlet",
+        async_mode=_SOCKETIO_ASYNC_MODE,
         engineio_options={
             "max_http_buffer_size": 100_000_000,
             "max_websocket_message_size": 100_000_000,
