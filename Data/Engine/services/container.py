@@ -182,6 +182,7 @@ def build_service_container(
         default_repo=settings.github.default_repo,
         default_branch=settings.github.default_branch,
         refresh_interval=settings.github.refresh_interval_seconds,
+        allow_proxies=settings.github.allow_proxies,
         logger=log.getChild("github.provider"),
     )
     github_service = GitHubService(

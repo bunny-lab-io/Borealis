@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import time
+import os
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -31,6 +32,7 @@ class GitHubArtifactProvider:
         default_repo: str,
         default_branch: str,
         refresh_interval: int,
+        allow_proxies: Optional[bool] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._cache_file = cache_file
@@ -42,6 +44,9 @@ class GitHubArtifactProvider:
         self._cache_lock = threading.Lock()
         self._cache: Dict[str, Dict[str, float | str]] = {}
         self._worker: Optional[threading.Thread] = None
+        if allow_proxies is None:
+            allow_proxies = _env_flag("BOREALIS_GITHUB_ALLOW_PROXIES", default=False)
+        self._allow_proxies = allow_proxies
         self._hydrate_cache_from_disk()
 
     def set_token(self, token: Optional[str]) -> None:
@@ -112,7 +117,7 @@ class GitHubArtifactProvider:
         sha: Optional[str] = None
 
         try:
-            response: Response = requests.get(url, headers=headers, timeout=20)
+            response: Response = self._http_get(url, headers=headers, timeout=20)
             if response.status_code == 200:
                 data = response.json()
                 sha = (data.get("commit", {}).get("sha") or "").strip()  # type: ignore[assignment]
@@ -179,7 +184,11 @@ class GitHubArtifactProvider:
             "User-Agent": "Borealis-Engine",
         }
         try:
-            response: Response = requests.get("https://api.github.com/rate_limit", headers=headers, timeout=10)
+            response: Response = self._http_get(
+                "https://api.github.com/rate_limit",
+                headers=headers,
+                timeout=10,
+            )
         except Exception as exc:  # pragma: no cover - defensive logging
             message = f"GitHub token verification raised: {exc}"
             self._log.warning("github-token-verify error=%s", message)
@@ -266,10 +275,26 @@ class GitHubArtifactProvider:
         except Exception as exc:  # pragma: no cover - defensive logging
             self._log.warning("failed to persist repo cache: %s", exc)
 
+    def _http_get(self, url: str, *, headers: Dict[str, str], timeout: float) -> Response:
+        if requests is None:  # pragma: no cover - defensive guard
+            raise RuntimeError("requests library not available")
+
+        kwargs: Dict[str, object] = {"headers": headers, "timeout": timeout}
+        if not self._allow_proxies:
+            kwargs["proxies"] = {}
+        return requests.get(url, **kwargs)
+
 
 def _safe_int(value: object) -> Optional[int]:
     try:
         return int(value)
     except Exception:
         return None
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 

@@ -104,3 +104,26 @@ def test_runtime_root_defaults_to_engine_dir(tmp_path, monkeypatch):
     assert settings.runtime_root == (tmp_path / "Engine").resolve()
 
     monkeypatch.delenv("BOREALIS_ROOT", raising=False)
+
+
+def test_github_proxies_disabled_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ROOT", str(tmp_path))
+    monkeypatch.delenv("BOREALIS_GITHUB_ALLOW_PROXIES", raising=False)
+
+    settings = load_environment()
+
+    assert settings.github.allow_proxies is False
+
+    monkeypatch.delenv("BOREALIS_ROOT", raising=False)
+
+
+def test_github_proxies_follow_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOREALIS_ROOT", str(tmp_path))
+    monkeypatch.setenv("BOREALIS_GITHUB_ALLOW_PROXIES", "yes")
+
+    settings = load_environment()
+
+    assert settings.github.allow_proxies is True
+
+    monkeypatch.delenv("BOREALIS_ROOT", raising=False)
+    monkeypatch.delenv("BOREALIS_GITHUB_ALLOW_PROXIES", raising=False)

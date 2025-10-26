@@ -48,6 +48,7 @@ class GitHubSettings:
     default_branch: str
     refresh_interval_seconds: int
     cache_root: Path
+    allow_proxies: bool
 
     @property
     def cache_file(self) -> Path:
@@ -168,6 +169,13 @@ def _resolve_github_cache_root(project_root: Path) -> Path:
     return (project_root / "Data" / "Engine" / "cache").resolve()
 
 
+def _should_allow_github_proxies() -> bool:
+    raw = os.getenv("BOREALIS_GITHUB_ALLOW_PROXIES")
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _parse_refresh_interval(raw: str | None) -> int:
     if not raw:
         return 60
@@ -214,6 +222,7 @@ def load_environment() -> EngineSettings:
         default_branch=os.getenv("BOREALIS_REPO_BRANCH", "main"),
         refresh_interval_seconds=_parse_refresh_interval(os.getenv("BOREALIS_REPO_HASH_REFRESH")),
         cache_root=_resolve_github_cache_root(project_root),
+        allow_proxies=_should_allow_github_proxies(),
     )
 
     return EngineSettings(

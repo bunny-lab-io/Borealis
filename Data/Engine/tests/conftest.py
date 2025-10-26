@@ -51,6 +51,7 @@ def engine_settings(tmp_path: Path) -> EngineSettings:
             default_branch="main",
             refresh_interval_seconds=60,
             cache_root=project_root / "cache",
+            allow_proxies=False,
         ),
     )
 
