@@ -1,9 +1,12 @@
+# Migration Prompt
+You are working in the Borealis Automation Platform repo (root: <ProjectRoot>). The legacy runtime lives under Data/Server/server.py. Your objective is to introduce a new Engine runtime under Data/Engine that will progressively take over responsibilities (API first, then WebUI, then WebSocket). Execute the migration in the stages seen below (be sure to not overstep stages, we only want to work on one stage at a time, until I give approval to move onto the next stage):
+
+Everytime you do work, you indicate the current stage you are on by writing to the file in <ProjectRoot>/Data/Engine/CODE_MIGRATION_TRACKER.md, inside of this file, you will keep an up-to-date ledger of the overall task list seen below, as well as the current stage you are on, and what task within that stage you are working on.  You will keep this file up-to-date at all times whenever you make progress, and you will reference this file whenever making changes in case you forget where you were last at in the codebase migration work.  You will never make modifications to the "# Migration Prompt" section, only the "# Borealis Engine Migration Tracker" section.
+
+Lastly, everytime that you complete a stage, you will create a pull request named "Stage <number> - <Stage Description> Implemented" I will merge your pull request associated with that stage into the "main" branch of the codebase, then I will create a new gpt-5-codex conversation to keep teh conversation fresh and relevant, instructing the agent to work from the next stage in-line, and I expect the Codex agent to read the aforementioned <ProjectRoot>/Data/Engine/CODE_MIGRATION_TRACKER.md to understand what it has already done thus far, and what it needs to work on next.  Every time that I start the new conversation, I will instruct gpt-5-codex to read <ProjectRoot>/Data/Engine/CODE_MIGRATION_TRACKER.md to understand it's tasks to determine what to do.
+
+
 # Borealis Engine Migration Tracker
-
-## Current Focus
-- **Stage:** Stage 1 — Establish the Engine skeleton and bootstrapper
-- **Active Task:** Stage 1 tasks completed; awaiting direction to proceed to Stage 2.
-
 ## Task Ledger
 - [x] **Stage 1 — Establish the Engine skeleton and bootstrapper**
   - [x] Add Data/Engine/__init__.py plus service subpackages with placeholder modules and docstrings.
