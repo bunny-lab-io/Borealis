@@ -210,6 +210,13 @@ def _infer_server_scope(message: str, explicit: Optional[str]) -> Optional[str]:
     return None
 
 
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _is_internal_request(req: Request) -> bool:
     """Return True if the HTTP request originated from the local server host."""
     try:
@@ -326,6 +333,8 @@ AUTH_RATE_LIMITER = SlidingWindowRateLimiter()
 ENROLLMENT_NONCE_CACHE = NonceCache()
 DPOP_VALIDATOR = DPoPValidator()
 DEVICE_AUTH_MANAGER: Optional[DeviceAuthManager] = None
+ENGINE_API_ENABLED = _env_flag("BOREALIS_ENGINE_API")
+ENGINE_API_GROUPS: Tuple[str, ...] = tuple()
 
 
 def _set_cached_github_token(token: Optional[str]) -> None:
@@ -5088,24 +5097,57 @@ def init_db():
 
 init_db()
 
-enrollment_routes.register(
-    app,
-    db_conn_factory=_db_conn,
-    log=_write_service_log,
-    jwt_service=JWT_SERVICE,
-    tls_bundle_path=TLS_BUNDLE_PATH,
-    ip_rate_limiter=IP_RATE_LIMITER,
-    fp_rate_limiter=FP_RATE_LIMITER,
-    nonce_cache=ENROLLMENT_NONCE_CACHE,
-    script_signer=SCRIPT_SIGNER,
-)
+if ENGINE_API_ENABLED:
+    _engine_api_config: Dict[str, Any] = {
+        "DATABASE_PATH": DB_PATH,
+        "TLS_CERT_PATH": TLS_CERT_PATH,
+        "TLS_KEY_PATH": TLS_KEY_PATH,
+        "TLS_BUNDLE_PATH": TLS_BUNDLE_PATH,
+    }
+    api_groups_override = os.environ.get("BOREALIS_API_GROUPS")
+    if api_groups_override:
+        _engine_api_config["API_GROUPS"] = api_groups_override
 
-token_routes.register(
-    app,
-    db_conn_factory=_db_conn,
-    jwt_service=JWT_SERVICE,
-    dpop_validator=DPOP_VALIDATOR,
-)
+    try:
+        from Data.Engine.server import register_engine_api
+
+        _engine_context = register_engine_api(app, config=_engine_api_config)
+    except Exception:
+        ENGINE_API_ENABLED = False
+        ENGINE_API_GROUPS = tuple()
+        _write_service_log(
+            "server",
+            "Engine API delegation failed; continuing with legacy API registration.",
+            level="ERROR",
+        )
+    else:
+        ENGINE_API_GROUPS = tuple(_engine_context.api_groups)
+        _write_service_log(
+            "server",
+            "Engine API delegation enabled for groups: {}".format(
+                ", ".join(ENGINE_API_GROUPS) or "default"
+            ),
+        )
+
+if not ENGINE_API_ENABLED:
+    enrollment_routes.register(
+        app,
+        db_conn_factory=_db_conn,
+        log=_write_service_log,
+        jwt_service=JWT_SERVICE,
+        tls_bundle_path=TLS_BUNDLE_PATH,
+        ip_rate_limiter=IP_RATE_LIMITER,
+        fp_rate_limiter=FP_RATE_LIMITER,
+        nonce_cache=ENROLLMENT_NONCE_CACHE,
+        script_signer=SCRIPT_SIGNER,
+    )
+
+    token_routes.register(
+        app,
+        db_conn_factory=_db_conn,
+        jwt_service=JWT_SERVICE,
+        dpop_validator=DPOP_VALIDATOR,
+    )
 
 agent_routes.register(
     app,

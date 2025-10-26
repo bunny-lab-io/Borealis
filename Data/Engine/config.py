@@ -26,8 +26,9 @@ defaults that mirror the legacy server runtime.  Key environment variables are
 
 When TLS values are not provided explicitly the Engine falls back to the
 certificate helper shipped with the legacy server, ensuring bundling parity.
-Logs are written to ``Logs/Server/server.log`` with daily rotation so the new
-runtime integrates with existing operational practices.
+Logs are written to ``Logs/Engine/engine.log`` with daily rotation and
+errors are additionally duplicated to ``Logs/Engine/error.log`` so the
+runtime integrates with the platform's logging policy.
 """
 
 from __future__ import annotations
@@ -48,7 +49,9 @@ except Exception:  # pragma: no-cover - Engine configuration still works without
 ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = ENGINE_DIR.parent.parent
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "database.db"
-LOG_FILE_PATH = PROJECT_ROOT / "Logs" / "Server" / "server.log"
+LOG_ROOT = PROJECT_ROOT / "Logs" / "Engine"
+LOG_FILE_PATH = LOG_ROOT / "engine.log"
+ERROR_LOG_FILE_PATH = LOG_ROOT / "error.log"
 
 
 def _ensure_parent(path: Path) -> None:
@@ -61,16 +64,28 @@ def _ensure_parent(path: Path) -> None:
 
 
 def _resolve_static_folder() -> str:
-    candidates = [
-        ENGINE_DIR / "web-interface" / "build",
-        ENGINE_DIR / "web-interface" / "dist",
+    candidate_roots = [
+        PROJECT_ROOT / "Engine" / "web-interface",
         ENGINE_DIR / "web-interface",
+        PROJECT_ROOT / "Data" / "Server" / "web-interface",
     ]
+
+    candidates = []
+    for root in candidate_roots:
+        absolute_root = root.resolve()
+        candidates.extend(
+            [
+                absolute_root / "build",
+                absolute_root / "dist",
+                absolute_root,
+            ]
+        )
+
     for candidate in candidates:
-        absolute = candidate.resolve()
-        if absolute.is_dir():
-            return str(absolute)
-    return str(candidates[0].resolve())
+        if candidate.is_dir():
+            return str(candidate)
+
+    return str(candidates[0])
 
 
 def _parse_origins(raw: Optional[Any]) -> Optional[List[str]]:
@@ -139,6 +154,7 @@ class EngineSettings:
     tls_key_path: Optional[str]
     tls_bundle_path: Optional[str]
     log_file: str
+    error_log_file: str
     api_groups: Tuple[str, ...]
     raw: MutableMapping[str, Any] = field(default_factory=dict)
 
@@ -219,6 +235,9 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
     log_file = str(runtime_config.get("LOG_FILE") or LOG_FILE_PATH)
     _ensure_parent(Path(log_file))
 
+    error_log_file = str(runtime_config.get("ERROR_LOG_FILE") or ERROR_LOG_FILE_PATH)
+    _ensure_parent(Path(error_log_file))
+
     api_groups = _parse_api_groups(
         runtime_config.get("API_GROUPS") or os.environ.get("BOREALIS_API_GROUPS")
     )
@@ -237,6 +256,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         tls_key_path=tls_key_path if tls_key_path else None,
         tls_bundle_path=tls_bundle_path if tls_bundle_path else None,
         log_file=str(log_file),
+        error_log_file=str(error_log_file),
         api_groups=api_groups,
         raw=runtime_config,
     )
@@ -244,7 +264,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
 
 
 def initialise_engine_logger(settings: EngineSettings, name: str = "borealis.engine") -> logging.Logger:
-    """Configure the Engine logger to write to the shared server log."""
+    """Configure the Engine logger to write to Engine log files."""
 
     logger = logging.getLogger(name)
     if not logger.handlers:
@@ -262,6 +282,16 @@ def initialise_engine_logger(settings: EngineSettings, name: str = "borealis.eng
         )
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
+
+        error_handler = TimedRotatingFileHandler(
+            settings.error_log_file,
+            when="midnight",
+            backupCount=0,
+            encoding="utf-8",
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(formatter)
+        logger.addHandler(error_handler)
 
     logger.setLevel(logging.INFO)
     logger.propagate = False

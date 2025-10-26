@@ -27,10 +27,10 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [x] Provide fixtures that mirror the legacy SQLite schema and seed data.
   - [x] Assert HTTP status codes, payloads, and side effects for parity.
   - [x] Integrate Engine API tests into CI/local workflows.
-- [ ] **Stage 5 — Bridge the legacy server to Engine APIs**
-  - [ ] Delegate API blueprint registration to the Engine factory from the legacy server.
-  - [ ] Replace legacy API routes with Engine-provided blueprints gated by a flag.
-  - [ ] Emit transitional logging when Engine handles requests.
+- [x] **Stage 5 — Bridge the legacy server to Engine APIs**
+  - [x] Delegate API blueprint registration to the Engine factory from the legacy server.
+  - [x] Replace legacy API routes with Engine-provided blueprints gated by a flag.
+  - [x] Emit transitional logging when Engine handles requests.
 - [ ] **Stage 6 — Plan WebUI migration**
   - [ ] Move static/template handling into Data/Engine/services/WebUI.
   - [ ] Preserve TLS-aware URL generation and caching.
@@ -43,5 +43,5 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [ ] Update legacy server to consume Engine WebSocket registration.
 
 ## Current Status
-- **Stage:** Stage 4 — Build unit and smoke tests for Engine APIs (completed)
+- **Stage:** Stage 5 — Bridge the legacy server to Engine APIs (completed)
 - **Active Task:** Awaiting next stage instructions.

@@ -198,7 +198,7 @@ function Ensure-EngineWebInterface {
         [string]$ProjectRoot
     )
 
-    $engineSource = Join-Path $ProjectRoot 'Data\Engine\web-interface'
+    $engineSource = Join-Path $ProjectRoot 'Engine\web-interface'
     $legacySource = Join-Path $ProjectRoot 'Data\Server\WebUI'
 
     if (-not (Test-Path $legacySource)) {
@@ -1108,7 +1108,7 @@ switch ($choice) {
         $venvFolder       = "Server"
         $dataSource       = "Data"
         $dataDestination  = "$venvFolder\Borealis"
-        $customUIPath     = "$dataSource\Engine\web-interface"
+        $customUIPath     = (Join-Path $scriptDir 'Engine\web-interface')
         $webUIDestination = "$venvFolder\web-interface"
         $venvPython       = Join-Path $venvFolder 'Scripts\python.exe'
 
@@ -1408,7 +1408,7 @@ switch ($choice) {
 
         Run-Step "Copy Borealis Engine WebUI Files into: $webUIDestination" {
             Ensure-EngineWebInterface -ProjectRoot $scriptDir
-            $engineWebUISource = Join-Path $engineSourceAbsolute 'web-interface'
+            $engineWebUISource = Join-Path $scriptDir 'Engine\web-interface'
             if (Test-Path $engineWebUISource) {
                 $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
                 if (Test-Path $webUIDestinationAbsolute) {
