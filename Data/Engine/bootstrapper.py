@@ -1,4 +1,11 @@
-"""Command-line bootstrapper for the Stage 1 Engine runtime."""
+"""Entrypoint helpers for running the Borealis Engine runtime.
+
+The bootstrapper assembles configuration via :func:`Data.Engine.config.load_runtime_config`
+before delegating to :func:`Data.Engine.server.create_app`.  It mirrors the
+legacy server defaults by binding to ``0.0.0.0:5001`` and honouring the
+``BOREALIS_ENGINE_*`` environment overrides for bind host/port.
+"""
+
 from __future__ import annotations
 
 import os

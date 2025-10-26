@@ -1,18 +1,20 @@
-"""Stage 1 Borealis Engine application factory.
+"""Stage 2 Borealis Engine application factory.
 
-This module establishes the foundational structure for the Engine runtime so
-subsequent migration stages can progressively assume responsibility for the
-API, WebUI, and WebSocket layers.
+Stage 1 introduced the structural skeleton for the Engine runtime.  Stage 2
+builds upon that foundation by centralising configuration handling and logging
+initialisation so the Engine mirrors the legacy server's start-up behaviour.
+The factory delegates configuration resolution to :mod:`Data.Engine.config`
+and emits structured logs to ``Logs/Server/server.log`` to align with the
+project's operational practices.
 """
 from __future__ import annotations
 
 import logging
-import os
 import ssl
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 import eventlet
 from flask import Flask
@@ -87,10 +89,7 @@ for root in _SEARCH_ROOTS:
         if root_str not in sys.path:
             sys.path.insert(0, root_str)
 
-try:  # pragma: no-cover - optional during Stage 1 scaffolding.
-    from Modules.crypto import certificates  # type: ignore
-except Exception:  # pragma: no-cover - Engine can start without certificate helpers.
-    certificates = None  # type: ignore[assignment]
+from .config import EngineSettings, initialise_engine_logger, load_runtime_config
 
 
 @dataclass
@@ -109,103 +108,27 @@ class EngineContext:
 __all__ = ["EngineContext", "create_app"]
 
 
-def _resolve_static_folder() -> str:
-    candidates = [
-        _ENGINE_DIR / "web-interface" / "build",
-        _ENGINE_DIR / "web-interface" / "dist",
-        _ENGINE_DIR / "web-interface",
-    ]
-    for candidate in candidates:
-        absolute = candidate.resolve()
-        if absolute.is_dir():
-            return str(absolute)
-    # Fall back to the first candidate to maintain parity with the legacy
-    # behaviour where the folder may not exist yet.
-    return str(candidates[0].resolve())
-
-
-def _initialise_logger(name: str = "borealis.engine") -> logging.Logger:
-    logger = logging.getLogger(name)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter("%(asctime)s-%(name)s-%(levelname)s: %(message)s")
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    return logger
-
-
-def _discover_tls_material(config: Mapping[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    cert_path = str(config.get("TLS_CERT_PATH") or os.environ.get("BOREALIS_TLS_CERT") or "") or None
-    key_path = str(config.get("TLS_KEY_PATH") or os.environ.get("BOREALIS_TLS_KEY") or "") or None
-    bundle_path = str(config.get("TLS_BUNDLE_PATH") or os.environ.get("BOREALIS_TLS_BUNDLE") or "") or None
-
-    if certificates and not all([cert_path, key_path, bundle_path]):
-        try:
-            auto_cert, auto_key, auto_bundle = certificates.certificate_paths()
-        except Exception:
-            auto_cert = auto_key = auto_bundle = None
-        else:
-            cert_path = cert_path or auto_cert
-            key_path = key_path or auto_key
-            bundle_path = bundle_path or auto_bundle
-
-    if cert_path:
-        os.environ.setdefault("BOREALIS_TLS_CERT", cert_path)
-    if key_path:
-        os.environ.setdefault("BOREALIS_TLS_KEY", key_path)
-    if bundle_path:
-        os.environ.setdefault("BOREALIS_TLS_BUNDLE", bundle_path)
-    return cert_path, key_path, bundle_path
-
-
-def _coerce_config(source: Optional[Mapping[str, Any]]) -> MutableMapping[str, Any]:
-    if source is None:
-        return {}
-    return dict(source)
-
-
 def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, SocketIO, EngineContext]:
-    """Create the Stage 1 Engine Flask application."""
+    """Create the Stage 2 Engine Flask application."""
 
-    runtime_config: MutableMapping[str, Any] = _coerce_config(config)
-    logger = _initialise_logger()
+    settings: EngineSettings = load_runtime_config(config)
+    logger = initialise_engine_logger(settings)
 
-    database_path = runtime_config.get("DATABASE_PATH") or os.path.abspath(
-        os.path.join(_ENGINE_DIR, "..", "..", "database.db")
-    )
-    os.makedirs(os.path.dirname(database_path), exist_ok=True)
+    database_path = settings.database_path
 
-    static_folder = _resolve_static_folder()
+    static_folder = settings.static_folder
     app = Flask(__name__, static_folder=static_folder, static_url_path="")
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
-    cors_origins = runtime_config.get("CORS_ORIGINS") or os.environ.get("BOREALIS_CORS_ORIGINS")
+    cors_origins = settings.cors_origins
     if cors_origins:
-        origins = [origin.strip() for origin in str(cors_origins).split(",") if origin.strip()]
-        CORS(app, supports_credentials=True, origins=origins)
+        CORS(app, supports_credentials=True, origins=cors_origins)
     else:
         CORS(app, supports_credentials=True)
 
-    app.secret_key = runtime_config.get("SECRET_KEY") or os.environ.get("BOREALIS_SECRET", "borealis-dev-secret")
+    app.secret_key = settings.secret_key
 
-    app.config.update(
-        SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE=runtime_config.get(
-            "SESSION_COOKIE_SAMESITE",
-            os.environ.get("BOREALIS_COOKIE_SAMESITE", "Lax"),
-        ),
-        SESSION_COOKIE_SECURE=bool(
-            str(runtime_config.get("SESSION_COOKIE_SECURE", os.environ.get("BOREALIS_COOKIE_SECURE", "0"))).lower()
-            in {"1", "true", "yes"}
-        ),
-    )
-    app.config.setdefault("PREFERRED_URL_SCHEME", "https")
-
-    cookie_domain = runtime_config.get("SESSION_COOKIE_DOMAIN") or os.environ.get("BOREALIS_COOKIE_DOMAIN")
-    if cookie_domain:
-        app.config["SESSION_COOKIE_DOMAIN"] = cookie_domain
+    app.config.update(settings.to_flask_config())
 
     socketio = SocketIO(
         app,
@@ -217,7 +140,11 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
         },
     )
 
-    tls_cert_path, tls_key_path, tls_bundle_path = _discover_tls_material(runtime_config)
+    tls_cert_path, tls_key_path, tls_bundle_path = (
+        settings.tls_cert_path,
+        settings.tls_key_path,
+        settings.tls_bundle_path,
+    )
 
     context = EngineContext(
         database_path=database_path,
@@ -226,7 +153,7 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
         tls_cert_path=tls_cert_path,
         tls_key_path=tls_key_path,
         tls_bundle_path=tls_bundle_path,
-        config=runtime_config,
+        config=settings.as_dict(),
     )
 
     from .services import API, WebSocket, WebUI  # Local import to avoid circular deps during bootstrap
