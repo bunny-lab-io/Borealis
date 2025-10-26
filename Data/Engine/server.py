@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
 import eventlet
-from flask import Flask
+from flask import Flask, request
 from flask_cors import CORS
 from flask_socketio import SocketIO
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -106,7 +106,46 @@ class EngineContext:
     api_groups: Sequence[str]
 
 
-__all__ = ["EngineContext", "create_app"]
+__all__ = ["EngineContext", "create_app", "register_engine_api"]
+
+
+def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> EngineContext:
+    return EngineContext(
+        database_path=settings.database_path,
+        logger=logger,
+        scheduler=None,
+        tls_cert_path=settings.tls_cert_path,
+        tls_key_path=settings.tls_key_path,
+        tls_bundle_path=settings.tls_bundle_path,
+        config=settings.as_dict(),
+        api_groups=settings.api_groups,
+    )
+
+
+def _attach_transition_logging(app: Flask, context: EngineContext, logger: logging.Logger) -> None:
+    tracked = {group.strip().lower() for group in context.api_groups if group}
+    if not tracked:
+        tracked = {"tokens", "enrollment"}
+
+    existing = getattr(app, "_engine_api_tracked_blueprints", set())
+    if existing:
+        tracked.update(existing)
+    setattr(app, "_engine_api_tracked_blueprints", tracked)
+
+    if getattr(app, "_engine_api_logging_installed", False):
+        return
+
+    @app.before_request
+    def _log_engine_api_bridge() -> None:  # pragma: no cover - integration behaviour exercised in higher-level tests
+        blueprint = (request.blueprint or "").lower()
+        if blueprint and blueprint in getattr(app, "_engine_api_tracked_blueprints", tracked):
+            logger.info(
+                "Engine handling API request via legacy bridge: %s %s",
+                request.method,
+                request.path,
+            )
+
+    setattr(app, "_engine_api_logging_installed", True)
 
 
 def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, SocketIO, EngineContext]:
@@ -114,8 +153,6 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
 
     settings: EngineSettings = load_runtime_config(config)
     logger = initialise_engine_logger(settings)
-
-    database_path = settings.database_path
 
     static_folder = settings.static_folder
     app = Flask(__name__, static_folder=static_folder, static_url_path="")
@@ -141,22 +178,7 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
         },
     )
 
-    tls_cert_path, tls_key_path, tls_bundle_path = (
-        settings.tls_cert_path,
-        settings.tls_key_path,
-        settings.tls_bundle_path,
-    )
-
-    context = EngineContext(
-        database_path=database_path,
-        logger=logger,
-        scheduler=None,
-        tls_cert_path=tls_cert_path,
-        tls_key_path=tls_key_path,
-        tls_bundle_path=tls_bundle_path,
-        config=settings.as_dict(),
-        api_groups=settings.api_groups,
-    )
+    context = _build_engine_context(settings, logger)
 
     from .services import API, WebSocket, WebUI  # Local import to avoid circular deps during bootstrap
 
@@ -167,3 +189,21 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
     logger.debug("Engine application factory completed initialisation.")
 
     return app, socketio, context
+
+
+def register_engine_api(app: Flask, *, config: Optional[Mapping[str, Any]] = None) -> EngineContext:
+    """Register Engine-managed API blueprints onto an existing Flask app."""
+
+    settings: EngineSettings = load_runtime_config(config)
+    logger = initialise_engine_logger(settings)
+    context = _build_engine_context(settings, logger)
+
+    from .services import API  # Local import avoids circular dependency at module import time
+
+    API.register_api(app, context)
+    _attach_transition_logging(app, context, logger)
+
+    groups_display = ", ".join(context.api_groups) if context.api_groups else "none"
+    logger.info("Engine API delegation activated for groups: %s", groups_display)
+
+    return context
