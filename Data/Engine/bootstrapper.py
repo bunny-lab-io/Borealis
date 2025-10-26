@@ -12,7 +12,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Set
+from typing import Any, Dict
 
 from .server import EngineContext, create_app
 
@@ -22,25 +22,18 @@ DEFAULT_PORT = 5001
 
 
 def _project_root() -> Path:
-    """Locate the repository root regardless of runtime staging depth."""
+    """Locate the repository root by discovering the Borealis bootstrap script."""
 
     current = Path(__file__).resolve().parent
 
-    # Prefer an explicit sentinel (Borealis.ps1) so running from the staged
-    # Engine runtime still discovers the true project root one level higher.
     for candidate in (current, *current.parents):
         if (candidate / "Borealis.ps1").is_file():
             return candidate
 
-    # Fallback: if we're inside ``<root>/Engine/Data/Engine`` the parent of the
-    # ``Engine`` directory is the project root.
-    for candidate in current.parents:
-        if candidate.name.lower() == "engine" and (candidate.parent / "Borealis.ps1").is_file():
-            return candidate.parent
-
-    # Last resort mirrors the previous behaviour (two levels up) so we don't
-    # regress in unforeseen layouts.
-    return current.parents[1]
+    raise RuntimeError(
+        "Unable to locate the Borealis project root; Borealis.ps1 was not found "
+        "in any parent directory."
+    )
 
 
 def _build_runtime_config() -> Dict[str, Any]:
@@ -58,43 +51,20 @@ def _stage_web_interface_assets(logger: logging.Logger) -> None:
     engine_web_root = project_root / "Engine" / "web-interface"
     legacy_source = project_root / "Data" / "Server" / "WebUI"
 
-    package_json = engine_web_root / "package.json"
-    src_dir = engine_web_root / "src"
-
-    if package_json.is_file() and src_dir.is_dir():
-        return
-
     if not legacy_source.is_dir():
-        logger.warning(
-            "Legacy WebUI source missing; unable to stage Engine web interface from %s",
-            legacy_source,
-        )
-        return
-
-    engine_web_root.mkdir(parents=True, exist_ok=True)
-
-    preserved: Set[str] = {".gitignore", "README.md"}
-    for child in engine_web_root.iterdir():
-        if child.name in preserved:
-            continue
-        if child.is_dir():
-            shutil.rmtree(child, ignore_errors=True)
-        else:
-            try:
-                child.unlink()
-            except FileNotFoundError:
-                continue
-
-    for item in legacy_source.iterdir():
-        destination = engine_web_root / item.name
-        if item.is_dir():
-            shutil.copytree(item, destination, dirs_exist_ok=True)
-        else:
-            shutil.copy2(item, destination)
-
-    if not package_json.is_file() or not src_dir.is_dir():
         raise RuntimeError(
-            f"Failed to stage Engine web interface assets into {engine_web_root}"
+            f"Engine web interface source missing: {legacy_source}"
+        )
+
+    if engine_web_root.exists():
+        shutil.rmtree(engine_web_root)
+
+    shutil.copytree(legacy_source, engine_web_root)
+
+    index_path = engine_web_root / "index.html"
+    if not index_path.is_file():
+        raise RuntimeError(
+            f"Engine web interface staging failed; missing {index_path}"
         )
 
     logger.info(
