@@ -93,6 +93,7 @@ _ENGINE_DIR = Path(__file__).resolve().parent
 _SEARCH_ROOTS = [
     _ENGINE_DIR.parent / "Server",
     _ENGINE_DIR.parent.parent / "Data" / "Server",
+    _ENGINE_DIR.parent.parent.parent / "Data" / "Server",
 ]
 for root in _SEARCH_ROOTS:
     modules_dir = root / "Modules"
