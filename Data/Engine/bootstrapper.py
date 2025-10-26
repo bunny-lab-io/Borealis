@@ -29,8 +29,36 @@ def _build_runtime_config() -> Dict[str, Any]:
     }
 
 
+def _ensure_tls_material(context: EngineContext) -> None:
+    """Ensure TLS certificate material exists, updating the context if created."""
+
+    try:  # Lazy import so Engine still starts if legacy modules are unavailable.
+        from Modules.crypto import certificates  # type: ignore
+    except Exception:
+        return
+
+    try:
+        cert_path, key_path, bundle_path = certificates.ensure_certificate()
+    except Exception as exc:
+        context.logger.error("Failed to auto-provision Engine TLS certificates: %s", exc)
+        return
+
+    cert_path_str = str(cert_path)
+    key_path_str = str(key_path)
+    bundle_path_str = str(bundle_path)
+
+    if not context.tls_cert_path or not Path(context.tls_cert_path).is_file():
+        context.tls_cert_path = cert_path_str
+    if not context.tls_key_path or not Path(context.tls_key_path).is_file():
+        context.tls_key_path = key_path_str
+    if not context.tls_bundle_path or not Path(context.tls_bundle_path).is_file():
+        context.tls_bundle_path = bundle_path_str
+
+
 def _prepare_tls_run_kwargs(context: EngineContext) -> Dict[str, Any]:
     """Validate and return TLS arguments for the Socket.IO runner."""
+
+    _ensure_tls_material(context)
 
     run_kwargs: Dict[str, Any] = {}
 
