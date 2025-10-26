@@ -1,0 +1,9 @@
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/requirements.txt
+Flask
+flask-cors
+flask_socketio
+eventlet
+cryptography
+PyJWT[crypto]
+pyotp
+qrcode
