@@ -22,7 +22,25 @@ DEFAULT_PORT = 5001
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    """Locate the repository root regardless of runtime staging depth."""
+
+    current = Path(__file__).resolve().parent
+
+    # Prefer an explicit sentinel (Borealis.ps1) so running from the staged
+    # Engine runtime still discovers the true project root one level higher.
+    for candidate in (current, *current.parents):
+        if (candidate / "Borealis.ps1").is_file():
+            return candidate
+
+    # Fallback: if we're inside ``<root>/Engine/Data/Engine`` the parent of the
+    # ``Engine`` directory is the project root.
+    for candidate in current.parents:
+        if candidate.name.lower() == "engine" and (candidate.parent / "Borealis.ps1").is_file():
+            return candidate.parent
+
+    # Last resort mirrors the previous behaviour (two levels up) so we don't
+    # regress in unforeseen layouts.
+    return current.parents[1]
 
 
 def _build_runtime_config() -> Dict[str, Any]:
