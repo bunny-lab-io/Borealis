@@ -13,11 +13,11 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [x] Scaffold Data/Engine/server.py with the create_app(config) factory and stub service registration hooks.
   - [x] Return a shared context object containing handles such as the database path, logger, and scheduler.
   - [x] Update project tooling so the Engine runtime can be launched alongside the legacy path.
-- [ ] **Stage 2 — Port configuration and dependency loading into the Engine factory**
-  - [ ] Extract configuration loading logic from Data/Server/server.py into Data/Engine/config.py helpers.
-  - [ ] Verify context parity between Engine and legacy startup.
-  - [ ] Initialize logging to Logs/Server/server.log when Engine mode is active.
-  - [ ] Document Engine launch paths and configuration requirements in module docstrings.
+- [x] **Stage 2 — Port configuration and dependency loading into the Engine factory**
+  - [x] Extract configuration loading logic from Data/Server/server.py into Data/Engine/config.py helpers.
+  - [x] Verify context parity between Engine and legacy startup.
+  - [x] Initialize logging to Logs/Server/server.log when Engine mode is active.
+  - [x] Document Engine launch paths and configuration requirements in module docstrings.
 - [ ] **Stage 3 — Introduce API blueprints and service adapters**
   - [ ] Create domain-focused API blueprints and register_api entry point.
   - [ ] Mirror route behaviour from the legacy server via service adapters.
@@ -41,3 +41,7 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [ ] Provide register_realtime hook for the Engine factory.
   - [ ] Add integration tests or smoke checks for key events.
   - [ ] Update legacy server to consume Engine WebSocket registration.
+
+## Current Status
+- **Stage:** Stage 2 — Port configuration and dependency loading into the Engine factory (completed)
+- **Active Task:** Awaiting next stage instructions.
