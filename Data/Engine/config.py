@@ -47,7 +47,26 @@ except Exception:  # pragma: no-cover - Engine configuration still works without
 
 
 ENGINE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = ENGINE_DIR.parent.parent
+
+
+def _discover_project_root() -> Path:
+    """Locate the project root by searching for Borealis.ps1 or using overrides."""
+
+    env_override = os.environ.get("BOREALIS_PROJECT_ROOT")
+    if env_override:
+        env_path = Path(env_override).expanduser().resolve()
+        if env_path.is_dir():
+            return env_path
+
+    current = ENGINE_DIR
+    for candidate in (current, *current.parents):
+        if (candidate / "Borealis.ps1").is_file():
+            return candidate
+
+    return ENGINE_DIR.parent.parent
+
+
+PROJECT_ROOT = _discover_project_root()
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "database.db"
 LOG_ROOT = PROJECT_ROOT / "Logs" / "Engine"
 LOG_FILE_PATH = LOG_ROOT / "engine.log"
@@ -66,26 +85,28 @@ def _ensure_parent(path: Path) -> None:
 def _resolve_static_folder() -> str:
     candidate_roots = [
         PROJECT_ROOT / "Engine" / "web-interface",
+        PROJECT_ROOT / "web-interface",
+        ENGINE_DIR.parent / "Engine" / "web-interface",
+        ENGINE_DIR.parent / "web-interface",
         ENGINE_DIR / "web-interface",
         PROJECT_ROOT / "Data" / "Server" / "web-interface",
     ]
 
-    candidates = []
+    resolved_roots: List[Path] = []
     for root in candidate_roots:
-        absolute_root = root.resolve()
-        candidates.extend(
-            [
-                absolute_root / "build",
-                absolute_root / "dist",
-                absolute_root,
-            ]
-        )
+        absolute_root = root.expanduser().resolve()
+        if absolute_root not in resolved_roots:
+            resolved_roots.append(absolute_root)
 
-    for candidate in candidates:
-        if candidate.is_dir():
-            return str(candidate)
+    for root in resolved_roots:
+        for candidate in (root / "build", root / "dist", root):
+            if candidate.is_dir():
+                return str(candidate)
 
-    return str(candidates[0])
+    if resolved_roots:
+        return str(resolved_roots[0])
+
+    return str((PROJECT_ROOT / "Engine" / "web-interface").resolve())
 
 
 def _parse_origins(raw: Optional[Any]) -> Optional[List[str]]:

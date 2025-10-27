@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
-from flask import Flask
+from flask import Blueprint, Flask, jsonify
 
 from Modules.auth import jwt_service as jwt_service_module
 from Modules.auth.dpop import DPoPValidator
@@ -191,18 +191,36 @@ _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, LegacyServiceAdapters], None]] 
 }
 
 
+def _register_core(app: Flask, context: EngineContext) -> None:
+    """Register core utility endpoints that do not require legacy adapters."""
+
+    blueprint = Blueprint("engine_core", __name__)
+
+    @blueprint.route("/health", methods=["GET"])
+    def health() -> Any:
+        return jsonify({"status": "ok"})
+
+    app.register_blueprint(blueprint)
+    context.logger.info("Engine registered API group 'core'.")
+
+
 def register_api(app: Flask, context: EngineContext) -> None:
     """Register Engine API blueprints based on the enabled groups."""
 
     enabled_groups: Iterable[str] = context.api_groups or DEFAULT_API_GROUPS
     normalized = [group.strip().lower() for group in enabled_groups if group]
-    adapters = LegacyServiceAdapters(context)
+    adapters: Optional[LegacyServiceAdapters] = None
 
     for group in normalized:
+        if group == "core":
+            _register_core(app, context)
+            continue
+
+        if adapters is None:
+            adapters = LegacyServiceAdapters(context)
         registrar = _GROUP_REGISTRARS.get(group)
         if registrar is None:
             context.logger.info("Engine API group '%s' is not implemented; skipping.", group)
             continue
         registrar(app, adapters)
         context.logger.info("Engine registered API group '%s'.", group)
-

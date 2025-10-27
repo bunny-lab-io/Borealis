@@ -32,6 +32,36 @@
       "problemMatcher": []
     },
     {
+      "label": "Borealis - Engine (Production)",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}/Borealis.ps1",
+        "-EngineProduction"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Borealis - Engine (Dev)",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}/Borealis.ps1",
+        "-EngineDev"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Borealis - Agent - Deploy",
       "type": "shell",
       "command": "powershell.exe",

@@ -117,6 +117,13 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     log_path = logs_dir / "server.log"
     error_log_path = logs_dir / "error.log"
 
+    static_dir = tmp_path / "static"
+    static_dir.mkdir(parents=True, exist_ok=True)
+    (static_dir / "index.html").write_text("<html><body>Engine Test UI</body></html>", encoding="utf-8")
+    assets_dir = static_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    (assets_dir / "example.txt").write_text("asset", encoding="utf-8")
+
     config = {
         "DATABASE_PATH": str(db_path),
         "TLS_CERT_PATH": str(cert_path),
@@ -124,7 +131,8 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         "TLS_BUNDLE_PATH": str(bundle_path),
         "LOG_FILE": str(log_path),
         "ERROR_LOG_FILE": str(error_log_path),
-        "API_GROUPS": ("tokens", "enrollment"),
+        "STATIC_FOLDER": str(static_dir),
+        "API_GROUPS": ("core", "tokens", "enrollment"),
     }
 
     app, _socketio, _context = create_app(config)

@@ -10,6 +10,8 @@ param(
     [switch]$Flask,
     [switch]$Quick,
     [switch]$EngineTests,
+    [switch]$EngineProduction,
+    [switch]$EngineDev,
     [string]$InstallerCode = ''
 )
 
@@ -17,6 +19,7 @@ param(
 $choice = $null
 $modeChoice = $null
 $agentSubChoice = $null
+$engineModeChoice = $null
 
 $scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
 
@@ -48,6 +51,16 @@ if ($Vite -and $Flask) {
     exit 1
 }
 
+if ($EngineProduction -and $EngineDev) {
+    Write-Host "Cannot combine -EngineProduction and -EngineDev." -ForegroundColor Red
+    exit 1
+}
+
+if (($EngineProduction -or $EngineDev) -and ($Server -or $Agent)) {
+    Write-Host "Engine automation switches cannot be combined with -Server or -Agent." -ForegroundColor Red
+    exit 1
+}
+
 if ($Server) {
     # Auto-select main menu option for Server when -Server flag is provided
     $choice = '1'
@@ -60,6 +73,10 @@ if ($Server) {
         'launch'  { $agentSubChoice = '4' }
         default   { $agentSubChoice = '1' }
     }
+} elseif ($EngineProduction -or $EngineDev) {
+    $choice = '5'
+    if ($EngineProduction) { $engineModeChoice = '1' }
+    if ($EngineDev) { $engineModeChoice = '3' }
 }
 
 if ($Server) {
@@ -1078,7 +1095,11 @@ switch ($choice) {
         foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
             if (-not (Test-Path $tool)) { Write-Host "`r$($symbols.Fail) Bundled executable not found at '$tool'." -ForegroundColor Red; exit 1 }
         }
-        $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), (Split-Path $nodeExe), $env:PATH
+    $nodeDir = Split-Path $nodeExe
+    $env:BOREALIS_NODE_DIR = $nodeDir
+    $env:BOREALIS_NPM_CMD  = $npmCmd
+    $env:BOREALIS_NPX_CMD  = $npxCmd
+    $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), $nodeDir, $env:PATH
 
         if (-not $modeChoice) {
             Write-Host " "
@@ -1315,14 +1336,22 @@ switch ($choice) {
                 exit 1
             }
         }
-        $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), (Split-Path $nodeExe), $env:PATH
+        $nodeDir = Split-Path $nodeExe
+        $env:BOREALIS_NODE_DIR = $nodeDir
+        $env:BOREALIS_NPM_CMD  = $npmCmd
+        $env:BOREALIS_NPX_CMD  = $npxCmd
+        $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), $nodeDir, $env:PATH
 
-        Write-Host " "
-        Write-Host "Configure Borealis Engine Mode:" -ForegroundColor DarkYellow
-        Write-Host " 1) Build & Launch > Production Flask Server @ http://localhost:5001" -ForegroundColor DarkCyan
-        Write-Host " 2) [Skip Build] & Immediately Launch > Production Flask Server @ http://localhost:5001" -ForegroundColor DarkCyan
-        Write-Host " 3) Launch > [Hotload-Ready] Vite Dev Server @ http://localhost:5173" -ForegroundColor DarkCyan
-        $engineModeChoice = Read-Host "Enter choice [1/2/3]"
+        if (-not $engineModeChoice) {
+            Write-Host " "
+            Write-Host "Configure Borealis Engine Mode:" -ForegroundColor DarkYellow
+            Write-Host " 1) Build & Launch > Production Flask Server @ https://localhost:5000" -ForegroundColor DarkCyan
+            Write-Host " 2) [Skip Build] & Immediately Launch > Production Flask Server @ https://localhost:5000" -ForegroundColor DarkCyan
+            Write-Host " 3) Launch > [Hotload-Ready] Vite Dev Server @ http://localhost:5173" -ForegroundColor DarkCyan
+            $engineModeChoice = Read-Host "Enter choice [1/2/3]"
+        } else {
+            Write-Host "Auto-selecting Borealis Engine mode option $engineModeChoice." -ForegroundColor DarkYellow
+        }
 
         $engineOperationMode = "production"
         $engineImmediateLaunch = $false
@@ -1347,7 +1376,7 @@ switch ($choice) {
                 $previousEngineMode = $env:BOREALIS_ENGINE_MODE
                 $previousEnginePort = $env:BOREALIS_ENGINE_PORT
                 $env:BOREALIS_ENGINE_MODE = $engineOperationMode
-                $env:BOREALIS_ENGINE_PORT = "5001"
+                $env:BOREALIS_ENGINE_PORT = "5000"
                 Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
                 Write-Host "===================================================================================="
                 Write-Host "$($symbols.Running) Engine Socket Server Started..."
@@ -1448,10 +1477,13 @@ switch ($choice) {
             $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
             if (Test-Path $webUIDestinationAbsolute) {
                 Push-Location $webUIDestinationAbsolute
-                if ($engineOperationMode -eq "developer") { $viteSubCommand = "dev" } else { $viteSubCommand = "build" }
                 $certRoot = Join-Path $scriptDir 'Certificates\Server'
                 Ensure-EngineTlsMaterial -PythonPath $venvPython -CertificateRoot $certRoot
-                Start-Process -NoNewWindow -FilePath $npmCmd -ArgumentList @("run", $viteSubCommand)
+                if ($engineOperationMode -eq "developer") {
+                    Start-Process -NoNewWindow -FilePath $npmCmd -ArgumentList @("run", "dev")
+                } else {
+                    & $npmCmd run build
+                }
                 Pop-Location
             }
         }
@@ -1462,7 +1494,7 @@ switch ($choice) {
             $previousEngineMode = $env:BOREALIS_ENGINE_MODE
             $previousEnginePort = $env:BOREALIS_ENGINE_PORT
             $env:BOREALIS_ENGINE_MODE = $engineOperationMode
-            $env:BOREALIS_ENGINE_PORT = "5001"
+            $env:BOREALIS_ENGINE_PORT = "5000"
             Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
             Write-Host "===================================================================================="
             Write-Host "$($symbols.Running) Engine Socket Server Started..."

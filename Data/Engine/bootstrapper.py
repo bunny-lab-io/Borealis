@@ -2,7 +2,7 @@
 
 The bootstrapper assembles configuration via :func:`Data.Engine.config.load_runtime_config`
 before delegating to :func:`Data.Engine.server.create_app`.  It mirrors the
-legacy server defaults by binding to ``0.0.0.0:5001`` and honouring the
+legacy server defaults by binding to ``0.0.0.0:5000`` and honouring the
 ``BOREALIS_ENGINE_*`` environment overrides for bind host/port.
 """
 
@@ -11,14 +11,16 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
+import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .server import EngineContext, create_app
 
 
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 5001
+DEFAULT_PORT = 5000
 
 
 def _project_root() -> Path:
@@ -37,16 +39,34 @@ def _project_root() -> Path:
 
 
 def _build_runtime_config() -> Dict[str, Any]:
+    api_groups_override = os.environ.get("BOREALIS_ENGINE_API_GROUPS")
+    if api_groups_override:
+        api_groups: Any = api_groups_override
+    else:
+        api_groups = ("core", "tokens", "enrollment")
+
     return {
         "HOST": os.environ.get("BOREALIS_ENGINE_HOST", DEFAULT_HOST),
         "PORT": int(os.environ.get("BOREALIS_ENGINE_PORT", DEFAULT_PORT)),
         "TLS_CERT_PATH": os.environ.get("BOREALIS_TLS_CERT"),
         "TLS_KEY_PATH": os.environ.get("BOREALIS_TLS_KEY"),
         "TLS_BUNDLE_PATH": os.environ.get("BOREALIS_TLS_BUNDLE"),
+        "API_GROUPS": api_groups,
     }
 
 
-def _stage_web_interface_assets(logger: logging.Logger) -> None:
+def _stage_web_interface_assets(logger: Optional[logging.Logger] = None, *, force: bool = False) -> Path:
+    """Ensure Engine web interface assets are staged and return the staging root."""
+
+    if logger is None:
+        logger = logging.getLogger("borealis.engine.bootstrap")
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s-%(name)s-%(levelname)s: %(message)s"))
+        logger.addHandler(handler)
+        logger.propagate = False
+    logger.setLevel(logging.INFO)
+
     project_root = _project_root()
     engine_web_root = project_root / "Engine" / "web-interface"
     legacy_source = project_root / "Data" / "Server" / "WebUI"
@@ -56,20 +76,114 @@ def _stage_web_interface_assets(logger: logging.Logger) -> None:
             f"Engine web interface source missing: {legacy_source}"
         )
 
+    index_path = engine_web_root / "index.html"
+    if engine_web_root.exists() and index_path.is_file() and not force:
+        logger.info("Engine web interface already staged at %s; skipping copy.", engine_web_root)
+        return engine_web_root
+
     if engine_web_root.exists():
         shutil.rmtree(engine_web_root)
 
     shutil.copytree(legacy_source, engine_web_root)
 
-    index_path = engine_web_root / "index.html"
     if not index_path.is_file():
         raise RuntimeError(
             f"Engine web interface staging failed; missing {index_path}"
         )
 
-    logger.info(
-        "Engine web interface staged from %s to %s", legacy_source, engine_web_root
-    )
+    logger.info("Engine web interface staged from %s to %s", legacy_source, engine_web_root)
+    return engine_web_root
+
+
+def _determine_static_folder(staging_root: Path) -> str:
+    for candidate in (staging_root / "build", staging_root / "dist", staging_root):
+        if candidate.is_dir():
+            return str(candidate)
+    return str(staging_root)
+
+
+def _resolve_npm_executable() -> str:
+    env_cmd = os.environ.get("BOREALIS_NPM_CMD")
+    if env_cmd:
+        candidate = Path(env_cmd).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+
+    node_dir = os.environ.get("BOREALIS_NODE_DIR")
+    if node_dir:
+        candidate = Path(node_dir) / "npm.cmd"
+        if candidate.is_file():
+            return str(candidate)
+        candidate = Path(node_dir) / "npm.exe"
+        if candidate.is_file():
+            return str(candidate)
+        candidate = Path(node_dir) / "npm"
+        if candidate.is_file():
+            return str(candidate)
+
+    if os.name == "nt":
+        return "npm.cmd"
+    return "npm"
+
+
+def _run_npm(args: list[str], cwd: Path, logger: logging.Logger) -> None:
+    command = [_resolve_npm_executable()] + args
+    logger.info("Running npm command: %s", " ".join(command))
+    start = time.time()
+    try:
+        completed = subprocess.run(command, cwd=str(cwd), capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        raise RuntimeError("npm executable not found; ensure Node.js dependencies are installed.") from exc
+    duration = time.time() - start
+    if completed.returncode != 0:
+        logger.error(
+            "npm command failed (%ss): %s\nstdout: %s\nstderr: %s",
+            f"{duration:.2f}",
+            " ".join(command),
+            completed.stdout.strip(),
+            completed.stderr.strip(),
+        )
+        raise RuntimeError(f"npm command {' '.join(command)} failed with exit code {completed.returncode}")
+    stdout = completed.stdout.strip()
+    if stdout:
+        logger.debug("npm stdout: %s", stdout)
+    stderr = completed.stderr.strip()
+    if stderr:
+        logger.debug("npm stderr: %s", stderr)
+    logger.info("npm command completed in %.2fs", duration)
+
+
+def _ensure_web_ui_build(staging_root: Path, logger: logging.Logger, *, mode: str) -> str:
+    package_json = staging_root / "package.json"
+    node_modules = staging_root / "node_modules"
+    build_dir = staging_root / "build"
+    needs_install = not node_modules.is_dir()
+    needs_build = not build_dir.is_dir()
+
+    if not needs_build and package_json.is_file():
+        build_index = build_dir / "index.html"
+        if build_index.is_file():
+            needs_build = build_index.stat().st_mtime < package_json.stat().st_mtime
+        else:
+            needs_build = True
+
+    if mode == "developer":
+        logger.info("Engine launched in developer mode; skipping WebUI build step.")
+        return _determine_static_folder(staging_root)
+
+    if not package_json.is_file():
+        logger.warning("WebUI package.json not found at %s; continuing without rebuild.", package_json)
+        return _determine_static_folder(staging_root)
+
+    if needs_install:
+        _run_npm(["install", "--silent", "--no-fund", "--audit=false"], staging_root, logger)
+
+    if needs_build:
+        _run_npm(["run", "build"], staging_root, logger)
+    else:
+        logger.info("Existing WebUI build found at %s; reuse.", build_dir)
+
+    return _determine_static_folder(staging_root)
 
 
 def _ensure_tls_material(context: EngineContext) -> None:
@@ -137,13 +251,24 @@ def _prepare_tls_run_kwargs(context: EngineContext) -> Dict[str, Any]:
 
 def main() -> None:
     config = _build_runtime_config()
+    mode = os.environ.get("BOREALIS_ENGINE_MODE", "production").strip().lower() or "production"
+    try:
+        staging_root = _stage_web_interface_assets()
+    except Exception as exc:
+        logging.getLogger("borealis.engine.bootstrap").error(
+            "Failed to stage Engine web interface: %s", exc
+        )
+        raise
+
+    if staging_root:
+        bootstrap_logger = logging.getLogger("borealis.engine.bootstrap")
+        static_folder = _ensure_web_ui_build(staging_root, bootstrap_logger, mode=mode)
+        config.setdefault("STATIC_FOLDER", static_folder)
+
     app, socketio, context = create_app(config)
 
-    try:
-        _stage_web_interface_assets(context.logger)
-    except Exception as exc:
-        context.logger.error("Failed to stage Engine web interface: %s", exc)
-        raise
+    if staging_root:
+        context.logger.info("Engine WebUI assets ready at %s", config["STATIC_FOLDER"])
 
     host = config.get("HOST", DEFAULT_HOST)
     port = int(config.get("PORT", DEFAULT_PORT))

@@ -32,11 +32,11 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [x] Replace legacy API routes with Engine-provided blueprints gated by a flag.
   - [x] Emit transitional logging when Engine handles requests.
 - [ ] **Stage 6 — Plan WebUI migration**
-  - [ ] Move static/template handling into Data/Engine/services/WebUI.
+  - [x] Move static/template handling into Data/Engine/services/WebUI.
   - [x] Ensure that data from /Data/Server/WebUI is copied into /Engine/web-interface during engine Deployment via Borealis.ps1
-  - [ ] Preserve TLS-aware URL generation and caching.
+  - [x] Preserve TLS-aware URL generation and caching.
   - [ ] Add migration switch in the legacy server for WebUI delegation.
-  - [ ] Extend tests to cover critical WebUI routes.
+  - [x] Extend tests to cover critical WebUI routes.
 - [ ] **Stage 7 — Plan WebSocket migration**
   - [ ] Extract Socket.IO handlers into Data/Engine/services/WebSocket.
   - [ ] Provide register_realtime hook for the Engine factory.
@@ -44,5 +44,5 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [ ] Update legacy server to consume Engine WebSocket registration.
 
 ## Current Status
-- **Stage:** Stage 5 — Bridge the legacy server to Engine APIs (completed)
-- **Active Task:** Awaiting next stage instructions.
+- **Stage:** Stage 6 — Plan WebUI migration
+- **Active Task:** Prepare legacy WebUI delegation switch (pending approval to touch legacy server).
