@@ -15,9 +15,10 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+import os
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
-from flask import Blueprint, Flask, jsonify
+from flask import Blueprint, Flask, jsonify, request
 
 from Modules.auth import jwt_service as jwt_service_module
 from Modules.auth.dpop import DPoPValidator
@@ -190,6 +191,60 @@ _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, LegacyServiceAdapters], None]] 
     "enrollment": _register_enrollment,
 }
 
+LEGACY_APP_CACHE: Optional[Flask] = None
+
+
+def _load_legacy_app(context: EngineContext) -> Flask:
+    global LEGACY_APP_CACHE
+    if LEGACY_APP_CACHE is not None:
+        return LEGACY_APP_CACHE
+
+    os.environ.setdefault("BOREALIS_DATABASE_PATH", context.database_path)
+    if context.tls_cert_path:
+        os.environ.setdefault("BOREALIS_TLS_CERT", context.tls_cert_path)
+    if context.tls_key_path:
+        os.environ.setdefault("BOREALIS_TLS_KEY", context.tls_key_path)
+    if context.tls_bundle_path:
+        os.environ.setdefault("BOREALIS_TLS_BUNDLE", context.tls_bundle_path)
+
+    try:
+        from Data.Server import server as legacy_server  # Local import to avoid heavy import when unused
+    except ImportError as exc:
+        raise RuntimeError("Legacy server module is unavailable; cannot enable fallback proxy.") from exc
+
+    LEGACY_APP_CACHE = legacy_server.app
+    return LEGACY_APP_CACHE
+
+
+def _register_legacy_proxy(app: Flask, context: EngineContext) -> None:
+    try:
+        legacy_app = _load_legacy_app(context)
+    except RuntimeError as exc:
+        context.logger.warning("Legacy API fallback disabled: %s", exc)
+        return
+    blueprint = Blueprint("legacy_api_bridge", __name__)
+    methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+
+    @blueprint.route("/api", defaults={"path": ""}, methods=methods)
+    @blueprint.route("/api/<path:path>", methods=methods)
+    def _legacy_passthrough(path: str):
+        legacy_context = legacy_app.request_context(request.environ)
+        legacy_context.push()
+        try:
+            request_path = request.path or f"/api/{path or ''}"
+            context.logger.info(
+                "Engine API routed to legacy handler: %s %s",
+                request.method,
+                request_path,
+            )
+            response = legacy_app.full_dispatch_request()
+        finally:
+            legacy_context.pop()
+        return response
+
+    app.register_blueprint(blueprint)
+    context.logger.info("Engine registered legacy API fallback proxy.")
+
 
 def _register_core(app: Flask, context: EngineContext) -> None:
     """Register core utility endpoints that do not require legacy adapters."""
@@ -224,3 +279,5 @@ def register_api(app: Flask, context: EngineContext) -> None:
             continue
         registrar(app, adapters)
         context.logger.info("Engine registered API group '%s'.", group)
+
+    _register_legacy_proxy(app, context)
