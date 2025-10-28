@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,12 +12,30 @@ from flask import Flask
 from Data.Engine.server import create_app
 
 
-_SCHEMA_DEFINITION = """
-CREATE TABLE IF NOT EXISTS devices (
+_SCHEMA_DEFINITION = """CREATE TABLE IF NOT EXISTS devices (
     guid TEXT PRIMARY KEY,
     hostname TEXT,
+    description TEXT,
     created_at INTEGER,
+    agent_hash TEXT,
+    memory TEXT,
+    network TEXT,
+    software TEXT,
+    storage TEXT,
+    cpu TEXT,
+    device_type TEXT,
+    domain TEXT,
+    external_ip TEXT,
+    internal_ip TEXT,
+    last_reboot TEXT,
     last_seen INTEGER,
+    last_user TEXT,
+    operating_system TEXT,
+    uptime INTEGER,
+    agent_id TEXT,
+    ansible_ee_ver TEXT,
+    connection_type TEXT,
+    connection_endpoint TEXT,
     ssl_key_fingerprint TEXT,
     token_version INTEGER,
     status TEXT,
@@ -64,6 +83,28 @@ CREATE TABLE IF NOT EXISTS device_keys (
     added_at TEXT,
     retired_at TEXT
 );
+CREATE TABLE IF NOT EXISTS device_list_views (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE,
+    columns_json TEXT,
+    filters_json TEXT,
+    created_at INTEGER,
+    updated_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS sites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    description TEXT
+);
+CREATE TABLE IF NOT EXISTS device_sites (
+    device_hostname TEXT,
+    site_id INTEGER,
+    PRIMARY KEY (device_hostname, site_id)
+);
+CREATE TABLE IF NOT EXISTS github_token (
+    id INTEGER PRIMARY KEY,
+    token TEXT
+);
 """
 
 
@@ -102,6 +143,83 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 
     db_path = tmp_path / "database" / "engine.sqlite3"
     _initialise_legacy_schema(db_path)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO devices (
+                guid,
+                hostname,
+                description,
+                created_at,
+                agent_hash,
+                memory,
+                network,
+                software,
+                storage,
+                cpu,
+                device_type,
+                domain,
+                external_ip,
+                internal_ip,
+                last_reboot,
+                last_seen,
+                last_user,
+                operating_system,
+                uptime,
+                agent_id,
+                ansible_ee_ver,
+                connection_type,
+                connection_endpoint,
+                ssl_key_fingerprint,
+                token_version,
+                status,
+                key_added_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "GUID-TEST-0001",
+                "test-device",
+                "Test device for Engine API",
+                1_700_000_000,
+                "hash-123",
+                json.dumps([{"slot": "DIMM1", "size_gb": 16}]),
+                json.dumps([{"iface": "eth0", "mac": "00:11:22:33:44:55"}]),
+                json.dumps(["sample-app"]),
+                json.dumps([{"drive": "C", "size_gb": 256}]),
+                json.dumps({"name": "Intel", "cores": 8}),
+                "Workstation",
+                "example.local",
+                "203.0.113.5",
+                "10.0.0.10",
+                "2025-10-01T00:00:00Z",
+                1_700_000_500,
+                "Alice",
+                "Windows 11 Pro",
+                7200,
+                "test-device-agent",
+                "1.0.0",
+                "",
+                "",
+                "FF:FF:FF",
+                1,
+                "active",
+                "2025-10-01T00:00:00Z",
+            ),
+        )
+        cur.execute(
+            "INSERT INTO sites (id, name, description) VALUES (?, ?, ?)",
+            (1, "Main Lab", "Primary integration site"),
+        )
+        cur.execute(
+            "INSERT INTO device_sites (device_hostname, site_id) VALUES (?, ?)",
+            ("test-device", 1),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     tls_dir = tmp_path / "tls"
     tls_dir.mkdir()
@@ -133,7 +251,7 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         "LOG_FILE": str(log_path),
         "ERROR_LOG_FILE": str(error_log_path),
         "STATIC_FOLDER": str(static_dir),
-        "API_GROUPS": ("core", "auth", "tokens", "enrollment"),
+        "API_GROUPS": ("core", "auth", "tokens", "enrollment", "devices"),
     }
 
     app, _socketio, _context = create_app(config)

@@ -43,7 +43,7 @@ def _build_runtime_config() -> Dict[str, Any]:
     if api_groups_override:
         api_groups: Any = api_groups_override
     else:
-        api_groups = ("core", "auth", "tokens", "enrollment")
+        api_groups = ("core", "auth", "tokens", "enrollment", "devices")
 
     return {
         "HOST": os.environ.get("BOREALIS_ENGINE_HOST", DEFAULT_HOST),
