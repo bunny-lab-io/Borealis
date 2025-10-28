@@ -1375,14 +1375,17 @@ switch ($choice) {
                 $py = Join-Path $scriptDir "Engine\Scripts\python.exe"
                 $previousEngineMode = $env:BOREALIS_ENGINE_MODE
                 $previousEnginePort = $env:BOREALIS_ENGINE_PORT
+                $previousProjectRoot = $env:BOREALIS_PROJECT_ROOT
                 $env:BOREALIS_ENGINE_MODE = $engineOperationMode
                 $env:BOREALIS_ENGINE_PORT = "5000"
+                $env:BOREALIS_PROJECT_ROOT = $scriptDir
                 Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
                 Write-Host "===================================================================================="
                 Write-Host "$($symbols.Running) Engine Socket Server Started..."
                 & $py -m Data.Engine.bootstrapper
                 if ($previousEngineMode) { $env:BOREALIS_ENGINE_MODE = $previousEngineMode } else { Remove-Item Env:BOREALIS_ENGINE_MODE -ErrorAction SilentlyContinue }
                 if ($previousEnginePort) { $env:BOREALIS_ENGINE_PORT = $previousEnginePort } else { Remove-Item Env:BOREALIS_ENGINE_PORT -ErrorAction SilentlyContinue }
+                if ($previousProjectRoot) { $env:BOREALIS_PROJECT_ROOT = $previousProjectRoot } else { Remove-Item Env:BOREALIS_PROJECT_ROOT -ErrorAction SilentlyContinue }
                 Pop-Location
             }
             break
@@ -1493,14 +1496,17 @@ switch ($choice) {
             $py = Join-Path $scriptDir "Engine\Scripts\python.exe"
             $previousEngineMode = $env:BOREALIS_ENGINE_MODE
             $previousEnginePort = $env:BOREALIS_ENGINE_PORT
+            $previousProjectRoot = $env:BOREALIS_PROJECT_ROOT
             $env:BOREALIS_ENGINE_MODE = $engineOperationMode
             $env:BOREALIS_ENGINE_PORT = "5000"
+            $env:BOREALIS_PROJECT_ROOT = $scriptDir
             Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
             Write-Host "===================================================================================="
             Write-Host "$($symbols.Running) Engine Socket Server Started..."
             & $py -m Data.Engine.bootstrapper
             if ($previousEngineMode) { $env:BOREALIS_ENGINE_MODE = $previousEngineMode } else { Remove-Item Env:BOREALIS_ENGINE_MODE -ErrorAction SilentlyContinue }
             if ($previousEnginePort) { $env:BOREALIS_ENGINE_PORT = $previousEnginePort } else { Remove-Item Env:BOREALIS_ENGINE_PORT -ErrorAction SilentlyContinue }
+            if ($previousProjectRoot) { $env:BOREALIS_PROJECT_ROOT = $previousProjectRoot } else { Remove-Item Env:BOREALIS_PROJECT_ROOT -ErrorAction SilentlyContinue }
             Pop-Location
         }
     }

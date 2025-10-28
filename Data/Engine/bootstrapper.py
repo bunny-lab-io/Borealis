@@ -126,6 +126,27 @@ def _resolve_npm_executable() -> str:
     return "npm"
 
 
+def _resolve_npx_executable() -> str:
+    env_cmd = os.environ.get("BOREALIS_NPX_CMD")
+    if env_cmd:
+        candidate = Path(env_cmd).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+
+    node_dir = os.environ.get("BOREALIS_NODE_DIR")
+    if node_dir:
+        candidate = Path(node_dir) / "npx.cmd"
+        if candidate.is_file():
+            return str(candidate)
+        candidate = Path(node_dir) / "npx"
+        if candidate.is_file():
+            return str(candidate)
+
+    if os.name == "nt":
+        return "npx.cmd"
+    return "npx"
+
+
 def _run_npm(args: list[str], cwd: Path, logger: logging.Logger) -> None:
     command = [_resolve_npm_executable()] + args
     logger.info("Running npm command: %s", " ".join(command))
@@ -151,6 +172,20 @@ def _run_npm(args: list[str], cwd: Path, logger: logging.Logger) -> None:
     if stderr:
         logger.debug("npm stderr: %s", stderr)
     logger.info("npm command completed in %.2fs", duration)
+
+
+def _run_vite(args: list[str], cwd: Path, logger: logging.Logger) -> None:
+    command = [_resolve_npx_executable(), "vite"] + args
+    logger.info("Running Vite command: %s", " ".join(command))
+    start = time.time()
+    try:
+        completed = subprocess.run(command, cwd=str(cwd), check=False)
+    except FileNotFoundError as exc:
+        raise RuntimeError("npx executable not found; ensure Node.js dependencies are installed.") from exc
+    duration = time.time() - start
+    if completed.returncode != 0:
+        raise RuntimeError(f"Vite command {' '.join(command)} failed with exit code {completed.returncode}")
+    logger.info("Vite command completed in %.2fs", duration)
 
 
 def _ensure_web_ui_build(staging_root: Path, logger: logging.Logger, *, mode: str) -> str:
@@ -179,7 +214,7 @@ def _ensure_web_ui_build(staging_root: Path, logger: logging.Logger, *, mode: st
         _run_npm(["install", "--silent", "--no-fund", "--audit=false"], staging_root, logger)
 
     if needs_build:
-        _run_npm(["run", "build"], staging_root, logger)
+        _run_vite(["build"], staging_root, logger)
     else:
         logger.info("Existing WebUI build found at %s; reuse.", build_dir)
 

@@ -45,4 +45,4 @@ Lastly, everytime that you complete a stage, you will create a pull request name
 
 ## Current Status
 - **Stage:** Stage 6 — Plan WebUI migration
-- **Active Task:** Prepare legacy WebUI delegation switch (pending approval to touch legacy server).
+- **Active Task:** Migrating authentication endpoints into the Engine API (legacy bridge removed).

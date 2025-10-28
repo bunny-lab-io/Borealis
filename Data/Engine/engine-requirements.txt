@@ -7,3 +7,4 @@ cryptography
 PyJWT[crypto]
 pyotp
 qrcode
+requests

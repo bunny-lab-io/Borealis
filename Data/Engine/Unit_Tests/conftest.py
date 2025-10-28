@@ -98,6 +98,7 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     monkeypatch.setenv("BOREALIS_CERT_ROOT", str(cert_root))
     monkeypatch.setenv("BOREALIS_SERVER_CERT_ROOT", str(cert_root / "Server"))
     monkeypatch.setenv("BOREALIS_AGENT_CERT_ROOT", str(cert_root / "Agent"))
+    monkeypatch.setenv("BOREALIS_ENGINE_DISABLE_LEGACY_PROXY", "1")
 
     db_path = tmp_path / "database" / "engine.sqlite3"
     _initialise_legacy_schema(db_path)
