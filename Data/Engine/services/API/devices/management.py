@@ -1583,4 +1583,3 @@ def register_management(app, adapters: "LegacyServiceAdapters") -> None:
         return jsonify(payload), status
 
     app.register_blueprint(blueprint)
-    adapters.context.logger.info("Engine registered API group 'devices'.")

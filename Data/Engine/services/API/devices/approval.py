@@ -519,5 +519,3 @@ def register_admin_endpoints(app, adapters: "LegacyServiceAdapters") -> None:
         return jsonify(payload), status
 
     app.register_blueprint(blueprint)
-    adapters.context.logger.info("Engine registered API group 'devices.admin'.")
-

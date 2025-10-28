@@ -405,4 +405,3 @@ def register_auth(app: Flask, adapters: "LegacyServiceAdapters") -> None:
         return service.me()
 
     app.register_blueprint(blueprint)
-    adapters.context.logger.info("Engine registered API group 'auth'.")
