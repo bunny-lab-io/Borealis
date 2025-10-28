@@ -22,6 +22,7 @@ from Modules.tokens import routes as token_routes
 
 from ...server import EngineContext
 from .access_management.login import register_auth
+from .devices.approval import register_admin_endpoints
 from .devices.management import register_management
 
 DEFAULT_API_GROUPS: Sequence[str] = ("auth", "tokens", "enrollment", "devices")
@@ -180,11 +181,16 @@ def _register_enrollment(app: Flask, adapters: LegacyServiceAdapters) -> None:
     )
 
 
+def _register_devices(app: Flask, adapters: LegacyServiceAdapters) -> None:
+    register_management(app, adapters)
+    register_admin_endpoints(app, adapters)
+
+
 _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, LegacyServiceAdapters], None]] = {
     "auth": register_auth,
     "tokens": _register_tokens,
     "enrollment": _register_enrollment,
-    "devices": register_management,
+    "devices": _register_devices,
 }
 
 

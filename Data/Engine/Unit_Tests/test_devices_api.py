@@ -120,3 +120,67 @@ def test_agent_hash_list_permissions(engine_harness: EngineTestHarness) -> None:
     assert allowed.status_code == 200
     agents = allowed.get_json()["agents"]
     assert agents and agents[0]["hostname"] == "test-device"
+
+
+def test_sites_lifecycle(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    create_resp = client.post(
+        "/api/sites",
+        json={"name": "Edge", "description": "Edge location"},
+    )
+    assert create_resp.status_code == 201
+    site_id = create_resp.get_json()["id"]
+
+    list_resp = client.get("/api/sites")
+    sites = list_resp.get_json()["sites"]
+    assert any(site["id"] == site_id for site in sites)
+
+    assign_resp = client.post(
+        "/api/sites/assign",
+        json={"site_id": site_id, "hostnames": ["test-device"]},
+    )
+    assert assign_resp.status_code == 200
+
+    mapping_resp = client.get("/api/sites/device_map")
+    mapping = mapping_resp.get_json()["mapping"]
+    assert mapping["test-device"]["site_id"] == site_id
+
+    rename_resp = client.post(
+        "/api/sites/rename",
+        json={"id": site_id, "new_name": "Edge-Renamed"},
+    )
+    assert rename_resp.status_code == 200
+    assert rename_resp.get_json()["name"] == "Edge-Renamed"
+
+    delete_resp = client.post("/api/sites/delete", json={"ids": [site_id]})
+    assert delete_resp.status_code == 200
+
+
+def test_admin_enrollment_code_flow(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    create_resp = client.post(
+        "/api/admin/enrollment-codes",
+        json={"ttl_hours": 1, "max_uses": 2},
+    )
+    assert create_resp.status_code == 201
+    code_id = create_resp.get_json()["id"]
+
+    list_resp = client.get("/api/admin/enrollment-codes")
+    codes = list_resp.get_json()["codes"]
+    assert any(code["id"] == code_id for code in codes)
+
+    delete_resp = client.delete(f"/api/admin/enrollment-codes/{code_id}")
+    assert delete_resp.status_code == 200
+
+
+def test_admin_device_approvals(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    list_resp = client.get("/api/admin/device-approvals")
+    approvals = list_resp.get_json()["approvals"]
+    assert approvals and approvals[0]["status"] == "pending"
+
+    approve_resp = client.post(
+        "/api/admin/device-approvals/approval-1/approve",
+        json={"conflict_resolution": "overwrite"},
+    )
+    assert approve_resp.status_code == 200

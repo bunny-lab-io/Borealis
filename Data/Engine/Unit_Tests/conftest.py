@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS enrollment_install_codes (
     id TEXT PRIMARY KEY,
     code TEXT UNIQUE,
     expires_at TEXT,
+    created_by_user_id TEXT,
     used_at TEXT,
     used_by_guid TEXT,
     max_uses INTEGER,
@@ -94,16 +95,27 @@ CREATE TABLE IF NOT EXISTS device_list_views (
 CREATE TABLE IF NOT EXISTS sites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT,
-    description TEXT
+    description TEXT,
+    created_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS device_sites (
-    device_hostname TEXT,
+    device_hostname TEXT PRIMARY KEY,
     site_id INTEGER,
-    PRIMARY KEY (device_hostname, site_id)
+    assigned_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS github_token (
     id INTEGER PRIMARY KEY,
     token TEXT
+);
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE,
+    display_name TEXT,
+    password_sha512 TEXT,
+    role TEXT,
+    last_login INTEGER,
+    created_at INTEGER,
+    updated_at INTEGER
 );
 """
 
@@ -210,12 +222,54 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
             ),
         )
         cur.execute(
-            "INSERT INTO sites (id, name, description) VALUES (?, ?, ?)",
-            (1, "Main Lab", "Primary integration site"),
+            "INSERT INTO sites (id, name, description, created_at) VALUES (?, ?, ?, ?)",
+            (1, "Main Lab", "Primary integration site", 1_700_000_000),
         )
         cur.execute(
-            "INSERT INTO device_sites (device_hostname, site_id) VALUES (?, ?)",
-            ("test-device", 1),
+            "INSERT INTO device_sites (device_hostname, site_id, assigned_at) VALUES (?, ?, ?)",
+            ("test-device", 1, 1_700_000_500),
+        )
+        cur.execute(
+            """
+            INSERT INTO users (id, username, display_name, password_sha512, role, last_login, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (1, "admin", "Administrator", "test", "Admin", 0, 0, 0),
+        )
+        cur.execute(
+            """
+            INSERT INTO device_approvals (
+                id,
+                approval_reference,
+                guid,
+                hostname_claimed,
+                ssl_key_fingerprint_claimed,
+                enrollment_code_id,
+                status,
+                client_nonce,
+                server_nonce,
+                agent_pubkey_der,
+                created_at,
+                updated_at,
+                approved_by_user_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "approval-1",
+                "APP-REF-1",
+                None,
+                "pending-device",
+                "aa:bb:cc:dd",
+                None,
+                "pending",
+                "client-nonce",
+                "server-nonce",
+                None,
+                "2025-01-01T00:00:00Z",
+                "2025-01-01T00:00:00Z",
+                None,
+            ),
         )
         conn.commit()
     finally:

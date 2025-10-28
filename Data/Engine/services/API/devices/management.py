@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - fallback for minimal test environments
             """Stand-in exception when the requests module is unavailable."""
 
         def get(self, *args: Any, **kwargs: Any) -> Any:
-            raise RuntimeError("The 'requests' library is required for repository hash lookups.")
+            raise self.RequestException("The 'requests' library is required for repository hash lookups.")
 
     requests = _RequestsStub()  # type: ignore
 
@@ -81,6 +81,16 @@ def _is_internal_request(remote_addr: Optional[str]) -> bool:
         if mapped in {"127.0.0.1"} or mapped.startswith("127."):
             return True
     return False
+
+
+def _row_to_site(row: Tuple[Any, ...]) -> Dict[str, Any]:
+    return {
+        "id": row[0],
+        "name": row[1],
+        "description": row[2] or "",
+        "created_at": row[3] or 0,
+        "device_count": row[4] or 0,
+    }
 
 
 class RepositoryHashCache:
@@ -336,6 +346,14 @@ class DeviceManagementService:
     def _require_login(self) -> Optional[Tuple[Dict[str, Any], int]]:
         if not self._current_user():
             return {"error": "unauthorized"}, 401
+        return None
+
+    def _require_admin(self) -> Optional[Tuple[Dict[str, Any], int]]:
+        user = self._current_user()
+        if not user:
+            return {"error": "unauthorized"}, 401
+        if (user.get("role") or "").lower() != "admin":
+            return {"error": "forbidden"}, 403
         return None
 
     def _build_device_payload(
@@ -737,6 +755,224 @@ class DeviceManagementService:
         finally:
             conn.close()
 
+    # ------------------------------------------------------------------
+    # Site management helpers
+    # ------------------------------------------------------------------
+
+    def list_sites(self) -> Tuple[Dict[str, Any], int]:
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT s.id,
+                       s.name,
+                       s.description,
+                       s.created_at,
+                       COALESCE(ds.cnt, 0) AS device_count
+                  FROM sites AS s
+             LEFT JOIN (
+                       SELECT site_id, COUNT(*) AS cnt
+                         FROM device_sites
+                     GROUP BY site_id
+                   ) AS ds ON ds.site_id = s.id
+              ORDER BY LOWER(s.name) ASC
+                """
+            )
+            rows = cur.fetchall()
+            sites = [_row_to_site(row) for row in rows]
+            return {"sites": sites}, 200
+        except Exception as exc:
+            self.logger.debug("Failed to list sites", exc_info=True)
+            return {"error": str(exc)}, 500
+        finally:
+            conn.close()
+
+    def create_site(self, name: str, description: str) -> Tuple[Dict[str, Any], int]:
+        if not name:
+            return {"error": "name is required"}, 400
+        now = int(time.time())
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO sites(name, description, created_at) VALUES (?, ?, ?)",
+                (name, description, now),
+            )
+            site_id = cur.lastrowid
+            conn.commit()
+            cur.execute(
+                "SELECT id, name, description, created_at, 0 FROM sites WHERE id = ?",
+                (site_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"error": "creation_failed"}, 500
+            return _row_to_site(row), 201
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return {"error": "name already exists"}, 409
+        except Exception as exc:
+            conn.rollback()
+            self.logger.debug("Failed to create site", exc_info=True)
+            return {"error": str(exc)}, 500
+        finally:
+            conn.close()
+
+    def delete_sites(self, ids: List[Any]) -> Tuple[Dict[str, Any], int]:
+        if not isinstance(ids, list) or not all(isinstance(x, (int, str)) for x in ids):
+            return {"error": "ids must be a list"}, 400
+        norm_ids: List[int] = []
+        for value in ids:
+            try:
+                norm_ids.append(int(value))
+            except Exception:
+                continue
+        if not norm_ids:
+            return {"status": "ok", "deleted": 0}, 200
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            placeholders = ",".join("?" * len(norm_ids))
+            cur.execute(
+                f"DELETE FROM device_sites WHERE site_id IN ({placeholders})",
+                tuple(norm_ids),
+            )
+            cur.execute(
+                f"DELETE FROM sites WHERE id IN ({placeholders})",
+                tuple(norm_ids),
+            )
+            deleted = cur.rowcount
+            conn.commit()
+            return {"status": "ok", "deleted": deleted}, 200
+        except Exception as exc:
+            conn.rollback()
+            self.logger.debug("Failed to delete sites", exc_info=True)
+            return {"error": str(exc)}, 500
+        finally:
+            conn.close()
+
+    def sites_device_map(self, hostnames: Optional[str]) -> Tuple[Dict[str, Any], int]:
+        filter_set: set[str] = set()
+        if hostnames:
+            for part in hostnames.split(","):
+                candidate = part.strip()
+                if candidate:
+                    filter_set.add(candidate)
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            if filter_set:
+                placeholders = ",".join("?" * len(filter_set))
+                cur.execute(
+                    f"""
+                    SELECT ds.device_hostname, s.id, s.name
+                      FROM device_sites ds
+                      JOIN sites s ON s.id = ds.site_id
+                     WHERE ds.device_hostname IN ({placeholders})
+                    """,
+                    tuple(filter_set),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT ds.device_hostname, s.id, s.name
+                      FROM device_sites ds
+                      JOIN sites s ON s.id = ds.site_id
+                    """
+                )
+            mapping: Dict[str, Dict[str, Any]] = {}
+            for hostname, site_id, site_name in cur.fetchall():
+                mapping[str(hostname)] = {"site_id": site_id, "site_name": site_name}
+            return {"mapping": mapping}, 200
+        except Exception as exc:
+            self.logger.debug("Failed to build site device map", exc_info=True)
+            return {"error": str(exc)}, 500
+        finally:
+            conn.close()
+
+    def assign_devices(self, site_id: Any, hostnames: List[str]) -> Tuple[Dict[str, Any], int]:
+        try:
+            site_id_int = int(site_id)
+        except Exception:
+            return {"error": "invalid site_id"}, 400
+        if not isinstance(hostnames, list) or not all(isinstance(h, str) and h.strip() for h in hostnames):
+            return {"error": "hostnames must be a list of strings"}, 400
+        now = int(time.time())
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM sites WHERE id = ?", (site_id_int,))
+            if not cur.fetchone():
+                return {"error": "site not found"}, 404
+            for hostname in hostnames:
+                hn = hostname.strip()
+                if not hn:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO device_sites(device_hostname, site_id, assigned_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(device_hostname)
+                    DO UPDATE SET site_id=excluded.site_id, assigned_at=excluded.assigned_at
+                    """,
+                    (hn, site_id_int, now),
+                )
+            conn.commit()
+            return {"status": "ok"}, 200
+        except Exception as exc:
+            conn.rollback()
+            self.logger.debug("Failed to assign devices to site", exc_info=True)
+            return {"error": str(exc)}, 500
+        finally:
+            conn.close()
+
+    def rename_site(self, site_id: Any, new_name: str) -> Tuple[Dict[str, Any], int]:
+        try:
+            site_id_int = int(site_id)
+        except Exception:
+            return {"error": "invalid id"}, 400
+        if not new_name:
+            return {"error": "new_name is required"}, 400
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE sites SET name = ? WHERE id = ?", (new_name, site_id_int))
+            if cur.rowcount == 0:
+                conn.rollback()
+                return {"error": "site not found"}, 404
+            conn.commit()
+            cur.execute(
+                """
+                SELECT s.id,
+                       s.name,
+                       s.description,
+                       s.created_at,
+                       COALESCE(ds.cnt, 0) AS device_count
+                  FROM sites AS s
+             LEFT JOIN (
+                       SELECT site_id, COUNT(*) AS cnt
+                         FROM device_sites
+                     GROUP BY site_id
+                   ) ds ON ds.site_id = s.id
+                 WHERE s.id = ?
+                """,
+                (site_id_int,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"error": "site not found"}, 404
+            return _row_to_site(row), 200
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return {"error": "name already exists"}, 409
+        except Exception as exc:
+            conn.rollback()
+            self.logger.debug("Failed to rename site", exc_info=True)
+            return {"error": str(exc)}, 500
+        finally:
+            conn.close()
+
     def repo_current_hash(self) -> Tuple[Dict[str, Any], int]:
         repo = (request.args.get("repo") or "bunny-lab-io/Borealis").strip()
         branch = (request.args.get("branch") or "main").strip()
@@ -880,6 +1116,59 @@ def register_management(app, adapters: "LegacyServiceAdapters") -> None:
             payload, status = requirement
             return jsonify(payload), status
         payload, status = service.delete_view(view_id)
+        return jsonify(payload), status
+
+    @blueprint.route("/api/sites", methods=["GET"])
+    def _sites_list():
+        payload, status = service.list_sites()
+        return jsonify(payload), status
+
+    @blueprint.route("/api/sites", methods=["POST"])
+    def _sites_create():
+        requirement = service._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        data = request.get_json(silent=True) or {}
+        name = (data.get("name") or "").strip()
+        description = (data.get("description") or "").strip()
+        payload, status = service.create_site(name, description)
+        return jsonify(payload), status
+
+    @blueprint.route("/api/sites/delete", methods=["POST"])
+    def _sites_delete():
+        requirement = service._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        data = request.get_json(silent=True) or {}
+        ids = data.get("ids") or []
+        payload, status = service.delete_sites(ids)
+        return jsonify(payload), status
+
+    @blueprint.route("/api/sites/device_map", methods=["GET"])
+    def _sites_device_map():
+        payload, status = service.sites_device_map(request.args.get("hostnames"))
+        return jsonify(payload), status
+
+    @blueprint.route("/api/sites/assign", methods=["POST"])
+    def _sites_assign():
+        requirement = service._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        data = request.get_json(silent=True) or {}
+        payload, status = service.assign_devices(data.get("site_id"), data.get("hostnames") or [])
+        return jsonify(payload), status
+
+    @blueprint.route("/api/sites/rename", methods=["POST"])
+    def _sites_rename():
+        requirement = service._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        data = request.get_json(silent=True) or {}
+        payload, status = service.rename_site(data.get("id"), (data.get("new_name") or "").strip())
         return jsonify(payload), status
 
     @blueprint.route("/api/repo/current_hash", methods=["GET"])

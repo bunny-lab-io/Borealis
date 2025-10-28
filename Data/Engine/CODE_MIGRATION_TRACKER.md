@@ -37,7 +37,7 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [x] Preserve TLS-aware URL generation and caching.
   - [ ] Add migration switch in the legacy server for WebUI delegation.
   - [x] Extend tests to cover critical WebUI routes.
-  - [ ] Port device API endpoints into Engine services (in progress).
+  - [ ] Port device API endpoints into Engine services (device + admin coverage in progress).
 - [ ] **Stage 7 — Plan WebSocket migration**
   - [ ] Extract Socket.IO handlers into Data/Engine/services/WebSocket.
   - [ ] Provide register_realtime hook for the Engine factory.
