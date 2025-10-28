@@ -208,6 +208,8 @@ def _parse_api_groups(raw: Optional[Any]) -> Tuple[str, ...]:
     else:
         return tuple()
     cleaned = [part.lower() for part in parts if part]
+    if "auth" not in cleaned:
+        cleaned.insert(0, "auth")
     return tuple(dict.fromkeys(cleaned))
 
 
