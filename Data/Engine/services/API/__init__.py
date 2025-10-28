@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from flask import Blueprint, Flask, jsonify
 
 from Modules.auth import jwt_service as jwt_service_module
+from Modules.auth.device_auth import DeviceAuthManager
 from Modules.auth.dpop import DPoPValidator
 from Modules.auth.rate_limit import SlidingWindowRateLimiter
 from Modules.crypto import signing
@@ -133,9 +134,11 @@ class LegacyServiceAdapters:
     dpop_validator: DPoPValidator = field(init=False)
     ip_rate_limiter: SlidingWindowRateLimiter = field(init=False)
     fp_rate_limiter: SlidingWindowRateLimiter = field(init=False)
+    device_rate_limiter: SlidingWindowRateLimiter = field(init=False)
     nonce_cache: NonceCache = field(init=False)
     script_signer: Any = field(init=False)
     service_log: Callable[[str, str, Optional[str]], None] = field(init=False)
+    device_auth_manager: DeviceAuthManager = field(init=False)
 
     def __post_init__(self) -> None:
         self.db_conn_factory = _make_db_conn_factory(self.context.database_path)
@@ -155,6 +158,15 @@ class LegacyServiceAdapters:
         else:
             base = Path(self.context.database_path).resolve().parent
         self.service_log = _make_service_logger(base, self.context.logger)
+
+        self.device_rate_limiter = SlidingWindowRateLimiter()
+        self.device_auth_manager = DeviceAuthManager(
+            db_conn_factory=self.db_conn_factory,
+            jwt_service=self.jwt_service,
+            dpop_validator=self.dpop_validator,
+            log=self.service_log,
+            rate_limiter=self.device_rate_limiter,
+        )
 
 
 def _register_tokens(app: Flask, adapters: LegacyServiceAdapters) -> None:
