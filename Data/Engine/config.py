@@ -71,6 +71,7 @@ DEFAULT_DATABASE_PATH = PROJECT_ROOT / "database.db"
 LOG_ROOT = PROJECT_ROOT / "Logs" / "Engine"
 LOG_FILE_PATH = LOG_ROOT / "engine.log"
 ERROR_LOG_FILE_PATH = LOG_ROOT / "error.log"
+API_LOG_FILE_PATH = LOG_ROOT / "api.log"
 
 
 def _ensure_parent(path: Path) -> None:
@@ -176,6 +177,7 @@ class EngineSettings:
     tls_bundle_path: Optional[str]
     log_file: str
     error_log_file: str
+    api_log_file: str
     api_groups: Tuple[str, ...]
     raw: MutableMapping[str, Any] = field(default_factory=dict)
 
@@ -259,11 +261,14 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
     error_log_file = str(runtime_config.get("ERROR_LOG_FILE") or ERROR_LOG_FILE_PATH)
     _ensure_parent(Path(error_log_file))
 
+    api_log_file = str(runtime_config.get("API_LOG_FILE") or API_LOG_FILE_PATH)
+    _ensure_parent(Path(api_log_file))
+
     api_groups = _parse_api_groups(
         runtime_config.get("API_GROUPS") or os.environ.get("BOREALIS_API_GROUPS")
     )
     if not api_groups:
-        api_groups = ("tokens", "enrollment")
+        api_groups = ("auth", "tokens", "enrollment")
 
     settings = EngineSettings(
         database_path=database_path,
@@ -278,6 +283,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         tls_bundle_path=tls_bundle_path if tls_bundle_path else None,
         log_file=str(log_file),
         error_log_file=str(error_log_file),
+        api_log_file=str(api_log_file),
         api_groups=api_groups,
         raw=runtime_config,
     )

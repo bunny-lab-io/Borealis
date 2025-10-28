@@ -21,7 +21,7 @@ from Modules.enrollment.nonce_store import NonceCache
 from Modules.tokens import routes as token_routes
 
 from ...server import EngineContext
-from .authentication import register_auth
+from .access_management.login import register_auth
 
 DEFAULT_API_GROUPS: Sequence[str] = ("auth", "tokens", "enrollment")
 

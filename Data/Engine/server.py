@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import time
 import ssl
 import sys
 from dataclasses import dataclass
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
@@ -33,7 +35,7 @@ _require_dependency("flask_socketio", "Flask-SocketIO")
 import eventlet  # type: ignore  # noqa: E402  # pragma: no cover - import guarded above
 from eventlet import wsgi as eventlet_wsgi  # type: ignore  # noqa: E402  # pragma: no cover
 
-from flask import Flask, request  # noqa: E402
+from flask import Flask, g, request  # noqa: E402
 from flask_cors import CORS  # noqa: E402
 from flask_socketio import SocketIO  # noqa: E402
 from werkzeug.middleware.proxy_fix import ProxyFix  # noqa: E402
@@ -117,6 +119,7 @@ class EngineContext:
     tls_bundle_path: Optional[str]
     config: Mapping[str, Any]
     api_groups: Sequence[str]
+    api_log_path: str
 
 
 __all__ = ["EngineContext", "create_app", "register_engine_api"]
@@ -132,6 +135,7 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         tls_bundle_path=settings.tls_bundle_path,
         config=settings.as_dict(),
         api_groups=settings.api_groups,
+        api_log_path=settings.api_log_file,
     )
 
 
@@ -192,6 +196,45 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
     )
 
     context = _build_engine_context(settings, logger)
+
+    api_logger = logging.getLogger("borealis.engine.api")
+    if not api_logger.handlers:
+        api_handler = TimedRotatingFileHandler(
+            context.api_log_path,
+            when="midnight",
+            backupCount=0,
+            encoding="utf-8",
+        )
+        api_handler.setFormatter(logging.Formatter("%(asctime)s-%(name)s-%(levelname)s: %(message)s"))
+        api_logger.addHandler(api_handler)
+    api_logger.setLevel(logging.INFO)
+    api_logger.propagate = False
+
+    @app.before_request
+    def _engine_api_start_timer() -> None:  # pragma: no cover - runtime behaviour
+        if request.path.startswith("/api"):
+            g._engine_api_start = time.perf_counter()
+
+    @app.after_request
+    def _engine_api_log(response):  # pragma: no cover - runtime behaviour
+        if request.path.startswith("/api"):
+            start = getattr(g, "_engine_api_start", None)
+            duration_ms = None
+            if start is not None:
+                duration_ms = (time.perf_counter() - start) * 1000.0
+            client_ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "-").split(",")[0].strip()
+            status = response.status_code
+            success = 200 <= status < 400
+            api_logger.info(
+                "client=%s method=%s path=%s status=%s success=%s duration_ms=%.2f",
+                client_ip,
+                request.method,
+                request.full_path.rstrip("?"),
+                status,
+                "true" if success else "false",
+                duration_ms if duration_ms is not None else 0.0,
+            )
+        return response
 
     from .services import API, WebSocket, WebUI  # Local import to avoid circular deps during bootstrap
 
