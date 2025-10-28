@@ -1013,8 +1013,8 @@ function InstallOrUpdate-BorealisAgent {
 
         if (-not $providedInstallerCode) {
             $defaultDisplay = if ($existingInstallerCode) { $existingInstallerCode } else { '' }
-            Write-Host ""; Write-Host "Optional: set an installer code for agent enrollment." -ForegroundColor DarkYellow
-            $inputCode = Read-Host ("Installer Code [{0}]" -f $defaultDisplay)
+            Write-Host ""; Write-Host "Set an installer code for agent enrollment." -ForegroundColor DarkYellow
+            $inputCode = Read-Host ("Installer Code [{0}] (e.g. A4E1-••••-••••-••••-••••-••••-••••-350A)" -f $defaultDisplay)
             if ($inputCode -and $inputCode.Trim()) {
                 $providedInstallerCode = $inputCode.Trim()
             } elseif ($defaultDisplay) {
