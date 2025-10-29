@@ -57,9 +57,10 @@ def _iter_exception_chain(exc: BaseException):
 def _agent_logs_root() -> str:
     try:
         root = _find_project_root()
-        return os.path.abspath(os.path.join(root, 'Logs', 'Agent'))
+        return os.path.abspath(os.path.join(root, 'Agent', 'Logs'))
     except Exception:
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Logs', 'Agent'))
+        base_dir = os.path.abspath(os.path.dirname(__file__))
+        return os.path.abspath(os.path.join(base_dir, 'Logs'))
 
 
 def _rotate_daily(path: str):
@@ -517,7 +518,7 @@ def _find_project_root():
     # Heuristic fallback: two levels up from Agent/Borealis
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-# Simple file logger under Logs/Agent
+# Simple file logger under Agent/Logs
 def _log_agent(message: str, fname: str = 'agent.log', *, scope: Optional[str] = None):
     try:
         log_dir = _agent_logs_root()
@@ -2856,7 +2857,7 @@ def _run_powershell_via_system_task(content: str):
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
             f.write(content or '')
         try:
-            log_dir = os.path.join(_project_root_for_temp(), 'Logs', 'Agent')
+            log_dir = os.path.join(_project_root_for_temp(), 'Agent', 'Logs')
             os.makedirs(log_dir, exist_ok=True)
             debug_copy = os.path.join(log_dir, 'system_last.ps1')
             with open(debug_copy, 'w', encoding='utf-8', newline='\n') as df:
@@ -3260,7 +3261,7 @@ if __name__=='__main__':
                         return
                     try:
                         # Save last SYSTEM script for debugging
-                        dbg_dir = os.path.join(_find_project_root(), 'Logs', 'Agent')
+                        dbg_dir = os.path.join(_find_project_root(), 'Agent', 'Logs')
                         os.makedirs(dbg_dir, exist_ok=True)
                         with open(os.path.join(dbg_dir, 'system_last.ps1'), 'w', encoding='utf-8', newline='\n') as df:
                             df.write(content or '')

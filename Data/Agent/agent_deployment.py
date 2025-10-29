@@ -14,7 +14,7 @@ def project_paths():
     venv_root = os.path.abspath(os.path.join(venv_scripts, os.pardir))
     project_root = os.path.abspath(os.path.join(venv_root, os.pardir))
     borealis_dir = os.path.join(venv_root, "Borealis")
-    logs_dir = os.path.join(project_root, "Logs", "Agent")
+    logs_dir = os.path.join(project_root, "Agent", "Logs")
     temp_dir = os.path.join(project_root, "Temp")
     return {
         "project_root": project_root,

@@ -90,7 +90,7 @@ The process that agents go through when authenticating securely with a Borealis 
 - Device enrollment is gated by enrollment/installer codes (*They have configurable expiration and usage limits*) and an operator approval queue; replay-resistant nonces plus rate limits (40 req/min/IP, 12 req/min/fingerprint) prevent brute force or code reuse.
 - All device APIs now require Authorization: Bearer headers and a service-context (e.g. SYSTEM or CURRENTUSER) marker; missing, expired, mismatched, or revoked credentials are rejected before any business logic runs.  Operator-driven revoking / device quarantining logic is not yet implemented.
 - Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (15 min) with 30-day refresh tokens hashed via SHA-256.
-- Centralized logging under Logs/Server and Logs/Agent captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review.
+- Centralized logging under Logs/Server and Agent/Logs captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review.
 #### Server Security
 - Auto-manages PKI: a persistent Borealis root CA (ECDSA SECP384R1) signs leaf certificates that include localhost SANs, tightened filesystem permissions, and a combined bundle for agent identity / cert pinning.
 - Script delivery is code-signed with an Ed25519 key stored under Certificates/Server/Code-Signing; agents refuse any payload whose signature or hash does not match the pinned public key.
@@ -104,7 +104,7 @@ The process that agents go through when authenticating securely with a Borealis 
 - Imports the server’s TLS bundle into a dedicated ssl.SSLContext, reuses it for the REST session, and injects it into the Socket.IO engine so WebSockets enjoy the same pinning and hostname checks.
 - Treats every script payload as hostile until verified: only Ed25519 signatures from the server are accepted, missing/invalid signatures are logged and dropped, and the trusted signing key is updated only after successful verification between the agent and the server.
 - Operates outbound-only; there are no listener ports, and every API/WebSocket call flows through AgentHttpClient.ensure_authenticated, forcing token refresh logic before retrying.
-- Logs bootstrap, enrollment, token refresh, and signature events to daily-rotated files under Logs/Agent, giving operators visibility without leaking secrets outside the project root.
+- Logs bootstrap, enrollment, token refresh, and signature events to daily-rotated files under Agent/Logs, giving operators visibility without leaking secrets outside the project root.
 
 ### Agent/Server Enrollment
 ```mermaid

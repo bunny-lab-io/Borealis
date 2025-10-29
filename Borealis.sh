@@ -96,8 +96,8 @@ detect_distro() {
   fi
 }
 
-ensure_log_dir() { mkdir -p "${SCRIPT_DIR}/Logs/Agent"; }
-log_agent() { ensure_log_dir; printf "[%s] %s\n" "$(date +%F\ %T)" "$1" >> "${SCRIPT_DIR}/Logs/Agent/$2"; }
+ensure_log_dir() { mkdir -p "${SCRIPT_DIR}/Agent/Logs"; }
+log_agent() { ensure_log_dir; printf "[%s] %s\n" "$(date +%F\ %T)" "$1" >> "${SCRIPT_DIR}/Agent/Logs/$2"; }
 
 need_sudo() { [ "${EUID:-$(id -u)}" -ne 0 ]; }
 
@@ -231,7 +231,7 @@ set -o nounset
 set -o pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 cd "$ROOT_DIR"
-LOG_DIR="$(cd -- "$ROOT_DIR/../../Logs/Agent" && pwd 2>/dev/null || echo "$ROOT_DIR/../../Logs/Agent")"
+LOG_DIR="$(cd -- "$ROOT_DIR/../Logs" && pwd 2>/dev/null || echo "$ROOT_DIR/../Logs")"
 mkdir -p "$LOG_DIR"
 PY_BIN="${ROOT_DIR}/../bin/python3"
 exec "$PY_BIN" "$ROOT_DIR/agent.py" --system-service --config SYSTEM >>"$LOG_DIR/svc.out.log" 2>>"$LOG_DIR/svc.err.log"

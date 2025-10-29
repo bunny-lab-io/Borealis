@@ -4,9 +4,9 @@
 - **Runtime Paths**: Do not edit `/Agent`; make changes in `Data/Agent` so the runtime copy stays ephemeral. Runtime folders are wiped regularly.
 
 ### Logging
-- General log: `Logs/Agent/agent.log`; rotate daily to `agent.log.YYYY-MM-DD` and never delete automatically.
-- Subsystems (e.g., `ansible`, `webrtc`, `scheduler`) must log to `Logs/Agent/<service>.log` and follow the same rotation policy.
-- Installation output writes to `Logs/Agent/install.log`.
+- General log: `Agent/Logs/agent.log`; rotate daily to `agent.log.YYYY-MM-DD` and never delete automatically.
+- Subsystems (e.g., `ansible`, `webrtc`, `scheduler`) must log to `Agent/Logs/<service>.log` and follow the same rotation policy.
+- Installation output writes to `Agent/Logs/install.log`; keep ad-hoc diagnostics (e.g., `system_last.ps1`, ansible traces) under `Agent/Logs/` so runtime state stays self-contained.
 - When troubleshooting with operators, prepend each line with `<timestamp>-<service-name>-<log-data>` and confirm whether to keep or remove verbose logging after resolution.
 
 ### Security
@@ -15,7 +15,7 @@
 - Uses a dedicated `ssl.SSLContext` seeded with the Engine’s TLS bundle for REST and Socket.IO traffic.
 - Validates all script payloads with Ed25519 signatures issued by the backend before execution.
 - Enforces outbound-only communication; every API/WebSocket call flows through `AgentHttpClient.ensure_authenticated` to refresh tokens proactively.
-- Logs bootstrap, enrollment, token refresh, and signature events under `Logs/Agent/`.
+- Logs bootstrap, enrollment, token refresh, and signature events under `Agent/Logs/`.
 
 ### Execution Contexts & Roles
 - Roles auto-discover from `Data/Agent/Roles/` and require no loader changes.
@@ -43,9 +43,9 @@
 - Reference the migration tracker before making Engine changes to avoid jumping ahead of the approved stage.
 
 ### Logging
-- General log: `Logs/Engine/engine.log` with daily rotation (`engine.log.YYYY-MM-DD`); do not auto-delete rotated files.
-- Subsystems should log to `Logs/Engine/<service>.log`; installation output belongs in `Logs/Engine/install.log`.
-- Adhere to the centralized logging policy and keep all log files inside the project root.
+- General log: `Engine/Logs/engine.log` with daily rotation (`engine.log.YYYY-MM-DD`); do not auto-delete rotated files.
+- Subsystems should log to `Engine/Logs/<service>.log`; installation output belongs in `Engine/Logs/install.log`.
+- Adhere to the centralized logging policy and keep Engine-specific artifacts within `Engine/Logs/` to preserve the runtime boundary.
 
 ### Security & API Parity
 - Shares the mutual trust model with the legacy server: Ed25519 device identities, EdDSA-signed access tokens, pinned Borealis root CA, TLS 1.3-only serving, and Authorization headers plus service-context markers on every device API.
@@ -78,4 +78,3 @@
 
 ### Platform Notes
 - Exists primarily to document past behaviour and assist the Engine migration. Future platform parity work should target the Engine; the legacy server will be deprecated once feature parity is confirmed.
-

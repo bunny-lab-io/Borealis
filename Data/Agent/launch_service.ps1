@@ -9,9 +9,11 @@ try {
     $scriptDir = Split-Path -Path $PSCommandPath -Parent
     Set-Location -Path $scriptDir
 
-    # Centralized logs under <ProjectRoot>\Logs\Agent
+    # Centralized logs under <ProjectRoot>\Agent\Logs
     $projRoot  = Resolve-Path (Join-Path $scriptDir '..\..')
-    $logsAgent = Join-Path $projRoot 'Logs\Agent'
+    $agentRoot = Join-Path $projRoot 'Agent'
+    if (-not (Test-Path $agentRoot)) { New-Item -ItemType Directory -Path $agentRoot -Force | Out-Null }
+    $logsAgent = Join-Path $agentRoot 'Logs'
     if (-not (Test-Path $logsAgent)) { New-Item -ItemType Directory -Path $logsAgent -Force | Out-Null }
     $wrapperLog = Join-Path $logsAgent 'service_wrapper.log'
 

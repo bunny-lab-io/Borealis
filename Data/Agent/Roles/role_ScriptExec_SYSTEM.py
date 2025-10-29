@@ -219,7 +219,7 @@ def _run_powershell_via_system_task(content: str, env_map: Dict[str, str], timeo
         with os.fdopen(script_fd, 'w', encoding='utf-8', newline='\n') as f:
             f.write(final_content)
         try:
-            log_dir = os.path.join(_project_root(), 'Logs', 'Agent')
+            log_dir = os.path.join(_project_root(), 'Agent', 'Logs')
             os.makedirs(log_dir, exist_ok=True)
             with open(os.path.join(log_dir, 'system_last.ps1'), 'w', encoding='utf-8', newline='\n') as df:
                 df.write(content or '')

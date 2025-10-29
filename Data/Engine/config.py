@@ -34,8 +34,8 @@ defaults that mirror the legacy server runtime.  Key environment variables are
 When TLS values are not provided explicitly the Engine provisions certificates
 under ``Engine/Certificates`` (migrating any legacy material) so the runtime
 remains self-contained.
-Logs are written to ``Logs/Engine/engine.log`` with daily rotation and
-errors are additionally duplicated to ``Logs/Engine/error.log`` so the
+Logs are written to ``Engine/Logs/engine.log`` with daily rotation and
+errors are additionally duplicated to ``Engine/Logs/error.log`` so the
 runtime integrates with the platform's logging policy.
 """
 
@@ -73,7 +73,7 @@ def _discover_project_root() -> Path:
 
 PROJECT_ROOT = _discover_project_root()
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "database.db"
-LOG_ROOT = PROJECT_ROOT / "Logs" / "Engine"
+LOG_ROOT = PROJECT_ROOT / "Engine" / "Logs"
 LOG_FILE_PATH = LOG_ROOT / "engine.log"
 ERROR_LOG_FILE_PATH = LOG_ROOT / "error.log"
 API_LOG_FILE_PATH = LOG_ROOT / "api.log"

@@ -242,7 +242,7 @@ class Role:
         self._ansible_ready = False
         self._ansible_bootstrap_lock = None
         try:
-            base = os.path.join(_project_root(), 'Logs', 'Agent')
+            base = os.path.join(_project_root(), 'Agent', 'Logs')
             os.makedirs(base, exist_ok=True)
             self._ansible_log(f"[init] PlaybookExec role init agent_id={ctx.agent_id}")
         except Exception:
@@ -580,7 +580,7 @@ class Role:
 
     def _log_local(self, msg: str, error: bool = False):
         try:
-            base = os.path.join(_project_root(), 'Logs', 'Agent')
+            base = os.path.join(_project_root(), 'Agent', 'Logs')
             os.makedirs(base, exist_ok=True)
             fn = 'agent.error.log' if error else 'agent.log'
             ts = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -600,7 +600,7 @@ class Role:
 
     def _ansible_log(self, msg: str, error: bool = False, run_id: str = None):
         try:
-            d = os.path.join(_project_root(), 'Logs', 'Agent')
+            d = os.path.join(_project_root(), 'Agent', 'Logs')
             ts = time.strftime('%Y-%m-%d %H:%M:%S')
             path = os.path.join(d, 'ansible.log')
             try:
@@ -716,7 +716,7 @@ class Role:
         if os.name != 'nt':
             return
         mod = self._ps_module_path()
-        log_dir = os.path.join(_project_root(), 'Logs', 'Agent')
+        log_dir = os.path.join(_project_root(), 'Agent', 'Logs')
         try:
             os.makedirs(log_dir, exist_ok=True)
         except Exception:

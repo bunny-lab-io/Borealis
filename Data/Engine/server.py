@@ -11,7 +11,7 @@ Stage 1 introduced the structural skeleton for the Engine runtime.  Stage 2
 builds upon that foundation by centralising configuration handling and logging
 initialisation so the Engine mirrors the legacy server's start-up behaviour.
 The factory delegates configuration resolution to :mod:`Data.Engine.config`
-and emits structured logs to ``Logs/Engine/engine.log`` (with an accompanying
+and emits structured logs to ``Engine/Logs/engine.log`` (with an accompanying
 error log) to align with the project's operational practices.
 """
 from __future__ import annotations

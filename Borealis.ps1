@@ -165,8 +165,9 @@ function Request-AgentElevation {
 
 # Ensure log directories
 function Ensure-AgentLogDir {
-    $logRoot = Join-Path $scriptDir 'Logs'
-    $agentLogDir = Join-Path $logRoot 'Agent'
+    $agentRoot = Join-Path $scriptDir 'Agent'
+    if (-not (Test-Path $agentRoot)) { New-Item -ItemType Directory -Path $agentRoot -Force | Out-Null }
+    $agentLogDir = Join-Path $agentRoot 'Logs'
     if (-not (Test-Path $agentLogDir)) { New-Item -ItemType Directory -Path $agentLogDir -Force | Out-Null }
     return $agentLogDir
 }
@@ -1036,7 +1037,7 @@ function InstallOrUpdate-BorealisAgent {
             }
         } catch {
             Write-AgentLog -FileName 'Install.log' -Message ("[CONFIG] Failed to persist agent_settings.json: {0}" -f $_.Exception.Message)
-            Write-Host "Failed to update agent_settings.json. Check Logs/Agent/install.log for details." -ForegroundColor Red
+            Write-Host "Failed to update agent_settings.json. Check Agent/Logs/install.log for details." -ForegroundColor Red
         }
     }
 
