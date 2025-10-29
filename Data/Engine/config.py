@@ -31,8 +31,9 @@ defaults that mirror the legacy server runtime.  Key environment variables are
                             ``DOMAIN``).
 ``BOREALIS_TLS_*``          TLS certificate, private key, and bundle paths.
 
-When TLS values are not provided explicitly the Engine falls back to the
-certificate helper shipped with the legacy server, ensuring bundling parity.
+When TLS values are not provided explicitly the Engine provisions certificates
+under ``Engine/Certificates`` (migrating any legacy material) so the runtime
+remains self-contained.
 Logs are written to ``Logs/Engine/engine.log`` with daily rotation and
 errors are additionally duplicated to ``Logs/Engine/error.log`` so the
 runtime integrates with the platform's logging policy.
@@ -47,10 +48,7 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
-try:  # pragma: no-cover - optional dependency during early migration stages.
-    from Modules.crypto import certificates  # type: ignore
-except Exception:  # pragma: no-cover - Engine configuration still works without it.
-    certificates = None  # type: ignore[assignment]
+from .security import certificates
 
 
 ENGINE_DIR = Path(__file__).resolve().parent
