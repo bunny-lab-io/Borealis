@@ -24,7 +24,7 @@ from Modules.auth import jwt_service as jwt_service_module
 from Modules.auth.device_auth import DeviceAuthManager
 from Modules.auth.dpop import DPoPValidator
 from Modules.auth.rate_limit import SlidingWindowRateLimiter
-from ...security import signing
+from Modules.crypto import signing
 from Modules.enrollment import routes as enrollment_routes
 from Modules.enrollment.nonce_store import NonceCache
 from Modules.tokens import routes as token_routes

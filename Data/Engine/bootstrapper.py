@@ -23,7 +23,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .security import certificates as engine_certificates
 from .server import EngineContext, create_app
 
 
@@ -232,8 +231,13 @@ def _ensure_web_ui_build(staging_root: Path, logger: logging.Logger, *, mode: st
 def _ensure_tls_material(context: EngineContext) -> None:
     """Ensure TLS certificate material exists, updating the context if created."""
 
+    try:  # Lazy import so Engine still starts if legacy modules are unavailable.
+        from Modules.crypto import certificates  # type: ignore
+    except Exception:
+        return
+
     try:
-        cert_path, key_path, bundle_path = engine_certificates.ensure_certificate()
+        cert_path, key_path, bundle_path = certificates.ensure_certificate()
     except Exception as exc:
         context.logger.error("Failed to auto-provision Engine TLS certificates: %s", exc)
         return

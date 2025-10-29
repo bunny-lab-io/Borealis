@@ -8,8 +8,8 @@
         "intervalSec": "10",
         "label": "API Request",
         "result": "{\n  \"status\": \"ok\"\n}",
-        "url": "https://localhost:5000/health",
-        "useProxy": "false"
+        "url": "http://localhost:5000/health",
+        "useProxy": "true"
       },
       "dragHandle": ".borealis-node-header",
       "dragging": false,
