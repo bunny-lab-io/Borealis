@@ -24,6 +24,7 @@ from Modules.auth import jwt_service as jwt_service_module
 from Modules.auth.device_auth import DeviceAuthManager
 from Modules.auth.dpop import DPoPValidator
 from Modules.auth.rate_limit import SlidingWindowRateLimiter
+from ...database import initialise_engine_database
 from ...security import signing
 from Modules.enrollment import routes as enrollment_routes
 from Modules.enrollment.nonce_store import NonceCache
@@ -151,6 +152,7 @@ class LegacyServiceAdapters:
 
     def __post_init__(self) -> None:
         self.db_conn_factory = _make_db_conn_factory(self.context.database_path)
+        initialise_engine_database(self.context.database_path, logger=self.context.logger)
         self.jwt_service = jwt_service_module.load_service()
         self.dpop_validator = DPoPValidator()
         self.ip_rate_limiter = SlidingWindowRateLimiter()
