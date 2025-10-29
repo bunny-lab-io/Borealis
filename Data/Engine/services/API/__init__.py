@@ -31,10 +31,11 @@ from Modules.tokens import routes as token_routes
 
 from ...server import EngineContext
 from .access_management.login import register_auth
+from .assemblies.management import register_assemblies
 from .devices.approval import register_admin_endpoints
 from .devices.management import register_management
 
-DEFAULT_API_GROUPS: Sequence[str] = ("auth", "tokens", "enrollment", "devices")
+DEFAULT_API_GROUPS: Sequence[str] = ("core", "auth", "tokens", "enrollment", "devices", "assemblies")
 
 _SERVER_SCOPE_PATTERN = re.compile(r"\\b(?:scope|context|agent_context)=([A-Za-z0-9_-]+)", re.IGNORECASE)
 _SERVER_AGENT_ID_PATTERN = re.compile(r"\\bagent_id=([^\\s,]+)", re.IGNORECASE)
@@ -211,6 +212,7 @@ _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, LegacyServiceAdapters], None]] 
     "tokens": _register_tokens,
     "enrollment": _register_enrollment,
     "devices": _register_devices,
+    "assemblies": register_assemblies,
 }
 
 

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "name": "Query OS String [LINUX]",
+  "description": "Simply returns the operating system in the output.",
+  "category": "application",
+  "type": "ansible",
+  "script": "LS0tCi0gbmFtZTogR2V0IG9wZXJhdGluZyBzeXN0ZW0gaW5mb3JtYXRpb24KICBob3N0czogYWxsCiAgZ2F0aGVyX2ZhY3RzOiB5ZXMKCiAgdGFza3M6CiAgICAtIG5hbWU6IFByaW50IE9TIHN0cmluZwogICAgICBkZWJ1ZzoKICAgICAgICBtc2c6ICJ7eyBhbnNpYmxlX2Rpc3RyaWJ1dGlvbiB9fSB7eyBhbnNpYmxlX2Rpc3RyaWJ1dGlvbl92ZXJzaW9uIH19IHt7IGFuc2libGVfZGlzdHJpYnV0aW9uX3JlbGVhc2UgfCBkZWZhdWx0KCcnKSB9fSIK",
+  "timeout_seconds": 3600,
+  "sites": {
+    "mode": "all",
+    "values": []
+  },
+  "variables": [],
+  "files": [],
+  "script_encoding": "base64"
+}

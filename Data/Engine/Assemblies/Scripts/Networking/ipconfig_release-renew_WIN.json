@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "ipconfig Release & Renew",
+  "description": "Releases the current IP address, waits n seconds, then renews the IP asking for a new one.",
+  "category": "script",
+  "type": "powershell",
+  "script": "aXBjb25maWcgL3JlbGVhc2UgClN0YXJ0LVNsZWVwIC1TZWNvbmRzICRlbnY6c2xlZXBUaW1lCmlwY29uZmlnIC9yZW5ldw==",
+  "timeout_seconds": 3600,
+  "sites": {
+    "mode": "all",
+    "values": []
+  },
+  "variables": [
+    {
+      "name": "sleepTime",
+      "label": "Seconds Until Renew",
+      "type": "string",
+      "default": "5",
+      "required": true,
+      "description": "Number of seconds between releasing the IP and asking for a new one."
+    }
+  ],
+  "files": [],
+  "script_encoding": "base64"
+}

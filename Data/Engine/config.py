@@ -215,8 +215,17 @@ def _parse_api_groups(raw: Optional[Any]) -> Tuple[str, ...]:
     else:
         return tuple()
     cleaned = [part.lower() for part in parts if part]
-    if "auth" not in cleaned:
-        cleaned.insert(0, "auth")
+
+    required_prefix: List[str] = []
+    for required in ("core", "auth"):
+        if required not in cleaned:
+            required_prefix.append(required)
+    if required_prefix:
+        cleaned = required_prefix + cleaned
+
+    if "assemblies" not in cleaned:
+        cleaned.append("assemblies")
+
     return tuple(dict.fromkeys(cleaned))
 
 
@@ -277,7 +286,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         runtime_config.get("API_GROUPS") or os.environ.get("BOREALIS_API_GROUPS")
     )
     if not api_groups:
-        api_groups = ("auth", "tokens", "enrollment", "devices")
+        api_groups = ("core", "auth", "tokens", "enrollment", "devices", "assemblies")
 
     settings = EngineSettings(
         database_path=database_path,
