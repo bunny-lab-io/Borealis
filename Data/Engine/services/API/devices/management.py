@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import ssl
 import sqlite3
 import threading
 import time
@@ -384,6 +385,60 @@ class RepositoryHashCache:
         except Exception:
             self._logger.debug("Failed to persist repository hash cache", exc_info=True)
 
+    def _resolve_original_ssl_module(self):
+        try:
+            from eventlet import patcher  # type: ignore
+
+            original_ssl = patcher.original("ssl")
+            if original_ssl is not None:
+                return original_ssl
+        except Exception:
+            pass
+
+        module_name = getattr(ssl.SSLContext, "__module__", "")
+        if module_name != "eventlet.green.ssl":
+            return ssl
+        return None
+
+    def _build_requests_session(self):
+        if isinstance(requests, _RequestsStub):
+            return None
+        try:
+            from requests import Session  # type: ignore
+            from requests.adapters import HTTPAdapter  # type: ignore
+        except Exception:
+            return None
+
+        original_ssl = self._resolve_original_ssl_module()
+        if original_ssl is None:
+            return None
+
+        try:
+            context = original_ssl.create_default_context()
+        except Exception:
+            return None
+
+        tls_version = getattr(original_ssl, "TLSVersion", None)
+        if tls_version is not None and hasattr(context, "minimum_version"):
+            try:
+                context.minimum_version = tls_version.TLSv1_2
+            except Exception:
+                pass
+
+        class _ContextAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                kwargs.setdefault("ssl_context", context)
+                return super().init_poolmanager(*args, **kwargs)
+
+            def proxy_manager_for(self, *args, **kwargs):
+                kwargs.setdefault("ssl_context", context)
+                return super().proxy_manager_for(*args, **kwargs)
+
+        session = Session()
+        adapter = _ContextAdapter()
+        session.mount("https://", adapter)
+        return session
+
     def _github_token(self, *, force_refresh: bool = False) -> Optional[str]:
         env_token = (request.headers.get("X-GitHub-Token") or "").strip()
         if env_token:
@@ -454,8 +509,15 @@ class RepositoryHashCache:
 
         sha: Optional[str] = None
         error: Optional[str] = None
+        session = None
         try:
-            resp = requests.get(
+            session = self._build_requests_session()
+        except Exception:
+            session = None
+
+        try:
+            target = session if session is not None else requests
+            resp = target.get(
                 f"https://api.github.com/repos/{repo}/branches/{branch}",
                 headers=headers,
                 timeout=20,
@@ -465,8 +527,18 @@ class RepositoryHashCache:
                 sha = ((data.get("commit") or {}).get("sha") or "").strip()
             else:
                 error = f"GitHub head lookup failed: HTTP {resp.status_code}"
+        except RecursionError as exc:
+            error = f"GitHub head lookup recursion error: {exc}"
         except requests.RequestException as exc:
             error = f"GitHub head lookup raised: {exc}"
+        except Exception as exc:
+            error = f"GitHub head lookup unexpected error: {exc}"
+        finally:
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:
+                    pass
 
         if sha:
             with self._lock:

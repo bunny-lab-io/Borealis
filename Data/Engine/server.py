@@ -80,6 +80,9 @@ if HttpProtocol is not None:  # pragma: no branch - attribute exists in supporte
                 or "unknown ca" in message
                 or reason_text == "unknown ca"
                 or "unknown_ca" in message
+                or "certificate unknown" in message
+                or reason_text == "certificate unknown"
+                or "certificate_unknown" in message
             ):
                 _close_connection_quietly()
                 return None
