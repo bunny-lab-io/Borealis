@@ -24,15 +24,18 @@ The `script_engines.py` helper exposes a PowerShell runner for potential server-
 - **Log Locations**
   - Agent: `<ProjectRoot>/Logs/Agent/<service>.log`
   - Server: `<ProjectRoot>/Logs/Server/<service>.log`
+  - Engine: `<ProjectRoot>/Logs/Engine/<service>.log`
 - **General-Purpose Logs**
   - Agent: `agent.log`
   - Server: `server.log`
+  - Engine: `engine.log`
 - **Dedicated Logs**
   - Subsystems with significant surface area must use their own `<service>.log`
     - Examples: `ansible.log`, `webrtc.log`, `scheduler.log`
 - **Installation / Bootstrap Logs**
   - Agent install: `Logs/Agent/install.log`
   - Server install: `Logs/Server/install.log`
+  - Engine Install: `Logs/Engine/install.log`
 - **Rotation Policy**
   - All log writers must rotate daily.
   - On day rollover, rename:
