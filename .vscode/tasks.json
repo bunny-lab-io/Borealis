@@ -111,6 +111,74 @@
       "problemMatcher": []
     },
     {
+      "label": "Borealis - Clear All Logs",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "& {\n    $projectRoot = '${workspaceFolder}';\n    $logPath = Join-Path $projectRoot 'Logs';\n    if (Test-Path $logPath) {\n        Remove-Item -Path $logPath -Recurse -Force -ErrorAction SilentlyContinue;\n        Write-Host ('Removed log directory: {0}' -f $logPath);\n    } else {\n        Write-Host ('Log directory not found: {0}' -f $logPath);\n    }\n}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Borealis - Delete Runtime Server",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "& {\n    $projectRoot = '${workspaceFolder}';\n    $target = Join-Path $projectRoot 'Server';\n    if (Test-Path $target) {\n        Remove-Item -Path $target -Recurse -Force -ErrorAction SilentlyContinue;\n        Write-Host ('Removed runtime server directory: {0}' -f $target);\n    } else {\n        Write-Host ('Runtime server directory not found: {0}' -f $target);\n    }\n}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Borealis - Delete Runtime Engine",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "& {\n    $projectRoot = '${workspaceFolder}';\n    $target = Join-Path $projectRoot 'Engine';\n    if (Test-Path $target) {\n        Remove-Item -Path $target -Recurse -Force -ErrorAction SilentlyContinue;\n        Write-Host ('Removed runtime engine directory: {0}' -f $target);\n    } else {\n        Write-Host ('Runtime engine directory not found: {0}' -f $target);\n    }\n}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Borealis - Delete Runtime Agent",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "& {\n    $projectRoot = '${workspaceFolder}';\n    $target = Join-Path $projectRoot 'Agent';\n    if (Test-Path $target) {\n        Remove-Item -Path $target -Recurse -Force -ErrorAction SilentlyContinue;\n        Write-Host ('Removed runtime agent directory: {0}' -f $target);\n    } else {\n        Write-Host ('Runtime agent directory not found: {0}' -f $target);\n    }\n}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Borealis - Kill All Component Processes",
       "type": "shell",
       "command": "powershell.exe",
