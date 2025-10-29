@@ -1,3 +1,10 @@
+# ======================================================
+# Data\Engine\config.py
+# Description: Configuration loader aligning the Engine runtime with legacy defaults, logging policy, and TLS discovery.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
 """Configuration helpers for the Borealis Engine runtime.
 
 Stage 2 of the migration focuses on lifting the legacy configuration loading

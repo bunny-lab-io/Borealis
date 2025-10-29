@@ -1,3 +1,10 @@
+# ======================================================
+# Data\Engine\server.py
+# Description: Flask/Socket.IO application factory wiring Engine services, logging, and legacy bridge registration.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
 """Stage 2 Borealis Engine application factory.
 
 Stage 1 introduced the structural skeleton for the Engine runtime.  Stage 2

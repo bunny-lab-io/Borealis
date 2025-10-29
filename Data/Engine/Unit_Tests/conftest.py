@@ -1,3 +1,10 @@
+# ======================================================
+# Data\Engine\Unit_Tests\conftest.py
+# Description: Pytest fixtures that seed the Engine app, SQLite schema, TLS materials, and WebUI assets.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
 from __future__ import annotations
 
 import json

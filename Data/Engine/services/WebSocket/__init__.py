@@ -1,3 +1,10 @@
+# ======================================================
+# Data\Engine\services\WebSocket\__init__.py
+# Description: Placeholder hook for registering Engine Socket.IO namespaces.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
 """WebSocket service stubs for the Borealis Engine runtime.
 
 Future stages will move Socket.IO namespaces and event handlers here. Stage 1

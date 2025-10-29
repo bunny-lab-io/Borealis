@@ -1,3 +1,10 @@
+# ======================================================
+# Data\Engine\Unit_Tests\test_enrollment_api.py
+# Description: Covers device enrollment request and poll flows including cryptographic proof handling.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
 from __future__ import annotations
 
 import base64

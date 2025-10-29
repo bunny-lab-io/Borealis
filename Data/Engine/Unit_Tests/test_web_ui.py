@@ -1,3 +1,10 @@
+# ======================================================
+# Data\Engine\Unit_Tests\test_web_ui.py
+# Description: Ensures Engine WebUI static routing and SPA fallback respond as expected.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
 from __future__ import annotations
 
 

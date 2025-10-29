@@ -1,3 +1,10 @@
+# ======================================================
+# Data\Engine\services\WebUI\__init__.py
+# Description: Registers the SPA static asset blueprint and 404 fallback for the Engine WebUI.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
 """WebUI static asset handling for the Borealis Engine runtime."""
 from __future__ import annotations
 

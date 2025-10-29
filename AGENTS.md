@@ -5,6 +5,21 @@
 The `script_engines.py` helper exposes a PowerShell runner for potential server-side orchestration, but no current Flask route invokes it; agent-side script execution lives under the roles in `Data/Agent`.
 - Agents run inside the packaged Python venv (`Data/Agent` mirrored to `Agent/`). `agent.py` handles the primary connection and hot-loads roles from `Data/Agent/Roles` at agent startup.
 
+## Engine File Headers (Codex Agent Guidance)
+- Any new Python modules created under `Data/Engine` or its staging counterpart `Engine/Data/Engine` must begin with the standardized commentary header that documents file purpose and API coverage.
+- Mirror the exact formatting shown below, updating the file path, description, and endpoint list to match the new module. If the file does not expose API routes, set the section to `API Endpoints (if applicable): None`.
+  ```text
+  # ======================================================
+  # Data\Engine\services\API\devices\management.py
+  # Description: Device inventory, list view, site management, and repository hash endpoints for the Engine API transition layer.
+  #
+  # API Endpoints (if applicable):
+  # - POST /api/agent/details (Device Authenticated) - Ingests hardware and inventory payloads from enrolled agents.
+  # ======================================================
+  ```
+- Always adjust the first line after `# Description:` and each endpoint bullet so operators can quickly understand why the file exists and how to authenticate to any routes.
+- When modifying an existing module that is missing this header, add it as part of the change before proceeding with further edits.
+
 ## Logging Policy (Centralized, Rotated)
 - **Log Locations**
   - Agent: `<ProjectRoot>/Logs/Agent/<service>.log`

@@ -1,3 +1,16 @@
+# ======================================================
+# Data\Engine\services\API\devices\approval.py
+# Description: Administrative device enrollment endpoints covering code lifecycle and approval queue actions.
+#
+# API Endpoints (if applicable):
+# - GET /api/admin/enrollment-codes (Token Authenticated (Admin)) - Lists enrollment/install codes with optional status filtering.
+# - POST /api/admin/enrollment-codes (Token Authenticated (Admin)) - Creates a new enrollment/install code with TTL and usage limits.
+# - DELETE /api/admin/enrollment-codes/<code_id> (Token Authenticated (Admin)) - Deletes an enrollment/install code record.
+# - GET /api/admin/device-approvals (Token Authenticated (Admin)) - Enumerates pending and historical device approval records.
+# - POST /api/admin/device-approvals/<approval_id>/approve (Token Authenticated (Admin)) - Approves a pending device and handles hostname conflicts.
+# - POST /api/admin/device-approvals/<approval_id>/deny (Token Authenticated (Admin)) - Denies a pending device approval request.
+# ======================================================
+
 """Admin-focused device enrollment and approval endpoints."""
 from __future__ import annotations
 

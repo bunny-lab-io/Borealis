@@ -1,3 +1,14 @@
+# ======================================================
+# Data\Engine\services\API\access_management\login.py
+# Description: Primary authentication blueprint used by the Engine auth group for sessions, MFA, and logout.
+#
+# API Endpoints (if applicable):
+# - POST /api/auth/login (No Authentication) - Authenticates operator credentials and starts a session token.
+# - POST /api/auth/logout (Token Authenticated) - Clears the active operator session and authentication cookie.
+# - POST /api/auth/mfa/verify (Token Authenticated (MFA pending)) - Verifies TOTP codes during multifactor setup or login.
+# - GET /api/auth/me (Token Authenticated) - Returns the currently authenticated operator profile.
+# ======================================================
+
 """Authentication endpoints for the Borealis Engine API."""
 from __future__ import annotations
 

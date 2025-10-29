@@ -1,3 +1,27 @@
+# ======================================================
+# Data\Engine\services\API\devices\management.py
+# Description: Device inventory, list view, site management, and repository hash endpoints for the Engine API transition layer.
+#
+# API Endpoints (if applicable):
+# - POST /api/agent/details (Device Authenticated) - Ingests hardware and inventory payloads from enrolled agents.
+# - GET /api/devices (No Authentication) - Returns a summary list of known devices for the WebUI transition.
+# - GET /api/devices/<guid> (No Authentication) - Retrieves a single device record by GUID, including summary fields.
+# - GET /api/device/details/<hostname> (No Authentication) - Returns full device details keyed by hostname.
+# - POST /api/device/description/<hostname> (Token Authenticated) - Updates the human-readable description for a device.
+# - GET /api/device_list_views (No Authentication) - Lists saved device table view definitions.
+# - GET /api/device_list_views/<int:view_id> (No Authentication) - Retrieves a specific saved device table view definition.
+# - POST /api/device_list_views (Token Authenticated) - Creates a custom device list view for the signed-in operator.
+# - PUT /api/device_list_views/<int:view_id> (Token Authenticated) - Updates an existing device list view definition.
+# - DELETE /api/device_list_views/<int:view_id> (Token Authenticated) - Deletes a saved device list view.
+# - GET /api/sites (No Authentication) - Lists known sites and their summary metadata.
+# - POST /api/sites (Token Authenticated (Admin)) - Creates a new site for grouping devices.
+# - POST /api/sites/delete (Token Authenticated (Admin)) - Deletes one or more sites by identifier.
+# - GET /api/sites/device_map (No Authentication) - Provides hostname to site assignment mapping data.
+# - POST /api/sites/assign (Token Authenticated (Admin)) - Assigns a set of devices to a given site.
+# - POST /api/sites/rename (Token Authenticated (Admin)) - Renames an existing site record.
+# - GET /api/repo/current_hash (No Authentication) - Fetches the current agent repository hash (with caching).
+# - GET /api/agent/hash_list (Loopback Restricted) - Returns stored agent hash metadata for localhost diagnostics.
+# ======================================================
 
 """Device management endpoints for the Borealis Engine API."""
 from __future__ import annotations

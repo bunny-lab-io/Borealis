@@ -1,3 +1,10 @@
+# ======================================================
+# Data\Engine\bootstrapper.py
+# Description: Bootstrap utility that resolves runtime config, stages WebUI assets, provisions TLS, and starts the Engine Socket.IO server.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
 """Entrypoint helpers for running the Borealis Engine runtime.
 
 The bootstrapper assembles configuration via :func:`Data.Engine.config.load_runtime_config`

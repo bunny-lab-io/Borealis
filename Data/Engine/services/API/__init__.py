@@ -1,3 +1,11 @@
+# ======================================================
+# Data\Engine\services\API\__init__.py
+# Description: Registers Engine API groups and bridges to legacy modules while exposing core utility routes.
+#
+# API Endpoints (if applicable):
+# - GET /health (No Authentication) - Returns an OK status for liveness probing.
+# ======================================================
+
 """API service adapters for the Borealis Engine runtime."""
 from __future__ import annotations
 

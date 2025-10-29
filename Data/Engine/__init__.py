@@ -1,3 +1,10 @@
+# ======================================================
+# Data\Engine\__init__.py
+# Description: Package initializer exposing create_app and EngineContext for the Borealis Engine.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
 """Borealis Engine runtime package.
 
 This package houses the next-generation server runtime that will gradually

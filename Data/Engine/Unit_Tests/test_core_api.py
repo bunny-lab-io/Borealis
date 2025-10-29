@@ -1,3 +1,10 @@
+# ======================================================
+# Data\Engine\Unit_Tests\test_core_api.py
+# Description: Validates the Engine /health endpoint wiring.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
 from __future__ import annotations
 
 
