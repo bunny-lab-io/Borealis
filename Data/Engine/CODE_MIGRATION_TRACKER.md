@@ -38,6 +38,8 @@ Lastly, everytime that you complete a stage, you will create a pull request name
   - [ ] Add migration switch in the legacy server for WebUI delegation.
   - [x] Extend tests to cover critical WebUI routes.
   - [ ] Port device API endpoints into Engine services (device + admin coverage in progress).
+    - [x] Move authentication/token stack onto Engine services without legacy fallbacks.
+    - [x] Port enrollment request/poll flows to Engine services and drop legacy imports.
 - [ ] **Stage 7 — Plan WebSocket migration**
   - [ ] Extract Socket.IO handlers into Data/Engine/services/WebSocket.
   - [ ] Provide register_realtime hook for the Engine factory.
@@ -46,4 +48,4 @@ Lastly, everytime that you complete a stage, you will create a pull request name
 
 ## Current Status
 - **Stage:** Stage 6 — Plan WebUI migration
-- **Active Task:** Migrating device endpoints into the Engine API (legacy bridge removed).
+- **Active Task:** Continue Stage 6 device/admin API migration (focus on remaining device and admin endpoints now that auth, token, and enrollment paths are Engine-native).

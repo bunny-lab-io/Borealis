@@ -35,7 +35,7 @@ except Exception:  # pragma: no cover - optional dependency
     qrcode = None  # type: ignore
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
-    from Data.Engine.services.API import LegacyServiceAdapters
+    from Data.Engine.services.API import EngineServiceAdapters
 
 
 def _now_ts() -> int:
@@ -103,7 +103,7 @@ def _user_row_to_dict(row: Sequence[Any]) -> Mapping[str, Any]:
 
 
 class _AuthService:
-    def __init__(self, app: Flask, adapters: "LegacyServiceAdapters") -> None:
+    def __init__(self, app: Flask, adapters: "EngineServiceAdapters") -> None:
         self.app = app
         self.adapters = adapters
         self.context = adapters.context
@@ -393,7 +393,7 @@ class _AuthService:
         )
 
 
-def register_auth(app: Flask, adapters: "LegacyServiceAdapters") -> None:
+def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Register authentication endpoints for the Engine."""
 
     service = _AuthService(app, adapters)
@@ -416,3 +416,4 @@ def register_auth(app: Flask, adapters: "LegacyServiceAdapters") -> None:
         return service.me()
 
     app.register_blueprint(blueprint)
+

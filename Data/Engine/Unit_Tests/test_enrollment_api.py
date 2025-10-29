@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from flask.testing import FlaskClient
 
-from Modules.crypto import keys as crypto_keys
+from Data.Engine.crypto import keys as crypto_keys
 
 from .conftest import EngineTestHarness
 

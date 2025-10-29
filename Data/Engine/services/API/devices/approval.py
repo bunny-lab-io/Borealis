@@ -24,10 +24,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from Modules.guid_utils import normalize_guid
+from ....auth.guid_utils import normalize_guid
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
-    from .. import LegacyServiceAdapters
+    from .. import EngineServiceAdapters
 
 
 VALID_TTL_HOURS = {1, 3, 6, 12, 24}
@@ -49,7 +49,7 @@ def _generate_install_code() -> str:
 class AdminDeviceService:
     """Utility wrapper for admin device APIs."""
 
-    def __init__(self, app, adapters: "LegacyServiceAdapters") -> None:
+    def __init__(self, app, adapters: "EngineServiceAdapters") -> None:
         self.app = app
         self.adapters = adapters
         self.db_conn_factory = adapters.db_conn_factory
@@ -477,7 +477,7 @@ class AdminDeviceService:
         return self._set_approval_status(approval_id, "denied")
 
 
-def register_admin_endpoints(app, adapters: "LegacyServiceAdapters") -> None:
+def register_admin_endpoints(app, adapters: "EngineServiceAdapters") -> None:
     """Register admin enrollment + approval endpoints."""
 
     service = AdminDeviceService(app, adapters)
@@ -532,3 +532,4 @@ def register_admin_endpoints(app, adapters: "LegacyServiceAdapters") -> None:
         return jsonify(payload), status
 
     app.register_blueprint(blueprint)
+

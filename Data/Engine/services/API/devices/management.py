@@ -41,8 +41,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from flask import Blueprint, jsonify, request, session, g
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from Modules.auth.device_auth import require_device_auth
-from Modules.guid_utils import normalize_guid
+from ....auth.device_auth import require_device_auth
+from ....auth.guid_utils import normalize_guid
 
 try:
     import requests  # type: ignore
@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover - fallback for minimal test environments
     requests = _RequestsStub()  # type: ignore
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
-    from .. import LegacyServiceAdapters
+    from .. import EngineServiceAdapters
 
 
 def _safe_json(raw: Optional[str], default: Any) -> Any:
@@ -340,7 +340,7 @@ def _device_upsert(
 class RepositoryHashCache:
     """Lightweight GitHub head cache with on-disk persistence."""
 
-    def __init__(self, adapters: "LegacyServiceAdapters") -> None:
+    def __init__(self, adapters: "EngineServiceAdapters") -> None:
         self._db_conn_factory = adapters.db_conn_factory
         self._service_log = adapters.service_log
         self._logger = adapters.context.logger
@@ -617,7 +617,7 @@ class DeviceManagementService:
         "connection_endpoint",
     )
 
-    def __init__(self, app, adapters: "LegacyServiceAdapters") -> None:
+    def __init__(self, app, adapters: "EngineServiceAdapters") -> None:
         self.app = app
         self.adapters = adapters
         self.db_conn_factory = adapters.db_conn_factory
@@ -1513,7 +1513,7 @@ class DeviceManagementService:
         finally:
             conn.close()
 
-def register_management(app, adapters: "LegacyServiceAdapters") -> None:
+def register_management(app, adapters: "EngineServiceAdapters") -> None:
     """Register device management endpoints onto the Flask app."""
 
     service = DeviceManagementService(app, adapters)
@@ -1679,3 +1679,4 @@ def register_management(app, adapters: "LegacyServiceAdapters") -> None:
         return jsonify(payload), status
 
     app.register_blueprint(blueprint)
+

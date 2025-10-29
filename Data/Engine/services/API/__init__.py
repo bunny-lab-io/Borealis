@@ -1,6 +1,6 @@
 # ======================================================
 # Data\Engine\services\API\__init__.py
-# Description: Registers Engine API groups and bridges to legacy modules while exposing core utility routes.
+# Description: Registers Engine API groups, wiring Engine-native authentication while delegating remaining legacy modules.
 #
 # API Endpoints (if applicable):
 # - GET /health (No Authentication) - Returns an OK status for liveness probing.
@@ -20,15 +20,15 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from flask import Blueprint, Flask, jsonify
 
-from Modules.auth import jwt_service as jwt_service_module
-from Modules.auth.device_auth import DeviceAuthManager
-from Modules.auth.dpop import DPoPValidator
-from Modules.auth.rate_limit import SlidingWindowRateLimiter
+from ...auth import jwt_service as jwt_service_module
+from ...auth.device_auth import DeviceAuthManager
+from ...auth.dpop import DPoPValidator
+from ...auth.rate_limit import SlidingWindowRateLimiter
 from ...database import initialise_engine_database
 from ...security import signing
-from Modules.enrollment import routes as enrollment_routes
-from Modules.enrollment.nonce_store import NonceCache
-from Modules.tokens import routes as token_routes
+from ...enrollment import NonceCache
+from .enrollment import routes as enrollment_routes
+from .tokens import routes as token_routes
 
 from ...server import EngineContext
 from .access_management.login import register_auth
@@ -137,7 +137,7 @@ def _make_db_conn_factory(database_path: str) -> Callable[[], sqlite3.Connection
 
 
 @dataclass
-class LegacyServiceAdapters:
+class EngineServiceAdapters:
     context: EngineContext
     db_conn_factory: Callable[[], sqlite3.Connection] = field(init=False)
     jwt_service: Any = field(init=False)
@@ -180,7 +180,7 @@ class LegacyServiceAdapters:
         )
 
 
-def _register_tokens(app: Flask, adapters: LegacyServiceAdapters) -> None:
+def _register_tokens(app: Flask, adapters: EngineServiceAdapters) -> None:
     token_routes.register(
         app,
         db_conn_factory=adapters.db_conn_factory,
@@ -189,7 +189,7 @@ def _register_tokens(app: Flask, adapters: LegacyServiceAdapters) -> None:
     )
 
 
-def _register_enrollment(app: Flask, adapters: LegacyServiceAdapters) -> None:
+def _register_enrollment(app: Flask, adapters: EngineServiceAdapters) -> None:
     tls_bundle = adapters.context.tls_bundle_path or ""
     enrollment_routes.register(
         app,
@@ -204,12 +204,12 @@ def _register_enrollment(app: Flask, adapters: LegacyServiceAdapters) -> None:
     )
 
 
-def _register_devices(app: Flask, adapters: LegacyServiceAdapters) -> None:
+def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
     register_management(app, adapters)
     register_admin_endpoints(app, adapters)
 
 
-_GROUP_REGISTRARS: Mapping[str, Callable[[Flask, LegacyServiceAdapters], None]] = {
+_GROUP_REGISTRARS: Mapping[str, Callable[[Flask, EngineServiceAdapters], None]] = {
     "auth": register_auth,
     "tokens": _register_tokens,
     "enrollment": _register_enrollment,
@@ -236,7 +236,7 @@ def register_api(app: Flask, context: EngineContext) -> None:
 
     enabled_groups: Iterable[str] = context.api_groups or DEFAULT_API_GROUPS
     normalized = [group.strip().lower() for group in enabled_groups if group]
-    adapters: Optional[LegacyServiceAdapters] = None
+    adapters: Optional[EngineServiceAdapters] = None
 
     for group in normalized:
         if group == "core":
@@ -244,7 +244,7 @@ def register_api(app: Flask, context: EngineContext) -> None:
             continue
 
         if adapters is None:
-            adapters = LegacyServiceAdapters(context)
+            adapters = EngineServiceAdapters(context)
         registrar = _GROUP_REGISTRARS.get(group)
         if registrar is None:
             context.logger.info("Engine API group '%s' is not implemented; skipping.", group)

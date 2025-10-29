@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, MutableMapping, Opti
 from flask import Blueprint, jsonify, request
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
-    from .. import LegacyServiceAdapters
+    from .. import EngineServiceAdapters
 
 
 _ISLAND_DIR_MAP: Mapping[str, str] = {
@@ -49,7 +49,7 @@ _BASE64_CLEANER = re.compile(r"\s+")
 class AssemblyManagementService:
     """Implements assembly CRUD helpers for Engine routes."""
 
-    def __init__(self, adapters: "LegacyServiceAdapters") -> None:
+    def __init__(self, adapters: "EngineServiceAdapters") -> None:
         self.adapters = adapters
         self.logger = adapters.context.logger or logging.getLogger(__name__)
         self.service_log = adapters.service_log
@@ -679,7 +679,7 @@ class AssemblyManagementService:
         return obj
 
 
-def register_assemblies(app, adapters: "LegacyServiceAdapters") -> None:
+def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
     """Register assembly CRUD endpoints on the Flask app."""
 
     service = AssemblyManagementService(adapters)
@@ -726,3 +726,4 @@ def register_assemblies(app, adapters: "LegacyServiceAdapters") -> None:
         return jsonify(response), status
 
     app.register_blueprint(blueprint)
+
