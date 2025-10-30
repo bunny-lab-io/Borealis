@@ -22,7 +22,6 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from ..security.certificates import project_root_path
 
 _TOKEN_ENV_ROOT = "BOREALIS_ENGINE_AUTH_TOKEN_ROOT"
-_LEGACY_SERVER_ROOT_ENV = "BOREALIS_SERVER_ROOT"
 _KEY_FILENAME = "borealis-jwt-ed25519.key"
 
 
@@ -57,16 +56,6 @@ def _token_root() -> Path:
     root = _engine_runtime_root() / "Data" / "Auth_Tokens"
     root.mkdir(parents=True, exist_ok=True)
     return root
-
-
-def _legacy_key_paths() -> Dict[str, Path]:
-    project_root = project_root_path()
-    server_root = _env_path(_LEGACY_SERVER_ROOT_ENV) or (project_root / "Server" / "Borealis")
-    candidates = {
-        "auth_keys": server_root / "auth_keys" / _KEY_FILENAME,
-        "keys": server_root / "keys" / _KEY_FILENAME,
-    }
-    return candidates
 
 
 def _tighten_permissions(path: Path) -> None:
@@ -159,7 +148,6 @@ def load_service() -> JWTService:
 
 def _load_or_create_private_key() -> ed25519.Ed25519PrivateKey:
     _KEY_DIR.mkdir(parents=True, exist_ok=True)
-    _migrate_legacy_key_if_present()
 
     if _KEY_FILE.exists():
         with _KEY_FILE.open("rb") as fh:
@@ -175,32 +163,6 @@ def _load_or_create_private_key() -> ed25519.Ed25519PrivateKey:
         fh.write(pem)
     _tighten_permissions(_KEY_FILE)
     return private_key
-
-
-def _migrate_legacy_key_if_present() -> None:
-    if _KEY_FILE.exists():
-        return
-
-    legacy_paths = _legacy_key_paths()
-    for legacy_file in legacy_paths.values():
-        if not legacy_file.exists():
-            continue
-        try:
-            legacy_bytes = legacy_file.read_bytes()
-        except Exception:
-            continue
-
-        try:
-            _KEY_FILE.write_bytes(legacy_bytes)
-            _tighten_permissions(_KEY_FILE)
-        except Exception:
-            continue
-
-        try:
-            legacy_file.unlink()
-        except Exception:
-            pass
-        break
 
 
 __all__ = ["JWTService", "load_service"]

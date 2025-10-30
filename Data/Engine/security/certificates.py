@@ -266,7 +266,11 @@ def _server_certificate_needs_regeneration(
 
     try:
         san = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value  # type: ignore[attr-defined]
-        names = {entry.value for entry in san.get_values_for_type(x509.DNSName)}
+        raw_names = san.get_values_for_type(x509.DNSName)
+        names = {
+            entry if isinstance(entry, str) else getattr(entry, "value", str(entry))
+            for entry in raw_names
+        }
     except Exception:
         names = set()
 

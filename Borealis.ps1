@@ -189,26 +189,43 @@ function Ensure-EngineTlsMaterial {
         [string]$CertificateRoot
     )
 
-    if (-not (Test-Path $CertificateRoot)) {
-        New-Item -Path $CertificateRoot -ItemType Directory -Force | Out-Null
-    }
+    $effectiveRoot = $null
 
     if (Test-Path $PythonPath) {
         $code = @'
-from Data.Engine.services.crypto import certificates
+from Data.Engine.security import certificates
 certificates.ensure_certificate()
+print(certificates.engine_certificates_root())
 '@
         try {
-            & $PythonPath -c $code | Out-Null
+            $output = & $PythonPath -c $code
+            if ($output) {
+                $raw = $output | Select-Object -Last 1
+                if ($raw) {
+                    $effectiveRoot = ([string]$raw).Trim()
+                }
+            }
         } catch {
             Write-Host "Failed to pre-generate Engine TLS certificates: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
-    $env:BOREALIS_CERT_DIR   = $CertificateRoot
-    $env:BOREALIS_TLS_CERT   = Join-Path $CertificateRoot 'borealis-server-cert.pem'
-    $env:BOREALIS_TLS_KEY    = Join-Path $CertificateRoot 'borealis-server-key.pem'
-    $env:BOREALIS_TLS_BUNDLE = Join-Path $CertificateRoot 'borealis-server-bundle.pem'
+    if (-not $effectiveRoot -and $CertificateRoot) {
+        $effectiveRoot = $CertificateRoot
+    }
+
+    if (-not $effectiveRoot) {
+        $effectiveRoot = Join-Path $scriptDir 'Engine\Certificates'
+    }
+
+    if (-not (Test-Path $effectiveRoot)) {
+        New-Item -Path $effectiveRoot -ItemType Directory -Force | Out-Null
+    }
+
+    $env:BOREALIS_CERT_DIR   = $effectiveRoot
+    $env:BOREALIS_TLS_CERT   = Join-Path $effectiveRoot 'borealis-server-cert.pem'
+    $env:BOREALIS_TLS_KEY    = Join-Path $effectiveRoot 'borealis-server-key.pem'
+    $env:BOREALIS_TLS_BUNDLE = Join-Path $effectiveRoot 'borealis-server-bundle.pem'
 }
 
 function Ensure-EngineWebInterface {
