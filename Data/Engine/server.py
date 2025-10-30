@@ -124,6 +124,7 @@ class EngineContext:
     database_path: str
     logger: logging.Logger
     scheduler: Any
+    socketio: Optional[Any]
     tls_cert_path: Optional[str]
     tls_key_path: Optional[str]
     tls_bundle_path: Optional[str]
@@ -140,6 +141,7 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         database_path=settings.database_path,
         logger=logger,
         scheduler=None,
+        socketio=None,
         tls_cert_path=settings.tls_cert_path,
         tls_key_path=settings.tls_key_path,
         tls_bundle_path=settings.tls_bundle_path,
@@ -206,6 +208,7 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
     )
 
     context = _build_engine_context(settings, logger)
+    context.socketio = socketio
 
     api_logger = logging.getLogger("borealis.engine.api")
     if not api_logger.handlers:

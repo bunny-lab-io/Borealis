@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, MutableMapping, Opti
 
 from flask import Blueprint, jsonify, request
 
+from . import execution as assemblies_execution
+
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
 
@@ -726,4 +728,5 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
         return jsonify(response), status
 
     app.register_blueprint(blueprint)
+    assemblies_execution.register_execution(app, adapters)
 
