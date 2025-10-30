@@ -51,15 +51,35 @@ def _scripts_root() -> Path:
     return scripts_dir.resolve()
 
 
-def _is_valid_scripts_relpath(rel_path: str) -> bool:
-    try:
-        normalized = (rel_path or "").replace("\\", "/").lstrip("/")
-        if not normalized:
-            return False
-        top = normalized.split("/", 1)[0]
-        return top in {"Scripts"}
-    except Exception:
-        return False
+def _normalize_script_relpath(rel_path: Any) -> Optional[str]:
+    """Return a canonical Scripts-relative path or ``None`` when invalid."""
+
+    if not isinstance(rel_path, str):
+        return None
+
+    raw = rel_path.replace("\\", "/").strip()
+    if not raw:
+        return None
+
+    segments: List[str] = []
+    for part in raw.split("/"):
+        candidate = part.strip()
+        if not candidate or candidate == ".":
+            continue
+        if candidate == "..":
+            return None
+        segments.append(candidate)
+
+    if not segments:
+        return None
+
+    first = segments[0]
+    if first.lower() != "scripts":
+        segments.insert(0, "Scripts")
+    else:
+        segments[0] = "Scripts"
+
+    return "/".join(segments)
 
 
 def _decode_base64_text(value: Any) -> Optional[str]:
@@ -370,25 +390,26 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
     @blueprint.route("/api/scripts/quick_run", methods=["POST"])
     def scripts_quick_run():
         data = request.get_json(silent=True) or {}
-        rel_path = (data.get("script_path") or "").strip()
+        rel_path_input = data.get("script_path")
+        rel_path_normalized = _normalize_script_relpath(rel_path_input)
         hostnames = _normalize_hostnames(data.get("hostnames"))
         run_mode = (data.get("run_mode") or "system").strip().lower()
+        admin_user = str(data.get("admin_user") or "").strip()
+        admin_pass = str(data.get("admin_pass") or "").strip()
 
-        if not rel_path or not hostnames:
+        if not rel_path_normalized or not hostnames:
             return jsonify({"error": "Missing script_path or hostnames[]"}), 400
 
-        if not _is_valid_scripts_relpath(rel_path):
-            return jsonify({"error": "Script not found"}), 404
+        rel_path_canonical = rel_path_normalized
 
         try:
             scripts_root = _scripts_root()
             assemblies_root = scripts_root.parent.resolve()
-            rel_target = rel_path.replace("\\", "/").lstrip("/")
-            abs_path = (assemblies_root / rel_target).resolve()
+            abs_path = (assemblies_root / rel_path_canonical).resolve()
         except Exception as exc:  # pragma: no cover - defensive guard
             service_log(
                 "assemblies",
-                f"quick job failed to resolve script path={rel_path}: {exc}",
+                f"quick job failed to resolve script path={rel_path_input!r}: {exc}",
                 level="ERROR",
             )
             return jsonify({"error": "Failed to resolve script path"}), 500
@@ -401,6 +422,11 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
             within_scripts = False
 
         if not within_scripts or not os.path.isfile(abs_path_str):
+            service_log(
+                "assemblies",
+                f"quick job requested missing or out-of-scope script input={rel_path_input!r} normalized={rel_path_canonical}",
+                level="WARNING",
+            )
             return jsonify({"error": "Script not found"}), 404
 
         doc = _load_assembly_document(abs_path, "powershell")
@@ -465,7 +491,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     """,
                     (
                         host,
-                        rel_path.replace(os.sep, "/"),
+                        rel_path_canonical.replace(os.sep, "/"),
                         friendly_name,
                         script_type,
                         now,
@@ -482,7 +508,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     "target_hostname": host,
                     "script_type": script_type,
                     "script_name": friendly_name,
-                    "script_path": rel_path.replace(os.sep, "/"),
+                    "script_path": rel_path_canonical.replace(os.sep, "/"),
                     "script_content": encoded_content,
                     "script_encoding": "base64",
                     "environment": env_map,
@@ -490,6 +516,8 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     "timeout_seconds": timeout_seconds,
                     "files": doc.get("files") if isinstance(doc.get("files"), list) else [],
                     "run_mode": run_mode,
+                    "admin_user": admin_user,
+                    "admin_pass": admin_pass,
                 }
                 if signature_b64:
                     payload["signature"] = signature_b64
