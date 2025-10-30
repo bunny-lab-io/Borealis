@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from flask.testing import FlaskClient
 
 from Data.Engine.crypto import keys as crypto_keys
+from Data.Engine.database import initialise_engine_database
 
 from .conftest import EngineTestHarness
 
@@ -32,7 +33,9 @@ def _iso(dt: datetime) -> str:
 
 def _seed_install_code(db_path: os.PathLike[str], code: str) -> str:
     record_id = str(uuid.uuid4())
-    expires_at = _iso(_now() + timedelta(days=1))
+    baseline = _now()
+    issued_at = _iso(baseline)
+    expires_at = _iso(baseline + timedelta(days=1))
     with sqlite3.connect(str(db_path)) as conn:
         conn.execute(
             """
@@ -41,6 +44,40 @@ def _seed_install_code(db_path: os.PathLike[str], code: str) -> str:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (record_id, code, expires_at, None, None, 1, 0, None),
+        )
+        conn.execute(
+            """
+            INSERT INTO enrollment_install_codes_persistent (
+                id,
+                code,
+                created_at,
+                expires_at,
+                created_by_user_id,
+                used_at,
+                used_by_guid,
+                max_uses,
+                last_known_use_count,
+                last_used_at,
+                is_active,
+                archived_at,
+                consumed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record_id,
+                code,
+                issued_at,
+                expires_at,
+                "test-suite",
+                None,
+                None,
+                1,
+                0,
+                None,
+                1,
+                None,
+                None,
+            ),
         )
         conn.commit()
     return record_id
@@ -193,6 +230,15 @@ def test_enrollment_poll_finalizes_when_approved(engine_harness: EngineTestHarne
             (final_guid,),
         )
         key_count = cur.fetchone()[0]
+        cur.execute(
+            """
+            SELECT is_active, last_known_use_count, used_by_guid, consumed_at
+              FROM enrollment_install_codes_persistent
+             WHERE id = ?
+            """,
+            (install_code_id,),
+        )
+        persistent_row = cur.fetchone()
 
     assert approval_row is not None
     approval_guid, approval_status = approval_row
@@ -211,3 +257,75 @@ def test_enrollment_poll_finalizes_when_approved(engine_harness: EngineTestHarne
     assert use_count == 1
     assert used_by_guid == final_guid
     assert key_count == 1
+    assert persistent_row is not None
+    is_active, last_known_use_count, persistent_guid, consumed_at = persistent_row
+    assert is_active == 0
+    assert last_known_use_count == 1
+    assert persistent_guid == final_guid
+    assert consumed_at is not None
+
+
+def test_persistent_enrollment_codes_restore_active_table(engine_harness: EngineTestHarness) -> None:
+    harness = engine_harness
+    code_id = str(uuid.uuid4())
+    baseline = _now()
+    issued_iso = _iso(baseline)
+    expires_iso = _iso(baseline + timedelta(hours=4))
+
+    with sqlite3.connect(str(harness.db_path)) as conn:
+        conn.execute("DELETE FROM enrollment_install_codes")
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO enrollment_install_codes_persistent (
+                id,
+                code,
+                created_at,
+                expires_at,
+                created_by_user_id,
+                used_at,
+                used_by_guid,
+                max_uses,
+                last_known_use_count,
+                last_used_at,
+                is_active,
+                archived_at,
+                consumed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                code_id,
+                "RESTORE-CODE-001",
+                issued_iso,
+                expires_iso,
+                "restorer",
+                None,
+                None,
+                3,
+                0,
+                None,
+                1,
+                None,
+                None,
+            ),
+        )
+        conn.commit()
+
+    initialise_engine_database(str(harness.db_path))
+
+    with sqlite3.connect(str(harness.db_path)) as conn:
+        cur = conn.execute(
+            """
+            SELECT code, expires_at, max_uses, use_count
+              FROM enrollment_install_codes
+             WHERE id = ?
+            """,
+            (code_id,),
+        )
+        row = cur.fetchone()
+
+    assert row is not None
+    restored_code, restored_expires, restored_max_uses, restored_use_count = row
+    assert restored_code == "RESTORE-CODE-001"
+    assert restored_expires == expires_iso
+    assert restored_max_uses == 3
+    assert restored_use_count == 0

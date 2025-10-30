@@ -69,6 +69,21 @@ CREATE TABLE IF NOT EXISTS enrollment_install_codes (
     use_count INTEGER,
     last_used_at TEXT
 );
+CREATE TABLE IF NOT EXISTS enrollment_install_codes_persistent (
+    id TEXT PRIMARY KEY,
+    code TEXT UNIQUE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_by_user_id TEXT,
+    used_at TEXT,
+    used_by_guid TEXT,
+    max_uses INTEGER NOT NULL DEFAULT 1,
+    last_known_use_count INTEGER NOT NULL DEFAULT 0,
+    last_used_at TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    archived_at TEXT,
+    consumed_at TEXT
+);
 CREATE TABLE IF NOT EXISTS device_approvals (
     id TEXT PRIMARY KEY,
     approval_reference TEXT UNIQUE,

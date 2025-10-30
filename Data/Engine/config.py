@@ -24,7 +24,7 @@ environment variables prefixed with ``BOREALIS_``, and finally built-in
 defaults that mirror the legacy server runtime.  Key environment variables are
 
 ``BOREALIS_DATABASE_PATH``  path to the SQLite database file.  Defaults to
-the Engine runtime copy under ``<ProjectRoot>/Engine/Data/Engine/database.db``.
+``<ProjectRoot>/Engine/database.db`` so data persists across Engine redeploys.
 ``BOREALIS_CORS_ORIGINS``   comma separated list of allowed origins for CORS.
 ``BOREALIS_SECRET``         Flask session secret key.
 ``BOREALIS_COOKIE_*``       Session cookie policies (``SAMESITE``, ``SECURE``,
@@ -72,7 +72,7 @@ def _discover_project_root() -> Path:
 
 
 PROJECT_ROOT = _discover_project_root()
-DEFAULT_DATABASE_PATH = PROJECT_ROOT / "Engine" / "Data" / "Engine" / "database.db"
+DEFAULT_DATABASE_PATH = PROJECT_ROOT / "Engine" / "database.db"
 LOG_ROOT = PROJECT_ROOT / "Engine" / "Logs"
 LOG_FILE_PATH = LOG_ROOT / "engine.log"
 ERROR_LOG_FILE_PATH = LOG_ROOT / "error.log"

@@ -1432,15 +1432,46 @@ switch ($choice) {
                 New-Item -Path $engineDataRoot -ItemType Directory -Force | Out-Null
             }
 
-            if (Test-Path (Join-Path $scriptDir $engineDataDestination)) {
-                Remove-Item (Join-Path $scriptDir $engineDataDestination) -Recurse -Force -ErrorAction SilentlyContinue
+            $engineDataAbsolute = Join-Path $scriptDir $engineDataDestination
+
+            $runtimeAssemblies = Join-Path $scriptDir 'Engine\Assemblies'
+            $sourceAssemblies  = Join-Path $engineSourceAbsolute 'Assemblies'
+
+            $runtimeDatabase   = Join-Path $scriptDir 'Engine\database.db'
+
+            $runtimeAuthTokens = Join-Path $scriptDir 'Engine\Auth_Tokens'
+
+            if (Test-Path $engineDataAbsolute) {
+                Remove-Item $engineDataAbsolute -Recurse -Force -ErrorAction SilentlyContinue
             }
-            New-Item -Path (Join-Path $scriptDir $engineDataDestination) -ItemType Directory -Force | Out-Null
+            New-Item -Path $engineDataAbsolute -ItemType Directory -Force | Out-Null
 
             if (-not (Test-Path $engineSourceAbsolute)) {
                 throw "Engine source directory '$engineSourceAbsolute' not found."
             }
-            Copy-Item (Join-Path $engineSourceAbsolute '*') (Join-Path $scriptDir $engineDataDestination) -Recurse -Force
+            Get-ChildItem -Path $engineSourceAbsolute -Force | ForEach-Object {
+                if ($_.Name -ieq 'Assemblies') {
+                    return
+                }
+                Copy-Item -Path $_.FullName -Destination $engineDataAbsolute -Recurse -Force
+            }
+
+            if (-not (Test-Path $runtimeAssemblies) -and (Test-Path $sourceAssemblies)) {
+                Copy-Item -Path $sourceAssemblies -Destination $runtimeAssemblies -Recurse -Force
+            } elseif (-not (Test-Path $runtimeAssemblies)) {
+                New-Item -Path $runtimeAssemblies -ItemType Directory -Force | Out-Null
+            }
+
+            if (-not (Test-Path $runtimeAuthTokens)) {
+                New-Item -Path $runtimeAuthTokens -ItemType Directory -Force | Out-Null
+            }
+
+            if (-not (Test-Path $runtimeDatabase)) {
+                $runtimeDatabaseDir = Split-Path -Path $runtimeDatabase -Parent
+                if (-not (Test-Path $runtimeDatabaseDir)) {
+                    New-Item -Path $runtimeDatabaseDir -ItemType Directory -Force | Out-Null
+                }
+            }
 
             . (Join-Path $venvFolder 'Scripts\Activate')
         }

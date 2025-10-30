@@ -681,6 +681,32 @@ def register(
                         enrollment_code_id,
                     ),
                 )
+                cur.execute(
+                    """
+                    UPDATE enrollment_install_codes_persistent
+                       SET last_known_use_count = ?,
+                           used_by_guid = ?,
+                           last_used_at = ?,
+                           used_at = CASE WHEN ? THEN ? ELSE used_at END,
+                           is_active = CASE WHEN ? THEN 0 ELSE is_active END,
+                           consumed_at = CASE WHEN ? THEN COALESCE(consumed_at, ?) ELSE consumed_at END,
+                           archived_at = CASE WHEN ? THEN COALESCE(archived_at, ?) ELSE archived_at END
+                     WHERE id = ?
+                    """,
+                    (
+                        new_count,
+                        effective_guid,
+                        now_iso,
+                        1 if consumed else 0,
+                        now_iso,
+                        1 if consumed else 0,
+                        1 if consumed else 0,
+                        now_iso,
+                        1 if consumed else 0,
+                        now_iso,
+                        enrollment_code_id,
+                    ),
+                )
 
             # Update approval record with final state
             cur.execute(

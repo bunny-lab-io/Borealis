@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 import eventlet
 from flask_socketio import SocketIO
@@ -31,6 +31,27 @@ def _run_once(db_conn_factory: Callable[[], any], log: Callable[[str, str, Optio
     conn = db_conn_factory()
     try:
         cur = conn.cursor()
+        persistent_table_exists = False
+        try:
+            cur.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='enrollment_install_codes_persistent'"
+            )
+            persistent_table_exists = cur.fetchone() is not None
+        except Exception:
+            persistent_table_exists = False
+
+        expired_ids: List[str] = []
+        if persistent_table_exists:
+            cur.execute(
+                """
+                SELECT id
+                  FROM enrollment_install_codes
+                 WHERE use_count = 0
+                   AND expires_at < ?
+                """,
+                (now_iso,),
+            )
+            expired_ids = [str(row[0]) for row in cur.fetchall() if row and row[0]]
         cur.execute(
             """
             DELETE FROM enrollment_install_codes
@@ -40,6 +61,21 @@ def _run_once(db_conn_factory: Callable[[], any], log: Callable[[str, str, Optio
             (now_iso,),
         )
         codes_pruned = cur.rowcount or 0
+        if expired_ids:
+            placeholders = ",".join("?" for _ in expired_ids)
+            try:
+                cur.execute(
+                    f"""
+                    UPDATE enrollment_install_codes_persistent
+                       SET is_active = 0,
+                           archived_at = COALESCE(archived_at, ?)
+                     WHERE id IN ({placeholders})
+                    """,
+                    (now_iso, *expired_ids),
+                )
+            except Exception:
+                # Best-effort archival; continue if the persistence table is absent.
+                pass
 
         cur.execute(
             """

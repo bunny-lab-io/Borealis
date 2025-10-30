@@ -45,6 +45,7 @@ def initialise_engine_database(database_path: str, *, logger: Optional[logging.L
     conn = sqlite3.connect(str(path))
     try:
         _apply_legacy_migrations(conn, logger=logger)
+        _restore_persisted_enrollment_codes(conn, logger=logger)
         _ensure_activity_history(conn, logger=logger)
         _ensure_device_list_views(conn, logger=logger)
         _ensure_sites(conn, logger=logger)
@@ -77,6 +78,58 @@ def _apply_legacy_migrations(conn: sqlite3.Connection, *, logger: Optional[loggi
             logger.error("Legacy schema migration failed: %s", exc, exc_info=True)
         else:  # pragma: no cover - escalated in tests if logger absent
             raise
+
+
+def _restore_persisted_enrollment_codes(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='enrollment_install_codes_persistent'"
+        )
+        if cur.fetchone() is None:
+            return
+        cur.execute(
+            """
+            INSERT INTO enrollment_install_codes (
+                id,
+                code,
+                expires_at,
+                created_by_user_id,
+                used_at,
+                used_by_guid,
+                max_uses,
+                use_count,
+                last_used_at
+            )
+            SELECT
+                p.id,
+                p.code,
+                p.expires_at,
+                p.created_by_user_id,
+                p.used_at,
+                p.used_by_guid,
+                p.max_uses,
+                p.last_known_use_count,
+                p.last_used_at
+              FROM enrollment_install_codes_persistent AS p
+             WHERE p.is_active = 1
+            ON CONFLICT(id) DO UPDATE
+                  SET code = excluded.code,
+                      expires_at = excluded.expires_at,
+                      created_by_user_id = excluded.created_by_user_id,
+                      used_at = excluded.used_at,
+                      used_by_guid = excluded.used_by_guid,
+                      max_uses = excluded.max_uses,
+                      use_count = excluded.use_count,
+                      last_used_at = excluded.last_used_at
+            """
+        )
+        conn.commit()
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to restore enrollment codes from persistence: %s", exc, exc_info=True)
+    finally:
+        cur.close()
 
 
 def _ensure_activity_history(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:

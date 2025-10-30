@@ -27,6 +27,7 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_device_aux_tables(conn)
     _ensure_refresh_token_table(conn)
     _ensure_install_code_table(conn)
+    _ensure_install_code_persistence_table(conn)
     _ensure_device_approval_table(conn)
 
     conn.commit()
@@ -185,6 +186,92 @@ def _ensure_install_code_table(conn: sqlite3.Connection) -> None:
         cur.execute(
             """
             ALTER TABLE enrollment_install_codes
+                ADD COLUMN last_used_at TEXT
+            """
+        )
+
+
+def _ensure_install_code_persistence_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS enrollment_install_codes_persistent (
+            id TEXT PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_by_user_id TEXT,
+            used_at TEXT,
+            used_by_guid TEXT,
+            max_uses INTEGER NOT NULL DEFAULT 1,
+            last_known_use_count INTEGER NOT NULL DEFAULT 0,
+            last_used_at TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            archived_at TEXT,
+            consumed_at TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_eicp_active
+            ON enrollment_install_codes_persistent(is_active, expires_at)
+        """
+    )
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_eicp_code
+            ON enrollment_install_codes_persistent(code)
+        """
+    )
+
+    columns = {row[1] for row in _table_info(cur, "enrollment_install_codes_persistent")}
+    if "last_known_use_count" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes_persistent
+                ADD COLUMN last_known_use_count INTEGER NOT NULL DEFAULT 0
+            """
+        )
+    if "archived_at" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes_persistent
+                ADD COLUMN archived_at TEXT
+            """
+        )
+    if "consumed_at" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes_persistent
+                ADD COLUMN consumed_at TEXT
+            """
+        )
+    if "is_active" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes_persistent
+                ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1
+            """
+        )
+    if "used_at" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes_persistent
+                ADD COLUMN used_at TEXT
+            """
+        )
+    if "used_by_guid" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes_persistent
+                ADD COLUMN used_by_guid TEXT
+            """
+        )
+    if "last_used_at" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes_persistent
                 ADD COLUMN last_used_at TEXT
             """
         )

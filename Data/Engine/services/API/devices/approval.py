@@ -244,7 +244,8 @@ class AdminDeviceService:
             cur = conn.cursor()
             created_by = self._lookup_user_id(cur, username) or username or "system"
             code_value = _generate_install_code()
-            expires_at = _now() + timedelta(hours=ttl_hours)
+            issued_at = _now()
+            expires_at = issued_at + timedelta(hours=ttl_hours)
             record_id = str(uuid.uuid4())
             cur.execute(
                 """
@@ -254,6 +255,40 @@ class AdminDeviceService:
                 VALUES (?, ?, ?, ?, ?, 0)
                 """,
                 (record_id, code_value, _iso(expires_at), created_by, max_uses),
+            )
+            cur.execute(
+                """
+                INSERT INTO enrollment_install_codes_persistent (
+                    id,
+                    code,
+                    created_at,
+                    expires_at,
+                    created_by_user_id,
+                    used_at,
+                    used_by_guid,
+                    max_uses,
+                    last_known_use_count,
+                    last_used_at,
+                    is_active,
+                    archived_at,
+                    consumed_at
+                )
+                VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 0, NULL, 1, NULL, NULL)
+                ON CONFLICT(id) DO UPDATE
+                      SET code = excluded.code,
+                          created_at = excluded.created_at,
+                          expires_at = excluded.expires_at,
+                          created_by_user_id = excluded.created_by_user_id,
+                          max_uses = excluded.max_uses,
+                          last_known_use_count = 0,
+                          used_at = NULL,
+                          used_by_guid = NULL,
+                          last_used_at = NULL,
+                          is_active = 1,
+                          archived_at = NULL,
+                          consumed_at = NULL
+                """,
+                (record_id, code_value, _iso(issued_at), _iso(expires_at), created_by, max_uses),
             )
             conn.commit()
         finally:
@@ -284,6 +319,17 @@ class AdminDeviceService:
                 (code_id,),
             )
             deleted = cur.rowcount
+            if deleted:
+                archive_ts = _iso(_now())
+                cur.execute(
+                    """
+                    UPDATE enrollment_install_codes_persistent
+                       SET is_active = 0,
+                           archived_at = COALESCE(archived_at, ?)
+                     WHERE id = ?
+                    """,
+                    (archive_ts, code_id),
+                )
             conn.commit()
         finally:
             conn.close()

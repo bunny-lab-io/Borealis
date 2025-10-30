@@ -1,6 +1,6 @@
 # ======================================================
 # Data\Engine\auth\jwt_service.py
-# Description: Engine-native JWT access-token helpers with signing key storage under Engine/Data/Auth_Tokens.
+# Description: Engine-native JWT access-token helpers with signing key storage under Engine/Auth_Tokens.
 #
 # API Endpoints (if applicable): None
 # ======================================================
@@ -53,7 +53,7 @@ def _token_root() -> Path:
     if env:
         env.mkdir(parents=True, exist_ok=True)
         return env
-    root = _engine_runtime_root() / "Data" / "Auth_Tokens"
+    root = _engine_runtime_root() / "Auth_Tokens"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
