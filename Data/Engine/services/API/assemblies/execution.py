@@ -32,25 +32,25 @@ def _assemblies_root() -> Path:
     base = Path(__file__).resolve()
     search_roots = (base, *base.parents)
     for candidate in search_roots:
-        engine_dir = candidate / "Engine"
+        engine_dir: Optional[Path]
+        if candidate.name.lower() == "engine":
+            engine_dir = candidate
+        else:
+            tentative = candidate / "Engine"
+            engine_dir = tentative if tentative.is_dir() else None
+        if not engine_dir:
+            continue
         assemblies_dir = engine_dir / "Assemblies"
         if assemblies_dir.is_dir():
             return assemblies_dir.resolve()
-        direct = candidate / "Assemblies"
-        if direct.is_dir():
-            return direct.resolve()
-    raise RuntimeError(
-        "Engine assemblies directory not found; expected <ProjectRoot>/Engine/Assemblies or Data/Engine/Assemblies."
-    )
+    raise RuntimeError("Engine assemblies directory not found; expected Engine/Assemblies.")
 
 
 def _scripts_root() -> Path:
     assemblies_root = _assemblies_root()
     scripts_dir = assemblies_root / "Scripts"
     if not scripts_dir.is_dir():
-        raise RuntimeError(
-            "Engine scripts directory not found; expected <Assemblies>/Scripts under Engine/Assemblies or Data/Engine/Assemblies."
-        )
+        raise RuntimeError("Engine scripts directory not found; expected Engine/Assemblies/Scripts.")
     return scripts_dir.resolve()
 
 
