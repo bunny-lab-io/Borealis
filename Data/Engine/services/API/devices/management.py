@@ -96,6 +96,25 @@ def _status_from_last_seen(last_seen: Optional[int]) -> str:
     return "Offline"
 
 
+def _normalize_service_mode(value: Any, agent_id: Optional[str] = None) -> str:
+    try:
+        text = str(value or "").strip().lower()
+    except Exception:
+        text = ""
+    if not text and agent_id:
+        try:
+            aid = agent_id.lower()
+            if "-svc-" in aid or aid.endswith("-svc"):
+                return "system"
+        except Exception:
+            pass
+    if text in {"system", "svc", "service", "system_service"}:
+        return "system"
+    if text in {"interactive", "currentuser", "user", "current_user"}:
+        return "currentuser"
+    return "currentuser"
+
+
 def _is_internal_request(remote_addr: Optional[str]) -> bool:
     addr = (remote_addr or "").strip()
     if not addr:
@@ -793,6 +812,76 @@ class DeviceManagementService:
             return {"devices": devices}, 200
         except Exception as exc:
             self.logger.debug("Failed to list devices", exc_info=True)
+            return {"error": str(exc)}, 500
+
+    def list_agents(self) -> Tuple[Dict[str, Any], int]:
+        try:
+            devices = self._fetch_devices(only_agents=True)
+            grouped: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            now = time.time()
+            for record in devices:
+                hostname = (record.get("hostname") or "").strip() or "unknown"
+                agent_id = (record.get("agent_id") or "").strip()
+                mode = _normalize_service_mode(record.get("service_mode"), agent_id)
+                if mode != "currentuser":
+                    lowered = agent_id.lower()
+                    if lowered.endswith("-script"):
+                        continue
+                last_seen_raw = record.get("last_seen") or 0
+                try:
+                    last_seen = int(last_seen_raw)
+                except Exception:
+                    last_seen = 0
+                collector_active = bool(last_seen and (now - float(last_seen)) < 130)
+                agent_guid = normalize_guid(record.get("agent_guid")) if record.get("agent_guid") else ""
+                status_value = record.get("status")
+                if status_value in (None, ""):
+                    status = "Online" if collector_active else "Offline"
+                else:
+                    status = str(status_value)
+                payload = {
+                    "hostname": hostname,
+                    "agent_hostname": hostname,
+                    "service_mode": mode,
+                    "collector_active": collector_active,
+                    "collector_active_ts": last_seen,
+                    "last_seen": last_seen,
+                    "status": status,
+                    "agent_id": agent_id,
+                    "agent_guid": agent_guid or "",
+                    "agent_hash": record.get("agent_hash") or "",
+                    "connection_type": record.get("connection_type") or "",
+                    "connection_endpoint": record.get("connection_endpoint") or "",
+                    "device_type": record.get("device_type") or "",
+                    "domain": record.get("domain") or "",
+                    "external_ip": record.get("external_ip") or "",
+                    "internal_ip": record.get("internal_ip") or "",
+                    "last_reboot": record.get("last_reboot") or "",
+                    "last_user": record.get("last_user") or "",
+                    "operating_system": record.get("operating_system") or "",
+                    "uptime": record.get("uptime") or 0,
+                    "site_id": record.get("site_id"),
+                    "site_name": record.get("site_name") or "",
+                    "site_description": record.get("site_description") or "",
+                }
+                bucket = grouped.setdefault(hostname, {})
+                existing = bucket.get(mode)
+                if not existing or last_seen >= existing.get("last_seen", 0):
+                    bucket[mode] = payload
+
+            agents: Dict[str, Dict[str, Any]] = {}
+            for bucket in grouped.values():
+                for payload in bucket.values():
+                    agent_key = payload.get("agent_id") or payload.get("agent_guid")
+                    if not agent_key:
+                        agent_key = f"{payload['hostname']}|{payload['service_mode']}"
+                    if not payload.get("agent_id"):
+                        payload["agent_id"] = agent_key
+                    agents[agent_key] = payload
+
+            return {"agents": agents}, 200
+        except Exception as exc:
+            self.logger.debug("Failed to list agents", exc_info=True)
             return {"error": str(exc)}, 500
 
     def get_device_by_guid(self, guid: str) -> Tuple[Dict[str, Any], int]:
@@ -1523,6 +1612,11 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
     @require_device_auth(adapters.device_auth_manager)
     def _agent_details():
         payload, status = service.save_agent_details()
+        return jsonify(payload), status
+
+    @blueprint.route("/api/agents", methods=["GET"])
+    def _list_agents():
+        payload, status = service.list_agents()
         return jsonify(payload), status
 
     @blueprint.route("/api/devices", methods=["GET"])

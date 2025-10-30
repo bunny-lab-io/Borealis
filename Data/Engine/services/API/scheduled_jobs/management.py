@@ -17,7 +17,7 @@
 """Scheduled job management integration for the Borealis Engine runtime."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 try:  # pragma: no cover - legacy module import guard
     import job_scheduler as legacy_job_scheduler  # type: ignore
