@@ -28,26 +28,29 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
 
 
-def _assemblies_root() -> str:
+def _assemblies_root() -> Path:
     base = Path(__file__).resolve()
-    search_roots = (base.parent, *base.parents)
+    search_roots = (base, *base.parents)
     for candidate in search_roots:
+        engine_dir = candidate / "Engine"
+        assemblies_dir = engine_dir / "Assemblies"
+        if assemblies_dir.is_dir():
+            return assemblies_dir.resolve()
         direct = candidate / "Assemblies"
         if direct.is_dir():
-            return str(direct.resolve())
-        engine_dir = candidate / "Engine"
-        if engine_dir.is_dir():
-            assemblies_dir = engine_dir / "Assemblies"
-            if assemblies_dir.is_dir():
-                return str(assemblies_dir.resolve())
-    raise RuntimeError("Engine assemblies directory not found; expected <ProjectRoot>/Data/Engine/Assemblies.")
+            return direct.resolve()
+    raise RuntimeError(
+        "Engine assemblies directory not found; expected <ProjectRoot>/Engine/Assemblies or Data/Engine/Assemblies."
+    )
 
 
 def _scripts_root() -> Path:
-    assemblies_root = Path(_assemblies_root())
+    assemblies_root = _assemblies_root()
     scripts_dir = assemblies_root / "Scripts"
     if not scripts_dir.is_dir():
-        raise RuntimeError("Engine scripts directory not found; expected <Assemblies>/Scripts.")
+        raise RuntimeError(
+            "Engine scripts directory not found; expected <Assemblies>/Scripts under Engine/Assemblies or Data/Engine/Assemblies."
+        )
     return scripts_dir.resolve()
 
 
