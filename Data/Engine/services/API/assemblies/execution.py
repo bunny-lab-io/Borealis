@@ -256,7 +256,8 @@ def rewrite_powershell_script(content: str, literal_lookup: Dict[str, str]) -> s
 
 
 def _load_assembly_document(abs_path: str, default_type: str) -> Dict[str, Any]:
-    base_name = os.path.splitext(os.path.basename(abs_path))[0]
+    abs_path_str = os.fspath(abs_path)
+    base_name = os.path.splitext(os.path.basename(abs_path_str))[0]
     doc: Dict[str, Any] = {
         "name": base_name,
         "description": "",
@@ -267,9 +268,9 @@ def _load_assembly_document(abs_path: str, default_type: str) -> Dict[str, Any]:
         "files": [],
         "timeout_seconds": 3600,
     }
-    if abs_path.lower().endswith(".json") and os.path.isfile(abs_path):
+    if abs_path_str.lower().endswith(".json") and os.path.isfile(abs_path_str):
         try:
-            with open(abs_path, "r", encoding="utf-8") as fh:
+            with open(abs_path_str, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception:
             data = {}
@@ -364,7 +365,7 @@ def _load_assembly_document(abs_path: str, default_type: str) -> Dict[str, Any]:
                 )
         return doc
     try:
-        with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
+        with open(abs_path_str, "r", encoding="utf-8", errors="replace") as fh:
             content = fh.read()
     except Exception:
         content = ""
