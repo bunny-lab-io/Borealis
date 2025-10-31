@@ -546,7 +546,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                 results.append({"hostname": host, "job_id": job_id, "status": "Running"})
                 service_log(
                     "assemblies",
-                    f"quick job queued hostname={host} path={rel_path} run_mode={run_mode}",
+                    f"quick job queued hostname={host} path={rel_path_canonical} run_mode={run_mode}",
                 )
         except Exception as exc:
             if conn is not None:
