@@ -42,6 +42,7 @@ Lastly, everytime that you complete a stage, you will create a pull request name
     - [x] Port enrollment request/poll flows to Engine services and drop legacy imports.
 - [ ] **Stage 7 — Plan WebSocket migration**
   - [ ] Extract Socket.IO handlers into Data/Engine/services/WebSocket.
+    - [x] Ported quick_job_result handler to keep device activity statuses in sync.
   - [ ] Provide register_realtime hook for the Engine factory.
   - [ ] Add integration tests or smoke checks for key events.
   - [ ] Update legacy server to consume Engine WebSocket registration.
