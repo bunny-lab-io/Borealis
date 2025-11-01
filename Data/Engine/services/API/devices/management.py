@@ -29,9 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import ssl
 import sqlite3
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -41,20 +39,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from flask import Blueprint, jsonify, request, session, g
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from ....auth.device_auth import require_device_auth
 from ....auth.guid_utils import normalize_guid
-
-try:
-    import requests  # type: ignore
-except ImportError:  # pragma: no cover - fallback for minimal test environments
-    class _RequestsStub:
-        class RequestException(RuntimeError):
-            """Stand-in exception when the requests module is unavailable."""
-
-        def get(self, *args: Any, **kwargs: Any) -> Any:
-            raise self.RequestException("The 'requests' library is required for repository hash lookups.")
-
-    requests = _RequestsStub()  # type: ignore
+from ....auth.device_auth import require_device_auth
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
@@ -356,257 +342,6 @@ def _device_upsert(
     cur.execute(sql, params)
 
 
-class RepositoryHashCache:
-    """Lightweight GitHub head cache with on-disk persistence."""
-
-    def __init__(self, adapters: "EngineServiceAdapters") -> None:
-        self._db_conn_factory = adapters.db_conn_factory
-        self._service_log = adapters.service_log
-        self._logger = adapters.context.logger
-        config = adapters.context.config or {}
-        default_root = Path(adapters.context.database_path).resolve().parent / "cache"
-        cache_root = Path(config.get("cache_dir") or default_root)
-        cache_root.mkdir(parents=True, exist_ok=True)
-        self._cache_file = cache_root / "repo_hash_cache.json"
-        self._cache: Dict[Tuple[str, str], Tuple[str, float]] = {}
-        self._lock = threading.Lock()
-        self._load_cache()
-
-    def _load_cache(self) -> None:
-        try:
-            if not self._cache_file.is_file():
-                return
-            data = json.loads(self._cache_file.read_text(encoding="utf-8"))
-            entries = data.get("entries") or {}
-            for key, payload in entries.items():
-                sha = payload.get("sha")
-                ts = payload.get("ts")
-                if not sha or ts is None:
-                    continue
-                repo, _, branch = key.partition(":")
-                if not repo or not branch:
-                    continue
-                self._cache[(repo, branch)] = (str(sha), float(ts))
-        except Exception:
-            self._logger.debug("Failed to hydrate repository hash cache", exc_info=True)
-
-    def _persist_cache(self) -> None:
-        try:
-            snapshot = {
-                f"{repo}:{branch}": {"sha": sha, "ts": ts}
-                for (repo, branch), (sha, ts) in self._cache.items()
-                if sha
-            }
-            payload = {"version": 1, "entries": snapshot}
-            tmp_path = self._cache_file.with_suffix(".tmp")
-            tmp_path.write_text(json.dumps(payload), encoding="utf-8")
-            tmp_path.replace(self._cache_file)
-        except Exception:
-            self._logger.debug("Failed to persist repository hash cache", exc_info=True)
-
-    def _resolve_original_ssl_module(self):
-        try:
-            from eventlet import patcher  # type: ignore
-
-            original_ssl = patcher.original("ssl")
-            if original_ssl is not None:
-                return original_ssl
-        except Exception:
-            pass
-
-        module_name = getattr(ssl.SSLContext, "__module__", "")
-        if module_name != "eventlet.green.ssl":
-            return ssl
-        return None
-
-    def _build_requests_session(self):
-        if isinstance(requests, _RequestsStub):
-            return None
-        try:
-            from requests import Session  # type: ignore
-            from requests.adapters import HTTPAdapter  # type: ignore
-        except Exception:
-            return None
-
-        original_ssl = self._resolve_original_ssl_module()
-        if original_ssl is None:
-            return None
-
-        try:
-            context = original_ssl.create_default_context()
-        except Exception:
-            return None
-
-        tls_version = getattr(original_ssl, "TLSVersion", None)
-        if tls_version is not None and hasattr(context, "minimum_version"):
-            try:
-                context.minimum_version = tls_version.TLSv1_2
-            except Exception:
-                pass
-
-        class _ContextAdapter(HTTPAdapter):
-            def init_poolmanager(self, *args, **kwargs):
-                kwargs.setdefault("ssl_context", context)
-                return super().init_poolmanager(*args, **kwargs)
-
-            def proxy_manager_for(self, *args, **kwargs):
-                kwargs.setdefault("ssl_context", context)
-                return super().proxy_manager_for(*args, **kwargs)
-
-        session = Session()
-        adapter = _ContextAdapter()
-        session.mount("https://", adapter)
-        return session
-
-    def _github_token(self, *, force_refresh: bool = False) -> Optional[str]:
-        env_token = (request.headers.get("X-GitHub-Token") or "").strip()
-        if env_token:
-            return env_token
-        token = None
-        if not force_refresh:
-            token = request.headers.get("Authorization")
-            if token and token.lower().startswith("bearer "):
-                return token.split(" ", 1)[1].strip()
-        conn: Optional[sqlite3.Connection] = None
-        try:
-            conn = self._db_conn_factory()
-            cur = conn.cursor()
-            cur.execute("SELECT token FROM github_token LIMIT 1")
-            row = cur.fetchone()
-            if row and row[0]:
-                candidate = str(row[0]).strip()
-                if candidate:
-                    token = candidate
-        except sqlite3.Error:
-            token = None
-        except Exception as exc:
-            self._service_log("server", f"github token lookup failed: {exc}")
-            token = None
-        finally:
-            if conn:
-                conn.close()
-        if token:
-            return token
-        fallback = os.environ.get("BOREALIS_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
-        return fallback.strip() if fallback else None
-
-    def resolve(
-        self,
-        repo: str,
-        branch: str,
-        *,
-        ttl: int = 60,
-        force_refresh: bool = False,
-    ) -> Tuple[Dict[str, Any], int]:
-        ttl = max(30, min(int(ttl or 60), 3600))
-        key = (repo, branch)
-        now = time.time()
-        with self._lock:
-            cached = self._cache.get(key)
-        if cached and not force_refresh:
-            sha, ts = cached
-            if sha and (now - ts) < ttl:
-                return (
-                    {
-                        "repo": repo,
-                        "branch": branch,
-                        "sha": sha,
-                        "cached": True,
-                        "age_seconds": now - ts,
-                        "source": "cache",
-                    },
-                    200,
-                )
-
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "Borealis-Engine",
-        }
-        token = self._github_token(force_refresh=force_refresh)
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
-        sha: Optional[str] = None
-        error: Optional[str] = None
-        session = None
-        try:
-            session = self._build_requests_session()
-        except Exception:
-            session = None
-
-        try:
-            target = session if session is not None else requests
-            resp = target.get(
-                f"https://api.github.com/repos/{repo}/branches/{branch}",
-                headers=headers,
-                timeout=20,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                sha = ((data.get("commit") or {}).get("sha") or "").strip()
-            else:
-                error = f"GitHub head lookup failed: HTTP {resp.status_code}"
-        except RecursionError as exc:
-            error = f"GitHub head lookup recursion error: {exc}"
-        except requests.RequestException as exc:
-            error = f"GitHub head lookup raised: {exc}"
-        except Exception as exc:
-            error = f"GitHub head lookup unexpected error: {exc}"
-        finally:
-            if session is not None:
-                try:
-                    session.close()
-                except Exception:
-                    pass
-
-        if sha:
-            with self._lock:
-                self._cache[key] = (sha, now)
-                self._persist_cache()
-            return (
-                {
-                    "repo": repo,
-                    "branch": branch,
-                    "sha": sha,
-                    "cached": False,
-                    "age_seconds": 0.0,
-                    "source": "github",
-                },
-                200,
-            )
-
-        if error:
-            self._service_log("server", f"/api/repo/current_hash error: {error}")
-
-        if cached:
-            cached_sha, ts = cached
-            return (
-                {
-                    "repo": repo,
-                    "branch": branch,
-                    "sha": cached_sha or None,
-                    "cached": True,
-                    "age_seconds": now - ts,
-                    "error": error or "using cached value",
-                    "source": "cache-stale",
-                },
-                200 if cached_sha else 503,
-            )
-
-        return (
-            {
-                "repo": repo,
-                "branch": branch,
-                "sha": None,
-                "cached": False,
-                "age_seconds": None,
-                "error": error or "unable to resolve repository head",
-                "source": "github",
-            },
-            503,
-        )
-
-
 class DeviceManagementService:
     """Encapsulates database access for device-focused API routes."""
 
@@ -642,7 +377,7 @@ class DeviceManagementService:
         self.db_conn_factory = adapters.db_conn_factory
         self.service_log = adapters.service_log
         self.logger = adapters.context.logger or logging.getLogger(__name__)
-        self.repo_cache = RepositoryHashCache(adapters)
+        self.repo_cache = adapters.github_integration
 
     def _db_conn(self) -> sqlite3.Connection:
         return self.db_conn_factory()
@@ -1554,18 +1289,14 @@ class DeviceManagementService:
             conn.close()
 
     def repo_current_hash(self) -> Tuple[Dict[str, Any], int]:
-        repo = (request.args.get("repo") or "bunny-lab-io/Borealis").strip()
-        branch = (request.args.get("branch") or "main").strip()
         refresh_flag = (request.args.get("refresh") or "").strip().lower()
-        ttl_raw = request.args.get("ttl")
-        if "/" not in repo:
-            return {"error": "repo must be in the form owner/name"}, 400
-        try:
-            ttl = int(ttl_raw) if ttl_raw else 60
-        except ValueError:
-            ttl = 60
         force_refresh = refresh_flag in {"1", "true", "yes", "force", "refresh"}
-        payload, status = self.repo_cache.resolve(repo, branch, ttl=ttl, force_refresh=force_refresh)
+        payload, status = self.repo_cache.current_repo_hash(
+            request.args.get("repo"),
+            request.args.get("branch"),
+            ttl=request.args.get("ttl"),
+            force_refresh=force_refresh,
+        )
         return payload, status
 
     def agent_hash_list(self) -> Tuple[Dict[str, Any], int]:
@@ -1773,4 +1504,3 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
         return jsonify(payload), status
 
     app.register_blueprint(blueprint)
-

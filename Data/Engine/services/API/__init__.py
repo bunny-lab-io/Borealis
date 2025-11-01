@@ -27,6 +27,7 @@ from ...auth.rate_limit import SlidingWindowRateLimiter
 from ...database import initialise_engine_database
 from ...security import signing
 from ...enrollment import NonceCache
+from ...integrations import GitHubIntegration
 from .enrollment import routes as enrollment_routes
 from .tokens import routes as token_routes
 
@@ -151,6 +152,7 @@ class EngineServiceAdapters:
     script_signer: Any = field(init=False)
     service_log: Callable[[str, str, Optional[str]], None] = field(init=False)
     device_auth_manager: DeviceAuthManager = field(init=False)
+    github_integration: GitHubIntegration = field(init=False)
 
     def __post_init__(self) -> None:
         self.db_conn_factory = _make_db_conn_factory(self.context.database_path)
@@ -179,6 +181,32 @@ class EngineServiceAdapters:
             dpop_validator=self.dpop_validator,
             log=self.service_log,
             rate_limiter=self.device_rate_limiter,
+        )
+
+        config = self.context.config or {}
+        cache_root_value = config.get("cache_dir") or config.get("CACHE_DIR")
+        if cache_root_value:
+            cache_root = Path(str(cache_root_value))
+        else:
+            cache_root = Path(self.context.database_path).resolve().parent / "cache"
+        cache_file = cache_root / "repo_hash_cache.json"
+
+        default_repo = config.get("default_repo") or config.get("DEFAULT_REPO")
+        default_branch = config.get("default_branch") or config.get("DEFAULT_BRANCH")
+        ttl_raw = config.get("repo_hash_refresh") or config.get("REPO_HASH_REFRESH")
+        try:
+            default_ttl_seconds = int(ttl_raw) if ttl_raw is not None else None
+        except (TypeError, ValueError):
+            default_ttl_seconds = None
+
+        self.github_integration = GitHubIntegration(
+            cache_file=cache_file,
+            db_conn_factory=self.db_conn_factory,
+            service_log=self.service_log,
+            logger=self.context.logger,
+            default_repo=default_repo,
+            default_branch=default_branch,
+            default_ttl_seconds=default_ttl_seconds,
         )
 
 

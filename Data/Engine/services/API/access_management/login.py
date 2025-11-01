@@ -38,6 +38,7 @@ except Exception:  # pragma: no cover - optional dependency
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from Data.Engine.services.API import EngineServiceAdapters
 
+from .github import register_github_token_management
 from .multi_factor_authentication import register_mfa_management
 from .users import register_user_management
 
@@ -434,4 +435,5 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     app.register_blueprint(blueprint)
     register_user_management(app, adapters)
     register_mfa_management(app, adapters)
+    register_github_token_management(app, adapters)
 
