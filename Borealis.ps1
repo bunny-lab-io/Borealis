@@ -233,31 +233,31 @@ function Ensure-EngineWebInterface {
         [string]$ProjectRoot
     )
 
-    $engineSource = Join-Path $ProjectRoot 'Engine\web-interface'
-    $legacySource = Join-Path $ProjectRoot 'Data\Server\WebUI'
+    $engineDestination = Join-Path $ProjectRoot 'Engine\web-interface'
+    $engineStageSource = Join-Path $ProjectRoot 'Data\Engine\web-interface'
 
-    if (-not (Test-Path $legacySource)) {
-        return
+    if (-not (Test-Path $engineStageSource)) {
+        throw "Engine web interface source missing at '$engineStageSource'."
     }
 
-    $enginePackage = Join-Path $engineSource 'package.json'
-    $engineSrcDir  = Join-Path $engineSource 'src'
+    $enginePackage = Join-Path $engineDestination 'package.json'
+    $engineSrcDir  = Join-Path $engineDestination 'src'
     if ((Test-Path $enginePackage) -and (Test-Path $engineSrcDir)) {
         return
     }
 
-    if (-not (Test-Path $engineSource)) {
-        New-Item -Path $engineSource -ItemType Directory -Force | Out-Null
+    if (-not (Test-Path $engineDestination)) {
+        New-Item -Path $engineDestination -ItemType Directory -Force | Out-Null
     }
 
     $preserve = @('.gitignore','README.md')
-    Get-ChildItem -Path $engineSource -Force | Where-Object { $preserve -notcontains $_.Name } |
+    Get-ChildItem -Path $engineDestination -Force | Where-Object { $preserve -notcontains $_.Name } |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-    Copy-Item (Join-Path $legacySource '*') $engineSource -Recurse -Force
+    Copy-Item (Join-Path $engineStageSource '*') $engineDestination -Recurse -Force
 
     if (-not (Test-Path $enginePackage)) {
-        throw "Failed to stage Engine web interface into '$engineSource'."
+        throw "Failed to stage Engine web interface into '$engineDestination' from '$engineStageSource'."
     }
 }
 
@@ -1415,7 +1415,7 @@ switch ($choice) {
         $dataSource            = "Data"
         $engineSource          = "$dataSource\Engine"
         $engineDataDestination = "$venvFolder\Data\Engine"
-        $webUIFallbackSource   = "$dataSource\Server\web-interface"
+        $webUIFallbackSource   = "$dataSource\Engine\web-interface"
         $webUIDestination      = "$venvFolder\web-interface"
         $venvPython            = Join-Path $venvFolder 'Scripts\python.exe'
         $engineSourceAbsolute  = Join-Path $scriptDir $engineSource

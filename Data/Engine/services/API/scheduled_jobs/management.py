@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-try:  # pragma: no cover - legacy module import guard
-    import job_scheduler as legacy_job_scheduler  # type: ignore
+try:  # pragma: no cover - Engine-local legacy scheduler shim
+    from . import legacy_job_scheduler  # type: ignore
 except Exception as exc:  # pragma: no cover - runtime guard
     legacy_job_scheduler = None  # type: ignore
     _SCHEDULER_IMPORT_ERROR = exc
@@ -36,8 +36,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
 def _raise_scheduler_import() -> None:
     if _SCHEDULER_IMPORT_ERROR is not None:
         raise RuntimeError(
-            "Legacy job scheduler module could not be imported; ensure Data/Server/job_scheduler.py "
-            "remains available during the Engine migration."
+            "Legacy job scheduler module could not be imported; ensure "
+            "Data/Engine/services/API/scheduled_jobs/legacy_job_scheduler.py remains available."
         ) from _SCHEDULER_IMPORT_ERROR
 
 
@@ -79,4 +79,3 @@ def register_management(app: "Flask", adapters: "EngineServiceAdapters") -> None
     """Ensure scheduled job routes are registered via the legacy scheduler."""
 
     ensure_scheduler(app, adapters)
-

@@ -332,20 +332,20 @@ PY
 
 ensure_engine_webui_source() {
   local engineSource="Engine/web-interface"
-  local legacySource="Data/Server/WebUI"
   if [[ -d "${engineSource}/src" && -f "${engineSource}/package.json" ]]; then
     return 0
   fi
-  if [[ ! -d "$legacySource" ]]; then
-    echo "${RED}Legacy WebUI source '$legacySource' not found.${RESET}" >&2
+  local stageSource="Data/Engine/web-interface"
+  if [[ ! -d "$stageSource" ]]; then
+    echo "${RED}Engine web interface source '$stageSource' not found.${RESET}" >&2
     return 1
   fi
   mkdir -p "$engineSource"
   find "$engineSource" -mindepth 1 -maxdepth 1 \
     ! -name '.gitignore' ! -name 'README.md' -exec rm -rf {} +
-  cp -a "$legacySource/." "$engineSource/"
+  cp -a "$stageSource/." "$engineSource/"
   if [[ ! -f "${engineSource}/package.json" ]]; then
-    echo "${RED}Failed to stage Engine web interface into '$engineSource'.${RESET}" >&2
+    echo "${RED}Failed to stage Engine web interface into '$engineSource' from '$stageSource'.${RESET}" >&2
     return 1
   fi
 }

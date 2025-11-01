@@ -1,4 +1,4 @@
-![Borealis Logo](Data/Server/WebUI/public/Borealis_Logo_Full.png)
+![Borealis Logo](Data/Engine/web-interface/public/Borealis_Logo_Full.png)
 
 Borealis is a remote management platform with a simple, visual automation layer, enabling you to leverage scripts, Ansible playbooks, and advanced nodegraph-based automation workflows.  I originally created Borealis to work towards consolidating the core functionality of several standalone automation platforms in my homelab, such as TacticalRMM, Ansible AWX, SemaphoreUI, and a few others. 
 
