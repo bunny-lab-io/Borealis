@@ -2,6 +2,9 @@
 param()
 
 $scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
+$script:BorealisTlsInitialized = $false
+$script:BorealisTrustedThumbprints = @()
+$script:BorealisCallbackApplied = $false
 $symbols = @{
     Success = [char]0x2705
     Running = [char]0x23F3
@@ -223,8 +226,278 @@ function Get-BorealisServerUrl {
         } catch {}
     }
 
-    if (-not $serverBaseUrl) { $serverBaseUrl = 'http://localhost:5000' }
-    return $serverBaseUrl.Trim()
+    if (-not $serverBaseUrl) { $serverBaseUrl = 'https://localhost:5000' }
+
+    $resolved = Resolve-BorealisServerUrl -Url $serverBaseUrl
+    if ([string]::IsNullOrWhiteSpace($resolved)) {
+        return 'https://localhost:5000'
+    }
+
+    return $resolved
+}
+
+function Resolve-BorealisServerUrl {
+    param(
+        [string]$Url
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        return ''
+    }
+
+    $candidate = $Url.Trim()
+    if ($candidate -notmatch '^[A-Za-z][A-Za-z0-9+.-]*://') {
+        $candidate = "https://$candidate"
+    }
+
+    try {
+        $builder = New-Object System.UriBuilder($candidate)
+    } catch {
+        return $candidate.TrimEnd('/')
+    }
+
+    $allowPlaintext = $false
+    try {
+        $allowValue = $env:BOREALIS_ALLOW_PLAINTEXT
+        if ($allowValue) {
+            $normalizedAllow = $allowValue.ToString().Trim().ToLowerInvariant()
+            if ($normalizedAllow -and @('1','true','yes','on') -contains $normalizedAllow) {
+                $allowPlaintext = $true
+            }
+        }
+    } catch {}
+
+    if ($builder.Scheme -eq 'http' -and -not $allowPlaintext) {
+        $hostName = $builder.Host.ToLowerInvariant()
+        if ($hostName -in @('localhost','127.0.0.1','::1')) {
+            $builder.Scheme = 'https'
+            if ($builder.Port -eq -1 -or $builder.Port -eq 80) {
+                $builder.Port = 5000
+            }
+        }
+    }
+
+    return $builder.Uri.AbsoluteUri.TrimEnd('/')
+}
+
+function Get-CertificatesFromPem {
+    param(
+        [string]$Path
+    )
+
+    if (-not $Path -or -not (Test-Path $Path -PathType Leaf)) {
+        return @()
+    }
+
+    $lines = @()
+    try {
+        $lines = Get-Content -Path $Path -ErrorAction Stop
+    } catch {
+        return @()
+    }
+
+    if (-not $lines -or $lines.Count -eq 0) {
+        Write-Verbose ("PEM content at {0} is empty." -f $Path)
+        return @()
+    }
+
+    $collecting = $false
+    $buffer = ''
+    $certificates = @()
+
+    foreach ($line in $lines) {
+        $lineValue = if ($null -ne $line) { $line } else { '' }
+        $trimmed = $lineValue.ToString().Trim()
+        if ($trimmed -eq '-----BEGIN CERTIFICATE-----') {
+            Write-Verbose ("Detected certificate begin marker in {0}." -f $Path)
+            $collecting = $true
+            $buffer = ''
+            continue
+        }
+        if ($trimmed -eq '-----END CERTIFICATE-----') {
+            Write-Verbose ("Detected certificate end marker in {0}; buffer length = {1} characters." -f $Path, $buffer.Length)
+            if ($collecting -and $buffer) {
+                try {
+                    $raw = [Convert]::FromBase64String($buffer)
+                    $cert = $null
+                    try { $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($raw) } catch {}
+                    if (-not $cert) {
+                        try {
+                            $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                                $raw,
+                                '',
+                                [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+                            )
+                        } catch {}
+                    }
+                    if (-not $cert) {
+                        throw "Unable to hydrate X509Certificate2 from PEM fragment."
+                    }
+                    $certificates += $cert
+                    Write-Verbose ("Loaded certificate '{0}' from {1}" -f $cert.Subject, $Path)
+                } catch {
+                    Write-Verbose ("Failed to decode certificate block from {0}: {1}" -f $Path, $_.Exception.Message)
+                }
+            }
+            $collecting = $false
+            $buffer = ''
+            continue
+        }
+        if ($collecting) {
+            $buffer += $trimmed
+        }
+    }
+
+    Write-Verbose ("Discovered {0} certificate(s) in {1}" -f $certificates.Count, $Path)
+    return $certificates
+}
+
+function Ensure-BorealisCertificateValidator {
+    if (-not ('Borealis.Update.CertificateValidator' -as [Type])) {
+        $typeDefinition = @"
+using System;
+using System.Collections.Generic;
+using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+
+namespace Borealis.Update
+{
+    public static class CertificateValidator
+    {
+        private static readonly HashSet<string> _trusted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public static bool AllowLoopback { get; set; } = true;
+
+        public static void ReplaceTrustedThumbprints(string[] thumbprints)
+        {
+            _trusted.Clear();
+            if (thumbprints == null)
+            {
+                return;
+            }
+
+            foreach (var thumb in thumbprints)
+            {
+                if (string.IsNullOrWhiteSpace(thumb))
+                {
+                    continue;
+                }
+
+                _trusted.Add(thumb);
+            }
+        }
+
+        public static bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors)
+        {
+            if (errors == SslPolicyErrors.None)
+            {
+                return true;
+            }
+
+            X509Certificate2 cert2 = certificate as X509Certificate2;
+            if (cert2 == null && certificate != null)
+            {
+                cert2 = new X509Certificate2(certificate);
+            }
+
+            if (cert2 != null && _trusted.Contains(cert2.Thumbprint))
+            {
+                return true;
+            }
+
+            if (chain != null)
+            {
+                foreach (var element in chain.ChainElements)
+                {
+                    if (element.Certificate != null && _trusted.Contains(element.Certificate.Thumbprint))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (AllowLoopback && sender is HttpWebRequest request && request.RequestUri != null)
+            {
+                var host = request.RequestUri.DnsSafeHost;
+                if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+}
+"@
+        Add-Type -TypeDefinition $typeDefinition -Language CSharp -ErrorAction Stop
+    }
+}
+
+function Initialize-BorealisTlsContext {
+    param(
+        [string]$AgentRoot,
+        [string]$ServerBaseUrl
+    )
+
+    if ($script:BorealisTlsInitialized -and $script:BorealisTrustedThumbprints.Count -gt 0) {
+        return
+    }
+
+    $candidatePaths = @()
+    if ($env:BOREALIS_ROOT_CA_PATH) {
+        $candidatePaths += $env:BOREALIS_ROOT_CA_PATH
+    }
+    if ($AgentRoot) {
+        $candidatePaths += (Join-Path $AgentRoot 'Certificates\borealis-root-ca.pem')
+        $candidatePaths += (Join-Path $AgentRoot 'Certificates\engine-root-ca.pem')
+        $candidatePaths += (Join-Path $AgentRoot 'Certificates\borealis-server-bundle.pem')
+    }
+    $candidatePaths += (Join-Path $scriptDir 'Engine\Certificates\borealis-root-ca.pem')
+    $candidatePaths += (Join-Path $scriptDir 'Engine\Certificates\borealis-server-bundle.pem')
+    $candidatePaths += (Join-Path $scriptDir 'Certificates\borealis-root-ca.pem')
+    $candidatePaths += (Join-Path $scriptDir 'Data\Engine\Certificates\borealis-root-ca.pem')
+    $candidatePaths = $candidatePaths | Where-Object { $_ } | Select-Object -Unique
+
+    $trusted = @()
+    foreach ($path in $candidatePaths) {
+        $exists = $false
+        try { $exists = Test-Path $path -PathType Leaf } catch {}
+        Write-Verbose ("Evaluating Borealis TLS candidate: {0} (exists={1})" -f $path, ($exists ? 'true' : 'false'))
+        if (-not $exists) { continue }
+        try {
+            $trusted += Get-CertificatesFromPem -Path $path
+        } catch {}
+    }
+
+    if ($trusted.Count -gt 0) {
+        $script:BorealisTrustedThumbprints = $trusted | ForEach-Object { $_.Thumbprint.ToUpperInvariant() } | Sort-Object -Unique
+        Write-Verbose ("Borealis TLS trust store loaded {0} certificate(s)." -f $script:BorealisTrustedThumbprints.Count)
+    } else {
+        $script:BorealisTrustedThumbprints = @()
+        Write-Verbose "No Borealis TLS certificates located; loopback hosts will be allowed without CA verification."
+    }
+
+    Ensure-BorealisCertificateValidator
+    try {
+        [Borealis.Update.CertificateValidator]::ReplaceTrustedThumbprints($script:BorealisTrustedThumbprints)
+    } catch {}
+
+    try {
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
+    } catch {}
+
+    if (-not $script:BorealisCallbackApplied) {
+        try {
+            $callback = New-Object System.Net.Security.RemoteCertificateValidationCallback([Borealis.Update.CertificateValidator]::Validate)
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $callback
+            $script:BorealisCallbackApplied = $true
+        } catch {}
+    }
+
+    $script:BorealisTlsInitialized = $true
 }
 
 function Get-AgentServiceId {
@@ -628,6 +901,7 @@ function Get-ServerCurrentRepoHash {
         $json = $resp.Content | ConvertFrom-Json
         return $json
     } catch {
+        Write-Verbose ("Get-ServerCurrentRepoHash request to {0} failed: {1}" -f $uri, $_.Exception.Message)
         return $null
     }
 }
@@ -873,6 +1147,7 @@ function Invoke-BorealisAgentUpdate {
     $gitExe = Get-GitExecutablePath -ProjectRoot $scriptDir
     $currentHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot -GitExe $gitExe
     $serverBaseUrl = Get-BorealisServerUrl -AgentRoot $agentRoot
+    Initialize-BorealisTlsContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl
     $agentId = Get-AgentServiceId -AgentRoot $agentRoot
 
     $authContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
