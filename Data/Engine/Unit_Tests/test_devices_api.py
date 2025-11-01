@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from Data.Engine.integrations import github as github_integration
 from Data.Engine.services.API.devices import management as device_management
 
 from .conftest import EngineTestHarness
@@ -98,13 +99,15 @@ def test_repo_current_hash_uses_cache(engine_harness: EngineTestHarness, monkeyp
         def json(self) -> Any:
             return self._payload
 
+    request_exception = getattr(github_integration.requests, "RequestException", RuntimeError)
+
     def fake_get(url: str, headers: Any, timeout: int) -> DummyResponse:
         calls["count"] += 1
         if calls["count"] == 1:
             return DummyResponse(200, {"commit": {"sha": "abc123"}})
-        raise device_management.requests.RequestException("network error")
+        raise request_exception("network error")
 
-    monkeypatch.setattr(device_management.requests, "get", fake_get)
+    monkeypatch.setattr(github_integration.requests, "get", fake_get)
 
     client = engine_harness.app.test_client()
     first = client.get("/api/repo/current_hash?repo=test/test&branch=main")

@@ -229,11 +229,13 @@ export default function Login({ onLogin }) {
                   Scan the QR code with your authenticator app, then enter the 6-digit code to complete setup for {username}.
                 </Typography>
                 {setupQr ? (
-                  <img
-                    src={setupQr}
-                    alt="MFA enrollment QR code"
-                    style={{ width: "180px", height: "180px", marginBottom: "12px" }}
-                  />
+                  <Box sx={{ display: "flex", justifyContent: "center", mb: 1.5 }}>
+                    <img
+                      src={setupQr}
+                      alt="MFA enrollment QR code"
+                      style={{ width: "180px", height: "180px" }}
+                    />
+                  </Box>
                 ) : null}
                 {formattedSecret ? (
                   <Box

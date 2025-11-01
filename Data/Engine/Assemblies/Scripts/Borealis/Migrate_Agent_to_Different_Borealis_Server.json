@@ -15,7 +15,7 @@
       "name": "server_url",
       "label": "Borealis Server URL",
       "type": "string",
-      "default": "https://localhost:5000",
+      "default": "http://localhost:5000",
       "required": true,
       "description": "URL of where the agent is going to reach-out to moving forward."
     }

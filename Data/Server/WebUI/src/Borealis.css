@@ -1,0 +1,252 @@
+/* ///////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Borealis.css
+
+body {
+  font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  background-color: #0b0f19;
+  color: #f5f7fa;
+}
+
+/* ======================================= */
+/* FLOW EDITOR                             */
+/* ======================================= */
+
+/* FlowEditor background container */
+.flow-editor-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Blue Gradient Overlay */
+.flow-editor-container::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    background: linear-gradient(
+        to bottom,
+        rgba(9, 44, 68, 0.9) 0%,
+        rgba(30, 30, 30, 0) 45%,
+        rgba(30, 30, 30, 0) 75%,
+        rgba(9, 44, 68, 0.7) 100%
+    );
+    z-index: -1;
+}
+
+/* helper lines for snapping */
+.helper-line {
+    position: absolute;
+    background: #0074ff;
+    z-index: 10;
+    pointer-events: none;
+  }
+  
+  .helper-line-vertical {
+    width: 1px;
+    height: 100%;
+  }
+  
+  .helper-line-horizontal {
+    height: 1px;
+    width: 100%;
+  }
+
+/* ======================================= */
+/* NODE SIDEBAR                            */
+/* ======================================= */
+
+/* Emphasize Drag & Drop Node Functionality */
+.sidebar-button:hover {
+    background-color: #2a2a2a !important;
+    box-shadow: 0 0 5px rgba(88, 166, 255, 0.3);
+    cursor: grab;
+}
+
+/* ======================================= */
+/* NODES                                   */
+/* ======================================= */
+
+/* Borealis Node Styling */
+.borealis-node {
+    background: linear-gradient(
+        to bottom,
+        #2c2c2c 60%,
+        #232323 100%
+    );
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    color: #ccc;
+    font-size: 12px;
+    min-width: 160px;
+    max-width: 260px;
+    position: relative;
+    box-shadow: 0 0 5px rgba(88, 166, 255, 0.15),
+                0 0 10px rgba(88, 166, 255, 0.15);
+    transition: box-shadow 0.3s ease-in-out;
+}
+.borealis-node::before {
+    content: "";
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 3px;
+    height: 100%;
+    background: linear-gradient(
+        to bottom,
+        var(--borealis-accent, #58a6ff) 0%,
+        var(--borealis-accent-dark, #0475c2) 100%
+    );
+    border-top-left-radius: 4px;
+    border-bottom-left-radius: 4px;
+}
+.borealis-node-header {
+    background: #232323;
+    padding: 6px 10px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    font-weight: bold;
+    color: var(--borealis-title, #58a6ff);
+    font-size: 10px;
+}
+.borealis-node-content {
+    padding: 10px;
+    font-size: 9px;
+}
+.borealis-handle {
+    background: #58a6ff;
+    width: 10px;
+    height: 10px;
+}
+
+/* Global dark form inputs */
+input,
+select,
+button {
+    background-color: #1d1d1d;
+    color: #ccc;
+    border: 1px solid #444;
+    font-size: 12px;
+}
+
+/* Label / Dark Text styling */
+label {
+    color: #aaa;
+    font-size: 9px;
+}
+
+/* Node Header - Shows drag handle cursor */
+.borealis-node-header {
+    cursor: grab;
+}
+
+/* Optional: when actively dragging */
+.borealis-node-header:active {
+    cursor: grabbing;
+}
+
+/* Node Body - Just pointer, not draggable */
+.borealis-node-content {
+    cursor: default;
+}
+
+/* ======================================= */
+/* FLOW TABS                               */
+/* ======================================= */
+
+/* Multi-Tab Bar Adjustments */
+.MuiTabs-root {
+    min-height: 32px !important;
+}
+
+.MuiTab-root {
+    min-height: 32px !important;
+    padding: 6px 12px !important;
+    color: #58a6ff !important;
+    text-transform: none !important;
+}
+
+/* Highlight tab on hover if it's not active */
+.MuiTab-root:hover:not(.Mui-selected) {
+    background-color: #2C2C2C !important;
+}
+
+/* We rely on the TabIndicatorProps to show the underline highlight for active tabs. */
+
+/* ======================================= */
+/* REACT-SIMPLE-KEYBOARD                   */
+/* ======================================= */
+
+/* Make the keyboard max width like the demo */
+.simple-keyboard {
+  max-width: 950px;
+  margin: 0 auto;
+  background: #181c23;
+  border-radius: 8px;
+  padding: 24px 24px 30px 24px;
+  box-shadow: 0 2px 24px 0 #000a;
+}
+
+/* Set dark background and color for the keyboard and its keys */
+.simple-keyboard .hg-button {
+  background: #23262e;
+  color: #b0d0ff;
+  border: 1px solid #333;
+  font-size: 1.1em;
+  min-width: 48px;
+  min-height: 48px;
+  margin: 5px;
+  border-radius: 6px;
+  transition: background 0.1s, color 0.1s;
+  padding-top: 6px;
+  padding-left: 8px;
+}
+
+.simple-keyboard .hg-button[data-skbtn="space"] {
+  min-width: 380px;
+}
+
+.simple-keyboard .hg-button[data-skbtn="tab"],
+.simple-keyboard .hg-button[data-skbtn="caps"],
+.simple-keyboard .hg-button[data-skbtn="shift"],
+.simple-keyboard .hg-button[data-skbtn="enter"],
+.simple-keyboard .hg-button[data-skbtn="bksp"] {
+  min-width: 82px;
+}
+
+.simple-keyboard .hg-button:hover {
+  background: #58a6ff;
+  color: #000;
+  border-color: #58a6ff;
+}
+
+/* Make sure rows aren't squashed */
+.simple-keyboard .hg-row {
+  display: flex !important;
+  flex-flow: row wrap;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+/* Remove any unwanted shrink/stretch */
+.simple-keyboard .hg-button {
+  flex: 0 0 auto;
+}
+
+/* Optional: on-screen keyboard input field (if you ever show it) */
+input[type="text"].simple-keyboard-input {
+  width: 100%;
+  height: 48px;
+  padding: 10px 20px;
+  font-size: 20px;
+  border: none;
+  box-sizing: border-box;
+  background: #181818;
+  color: #f5f7fa;
+  border-radius: 6px;
+  margin-bottom: 20px;
+}

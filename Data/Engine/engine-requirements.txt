@@ -7,4 +7,5 @@ cryptography
 PyJWT[crypto]
 pyotp
 qrcode
+Pillow
 requests

@@ -29,9 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import ssl
 import sqlite3
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -41,20 +39,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from flask import Blueprint, jsonify, request, session, g
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from ....auth.device_auth import require_device_auth
 from ....auth.guid_utils import normalize_guid
-
-try:
-    import requests  # type: ignore
-except ImportError:  # pragma: no cover - fallback for minimal test environments
-    class _RequestsStub:
-        class RequestException(RuntimeError):
-            """Stand-in exception when the requests module is unavailable."""
-
-        def get(self, *args: Any, **kwargs: Any) -> Any:
-            raise self.RequestException("The 'requests' library is required for repository hash lookups.")
-
-    requests = _RequestsStub()  # type: ignore
+from ....auth.device_auth import require_device_auth
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
@@ -94,6 +80,25 @@ def _status_from_last_seen(last_seen: Optional[int]) -> str:
     except Exception:
         pass
     return "Offline"
+
+
+def _normalize_service_mode(value: Any, agent_id: Optional[str] = None) -> str:
+    try:
+        text = str(value or "").strip().lower()
+    except Exception:
+        text = ""
+    if not text and agent_id:
+        try:
+            aid = agent_id.lower()
+            if "-svc-" in aid or aid.endswith("-svc"):
+                return "system"
+        except Exception:
+            pass
+    if text in {"system", "svc", "service", "system_service"}:
+        return "system"
+    if text in {"interactive", "currentuser", "user", "current_user"}:
+        return "currentuser"
+    return "currentuser"
 
 
 def _is_internal_request(remote_addr: Optional[str]) -> bool:
@@ -337,257 +342,6 @@ def _device_upsert(
     cur.execute(sql, params)
 
 
-class RepositoryHashCache:
-    """Lightweight GitHub head cache with on-disk persistence."""
-
-    def __init__(self, adapters: "EngineServiceAdapters") -> None:
-        self._db_conn_factory = adapters.db_conn_factory
-        self._service_log = adapters.service_log
-        self._logger = adapters.context.logger
-        config = adapters.context.config or {}
-        default_root = Path(adapters.context.database_path).resolve().parent / "cache"
-        cache_root = Path(config.get("cache_dir") or default_root)
-        cache_root.mkdir(parents=True, exist_ok=True)
-        self._cache_file = cache_root / "repo_hash_cache.json"
-        self._cache: Dict[Tuple[str, str], Tuple[str, float]] = {}
-        self._lock = threading.Lock()
-        self._load_cache()
-
-    def _load_cache(self) -> None:
-        try:
-            if not self._cache_file.is_file():
-                return
-            data = json.loads(self._cache_file.read_text(encoding="utf-8"))
-            entries = data.get("entries") or {}
-            for key, payload in entries.items():
-                sha = payload.get("sha")
-                ts = payload.get("ts")
-                if not sha or ts is None:
-                    continue
-                repo, _, branch = key.partition(":")
-                if not repo or not branch:
-                    continue
-                self._cache[(repo, branch)] = (str(sha), float(ts))
-        except Exception:
-            self._logger.debug("Failed to hydrate repository hash cache", exc_info=True)
-
-    def _persist_cache(self) -> None:
-        try:
-            snapshot = {
-                f"{repo}:{branch}": {"sha": sha, "ts": ts}
-                for (repo, branch), (sha, ts) in self._cache.items()
-                if sha
-            }
-            payload = {"version": 1, "entries": snapshot}
-            tmp_path = self._cache_file.with_suffix(".tmp")
-            tmp_path.write_text(json.dumps(payload), encoding="utf-8")
-            tmp_path.replace(self._cache_file)
-        except Exception:
-            self._logger.debug("Failed to persist repository hash cache", exc_info=True)
-
-    def _resolve_original_ssl_module(self):
-        try:
-            from eventlet import patcher  # type: ignore
-
-            original_ssl = patcher.original("ssl")
-            if original_ssl is not None:
-                return original_ssl
-        except Exception:
-            pass
-
-        module_name = getattr(ssl.SSLContext, "__module__", "")
-        if module_name != "eventlet.green.ssl":
-            return ssl
-        return None
-
-    def _build_requests_session(self):
-        if isinstance(requests, _RequestsStub):
-            return None
-        try:
-            from requests import Session  # type: ignore
-            from requests.adapters import HTTPAdapter  # type: ignore
-        except Exception:
-            return None
-
-        original_ssl = self._resolve_original_ssl_module()
-        if original_ssl is None:
-            return None
-
-        try:
-            context = original_ssl.create_default_context()
-        except Exception:
-            return None
-
-        tls_version = getattr(original_ssl, "TLSVersion", None)
-        if tls_version is not None and hasattr(context, "minimum_version"):
-            try:
-                context.minimum_version = tls_version.TLSv1_2
-            except Exception:
-                pass
-
-        class _ContextAdapter(HTTPAdapter):
-            def init_poolmanager(self, *args, **kwargs):
-                kwargs.setdefault("ssl_context", context)
-                return super().init_poolmanager(*args, **kwargs)
-
-            def proxy_manager_for(self, *args, **kwargs):
-                kwargs.setdefault("ssl_context", context)
-                return super().proxy_manager_for(*args, **kwargs)
-
-        session = Session()
-        adapter = _ContextAdapter()
-        session.mount("https://", adapter)
-        return session
-
-    def _github_token(self, *, force_refresh: bool = False) -> Optional[str]:
-        env_token = (request.headers.get("X-GitHub-Token") or "").strip()
-        if env_token:
-            return env_token
-        token = None
-        if not force_refresh:
-            token = request.headers.get("Authorization")
-            if token and token.lower().startswith("bearer "):
-                return token.split(" ", 1)[1].strip()
-        conn: Optional[sqlite3.Connection] = None
-        try:
-            conn = self._db_conn_factory()
-            cur = conn.cursor()
-            cur.execute("SELECT token FROM github_token LIMIT 1")
-            row = cur.fetchone()
-            if row and row[0]:
-                candidate = str(row[0]).strip()
-                if candidate:
-                    token = candidate
-        except sqlite3.Error:
-            token = None
-        except Exception as exc:
-            self._service_log("server", f"github token lookup failed: {exc}")
-            token = None
-        finally:
-            if conn:
-                conn.close()
-        if token:
-            return token
-        fallback = os.environ.get("BOREALIS_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
-        return fallback.strip() if fallback else None
-
-    def resolve(
-        self,
-        repo: str,
-        branch: str,
-        *,
-        ttl: int = 60,
-        force_refresh: bool = False,
-    ) -> Tuple[Dict[str, Any], int]:
-        ttl = max(30, min(int(ttl or 60), 3600))
-        key = (repo, branch)
-        now = time.time()
-        with self._lock:
-            cached = self._cache.get(key)
-        if cached and not force_refresh:
-            sha, ts = cached
-            if sha and (now - ts) < ttl:
-                return (
-                    {
-                        "repo": repo,
-                        "branch": branch,
-                        "sha": sha,
-                        "cached": True,
-                        "age_seconds": now - ts,
-                        "source": "cache",
-                    },
-                    200,
-                )
-
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "Borealis-Engine",
-        }
-        token = self._github_token(force_refresh=force_refresh)
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
-        sha: Optional[str] = None
-        error: Optional[str] = None
-        session = None
-        try:
-            session = self._build_requests_session()
-        except Exception:
-            session = None
-
-        try:
-            target = session if session is not None else requests
-            resp = target.get(
-                f"https://api.github.com/repos/{repo}/branches/{branch}",
-                headers=headers,
-                timeout=20,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                sha = ((data.get("commit") or {}).get("sha") or "").strip()
-            else:
-                error = f"GitHub head lookup failed: HTTP {resp.status_code}"
-        except RecursionError as exc:
-            error = f"GitHub head lookup recursion error: {exc}"
-        except requests.RequestException as exc:
-            error = f"GitHub head lookup raised: {exc}"
-        except Exception as exc:
-            error = f"GitHub head lookup unexpected error: {exc}"
-        finally:
-            if session is not None:
-                try:
-                    session.close()
-                except Exception:
-                    pass
-
-        if sha:
-            with self._lock:
-                self._cache[key] = (sha, now)
-                self._persist_cache()
-            return (
-                {
-                    "repo": repo,
-                    "branch": branch,
-                    "sha": sha,
-                    "cached": False,
-                    "age_seconds": 0.0,
-                    "source": "github",
-                },
-                200,
-            )
-
-        if error:
-            self._service_log("server", f"/api/repo/current_hash error: {error}")
-
-        if cached:
-            cached_sha, ts = cached
-            return (
-                {
-                    "repo": repo,
-                    "branch": branch,
-                    "sha": cached_sha or None,
-                    "cached": True,
-                    "age_seconds": now - ts,
-                    "error": error or "using cached value",
-                    "source": "cache-stale",
-                },
-                200 if cached_sha else 503,
-            )
-
-        return (
-            {
-                "repo": repo,
-                "branch": branch,
-                "sha": None,
-                "cached": False,
-                "age_seconds": None,
-                "error": error or "unable to resolve repository head",
-                "source": "github",
-            },
-            503,
-        )
-
-
 class DeviceManagementService:
     """Encapsulates database access for device-focused API routes."""
 
@@ -623,7 +377,7 @@ class DeviceManagementService:
         self.db_conn_factory = adapters.db_conn_factory
         self.service_log = adapters.service_log
         self.logger = adapters.context.logger or logging.getLogger(__name__)
-        self.repo_cache = RepositoryHashCache(adapters)
+        self.repo_cache = adapters.github_integration
 
     def _db_conn(self) -> sqlite3.Connection:
         return self.db_conn_factory()
@@ -793,6 +547,76 @@ class DeviceManagementService:
             return {"devices": devices}, 200
         except Exception as exc:
             self.logger.debug("Failed to list devices", exc_info=True)
+            return {"error": str(exc)}, 500
+
+    def list_agents(self) -> Tuple[Dict[str, Any], int]:
+        try:
+            devices = self._fetch_devices(only_agents=True)
+            grouped: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            now = time.time()
+            for record in devices:
+                hostname = (record.get("hostname") or "").strip() or "unknown"
+                agent_id = (record.get("agent_id") or "").strip()
+                mode = _normalize_service_mode(record.get("service_mode"), agent_id)
+                if mode != "currentuser":
+                    lowered = agent_id.lower()
+                    if lowered.endswith("-script"):
+                        continue
+                last_seen_raw = record.get("last_seen") or 0
+                try:
+                    last_seen = int(last_seen_raw)
+                except Exception:
+                    last_seen = 0
+                collector_active = bool(last_seen and (now - float(last_seen)) < 130)
+                agent_guid = normalize_guid(record.get("agent_guid")) if record.get("agent_guid") else ""
+                status_value = record.get("status")
+                if status_value in (None, ""):
+                    status = "Online" if collector_active else "Offline"
+                else:
+                    status = str(status_value)
+                payload = {
+                    "hostname": hostname,
+                    "agent_hostname": hostname,
+                    "service_mode": mode,
+                    "collector_active": collector_active,
+                    "collector_active_ts": last_seen,
+                    "last_seen": last_seen,
+                    "status": status,
+                    "agent_id": agent_id,
+                    "agent_guid": agent_guid or "",
+                    "agent_hash": record.get("agent_hash") or "",
+                    "connection_type": record.get("connection_type") or "",
+                    "connection_endpoint": record.get("connection_endpoint") or "",
+                    "device_type": record.get("device_type") or "",
+                    "domain": record.get("domain") or "",
+                    "external_ip": record.get("external_ip") or "",
+                    "internal_ip": record.get("internal_ip") or "",
+                    "last_reboot": record.get("last_reboot") or "",
+                    "last_user": record.get("last_user") or "",
+                    "operating_system": record.get("operating_system") or "",
+                    "uptime": record.get("uptime") or 0,
+                    "site_id": record.get("site_id"),
+                    "site_name": record.get("site_name") or "",
+                    "site_description": record.get("site_description") or "",
+                }
+                bucket = grouped.setdefault(hostname, {})
+                existing = bucket.get(mode)
+                if not existing or last_seen >= existing.get("last_seen", 0):
+                    bucket[mode] = payload
+
+            agents: Dict[str, Dict[str, Any]] = {}
+            for bucket in grouped.values():
+                for payload in bucket.values():
+                    agent_key = payload.get("agent_id") or payload.get("agent_guid")
+                    if not agent_key:
+                        agent_key = f"{payload['hostname']}|{payload['service_mode']}"
+                    if not payload.get("agent_id"):
+                        payload["agent_id"] = agent_key
+                    agents[agent_key] = payload
+
+            return {"agents": agents}, 200
+        except Exception as exc:
+            self.logger.debug("Failed to list agents", exc_info=True)
             return {"error": str(exc)}, 500
 
     def get_device_by_guid(self, guid: str) -> Tuple[Dict[str, Any], int]:
@@ -1465,18 +1289,14 @@ class DeviceManagementService:
             conn.close()
 
     def repo_current_hash(self) -> Tuple[Dict[str, Any], int]:
-        repo = (request.args.get("repo") or "bunny-lab-io/Borealis").strip()
-        branch = (request.args.get("branch") or "main").strip()
         refresh_flag = (request.args.get("refresh") or "").strip().lower()
-        ttl_raw = request.args.get("ttl")
-        if "/" not in repo:
-            return {"error": "repo must be in the form owner/name"}, 400
-        try:
-            ttl = int(ttl_raw) if ttl_raw else 60
-        except ValueError:
-            ttl = 60
         force_refresh = refresh_flag in {"1", "true", "yes", "force", "refresh"}
-        payload, status = self.repo_cache.resolve(repo, branch, ttl=ttl, force_refresh=force_refresh)
+        payload, status = self.repo_cache.current_repo_hash(
+            request.args.get("repo"),
+            request.args.get("branch"),
+            ttl=request.args.get("ttl"),
+            force_refresh=force_refresh,
+        )
         return payload, status
 
     def agent_hash_list(self) -> Tuple[Dict[str, Any], int]:
@@ -1523,6 +1343,11 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
     @require_device_auth(adapters.device_auth_manager)
     def _agent_details():
         payload, status = service.save_agent_details()
+        return jsonify(payload), status
+
+    @blueprint.route("/api/agents", methods=["GET"])
+    def _list_agents():
+        payload, status = service.list_agents()
         return jsonify(payload), status
 
     @blueprint.route("/api/devices", methods=["GET"])
@@ -1679,4 +1504,3 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
         return jsonify(payload), status
 
     app.register_blueprint(blueprint)
-

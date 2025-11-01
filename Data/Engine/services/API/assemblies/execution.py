@@ -13,18 +13,365 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
+import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from flask import Blueprint, jsonify, request
-
-from ..scheduled_jobs.management import ensure_scheduler, get_scheduler
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from flask import Flask
 
     from .. import EngineServiceAdapters
+
+
+def _assemblies_root() -> Path:
+    base = Path(__file__).resolve()
+    search_roots = (base, *base.parents)
+    for candidate in search_roots:
+        engine_dir: Optional[Path]
+        if candidate.name.lower() == "engine":
+            engine_dir = candidate
+        else:
+            tentative = candidate / "Engine"
+            engine_dir = tentative if tentative.is_dir() else None
+        if not engine_dir:
+            continue
+        assemblies_dir = engine_dir / "Assemblies"
+        if assemblies_dir.is_dir():
+            return assemblies_dir.resolve()
+    raise RuntimeError("Engine assemblies directory not found; expected Engine/Assemblies.")
+
+
+def _scripts_root() -> Path:
+    assemblies_root = _assemblies_root()
+    scripts_dir = assemblies_root / "Scripts"
+    if not scripts_dir.is_dir():
+        raise RuntimeError("Engine scripts directory not found; expected Engine/Assemblies/Scripts.")
+    return scripts_dir.resolve()
+
+
+def _normalize_script_relpath(rel_path: Any) -> Optional[str]:
+    """Return a canonical Scripts-relative path or ``None`` when invalid."""
+
+    if not isinstance(rel_path, str):
+        return None
+
+    raw = rel_path.replace("\\", "/").strip()
+    if not raw:
+        return None
+
+    segments: List[str] = []
+    for part in raw.split("/"):
+        candidate = part.strip()
+        if not candidate or candidate == ".":
+            continue
+        if candidate == "..":
+            return None
+        segments.append(candidate)
+
+    if not segments:
+        return None
+
+    first = segments[0]
+    if first.lower() != "scripts":
+        segments.insert(0, "Scripts")
+    else:
+        segments[0] = "Scripts"
+
+    return "/".join(segments)
+
+
+def _decode_base64_text(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    try:
+        cleaned = re.sub(r"\s+", "", stripped)
+    except Exception:
+        cleaned = stripped
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except Exception:
+        return None
+    try:
+        return decoded.decode("utf-8")
+    except Exception:
+        return decoded.decode("utf-8", errors="replace")
+
+
+def _decode_script_content(value: Any, encoding_hint: str = "") -> str:
+    encoding = (encoding_hint or "").strip().lower()
+    if isinstance(value, str):
+        if encoding in {"base64", "b64", "base-64"}:
+            decoded = _decode_base64_text(value)
+            if decoded is not None:
+                return decoded.replace("\r\n", "\n")
+        decoded = _decode_base64_text(value)
+        if decoded is not None:
+            return decoded.replace("\r\n", "\n")
+        return value.replace("\r\n", "\n")
+    return ""
+
+
+def _canonical_env_key(name: Any) -> str:
+    try:
+        return re.sub(r"[^A-Za-z0-9_]", "_", str(name or "").strip()).upper()
+    except Exception:
+        return ""
+
+
+def _env_string(value: Any) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _powershell_literal(value: Any, var_type: str) -> str:
+    typ = str(var_type or "string").lower()
+    if typ == "boolean":
+        if isinstance(value, bool):
+            truthy = value
+        elif value is None:
+            truthy = False
+        elif isinstance(value, (int, float)):
+            truthy = value != 0
+        else:
+            s = str(value).strip().lower()
+            if s in {"true", "1", "yes", "y", "on"}:
+                truthy = True
+            elif s in {"false", "0", "no", "n", "off", ""}:
+                truthy = False
+            else:
+                truthy = bool(s)
+        return "$true" if truthy else "$false"
+    if typ == "number":
+        if value is None or value == "":
+            return "0"
+        return str(value)
+    s = "" if value is None else str(value)
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _expand_env_aliases(env_map: Dict[str, str], variables: List[Dict[str, Any]]) -> Dict[str, str]:
+    expanded: Dict[str, str] = dict(env_map or {})
+    if not isinstance(variables, list):
+        return expanded
+    for var in variables:
+        if not isinstance(var, dict):
+            continue
+        name = str(var.get("name") or "").strip()
+        if not name:
+            continue
+        canonical = _canonical_env_key(name)
+        if not canonical or canonical not in expanded:
+            continue
+        value = expanded[canonical]
+        alias = re.sub(r"[^A-Za-z0-9_]", "_", name)
+        if alias and alias not in expanded:
+            expanded[alias] = value
+        if alias != name and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) and name not in expanded:
+            expanded[name] = value
+    return expanded
+
+
+def _extract_variable_default(var: Dict[str, Any]) -> Any:
+    for key in ("value", "default", "defaultValue", "default_value"):
+        if key in var:
+            val = var.get(key)
+            return "" if val is None else val
+    return ""
+
+
+def prepare_variable_context(doc_variables: List[Dict[str, Any]], overrides: Dict[str, Any]):
+    env_map: Dict[str, str] = {}
+    variables: List[Dict[str, Any]] = []
+    literal_lookup: Dict[str, str] = {}
+    doc_names: Dict[str, bool] = {}
+
+    overrides = overrides or {}
+
+    if not isinstance(doc_variables, list):
+        doc_variables = []
+
+    for var in doc_variables:
+        if not isinstance(var, dict):
+            continue
+        name = str(var.get("name") or "").strip()
+        if not name:
+            continue
+        doc_names[name] = True
+        canonical = _canonical_env_key(name)
+        var_type = str(var.get("type") or "string").lower()
+        default_val = _extract_variable_default(var)
+        final_val = overrides[name] if name in overrides else default_val
+        if canonical:
+            env_map[canonical] = _env_string(final_val)
+            literal_lookup[canonical] = _powershell_literal(final_val, var_type)
+        if name in overrides:
+            new_var = dict(var)
+            new_var["value"] = overrides[name]
+            variables.append(new_var)
+        else:
+            variables.append(var)
+
+    for name, val in overrides.items():
+        if name in doc_names:
+            continue
+        canonical = _canonical_env_key(name)
+        if canonical:
+            env_map[canonical] = _env_string(val)
+            literal_lookup[canonical] = _powershell_literal(val, "string")
+        variables.append({"name": name, "value": val, "type": "string"})
+
+    env_map = _expand_env_aliases(env_map, variables)
+    return env_map, variables, literal_lookup
+
+
+_ENV_VAR_PATTERN = re.compile(r"(?i)\$env:(\{)?([A-Za-z0-9_\-]+)(?(1)\})")
+
+
+def rewrite_powershell_script(content: str, literal_lookup: Dict[str, str]) -> str:
+    if not content or not literal_lookup:
+        return content
+
+    def _replace(match: Any) -> str:
+        name = match.group(2)
+        canonical = _canonical_env_key(name)
+        if not canonical:
+            return match.group(0)
+        literal = literal_lookup.get(canonical)
+        if literal is None:
+            return match.group(0)
+        return literal
+
+    return _ENV_VAR_PATTERN.sub(_replace, content)
+
+
+def _load_assembly_document(abs_path: str, default_type: str) -> Dict[str, Any]:
+    abs_path_str = os.fspath(abs_path)
+    base_name = os.path.splitext(os.path.basename(abs_path_str))[0]
+    doc: Dict[str, Any] = {
+        "name": base_name,
+        "description": "",
+        "category": "application" if default_type == "ansible" else "script",
+        "type": default_type,
+        "script": "",
+        "variables": [],
+        "files": [],
+        "timeout_seconds": 3600,
+    }
+    if abs_path_str.lower().endswith(".json") and os.path.isfile(abs_path_str):
+        try:
+            with open(abs_path_str, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception:
+            data = {}
+        if isinstance(data, dict):
+            doc["name"] = str(data.get("name") or doc["name"])
+            doc["description"] = str(data.get("description") or "")
+            cat = str(data.get("category") or doc["category"]).strip().lower()
+            if cat in {"application", "script"}:
+                doc["category"] = cat
+            typ = str(data.get("type") or data.get("script_type") or default_type).strip().lower()
+            if typ in {"powershell", "batch", "bash", "ansible"}:
+                doc["type"] = typ
+            script_val = data.get("script")
+            content_val = data.get("content")
+            script_lines = data.get("script_lines")
+            if isinstance(script_lines, list):
+                try:
+                    doc["script"] = "\n".join(str(line) for line in script_lines)
+                except Exception:
+                    doc["script"] = ""
+            elif isinstance(script_val, str):
+                doc["script"] = script_val
+            else:
+                if isinstance(content_val, str):
+                    doc["script"] = content_val
+            encoding_hint = str(
+                data.get("script_encoding") or data.get("scriptEncoding") or ""
+            ).strip().lower()
+            doc["script"] = _decode_script_content(doc.get("script"), encoding_hint)
+            if encoding_hint in {"base64", "b64", "base-64"}:
+                doc["script_encoding"] = "base64"
+            else:
+                probe_source = ""
+                if isinstance(script_val, str) and script_val:
+                    probe_source = script_val
+                elif isinstance(content_val, str) and content_val:
+                    probe_source = content_val
+                decoded_probe = _decode_base64_text(probe_source) if probe_source else None
+                if decoded_probe is not None:
+                    doc["script_encoding"] = "base64"
+                    doc["script"] = decoded_probe.replace("\r\n", "\n")
+                else:
+                    doc["script_encoding"] = "plain"
+            try:
+                timeout_raw = data.get("timeout_seconds", data.get("timeout"))
+                if timeout_raw is None:
+                    doc["timeout_seconds"] = 3600
+                else:
+                    doc["timeout_seconds"] = max(0, int(timeout_raw))
+            except Exception:
+                doc["timeout_seconds"] = 3600
+            vars_in = data.get("variables") if isinstance(data.get("variables"), list) else []
+            doc["variables"] = []
+            for item in vars_in:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or item.get("key") or "").strip()
+                if not name:
+                    continue
+                vtype = str(item.get("type") or "string").strip().lower()
+                if vtype not in {"string", "number", "boolean", "credential"}:
+                    vtype = "string"
+                doc["variables"].append(
+                    {
+                        "name": name,
+                        "label": str(item.get("label") or ""),
+                        "type": vtype,
+                        "default": item.get("default", item.get("default_value")),
+                        "required": bool(item.get("required")),
+                        "description": str(item.get("description") or ""),
+                    }
+                )
+            files_in = data.get("files") if isinstance(data.get("files"), list) else []
+            doc["files"] = []
+            for file_item in files_in:
+                if not isinstance(file_item, dict):
+                    continue
+                fname = file_item.get("file_name") or file_item.get("name")
+                if not fname or not isinstance(file_item.get("data"), str):
+                    continue
+                try:
+                    size_val = int(file_item.get("size") or 0)
+                except Exception:
+                    size_val = 0
+                doc["files"].append(
+                    {
+                        "file_name": str(fname),
+                        "size": size_val,
+                        "mime_type": str(file_item.get("mime_type") or file_item.get("mimeType") or ""),
+                        "data": file_item.get("data"),
+                    }
+                )
+        return doc
+    try:
+        with open(abs_path_str, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+    except Exception:
+        content = ""
+    normalized_script = (content or "").replace("\r\n", "\n")
+    doc["script"] = normalized_script
+    return doc
 
 
 def _normalize_hostnames(value: Any) -> List[str]:
@@ -41,31 +388,52 @@ def _normalize_hostnames(value: Any) -> List[str]:
 def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
     """Register quick execution endpoints for assemblies."""
 
-    ensure_scheduler(app, adapters)
     blueprint = Blueprint("assemblies_execution", __name__)
     service_log = adapters.service_log
 
     @blueprint.route("/api/scripts/quick_run", methods=["POST"])
     def scripts_quick_run():
-        scheduler = get_scheduler(adapters)
         data = request.get_json(silent=True) or {}
-        rel_path = (data.get("script_path") or "").strip()
+        rel_path_input = data.get("script_path")
+        rel_path_normalized = _normalize_script_relpath(rel_path_input)
         hostnames = _normalize_hostnames(data.get("hostnames"))
         run_mode = (data.get("run_mode") or "system").strip().lower()
+        admin_user = str(data.get("admin_user") or "").strip()
+        admin_pass = str(data.get("admin_pass") or "").strip()
 
-        if not rel_path or not hostnames:
+        if not rel_path_normalized or not hostnames:
             return jsonify({"error": "Missing script_path or hostnames[]"}), 400
 
-        scripts_root = scheduler._scripts_root()  # type: ignore[attr-defined]
-        abs_path = os.path.abspath(os.path.join(scripts_root, rel_path))
-        if (
-            not abs_path.startswith(scripts_root)
-            or not scheduler._is_valid_scripts_relpath(rel_path)  # type: ignore[attr-defined]
-            or not os.path.isfile(abs_path)
-        ):
+        rel_path_canonical = rel_path_normalized
+
+        try:
+            scripts_root = _scripts_root()
+            assemblies_root = scripts_root.parent.resolve()
+            abs_path = (assemblies_root / rel_path_canonical).resolve()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            service_log(
+                "assemblies",
+                f"quick job failed to resolve script path={rel_path_input!r}: {exc}",
+                level="ERROR",
+            )
+            return jsonify({"error": "Failed to resolve script path"}), 500
+
+        scripts_root_str = str(scripts_root)
+        abs_path_str = str(abs_path)
+        try:
+            within_scripts = os.path.commonpath([scripts_root_str, abs_path_str]) == scripts_root_str
+        except ValueError:
+            within_scripts = False
+
+        if not within_scripts or not os.path.isfile(abs_path_str):
+            service_log(
+                "assemblies",
+                f"quick job requested missing or out-of-scope script input={rel_path_input!r} normalized={rel_path_canonical}",
+                level="WARNING",
+            )
             return jsonify({"error": "Script not found"}), 404
 
-        doc = scheduler._load_assembly_document(abs_path, "scripts")  # type: ignore[attr-defined]
+        doc = _load_assembly_document(abs_path, "powershell")
         script_type = (doc.get("type") or "powershell").lower()
         if script_type != "powershell":
             return jsonify({"error": f"Unsupported script type '{script_type}'. Only PowerShell is supported."}), 400
@@ -81,8 +449,8 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     continue
                 overrides[name] = val
 
-        env_map, variables, literal_lookup = scheduler._prepare_variable_context(doc_variables, overrides)  # type: ignore[attr-defined]
-        content = scheduler._rewrite_powershell_script(content, literal_lookup)  # type: ignore[attr-defined]
+        env_map, variables, literal_lookup = prepare_variable_context(doc_variables, overrides)
+        content = rewrite_powershell_script(content, literal_lookup)
         normalized_script = (content or "").replace("\r\n", "\n")
         script_bytes = normalized_script.encode("utf-8")
         encoded_content = (
@@ -127,7 +495,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     """,
                     (
                         host,
-                        rel_path.replace(os.sep, "/"),
+                        rel_path_canonical.replace(os.sep, "/"),
                         friendly_name,
                         script_type,
                         now,
@@ -144,7 +512,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     "target_hostname": host,
                     "script_type": script_type,
                     "script_name": friendly_name,
-                    "script_path": rel_path.replace(os.sep, "/"),
+                    "script_path": rel_path_canonical.replace(os.sep, "/"),
                     "script_content": encoded_content,
                     "script_encoding": "base64",
                     "environment": env_map,
@@ -152,6 +520,8 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     "timeout_seconds": timeout_seconds,
                     "files": doc.get("files") if isinstance(doc.get("files"), list) else [],
                     "run_mode": run_mode,
+                    "admin_user": admin_user,
+                    "admin_pass": admin_pass,
                 }
                 if signature_b64:
                     payload["signature"] = signature_b64
@@ -176,7 +546,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                 results.append({"hostname": host, "job_id": job_id, "status": "Running"})
                 service_log(
                     "assemblies",
-                    f"quick job queued hostname={host} path={rel_path} run_mode={run_mode}",
+                    f"quick job queued hostname={host} path={rel_path_canonical} run_mode={run_mode}",
                 )
         except Exception as exc:
             if conn is not None:
