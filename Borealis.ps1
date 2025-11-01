@@ -1066,7 +1066,7 @@ function InstallOrUpdate-BorealisAgent {
 
 # ---------------------- Main -----------------------
 Clear-Host
-@'
+$art = @'
 :::::::::   ::::::::  :::::::::  ::::::::::     :::     :::        ::::::::::: :::::::: 
 :+:    :+: :+:    :+: :+:    :+: :+:          :+: :+:   :+:            :+:    :+:    :+:
 +:+    +:+ +:+    +:+ +:+    +:+ +:+         +:+   +:+  +:+            +:+    +:+       
@@ -1074,7 +1074,16 @@ Clear-Host
 +#+    +#+ +#+    +#+ +#+    +#+ +#+        +#+     +#+ +#+            +#+           +#+
 #+#    #+# #+#    #+# #+#    #+# #+#        #+#     #+# #+#            #+#    #+#    #+#
 #########   ########  ###    ### ########## ###     ### ########## ########### ######## 
-'@ | Write-Host -ForegroundColor DarkCyan
+'@
+
+$lines  = $art -split "`r?`n"
+# Approximate “violet → orange” using the built-in ConsoleColor names
+$colors = @('DarkGray','DarkGray','DarkCyan','DarkCyan','DarkCyan','White','White')
+
+for ($i=0; $i -lt $lines.Count; $i++) {
+    $idx = [int]([math]::Floor($i * ($colors.Count-1) / ([math]::Max($lines.Count-1,1))))
+    Write-Host $lines[$i] -ForegroundColor $colors[$idx]
+}
 @'
 ____ _  _ ___ ____ _  _ ____ ___ _ ____ _  _    ___  _    ____ ___ ____ ____ ____ _  _
 |__| |  |  |  |  | |\/| |__|  |  | |  | |\ |    |__] |    |__|  |  |___ |  | |__/ |\/|

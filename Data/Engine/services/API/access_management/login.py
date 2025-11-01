@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import logging
 import os
 import sqlite3
 import time
@@ -39,6 +40,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
 
 from .multi_factor_authentication import register_mfa_management
 from .users import register_user_management
+
+_logger = logging.getLogger(__name__)
+_qr_logger_warning_emitted = False
+
 
 def _now_ts() -> int:
     return int(time.time())
@@ -73,7 +78,13 @@ def _totp_provisioning_uri(secret: str, username: str) -> Optional[str]:
 
 
 def _totp_qr_data_uri(payload: str) -> Optional[str]:
-    if not payload or qrcode is None:
+    global _qr_logger_warning_emitted
+    if not payload:
+        return None
+    if qrcode is None:
+        if not _qr_logger_warning_emitted:
+            _logger.warning("MFA QR generation skipped: 'qrcode' dependency not available.")
+            _qr_logger_warning_emitted = True
         return None
     try:
         image = qrcode.make(payload, box_size=6, border=4)
@@ -81,7 +92,10 @@ def _totp_qr_data_uri(payload: str) -> Optional[str]:
         image.save(buffer, format="PNG")
         encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
         return f"data:image/png;base64,{encoded}"
-    except Exception:
+    except Exception as exc:
+        if not _qr_logger_warning_emitted:
+            _logger.warning("Failed to generate MFA QR code: %s", exc, exc_info=True)
+            _qr_logger_warning_emitted = True
         return None
 
 

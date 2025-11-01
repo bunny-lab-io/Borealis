@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Box, TextField, Button, Typography } from "@mui/material";
 
 export default function Login({ onLogin }) {
@@ -18,33 +18,6 @@ export default function Login({ onLogin }) {
     if (!setupSecret) return "";
     return setupSecret.replace(/(.{4})/g, "$1 ").trim();
   }, [setupSecret]);
-
-  useEffect(() => {
-    if (mfaStage !== "setup" || setupQr || !setupUri) {
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const module = await import("qrcode");
-        const toDataURL = module?.toDataURL || module?.default?.toDataURL;
-        if (!toDataURL) {
-          throw new Error("qrcode.toDataURL unavailable");
-        }
-        const url = await toDataURL(setupUri, { margin: 1, width: 180 });
-        if (!cancelled) {
-          setSetupQr(url);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          console.warn("Failed to generate MFA QR code locally", err);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [mfaStage, setupQr, setupUri]);
 
   const sha512 = async (text) => {
     try {
@@ -256,11 +229,13 @@ export default function Login({ onLogin }) {
                   Scan the QR code with your authenticator app, then enter the 6-digit code to complete setup for {username}.
                 </Typography>
                 {setupQr ? (
-                  <img
-                    src={setupQr}
-                    alt="MFA enrollment QR code"
-                    style={{ width: "180px", height: "180px", marginBottom: "12px" }}
-                  />
+                  <Box sx={{ display: "flex", justifyContent: "center", mb: 1.5 }}>
+                    <img
+                      src={setupQr}
+                      alt="MFA enrollment QR code"
+                      style={{ width: "180px", height: "180px" }}
+                    />
+                  </Box>
                 ) : null}
                 {formattedSecret ? (
                   <Box
