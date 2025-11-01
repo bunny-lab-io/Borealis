@@ -14,22 +14,22 @@ Borealis is a remote management platform with a simple, visual automation layer,
 
 ## Screenshots
 Device List Overview:
-![Device List](Data/Repository_Resources/borealis_device_list.png)
+![Device List](Docs/images/repo_screenshots/borealis_device_list.png)
 
 Device Details:
-![Device Details](Data/Repository_Resources/borealis_device_details.png)
+![Device Details](Docs/images/repo_screenshots/borealis_device_details.png)
 
 Assembly List:
-![Assembly List](Data/Repository_Resources/borealis_assembly_list.png)
+![Assembly List](Docs/images/repo_screenshots/borealis_assembly_list.png)
 
 Assembly Editor:
-![Assembly Editor](Data/Repository_Resources/borealis_assembly_editor.png)
+![Assembly Editor](Docs/images/repo_screenshots/borealis_assembly_editor.png)
 
 Scheduled Job History View:
-![Scheduled Job History](Data/Repository_Resources/borealis_scheduled_job_history.png)
+![Scheduled Job History](Docs/images/repo_screenshots/borealis_scheduled_job_history.png)
 
 Workflow Editor:
-[![Workflow Editor Demonstration](Data/Repository_Resources/borealis_flow_editor.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
+[![Workflow Editor Demonstration](Docs/images/repo_screenshots/borealis_flow_editor.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
 
 
 ## Getting Started
