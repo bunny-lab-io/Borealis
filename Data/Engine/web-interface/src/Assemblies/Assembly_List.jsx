@@ -13,6 +13,7 @@ import {
   DialogActions,
   TextField,
   CircularProgress,
+  Link as MuiLink,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
@@ -45,6 +46,7 @@ const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 const BOREALIS_BLUE = "#58a6ff";
+const DARKER_GRAY = "#9aa3ad";
 const PAGE_SIZE = 25;
 
 const TYPE_METADATA = {
@@ -65,9 +67,7 @@ const TYPE_METADATA = {
 const TypeCellRenderer = React.memo(function TypeCellRenderer(props) {
   const typeKey = props?.data?.typeKey;
   const meta = typeKey ? TYPE_METADATA[typeKey] : null;
-  if (!meta) {
-    return null;
-  }
+  if (!meta) return null;
   const { Icon, label } = meta;
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -76,6 +76,42 @@ const TypeCellRenderer = React.memo(function TypeCellRenderer(props) {
         {label}
       </Typography>
     </Box>
+  );
+});
+
+// Clickable name that opens the corresponding editor, styled in Borealis blue
+const NameCellRenderer = React.memo(function NameCellRenderer(props) {
+  const { data, context } = props;
+  const openRow = context?.openRow;
+  if (!data) return null;
+  const handleClick = (e) => {
+    e.preventDefault();
+    openRow?.(data);
+  };
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openRow?.(data);
+    }
+  };
+  return (
+    <MuiLink
+      component="button"
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      sx={{
+        color: BOREALIS_BLUE,
+        textAlign: "left",
+        cursor: "pointer",
+        p: 0,
+        m: 0,
+        fontSize: 14,
+        textDecoration: "none",
+        "&:hover": { textDecoration: "underline" },
+      }}
+    >
+      {data?.name || ""}
+    </MuiLink>
   );
 });
 
@@ -88,12 +124,12 @@ const normalizeRow = (island, item) => {
     island === "workflows"
       ? item?.tab_name || fileName.replace(/\.[^.]+$/, "") || fileName || "Workflow"
       : item?.name || fileName.replace(/\.[^.]+$/, "") || fileName || "Assembly";
+  // For workflows, always show 'workflow' in Category per request
   const category =
     island === "workflows"
-      ? folder || "Workflows"
+      ? "workflow"
       : item?.category || "";
-  const description =
-    island === "workflows" ? "" : item?.description || "";
+  const description = island === "workflows" ? "" : item?.description || "";
   return {
     id: `${island}:${idSeed}`,
     typeKey: island,
@@ -144,6 +180,14 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
         }),
       );
       setRows(results.flat());
+      // After data load, auto-size specific columns
+      setTimeout(() => {
+        const columnApi = gridRef.current?.columnApi;
+        if (columnApi) {
+          const ids = ["assemblyType", "location", "category", "name"];
+          columnApi.autoSizeColumns(ids, false);
+        }
+      }, 0);
     } catch (err) {
       console.error("Failed to load assemblies:", err);
       setRows([]);
@@ -168,15 +212,11 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
         };
         if (!payload.name) payload.name = row.name;
         if (!payload.tab_name) payload.tab_name = row.name;
-        if (onOpenWorkflow) {
-          onOpenWorkflow(payload);
-        }
+        onOpenWorkflow?.(payload);
         return;
       }
       const mode = row.typeKey === "ansible" ? "ansible" : "scripts";
-      if (onOpenScript) {
-        onOpenScript(row.relPath, mode, null);
-      }
+      onOpenScript?.(row.relPath, mode, null);
     },
     [onOpenWorkflow, onOpenScript],
   );
@@ -239,9 +279,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
         body: JSON.stringify(payload),
       });
       const data = await resp.json();
-      if (!resp.ok) {
-        throw new Error(data?.error || `HTTP ${resp.status}`);
-      }
+      if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       setRenameDialogOpen(false);
       await fetchAssemblies();
     } catch (err) {
@@ -267,9 +305,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
         }),
       });
       const data = await resp.json();
-      if (!resp.ok) {
-        throw new Error(data?.error || `HTTP ${resp.status}`);
-      }
+      if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       setDeleteDialogOpen(false);
       await fetchAssemblies();
     } catch (err) {
@@ -281,30 +317,62 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
   const columnDefs = useMemo(
     () => [
       {
+        colId: "assemblyType",
         field: "assemblyType",
         headerName: "Assembly Type",
         valueGetter: (params) => TYPE_METADATA[params?.data?.typeKey]?.label || "",
         cellRenderer: TypeCellRenderer,
-        width: 200,
+        minWidth: 160,
+        flex: 0,
+        sortable: true,
+        filter: "agTextColumnFilter",
+        resizable: true,
+      },
+      {
+        colId: "location",
+        field: "location",
+        headerName: "Location",
+        valueGetter: (params) => params?.data?.folder || "",
+        cellStyle: { color: DARKER_GRAY, fontSize: 13 },
         minWidth: 180,
         flex: 0,
         sortable: true,
         filter: "agTextColumnFilter",
+        resizable: true,
       },
       {
+        colId: "category",
         field: "category",
         headerName: "Category",
         valueGetter: (params) => params?.data?.category || "",
+        minWidth: 160,
+        flex: 0,
+        sortable: true,
+        filter: "agTextColumnFilter",
+        resizable: true,
       },
       {
+        colId: "name",
         field: "name",
         headerName: "Name",
         valueGetter: (params) => params?.data?.name || "",
+        cellRenderer: NameCellRenderer,
+        minWidth: 220,
+        flex: 0,
+        sortable: true,
+        filter: "agTextColumnFilter",
+        resizable: true,
       },
       {
+        colId: "description",
         field: "description",
         headerName: "Description",
         valueGetter: (params) => params?.data?.description || "",
+        flex: 1, // Only Description flexes to take remaining width
+        minWidth: 300,
+        sortable: true,
+        filter: "agTextColumnFilter",
+        resizable: true,
       },
     ],
     [],
@@ -314,10 +382,11 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
     () => ({
       sortable: true,
       filter: "agTextColumnFilter",
-      floatingFilter: true,
+      // Remove floating textboxes at the top (use column menu filters instead)
+      floatingFilter: false,
       resizable: true,
-      flex: 1,
-      minWidth: 180,
+      flex: 0,
+      minWidth: 140,
     }),
     [],
   );
@@ -339,9 +408,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
 
   const handleCreateScript = () => {
     const trimmed = scriptName.trim();
-    if (!trimmed || !scriptDialog.island) {
-      return;
-    }
+    if (!trimmed || !scriptDialog.island) return;
     const isAnsible = scriptDialog.island === "ansible";
     const context = {
       folder: "",
@@ -351,22 +418,16 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
       type: isAnsible ? "ansible" : "powershell",
       category: isAnsible ? "application" : "script",
     };
-    if (onOpenScript) {
-      onOpenScript(null, isAnsible ? "ansible" : "scripts", context);
-    }
+    onOpenScript?.(null, isAnsible ? "ansible" : "scripts", context);
     setScriptDialog({ open: false, island: null });
     setScriptName("");
   };
 
   const handleCreateWorkflow = () => {
     const trimmed = workflowName.trim();
-    if (!trimmed) {
-      return;
-    }
+    if (!trimmed) return;
     setWorkflowDialogOpen(false);
-    if (onOpenWorkflow) {
-      onOpenWorkflow(null, "", trimmed);
-    }
+    onOpenWorkflow?.(null, "", trimmed);
     setWorkflowName("");
   };
 
@@ -460,6 +521,13 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
             "& .ag-icon": {
               fontFamily: iconFontFamily,
             },
+            // Vertically center cell content across the board
+            "& .ag-cell": {
+              display: "flex",
+              alignItems: "center",
+              paddingTop: "8px",
+              paddingBottom: "8px",
+            },
           }}
         >
           <AgGridReact
@@ -467,14 +535,18 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
             rowData={rows}
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
+            context={{ openRow }}
             rowSelection="single"
             pagination
             paginationPageSize={PAGE_SIZE}
             animateRows
             onRowDoubleClicked={handleRowDoubleClicked}
             onCellContextMenu={handleCellContextMenu}
-            getRowId={(params) => params?.data?.id || params?.data?.relPath || params?.data?.fileName || String(params?.rowIndex ?? "")}
+            getRowId={(params) =>
+              params?.data?.id || params?.data?.relPath || params?.data?.fileName || String(params?.rowIndex ?? "")
+            }
             theme={myTheme}
+            rowHeight={44}
             style={{
               width: "100%",
               height: "100%",
@@ -592,11 +664,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
           >
             Cancel
           </Button>
-          <Button
-            onClick={handleCreateScript}
-            disabled={!scriptName.trim()}
-            sx={{ textTransform: "none", color: BOREALIS_BLUE }}
-          >
+          <Button onClick={handleCreateScript} disabled={!scriptName.trim()} sx={{ textTransform: "none", color: BOREALIS_BLUE }}>
             Create
           </Button>
         </DialogActions>
