@@ -16,6 +16,7 @@ error log) to align with the project's operational practices.
 """
 from __future__ import annotations
 
+import atexit
 import importlib.util
 import logging
 import time
@@ -96,8 +97,11 @@ if HttpProtocol is not None:  # pragma: no branch - attribute exists in supporte
 
 _SOCKETIO_ASYNC_MODE = "eventlet"
 
+_ASSEMBLY_SHUTDOWN_REGISTERED = False
+
 
 from .config import EngineSettings, initialise_engine_logger, load_runtime_config
+from .assembly_management import initialise_assembly_runtime
 
 
 @dataclass
@@ -114,6 +118,7 @@ class EngineContext:
     config: Mapping[str, Any]
     api_groups: Sequence[str]
     api_log_path: str
+    assembly_cache: Optional[Any] = None
 
 
 __all__ = ["EngineContext", "create_app", "register_engine_api"]
@@ -131,6 +136,7 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         config=settings.as_dict(),
         api_groups=settings.api_groups,
         api_log_path=settings.api_log_file,
+        assembly_cache=None,
     )
 
 
@@ -158,6 +164,21 @@ def _attach_transition_logging(app: Flask, context: EngineContext, logger: loggi
             )
 
     setattr(app, "_engine_api_logging_installed", True)
+
+
+def _register_assembly_shutdown_hook(assembly_cache, logger: logging.Logger) -> None:
+    global _ASSEMBLY_SHUTDOWN_REGISTERED
+    if _ASSEMBLY_SHUTDOWN_REGISTERED:
+        return
+
+    def _shutdown_assembly_cache() -> None:  # pragma: no cover - process shutdown
+        try:
+            assembly_cache.shutdown(flush=True)
+        except Exception:
+            logger.debug("Failed to shut down assembly cache cleanly", exc_info=True)
+
+    atexit.register(_shutdown_assembly_cache)
+    _ASSEMBLY_SHUTDOWN_REGISTERED = True
 
 
 def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, SocketIO, EngineContext]:
@@ -192,6 +213,11 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
 
     context = _build_engine_context(settings, logger)
     context.socketio = socketio
+
+    assembly_cache = initialise_assembly_runtime(logger=logger, config=settings.as_dict())
+    assembly_cache.reload()
+    context.assembly_cache = assembly_cache
+    _register_assembly_shutdown_hook(assembly_cache, logger)
 
     api_logger = logging.getLogger("borealis.engine.api")
     if not api_logger.handlers:
@@ -249,6 +275,11 @@ def register_engine_api(app: Flask, *, config: Optional[Mapping[str, Any]] = Non
     settings: EngineSettings = load_runtime_config(config)
     logger = initialise_engine_logger(settings)
     context = _build_engine_context(settings, logger)
+
+    assembly_cache = initialise_assembly_runtime(logger=logger, config=settings.as_dict())
+    assembly_cache.reload()
+    context.assembly_cache = assembly_cache
+    _register_assembly_shutdown_hook(assembly_cache, logger)
 
     from .services import API  # Local import avoids circular dependency at module import time
 

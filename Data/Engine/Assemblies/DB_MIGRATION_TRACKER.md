@@ -9,15 +9,15 @@
 
 
 ## 1. Implement multi-database assembly persistence with payload indirection
-[ ] Define three SQLite databases (`official.db`, `community.db`, `user_created.db`) stored under `Data/Engine/Assemblies/` and mirrored to `/Engine/Assemblies/` at runtime.
-[ ] Standardize a shared schema (per your column list) and enable WAL + shared-cache on all connections.
-[ ] Add payload GUID indirection so large scripts/workflows/binaries live under `Data/Engine/Assemblies/Payloads/<GUID>` and `/Engine/Assemblies/Payloads/<GUID>`; the DB stores GUID references, not raw base64.
-[ ] Build a startup loader that opens each database, validates schema, and hydrates an in-memory cache keyed by `assembly_id` with metadata, payload handles, and source domain.
-[ ] Implement a write queue service that stages mutations in memory, marks cache entries as “dirty,” persists them on a 60-second cadence (configurable), and handles graceful shutdown flushing.
-[ ] Expose cache state so callers can detect queued writes vs. persisted rows.
+[x] Define three SQLite databases (`official.db`, `community.db`, `user_created.db`) stored under `Data/Engine/Assemblies/` and mirrored to `/Engine/Assemblies/` at runtime.
+[x] Standardize a shared schema (per your column list) and enable WAL + shared-cache on all connections.
+[x] Add payload GUID indirection so large scripts/workflows/binaries live under `Data/Engine/Assemblies/Payloads/<GUID>` and `/Engine/Assemblies/Payloads/<GUID>`; the DB stores GUID references, not raw base64.
+[x] Build a startup loader that opens each database, validates schema, and hydrates an in-memory cache keyed by `assembly_id` with metadata, payload handles, and source domain.
+[x] Implement a write queue service that stages mutations in memory, marks cache entries as “dirty,” persists them on a 60-second cadence (configurable), and handles graceful shutdown flushing.
+[x] Expose cache state so callers can detect queued writes vs. persisted rows.
 ### Details
 ```
-1. Under `Data/Engine/engine/assemblies/`, add a new package (e.g., `persistence/`) containing:
+1. Under `Data/Engine/assembly_management/`, add the management package containing:
 
    * `databases.py` for connection management (WAL, pragmas, attach logic).
    * `models.py` defining dataclasses for assemblies/payload metadata.
@@ -39,6 +39,13 @@
    * Update cache entries to track payload GUID + type; adapt runner interfaces to resolve GUID back to content.
 5. Include integrity checks/logging: detect missing payload files, log warnings, and surface errors to API callers.
 ```
+
+**Stage Notes**
+- Added `Data/Engine/assembly_management/` with `databases.py`, `models.py`, `payloads.py`, and `bootstrap.py` to manage multi-domain SQLite storage, payload GUID indirection, and the timed write queue.
+- `AssemblyDatabaseManager.initialise()` now creates `official.db`, `community.db`, and `user_created.db` in the staging tree with WAL/shared-cache pragmas and mirrors them to `/Engine/Assemblies/`.
+- `PayloadManager` persists payload content beneath `Payloads/<GUID>` in both staging and runtime directories, computing SHA-256 checksums for metadata.
+- `AssemblyCache` hydrates all domains at startup, exposes `describe()` for dirty state inspection, and flushes staged writes on a configurable cadence (default 60 s) with an atexit shutdown hook.
+- `initialise_assembly_runtime()` is invoked from both `create_app` and `register_engine_api`, wiring the cache onto `EngineContext` and ensuring graceful shutdown flushing.
 
 ## 2. Update Engine services and APIs for multi-domain assemblies
 [ ] Refactor existing assembly REST endpoints to read from the cache instead of filesystem JSON.

@@ -1,0 +1,166 @@
+# ======================================================
+# Data\Engine\assembly_management\payloads.py
+# Description: Handles payload GUID generation, filesystem storage, and staging/runtime mirroring.
+#
+# API Endpoints (if applicable): None
+# ======================================================
+
+"""Payload storage helpers for assembly persistence."""
+
+from __future__ import annotations
+
+import datetime as _dt
+import hashlib
+import logging
+import shutil
+import uuid
+from pathlib import Path
+from typing import Optional, Union
+
+from .models import PayloadDescriptor, PayloadType
+
+
+class PayloadManager:
+    """Stores payload content on disk and mirrors it to the runtime directory."""
+
+    def __init__(self, staging_root: Path, runtime_root: Path, *, logger: Optional[logging.Logger] = None) -> None:
+        self._staging_root = staging_root
+        self._runtime_root = runtime_root
+        self._logger = logger or logging.getLogger(__name__)
+        self._staging_root.mkdir(parents=True, exist_ok=True)
+        self._runtime_root.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def store_payload(
+        self,
+        payload_type: PayloadType,
+        content: Union[str, bytes],
+        *,
+        guid: Optional[str] = None,
+        extension: Optional[str] = None,
+    ) -> PayloadDescriptor:
+        """Persist payload content and mirror it to the runtime directory."""
+
+        resolved_guid = self._normalise_guid(guid or uuid.uuid4().hex)
+        resolved_extension = self._normalise_extension(extension or self._default_extension(payload_type))
+        now = _dt.datetime.utcnow()
+        data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+        checksum = hashlib.sha256(data).hexdigest()
+
+        staging_dir = self._payload_dir(self._staging_root, resolved_guid)
+        runtime_dir = self._payload_dir(self._runtime_root, resolved_guid)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+
+        file_name = f"payload{resolved_extension}"
+        staging_path = staging_dir / file_name
+        runtime_path = runtime_dir / file_name
+
+        with staging_path.open("wb") as handle:
+            handle.write(data)
+
+        try:
+            shutil.copy2(staging_path, runtime_path)
+        except Exception as exc:  # pragma: no cover - best effort mirror
+            self._logger.debug("Failed to mirror payload %s to runtime copy: %s", resolved_guid, exc)
+
+        descriptor = PayloadDescriptor(
+            guid=resolved_guid,
+            payload_type=payload_type,
+            file_name=file_name,
+            file_extension=resolved_extension,
+            size_bytes=len(data),
+            checksum=checksum,
+            created_at=now,
+            updated_at=now,
+        )
+        return descriptor
+
+    def update_payload(self, descriptor: PayloadDescriptor, content: Union[str, bytes]) -> PayloadDescriptor:
+        """Replace payload content while retaining GUID and metadata."""
+
+        data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+        checksum = hashlib.sha256(data).hexdigest()
+        now = _dt.datetime.utcnow()
+
+        staging_path = self._payload_dir(self._staging_root, descriptor.guid) / descriptor.file_name
+        runtime_path = self._payload_dir(self._runtime_root, descriptor.guid) / descriptor.file_name
+        staging_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with staging_path.open("wb") as handle:
+            handle.write(data)
+
+        try:
+            shutil.copy2(staging_path, runtime_path)
+        except Exception as exc:  # pragma: no cover - best effort mirror
+            self._logger.debug("Failed to mirror payload %s during update: %s", descriptor.guid, exc)
+
+        descriptor.size_bytes = len(data)
+        descriptor.checksum = checksum
+        descriptor.updated_at = now
+        return descriptor
+
+    def read_payload_bytes(self, descriptor: PayloadDescriptor) -> bytes:
+        """Retrieve payload content from the staging copy."""
+
+        staging_path = self._payload_dir(self._staging_root, descriptor.guid) / descriptor.file_name
+        return staging_path.read_bytes()
+
+    def ensure_runtime_copy(self, descriptor: PayloadDescriptor) -> None:
+        """Ensure the runtime payload copy matches the staging content."""
+
+        staging_path = self._payload_dir(self._staging_root, descriptor.guid) / descriptor.file_name
+        runtime_path = self._payload_dir(self._runtime_root, descriptor.guid) / descriptor.file_name
+        if not staging_path.exists():
+            self._logger.warning("Payload missing on disk; guid=%s path=%s", descriptor.guid, staging_path)
+            return
+        runtime_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(staging_path, runtime_path)
+        except Exception as exc:  # pragma: no cover - best effort mirror
+            self._logger.debug("Failed to mirror payload %s via ensure_runtime_copy: %s", descriptor.guid, exc)
+
+    def delete_payload(self, descriptor: PayloadDescriptor) -> None:
+        """Remove staging and runtime payload files."""
+
+        for root in (self._staging_root, self._runtime_root):
+            dir_path = self._payload_dir(root, descriptor.guid)
+            file_path = dir_path / descriptor.file_name
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+                if dir_path.exists() and not any(dir_path.iterdir()):
+                    dir_path.rmdir()
+            except Exception as exc:  # pragma: no cover - best effort cleanup
+                self._logger.debug("Failed to remove payload directory %s (%s): %s", descriptor.guid, root, exc)
+
+    # ------------------------------------------------------------------
+    # Helper methods
+    # ------------------------------------------------------------------
+    def _payload_dir(self, root: Path, guid: str) -> Path:
+        return root / guid.lower().strip()
+
+    @staticmethod
+    def _default_extension(payload_type: PayloadType) -> str:
+        if payload_type == PayloadType.SCRIPT:
+            return ".txt"
+        if payload_type == PayloadType.WORKFLOW:
+            return ".json"
+        return ".bin"
+
+    @staticmethod
+    def _normalise_extension(extension: str) -> str:
+        value = (extension or "").strip()
+        if not value:
+            return ".bin"
+        if not value.startswith("."):
+            return f".{value}"
+        return value
+
+    @staticmethod
+    def _normalise_guid(guid: str) -> str:
+        return guid.strip().lower()
+
