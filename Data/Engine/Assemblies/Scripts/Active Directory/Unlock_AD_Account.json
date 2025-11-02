@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "Unlock AD Account [WIN]",
+  "description": "Run on DC to unlock user specified at time of execution.",
+  "category": "script",
+  "type": "powershell",
+  "script": "JFVzZXJOYW1lID0gJGVudjpVc2VyX05hbWUKVW5sb2NrLUFEQWNjb3VudCAtSWRlbnRpdHkgJFVzZXJOYW1l",
+  "timeout_seconds": 3600,
+  "sites": {
+    "mode": "all",
+    "values": []
+  },
+  "variables": [
+    {
+      "name": "User_Name",
+      "label": "Active Directory Username",
+      "description": "Username to unlock",
+      "type": "string",
+      "default": "",
+      "required": false
+    }
+  ],
+  "files": [],
+  "script_encoding": "base64"
+}
