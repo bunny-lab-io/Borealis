@@ -77,11 +77,11 @@ def _stage_web_interface_assets(logger: Optional[logging.Logger] = None, *, forc
 
     project_root = _project_root()
     engine_web_root = project_root / "Engine" / "web-interface"
-    legacy_source = project_root / "Data" / "Server" / "WebUI"
+    modern_source = project_root / "Data" / "Engine" / "web-interface"
 
-    if not legacy_source.is_dir():
+    if not modern_source.is_dir():
         raise RuntimeError(
-            f"Engine web interface source missing: {legacy_source}"
+            f"Engine web interface source missing: {modern_source}"
         )
 
     index_path = engine_web_root / "index.html"
@@ -92,14 +92,14 @@ def _stage_web_interface_assets(logger: Optional[logging.Logger] = None, *, forc
     if engine_web_root.exists():
         shutil.rmtree(engine_web_root)
 
-    shutil.copytree(legacy_source, engine_web_root)
+    shutil.copytree(modern_source, engine_web_root)
 
     if not index_path.is_file():
         raise RuntimeError(
             f"Engine web interface staging failed; missing {index_path}"
         )
 
-    logger.info("Engine web interface staged from %s to %s", legacy_source, engine_web_root)
+    logger.info("Engine web interface staged from %s to %s", modern_source, engine_web_root)
     return engine_web_root
 
 
