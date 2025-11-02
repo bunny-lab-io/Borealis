@@ -319,7 +319,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
       {
         colId: "assemblyType",
         field: "assemblyType",
-        headerName: "Assembly Type",
+        headerName: "Type",
         valueGetter: (params) => TYPE_METADATA[params?.data?.typeKey]?.label || "",
         cellRenderer: TypeCellRenderer,
         minWidth: 160,

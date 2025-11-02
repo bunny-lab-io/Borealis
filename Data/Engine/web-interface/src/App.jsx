@@ -28,7 +28,7 @@ import {
 import FlowTabs from "./Flow_Editor/Flow_Tabs";
 import FlowEditor from "./Flow_Editor/Flow_Editor";
 import NodeSidebar from "./Flow_Editor/Node_Sidebar";
-import StatusBar from "./Status_Bar";
+import StatusBar from "./Flow_Editor/Status_Bar.jsx";
 
 // Borealis Page Imports
 import Login from "./Login.jsx";
