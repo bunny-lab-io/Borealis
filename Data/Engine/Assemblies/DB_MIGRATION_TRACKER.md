@@ -1,3 +1,13 @@
+# Prompt Instructions for Assembly Database Migration & Implementation
+1. Open and read `Data/Engine/Assemblies/DB_MIGRATION_TRACKER.md`.
+2. Work through the migration tracker one stage at a time. For the current stage:
+   • Read the entire task list plus the associated “Details” subsection before changing any code.
+   • Implement only the current stage’s requirements before asking for the operator to sync a commit to github before moving on.  Do not do this yourself.
+3. As soon as you complete any checkbox item (even partway through your coding), immediately update the markdown file to mark that checkbox as checked (`[x]`). Do this incrementally while you code, not just at the end.
+4. Repeat the same read/implement/check-off cycle for each subsequent stage until the file is fully completed.
+5. Keep all stage notes synchronized with the implementation as you go.
+
+
 ## 1. Implement multi-database assembly persistence with payload indirection
 [ ] Define three SQLite databases (`official.db`, `community.db`, `user_created.db`) stored under `Data/Engine/Assemblies/` and mirrored to `/Engine/Assemblies/` at runtime.
 [ ] Standardize a shared schema (per your column list) and enable WAL + shared-cache on all connections.
