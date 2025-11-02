@@ -95,7 +95,6 @@ def _resolve_static_folder() -> str:
         ENGINE_DIR.parent / "Engine" / "web-interface",
         ENGINE_DIR.parent / "web-interface",
         ENGINE_DIR / "web-interface",
-        PROJECT_ROOT / "Data" / "Server" / "web-interface",
     ]
 
     resolved_roots: List[Path] = []

@@ -240,23 +240,15 @@ function Ensure-EngineWebInterface {
         throw "Engine web interface source missing at '$engineStageSource'."
     }
 
-    $enginePackage = Join-Path $engineDestination 'package.json'
-    $engineSrcDir  = Join-Path $engineDestination 'src'
-    if ((Test-Path $enginePackage) -and (Test-Path $engineSrcDir)) {
-        return
+    if (Test-Path $engineDestination) {
+        Remove-Item $engineDestination -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    if (-not (Test-Path $engineDestination)) {
-        New-Item -Path $engineDestination -ItemType Directory -Force | Out-Null
-    }
-
-    $preserve = @('.gitignore','README.md')
-    Get-ChildItem -Path $engineDestination -Force | Where-Object { $preserve -notcontains $_.Name } |
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -Path $engineDestination -ItemType Directory -Force | Out-Null
 
     Copy-Item (Join-Path $engineStageSource '*') $engineDestination -Recurse -Force
 
-    if (-not (Test-Path $enginePackage)) {
+    if (-not (Test-Path (Join-Path $engineDestination 'package.json'))) {
         throw "Failed to stage Engine web interface into '$engineDestination' from '$engineStageSource'."
     }
 }
@@ -1415,11 +1407,9 @@ switch ($choice) {
         $dataSource            = "Data"
         $engineSource          = "$dataSource\Engine"
         $engineDataDestination = "$venvFolder\Data\Engine"
-        $webUIFallbackSource   = "$dataSource\Engine\web-interface"
         $webUIDestination      = "$venvFolder\web-interface"
         $venvPython            = Join-Path $venvFolder 'Scripts\python.exe'
         $engineSourceAbsolute  = Join-Path $scriptDir $engineSource
-        $webUIFallbackAbsolute = Join-Path $scriptDir $webUIFallbackSource
 
         Run-Step "Create Borealis Engine Virtual Python Environment" {
             $venvActivate = Join-Path $venvFolder 'Scripts\Activate'
@@ -1490,27 +1480,18 @@ switch ($choice) {
         Run-Step "Copy Borealis Engine WebUI Files into: $webUIDestination" {
             Ensure-EngineWebInterface -ProjectRoot $scriptDir
             $engineWebUISource = Join-Path $scriptDir 'Engine\web-interface'
-            if (Test-Path $engineWebUISource) {
-                $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
-                if (Test-Path $webUIDestinationAbsolute) {
-                    Remove-Item (Join-Path $webUIDestinationAbsolute '*') -Recurse -Force -ErrorAction SilentlyContinue
-                } else {
-                    New-Item -Path $webUIDestinationAbsolute -ItemType Directory -Force | Out-Null
-                }
-                Copy-Item (Join-Path $engineWebUISource '*') $webUIDestinationAbsolute -Recurse -Force
-            } elseif (-not (Test-Path (Join-Path $scriptDir $webUIDestination)) -or -not (Get-ChildItem -Path (Join-Path $scriptDir $webUIDestination) -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-                if (Test-Path $webUIFallbackAbsolute) {
-                    $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
-                    if (-not (Test-Path $webUIDestinationAbsolute)) {
-                        New-Item -Path $webUIDestinationAbsolute -ItemType Directory -Force | Out-Null
-                    }
-                    Copy-Item (Join-Path $webUIFallbackAbsolute '*') $webUIDestinationAbsolute -Recurse -Force
-                } else {
-                    Write-Host "Fallback WebUI source not found at '$webUIFallbackAbsolute'." -ForegroundColor Yellow
-                }
-            } else {
-                Write-Host "Existing Engine web interface detected; skipping fallback copy." -ForegroundColor DarkYellow
+            if (-not (Test-Path $engineWebUISource)) {
+                throw "Engine web interface staging directory not found at '$engineWebUISource'."
             }
+
+            $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
+            if (Test-Path $webUIDestinationAbsolute) {
+                Remove-Item (Join-Path $webUIDestinationAbsolute '*') -Recurse -Force -ErrorAction SilentlyContinue
+            } else {
+                New-Item -Path $webUIDestinationAbsolute -ItemType Directory -Force | Out-Null
+            }
+
+            Copy-Item (Join-Path $engineWebUISource '*') $webUIDestinationAbsolute -Recurse -Force
         }
 
         Run-Step "Vite Web Frontend: Install NPM Packages" {
