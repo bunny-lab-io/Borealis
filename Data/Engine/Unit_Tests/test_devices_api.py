@@ -37,6 +37,18 @@ def test_list_devices(engine_harness: EngineTestHarness) -> None:
     assert "summary" in device and isinstance(device["summary"], dict)
 
 
+def test_list_agents(engine_harness: EngineTestHarness) -> None:
+    client = engine_harness.app.test_client()
+    response = client.get("/api/agents")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert isinstance(payload, dict)
+    assert payload, "expected at least one agent in the response"
+    first_agent = next(iter(payload.values()))
+    assert first_agent["hostname"] == "test-device"
+    assert first_agent["agent_id"] == "test-device-agent"
+
+
 def test_device_details(engine_harness: EngineTestHarness) -> None:
     client = engine_harness.app.test_client()
     response = client.get("/api/device/details/test-device")

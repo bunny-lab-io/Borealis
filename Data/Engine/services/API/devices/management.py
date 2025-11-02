@@ -615,7 +615,11 @@ class DeviceManagementService:
                         payload["agent_id"] = agent_key
                     agents[agent_key] = payload
 
-            return {"agents": agents}, 200
+            # The legacy server exposed /api/agents as a mapping keyed by
+            # agent identifier. The Engine WebUI expects the same structure,
+            # so we return the flattened dictionary directly instead of
+            # wrapping it in another object.
+            return agents, 200
         except Exception as exc:
             self.logger.debug("Failed to list agents", exc_info=True)
             return {"error": str(exc)}, 500

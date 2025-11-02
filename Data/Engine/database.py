@@ -15,10 +15,7 @@ import time
 from pathlib import Path
 from typing import Optional, Sequence
 
-try:  # pragma: no cover - legacy dependency shim
-    from Modules import db_migrations  # type: ignore
-except Exception:  # pragma: no cover - absent in some test contexts
-    db_migrations = None  # type: ignore
+from . import database_migrations
 
 
 _DEFAULT_ADMIN_HASH = (
@@ -44,7 +41,7 @@ def initialise_engine_database(database_path: str, *, logger: Optional[logging.L
 
     conn = sqlite3.connect(str(path))
     try:
-        _apply_legacy_migrations(conn, logger=logger)
+        _apply_engine_migrations(conn, logger=logger)
         _restore_persisted_enrollment_codes(conn, logger=logger)
         _ensure_activity_history(conn, logger=logger)
         _ensure_device_list_views(conn, logger=logger)
@@ -66,16 +63,12 @@ def initialise_engine_database(database_path: str, *, logger: Optional[logging.L
         conn.close()
 
 
-def _apply_legacy_migrations(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
-    if db_migrations is None:
-        if logger:
-            logger.debug("Legacy db_migrations module not available; skipping schema sync.")
-        return
+def _apply_engine_migrations(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
     try:
-        db_migrations.apply_all(conn)
+        database_migrations.apply_all(conn)
     except Exception as exc:
         if logger:
-            logger.error("Legacy schema migration failed: %s", exc, exc_info=True)
+            logger.error("Engine schema migration failed: %s", exc, exc_info=True)
         else:  # pragma: no cover - escalated in tests if logger absent
             raise
 

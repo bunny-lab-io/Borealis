@@ -20,10 +20,8 @@ import importlib.util
 import logging
 import time
 import ssl
-import sys
 from dataclasses import dataclass
 from logging.handlers import TimedRotatingFileHandler
-from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
 
@@ -98,21 +96,6 @@ if HttpProtocol is not None:  # pragma: no branch - attribute exists in supporte
 
 _SOCKETIO_ASYNC_MODE = "eventlet"
 
-
-# Ensure the legacy ``Modules`` package is importable when running from the
-# Engine deployment directory.
-_ENGINE_DIR = Path(__file__).resolve().parent
-_SEARCH_ROOTS = [
-    _ENGINE_DIR.parent / "Server",
-    _ENGINE_DIR.parent.parent / "Data" / "Server",
-    _ENGINE_DIR.parent.parent.parent / "Data" / "Server",
-]
-for root in _SEARCH_ROOTS:
-    modules_dir = root / "Modules"
-    if modules_dir.is_dir():
-        root_str = str(root)
-        if root_str not in sys.path:
-            sys.path.insert(0, root_str)
 
 from .config import EngineSettings, initialise_engine_logger, load_runtime_config
 
