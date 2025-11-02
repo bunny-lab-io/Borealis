@@ -16,6 +16,33 @@ from typing import Iterator
 import pytest
 from flask import Flask
 
+import sys
+import types
+
+import importlib.machinery
+
+
+def _ensure_eventlet_stub() -> None:
+    if "eventlet" in sys.modules:
+        return
+    eventlet_module = types.ModuleType("eventlet")
+    eventlet_module.monkey_patch = lambda **_kwargs: None  # type: ignore[attr-defined]
+    eventlet_module.sleep = lambda _seconds: None  # type: ignore[attr-defined]
+
+    wsgi_module = types.ModuleType("eventlet.wsgi")
+    wsgi_module.HttpProtocol = object()  # type: ignore[attr-defined]
+
+    eventlet_module.wsgi = wsgi_module  # type: ignore[attr-defined]
+
+    eventlet_module.__spec__ = importlib.machinery.ModuleSpec("eventlet", loader=None)
+    wsgi_module.__spec__ = importlib.machinery.ModuleSpec("eventlet.wsgi", loader=None)
+
+    sys.modules["eventlet"] = eventlet_module
+    sys.modules["eventlet.wsgi"] = wsgi_module
+
+
+_ensure_eventlet_stub()
+
 from Data.Engine.server import create_app
 
 
