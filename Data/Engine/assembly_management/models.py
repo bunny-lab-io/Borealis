@@ -45,7 +45,7 @@ class PayloadType(str, Enum):
 class PayloadDescriptor:
     """Represents on-disk payload material referenced by an assembly."""
 
-    guid: str
+    assembly_guid: str
     payload_type: PayloadType
     file_name: str
     file_extension: str
@@ -56,7 +56,7 @@ class PayloadDescriptor:
 
     def as_dict(self) -> Dict[str, Any]:
         return {
-            "guid": self.guid,
+            "assembly_guid": self.assembly_guid,
             "payload_type": self.payload_type.value,
             "file_name": self.file_name,
             "file_extension": self.file_extension,
@@ -66,12 +66,18 @@ class PayloadDescriptor:
             "updated_at": self.updated_at.isoformat(),
         }
 
+    @property
+    def guid(self) -> str:
+        """Backwards-compatible accessor for legacy references."""
+
+        return self.assembly_guid
+
 
 @dataclass(slots=True)
 class AssemblyRecord:
     """Represents an assembly row hydrated from persistence."""
 
-    assembly_id: str
+    assembly_guid: str
     display_name: str
     summary: Optional[str]
     category: Optional[str]
@@ -106,4 +112,3 @@ class CachedAssembly:
         self.is_dirty = False
         self.last_persisted = now
         self.dirty_since = None
-

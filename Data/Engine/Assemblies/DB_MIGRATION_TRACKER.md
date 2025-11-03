@@ -71,6 +71,9 @@
 6. Adjust error handling to surface concurrency/locking issues with retries and user-friendly messages.
 ```
 
+**Stage Notes (in progress)**
+- Refactoring work is underway to move REST endpoints onto `AssemblyCache` while we align on assembly GUID usage and domain permissions. Pending operator testing before tasks can be completed.
+
 ## 3. Implement Dev Mode authorization and UX toggles
 [ ] Gate privileged writes behind Admin role + Dev Mode toggle.
 [ ] Store Dev Mode state server-side (per-user session or short-lived token) to prevent unauthorized access.

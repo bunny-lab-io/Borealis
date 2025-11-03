@@ -23,33 +23,26 @@ from .models import AssemblyDomain, AssemblyRecord, CachedAssembly, PayloadDescr
 
 _SCHEMA_STATEMENTS: Iterable[str] = (
     """
-    CREATE TABLE IF NOT EXISTS payloads (
-        payload_guid TEXT PRIMARY KEY,
-        payload_type TEXT NOT NULL,
-        file_name TEXT NOT NULL,
-        file_extension TEXT NOT NULL,
-        size_bytes INTEGER NOT NULL DEFAULT 0,
-        checksum TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    """
     CREATE TABLE IF NOT EXISTS assemblies (
-        assembly_id TEXT PRIMARY KEY,
+        assembly_guid TEXT PRIMARY KEY,
         display_name TEXT NOT NULL,
         summary TEXT,
         category TEXT,
         assembly_kind TEXT NOT NULL,
         assembly_type TEXT,
         version INTEGER NOT NULL DEFAULT 1,
-        payload_guid TEXT NOT NULL,
         metadata_json TEXT,
         tags_json TEXT,
         checksum TEXT,
+        payload_type TEXT NOT NULL,
+        payload_file_name TEXT NOT NULL,
+        payload_file_extension TEXT NOT NULL,
+        payload_size_bytes INTEGER NOT NULL DEFAULT 0,
+        payload_checksum TEXT,
+        payload_created_at TEXT NOT NULL,
+        payload_updated_at TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(payload_guid) REFERENCES payloads(payload_guid) ON DELETE CASCADE
+        updated_at TEXT NOT NULL
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_assemblies_kind ON assemblies(assembly_kind)",
@@ -87,6 +80,14 @@ class AssemblyDatabaseManager:
             runtime = (self._runtime_root / domain.database_name).resolve()
             self._paths[domain] = AssemblyDatabasePaths(staging=staging, runtime=runtime)
 
+    @property
+    def staging_root(self) -> Path:
+        return self._staging_root
+
+    @property
+    def runtime_root(self) -> Path:
+        return self._runtime_root
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -102,6 +103,18 @@ class AssemblyDatabaseManager:
                 conn.close()
             self._mirror_database(domain)
 
+    def reset_domain(self, domain: AssemblyDomain) -> None:
+        """Remove all assemblies and payload metadata for the specified domain."""
+
+        conn = self._open_connection(domain)
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM assemblies")
+            conn.commit()
+        finally:
+            conn.close()
+            self._mirror_database(domain)
+
     def load_all(self, domain: AssemblyDomain) -> List[AssemblyRecord]:
         """Load all assembly records for the given domain."""
 
@@ -111,29 +124,26 @@ class AssemblyDatabaseManager:
             cur.execute(
                 """
                 SELECT
-                    a.assembly_id AS assembly_id,
-                    a.display_name AS display_name,
-                    a.summary AS summary,
-                    a.category AS category,
-                    a.assembly_kind AS assembly_kind,
-                    a.assembly_type AS assembly_type,
-                    a.version AS version,
-                    a.payload_guid AS payload_guid,
-                    a.metadata_json AS metadata_json,
-                    a.tags_json AS tags_json,
-                    a.checksum AS assembly_checksum,
-                    a.created_at AS assembly_created_at,
-                    a.updated_at AS assembly_updated_at,
-                    p.payload_guid AS payload_guid,
-                    p.payload_type AS payload_type,
-                    p.file_name AS payload_file_name,
-                    p.file_extension AS payload_file_extension,
-                    p.size_bytes AS payload_size_bytes,
-                    p.checksum AS payload_checksum,
-                    p.created_at AS payload_created_at,
-                    p.updated_at AS payload_updated_at
-                FROM assemblies AS a
-                JOIN payloads AS p ON p.payload_guid = a.payload_guid
+                    assembly_guid,
+                    display_name,
+                    summary,
+                    category,
+                    assembly_kind,
+                    assembly_type,
+                    version,
+                    metadata_json,
+                    tags_json,
+                    checksum AS assembly_checksum,
+                    payload_type,
+                    payload_file_name,
+                    payload_file_extension,
+                    payload_size_bytes,
+                    payload_checksum,
+                    payload_created_at,
+                    payload_updated_at,
+                    created_at AS assembly_created_at,
+                    updated_at AS assembly_updated_at
+                FROM assemblies
                 """
             )
             records: List[AssemblyRecord] = []
@@ -144,7 +154,7 @@ class AssemblyDatabaseManager:
                 except Exception:
                     payload_type = PayloadType.UNKNOWN
                 payload = PayloadDescriptor(
-                    guid=row["payload_guid"],
+                    assembly_guid=row["assembly_guid"],
                     payload_type=payload_type,
                     file_name=row["payload_file_name"],
                     file_extension=row["payload_file_extension"],
@@ -164,7 +174,7 @@ class AssemblyDatabaseManager:
                 except Exception:
                     tags = {}
                 record = AssemblyRecord(
-                    assembly_id=row["assembly_id"],
+                    assembly_guid=row["assembly_guid"],
                     display_name=row["display_name"],
                     summary=row["summary"],
                     category=row["category"],
@@ -191,20 +201,62 @@ class AssemblyDatabaseManager:
         try:
             cur = conn.cursor()
             payload = record.payload
+            metadata_json = json.dumps(record.metadata or {})
+            tags_json = json.dumps(record.tags or {})
             cur.execute(
                 """
-                INSERT INTO payloads (payload_guid, payload_type, file_name, file_extension, size_bytes, checksum, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(payload_guid) DO UPDATE SET
-                    payload_type = excluded.payload_type,
-                    file_name = excluded.file_name,
-                    file_extension = excluded.file_extension,
-                    size_bytes = excluded.size_bytes,
+                INSERT INTO assemblies (
+                    assembly_guid,
+                    display_name,
+                    summary,
+                    category,
+                    assembly_kind,
+                    assembly_type,
+                    version,
+                    metadata_json,
+                    tags_json,
+                    checksum,
+                    payload_type,
+                    payload_file_name,
+                    payload_file_extension,
+                    payload_size_bytes,
+                    payload_checksum,
+                    payload_created_at,
+                    payload_updated_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(assembly_guid) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    summary = excluded.summary,
+                    category = excluded.category,
+                    assembly_kind = excluded.assembly_kind,
+                    assembly_type = excluded.assembly_type,
+                    version = excluded.version,
+                    metadata_json = excluded.metadata_json,
+                    tags_json = excluded.tags_json,
                     checksum = excluded.checksum,
+                    payload_type = excluded.payload_type,
+                    payload_file_name = excluded.payload_file_name,
+                    payload_file_extension = excluded.payload_file_extension,
+                    payload_size_bytes = excluded.payload_size_bytes,
+                    payload_checksum = excluded.payload_checksum,
+                    payload_created_at = excluded.payload_created_at,
+                    payload_updated_at = excluded.payload_updated_at,
                     updated_at = excluded.updated_at
                 """,
                 (
-                    payload.guid,
+                    record.assembly_guid,
+                    record.display_name,
+                    record.summary,
+                    record.category,
+                    record.assembly_kind,
+                    record.assembly_type,
+                    record.version,
+                    metadata_json,
+                    tags_json,
+                    record.checksum,
                     payload.payload_type.value,
                     payload.file_name,
                     payload.file_extension,
@@ -212,53 +264,6 @@ class AssemblyDatabaseManager:
                     payload.checksum,
                     payload.created_at.isoformat(),
                     payload.updated_at.isoformat(),
-                ),
-            )
-            metadata_json = json.dumps(record.metadata or {})
-            tags_json = json.dumps(record.tags or {})
-            cur.execute(
-                """
-                INSERT INTO assemblies (
-                    assembly_id,
-                    display_name,
-                    summary,
-                    category,
-                    assembly_kind,
-                    assembly_type,
-                    version,
-                    payload_guid,
-                    metadata_json,
-                    tags_json,
-                    checksum,
-                    created_at,
-                    updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(assembly_id) DO UPDATE SET
-                    display_name = excluded.display_name,
-                    summary = excluded.summary,
-                    category = excluded.category,
-                    assembly_kind = excluded.assembly_kind,
-                    assembly_type = excluded.assembly_type,
-                    version = excluded.version,
-                    payload_guid = excluded.payload_guid,
-                    metadata_json = excluded.metadata_json,
-                    tags_json = excluded.tags_json,
-                    checksum = excluded.checksum,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    record.assembly_id,
-                    record.display_name,
-                    record.summary,
-                    record.category,
-                    record.assembly_kind,
-                    record.assembly_type,
-                    record.version,
-                    payload.guid,
-                    metadata_json,
-                    tags_json,
-                    record.checksum,
                     record.created_at.isoformat(),
                     record.updated_at.isoformat(),
                 ),
@@ -275,7 +280,7 @@ class AssemblyDatabaseManager:
         conn = self._open_connection(domain)
         try:
             cur = conn.cursor()
-            cur.execute("DELETE FROM assemblies WHERE assembly_id = ?", (record.assembly_id,))
+            cur.execute("DELETE FROM assemblies WHERE assembly_guid = ?", (record.assembly_guid,))
             conn.commit()
         finally:
             conn.close()
@@ -326,4 +331,3 @@ class AssemblyDatabaseManager:
                         runtime_candidate,
                         exc,
                     )
-

@@ -38,12 +38,12 @@ class PayloadManager:
         payload_type: PayloadType,
         content: Union[str, bytes],
         *,
-        guid: Optional[str] = None,
+        assembly_guid: Optional[str] = None,
         extension: Optional[str] = None,
     ) -> PayloadDescriptor:
         """Persist payload content and mirror it to the runtime directory."""
 
-        resolved_guid = self._normalise_guid(guid or uuid.uuid4().hex)
+        resolved_guid = self._normalise_guid(assembly_guid or uuid.uuid4().hex)
         resolved_extension = self._normalise_extension(extension or self._default_extension(payload_type))
         now = _dt.datetime.utcnow()
         data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
@@ -67,7 +67,7 @@ class PayloadManager:
             self._logger.debug("Failed to mirror payload %s to runtime copy: %s", resolved_guid, exc)
 
         descriptor = PayloadDescriptor(
-            guid=resolved_guid,
+            assembly_guid=resolved_guid,
             payload_type=payload_type,
             file_name=file_name,
             file_extension=resolved_extension,
@@ -85,8 +85,8 @@ class PayloadManager:
         checksum = hashlib.sha256(data).hexdigest()
         now = _dt.datetime.utcnow()
 
-        staging_path = self._payload_dir(self._staging_root, descriptor.guid) / descriptor.file_name
-        runtime_path = self._payload_dir(self._runtime_root, descriptor.guid) / descriptor.file_name
+        staging_path = self._payload_dir(self._staging_root, descriptor.assembly_guid) / descriptor.file_name
+        runtime_path = self._payload_dir(self._runtime_root, descriptor.assembly_guid) / descriptor.file_name
         staging_path.parent.mkdir(parents=True, exist_ok=True)
         runtime_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -96,7 +96,7 @@ class PayloadManager:
         try:
             shutil.copy2(staging_path, runtime_path)
         except Exception as exc:  # pragma: no cover - best effort mirror
-            self._logger.debug("Failed to mirror payload %s during update: %s", descriptor.guid, exc)
+            self._logger.debug("Failed to mirror payload %s during update: %s", descriptor.assembly_guid, exc)
 
         descriptor.size_bytes = len(data)
         descriptor.checksum = checksum
@@ -106,28 +106,28 @@ class PayloadManager:
     def read_payload_bytes(self, descriptor: PayloadDescriptor) -> bytes:
         """Retrieve payload content from the staging copy."""
 
-        staging_path = self._payload_dir(self._staging_root, descriptor.guid) / descriptor.file_name
+        staging_path = self._payload_dir(self._staging_root, descriptor.assembly_guid) / descriptor.file_name
         return staging_path.read_bytes()
 
     def ensure_runtime_copy(self, descriptor: PayloadDescriptor) -> None:
         """Ensure the runtime payload copy matches the staging content."""
 
-        staging_path = self._payload_dir(self._staging_root, descriptor.guid) / descriptor.file_name
-        runtime_path = self._payload_dir(self._runtime_root, descriptor.guid) / descriptor.file_name
+        staging_path = self._payload_dir(self._staging_root, descriptor.assembly_guid) / descriptor.file_name
+        runtime_path = self._payload_dir(self._runtime_root, descriptor.assembly_guid) / descriptor.file_name
         if not staging_path.exists():
-            self._logger.warning("Payload missing on disk; guid=%s path=%s", descriptor.guid, staging_path)
+            self._logger.warning("Payload missing on disk; guid=%s path=%s", descriptor.assembly_guid, staging_path)
             return
         runtime_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.copy2(staging_path, runtime_path)
         except Exception as exc:  # pragma: no cover - best effort mirror
-            self._logger.debug("Failed to mirror payload %s via ensure_runtime_copy: %s", descriptor.guid, exc)
+            self._logger.debug("Failed to mirror payload %s via ensure_runtime_copy: %s", descriptor.assembly_guid, exc)
 
     def delete_payload(self, descriptor: PayloadDescriptor) -> None:
         """Remove staging and runtime payload files."""
 
         for root in (self._staging_root, self._runtime_root):
-            dir_path = self._payload_dir(root, descriptor.guid)
+            dir_path = self._payload_dir(root, descriptor.assembly_guid)
             file_path = dir_path / descriptor.file_name
             try:
                 if file_path.exists():
@@ -135,7 +135,9 @@ class PayloadManager:
                 if dir_path.exists() and not any(dir_path.iterdir()):
                     dir_path.rmdir()
             except Exception as exc:  # pragma: no cover - best effort cleanup
-                self._logger.debug("Failed to remove payload directory %s (%s): %s", descriptor.guid, root, exc)
+                self._logger.debug(
+                    "Failed to remove payload directory %s (%s): %s", descriptor.assembly_guid, root, exc
+                )
 
     # ------------------------------------------------------------------
     # Helper methods
@@ -163,4 +165,3 @@ class PayloadManager:
     @staticmethod
     def _normalise_guid(guid: str) -> str:
         return guid.strip().lower()
-

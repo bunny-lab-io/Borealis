@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Dict, List, Mapping, Optional
 from .databases import AssemblyDatabaseManager
 from .models import AssemblyDomain, AssemblyRecord, CachedAssembly
 from .payloads import PayloadManager
+from .sync import sync_official_domain
 
 
 class AssemblyCache:
@@ -90,12 +92,29 @@ class AssemblyCache:
                 for record in records:
                     self._payload_manager.ensure_runtime_copy(record.payload)
                     entry = CachedAssembly(domain=domain, record=record, is_dirty=False, last_persisted=record.updated_at)
-                    self._store[record.assembly_id] = entry
-                    self._domain_index[domain][record.assembly_id] = entry
+                    self._store[record.assembly_guid] = entry
+                    self._domain_index[domain][record.assembly_guid] = entry
 
-    def get(self, assembly_id: str) -> Optional[AssemblyRecord]:
+    def get_entry(self, assembly_guid: str) -> Optional[CachedAssembly]:
+        """Return a defensive copy of the cached assembly."""
+
         with self._lock:
-            entry = self._store.get(assembly_id)
+            entry = self._store.get(assembly_guid)
+            if entry is None:
+                return None
+            return self._clone_entry(entry)
+
+    def list_entries(self, *, domain: Optional[AssemblyDomain] = None) -> List[CachedAssembly]:
+        """Return defensive copies of cached assemblies, optionally filtered by domain."""
+
+        with self._lock:
+            if domain is None:
+                return [self._clone_entry(entry) for entry in self._store.values()]
+            return [self._clone_entry(entry) for entry in self._domain_index[domain].values()]
+
+    def get(self, assembly_guid: str) -> Optional[AssemblyRecord]:
+        with self._lock:
+            entry = self._store.get(assembly_guid)
             if not entry:
                 return None
             return entry.record
@@ -108,37 +127,37 @@ class AssemblyCache:
 
     def stage_upsert(self, domain: AssemblyDomain, record: AssemblyRecord) -> None:
         with self._lock:
-            entry = self._store.get(record.assembly_id)
+            entry = self._store.get(record.assembly_guid)
             if entry is None:
                 entry = CachedAssembly(domain=domain, record=record, is_dirty=True)
                 entry.mark_dirty()
-                self._store[record.assembly_id] = entry
-                self._domain_index[domain][record.assembly_id] = entry
+                self._store[record.assembly_guid] = entry
+                self._domain_index[domain][record.assembly_guid] = entry
             else:
                 entry.domain = domain
                 entry.record = record
                 entry.mark_dirty()
-            self._pending_deletes.pop(record.assembly_id, None)
-            self._dirty[record.assembly_id] = entry
+            self._pending_deletes.pop(record.assembly_guid, None)
+            self._dirty[record.assembly_guid] = entry
             self._flush_event.set()
 
-    def stage_delete(self, assembly_id: str) -> None:
+    def stage_delete(self, assembly_guid: str) -> None:
         with self._lock:
-            entry = self._store.get(assembly_id)
+            entry = self._store.get(assembly_guid)
             if not entry:
                 return
             entry.is_dirty = True
-            self._dirty.pop(assembly_id, None)
-            self._pending_deletes[assembly_id] = entry
+            self._dirty.pop(assembly_guid, None)
+            self._pending_deletes[assembly_guid] = entry
             self._flush_event.set()
 
     def describe(self) -> List[Dict[str, str]]:
         with self._lock:
             snapshot = []
-            for assembly_id, entry in self._store.items():
+            for assembly_guid, entry in self._store.items():
                 snapshot.append(
                     {
-                        "assembly_id": assembly_id,
+                        "assembly_guid": assembly_guid,
                         "domain": entry.domain.value,
                         "is_dirty": "true" if entry.is_dirty else "false",
                         "dirty_since": entry.dirty_since.isoformat() if entry.dirty_since else "",
@@ -157,6 +176,23 @@ class AssemblyCache:
             self._worker.join(timeout=10.0)
         if flush:
             self._flush_dirty_entries()
+
+    def read_payload_bytes(self, assembly_guid: str) -> bytes:
+        """Return the payload bytes for the specified assembly."""
+
+        with self._lock:
+            entry = self._store.get(assembly_guid)
+        if not entry:
+            raise KeyError(f"Assembly '{assembly_guid}' not found in cache")
+        return self._payload_manager.read_payload_bytes(entry.record.payload)
+
+    @property
+    def payload_manager(self) -> PayloadManager:
+        return self._payload_manager
+
+    @property
+    def database_manager(self) -> AssemblyDatabaseManager:
+        return self._db_manager
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -186,17 +222,17 @@ class AssemblyCache:
                 self._db_manager.delete_record(entry.domain, entry)
                 self._payload_manager.delete_payload(entry.record.payload)
                 with self._lock:
-                    self._store.pop(entry.record.assembly_id, None)
-                    self._domain_index[entry.domain].pop(entry.record.assembly_id, None)
+                    self._store.pop(entry.record.assembly_guid, None)
+                    self._domain_index[entry.domain].pop(entry.record.assembly_guid, None)
             except Exception as exc:
                 self._logger.error(
                     "Failed to delete assembly %s in domain %s: %s",
-                    entry.record.assembly_id,
+                    entry.record.assembly_guid,
                     entry.domain.value,
                     exc,
                 )
                 with self._lock:
-                    self._pending_deletes[entry.record.assembly_id] = entry
+                    self._pending_deletes[entry.record.assembly_guid] = entry
                 return
 
         for entry in dirty_items:
@@ -207,13 +243,23 @@ class AssemblyCache:
             except Exception as exc:
                 self._logger.error(
                     "Failed to flush assembly %s in domain %s: %s",
-                    entry.record.assembly_id,
+                    entry.record.assembly_guid,
                     entry.domain.value,
                     exc,
                 )
                 with self._lock:
-                    self._dirty[entry.record.assembly_id] = entry
+                    self._dirty[entry.record.assembly_guid] = entry
                 break
+
+    def _clone_entry(self, entry: CachedAssembly) -> CachedAssembly:
+        record_copy = copy.deepcopy(entry.record)
+        return CachedAssembly(
+            domain=entry.domain,
+            record=record_copy,
+            is_dirty=entry.is_dirty,
+            last_persisted=entry.last_persisted,
+            dirty_since=entry.dirty_since,
+        )
 
 
 def initialise_assembly_runtime(
@@ -232,6 +278,10 @@ def initialise_assembly_runtime(
     db_manager.initialise()
 
     payload_manager = PayloadManager(staging_root=payload_staging, runtime_root=payload_runtime, logger=logger)
+    try:
+        sync_official_domain(db_manager, payload_manager, staging_root, logger=logger)
+    except Exception:  # pragma: no cover - best effort during bootstrap
+        (logger or logging.getLogger(__name__)).exception("Official assembly sync failed during startup.")
     flush_interval = _resolve_flush_interval(config)
 
     return AssemblyCache.initialise(
@@ -275,4 +325,3 @@ def _discover_staging_root() -> Path:
         if data_dir.is_dir():
             return data_dir.resolve()
     raise RuntimeError("Could not locate staging assemblies directory (expected Data/Engine/Assemblies).")
-
