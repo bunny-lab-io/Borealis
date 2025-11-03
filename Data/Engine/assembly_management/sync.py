@@ -110,21 +110,21 @@ def _record_from_file(
         return None
 
     payload_type = _payload_type_for_kind(kind)
-    guid = hashlib.sha1(rel_path.encode("utf-8")).hexdigest()
-    descriptor = payload_manager.store_payload(payload_type, text, assembly_guid=guid, extension=".json")
+    assembly_guid = hashlib.sha1(rel_path.encode("utf-8")).hexdigest()
+    descriptor = payload_manager.store_payload(payload_type, text, assembly_guid=assembly_guid, extension=".json")
 
     file_stat = file_path.stat()
     timestamp = _dt.datetime.utcfromtimestamp(file_stat.st_mtime).replace(microsecond=0)
     descriptor.created_at = timestamp
     descriptor.updated_at = timestamp
 
-    assembly_id = _assembly_id_from_path(rel_path)
+    assembly_path = _assembly_id_from_path(rel_path)
     document_metadata = _metadata_from_document(kind, document, rel_path)
     tags = _coerce_dict(document.get("tags"))
 
     record = AssemblyRecord(
-        assembly_id=assembly_id,
-        display_name=document_metadata.get("display_name") or assembly_id.rsplit("/", 1)[-1],
+        assembly_guid=assembly_guid,
+        display_name=document_metadata.get("display_name") or assembly_path.rsplit("/", 1)[-1],
         summary=document_metadata.get("summary"),
         category=document_metadata.get("category"),
         assembly_kind=kind,

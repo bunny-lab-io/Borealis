@@ -308,6 +308,7 @@ class AssemblyDatabaseManager:
 
     def _apply_schema(self, conn: sqlite3.Connection) -> None:
         cur = conn.cursor()
+        self._migrate_legacy_schema(cur)
         for statement in _SCHEMA_STATEMENTS:
             cur.execute(statement)
         conn.commit()
@@ -331,3 +332,147 @@ class AssemblyDatabaseManager:
                         runtime_candidate,
                         exc,
                     )
+    
+    def _migrate_legacy_schema(self, cur: sqlite3.Cursor) -> None:
+        """Upgrade legacy assembly/payload tables to the consolidated schema."""
+
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='assemblies'")
+        if not cur.fetchone():
+            return
+
+        cur.execute("PRAGMA table_info('assemblies')")
+        legacy_columns = {row[1] for row in cur.fetchall()}
+        if "assembly_guid" in legacy_columns:
+            return  # Already migrated
+
+        self._logger.info("Migrating legacy assemblies schema to assembly_guid layout.")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS assemblies_new (
+                assembly_guid TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                summary TEXT,
+                category TEXT,
+                assembly_kind TEXT NOT NULL,
+                assembly_type TEXT,
+                version INTEGER NOT NULL DEFAULT 1,
+                metadata_json TEXT,
+                tags_json TEXT,
+                checksum TEXT,
+                payload_type TEXT NOT NULL,
+                payload_file_name TEXT NOT NULL,
+                payload_file_extension TEXT NOT NULL,
+                payload_size_bytes INTEGER NOT NULL DEFAULT 0,
+                payload_checksum TEXT,
+                payload_created_at TEXT NOT NULL,
+                payload_updated_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payloads'")
+        has_payloads = cur.fetchone() is not None
+
+        if has_payloads:
+            cur.execute(
+                """
+                INSERT INTO assemblies_new (
+                    assembly_guid,
+                    display_name,
+                    summary,
+                    category,
+                    assembly_kind,
+                    assembly_type,
+                    version,
+                    metadata_json,
+                    tags_json,
+                    checksum,
+                    payload_type,
+                    payload_file_name,
+                    payload_file_extension,
+                    payload_size_bytes,
+                    payload_checksum,
+                    payload_created_at,
+                    payload_updated_at,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    a.assembly_id AS assembly_guid,
+                    a.display_name,
+                    a.summary,
+                    a.category,
+                    a.assembly_kind,
+                    a.assembly_type,
+                    a.version,
+                    COALESCE(a.metadata_json, '{}') AS metadata_json,
+                    COALESCE(a.tags_json, '{}') AS tags_json,
+                    a.checksum,
+                    COALESCE(p.payload_type, 'unknown') AS payload_type,
+                    COALESCE(p.file_name, 'payload.json') AS payload_file_name,
+                    COALESCE(p.file_extension, '.json') AS payload_file_extension,
+                    COALESCE(p.size_bytes, 0) AS payload_size_bytes,
+                    COALESCE(p.checksum, '') AS payload_checksum,
+                    COALESCE(p.created_at, a.created_at) AS payload_created_at,
+                    COALESCE(p.updated_at, a.updated_at) AS payload_updated_at,
+                    a.created_at,
+                    a.updated_at
+                FROM assemblies AS a
+                LEFT JOIN payloads AS p ON p.payload_guid = a.payload_guid
+                """
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO assemblies_new (
+                    assembly_guid,
+                    display_name,
+                    summary,
+                    category,
+                    assembly_kind,
+                    assembly_type,
+                    version,
+                    metadata_json,
+                    tags_json,
+                    checksum,
+                    payload_type,
+                    payload_file_name,
+                    payload_file_extension,
+                    payload_size_bytes,
+                    payload_checksum,
+                    payload_created_at,
+                    payload_updated_at,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    assembly_id AS assembly_guid,
+                    display_name,
+                    summary,
+                    category,
+                    assembly_kind,
+                    assembly_type,
+                    version,
+                    COALESCE(metadata_json, '{}'),
+                    COALESCE(tags_json, '{}'),
+                    checksum,
+                    'unknown' AS payload_type,
+                    'payload.json' AS payload_file_name,
+                    '.json' AS payload_file_extension,
+                    0 AS payload_size_bytes,
+                    '' AS payload_checksum,
+                    created_at AS payload_created_at,
+                    updated_at AS payload_updated_at,
+                    created_at,
+                    updated_at
+                FROM assemblies
+                """
+            )
+
+        cur.execute("DROP TABLE assemblies")
+        if has_payloads:
+            cur.execute("DROP TABLE payloads")
+        cur.execute("ALTER TABLE assemblies_new RENAME TO assemblies")
+        self._logger.info("Legacy assemblies schema migration completed.")

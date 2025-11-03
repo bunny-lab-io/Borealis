@@ -24,3 +24,15 @@ database.db
 .vs/s
 __pycache__
 /Update_Staging/
+
+# Assembly Databases
+/Data/Engine/Assemblies/community.db
+/Data/Engine/Assemblies/community.db-shm
+/Data/Engine/Assemblies/community.db-wal
+/Data/Engine/Assemblies/official.db
+/Data/Engine/Assemblies/official.db-shm
+/Data/Engine/Assemblies/official.db-wal
+/Data/Engine/Assemblies/user_created.db
+/Data/Engine/Assemblies/user_created.db-shm
+/Data/Engine/Assemblies/user_created.db-wal
+/Data/Engine/Assemblies/Payloads/

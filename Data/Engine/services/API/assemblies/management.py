@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from Data.Engine.assembly_management.models import AssemblyDomain
-from ..assemblies.service import AssemblyRuntimeService
+from ....assembly_management.models import AssemblyDomain
+from ...assemblies.service import AssemblyRuntimeService
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters

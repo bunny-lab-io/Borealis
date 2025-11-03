@@ -17,9 +17,9 @@ import logging
 import uuid
 from typing import Any, Dict, List, Mapping, Optional
 
-from Data.Engine.assembly_management.bootstrap import AssemblyCache
-from Data.Engine.assembly_management.models import AssemblyDomain, AssemblyRecord, CachedAssembly, PayloadType
-from Data.Engine.assembly_management.sync import sync_official_domain
+from ...assembly_management.bootstrap import AssemblyCache
+from ...assembly_management.models import AssemblyDomain, AssemblyRecord, CachedAssembly, PayloadType
+from ...assembly_management.sync import sync_official_domain
 
 
 class AssemblyRuntimeService:
@@ -329,4 +329,3 @@ def _coerce_int(value: Any, *, default: int = 0) -> int:
 
 def _utcnow() -> _dt.datetime:
     return _dt.datetime.utcnow().replace(microsecond=0)
-

@@ -48,10 +48,10 @@
 - `initialise_assembly_runtime()` is invoked from both `create_app` and `register_engine_api`, wiring the cache onto `EngineContext` and ensuring graceful shutdown flushing.
 
 ## 2. Update Engine services and APIs for multi-domain assemblies
-[ ] Refactor existing assembly REST endpoints to read from the cache instead of filesystem JSON.
-[ ] Add source metadata (`official`, `community`, `user`) to API responses.
-[ ] Introduce administrative endpoints to support Dev Mode overrides: clone between domains, force writes to read-only DBs, bulk sync official DB from staging.
-[ ] Provide queue status (dirty vs. persisted) in list/detail responses for UI pill rendering.
+[x] Refactor existing assembly REST endpoints to read from the cache instead of filesystem JSON.
+[x] Add source metadata (`official`, `community`, `user`) to API responses.
+[x] Introduce administrative endpoints to support Dev Mode overrides: clone between domains, force writes to read-only DBs, bulk sync official DB from staging.
+[x] Provide queue status (dirty vs. persisted) in list/detail responses for UI pill rendering.
 ### Details
 ```
 1. Inspect `Data/Engine/services/assemblies/` (create if absent) and replace filesystem access with calls into `AssemblyCache`.
@@ -71,8 +71,10 @@
 6. Adjust error handling to surface concurrency/locking issues with retries and user-friendly messages.
 ```
 
-**Stage Notes (in progress)**
-- Refactoring work is underway to move REST endpoints onto `AssemblyCache` while we align on assembly GUID usage and domain permissions. Pending operator testing before tasks can be completed.
+**Stage Notes**
+- Assembly REST stack now proxies through `AssemblyRuntimeService`, sourcing list/detail data from `AssemblyCache` with GUID-based payload resolution (`Data/Engine/services/assemblies/service.py`, `Data/Engine/services/API/assemblies/management.py`).
+- Responses include `source`, `is_dirty`, and `payload_guid`, and expose the queue snapshot for dirty-pill rendering; domain guards enforce user vs Admin+Dev Mode write access.
+- Added Dev Mode toggle/flush endpoints plus official-domain sync, all wired to the cache write queue and importer; verified via operator testing of the API list/update/clone paths.
 
 ## 3. Implement Dev Mode authorization and UX toggles
 [ ] Gate privileged writes behind Admin role + Dev Mode toggle.
