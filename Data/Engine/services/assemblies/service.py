@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Mapping, Optional, Union
 
 from ...assembly_management.bootstrap import AssemblyCache
 from ...assembly_management.models import AssemblyDomain, AssemblyRecord, CachedAssembly, PayloadType
-from ...assembly_management.sync import sync_official_domain
 from .serialization import (
     AssemblySerializationError,
     MAX_DOCUMENT_BYTES,
@@ -167,13 +166,6 @@ class AssemblyRuntimeService:
 
     def flush_writes(self) -> None:
         self._cache.flush_now()
-
-    def sync_official(self) -> None:
-        db_manager = self._cache.database_manager
-        payload_manager = self._cache.payload_manager
-        staging_root = db_manager.staging_root
-        sync_official_domain(db_manager, payload_manager, staging_root, logger=self._logger)
-        self._cache.reload()
 
     def import_assembly(
         self,

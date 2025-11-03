@@ -11,7 +11,6 @@
 # - POST /api/assemblies/<assembly_guid>/clone (Token Authenticated (Admin+Dev Mode for non-user domains)) - Clones an assembly into a target domain.
 # - POST /api/assemblies/dev-mode/switch (Token Authenticated (Admin)) - Enables or disables Dev Mode overrides for the current session.
 # - POST /api/assemblies/dev-mode/write (Token Authenticated (Admin+Dev Mode)) - Flushes queued assembly writes immediately.
-# - POST /api/assemblies/official/sync (Token Authenticated (Admin+Dev Mode)) - Rebuilds the official domain from staged JSON assemblies.
 # - POST /api/assemblies/import (Token Authenticated (Domain write permissions)) - Imports a legacy assembly JSON document into the selected domain.
 # - GET /api/assemblies/<assembly_guid>/export (Token Authenticated) - Exports an assembly as legacy JSON with metadata.
 # ======================================================
@@ -550,23 +549,6 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
         except Exception:  # pragma: no cover
             service.logger.exception("Failed to flush assembly queue.")
             service._audit(user=user, action="flush_queue", status="error", detail="internal server error")
-            return jsonify({"error": "internal server error"}), 500
-
-    # ------------------------------------------------------------------
-    # Official sync
-    # ------------------------------------------------------------------
-    @blueprint.route("/official/sync", methods=["POST"])
-    def sync_official():
-        user, error = service.require_admin(dev_mode_required=True)
-        if error:
-            return jsonify(error[0]), error[1]
-        try:
-            service.runtime.sync_official()
-            service._audit(user=user, action="sync_official", status="success")
-            return jsonify({"status": "synced"}), 200
-        except Exception:  # pragma: no cover
-            service.logger.exception("Official assembly sync failed.")
-            service._audit(user=user, action="sync_official", status="error", detail="internal server error")
             return jsonify({"error": "internal server error"}), 500
 
     app.register_blueprint(blueprint)

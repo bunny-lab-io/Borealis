@@ -18,9 +18,6 @@ from typing import Dict, List, Mapping, Optional
 from .databases import AssemblyDatabaseManager
 from .models import AssemblyDomain, AssemblyRecord, CachedAssembly
 from .payloads import PayloadManager
-from .sync import sync_official_domain
-
-
 class AssemblyCache:
     """Caches assemblies in memory and coordinates background persistence."""
 
@@ -278,10 +275,8 @@ def initialise_assembly_runtime(
     db_manager.initialise()
 
     payload_manager = PayloadManager(staging_root=payload_staging, runtime_root=payload_runtime, logger=logger)
-    try:
-        sync_official_domain(db_manager, payload_manager, staging_root, logger=logger)
-    except Exception:  # pragma: no cover - best effort during bootstrap
-        (logger or logging.getLogger(__name__)).exception("Official assembly sync failed during startup.")
+    # Automatic JSON-to-database imports have been retired so that staging official.db remains the single source
+    # of truth.
     flush_interval = _resolve_flush_interval(config)
 
     return AssemblyCache.initialise(

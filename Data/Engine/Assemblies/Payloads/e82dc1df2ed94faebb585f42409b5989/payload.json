@@ -1,0 +1,16 @@
+{
+  "category": "script",
+  "description": "Permission test script.",
+  "files": [],
+  "name": "Official Dev Mode Script",
+  "script": "V3JpdGUtSG9zdCAicGVybWlzc2lvbnMi",
+  "script_encoding": "base64",
+  "sites": {
+    "mode": "all",
+    "values": []
+  },
+  "timeout_seconds": 60,
+  "type": "powershell",
+  "variables": [],
+  "version": 1
+}

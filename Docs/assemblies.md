@@ -2,6 +2,7 @@
 
 ## Database Layout
 - Three SQLite databases live under `Data/Engine/Assemblies` (`official.db`, `community.db`, `user_created.db`) and mirror to `Engine/Assemblies` at runtime.
+- Automatic JSON → SQLite imports for the official domain have been retired; the staged `official.db` now serves as the authoritative store unless you invoke a manual sync.
 - Payload binaries/json store under `Payloads/<payload-guid>` in both staging and runtime directories; the AssemblyCache references payload GUIDs instead of embedding large blobs.
 - WAL mode with shared-cache is enabled on every connection; queue flushes copy the refreshed `.db`, `-wal`, and `-shm` files into the runtime mirror.
 - `AssemblyCache.describe()` reveals dirty/clean state per assembly, helping operators spot pending writes before shutdown or sync operations.
@@ -15,5 +16,5 @@
 ## Backup Guidance
 - Regularly snapshot `Data/Engine/Assemblies` and `Data/Engine/Assemblies/Payloads` alongside the mirrored runtime copies to preserve both metadata and payload artifacts.
 - Include the queue inspection endpoint (`GET /api/assemblies`) in maintenance scripts to verify no dirty entries remain before capturing backups.
-- The new CLI helper `python Data/Engine/tools/assemblies.py sync-official` refreshes the official domain from staged JSON and reports row counts, useful after restoring from backup or before releases.
+- Maintain the staged databases directly; to publish new official assemblies copy the curated `official.db` into `Data/Engine/Assemblies` before restarting the Engine.
 - Future automation will extend to scheduled backups and staged restore helpers; until then, ensure filesystem backups capture both SQLite databases and payload directories atomically.

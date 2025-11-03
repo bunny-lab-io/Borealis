@@ -1,0 +1,19 @@
+{
+  "description": "Import/export workflow test.",
+  "edges": [],
+  "nodes": [
+    {
+      "data": {
+        "label": "Input",
+        "value": "example"
+      },
+      "id": "node-1",
+      "position": {
+        "x": 10,
+        "y": 20
+      },
+      "type": "DataNode"
+    }
+  ],
+  "tab_name": "Import Workflow"
+}
