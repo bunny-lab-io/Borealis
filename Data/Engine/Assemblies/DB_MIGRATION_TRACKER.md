@@ -77,9 +77,9 @@
 - Added Dev Mode toggle/flush endpoints plus official-domain sync, all wired to the cache write queue and importer; verified via operator testing of the API list/update/clone paths.
 
 ## 3. Implement Dev Mode authorization and UX toggles
-[ ] Gate privileged writes behind Admin role + Dev Mode toggle.
-[ ] Store Dev Mode state server-side (per-user session or short-lived token) to prevent unauthorized access.
-[ ] Ensure Dev Mode audit logging for all privileged operations.
+[x] Gate privileged writes behind Admin role + Dev Mode toggle.
+[x] Store Dev Mode state server-side (per-user session or short-lived token) to prevent unauthorized access.
+[x] Ensure Dev Mode audit logging for all privileged operations.
 ### Details
 ```
 1. Extend authentication middleware in `Data/Engine/services/auth/` to include role checks and Dev Mode status.
@@ -87,6 +87,12 @@
 3. Record Dev Mode actions in audit logs (`Engine/Logs/engine.log` or dedicated file) with user, time, target domain, and operation.
 4. Update error responses for insufficient privileges to guide admins to enable Dev Mode.
 ```
+
+**Stage Notes**
+- Added `Data/Engine/services/auth/` with `DevModeManager` and `RequestAuthContext`, storing Dev Mode grants server-side with configurable TTL enforcement.
+- `EngineServiceAdapters` now provisions a shared `DevModeManager`, exposing auth helpers to API groups.
+- Updated `Data/Engine/services/API/assemblies/management.py` to enforce admin + Dev Mode checks for privileged mutations, centralise error messaging, and route Dev Mode toggles through the server-side manager.
+- Privileged assembly endpoints now emit structured audit entries via the Engine service log, covering success and denial paths for create/update/delete/clone, manual flush, official sync, and Dev Mode state changes.
 
 ## 4. Enhance Assembly Editor WebUI
 [ ] Add “Source” column to AG Grid with domain filter badges.

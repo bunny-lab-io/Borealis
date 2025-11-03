@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import os
 import re
 import sqlite3
 import time
@@ -28,6 +29,7 @@ from ...database import initialise_engine_database
 from ...security import signing
 from ...enrollment import NonceCache
 from ...integrations import GitHubIntegration
+from ..auth import DevModeManager
 from .enrollment import routes as enrollment_routes
 from .tokens import routes as token_routes
 
@@ -142,6 +144,7 @@ def _make_db_conn_factory(database_path: str) -> Callable[[], sqlite3.Connection
 @dataclass
 class EngineServiceAdapters:
     context: EngineContext
+    config: Mapping[str, Any] = field(init=False)
     db_conn_factory: Callable[[], sqlite3.Connection] = field(init=False)
     jwt_service: Any = field(init=False)
     dpop_validator: DPoPValidator = field(init=False)
@@ -153,10 +156,12 @@ class EngineServiceAdapters:
     service_log: Callable[[str, str, Optional[str]], None] = field(init=False)
     device_auth_manager: DeviceAuthManager = field(init=False)
     github_integration: GitHubIntegration = field(init=False)
+    dev_mode_manager: DevModeManager = field(init=False)
 
     def __post_init__(self) -> None:
         self.db_conn_factory = _make_db_conn_factory(self.context.database_path)
         initialise_engine_database(self.context.database_path, logger=self.context.logger)
+        self.config = dict(self.context.config or {})
         self.jwt_service = jwt_service_module.load_service()
         self.dpop_validator = DPoPValidator()
         self.ip_rate_limiter = SlidingWindowRateLimiter()
@@ -167,7 +172,7 @@ class EngineServiceAdapters:
         except Exception:
             self.script_signer = None
 
-        log_file = str(self.context.config.get("log_file") or self.context.config.get("LOG_FILE") or "")
+        log_file = str(self.config.get("log_file") or self.config.get("LOG_FILE") or "")
         if log_file:
             base = Path(log_file).resolve().parent
         else:
@@ -183,7 +188,7 @@ class EngineServiceAdapters:
             rate_limiter=self.device_rate_limiter,
         )
 
-        config = self.context.config or {}
+        config = self.config
         cache_root_value = config.get("cache_dir") or config.get("CACHE_DIR")
         if cache_root_value:
             cache_root = Path(str(cache_root_value))
@@ -207,6 +212,25 @@ class EngineServiceAdapters:
             default_repo=default_repo,
             default_branch=default_branch,
             default_ttl_seconds=default_ttl_seconds,
+        )
+
+        env_ttl_raw = os.environ.get("BOREALIS_DEV_MODE_TTL_SECONDS")
+        try:
+            env_ttl = int(env_ttl_raw) if env_ttl_raw else None
+        except (TypeError, ValueError):
+            env_ttl = None
+        config_ttl_raw = config.get("assemblies_dev_mode_ttl_seconds")
+        try:
+            config_ttl = int(config_ttl_raw) if config_ttl_raw is not None else None
+        except (TypeError, ValueError):
+            config_ttl = None
+
+        default_ttl = config_ttl or env_ttl or 900
+        if default_ttl < 60:
+            default_ttl = 60
+        self.dev_mode_manager = DevModeManager(
+            logger=self.context.logger,
+            default_ttl_seconds=default_ttl,
         )
 
 
