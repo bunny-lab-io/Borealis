@@ -15,11 +15,17 @@ import hashlib
 import json
 import logging
 import uuid
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 from ...assembly_management.bootstrap import AssemblyCache
 from ...assembly_management.models import AssemblyDomain, AssemblyRecord, CachedAssembly, PayloadType
 from ...assembly_management.sync import sync_official_domain
+from .serialization import (
+    AssemblySerializationError,
+    MAX_DOCUMENT_BYTES,
+    prepare_import_request,
+    record_to_legacy_payload,
+)
 
 
 class AssemblyRuntimeService:
@@ -57,6 +63,17 @@ class AssemblyRuntimeService:
         payload_text = self._read_payload_text(entry.record.assembly_guid)
         data = self._serialize_entry(entry, include_payload=True, payload_text=payload_text)
         return data
+
+    def export_assembly(self, assembly_guid: str) -> Dict[str, Any]:
+        entry = self._cache.get_entry(assembly_guid)
+        if not entry:
+            raise ValueError(f"Assembly '{assembly_guid}' not found")
+        payload_text = self._read_payload_text(assembly_guid)
+        export_payload = record_to_legacy_payload(entry.record, domain=entry.domain, payload_text=payload_text)
+        export_payload["is_dirty"] = entry.is_dirty
+        export_payload["dirty_since"] = entry.dirty_since.isoformat() if entry.dirty_since else None
+        export_payload["last_persisted"] = entry.last_persisted.isoformat() if entry.last_persisted else None
+        return export_payload
 
     def get_cached_entry(self, assembly_guid: str) -> Optional[CachedAssembly]:
         return self._cache.get_entry(assembly_guid)
@@ -157,6 +174,26 @@ class AssemblyRuntimeService:
         staging_root = db_manager.staging_root
         sync_official_domain(db_manager, payload_manager, staging_root, logger=self._logger)
         self._cache.reload()
+
+    def import_assembly(
+        self,
+        *,
+        domain: AssemblyDomain,
+        document: Union[str, Mapping[str, Any]],
+        assembly_guid: Optional[str] = None,
+        metadata_override: Optional[Mapping[str, Any]] = None,
+        tags_override: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        resolved_guid, payload = prepare_import_request(
+            document,
+            domain=domain,
+            assembly_guid=assembly_guid,
+            metadata_override=metadata_override,
+            tags_override=tags_override,
+        )
+        if resolved_guid and self._cache.get_entry(resolved_guid):
+            return self.update_assembly(resolved_guid, payload)
+        return self.create_assembly(payload)
 
     # ------------------------------------------------------------------
     # Internal helpers

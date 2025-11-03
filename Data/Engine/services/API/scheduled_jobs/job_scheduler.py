@@ -282,7 +282,7 @@ def _add_months(dt_tuple: Tuple[int, int, int, int, int, int], months: int = 1) 
     Handles month-end clamping.
     """
     from calendar import monthrange
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     y, m, d, hh, mm, ss = dt_tuple
     m2 = m + months
@@ -292,28 +292,28 @@ def _add_months(dt_tuple: Tuple[int, int, int, int, int, int], months: int = 1) 
     last_day = monthrange(y, m2)[1]
     d = min(d, last_day)
     try:
-        return int(datetime(y, m2, d, hh, mm, ss).timestamp())
+        return int(datetime(y, m2, d, hh, mm, ss, tzinfo=timezone.utc).timestamp())
     except Exception:
         # Fallback to first of month if something odd
-        return int(datetime(y, m2, 1, hh, mm, ss).timestamp())
+        return int(datetime(y, m2, 1, hh, mm, ss, tzinfo=timezone.utc).timestamp())
 
 
 def _add_years(dt_tuple: Tuple[int, int, int, int, int, int], years: int = 1) -> int:
-    from datetime import datetime
+    from datetime import datetime, timezone
     y, m, d, hh, mm, ss = dt_tuple
     y += years
     # Handle Feb 29 -> Feb 28 if needed
     try:
-        return int(datetime(y, m, d, hh, mm, ss).timestamp())
+        return int(datetime(y, m, d, hh, mm, ss, tzinfo=timezone.utc).timestamp())
     except Exception:
         # clamp day to 28
         d2 = 28 if (m == 2 and d > 28) else 1
-        return int(datetime(y, m, d2, hh, mm, ss).timestamp())
+        return int(datetime(y, m, d2, hh, mm, ss, tzinfo=timezone.utc).timestamp())
 
 
 def _to_dt_tuple(ts: int) -> Tuple[int, int, int, int, int, int]:
-    from datetime import datetime
-    dt = datetime.utcfromtimestamp(int(ts))
+    from datetime import datetime, timezone
+    dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
     return (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
 
 
@@ -928,35 +928,37 @@ class JobScheduler:
                 "every_hour": 60 * 60,
             }
             period = period_map.get(st)
-            candidate = (last + period) if last else start_ts
-            while candidate is not None and candidate <= now_ts - 1:
-                candidate += period
+            if last is None:
+                return start_ts
+            candidate = last + period
             return candidate
         if st == "daily":
             period = 86400
-            candidate = last + period if last else start_ts
-            while candidate is not None and candidate <= now_ts - 1:
-                candidate += period
-            return candidate
+            if last is None:
+                return start_ts
+            candidate = last + period
+            return candidate if candidate <= now_ts else candidate
         if st == "weekly":
             period = 7 * 86400
-            candidate = last + period if last else start_ts
-            while candidate is not None and candidate <= now_ts - 1:
-                candidate += period
-            return candidate
+            if last is None:
+                return start_ts
+            candidate = last + period
+            return candidate if candidate <= now_ts else candidate
         if st == "monthly":
-            base = _to_dt_tuple(last) if last else _to_dt_tuple(start_ts)
-            candidate = _add_months(base, 1 if last else 0)
-            while candidate <= now_ts - 1:
-                base = _to_dt_tuple(candidate)
-                candidate = _add_months(base, 1)
+            if last is None:
+                return start_ts
+            base = _to_dt_tuple(last)
+            candidate = _add_months(base, 1)
+            if candidate <= now_ts:
+                return candidate
             return candidate
         if st == "yearly":
-            base = _to_dt_tuple(last) if last else _to_dt_tuple(start_ts)
-            candidate = _add_years(base, 1 if last else 0)
-            while candidate <= now_ts - 1:
-                base = _to_dt_tuple(candidate)
-                candidate = _add_years(base, 1)
+            if last is None:
+                return start_ts
+            base = _to_dt_tuple(last)
+            candidate = _add_years(base, 1)
+            if candidate <= now_ts:
+                return candidate
             return candidate
         return None
 

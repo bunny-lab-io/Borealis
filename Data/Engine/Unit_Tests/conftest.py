@@ -354,7 +354,7 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         "LOG_FILE": str(log_path),
         "ERROR_LOG_FILE": str(error_log_path),
         "STATIC_FOLDER": str(static_dir),
-        "API_GROUPS": ("core", "auth", "tokens", "enrollment", "devices"),
+        "API_GROUPS": ("core", "auth", "tokens", "enrollment", "devices", "assemblies"),
     }
 
     app, _socketio, _context = create_app(config)

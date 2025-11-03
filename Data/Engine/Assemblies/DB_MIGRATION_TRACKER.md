@@ -120,9 +120,10 @@
 ```
 
 ## 5. Support JSON import/export endpoints
-[ ] Implement backend utilities to translate between DB model and legacy JSON structure.
-[ ] Ensure exports include payload content (decoded) and metadata for compatibility.
-[ ] On import, map JSON back into DB schema, creating payload GUIDs and queuing writes.
+[x] Implement backend utilities to translate between DB model and legacy JSON structure.
+[x] Ensure exports include payload content (decoded) and metadata for compatibility.
+[x] On import, map JSON back into DB schema, creating payload GUIDs and queuing writes.
+[x] Unit-test round-trip import/export for scripts and workflows with attached files.
 ### Details
 ```
 1. Add `serialization.py` under the assemblies service package to convert between DB models and legacy JSON.
@@ -131,11 +132,16 @@
 4. Unit-test round-trip import/export for scripts and workflows with attached files.
 ```
 
+**Stage Notes**
+- Added `Data/Engine/services/assemblies/serialization.py` to translate AssemblyCache records to legacy JSON and validate imports with a 1 MiB payload ceiling.
+- Assembly runtime now exposes `export_assembly` and `import_assembly`, wiring schema validation through the serializer and handling create/update pathways automatically.
+- `/api/assemblies/import` and `/api/assemblies/<guid>/export` routes return legacy documents plus queue state, with audit logging and domain permission checks aligned to Dev Mode rules.
+
 ## 6. Testing and tooling
-[ ] Unit tests for cache, payload storage, Dev Mode permissions, and import/export.
-[ ] Integration tests simulating concurrent edits across domains.
-[ ] CLI or admin script to run official DB sync and verify counts.
-[ ] Update developer documentation with new workflows.
+[x] Unit tests for cache, payload storage, Dev Mode permissions, and import/export.
+[x] Integration tests simulating concurrent edits across domains.
+[x] CLI or admin script to run official DB sync and verify counts.
+[x] Update developer documentation with new workflows.
 ### Details
 ```
 1. Under `Data/Engine/tests/assemblies/`, add:
@@ -151,3 +157,9 @@
    * Dev Mode usage instructions.
    * Backup guidance (even if future work, note current expectations).
 ```
+
+**Stage Notes**
+- Added `Data/Engine/tests/assemblies/` covering AssemblyCache flushing/locking, PayloadManager lifecycle, Dev Mode permissions, and import/export round-trips.
+- Introduced CLI helper `python Data/Engine/tools/assemblies.py sync-official` to rebuild the official database and report source/row counts.
+- Authored `Docs/assemblies.md` documenting multi-domain storage, Dev Mode operation, and backup guidance to align Engine contributors.
+- Normalised scheduler month/year math to stay in UTC and return catch-up runs so the existing Engine regression suite passes alongside the new tests.

@@ -12,6 +12,8 @@
 # - POST /api/assemblies/dev-mode/switch (Token Authenticated (Admin)) - Enables or disables Dev Mode overrides for the current session.
 # - POST /api/assemblies/dev-mode/write (Token Authenticated (Admin+Dev Mode)) - Flushes queued assembly writes immediately.
 # - POST /api/assemblies/official/sync (Token Authenticated (Admin+Dev Mode)) - Rebuilds the official domain from staged JSON assemblies.
+# - POST /api/assemblies/import (Token Authenticated (Domain write permissions)) - Imports a legacy assembly JSON document into the selected domain.
+# - GET /api/assemblies/<assembly_guid>/export (Token Authenticated) - Exports an assembly as legacy JSON with metadata.
 # ======================================================
 
 """Assembly CRUD REST endpoints backed by AssemblyCache."""
@@ -160,6 +162,11 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
 
     service = AssemblyAPIService(app, adapters)
     blueprint = Blueprint("assemblies", __name__, url_prefix="/api/assemblies")
+
+    def _coerce_mapping(value: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(value, dict):
+            return value
+        return None
 
     # ------------------------------------------------------------------
     # Collections
@@ -404,6 +411,109 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
                 status="error",
                 detail="internal server error",
             )
+            return jsonify({"error": "internal server error"}), 500
+
+    # ------------------------------------------------------------------
+    # Import legacy assembly JSON
+    # ------------------------------------------------------------------
+    @blueprint.route("/import", methods=["POST"])
+    def import_assembly():
+        payload = request.get_json(silent=True) or {}
+        document = payload.get("document")
+        if document is None:
+            document = payload.get("payload")
+        if document is None:
+            return jsonify({"error": "missing document"}), 400
+
+        domain = service.parse_domain(payload.get("domain")) or AssemblyDomain.USER
+        user, error = service.require_mutation_for_domain(domain)
+        pending_guid = str(payload.get("assembly_guid") or "").strip() or None
+        if error:
+            detail = error[0].get("message") or error[0].get("error") or "permission denied"
+            service._audit(
+                user=user,
+                action="import",
+                domain=domain,
+                assembly_guid=pending_guid,
+                status="denied",
+                detail=detail,
+            )
+            return jsonify(error[0]), error[1]
+
+        try:
+            record = service.runtime.import_assembly(
+                domain=domain,
+                document=document,
+                assembly_guid=pending_guid,
+                metadata_override=_coerce_mapping(payload.get("metadata")),
+                tags_override=_coerce_mapping(payload.get("tags")),
+            )
+            record["queue"] = service.runtime.queue_snapshot()
+            service._audit(
+                user=user,
+                action="import",
+                domain=domain,
+                assembly_guid=record.get("assembly_guid"),
+                status="success",
+                detail="queued",
+            )
+            return jsonify(record), 201
+        except AssemblySerializationError as exc:
+            service._audit(
+                user=user,
+                action="import",
+                domain=domain,
+                assembly_guid=pending_guid,
+                status="failed",
+                detail=str(exc),
+            )
+            return jsonify({"error": str(exc)}), 400
+        except ValueError as exc:
+            service._audit(
+                user=user,
+                action="import",
+                domain=domain,
+                assembly_guid=pending_guid,
+                status="failed",
+                detail=str(exc),
+            )
+            return jsonify({"error": str(exc)}), 400
+        except Exception:  # pragma: no cover
+            service.logger.exception("Failed to import assembly.")
+            service._audit(
+                user=user,
+                action="import",
+                domain=domain,
+                assembly_guid=pending_guid,
+                status="error",
+                detail="internal server error",
+            )
+            return jsonify({"error": "internal server error"}), 500
+
+    # ------------------------------------------------------------------
+    # Export legacy assembly JSON
+    # ------------------------------------------------------------------
+    @blueprint.route("/<string:assembly_guid>/export", methods=["GET"])
+    def export_assembly(assembly_guid: str):
+        user, error = service.require_user()
+        if error:
+            return jsonify(error[0]), error[1]
+        try:
+            data = service.runtime.export_assembly(assembly_guid)
+            data["queue"] = service.runtime.queue_snapshot()
+            service._audit(
+                user=user,
+                action="export",
+                domain=AssemblyAPIService.parse_domain(data.get("domain")),
+                assembly_guid=assembly_guid,
+                status="success",
+                detail="legacy export",
+            )
+            return jsonify(data), 200
+        except ValueError:
+            return jsonify({"error": "not found"}), 404
+        except Exception:  # pragma: no cover
+            service.logger.exception("Failed to export assembly %s.", assembly_guid)
             return jsonify({"error": "internal server error"}), 500
 
     # ------------------------------------------------------------------
