@@ -20,7 +20,7 @@ import {
 import { Folder as FolderIcon, Description as DescriptionIcon } from "@mui/icons-material";
 import { SimpleTreeView, TreeItem } from "@mui/x-tree-view";
 
-function buildTree(items, folders, rootLabel = "Scripts") {
+function buildTree(items, rootLabel = "Scripts") {
   const map = {};
   const rootNode = {
     id: "root",
@@ -31,47 +31,43 @@ function buildTree(items, folders, rootLabel = "Scripts") {
   };
   map[rootNode.id] = rootNode;
 
-  (folders || []).forEach((f) => {
-    const parts = (f || "").split("/");
+  (items || []).forEach((item) => {
+    if (!item || typeof item !== "object") return;
+    const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+    const rawPath = String(metadata.source_path || metadata.legacy_path || "")
+      .replace(/\\/g, "/")
+      .replace(/^\/+/, "")
+      .trim();
+    const pathSegments = rawPath ? rawPath.split("/").filter(Boolean) : [];
+    const segments = pathSegments.length
+      ? pathSegments
+      : [String(item.display_name || metadata.display_name || item.assembly_guid || "Assembly").trim() || "Assembly"];
     let children = rootNode.children;
     let parentPath = "";
-    parts.forEach((part) => {
-      const path = parentPath ? `${parentPath}/${part}` : part;
-      let node = children.find((n) => n.id === path);
-      if (!node) {
-        node = { id: path, label: part, path, isFolder: true, children: [] };
-        children.push(node);
-        map[path] = node;
-      }
-      children = node.children;
-      parentPath = path;
-    });
-  });
-
-  (items || []).forEach((s) => {
-    const parts = (s.rel_path || "").split("/");
-    let children = rootNode.children;
-    let parentPath = "";
-    parts.forEach((part, idx) => {
-      const path = parentPath ? `${parentPath}/${part}` : part;
-      const isFile = idx === parts.length - 1;
-      let node = children.find((n) => n.id === path);
+    segments.forEach((segment, idx) => {
+      const nodeId = parentPath ? `${parentPath}/${segment}` : segment;
+      const isFile = idx === segments.length - 1;
+      let node = children.find((n) => n.id === nodeId);
       if (!node) {
         node = {
-          id: path,
-          label: isFile ? (s.name || s.file_name || part) : part,
-          path,
+          id: nodeId,
+          label: isFile ? (item.display_name || metadata.display_name || segment) : segment,
+          path: nodeId,
           isFolder: !isFile,
-          fileName: s.file_name,
-          script: isFile ? s : null,
+          script: isFile ? item : null,
+          scriptPath: isFile ? (rawPath || nodeId) : undefined,
           children: []
         };
         children.push(node);
-        map[path] = node;
+        map[nodeId] = node;
+      } else if (isFile) {
+        node.script = item;
+        node.label = item.display_name || metadata.display_name || node.label;
+        node.scriptPath = rawPath || nodeId;
       }
       if (!isFile) {
         children = node.children;
-        parentPath = path;
+        parentPath = nodeId;
       }
     });
   });
@@ -99,11 +95,19 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
 
   const loadTree = useCallback(async () => {
     try {
-      const island = mode === 'ansible' ? 'ansible' : 'scripts';
-      const resp = await fetch(`/api/assembly/list?island=${island}`);
+      const resp = await fetch("/api/assemblies");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      const { root, map } = buildTree(data.items || [], data.folders || [], mode === 'ansible' ? 'Ansible Playbooks' : 'Scripts');
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const filtered = items.filter((item) => {
+        const kind = String(item?.assembly_kind || "").toLowerCase();
+        const type = String(item?.assembly_type || "").toLowerCase();
+        if (mode === "ansible") {
+          return type === "ansible";
+        }
+        return kind === "script" && type !== "ansible";
+      });
+      const { root, map } = buildTree(filtered, mode === "ansible" ? "Ansible Playbooks" : "Scripts");
       setTree(root);
       setNodeMap(map);
     } catch (err) {
@@ -261,7 +265,6 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
     const loadAssembly = async () => {
       setVariableStatus({ loading: true, error: "" });
       try {
-        const island = mode === "ansible" ? "ansible" : "scripts";
         const trimmed = (selectedPath || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
         if (!trimmed) {
           setVariables([]);
@@ -270,16 +273,26 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
           setVariableStatus({ loading: false, error: "" });
           return;
         }
-        let relPath = trimmed;
-        if (island === "scripts" && relPath.toLowerCase().startsWith("scripts/")) {
-          relPath = relPath.slice("Scripts/".length);
-        } else if (island === "ansible" && relPath.toLowerCase().startsWith("ansible_playbooks/")) {
-          relPath = relPath.slice("Ansible_Playbooks/".length);
+        const node = nodeMap[trimmed];
+        const script = node?.script;
+        const assemblyGuid = script?.assembly_guid;
+        if (!assemblyGuid) {
+          setVariables([]);
+          setVariableValues({});
+          setVariableErrors({});
+          setVariableStatus({ loading: false, error: "" });
+          return;
         }
-        const resp = await fetch(`/api/assembly/load?island=${island}&path=${encodeURIComponent(relPath)}`);
+        const resp = await fetch(`/api/assemblies/${encodeURIComponent(assemblyGuid)}/export`);
         if (!resp.ok) throw new Error(`Failed to load assembly (HTTP ${resp.status})`);
         const data = await resp.json();
-        const defs = normalizeVariables(data?.assembly?.variables || []);
+        const metadata = data?.metadata && typeof data.metadata === "object" ? data.metadata : {};
+        const payload = data?.payload && typeof data.payload === "object" ? data.payload : {};
+        const varsSource =
+          (payload && payload.variables) ||
+          metadata.variables ||
+          [];
+        const defs = normalizeVariables(varsSource);
         if (!canceled) {
           setVariables(defs);
           const initialValues = {};
@@ -303,7 +316,7 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
     return () => {
       canceled = true;
     };
-  }, [selectedPath, mode]);
+  }, [selectedPath, mode, nodeMap]);
 
   const handleVariableChange = (variable, rawValue) => {
     const { name, type } = variable;
@@ -375,8 +388,12 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
     try {
       let resp;
       const variableOverrides = buildVariablePayload();
+      const node = nodeMap[selectedPath];
       if (mode === 'ansible') {
-        const playbook_path = selectedPath; // relative to ansible island
+        const rawPath = (node?.scriptPath || selectedPath || "").replace(/\\/g, "/");
+        const playbook_path = rawPath.toLowerCase().startsWith("ansible_playbooks/")
+          ? rawPath
+          : `Ansible_Playbooks/${rawPath}`;
         resp = await fetch("/api/ansible/quick_run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -389,8 +406,8 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
           })
         });
       } else {
-        // quick_run expects a path relative to Assemblies root with 'Scripts/' prefix
-        const script_path = selectedPath.startsWith('Scripts/') ? selectedPath : `Scripts/${selectedPath}`;
+        const rawPath = (node?.scriptPath || selectedPath || "").replace(/\\/g, "/");
+        const script_path = rawPath.toLowerCase().startsWith("scripts/") ? rawPath : `Scripts/${rawPath}`;
         resp = await fetch("/api/scripts/quick_run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

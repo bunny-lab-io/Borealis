@@ -98,10 +98,10 @@
 [ ] Add “Source” column to AG Grid with domain filter badges.
 [ ] Display yellow “Queued to Write to DB” pill for assemblies whose cache entry is dirty.
 [ ] Implement Import/Export dropdown in `Assembly_Editor.jsx`:
-    [ ] Export: bundle metadata + payload contents into legacy JSON format for download.
-    [ ] Import: parse JSON, populate editor form, and default to saving into `user_created`.
-[ ] Add Dev Mode banner/toggles and domain picker when Dev Mode is active; otherwise show read-only warnings.
-[ ] Ensure admin-only controls are hidden for non-authorized users.
+    [x] Export: bundle metadata + payload contents into legacy JSON format for download.
+    [x] Import: parse JSON, populate editor form, and default to saving into `user_created`.
+[x] Add Dev Mode banner/toggles and domain picker when Dev Mode is active; otherwise show read-only warnings.
+[x] Ensure admin-only controls are hidden for non-authorized users.
 ### Details
 ```
 1. Modify `Data/Engine/web-interface/src/Assemblies/Assembly_List.jsx` (or equivalent) to:
@@ -118,6 +118,11 @@
 4. Wire UI actions to new API endpoints (clone, Dev Mode enable/disable, immediate persist).
 5. Update i18n/strings files if the UI uses localization.
 ```
+
+**Stage Notes**
+- `Assembly_List.jsx` now consumes `/api/assemblies`, renders domain badges plus dirty-state pills, exposes clone-to-domain via a new dialog, and surfaces queue metadata for each row.
+- `Assembly_Editor.jsx` loads and saves assemblies by GUID through the cache APIs, adds import/export tooling, domain selection with read-only warnings, Dev Mode enable/flush controls, and reuses shared badge components for status display.
+- App routing (workflows/scripts) and quick job tooling were updated to pass assembly GUID/domain metadata, rely on the import/export endpoints, and hydrate variables from the new Assembly service.
 
 ## 5. Support JSON import/export endpoints
 [x] Implement backend utilities to translate between DB model and legacy JSON structure.

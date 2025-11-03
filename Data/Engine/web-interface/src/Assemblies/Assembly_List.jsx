@@ -23,6 +23,7 @@ import MenuBookIcon from "@mui/icons-material/MenuBook";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { ConfirmDeleteDialog, NewWorkflowDialog } from "../Dialogs";
+import { DomainBadge, DirtyStatePill, resolveDomainMeta, DOMAIN_OPTIONS } from "./Assembly_Badges";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -48,13 +49,47 @@ const iconFontFamily = '"Quartz Regular"';
 const BOREALIS_BLUE = "#58a6ff";
 const DARKER_GRAY = "#9aa3ad";
 const PAGE_SIZE = 25;
+const SELECT_BASE_SX = {
+  "& .MuiOutlinedInput-root": {
+    bgcolor: "#1C1C1C",
+    color: "#e6edf3",
+    borderRadius: 1,
+    "& fieldset": { borderColor: "#2b3544" },
+    "&:hover fieldset": { borderColor: "#3a4657" },
+    "&.Mui-focused fieldset": { borderColor: "#58a6ff" },
+  },
+  "& .MuiOutlinedInput-input": {
+    padding: "9px 12px",
+    fontSize: "0.95rem",
+    lineHeight: 1.4,
+  },
+  "& .MuiInputLabel-root": {
+    color: "#9ba3b4",
+  },
+  "& .MuiInputLabel-root.Mui-focused": { color: "#58a6ff" },
+};
+const MENU_PROPS = {
+  PaperProps: {
+    sx: {
+      bgcolor: "#1C1C1C",
+      color: "#e6edf3",
+      border: "1px solid #2b3544",
+      "& .MuiMenuItem-root.Mui-selected": {
+        bgcolor: "rgba(88,166,255,0.16)",
+      },
+      "& .MuiMenuItem-root.Mui-selected:hover": {
+        bgcolor: "rgba(88,166,255,0.24)",
+      },
+    },
+  },
+};
 
 const TYPE_METADATA = {
-  workflows: {
+  workflow: {
     label: "Workflow",
     Icon: PolylineIcon,
   },
-  scripts: {
+  script: {
     label: "Script",
     Icon: CodeIcon,
   },
@@ -115,42 +150,85 @@ const NameCellRenderer = React.memo(function NameCellRenderer(props) {
   );
 });
 
-const normalizeRow = (island, item) => {
-  const relPath = String(item?.rel_path || "").replace(/\\/g, "/");
-  const fileName = String(item?.file_name || relPath.split("/").pop() || "");
-  const folder = relPath ? relPath.split("/").slice(0, -1).join("/") : "";
-  const idSeed = relPath || fileName || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const name =
-    island === "workflows"
-      ? item?.tab_name || fileName.replace(/\.[^.]+$/, "") || fileName || "Workflow"
-      : item?.name || fileName.replace(/\.[^.]+$/, "") || fileName || "Assembly";
-  // For workflows, always show 'workflow' in Category per request
-  const category =
-    island === "workflows"
-      ? "workflow"
-      : item?.category || "";
-  const description = island === "workflows" ? "" : item?.description || "";
+const SourceCellRenderer = React.memo(function SourceCellRenderer(props) {
+  const { data } = props;
+  if (!data) return null;
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+      <DomainBadge domain={data.domain} size="small" />
+      {data.isDirty ? <DirtyStatePill compact /> : null}
+    </Box>
+  );
+});
+
+const normalizeRow = (item, queueEntry) => {
+  if (!item) return null;
+  const assemblyGuid = item.assembly_guid || item.assembly_id || "";
+  const assemblyKind = String(item.assembly_kind || "").toLowerCase();
+  const assemblyType = String(item.assembly_type || "").toLowerCase();
+  let typeKey = "script";
+  if (assemblyKind === "workflow") {
+    typeKey = "workflow";
+  } else if (assemblyKind === "ansible" || assemblyType === "ansible") {
+    typeKey = "ansible";
+  }
+
+  const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const sourcePath = String(metadata.source_path || metadata.rel_path || "").replace(/\\/g, "/");
+  const pathParts = sourcePath ? sourcePath.split("/") : [];
+  const fileName = pathParts.length ? pathParts[pathParts.length - 1] : "";
+  const folder = pathParts.length > 1 ? pathParts.slice(0, -1).join("/") : "";
+
+  const domain = String(item.source || "user").toLowerCase();
+  const domainMeta = resolveDomainMeta(domain);
+  const displayName =
+    item.display_name ||
+    metadata.display_name ||
+    fileName.replace(/\.[^.]+$/, "") ||
+    fileName ||
+    "Assembly";
+  const summary = item.summary || metadata.summary || "";
+  const category = item.category || metadata.category || "";
+  const queueRecord = queueEntry || null;
+  const isDirty = Boolean(item.is_dirty);
+
   return {
-    id: `${island}:${idSeed}`,
-    typeKey: island,
-    name,
+    id: assemblyGuid || `${typeKey}:${displayName}`,
+    assemblyGuid,
+    typeKey,
+    assemblyKind,
+    assemblyType,
+    name: displayName,
     category,
-    description,
-    relPath,
+    description: summary,
+    relPath: sourcePath,
+    sourcePath,
     fileName,
     folder,
-    raw: item || {},
+    domain,
+    domainLabel: domainMeta.label,
+    isDirty,
+    dirtySince: item.dirty_since || queueRecord?.dirty_since || "",
+    lastPersisted: item.last_persisted || queueRecord?.last_persisted || "",
+    queueEntry: queueRecord,
+    version: item.version ?? null,
+    metadata,
+    tags: item.tags || {},
+    payloadGuid: item.payload_guid,
+    updatedAt: item.updated_at,
+    createdAt: item.created_at,
+    raw: item,
   };
 };
 
-export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
+export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = "User" }) {
   const gridRef = useRef(null);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const [newMenuAnchor, setNewMenuAnchor] = useState(null);
-  const [scriptDialog, setScriptDialog] = useState({ open: false, island: null });
+  const [scriptDialog, setScriptDialog] = useState({ open: false, typeKey: null });
   const [scriptName, setScriptName] = useState("");
   const [workflowDialogOpen, setWorkflowDialogOpen] = useState(false);
   const [workflowName, setWorkflowName] = useState("");
@@ -161,30 +239,35 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [cloneDialog, setCloneDialog] = useState({ open: false, row: null, targetDomain: "user" });
+  const isAdmin = (userRole || "").toLowerCase() === "admin";
 
   const fetchAssemblies = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const islands = ["workflows", "scripts", "ansible"];
-      const results = await Promise.all(
-        islands.map(async (island) => {
-          const resp = await fetch(`/api/assembly/list?island=${encodeURIComponent(island)}`);
-          if (!resp.ok) {
-            const problem = await resp.text();
-            throw new Error(problem || `Failed to load ${island} assemblies (HTTP ${resp.status})`);
-          }
-          const data = await resp.json();
-          const items = Array.isArray(data?.items) ? data.items : [];
-          return items.map((item) => normalizeRow(island, item));
-        }),
-      );
-      setRows(results.flat());
-      // After data load, auto-size specific columns
+      const resp = await fetch("/api/assemblies");
+      if (!resp.ok) {
+        const problem = await resp.text();
+        throw new Error(problem || `Failed to load assemblies (HTTP ${resp.status})`);
+      }
+      const payload = await resp.json();
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const queue = Array.isArray(payload?.queue) ? payload.queue : [];
+      const queueMap = queue.reduce((acc, entry) => {
+        if (entry && entry.assembly_guid) {
+          acc[entry.assembly_guid] = entry;
+        }
+        return acc;
+      }, {});
+      const processed = items
+        .map((item) => normalizeRow(item, queueMap[item?.assembly_guid || item?.assembly_id || ""]))
+        .filter(Boolean);
+      setRows(processed);
       setTimeout(() => {
         const columnApi = gridRef.current?.columnApi;
         if (columnApi) {
-          const ids = ["assemblyType", "location", "category", "name"];
+          const ids = ["assemblyType", "source", "category", "name"];
           columnApi.autoSizeColumns(ids, false);
         }
       }, 0);
@@ -204,19 +287,11 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
   const openRow = useCallback(
     (row) => {
       if (!row) return;
-      if (row.typeKey === "workflows") {
-        const payload = {
-          ...row.raw,
-          rel_path: row.relPath,
-          file_name: row.fileName,
-        };
-        if (!payload.name) payload.name = row.name;
-        if (!payload.tab_name) payload.tab_name = row.name;
-        onOpenWorkflow?.(payload);
+      if (row.typeKey === "workflow") {
+        onOpenWorkflow?.(row);
         return;
       }
-      const mode = row.typeKey === "ansible" ? "ansible" : "scripts";
-      onOpenScript?.(row.relPath, mode, null);
+      onOpenScript?.(row);
     },
     [onOpenWorkflow, onOpenScript],
   );
@@ -250,35 +325,67 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
     closeContextMenu();
   };
 
+  const startClone = () => {
+    if (!activeRow || !activeRow.assemblyGuid) return;
+    const defaultTarget = activeRow.domain === "user" ? "community" : "user";
+    setCloneDialog({ open: true, row: activeRow, targetDomain: defaultTarget });
+    closeContextMenu();
+  };
+
   const startDelete = () => {
     if (!activeRow) return;
     setDeleteDialogOpen(true);
     closeContextMenu();
   };
 
+  const handleCloneClose = () => setCloneDialog({ open: false, row: null, targetDomain: "user" });
+
+  const handleCloneConfirm = async () => {
+    const target = cloneDialog.row;
+    if (!target?.assemblyGuid) {
+      handleCloneClose();
+      return;
+    }
+    try {
+      const resp = await fetch(`/api/assemblies/${encodeURIComponent(target.assemblyGuid)}/clone`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target_domain: cloneDialog.targetDomain,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
+      handleCloneClose();
+      await fetchAssemblies();
+    } catch (err) {
+      console.error("Failed to clone assembly:", err);
+      alert(err?.message || "Failed to clone assembly");
+      handleCloneClose();
+    }
+  };
+
   const handleRenameSave = async () => {
     const target = activeRow;
     const trimmed = renameValue.trim();
-    if (!target || !trimmed) {
+    if (!target || !trimmed || !target.assemblyGuid) {
       setRenameDialogOpen(false);
       return;
     }
     try {
-      const payload = {
-        island: target.typeKey,
-        kind: "file",
-        path: target.relPath,
-        new_name: trimmed,
-      };
-      if (target.typeKey !== "workflows" && target.raw?.type) {
-        payload.type = target.raw.type;
-      }
-      const resp = await fetch(`/api/assembly/rename`, {
-        method: "POST",
+      const resp = await fetch(`/api/assemblies/${encodeURIComponent(target.assemblyGuid)}`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          display_name: trimmed,
+        }),
       });
-      const data = await resp.json();
+      let data = null;
+      try {
+        data = await resp.json();
+      } catch {
+        data = null;
+      }
       if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       setRenameDialogOpen(false);
       await fetchAssemblies();
@@ -290,21 +397,20 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
 
   const handleDeleteConfirm = async () => {
     const target = activeRow;
-    if (!target) {
+    if (!target || !target.assemblyGuid) {
       setDeleteDialogOpen(false);
       return;
     }
     try {
-      const resp = await fetch(`/api/assembly/delete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          island: target.typeKey,
-          kind: "file",
-          path: target.relPath,
-        }),
+      const resp = await fetch(`/api/assemblies/${encodeURIComponent(target.assemblyGuid)}`, {
+        method: "DELETE",
       });
-      const data = await resp.json();
+      let data = null;
+      try {
+        data = await resp.json();
+      } catch {
+        data = null;
+      }
       if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       setDeleteDialogOpen(false);
       await fetchAssemblies();
@@ -329,12 +435,25 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
         resizable: true,
       },
       {
-        colId: "location",
-        field: "location",
-        headerName: "Location",
+        colId: "source",
+        field: "domain",
+        headerName: "Source",
+        valueGetter: (params) => params?.data?.domain || "",
+        valueFormatter: (params) => resolveDomainMeta(params?.value).label,
+        filter: "agTextColumnFilter",
+        cellRenderer: SourceCellRenderer,
+        minWidth: 170,
+        flex: 0,
+        sortable: true,
+        resizable: true,
+      },
+      {
+        colId: "path",
+        field: "path",
+        headerName: "Path",
         valueGetter: (params) => params?.data?.folder || "",
         cellStyle: { color: DARKER_GRAY, fontSize: 13 },
-        minWidth: 180,
+        minWidth: 200,
         flex: 0,
         sortable: true,
         filter: "agTextColumnFilter",
@@ -395,21 +514,21 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
 
   const handleRefresh = () => fetchAssemblies();
 
-  const handleNewAssemblyOption = (island) => {
+  const handleNewAssemblyOption = (typeKey) => {
     setNewMenuAnchor(null);
-    if (island === "workflows") {
+    if (typeKey === "workflow") {
       setWorkflowName("");
       setWorkflowDialogOpen(true);
       return;
     }
     setScriptName("");
-    setScriptDialog({ open: true, island });
+    setScriptDialog({ open: true, typeKey });
   };
 
   const handleCreateScript = () => {
     const trimmed = scriptName.trim();
-    if (!trimmed || !scriptDialog.island) return;
-    const isAnsible = scriptDialog.island === "ansible";
+    if (!trimmed || !scriptDialog.typeKey) return;
+    const isAnsible = scriptDialog.typeKey === "ansible";
     const context = {
       folder: "",
       suggestedFileName: trimmed,
@@ -418,8 +537,21 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
       type: isAnsible ? "ansible" : "powershell",
       category: isAnsible ? "application" : "script",
     };
-    onOpenScript?.(null, isAnsible ? "ansible" : "scripts", context);
-    setScriptDialog({ open: false, island: null });
+    const newRow = {
+      assemblyGuid: null,
+      typeKey: isAnsible ? "ansible" : "script",
+      assemblyKind: isAnsible ? "ansible" : "script",
+      assemblyType: isAnsible ? "ansible" : context.type,
+      name: trimmed,
+      category: context.category,
+      domain: "user",
+      metadata: { ...context },
+      isDirty: false,
+      isNew: true,
+      createContext: context,
+    };
+    onOpenScript?.(newRow);
+    setScriptDialog({ open: false, typeKey: null });
     setScriptName("");
   };
 
@@ -427,7 +559,17 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
     const trimmed = workflowName.trim();
     if (!trimmed) return;
     setWorkflowDialogOpen(false);
-    onOpenWorkflow?.(null, "", trimmed);
+    const newWorkflow = {
+      assemblyGuid: null,
+      typeKey: "workflow",
+      assemblyKind: "workflow",
+      assemblyType: "workflow",
+      name: trimmed,
+      domain: "user",
+      metadata: { display_name: trimmed, category: "workflow" },
+      isNew: true,
+    };
+    onOpenWorkflow?.(newWorkflow);
     setWorkflowName("");
   };
 
@@ -494,8 +636,8 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
           onClose={() => setNewMenuAnchor(null)}
           PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
         >
-          <MenuItem onClick={() => handleNewAssemblyOption("scripts")}>Script</MenuItem>
-          <MenuItem onClick={() => handleNewAssemblyOption("workflows")}>Workflow</MenuItem>
+          <MenuItem onClick={() => handleNewAssemblyOption("script")}>Script</MenuItem>
+          <MenuItem onClick={() => handleNewAssemblyOption("workflow")}>Workflow</MenuItem>
           <MenuItem onClick={() => handleNewAssemblyOption("ansible")}>Ansible Playbook</MenuItem>
         </Menu>
       </Box>
@@ -543,7 +685,11 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
             onRowDoubleClicked={handleRowDoubleClicked}
             onCellContextMenu={handleCellContextMenu}
             getRowId={(params) =>
-              params?.data?.id || params?.data?.relPath || params?.data?.fileName || String(params?.rowIndex ?? "")
+              params?.data?.assemblyGuid ||
+              params?.data?.id ||
+              params?.data?.relPath ||
+              params?.data?.fileName ||
+              String(params?.rowIndex ?? "")
             }
             theme={myTheme}
             rowHeight={44}
@@ -587,6 +733,9 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
         >
           Open
         </MenuItem>
+        {activeRow?.assemblyGuid && (isAdmin || activeRow.domain === "user") ? (
+          <MenuItem onClick={startClone}>Clone</MenuItem>
+        ) : null}
         <MenuItem onClick={startRename}>Rename</MenuItem>
         <MenuItem sx={{ color: "#ff8a8a" }} onClick={startDelete}>
           Delete
@@ -629,14 +778,51 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
         onConfirm={handleDeleteConfirm}
       />
 
+      <Dialog open={cloneDialog.open} onClose={handleCloneClose}>
+        <DialogTitle>Clone Assembly</DialogTitle>
+        <DialogContent sx={{ minWidth: 280 }}>
+          <TextField
+            select
+            fullWidth
+            label="Target Domain"
+            value={cloneDialog.targetDomain}
+            onChange={(e) =>
+              setCloneDialog((prev) => ({
+                ...prev,
+                targetDomain: String(e.target.value || "").toLowerCase(),
+              }))
+            }
+            sx={{ ...SELECT_BASE_SX, mt: 1 }}
+            SelectProps={{ MenuProps: MENU_PROPS }}
+          >
+            {DOMAIN_OPTIONS.filter((option) => option.value !== cloneDialog.row?.domain).map((option) => (
+              <MenuItem key={option.value} value={option.value}>
+                {option.label}
+              </MenuItem>
+            ))}
+          </TextField>
+          <Typography variant="body2" sx={{ mt: 1, color: "#9ba3b4" }}>
+            Cloning creates a copy of the assembly in the selected domain.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloneClose} sx={{ textTransform: "none", color: "#58a6ff" }}>
+            Cancel
+          </Button>
+          <Button onClick={handleCloneConfirm} sx={{ textTransform: "none", color: "#58a6ff" }}>
+            Clone
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog
         open={scriptDialog.open}
         onClose={() => {
-          setScriptDialog({ open: false, island: null });
+          setScriptDialog({ open: false, typeKey: null });
           setScriptName("");
         }}
       >
-        <DialogTitle>{scriptDialog.island === "ansible" ? "New Ansible Playbook" : "New Script"}</DialogTitle>
+        <DialogTitle>{scriptDialog.typeKey === "ansible" ? "New Ansible Playbook" : "New Script"}</DialogTitle>
         <DialogContent>
           <TextField
             autoFocus
@@ -657,7 +843,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript }) {
         <DialogActions>
           <Button
             onClick={() => {
-              setScriptDialog({ open: false, island: null });
+              setScriptDialog({ open: false, typeKey: null });
               setScriptName("");
             }}
             sx={{ textTransform: "none" }}

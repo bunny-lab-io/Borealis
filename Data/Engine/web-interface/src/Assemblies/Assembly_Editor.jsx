@@ -5,7 +5,7 @@ import {
   Typography,
   Button,
   TextField,
-  MenuItem,
+  Menu, MenuItem,
   Grid,
   FormControlLabel,
   Checkbox,
@@ -26,6 +26,7 @@ import "prismjs/components/prism-batch";
 import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
 import { ConfirmDeleteDialog } from "../Dialogs";
+import { DomainBadge, DirtyStatePill, DOMAIN_OPTIONS } from "./Assembly_Badges";
 
 const TYPE_OPTIONS_ALL = [
   { key: "ansible", label: "Ansible Playbook", prism: "yaml" },
@@ -170,6 +171,20 @@ function formatBytes(size) {
     idx += 1;
   }
   return `${s.toFixed(1)} ${units[idx]}`;
+}
+
+function downloadJsonFile(fileName, data) {
+  const safeName = fileName && fileName.trim() ? fileName.trim() : "assembly.json";
+  const content = JSON.stringify(data, null, 2);
+  const blob = new Blob([content], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = safeName.endsWith(".json") ? safeName : `${safeName}.json`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 function defaultAssembly(defaultType = "powershell") {
@@ -368,12 +383,12 @@ function toServerDocument(assembly) {
 function RenameFileDialog({ open, value, onChange, onCancel, onSave }) {
   return (
     <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: BACKGROUND_COLORS.dialog, color: "#fff" } }}>
-      <DialogTitle>Rename Assembly File</DialogTitle>
+      <DialogTitle>Rename Assembly</DialogTitle>
       <DialogContent>
         <TextField
           autoFocus
           margin="dense"
-          label="File Name"
+          label="Assembly Name"
           fullWidth
           variant="outlined"
           value={value}
@@ -390,25 +405,34 @@ function RenameFileDialog({ open, value, onChange, onCancel, onSave }) {
 }
 
 export default function AssemblyEditor({
-  mode = "scripts",
-  initialPath = "",
-  initialContext = null,
+  mode = "script",
+  initialAssembly = null,
   onConsumeInitialData,
-  onSaved
+  onSaved,
+  userRole = "User",
 }) {
-  const isAnsible = mode === "ansible";
+  const normalizedMode = mode === "ansible" ? "ansible" : "script";
+  const isAnsible = normalizedMode === "ansible";
   const defaultType = isAnsible ? "ansible" : "powershell";
   const [assembly, setAssembly] = useState(() => defaultAssembly(defaultType));
-  const [currentPath, setCurrentPath] = useState("");
-  const [fileName, setFileName] = useState("");
-  const [folderPath, setFolderPath] = useState(() => normalizeFolderPath(initialContext?.folder || ""));
+  const [assemblyGuid, setAssemblyGuid] = useState(initialAssembly?.row?.assemblyGuid || null);
+  const [domain, setDomain] = useState(() => (initialAssembly?.row?.domain || "user").toLowerCase());
+  const [fileName, setFileName] = useState(() => sanitizeFileName(initialAssembly?.row?.name || ""));
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [siteOptions, setSiteOptions] = useState([]);
   const [siteLoading, setSiteLoading] = useState(false);
-  const contextNonceRef = useRef(null);
+  const [queueInfo, setQueueInfo] = useState(initialAssembly?.row?.queueEntry || null);
+  const [isDirtyQueue, setIsDirtyQueue] = useState(Boolean(initialAssembly?.row?.isDirty));
+  const [devModeEnabled, setDevModeEnabled] = useState(false);
+  const [devModeBusy, setDevModeBusy] = useState(false);
+  const importInputRef = useRef(null);
+  const [menuAnchorEl, setMenuAnchorEl] = useState(null);
+  const [errorMessage, setErrorMessage] = useState("");
+  const isAdmin = (userRole || "").toLowerCase() === "admin";
 
   const TYPE_OPTIONS = useMemo(
     () => (isAnsible ? TYPE_OPTIONS_ALL.filter((o) => o.key === "ansible") : TYPE_OPTIONS_ALL.filter((o) => o.key !== "ansible")),
@@ -426,53 +450,123 @@ export default function AssemblyEditor({
     return map;
   }, [siteOptions]);
 
-  const island = isAnsible ? "ansible" : "scripts";
-
   useEffect(() => {
-    if (!initialPath) return;
     let canceled = false;
-    (async () => {
+
+    const hydrateFromDocument = (document) => {
+      const doc = fromServerDocument(document || {}, defaultType);
+      setAssembly(doc);
+      setFileName((prev) => prev || sanitizeFileName(doc.name || ""));
+    };
+
+    const hydrateNewContext = (ctx) => {
+      const doc = defaultAssembly(ctx?.defaultType || defaultType);
+      if (ctx?.name) doc.name = ctx.name;
+      if (ctx?.description) doc.description = ctx.description;
+      if (ctx?.category) doc.category = ctx.category;
+      if (ctx?.type) doc.type = ctx.type;
+      hydrateFromDocument(doc);
+      setAssemblyGuid(null);
+      setDomain((ctx?.domain || initialAssembly?.row?.domain || "user").toLowerCase());
+      setQueueInfo(null);
+      setIsDirtyQueue(false);
+      const suggested = ctx?.suggestedFileName || ctx?.name || doc.name || "";
+      setFileName(sanitizeFileName(suggested));
+    };
+
+    const hydrateExisting = async (guid, row) => {
       try {
-        const resp = await fetch(`/api/assembly/load?island=${encodeURIComponent(island)}&path=${encodeURIComponent(initialPath)}`);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        setLoading(true);
+        const resp = await fetch(`/api/assemblies/${encodeURIComponent(guid)}/export`);
+        if (!resp.ok) {
+          const problem = await resp.text();
+          throw new Error(problem || `Failed to load assembly (HTTP ${resp.status})`);
+        }
         const data = await resp.json();
         if (canceled) return;
-        const rel = data.rel_path || initialPath;
-        setCurrentPath(rel);
-        setFolderPath(normalizeFolderPath(rel.split("/").slice(0, -1).join("/")));
-        setFileName(data.file_name || rel.split("/").pop() || "");
-        const doc = fromServerDocument(data.assembly || data, defaultType);
-        setAssembly(doc);
+        const metadata = data?.metadata && typeof data.metadata === "object" ? data.metadata : {};
+        const payload = data?.payload && typeof data.payload === "object" ? data.payload : {};
+        const enrichedDoc = { ...payload };
+        const fallbackName =
+          metadata.display_name || data?.display_name || row?.name || assembly.name || "";
+        enrichedDoc.name = enrichedDoc.name || fallbackName;
+        enrichedDoc.display_name = enrichedDoc.display_name || fallbackName;
+        enrichedDoc.description =
+          enrichedDoc.description ||
+          metadata.summary ||
+          data?.summary ||
+          row?.description ||
+          "";
+        enrichedDoc.category =
+          enrichedDoc.category || metadata.category || data?.category || row?.category || "";
+        enrichedDoc.type =
+          enrichedDoc.type ||
+          metadata.assembly_type ||
+          data?.assembly_type ||
+          row?.assembly_type ||
+          defaultType;
+        if (enrichedDoc.timeout_seconds == null) {
+          const metaTimeout =
+            metadata.timeout_seconds ?? metadata.timeoutSeconds ?? metadata.timeout ?? null;
+          if (metaTimeout != null) enrichedDoc.timeout_seconds = metaTimeout;
+        }
+        if (!enrichedDoc.sites) {
+          const metaSites = metadata.sites && typeof metadata.sites === "object" ? metadata.sites : {};
+          enrichedDoc.sites = metaSites;
+        }
+        if (!Array.isArray(enrichedDoc.variables) || !enrichedDoc.variables.length) {
+          enrichedDoc.variables = Array.isArray(metadata.variables) ? metadata.variables : [];
+        }
+        if (!Array.isArray(enrichedDoc.files) || !enrichedDoc.files.length) {
+          enrichedDoc.files = Array.isArray(metadata.files) ? metadata.files : [];
+        }
+        hydrateFromDocument({ ...enrichedDoc });
+        setAssemblyGuid(data?.assembly_guid || guid);
+        setDomain((data?.source || data?.domain || row?.domain || "user").toLowerCase());
+        setQueueInfo({
+          dirty_since: data?.dirty_since || row?.queueEntry?.dirty_since || null,
+          last_persisted: data?.last_persisted || row?.queueEntry?.last_persisted || null,
+        });
+        setIsDirtyQueue(Boolean(data?.is_dirty));
+        const exportName = sanitizeFileName(
+          data?.display_name || metadata.display_name || row?.name || guid
+        );
+        setFileName(exportName);
       } catch (err) {
         console.error("Failed to load assembly:", err);
+        if (!canceled) {
+          setErrorMessage(err?.message || "Failed to load assembly data.");
+        }
       } finally {
-        if (!canceled && onConsumeInitialData) onConsumeInitialData();
+        if (!canceled) {
+          setLoading(false);
+          onConsumeInitialData?.();
+        }
       }
-    })();
+    };
+
+    const row = initialAssembly?.row;
+    const context = row?.createContext || initialAssembly?.createContext;
+
+    if (row?.assemblyGuid) {
+      hydrateExisting(row.assemblyGuid, row);
+      return () => {
+        canceled = true;
+      };
+    }
+
+    if (context) {
+      hydrateNewContext(context);
+      onConsumeInitialData?.();
+      return () => {
+        canceled = true;
+      };
+    }
+
     return () => {
       canceled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialPath, island]);
-
-  useEffect(() => {
-    const ctx = initialContext;
-    if (!ctx || !ctx.nonce) return;
-    if (contextNonceRef.current === ctx.nonce) return;
-    contextNonceRef.current = ctx.nonce;
-    const doc = defaultAssembly(ctx.defaultType || defaultType);
-    if (ctx.name) doc.name = ctx.name;
-    if (ctx.description) doc.description = ctx.description;
-    if (ctx.category) doc.category = ctx.category;
-    if (ctx.type) doc.type = ctx.type;
-    setAssembly(doc);
-    setCurrentPath("");
-    const suggested = ctx.suggestedFileName || ctx.name || "";
-    setFileName(suggested ? sanitizeFileName(suggested) : "");
-    setFolderPath(normalizeFolderPath(ctx.folder || ""));
-    if (onConsumeInitialData) onConsumeInitialData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialContext?.nonce]);
+  }, [initialAssembly, defaultType, onConsumeInitialData]);
 
   useEffect(() => {
     let canceled = false;
@@ -593,116 +687,242 @@ export default function AssemblyEditor({
     setAssembly((prev) => ({ ...prev, files: prev.files.filter((f) => f.id !== id) }));
   };
 
-  const computeTargetPath = () => {
-    if (currentPath) return currentPath;
-    const baseName = sanitizeFileName(fileName || assembly.name || (isAnsible ? "playbook" : "assembly"));
-    const folder = normalizeFolderPath(folderPath);
-    return folder ? `${folder}/${baseName}` : baseName;
-  };
+  const canWriteToDomain = domain === "user" || (isAdmin && devModeEnabled);
 
-  const saveAssembly = async () => {
+  const handleSaveAssembly = async () => {
     if (!assembly.name.trim()) {
       alert("Assembly Name is required.");
       return;
     }
-    const payload = toServerDocument(assembly);
-    payload.type = assembly.type;
-    const targetPath = computeTargetPath();
-    if (!targetPath) {
-      alert("Unable to determine file path.");
-      return;
-    }
+    const document = toServerDocument(assembly);
     setSaving(true);
+    setErrorMessage("");
     try {
-      if (currentPath) {
-        const resp = await fetch(`/api/assembly/edit`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ island, path: currentPath, content: payload })
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          throw new Error(data?.error || `HTTP ${resp.status}`);
-        }
-        if (data?.rel_path) {
-          setCurrentPath(data.rel_path);
-          setFolderPath(normalizeFolderPath(data.rel_path.split("/").slice(0, -1).join("/")));
-          setFileName(data.rel_path.split("/").pop() || fileName);
-        }
-      } else {
-        const resp = await fetch(`/api/assembly/create`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ island, kind: "file", path: targetPath, content: payload, type: assembly.type })
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
-        if (data.rel_path) {
-          setCurrentPath(data.rel_path);
-          setFolderPath(data.rel_path.split("/").slice(0, -1).join("/"));
-          setFileName(data.rel_path.split("/").pop() || "");
-        } else {
-          setCurrentPath(targetPath);
-          setFileName(targetPath.split("/").pop() || "");
-        }
+      const resp = await fetch("/api/assemblies/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          document,
+          domain,
+          assembly_guid: assemblyGuid || undefined,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
       }
-      onSaved && onSaved();
+      const nextGuid = data?.assembly_guid || assemblyGuid;
+      setAssemblyGuid(nextGuid || null);
+      const nextDomain = (data?.source || data?.domain || domain || "user").toLowerCase();
+      setDomain(nextDomain);
+      setQueueInfo({
+        dirty_since: data?.dirty_since || null,
+        last_persisted: data?.last_persisted || null,
+      });
+      setIsDirtyQueue(Boolean(data?.is_dirty));
+      if (data?.display_name) {
+        setAssembly((prev) => ({ ...prev, name: data.display_name }));
+        setFileName(sanitizeFileName(data.display_name));
+      } else {
+        setFileName((prev) => prev || sanitizeFileName(assembly.name));
+      }
+      onSaved?.();
     } catch (err) {
       console.error("Failed to save assembly:", err);
-      alert(err.message || "Failed to save assembly");
+      const message = err?.message || "Failed to save assembly.";
+      setErrorMessage(message);
+      alert(message);
     } finally {
       setSaving(false);
     }
   };
 
-  const saveRename = async () => {
-    try {
-      const nextName = sanitizeFileName(renameValue || fileName || assembly.name);
-      const resp = await fetch(`/api/assembly/rename`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ island, kind: "file", path: currentPath, new_name: nextName, type: assembly.type })
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
-      const rel = data.rel_path || currentPath;
-      setCurrentPath(rel);
-      setFolderPath(rel.split("/").slice(0, -1).join("/"));
-      setFileName(rel.split("/").pop() || nextName);
+  const handleRenameConfirm = () => {
+    const trimmed = (renameValue || assembly.name || "").trim();
+    if (!trimmed) {
       setRenameOpen(false);
-    } catch (err) {
-      console.error("Failed to rename assembly:", err);
-      alert(err.message || "Failed to rename");
-      setRenameOpen(false);
+      return;
     }
+    setAssembly((prev) => ({ ...prev, name: trimmed }));
+    setFileName(sanitizeFileName(trimmed));
+    setRenameOpen(false);
   };
 
-  const deleteAssembly = async () => {
-    if (!currentPath) {
+  const handleDeleteAssembly = async () => {
+    if (!assemblyGuid) {
       setDeleteOpen(false);
       return;
     }
+    setSaving(true);
+    setErrorMessage("");
     try {
-      const resp = await fetch(`/api/assembly/delete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ island, kind: "file", path: currentPath })
+      const resp = await fetch(`/api/assemblies/${encodeURIComponent(assemblyGuid)}`, {
+        method: "DELETE",
       });
+      const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        throw new Error(data?.error || `HTTP ${resp.status}`);
+        throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
       }
       setDeleteOpen(false);
-      setAssembly(defaultAssembly(defaultType));
-      setCurrentPath("");
-      setFileName("");
-      onSaved && onSaved();
+      onSaved?.();
     } catch (err) {
       console.error("Failed to delete assembly:", err);
-      alert(err.message || "Failed to delete assembly");
-      setDeleteOpen(false);
+      const message = err?.message || "Failed to delete assembly.";
+      setErrorMessage(message);
+      alert(message);
+    } finally {
+      setSaving(false);
     }
   };
+
+  const handleDevModeToggle = async (enabled) => {
+    setDevModeBusy(true);
+    setErrorMessage("");
+    try {
+      const resp = await fetch("/api/assemblies/dev-mode/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
+      }
+      setDevModeEnabled(Boolean(data?.dev_mode));
+    } catch (err) {
+      console.error("Failed to toggle Dev Mode:", err);
+      const message = err?.message || "Failed to update Dev Mode.";
+      setErrorMessage(message);
+      alert(message);
+    } finally {
+      setDevModeBusy(false);
+    }
+  };
+
+  const handleFlushQueue = async () => {
+    setDevModeBusy(true);
+    setErrorMessage("");
+    try {
+      const resp = await fetch("/api/assemblies/dev-mode/write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
+      }
+      setIsDirtyQueue(false);
+      setQueueInfo((prev) => ({
+        ...(prev || {}),
+        dirty_since: null,
+        last_persisted: new Date().toISOString(),
+      }));
+    } catch (err) {
+      console.error("Failed to flush assembly queue:", err);
+      const message = err?.message || "Failed to flush queued writes.";
+      setErrorMessage(message);
+      alert(message);
+    } finally {
+      setDevModeBusy(false);
+    }
+  };
+
+  const handleExportAssembly = async () => {
+    handleMenuClose();
+    setErrorMessage("");
+    try {
+      if (assemblyGuid) {
+        const resp = await fetch(`/api/assemblies/${encodeURIComponent(assemblyGuid)}/export`);
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
+        }
+        const exportDoc = { ...data };
+        delete exportDoc.queue;
+        const exportName = sanitizeFileName(fileName || data?.display_name || assembly.name || assemblyGuid);
+        downloadJsonFile(exportName, exportDoc);
+      } else {
+        const document = toServerDocument(assembly);
+        const exportDoc = {
+          assembly_guid: assemblyGuid,
+          domain,
+          assembly_kind: isAnsible ? "ansible" : "script",
+          assembly_type: assembly.type,
+          display_name: assembly.name,
+          summary: assembly.description,
+          category: assembly.category,
+          payload: document,
+        };
+        const exportName = sanitizeFileName(fileName || assembly.name || "assembly");
+        downloadJsonFile(exportName, exportDoc);
+      }
+    } catch (err) {
+      console.error("Failed to export assembly:", err);
+      const message = err?.message || "Failed to export assembly.";
+      setErrorMessage(message);
+      alert(message);
+    }
+  };
+
+  const handleImportAssembly = async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    setErrorMessage("");
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const payload = parsed?.payload || parsed;
+      const doc = fromServerDocument(payload || {}, defaultType);
+      setAssembly(doc);
+      setAssemblyGuid(parsed?.assembly_guid || null);
+      setDomain("user");
+      setQueueInfo(null);
+      setIsDirtyQueue(false);
+      const baseName = parsed?.display_name || parsed?.name || file.name.replace(/\.[^.]+$/, "") || "assembly";
+      setFileName(sanitizeFileName(baseName));
+      alert("Assembly imported. Review details before saving.");
+    } catch (err) {
+      console.error("Failed to import assembly:", err);
+      const message = err?.message || "Failed to import assembly JSON.";
+      setErrorMessage(message);
+      alert(message);
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const handleMenuOpen = (event) => {
+    setMenuAnchorEl(event.currentTarget);
+  };
+
+  const handleMenuClose = () => {
+    setMenuAnchorEl(null);
+  };
+
+  const triggerImport = () => {
+    handleMenuClose();
+    importInputRef.current?.click();
+  };
+
+  const triggerExport = () => {
+    handleExportAssembly();
+  };
+
+  const triggerFlushQueue = () => {
+    handleMenuClose();
+    handleFlushQueue();
+  };
+
+  const saveDisabled = saving || loading || !canWriteToDomain;
+  const deleteDisabled = !assemblyGuid || saving || loading;
+  const renameDisabled = saving || loading;
+  const dirtyPillVisible = Boolean(isDirtyQueue);
+  const lastPersistedDisplay = queueInfo?.last_persisted
+    ? new Date(queueInfo.last_persisted).toLocaleString()
+    : null;
+  const dirtySinceDisplay = queueInfo?.dirty_since
+    ? new Date(queueInfo.dirty_since).toLocaleString()
+    : null;
 
   const siteScopeValue = assembly.sites?.mode === "specific" ? "specific" : "all";
   const selectedSiteValues = Array.isArray(assembly.sites?.values)
@@ -746,42 +966,100 @@ export default function AssemblyEditor({
               mt: { xs: 2, sm: 0 }
             }}
           >
-            {currentPath ? (
-              <Tooltip title="Rename File">
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <DomainBadge domain={domain} size="small" />
+              {dirtyPillVisible ? <DirtyStatePill compact /> : null}
+            </Box>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={handleMenuOpen}
+              sx={{
+                textTransform: "none",
+                borderColor: "#2b3544",
+                color: "#e6edf3",
+                "&:hover": {
+                  borderColor: "#58a6ff",
+                  color: "#58a6ff",
+                },
+              }}
+            >
+              Import / Export
+            </Button>
+            {isAdmin ? (
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => handleDevModeToggle(!devModeEnabled)}
+                disabled={devModeBusy}
+                sx={{
+                  textTransform: "none",
+                  borderColor: devModeEnabled ? "#ffb347" : "#2b3544",
+                  color: devModeEnabled ? "#ffb347" : "#e6edf3",
+                  "&:hover": {
+                    borderColor: devModeEnabled ? "#ffcc80" : "#58a6ff",
+                    color: devModeEnabled ? "#ffcc80" : "#58a6ff",
+                  },
+                }}
+              >
+                {devModeEnabled ? "Disable Dev Mode" : "Enable Dev Mode"}
+              </Button>
+            ) : null}
+            {isAdmin && devModeEnabled ? (
+              <Button
+                size="small"
+                onClick={triggerFlushQueue}
+                disabled={devModeBusy || !dirtyPillVisible}
+                sx={{ color: "#f8d47a", textTransform: "none" }}
+              >
+                Flush Queue
+              </Button>
+            ) : null}
+            <Tooltip title="Rename Assembly">
+              <span>
                 <Button
                   size="small"
-                  onClick={() => { setRenameValue(fileName); setRenameOpen(true); }}
+                  onClick={() => {
+                    setRenameValue(assembly.name || "");
+                    setRenameOpen(true);
+                  }}
+                  disabled={renameDisabled}
                   sx={{ color: "#58a6ff", textTransform: "none" }}
                 >
                   Rename
                 </Button>
-              </Tooltip>
-            ) : null}
-            {currentPath ? (
+              </span>
+            </Tooltip>
+            {assemblyGuid ? (
               <Tooltip title="Delete Assembly">
-                <Button
-                  size="small"
-                  onClick={() => setDeleteOpen(true)}
-                  sx={{ color: "#ff6b6b", textTransform: "none" }}
-                >
-                  Delete
-                </Button>
+                <span>
+                  <Button
+                    size="small"
+                    onClick={() => setDeleteOpen(true)}
+                    disabled={deleteDisabled}
+                    sx={{ color: "#ff6b6b", textTransform: "none" }}
+                  >
+                    Delete
+                  </Button>
+                </span>
               </Tooltip>
             ) : null}
             <Button
               variant="outlined"
-              onClick={saveAssembly}
-              disabled={saving}
+              onClick={handleSaveAssembly}
+              disabled={saveDisabled}
               sx={{
-                color: "#58a6ff",
-                borderColor: "#58a6ff",
+                color: saveDisabled ? "#3c4452" : "#58a6ff",
+                borderColor: saveDisabled ? "#2b3544" : "#58a6ff",
                 textTransform: "none",
                 backgroundColor: saving
                   ? BACKGROUND_COLORS.primaryActionSaving
                   : BACKGROUND_COLORS.field,
                 "&:hover": {
-                  borderColor: "#7db7ff",
-                  backgroundColor: BACKGROUND_COLORS.primaryActionHover
+                  borderColor: saveDisabled ? "#2b3544" : "#7db7ff",
+                  backgroundColor: saveDisabled
+                    ? BACKGROUND_COLORS.field
+                    : BACKGROUND_COLORS.primaryActionHover,
                 },
                 "&.Mui-disabled": {
                   color: "#3c4452",
@@ -792,8 +1070,92 @@ export default function AssemblyEditor({
               {saving ? "Saving..." : "Save Assembly"}
             </Button>
           </Box>
-        </Grid>
       </Grid>
+      </Grid>
+
+      <Menu
+        anchorEl={menuAnchorEl}
+        open={Boolean(menuAnchorEl)}
+        onClose={handleMenuClose}
+        PaperProps={{ sx: { bgcolor: BACKGROUND_COLORS.dialog, color: "#fff" } }}
+      >
+        <MenuItem onClick={triggerExport}>Export JSON</MenuItem>
+        <MenuItem onClick={triggerImport}>Import JSON</MenuItem>
+      </Menu>
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json"
+        style={{ display: "none" }}
+        onChange={handleImportAssembly}
+      />
+
+      <Box
+        sx={{
+          mt: 2,
+          mb: 2,
+          display: "flex",
+          alignItems: "center",
+          gap: 2,
+          flexWrap: "wrap",
+        }}
+      >
+        <TextField
+          select
+          label="Domain"
+          value={domain}
+          onChange={(e) => setDomain(String(e.target.value || "").toLowerCase())}
+          disabled={loading}
+          sx={{ ...SELECT_BASE_SX, width: 220 }}
+          SelectProps={{ MenuProps: MENU_PROPS }}
+        >
+          {DOMAIN_OPTIONS.map((option) => (
+            <MenuItem key={option.value} value={option.value}>
+              {option.label}
+            </MenuItem>
+          ))}
+        </TextField>
+        {dirtySinceDisplay ? (
+          <Typography variant="caption" sx={{ color: "#9ba3b4" }}>
+            Dirty since: {dirtySinceDisplay}
+          </Typography>
+        ) : null}
+        {lastPersistedDisplay ? (
+          <Typography variant="caption" sx={{ color: "#9ba3b4" }}>
+            Last persisted: {lastPersistedDisplay}
+          </Typography>
+        ) : null}
+      </Box>
+
+      {!canWriteToDomain ? (
+        <Box
+          sx={{
+            mb: 2,
+            p: 1.5,
+            borderRadius: 1,
+            border: "1px solid rgba(248, 212, 122, 0.4)",
+            backgroundColor: "rgba(248, 212, 122, 0.12)",
+          }}
+        >
+          <Typography variant="body2" sx={{ color: "#f8d47a" }}>
+            This domain is read-only. Enable Dev Mode as an administrator to edit or switch to the User domain.
+          </Typography>
+        </Box>
+      ) : null}
+
+      {errorMessage ? (
+        <Box
+          sx={{
+            mb: 2,
+            p: 1.5,
+            borderRadius: 1,
+            border: "1px solid rgba(255, 138, 138, 0.4)",
+            backgroundColor: "rgba(255, 138, 138, 0.12)",
+          }}
+        >
+          <Typography variant="body2" sx={{ color: "#ff8a8a" }}>{errorMessage}</Typography>
+        </Box>
+      ) : null}
 
 
           <Box
@@ -882,7 +1244,7 @@ export default function AssemblyEditor({
                 onValueChange={(value) => updateAssembly({ script: value })}
                 highlight={(src) => highlightedHtml(src, prismLanguage)}
                 padding={12}
-                placeholder={currentPath ? `Editing: ${currentPath}` : "Start typing your script..."}
+                placeholder={assemblyGuid ? `Editing assembly: ${assemblyGuid}` : "Start typing your script..."}
                 style={{
                   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
                   fontSize: 14,
@@ -1256,13 +1618,13 @@ export default function AssemblyEditor({
         value={renameValue}
         onChange={setRenameValue}
         onCancel={() => setRenameOpen(false)}
-        onSave={saveRename}
+        onSave={handleRenameConfirm}
       />
       <ConfirmDeleteDialog
         open={deleteOpen}
         message="Deleting this assembly cannot be undone. Continue?"
         onCancel={() => setDeleteOpen(false)}
-        onConfirm={deleteAssembly}
+        onConfirm={handleDeleteAssembly}
       />
     </Box>
   );

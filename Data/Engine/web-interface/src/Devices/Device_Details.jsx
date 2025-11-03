@@ -91,54 +91,48 @@ export default function DeviceDetails({ device, onBack }) {
     let canceled = false;
     const loadAssemblyNames = async () => {
       const next = {};
-      const storeName = (rawPath, rawName, prefix = "") => {
+      const storeName = (rawPath, rawName) => {
         const name = typeof rawName === "string" ? rawName.trim() : "";
         if (!name) return;
         const normalizedPath = String(rawPath || "")
           .replace(/\\/g, "/")
           .replace(/^\/+/, "")
           .trim();
-        const keys = new Set();
-        if (normalizedPath) {
-          keys.add(normalizedPath);
-          if (prefix) {
-            const prefixed = `${prefix}/${normalizedPath}`.replace(/\/+/g, "/");
-            keys.add(prefixed);
-          }
+        if (!normalizedPath) return;
+        if (!next[normalizedPath]) next[normalizedPath] = name;
+        const base = normalizedPath.split("/").pop() || "";
+        if (base && !next[base]) next[base] = name;
+        const dot = base.lastIndexOf(".");
+        if (dot > 0) {
+          const baseNoExt = base.slice(0, dot);
+          if (baseNoExt && !next[baseNoExt]) next[baseNoExt] = name;
         }
-        const base = normalizedPath ? normalizedPath.split("/").pop() || "" : "";
-        if (base) {
-          keys.add(base);
-          const dot = base.lastIndexOf(".");
-          if (dot > 0) {
-            keys.add(base.slice(0, dot));
+      };
+      try {
+        const resp = await fetch("/api/assemblies");
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const items = Array.isArray(data?.items) ? data.items : [];
+        items.forEach((item) => {
+          if (!item || typeof item !== "object") return;
+          const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+          const displayName =
+            (item.display_name || "").trim() ||
+            (metadata.display_name ? String(metadata.display_name).trim() : "") ||
+            item.assembly_guid ||
+            "";
+          if (!displayName) return;
+          storeName(metadata.source_path || metadata.legacy_path || "", displayName);
+          if (item.assembly_guid && !next[item.assembly_guid]) {
+            next[item.assembly_guid] = displayName;
           }
-        }
-        keys.forEach((key) => {
-          if (key && !next[key]) {
-            next[key] = name;
+          if (item.payload_guid && !next[item.payload_guid]) {
+            next[item.payload_guid] = displayName;
           }
         });
-      };
-      const ingest = async (island, prefix = "") => {
-        try {
-          const resp = await fetch(`/api/assembly/list?island=${island}`);
-          if (!resp.ok) return;
-          const data = await resp.json();
-          const items = Array.isArray(data.items) ? data.items : [];
-          items.forEach((item) => {
-            if (!item || typeof item !== "object") return;
-            const rel = item.rel_path || item.path || item.file_name || item.playbook_path || "";
-            const label = (item.name || item.tab_name || item.display_name || item.file_name || "").trim();
-            storeName(rel, label, prefix);
-          });
-        } catch {
-          // ignore failures; map remains partial
-        }
-      };
-      await ingest("scripts", "Scripts");
-      await ingest("workflows", "Workflows");
-      await ingest("ansible", "Ansible_Playbooks");
+      } catch {
+        // ignore failures; map remains partial
+      }
       if (!canceled) {
         setAssemblyNameMap(next);
       }

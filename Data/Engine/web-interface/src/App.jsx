@@ -113,7 +113,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   const [userDisplayName, setUserDisplayName] = useState(null);
   const [editingJob, setEditingJob] = useState(null);
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
-  const [assemblyEditorState, setAssemblyEditorState] = useState(null); // { path, mode, context, nonce }
+  const [assemblyEditorState, setAssemblyEditorState] = useState(null); // { mode: 'script'|'ansible', row, nonce }
   const [sessionResolved, setSessionResolved] = useState(false);
   const initialPathRef = useRef(window.location.pathname + window.location.search);
   const pendingPathRef = useRef(null);
@@ -858,34 +858,133 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     async (name) => {
       const tab = tabs.find((t) => t.id === activeTabId);
       if (!tab || !name) return;
-      const payload = {
-        path: tab.folderPath ? `${tab.folderPath}/${name}` : name,
-        workflow: {
-          tab_name: tab.tab_name,
-          nodes: tab.nodes,
-          edges: tab.edges
-        }
+      const document = {
+        tab_name: name,
+        name,
+        display_name: name,
+        nodes: tab.nodes,
+        edges: tab.edges,
       };
       try {
-        const body = {
-          island: 'workflows',
-          kind: 'file',
-          path: payload.path,
-          content: payload.workflow
-        };
-        await fetch("/api/assembly/create", {
+        const resp = await fetch("/api/assemblies/import", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
+          body: JSON.stringify({
+            document,
+            domain: tab.domain || "user",
+            assembly_guid: tab.assemblyGuid || undefined,
+          }),
         });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
         setTabs((prev) =>
-          prev.map((t) => (t.id === activeTabId ? { ...t, tab_name: name } : t))
+          prev.map((t) =>
+            t.id === activeTabId
+              ? {
+                  ...t,
+                  tab_name: name,
+                  assemblyGuid: data?.assembly_guid || t.assemblyGuid || null,
+                  domain: (data?.source || data?.domain || t.domain || "user").toLowerCase(),
+                }
+              : t
+          )
         );
       } catch (err) {
         console.error("Failed to save workflow:", err);
       }
     },
     [tabs, activeTabId]
+  );
+
+  const openScriptFromList = useCallback(
+    (row) => {
+      if (!row) return;
+      const normalizedRow = {
+        ...row,
+        domain: (row?.domain || "user").toLowerCase(),
+      };
+      const mode = normalizedRow.typeKey === "ansible" || normalizedRow.mode === "ansible" ? "ansible" : "script";
+      const nonce = Date.now();
+      const state = {
+        mode,
+        row: normalizedRow,
+        nonce,
+      };
+      setAssemblyEditorState(state);
+      navigateTo(mode === "ansible" ? "ansible_editor" : "scripts", { assemblyState: state });
+    },
+    [navigateTo, setAssemblyEditorState]
+  );
+
+  const openWorkflowFromList = useCallback(
+    async (row) => {
+      const newId = "flow_" + Date.now();
+      const rawDomain = (row?.domain || "user").toLowerCase();
+      const sourcePath = row?.sourcePath || row?.metadata?.source_path || "";
+      const folderPath = sourcePath ? sourcePath.split("/").slice(0, -1).join("/") : "";
+      if (row?.assemblyGuid) {
+        try {
+          const resp = await fetch(`/api/assemblies/${encodeURIComponent(row.assemblyGuid)}/export`);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          let payload = data?.payload;
+          if (typeof payload === "string") {
+            try {
+              payload = JSON.parse(payload);
+            } catch {
+              payload = {};
+            }
+          }
+          const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
+          const edges = Array.isArray(payload?.edges) ? payload.edges : [];
+          const tabName = payload?.tab_name || data?.display_name || row?.name || "Workflow";
+          const domain = (data?.domain || rawDomain).toLowerCase();
+          setTabs([
+            {
+              id: newId,
+              tab_name: tabName,
+              nodes,
+              edges,
+              folderPath,
+              assemblyGuid: data?.assembly_guid || row?.assemblyGuid || null,
+              domain,
+              sourceRow: row,
+              exportMetadata: data,
+            },
+          ]);
+        } catch (err) {
+          console.error("Failed to load workflow:", err);
+          setTabs([
+            {
+              id: newId,
+              tab_name: row?.name || "Workflow",
+              nodes: [],
+              edges: [],
+              folderPath,
+              assemblyGuid: row?.assemblyGuid || null,
+              domain: rawDomain,
+              sourceRow: row,
+            },
+          ]);
+        }
+      } else {
+        setTabs([
+          {
+            id: newId,
+            tab_name: row?.name || "Workflow",
+            nodes: [],
+            edges: [],
+            folderPath,
+            assemblyGuid: null,
+            domain: rawDomain,
+            sourceRow: row,
+          },
+        ]);
+      }
+      setActiveTabId(newId);
+      navigateTo("workflow-editor");
+    },
+    [navigateTo, setTabs, setActiveTabId]
   );
 
   const isAdmin = (String(userRole || '').toLowerCase() === 'admin');
@@ -972,97 +1071,31 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "workflows":
         return (
           <AssemblyList
-            onOpenWorkflow={async (workflow, folderPath, name) => {
-              const newId = "flow_" + Date.now();
-              if (workflow && workflow.rel_path) {
-                const folder = workflow.rel_path.split("/").slice(0, -1).join("/");
-                try {
-                  const resp = await fetch(`/api/assembly/load?island=workflows&path=${encodeURIComponent(workflow.rel_path)}`);
-                  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                  const data = await resp.json();
-                  setTabs([{ id: newId, tab_name: data.tab_name || workflow.name || workflow.file_name || "Workflow", nodes: data.nodes || [], edges: data.edges || [], folderPath: folder }]);
-                } catch (err) {
-                  console.error("Failed to load workflow:", err);
-                  setTabs([{ id: newId, tab_name: workflow?.name || "Workflow", nodes: [], edges: [], folderPath: folder }]);
-                }
-              } else {
-                setTabs([{ id: newId, tab_name: name || "Flow", nodes: [], edges: [], folderPath: folderPath || "" }]);
-              }
-              setActiveTabId(newId);
-              navigateTo("workflow-editor");
-            }}
-            onOpenScript={(rel, mode, context) => {
-              const nonce = Date.now();
-              setAssemblyEditorState({
-                path: rel || '',
-                mode,
-                context: context ? { ...context, nonce } : null,
-                nonce
-              });
-              navigateTo(mode === 'ansible' ? 'ansible_editor' : 'scripts', {
-                assemblyState: {
-                  path: rel || '',
-                  mode,
-                  context: context ? { ...context, nonce } : null,
-                  nonce
-                }
-              });
-            }}
+            onOpenWorkflow={openWorkflowFromList}
+            onOpenScript={openScriptFromList}
+            userRole={userRole || 'User'}
           />
         );
 
       case "assemblies":
         return (
           <AssemblyList
-            onOpenWorkflow={async (workflow, folderPath, name) => {
-              const newId = "flow_" + Date.now();
-              if (workflow && workflow.rel_path) {
-                const folder = workflow.rel_path.split("/").slice(0, -1).join("/");
-                try {
-                  const resp = await fetch(`/api/assembly/load?island=workflows&path=${encodeURIComponent(workflow.rel_path)}`);
-                  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                  const data = await resp.json();
-                  setTabs([{ id: newId, tab_name: data.tab_name || workflow.name || workflow.file_name || "Workflow", nodes: data.nodes || [], edges: data.edges || [], folderPath: folder }]);
-                } catch (err) {
-                  console.error("Failed to load workflow:", err);
-                  setTabs([{ id: newId, tab_name: workflow?.name || "Workflow", nodes: [], edges: [], folderPath: folder }]);
-                }
-              } else {
-                setTabs([{ id: newId, tab_name: name || "Flow", nodes: [], edges: [], folderPath: folderPath || "" }]);
-              }
-              setActiveTabId(newId);
-              navigateTo("workflow-editor");
-            }}
-            onOpenScript={(rel, mode, context) => {
-              const nonce = Date.now();
-              setAssemblyEditorState({
-                path: rel || '',
-                mode,
-                context: context ? { ...context, nonce } : null,
-                nonce
-              });
-              navigateTo(mode === 'ansible' ? 'ansible_editor' : 'scripts', {
-                assemblyState: {
-                  path: rel || '',
-                  mode,
-                  context: context ? { ...context, nonce } : null,
-                  nonce
-                }
-              });
-            }}
+            onOpenWorkflow={openWorkflowFromList}
+            onOpenScript={openScriptFromList}
+            userRole={userRole || 'User'}
           />
         );
 
       case "scripts":
         return (
           <AssemblyEditor
-            mode="scripts"
-            initialPath={assemblyEditorState?.mode === 'scripts' ? (assemblyEditorState?.path || '') : ''}
-            initialContext={assemblyEditorState?.mode === 'scripts' ? assemblyEditorState?.context : null}
-            onConsumeInitialData={() =>
-              setAssemblyEditorState((prev) => (prev && prev.mode === 'scripts' ? null : prev))
-            }
+            mode="script"
+            initialAssembly={assemblyEditorState && assemblyEditorState.mode === 'script' ? assemblyEditorState : null}
+            onConsumeInitialData={() => {
+              setAssemblyEditorState((prev) => (prev && prev.mode === 'script' ? null : prev));
+            }}
             onSaved={() => navigateTo('assemblies')}
+            userRole={userRole || 'User'}
           />
         );
 
@@ -1070,12 +1103,12 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return (
           <AssemblyEditor
             mode="ansible"
-            initialPath={assemblyEditorState?.mode === 'ansible' ? (assemblyEditorState?.path || '') : ''}
-            initialContext={assemblyEditorState?.mode === 'ansible' ? assemblyEditorState?.context : null}
-            onConsumeInitialData={() =>
-              setAssemblyEditorState((prev) => (prev && prev.mode === 'ansible' ? null : prev))
-            }
+            initialAssembly={assemblyEditorState && assemblyEditorState.mode === 'ansible' ? assemblyEditorState : null}
+            onConsumeInitialData={() => {
+              setAssemblyEditorState((prev) => (prev && prev.mode === 'ansible' ? null : prev));
+            }}
             onSaved={() => navigateTo('assemblies')}
+            userRole={userRole || 'User'}
           />
         );
 
