@@ -459,6 +459,12 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   useEffect(() => {
     loadAssemblies();
   }, [loadAssemblies]);
+
+  // dialogs state
+  const [addCompOpen, setAddCompOpen] = useState(false);
+  const [compTab, setCompTab] = useState("scripts");
+  const [selectedNodeId, setSelectedNodeId] = useState("");
+
   useEffect(() => {
     setSelectedNodeId("");
   }, [compTab]);
@@ -496,11 +502,6 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
       setSelectedCredentialId(String(filteredCredentials[0].id));
     }
   }, [remoteExec, filteredCredentials, selectedCredentialId, execContext, useSvcAccount]);
-
-  // dialogs state
-  const [addCompOpen, setAddCompOpen] = useState(false);
-  const [compTab, setCompTab] = useState("scripts");
-  const [selectedNodeId, setSelectedNodeId] = useState("");
 
   const [addTargetOpen, setAddTargetOpen] = useState(false);
   const [availableDevices, setAvailableDevices] = useState([]); // [{hostname, display, online}]
