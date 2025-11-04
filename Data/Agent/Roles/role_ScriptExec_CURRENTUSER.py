@@ -293,56 +293,44 @@ class Role:
                     return
                 job_label = job_id if job_id is not None else 'unknown'
                 _log(f"quick_job_run(currentuser) received payload job_id={job_label}")
+                context = payload.get('context') if isinstance(payload, dict) else None
+
+                def _result_payload(job_value, status_value, stdout_value="", stderr_value=""):
+                    result = {
+                        'job_id': job_value,
+                        'status': status_value,
+                        'stdout': stdout_value,
+                        'stderr': stderr_value,
+                    }
+                    if isinstance(context, dict):
+                        result['context'] = context
+                    return result
+
                 script_bytes = decode_script_bytes(payload.get('script_content'), payload.get('script_encoding'))
                 if script_bytes is None:
                     _log(f"quick_job_run(currentuser) invalid script payload job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', {
-                        'job_id': job_id,
-                        'status': 'Failed',
-                        'stdout': '',
-                        'stderr': 'Invalid script payload (unable to decode)',
-                    })
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Invalid script payload (unable to decode)'))
                     return
                 signature_b64 = payload.get('signature')
                 sig_alg = (payload.get('sig_alg') or 'ed25519').lower()
                 signing_key = payload.get('signing_key')
                 if sig_alg and sig_alg not in ('ed25519', 'eddsa'):
                     _log(f"quick_job_run(currentuser) unsupported signature algorithm job_id={job_label} alg={sig_alg}", error=True)
-                    await sio.emit('quick_job_result', {
-                        'job_id': job_id,
-                        'status': 'Failed',
-                        'stdout': '',
-                        'stderr': f'Unsupported script signature algorithm: {sig_alg}',
-                    })
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported script signature algorithm: {sig_alg}'))
                     return
                 if not isinstance(signature_b64, str) or not signature_b64.strip():
                     _log(f"quick_job_run(currentuser) missing signature job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', {
-                        'job_id': job_id,
-                        'status': 'Failed',
-                        'stdout': '',
-                        'stderr': 'Missing script signature; rejecting payload',
-                    })
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Missing script signature; rejecting payload'))
                     return
                 http_client_fn = getattr(self.ctx, 'hooks', {}).get('http_client') if hasattr(self.ctx, 'hooks') else None
                 client = http_client_fn() if callable(http_client_fn) else None
                 if client is None:
                     _log(f"quick_job_run(currentuser) missing http_client hook job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', {
-                        'job_id': job_id,
-                        'status': 'Failed',
-                        'stdout': '',
-                        'stderr': 'Signature verification unavailable (client missing)',
-                    })
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Signature verification unavailable (client missing)'))
                     return
                 if not verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
                     _log(f"quick_job_run(currentuser) signature verification failed job_id={job_label}", error=True)
-                    await sio.emit('quick_job_result', {
-                        'job_id': job_id,
-                        'status': 'Failed',
-                        'stdout': '',
-                        'stderr': 'Rejected script payload due to invalid signature',
-                    })
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', 'Rejected script payload due to invalid signature'))
                     return
                 _log(f"quick_job_run(currentuser) signature verified job_id={job_label}")
                 content = script_bytes.decode('utf-8', errors='replace')
@@ -371,37 +359,26 @@ class Role:
                 except Exception:
                     timeout_seconds = 0
                 if script_type != 'powershell':
-                    await sio.emit('quick_job_result', { 'job_id': job_id, 'status': 'Failed', 'stdout': '', 'stderr': f"Unsupported type: {script_type}" })
+                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported type: {script_type}'))
                     return
-                if run_mode == 'admin':
-                    rc, out, err = -1, '', 'Admin credentialed runs are disabled; use SYSTEM or Current User.'
-                else:
-                    rc, out, err = await _run_powershell_via_user_task(content, env_map, timeout_seconds)
-                    if rc == -999:
-                        path = _write_temp_script(content, '.ps1', env_map, timeout_seconds)
-                        try:
-                            rc, out, err = await _run_powershell_local(path)
-                        finally:
-                            try:
-                                if path and os.path.isfile(path):
-                                    os.remove(path)
-                            except Exception:
-                                pass
+
+                rc, out, err = await _run_powershell_via_user_task(content, env_map, timeout_seconds)
+                if rc == -999:
+                    rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
                 status = 'Success' if rc == 0 else 'Failed'
-                await sio.emit('quick_job_result', {
-                    'job_id': job_id,
-                    'status': status,
-                    'stdout': out,
-                    'stderr': err,
-                })
+                await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
             except Exception as e:
                 try:
-                    await sio.emit('quick_job_result', {
+                    context = payload.get('context') if isinstance(payload, dict) else None
+                    result = {
                         'job_id': payload.get('job_id') if isinstance(payload, dict) else None,
                         'status': 'Failed',
                         'stdout': '',
                         'stderr': str(e),
-                    })
+                    }
+                    if isinstance(context, dict):
+                        result['context'] = context
+                    await sio.emit('quick_job_result', result)
                 except Exception:
                     pass
 
@@ -451,3 +428,5 @@ class Role:
             QtWidgets.QApplication.instance().quit()
         except Exception:
             os._exit(0)
+
+

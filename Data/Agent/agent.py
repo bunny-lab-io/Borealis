@@ -3200,14 +3200,18 @@ if __name__=='__main__':
                 script_bytes = _decode_script_bytes(payload.get('script_content'), encoding_hint)
                 run_mode = (payload.get('run_mode') or 'current_user').lower()
                 _log_agent(f"quick_job_run received payload job_id={job_label} run_mode={run_mode}")
+                context = payload.get('context') if isinstance(payload, dict) else None
                 if script_bytes is None:
                     err = 'Invalid script payload (unable to decode)'
-                    await sio.emit('quick_job_result', {
+                    result_payload = {
                         'job_id': job_id,
                         'status': 'Failed',
                         'stdout': '',
                         'stderr': err,
-                    })
+                    }
+                    if isinstance(context, dict):
+                        result_payload['context'] = context
+                    await sio.emit('quick_job_result', result_payload)
                     _log_agent(err)
                     _log_agent(err, fname='agent.error.log')
                     return
@@ -3216,35 +3220,44 @@ if __name__=='__main__':
                 signing_key = payload.get('signing_key')
                 if sig_alg and sig_alg not in ('ed25519', 'eddsa'):
                     err = f"Unsupported script signature algorithm: {sig_alg}"
-                    await sio.emit('quick_job_result', {
+                    result_payload = {
                         'job_id': job_id,
                         'status': 'Failed',
                         'stdout': '',
                         'stderr': err,
-                    })
+                    }
+                    if isinstance(context, dict):
+                        result_payload['context'] = context
+                    await sio.emit('quick_job_result', result_payload)
                     _log_agent(err)
                     _log_agent(err, fname='agent.error.log')
                     return
                 if not isinstance(signature_b64, str) or not signature_b64.strip():
                     err = 'Missing script signature; rejecting payload'
-                    await sio.emit('quick_job_result', {
+                    result_payload = {
                         'job_id': job_id,
                         'status': 'Failed',
                         'stdout': '',
                         'stderr': err,
-                    })
+                    }
+                    if isinstance(context, dict):
+                        result_payload['context'] = context
+                    await sio.emit('quick_job_result', result_payload)
                     _log_agent(err)
                     _log_agent(err, fname='agent.error.log')
                     return
                 client = http_client()
                 if not _verify_and_store_script_signature(client, script_bytes, signature_b64, signing_key):
                     err = 'Rejected script payload due to invalid signature'
-                    await sio.emit('quick_job_result', {
+                    result_payload = {
                         'job_id': job_id,
                         'status': 'Failed',
                         'stdout': '',
                         'stderr': err,
-                    })
+                    }
+                    if isinstance(context, dict):
+                        result_payload['context'] = context
+                    await sio.emit('quick_job_result', result_payload)
                     _log_agent(err)
                     _log_agent(err, fname='agent.error.log')
                     return
@@ -3279,21 +3292,28 @@ if __name__=='__main__':
                         # Fallback to plain local run
                         rc, out, err = _run_powershell_script_content_local(content)
                 status = 'Success' if rc == 0 else 'Failed'
-                await sio.emit('quick_job_result', {
+                result_payload = {
                     'job_id': job_id,
                     'status': status,
                     'stdout': out or '',
                     'stderr': err or '',
-                })
+                }
+                if isinstance(context, dict):
+                    result_payload['context'] = context
+                await sio.emit('quick_job_result', result_payload)
                 _log_agent(f"quick_job_result sent: job_id={job_id} status={status}")
             except Exception as e:
                 try:
-                    await sio.emit('quick_job_result', {
+                    result_payload = {
                         'job_id': payload.get('job_id') if isinstance(payload, dict) else None,
                         'status': 'Failed',
                         'stdout': '',
                         'stderr': str(e),
-                    })
+                    }
+                    context = payload.get('context') if isinstance(payload, dict) else None
+                    if isinstance(context, dict):
+                        result_payload['context'] = context
+                    await sio.emit('quick_job_result', result_payload)
                 except Exception:
                     pass
                 _log_agent(f"quick_job_run handler error: {e}", fname='agent.error.log')

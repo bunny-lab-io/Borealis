@@ -63,6 +63,33 @@ class AssemblyRuntimeService:
         data = self._serialize_entry(entry, include_payload=True, payload_text=payload_text)
         return data
 
+    def resolve_document_by_source_path(
+        self,
+        source_path: str,
+        *,
+        include_payload: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """Return an assembly record whose metadata source_path matches the provided value."""
+
+        normalized = _normalize_source_path(source_path)
+        if not normalized:
+            return None
+        lookup_key = normalized.lower()
+        try:
+            entries = self._cache.list_entries()
+        except Exception:
+            entries = []
+        for entry in entries:
+            metadata = entry.record.metadata or {}
+            candidate = _normalize_source_path(metadata.get("source_path"))
+            if not candidate:
+                continue
+            if candidate.lower() != lookup_key:
+                continue
+            payload_text = self._read_payload_text(entry.record.assembly_guid) if include_payload else None
+            return self._serialize_entry(entry, include_payload=include_payload, payload_text=payload_text)
+        return None
+
     def export_assembly(self, assembly_guid: str) -> Dict[str, Any]:
         entry = self._cache.get_entry(assembly_guid)
         if not entry:
@@ -326,6 +353,27 @@ def _payload_type_from_kind(kind: str) -> PayloadType:
     if kind_lower == "ansible":
         return PayloadType.BINARY
     return PayloadType.UNKNOWN
+
+
+def _normalize_source_path(value: Any) -> str:
+    """Normalise metadata source_path for comparison."""
+
+    if value is None:
+        return ""
+    text = str(value).replace("\\", "/").strip()
+    if not text:
+        return ""
+    segments = []
+    for part in text.split("/"):
+        candidate = part.strip()
+        if not candidate or candidate == ".":
+            continue
+        if candidate == "..":
+            return ""
+        segments.append(candidate)
+    if not segments:
+        return ""
+    return "/".join(segments)
 
 
 def _serialize_payload(value: Any) -> str:

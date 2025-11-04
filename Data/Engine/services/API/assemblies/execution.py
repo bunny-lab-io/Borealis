@@ -27,6 +27,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
 
     from .. import EngineServiceAdapters
 
+from ...assemblies.service import AssemblyRuntimeService
+
 
 def _assemblies_root() -> Path:
     base = Path(__file__).resolve()
@@ -255,8 +257,12 @@ def rewrite_powershell_script(content: str, literal_lookup: Dict[str, str]) -> s
     return _ENV_VAR_PATTERN.sub(_replace, content)
 
 
-def _load_assembly_document(abs_path: str, default_type: str) -> Dict[str, Any]:
-    abs_path_str = os.fspath(abs_path)
+def _load_assembly_document(
+    source_identifier: str,
+    default_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    abs_path_str = os.fspath(source_identifier)
     base_name = os.path.splitext(os.path.basename(abs_path_str))[0]
     doc: Dict[str, Any] = {
         "name": base_name,
@@ -267,110 +273,114 @@ def _load_assembly_document(abs_path: str, default_type: str) -> Dict[str, Any]:
         "variables": [],
         "files": [],
         "timeout_seconds": 3600,
+        "metadata": {},
     }
-    if abs_path_str.lower().endswith(".json") and os.path.isfile(abs_path_str):
+    data: Dict[str, Any] = {}
+    if isinstance(payload, dict):
+        data = payload
+    elif abs_path_str.lower().endswith(".json") and os.path.isfile(abs_path_str):
         try:
             with open(abs_path_str, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception:
             data = {}
-        if isinstance(data, dict):
-            doc["name"] = str(data.get("name") or doc["name"])
-            doc["description"] = str(data.get("description") or "")
-            cat = str(data.get("category") or doc["category"]).strip().lower()
-            if cat in {"application", "script"}:
-                doc["category"] = cat
-            typ = str(data.get("type") or data.get("script_type") or default_type).strip().lower()
-            if typ in {"powershell", "batch", "bash", "ansible"}:
-                doc["type"] = typ
-            script_val = data.get("script")
-            content_val = data.get("content")
-            script_lines = data.get("script_lines")
-            if isinstance(script_lines, list):
-                try:
-                    doc["script"] = "\n".join(str(line) for line in script_lines)
-                except Exception:
-                    doc["script"] = ""
-            elif isinstance(script_val, str):
-                doc["script"] = script_val
-            else:
-                if isinstance(content_val, str):
-                    doc["script"] = content_val
-            encoding_hint = str(
-                data.get("script_encoding") or data.get("scriptEncoding") or ""
-            ).strip().lower()
-            doc["script"] = _decode_script_content(doc.get("script"), encoding_hint)
-            if encoding_hint in {"base64", "b64", "base-64"}:
-                doc["script_encoding"] = "base64"
-            else:
-                probe_source = ""
-                if isinstance(script_val, str) and script_val:
-                    probe_source = script_val
-                elif isinstance(content_val, str) and content_val:
-                    probe_source = content_val
-                decoded_probe = _decode_base64_text(probe_source) if probe_source else None
-                if decoded_probe is not None:
-                    doc["script_encoding"] = "base64"
-                    doc["script"] = decoded_probe.replace("\r\n", "\n")
-                else:
-                    doc["script_encoding"] = "plain"
+    if isinstance(data, dict) and data:
+        doc["name"] = str(data.get("name") or doc["name"])
+        doc["description"] = str(data.get("description") or "")
+        doc["metadata"] = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        cat = str(data.get("category") or doc["category"]).strip().lower()
+        if cat in {"application", "script"}:
+            doc["category"] = cat
+        typ = str(data.get("type") or data.get("script_type") or default_type).strip().lower()
+        if typ in {"powershell", "batch", "bash", "ansible"}:
+            doc["type"] = typ
+        script_val = data.get("script")
+        content_val = data.get("content")
+        script_lines = data.get("script_lines")
+        if isinstance(script_lines, list):
             try:
-                timeout_raw = data.get("timeout_seconds", data.get("timeout"))
-                if timeout_raw is None:
-                    doc["timeout_seconds"] = 3600
-                else:
-                    doc["timeout_seconds"] = max(0, int(timeout_raw))
+                doc["script"] = "\n".join(str(line) for line in script_lines)
             except Exception:
+                doc["script"] = ""
+        elif isinstance(script_val, str):
+            doc["script"] = script_val
+        elif isinstance(content_val, str):
+            doc["script"] = content_val
+        encoding_hint = str(data.get("script_encoding") or data.get("scriptEncoding") or "").strip().lower()
+        doc["script"] = _decode_script_content(doc.get("script"), encoding_hint)
+        if encoding_hint in {"base64", "b64", "base-64"}:
+            doc["script_encoding"] = "base64"
+        else:
+            probe_source = ""
+            if isinstance(script_val, str) and script_val:
+                probe_source = script_val
+            elif isinstance(content_val, str) and content_val:
+                probe_source = content_val
+            decoded_probe = _decode_base64_text(probe_source) if probe_source else None
+            if decoded_probe is not None:
+                doc["script_encoding"] = "base64"
+                doc["script"] = decoded_probe.replace("\r\n", "\n")
+            else:
+                doc["script_encoding"] = "plain"
+        try:
+            timeout_raw = data.get("timeout_seconds", data.get("timeout"))
+            if timeout_raw is None:
                 doc["timeout_seconds"] = 3600
-            vars_in = data.get("variables") if isinstance(data.get("variables"), list) else []
-            doc["variables"] = []
-            for item in vars_in:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name") or item.get("key") or "").strip()
-                if not name:
-                    continue
-                vtype = str(item.get("type") or "string").strip().lower()
-                if vtype not in {"string", "number", "boolean", "credential"}:
-                    vtype = "string"
-                doc["variables"].append(
-                    {
-                        "name": name,
-                        "label": str(item.get("label") or ""),
-                        "type": vtype,
-                        "default": item.get("default", item.get("default_value")),
-                        "required": bool(item.get("required")),
-                        "description": str(item.get("description") or ""),
-                    }
-                )
-            files_in = data.get("files") if isinstance(data.get("files"), list) else []
-            doc["files"] = []
-            for file_item in files_in:
-                if not isinstance(file_item, dict):
-                    continue
-                fname = file_item.get("file_name") or file_item.get("name")
-                if not fname or not isinstance(file_item.get("data"), str):
-                    continue
-                try:
-                    size_val = int(file_item.get("size") or 0)
-                except Exception:
-                    size_val = 0
-                doc["files"].append(
-                    {
-                        "file_name": str(fname),
-                        "size": size_val,
-                        "mime_type": str(file_item.get("mime_type") or file_item.get("mimeType") or ""),
-                        "data": file_item.get("data"),
-                    }
-                )
+            else:
+                doc["timeout_seconds"] = max(0, int(timeout_raw))
+        except Exception:
+            doc["timeout_seconds"] = 3600
+        vars_in = data.get("variables") if isinstance(data.get("variables"), list) else []
+        doc["variables"] = []
+        for item in vars_in:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("key") or "").strip()
+            if not name:
+                continue
+            vtype = str(item.get("type") or "string").strip().lower()
+            if vtype not in {"string", "number", "boolean", "credential"}:
+                vtype = "string"
+            doc["variables"].append(
+                {
+                    "name": name,
+                    "label": str(item.get("label") or ""),
+                    "type": vtype,
+                    "default": item.get("default", item.get("default_value")),
+                    "required": bool(item.get("required")),
+                    "description": str(item.get("description") or ""),
+                }
+            )
+        files_in = data.get("files") if isinstance(data.get("files"), list) else []
+        doc["files"] = []
+        for file_item in files_in:
+            if not isinstance(file_item, dict):
+                continue
+            fname = file_item.get("file_name") or file_item.get("name")
+            if not fname or not isinstance(file_item.get("data"), str):
+                continue
+            try:
+                size_val = int(file_item.get("size") or 0)
+            except Exception:
+                size_val = 0
+            doc["files"].append(
+                {
+                    "file_name": str(fname),
+                    "size": size_val,
+                    "mime_type": str(file_item.get("mime_type") or file_item.get("mimeType") or ""),
+                    "data": file_item.get("data"),
+                }
+            )
         return doc
-    try:
-        with open(abs_path_str, "r", encoding="utf-8", errors="replace") as fh:
-            content = fh.read()
-    except Exception:
-        content = ""
-    normalized_script = (content or "").replace("\r\n", "\n")
-    doc["script"] = normalized_script
+    if os.path.isfile(abs_path_str):
+        try:
+            with open(abs_path_str, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except Exception:
+            content = ""
+        doc["script"] = (content or "").replace("\r\n", "\n")
+    else:
+        doc["script"] = ""
     return doc
 
 
@@ -390,6 +400,10 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
 
     blueprint = Blueprint("assemblies_execution", __name__)
     service_log = adapters.service_log
+    assembly_cache = adapters.context.assembly_cache
+    if assembly_cache is None:
+        raise RuntimeError("Assembly cache is not initialised; ensure Engine bootstrap executed.")
+    assembly_runtime = AssemblyRuntimeService(assembly_cache, logger=adapters.context.logger)
 
     @blueprint.route("/api/scripts/quick_run", methods=["POST"])
     def scripts_quick_run():
@@ -406,34 +420,65 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
 
         rel_path_canonical = rel_path_normalized
 
+        assembly_source = "runtime"
+        assembly_guid: Optional[str] = None
+        abs_path_str = rel_path_canonical
+        doc: Optional[Dict[str, Any]] = None
+        record: Optional[Dict[str, Any]] = None
         try:
-            scripts_root = _scripts_root()
-            assemblies_root = scripts_root.parent.resolve()
-            abs_path = (assemblies_root / rel_path_canonical).resolve()
-        except Exception as exc:  # pragma: no cover - defensive guard
-            service_log(
-                "assemblies",
-                f"quick job failed to resolve script path={rel_path_input!r}: {exc}",
-                level="ERROR",
-            )
-            return jsonify({"error": "Failed to resolve script path"}), 500
+            record = assembly_runtime.resolve_document_by_source_path(rel_path_canonical)
+        except Exception:
+            record = None
+        if record:
+            payload_doc = record.get("payload_json")
+            if not isinstance(payload_doc, dict):
+                raw_payload = record.get("payload")
+                if isinstance(raw_payload, str):
+                    try:
+                        payload_doc = json.loads(raw_payload)
+                    except Exception:
+                        payload_doc = None
+            if isinstance(payload_doc, dict):
+                doc = _load_assembly_document(rel_path_canonical, "powershell", payload=payload_doc)
+                if doc:
+                    metadata_block = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+                    if isinstance(metadata_block, dict):
+                        assembly_guid = metadata_block.get("assembly_guid")
+                    if not doc.get("name"):
+                        doc["name"] = record.get("display_name") or doc.get("name")
+        if doc is None:
+            assembly_source = "filesystem"
+            try:
+                scripts_root = _scripts_root()
+                assemblies_root = scripts_root.parent.resolve()
+                abs_path = (assemblies_root / rel_path_canonical).resolve()
+            except Exception as exc:  # pragma: no cover - defensive guard
+                service_log(
+                    "assemblies",
+                    f"quick job failed to resolve script path={rel_path_input!r}: {exc}",
+                    level="ERROR",
+                )
+                return jsonify({"error": "Failed to resolve script path"}), 500
 
-        scripts_root_str = str(scripts_root)
-        abs_path_str = str(abs_path)
-        try:
-            within_scripts = os.path.commonpath([scripts_root_str, abs_path_str]) == scripts_root_str
-        except ValueError:
-            within_scripts = False
+            scripts_root_str = str(scripts_root)
+            abs_path_str = str(abs_path)
+            try:
+                within_scripts = os.path.commonpath([scripts_root_str, abs_path_str]) == scripts_root_str
+            except ValueError:
+                within_scripts = False
 
-        if not within_scripts or not os.path.isfile(abs_path_str):
-            service_log(
-                "assemblies",
-                f"quick job requested missing or out-of-scope script input={rel_path_input!r} normalized={rel_path_canonical}",
-                level="WARNING",
-            )
+            if not within_scripts or not os.path.isfile(abs_path_str):
+                service_log(
+                    "assemblies",
+                    f"quick job requested missing or out-of-scope script input={rel_path_input!r} normalized={rel_path_canonical}",
+                    level="WARNING",
+                )
+                return jsonify({"error": "Script not found"}), 404
+
+            doc = _load_assembly_document(abs_path_str, "powershell")
+        if not doc:
             return jsonify({"error": "Script not found"}), 404
 
-        doc = _load_assembly_document(abs_path, "powershell")
         script_type = (doc.get("type") or "powershell").lower()
         if script_type != "powershell":
             return jsonify({"error": f"Unsupported script type '{script_type}'. Only PowerShell is supported."}), 400
@@ -476,7 +521,9 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         except Exception:
             timeout_seconds = 0
 
-        friendly_name = (doc.get("name") or "").strip() or os.path.basename(abs_path)
+        friendly_name = (doc.get("name") or "").strip()
+        if not friendly_name:
+            friendly_name = os.path.basename(rel_path_canonical)
         now = int(time.time())
         results: List[Dict[str, Any]] = []
         socketio = getattr(adapters.context, "socketio", None)
@@ -528,6 +575,10 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     payload["sig_alg"] = "ed25519"
                 if signing_key_b64:
                     payload["signing_key"] = signing_key_b64
+                context_block = payload.setdefault("context", {})
+                context_block["assembly_source"] = assembly_source
+                if assembly_guid:
+                    context_block["assembly_guid"] = assembly_guid
 
                 socketio.emit("quick_job_run", payload)
                 try:
@@ -546,7 +597,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                 results.append({"hostname": host, "job_id": job_id, "status": "Running"})
                 service_log(
                     "assemblies",
-                    f"quick job queued hostname={host} path={rel_path_canonical} run_mode={run_mode}",
+                    f"quick job queued hostname={host} path={rel_path_canonical} run_mode={run_mode} source={assembly_source}",
                 )
         except Exception as exc:
             if conn is not None:

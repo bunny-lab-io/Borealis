@@ -85,6 +85,9 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         cursor = None
         broadcast_payload: Optional[Dict[str, Any]] = None
 
+        ctx_payload = data.get("context")
+        context_info: Optional[Dict[str, Any]] = ctx_payload if isinstance(ctx_payload, dict) else None
+
         try:
             conn = adapters.db_conn_factory()
             cursor = conn.cursor()
@@ -105,10 +108,30 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
             except sqlite3.Error:
                 link = None
 
+            run_id: Optional[int] = None
+            scheduled_ts_ctx: Optional[int] = None
             if link:
                 try:
                     run_id = int(link[0])
-                    ts_now = _now_ts()
+                except Exception:
+                    run_id = None
+
+            if run_id is None and context_info:
+                ctx_run = context_info.get("scheduled_job_run_id") or context_info.get("run_id")
+                try:
+                    if ctx_run is not None:
+                        run_id = int(ctx_run)
+                except (TypeError, ValueError):
+                    run_id = None
+                try:
+                    if context_info.get("scheduled_ts") is not None:
+                        scheduled_ts_ctx = int(context_info.get("scheduled_ts"))
+                except (TypeError, ValueError):
+                    scheduled_ts_ctx = None
+
+            if run_id is not None:
+                ts_now = _now_ts()
+                try:
                     if status.lower() == "running":
                         cursor.execute(
                             "UPDATE scheduled_job_runs SET status='Running', updated_at=? WHERE id=?",
@@ -125,13 +148,29 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
                             """,
                             (status, ts_now, ts_now, run_id),
                         )
+                    if scheduled_ts_ctx is not None:
+                        cursor.execute(
+                            "UPDATE scheduled_job_runs SET scheduled_ts=COALESCE(scheduled_ts, ?) WHERE id=?",
+                            (scheduled_ts_ctx, run_id),
+                        )
                     conn.commit()
+                    adapters.service_log(
+                        "scheduled_jobs",
+                        f"scheduled run update run_id={run_id} activity_id={job_id} status={status}",
+                    )
                 except Exception as exc:  # pragma: no cover - defensive guard
                     logger.debug(
-                        "quick_job_result failed to update scheduled_job_runs for job_id=%s: %s",
+                        "quick_job_result failed to update scheduled_job_runs for job_id=%s run_id=%s: %s",
                         job_id,
+                        run_id,
                         exc,
                     )
+            elif context_info:
+                adapters.service_log(
+                    "scheduled_jobs",
+                    f"scheduled run update skipped (no run_id) activity_id={job_id} status={status} context={context_info}",
+                    level="WARNING",
+                )
 
             try:
                 cursor.execute(

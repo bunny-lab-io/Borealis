@@ -20,12 +20,15 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, List
 
+from ...assemblies.service import AssemblyRuntimeService
 from . import job_scheduler
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from flask import Flask
 
     from .. import EngineServiceAdapters
+
+
 def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     """Instantiate the Engine job scheduler and attach it to the Engine context."""
 
@@ -35,6 +38,11 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     socketio = getattr(adapters.context, "socketio", None)
     if socketio is None:
         raise RuntimeError("Socket.IO instance is required to initialise the scheduled job service.")
+
+    assembly_cache = adapters.context.assembly_cache
+    if assembly_cache is None:
+        raise RuntimeError("Assembly cache is required to initialise the scheduled job service.")
+    assembly_runtime = AssemblyRuntimeService(assembly_cache, logger=adapters.context.logger)
 
     database_path = adapters.context.database_path
     script_signer = adapters.script_signer
@@ -87,6 +95,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
         database_path,
         script_signer=script_signer,
         service_logger=adapters.service_log,
+        assembly_runtime=assembly_runtime,
     )
     job_scheduler.set_online_lookup(scheduler, _online_hostnames_snapshot)
     scheduler.start()
