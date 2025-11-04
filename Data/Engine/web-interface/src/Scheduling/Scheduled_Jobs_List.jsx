@@ -20,6 +20,8 @@ import {
 } from "@mui/material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+import { DomainBadge, resolveDomainMeta } from "../Assemblies/Assembly_Badges";
+import { buildAssemblyIndex, resolveAssemblyForComponent } from "../Assemblies/assemblyUtils";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -143,7 +145,55 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   const [error, setError] = useState("");
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [assembliesPayload, setAssembliesPayload] = useState({ items: [], queue: [] });
+  const [assembliesLoading, setAssembliesLoading] = useState(false);
+  const [assembliesError, setAssembliesError] = useState("");
   const gridApiRef = useRef(null);
+
+  const assembliesCellRenderer = useCallback((params) => {
+    const list = params?.data?.componentsMeta || [];
+    if (!list.length) {
+      return <Typography variant="body2" sx={{ color: "#888" }}>No assemblies</Typography>;
+    }
+    return (
+      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+        {list.map((item) => (
+          <Box key={item.key} sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+            <DomainBadge domain={item.domain} size="small" />
+            <Typography variant="body2" sx={{ color: "#f5f7fa" }}>{item.label}</Typography>
+          </Box>
+        ))}
+      </Box>
+    );
+  }, []);
+
+  const loadAssemblies = useCallback(async () => {
+    setAssembliesLoading(true);
+    setAssembliesError("");
+    try {
+      const resp = await fetch("/api/assemblies");
+      if (!resp.ok) {
+        const detail = await resp.text();
+        throw new Error(detail || `HTTP ${resp.status}`);
+      }
+      const data = await resp.json();
+      setAssembliesPayload({
+        items: Array.isArray(data?.items) ? data.items : [],
+        queue: Array.isArray(data?.queue) ? data.queue : []
+      });
+    } catch (err) {
+      console.error("Failed to load assemblies:", err);
+      setAssembliesPayload({ items: [], queue: [] });
+      setAssembliesError(err?.message || "Failed to load assemblies");
+    } finally {
+      setAssembliesLoading(false);
+    }
+  }, []);
+
+  const assemblyIndex = useMemo(
+    () => buildAssemblyIndex(assembliesPayload.items, assembliesPayload.queue),
+    [assembliesPayload.items, assembliesPayload.queue]
+  );
 
   const loadJobs = useCallback(
     async ({ showLoading = false } = {}) => {
@@ -196,7 +246,44 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
           }
         };
         const mappedRows = (data?.jobs || []).map((j) => {
-          const compName = (Array.isArray(j.components) && j.components[0]?.name) || "Demonstration Component";
+          const components = Array.isArray(j.components) ? j.components : [];
+          const normalizedComponents = components.map((component) => {
+            const record = resolveAssemblyForComponent(assemblyIndex, component);
+            const displayName =
+              record?.displayName ||
+              component.name ||
+              component.component_name ||
+              component.script_name ||
+              component.script_path ||
+              component.path ||
+              "Assembly";
+            const domainValue = (record?.domain || component.domain || "user").toLowerCase();
+            const domainMeta = resolveDomainMeta(domainValue);
+            const assemblyGuid =
+              component.assembly_guid ||
+              component.assemblyGuid ||
+              record?.assemblyGuid ||
+              null;
+            return {
+              ...component,
+              assembly_guid: assemblyGuid,
+              name: displayName,
+              domain: domainValue,
+              domainLabel: domainMeta.label,
+              path: record?.path || component.path || component.script_path || component.playbook_path || ""
+            };
+          });
+          const componentSummaries = normalizedComponents.map((comp, idx) => ({
+            key: `${comp.assembly_guid || comp.path || idx}-${idx}`,
+            label: comp.name,
+            domain: comp.domain
+          }));
+          const compName =
+            componentSummaries.length === 1
+              ? componentSummaries[0].label
+              : componentSummaries.length > 1
+                ? `${componentSummaries.length} Assemblies`
+                : "No Assemblies";
           const targetText = Array.isArray(j.targets)
             ? `${j.targets.length} device${j.targets.length !== 1 ? "s" : ""}`
             : "";
@@ -213,6 +300,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             id: j.id,
             name: j.name,
             scriptWorkflow: compName,
+            componentsMeta: componentSummaries,
             target: targetText,
             occurrence,
             lastRun: fmt(j.last_run_ts),
@@ -220,7 +308,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             result: j.last_status || (j.next_run_ts ? "Scheduled" : ""),
             resultsCounts,
             enabled: Boolean(j.enabled),
-            raw: j
+            raw: { ...j, components: normalizedComponents }
           };
         });
         setRows(mappedRows);
@@ -251,8 +339,12 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         }
       }
     },
-    []
+    [assemblyIndex]
   );
+
+  useEffect(() => {
+    loadAssemblies();
+  }, [loadAssemblies, refreshToken]);
 
   useEffect(() => {
     let timer;
@@ -422,8 +514,9 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       },
       {
         headerName: "Assembly(s)",
-        field: "scriptWorkflow",
-        valueGetter: (params) => params.data?.scriptWorkflow || "Demonstration Component"
+        field: "componentsMeta",
+        minWidth: 240,
+        cellRenderer: assembliesCellRenderer
       },
       {
         headerName: "Target",
@@ -461,7 +554,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         suppressMenu: true
       }
     ],
-    [enabledCellRenderer, nameCellRenderer, resultsCellRenderer]
+    [enabledCellRenderer, nameCellRenderer, resultsCellRenderer, assembliesCellRenderer]
   );
 
   const defaultColDef = useMemo(

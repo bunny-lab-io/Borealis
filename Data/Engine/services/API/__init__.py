@@ -36,6 +36,7 @@ from .tokens import routes as token_routes
 from ...server import EngineContext
 from .access_management.login import register_auth
 from .assemblies.management import register_assemblies
+from .assemblies.execution import register_execution
 from .devices import routes as device_routes
 from .devices.approval import register_admin_endpoints
 from .devices.management import register_management
@@ -268,12 +269,17 @@ def _register_scheduled_jobs(app: Flask, adapters: EngineServiceAdapters) -> Non
     scheduled_jobs_management.register_management(app, adapters)
 
 
+def _register_assemblies(app: Flask, adapters: EngineServiceAdapters) -> None:
+    register_assemblies(app, adapters)
+    register_execution(app, adapters)
+
+
 _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, EngineServiceAdapters], None]] = {
     "auth": register_auth,
     "tokens": _register_tokens,
     "enrollment": _register_enrollment,
     "devices": _register_devices,
-    "assemblies": register_assemblies,
+    "assemblies": _register_assemblies,
     "scheduled_jobs": _register_scheduled_jobs,
 }
 

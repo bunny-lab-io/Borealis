@@ -27,6 +27,11 @@ import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
 import { ConfirmDeleteDialog } from "../Dialogs";
 import { DomainBadge, DirtyStatePill, DOMAIN_OPTIONS } from "./Assembly_Badges";
+import {
+  decodeBase64String,
+  normalizeVariablesFromServer,
+  normalizeFilesFromServer
+} from "./assemblyUtils";
 
 const TYPE_OPTIONS_ALL = [
   { key: "ansible", label: "Ansible Playbook", prism: "yaml" },
@@ -201,70 +206,6 @@ function defaultAssembly(defaultType = "powershell") {
   };
 }
 
-function normalizeVariablesFromServer(vars = []) {
-  return (Array.isArray(vars) ? vars : []).map((v, idx) => ({
-    id: `${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 8)}`,
-    name: v?.name || v?.key || "",
-    label: v?.label || "",
-    type: v?.type || "string",
-    defaultValue: v?.default ?? v?.default_value ?? "",
-    required: Boolean(v?.required),
-    description: v?.description || ""
-  }));
-}
-
-function decodeBase64String(data = "") {
-  if (typeof data !== "string") {
-    return { success: false, value: "" };
-  }
-
-  const trimmed = data.trim();
-  if (!trimmed) {
-    return { success: true, value: "" };
-  }
-
-  const sanitized = trimmed.replace(/\s+/g, "");
-
-  try {
-    if (typeof window !== "undefined" && typeof window.atob === "function") {
-      const binary = window.atob(sanitized);
-      if (typeof TextDecoder !== "undefined") {
-        try {
-          const decoder = new TextDecoder("utf-8", { fatal: false });
-          return {
-            success: true,
-            value: decoder.decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)))
-          };
-        } catch (err) {
-          // fall through to manual reconstruction
-        }
-      }
-
-      let decoded = "";
-      for (let i = 0; i < binary.length; i += 1) {
-        decoded += String.fromCharCode(binary.charCodeAt(i));
-      }
-      try {
-        return { success: true, value: decodeURIComponent(escape(decoded)) };
-      } catch (err) {
-        return { success: true, value: decoded };
-      }
-    }
-  } catch (err) {
-    // fall through to Buffer fallback
-  }
-
-  try {
-    if (typeof Buffer !== "undefined") {
-      return { success: true, value: Buffer.from(sanitized, "base64").toString("utf-8") };
-    }
-  } catch (err) {
-    // ignore
-  }
-
-  return { success: false, value: "" };
-}
-
 function encodeBase64String(text = "") {
   if (typeof text !== "string") {
     text = text == null ? "" : String(text);
@@ -289,16 +230,6 @@ function encodeBase64String(text = "") {
     // ignore
   }
   return "";
-}
-
-function normalizeFilesFromServer(files = []) {
-  return (Array.isArray(files) ? files : []).map((f, idx) => ({
-    id: `${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 8)}`,
-    fileName: f?.file_name || f?.name || "file.bin",
-    size: f?.size || 0,
-    mimeType: f?.mime_type || f?.mimeType || "",
-    data: f?.data || ""
-  }));
 }
 
 function fromServerDocument(doc = {}, defaultType = "powershell") {

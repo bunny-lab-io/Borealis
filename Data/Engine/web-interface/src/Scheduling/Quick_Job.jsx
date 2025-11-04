@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   Dialog,
   DialogTitle,
@@ -19,66 +19,19 @@ import {
 } from "@mui/material";
 import { Folder as FolderIcon, Description as DescriptionIcon } from "@mui/icons-material";
 import { SimpleTreeView, TreeItem } from "@mui/x-tree-view";
-
-function buildTree(items, rootLabel = "Scripts") {
-  const map = {};
-  const rootNode = {
-    id: "root",
-    label: rootLabel,
-    path: "",
-    isFolder: true,
-    children: []
-  };
-  map[rootNode.id] = rootNode;
-
-  (items || []).forEach((item) => {
-    if (!item || typeof item !== "object") return;
-    const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
-    const rawPath = String(metadata.source_path || metadata.legacy_path || "")
-      .replace(/\\/g, "/")
-      .replace(/^\/+/, "")
-      .trim();
-    const pathSegments = rawPath ? rawPath.split("/").filter(Boolean) : [];
-    const segments = pathSegments.length
-      ? pathSegments
-      : [String(item.display_name || metadata.display_name || item.assembly_guid || "Assembly").trim() || "Assembly"];
-    let children = rootNode.children;
-    let parentPath = "";
-    segments.forEach((segment, idx) => {
-      const nodeId = parentPath ? `${parentPath}/${segment}` : segment;
-      const isFile = idx === segments.length - 1;
-      let node = children.find((n) => n.id === nodeId);
-      if (!node) {
-        node = {
-          id: nodeId,
-          label: isFile ? (item.display_name || metadata.display_name || segment) : segment,
-          path: nodeId,
-          isFolder: !isFile,
-          script: isFile ? item : null,
-          scriptPath: isFile ? (rawPath || nodeId) : undefined,
-          children: []
-        };
-        children.push(node);
-        map[nodeId] = node;
-      } else if (isFile) {
-        node.script = item;
-        node.label = item.display_name || metadata.display_name || node.label;
-        node.scriptPath = rawPath || nodeId;
-      }
-      if (!isFile) {
-        children = node.children;
-        parentPath = nodeId;
-      }
-    });
-  });
-
-  return { root: [rootNode], map };
-}
+import { DomainBadge } from "../Assemblies/Assembly_Badges";
+import {
+  buildAssemblyIndex,
+  buildAssemblyTree,
+  normalizeAssemblyPath,
+  parseAssemblyExport
+} from "../Assemblies/assemblyUtils";
 
 export default function QuickJob({ open, onClose, hostnames = [] }) {
-  const [tree, setTree] = useState([]);
-  const [nodeMap, setNodeMap] = useState({});
-  const [selectedPath, setSelectedPath] = useState("");
+  const [assemblyPayload, setAssemblyPayload] = useState({ items: [], queue: [] });
+  const [assembliesLoading, setAssembliesLoading] = useState(false);
+  const [assembliesError, setAssembliesError] = useState("");
+  const [selectedAssemblyGuid, setSelectedAssemblyGuid] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [runAsCurrentUser, setRunAsCurrentUser] = useState(false);
@@ -92,44 +45,96 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
   const [variableValues, setVariableValues] = useState({});
   const [variableErrors, setVariableErrors] = useState({});
   const [variableStatus, setVariableStatus] = useState({ loading: false, error: "" });
+  const assemblyExportCacheRef = useRef(new Map());
 
-  const loadTree = useCallback(async () => {
+  const loadAssemblies = useCallback(async () => {
+    setAssembliesLoading(true);
+    setAssembliesError("");
     try {
       const resp = await fetch("/api/assemblies");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      if (!resp.ok) {
+        const detail = await resp.text();
+        throw new Error(detail || `HTTP ${resp.status}`);
+      }
       const data = await resp.json();
-      const items = Array.isArray(data?.items) ? data.items : [];
-      const filtered = items.filter((item) => {
-        const kind = String(item?.assembly_kind || "").toLowerCase();
-        const type = String(item?.assembly_type || "").toLowerCase();
-        if (mode === "ansible") {
-          return type === "ansible";
-        }
-        return kind === "script" && type !== "ansible";
+      assemblyExportCacheRef.current.clear();
+      setAssemblyPayload({
+        items: Array.isArray(data?.items) ? data.items : [],
+        queue: Array.isArray(data?.queue) ? data.queue : []
       });
-      const { root, map } = buildTree(filtered, mode === "ansible" ? "Ansible Playbooks" : "Scripts");
-      setTree(root);
-      setNodeMap(map);
     } catch (err) {
-      console.error("Failed to load scripts:", err);
-      setTree([]);
-      setNodeMap({});
+      console.error("Failed to load assemblies:", err);
+      setAssemblyPayload({ items: [], queue: [] });
+      setAssembliesError(err?.message || "Failed to load assemblies");
+    } finally {
+      setAssembliesLoading(false);
     }
-  }, [mode]);
+  }, []);
+
+  const assemblyIndex = useMemo(
+    () => buildAssemblyIndex(assemblyPayload.items, assemblyPayload.queue),
+    [assemblyPayload.items, assemblyPayload.queue]
+  );
+
+  const scriptTreeData = useMemo(
+    () => buildAssemblyTree(assemblyIndex.grouped?.scripts || [], { rootLabel: "Scripts" }),
+    [assemblyIndex]
+  );
+
+  const ansibleTreeData = useMemo(
+    () => buildAssemblyTree(assemblyIndex.grouped?.ansible || [], { rootLabel: "Ansible Playbooks" }),
+    [assemblyIndex]
+  );
+
+  const selectedAssembly = useMemo(() => {
+    if (!selectedAssemblyGuid) return null;
+    const guid = selectedAssemblyGuid.toLowerCase();
+    return assemblyIndex.byGuid?.get(guid) || null;
+  }, [selectedAssemblyGuid, assemblyIndex]);
+
+  const loadAssemblyExport = useCallback(
+    async (assemblyGuid) => {
+      const cacheKey = assemblyGuid.toLowerCase();
+      if (assemblyExportCacheRef.current.has(cacheKey)) {
+        return assemblyExportCacheRef.current.get(cacheKey);
+      }
+      const resp = await fetch(`/api/assemblies/${encodeURIComponent(assemblyGuid)}/export`);
+      if (!resp.ok) {
+        throw new Error(`Failed to load assembly (HTTP ${resp.status})`);
+      }
+      const data = await resp.json();
+      assemblyExportCacheRef.current.set(cacheKey, data);
+      return data;
+    },
+    []
+  );
 
   useEffect(() => {
-    if (open) {
-      setSelectedPath("");
-      setError("");
-      setVariables([]);
-      setVariableValues({});
-      setVariableErrors({});
-      setVariableStatus({ loading: false, error: "" });
-      setUseSvcAccount(true);
-      setSelectedCredentialId("");
-      loadTree();
+    if (!open) {
+      setSelectedAssemblyGuid("");
+      return;
     }
-  }, [open, loadTree]);
+    setSelectedAssemblyGuid("");
+    setError("");
+    setVariables([]);
+    setVariableValues({});
+    setVariableErrors({});
+    setVariableStatus({ loading: false, error: "" });
+    setUseSvcAccount(true);
+    setSelectedCredentialId("");
+    if (!assemblyPayload.items.length && !assembliesLoading) {
+      loadAssemblies();
+    }
+  }, [open, loadAssemblies, assemblyPayload.items.length, assembliesLoading]);
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedAssemblyGuid("");
+    setVariables([]);
+    setVariableValues({});
+    setVariableErrors({});
+    setVariableStatus({ loading: false, error: "" });
+  }, [mode, open]);
 
   useEffect(() => {
     if (!open || mode !== "ansible") return;
@@ -201,37 +206,18 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
       </TreeItem>
     ));
 
-  const onItemSelect = (_e, itemId) => {
-    const node = nodeMap[itemId];
-    if (node && !node.isFolder) {
-      setSelectedPath(node.path);
-      setError("");
-      setVariableErrors({});
-    }
-  };
-
-  const normalizeVariables = (list) => {
-    if (!Array.isArray(list)) return [];
-    return list
-      .map((raw) => {
-        if (!raw || typeof raw !== "object") return null;
-        const name = typeof raw.name === "string" ? raw.name.trim() : typeof raw.key === "string" ? raw.key.trim() : "";
-        if (!name) return null;
-        const type = typeof raw.type === "string" ? raw.type.toLowerCase() : "string";
-        const label = typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : name;
-        const description = typeof raw.description === "string" ? raw.description : "";
-        const required = Boolean(raw.required);
-        const defaultValue = raw.hasOwnProperty("default")
-          ? raw.default
-          : raw.hasOwnProperty("defaultValue")
-            ? raw.defaultValue
-            : raw.hasOwnProperty("default_value")
-              ? raw.default_value
-              : "";
-        return { name, label, type, description, required, default: defaultValue };
-      })
-      .filter(Boolean);
-  };
+  const onItemSelect = useCallback(
+    (_e, itemId) => {
+      const treeData = mode === "ansible" ? ansibleTreeData : scriptTreeData;
+      const node = treeData.map[itemId];
+      if (node && !node.isFolder && node.assemblyGuid) {
+        setSelectedAssemblyGuid(node.assemblyGuid);
+        setError("");
+        setVariableErrors({});
+      }
+    },
+    [mode, ansibleTreeData, scriptTreeData]
+  );
 
   const deriveInitialValue = (variable) => {
     const { type, default: defaultValue } = variable;
@@ -254,7 +240,7 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
   };
 
   useEffect(() => {
-    if (!selectedPath) {
+    if (!selectedAssemblyGuid) {
       setVariables([]);
       setVariableValues({});
       setVariableErrors({});
@@ -262,61 +248,34 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
       return;
     }
     let canceled = false;
-    const loadAssembly = async () => {
+    (async () => {
       setVariableStatus({ loading: true, error: "" });
       try {
-        const trimmed = (selectedPath || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
-        if (!trimmed) {
-          setVariables([]);
-          setVariableValues({});
-          setVariableErrors({});
-          setVariableStatus({ loading: false, error: "" });
-          return;
-        }
-        const node = nodeMap[trimmed];
-        const script = node?.script;
-        const assemblyGuid = script?.assembly_guid;
-        if (!assemblyGuid) {
-          setVariables([]);
-          setVariableValues({});
-          setVariableErrors({});
-          setVariableStatus({ loading: false, error: "" });
-          return;
-        }
-        const resp = await fetch(`/api/assemblies/${encodeURIComponent(assemblyGuid)}/export`);
-        if (!resp.ok) throw new Error(`Failed to load assembly (HTTP ${resp.status})`);
-        const data = await resp.json();
-        const metadata = data?.metadata && typeof data.metadata === "object" ? data.metadata : {};
-        const payload = data?.payload && typeof data.payload === "object" ? data.payload : {};
-        const varsSource =
-          (payload && payload.variables) ||
-          metadata.variables ||
-          [];
-        const defs = normalizeVariables(varsSource);
-        if (!canceled) {
-          setVariables(defs);
-          const initialValues = {};
-          defs.forEach((v) => {
-            initialValues[v.name] = deriveInitialValue(v);
-          });
-          setVariableValues(initialValues);
-          setVariableErrors({});
-          setVariableStatus({ loading: false, error: "" });
-        }
+        const exportDoc = await loadAssemblyExport(selectedAssemblyGuid);
+        if (canceled) return;
+        const parsed = parseAssemblyExport(exportDoc);
+        const defs = Array.isArray(parsed.variables) ? parsed.variables : [];
+        setVariables(defs);
+        const initialValues = {};
+        defs.forEach((v) => {
+          if (!v || !v.name) return;
+          initialValues[v.name] = deriveInitialValue(v);
+        });
+        setVariableValues(initialValues);
+        setVariableErrors({});
+        setVariableStatus({ loading: false, error: "" });
       } catch (err) {
-        if (!canceled) {
-          setVariables([]);
-          setVariableValues({});
-          setVariableErrors({});
-          setVariableStatus({ loading: false, error: err?.message || String(err) });
-        }
+        if (canceled) return;
+        setVariables([]);
+        setVariableValues({});
+        setVariableErrors({});
+        setVariableStatus({ loading: false, error: err?.message || String(err) });
       }
-    };
-    loadAssembly();
+    })();
     return () => {
       canceled = true;
     };
-  }, [selectedPath, mode, nodeMap]);
+  }, [selectedAssemblyGuid, loadAssemblyExport]);
 
   const handleVariableChange = (variable, rawValue) => {
     const { name, type } = variable;
@@ -357,11 +316,11 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
   };
 
   const onRun = async () => {
-    if (!selectedPath) {
-      setError(mode === 'ansible' ? "Please choose a playbook to run." : "Please choose a script to run.");
+    if (!selectedAssembly) {
+      setError(mode === "ansible" ? "Please choose a playbook to run." : "Please choose a script to run.");
       return;
     }
-    if (mode === 'ansible' && !useSvcAccount && !selectedCredentialId) {
+    if (mode === "ansible" && !useSvcAccount && !selectedCredentialId) {
       setError("Select a credential to run this playbook.");
       return;
     }
@@ -388,17 +347,17 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
     try {
       let resp;
       const variableOverrides = buildVariablePayload();
-      const node = nodeMap[selectedPath];
-      if (mode === 'ansible') {
-        const rawPath = (node?.scriptPath || selectedPath || "").replace(/\\/g, "/");
-        const playbook_path = rawPath.toLowerCase().startsWith("ansible_playbooks/")
-          ? rawPath
-          : `Ansible_Playbooks/${rawPath}`;
+      const normalizedPath = normalizeAssemblyPath(
+        mode === "ansible" ? "ansible" : "script",
+        selectedAssembly.path || "",
+        selectedAssembly.displayName
+      );
+      if (mode === "ansible") {
         resp = await fetch("/api/ansible/quick_run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            playbook_path,
+            playbook_path: normalizedPath,
             hostnames,
             variable_values: variableOverrides,
             credential_id: !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null,
@@ -406,21 +365,31 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
           })
         });
       } else {
-        const rawPath = (node?.scriptPath || selectedPath || "").replace(/\\/g, "/");
-        const script_path = rawPath.toLowerCase().startsWith("scripts/") ? rawPath : `Scripts/${rawPath}`;
         resp = await fetch("/api/scripts/quick_run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            script_path,
+            script_path: normalizedPath,
             hostnames,
             run_mode: runAsCurrentUser ? "current_user" : "system",
             variable_values: variableOverrides
           })
         });
       }
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      const contentType = String(resp.headers.get("content-type") || "");
+      let data = null;
+      if (contentType.includes("application/json")) {
+        data = await resp.json().catch(() => null);
+      } else {
+        const text = await resp.text().catch(() => "");
+        if (text && text.trim()) {
+          data = { error: text.trim() };
+        }
+      }
+      if (!resp.ok) {
+        const message = data?.error || data?.message || `HTTP ${resp.status}`;
+        throw new Error(message);
+      }
       onClose && onClose();
     } catch (err) {
       setError(String(err.message || err));
@@ -432,8 +401,10 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
   const credentialRequired = mode === "ansible" && !useSvcAccount;
   const disableRun =
     running ||
-    !selectedPath ||
+    !selectedAssembly ||
     (credentialRequired && (!selectedCredentialId || !credentials.length));
+  const activeTreeData = mode === "ansible" ? ansibleTreeData : scriptTreeData;
+  const treeItems = Array.isArray(activeTreeData.root) ? activeTreeData.root : [];
 
   return (
     <Dialog open={open} onClose={running ? undefined : onClose} fullWidth maxWidth="md"
@@ -448,6 +419,9 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
         <Typography variant="body2" sx={{ color: "#aaa", mb: 1 }}>
           Select a {mode === 'ansible' ? 'playbook' : 'script'} to run on {hostnames.length} device{hostnames.length !== 1 ? "s" : ""}.
         </Typography>
+        {assembliesError ? (
+          <Typography variant="body2" sx={{ color: "#ff8080", mb: 1 }}>{assembliesError}</Typography>
+        ) : null}
         {mode === 'ansible' && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap", mb: 2 }}>
             <FormControlLabel
@@ -511,7 +485,14 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
         <Box sx={{ display: "flex", gap: 2 }}>
           <Paper sx={{ flex: 1, p: 1, bgcolor: "#1e1e1e", maxHeight: 400, overflow: "auto" }}>
             <SimpleTreeView sx={{ color: "#e6edf3" }} onItemSelectionToggle={onItemSelect}>
-              {tree.length ? renderNodes(tree) : (
+              {assembliesLoading ? (
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 1, py: 0.5, color: "#7db7ff" }}>
+                  <CircularProgress size={18} sx={{ color: "#58a6ff" }} />
+                  <Typography variant="body2">Loading assemblies…</Typography>
+                </Box>
+              ) : treeItems.length ? (
+                renderNodes(treeItems)
+              ) : (
                 <Typography variant="body2" sx={{ color: "#888", p: 1 }}>
                   {mode === 'ansible' ? 'No playbooks found.' : 'No scripts found.'}
                 </Typography>
@@ -520,9 +501,19 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
           </Paper>
           <Box sx={{ width: 320 }}>
             <Typography variant="subtitle2" sx={{ color: "#ccc", mb: 1 }}>Selection</Typography>
-            <Typography variant="body2" sx={{ color: selectedPath ? "#e6edf3" : "#888" }}>
-              {selectedPath || (mode === 'ansible' ? 'No playbook selected' : 'No script selected')}
-            </Typography>
+            {selectedAssembly ? (
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                  <Typography variant="body2" sx={{ color: "#e6edf3" }}>{selectedAssembly.displayName}</Typography>
+                  <DomainBadge domain={selectedAssembly.domain} size="small" />
+                </Box>
+                <Typography variant="body2" sx={{ color: "#aaa" }}>{selectedAssembly.path}</Typography>
+              </Box>
+            ) : (
+              <Typography variant="body2" sx={{ color: "#888" }}>
+                {mode === 'ansible' ? 'No playbook selected' : 'No script selected'}
+              </Typography>
+            )}
             <Box sx={{ mt: 2 }}>
               {mode !== 'ansible' && (
                 <>
