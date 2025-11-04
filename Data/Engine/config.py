@@ -283,7 +283,16 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         runtime_config.get("API_GROUPS") or os.environ.get("BOREALIS_API_GROUPS")
     )
     if not api_groups:
-        api_groups = ("core", "auth", "tokens", "enrollment", "devices", "assemblies")
+        api_groups = (
+            "core",
+            "auth",
+            "tokens",
+            "enrollment",
+            "devices",
+            "server",
+            "assemblies",
+            "scheduled_jobs",
+        )
 
     settings = EngineSettings(
         database_path=database_path,

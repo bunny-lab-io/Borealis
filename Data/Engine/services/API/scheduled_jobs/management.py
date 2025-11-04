@@ -17,7 +17,8 @@
 """Scheduled job management integration for the Borealis Engine runtime."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, List
 
 from . import job_scheduler
 
@@ -38,12 +39,56 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     database_path = adapters.context.database_path
     script_signer = adapters.script_signer
 
+    def _online_hostnames_snapshot() -> List[str]:
+        """Return hostnames deemed online based on recent agent heartbeats."""
+        threshold = int(time.time()) - 300
+        conn = None
+        try:
+            conn = adapters.db_conn_factory()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT hostname FROM devices WHERE last_seen IS NOT NULL AND last_seen >= ?",
+                (threshold,),
+            )
+            rows = cur.fetchall()
+        except Exception as exc:
+            adapters.service_log(
+                "scheduled_jobs",
+                f"online host snapshot lookup failed err={exc}",
+                level="ERROR",
+            )
+            rows = []
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
+        seen = set()
+        hostnames: List[str] = []
+        for row in rows or []:
+            try:
+                raw = row[0] if isinstance(row, (list, tuple)) else row
+                name = str(raw or "").strip()
+            except Exception:
+                name = ""
+            if not name:
+                continue
+            for variant in (name, name.upper(), name.lower()):
+                if variant and variant not in seen:
+                    seen.add(variant)
+                    hostnames.append(variant)
+        return hostnames
+
     scheduler = job_scheduler.register(
         app,
         socketio,
         database_path,
         script_signer=script_signer,
+        service_logger=adapters.service_log,
     )
+    job_scheduler.set_online_lookup(scheduler, _online_hostnames_snapshot)
     scheduler.start()
     adapters.context.scheduler = scheduler
     adapters.service_log("scheduled_jobs", "engine scheduler initialised", level="INFO")
@@ -61,4 +106,3 @@ def register_management(app: "Flask", adapters: "EngineServiceAdapters") -> None
     """Ensure scheduled job routes are registered via the Engine scheduler."""
 
     ensure_scheduler(app, adapters)
-

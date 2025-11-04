@@ -41,8 +41,9 @@ from .devices import routes as device_routes
 from .devices.approval import register_admin_endpoints
 from .devices.management import register_management
 from .scheduled_jobs import management as scheduled_jobs_management
+from .server import info as server_info
 
-DEFAULT_API_GROUPS: Sequence[str] = ("core", "auth", "tokens", "enrollment", "devices", "assemblies", "scheduled_jobs")
+DEFAULT_API_GROUPS: Sequence[str] = ("core", "auth", "tokens", "enrollment", "devices", "server", "assemblies", "scheduled_jobs")
 
 _SERVER_SCOPE_PATTERN = re.compile(r"\\b(?:scope|context|agent_context)=([A-Za-z0-9_-]+)", re.IGNORECASE)
 _SERVER_AGENT_ID_PATTERN = re.compile(r"\\bagent_id=([^\\s,]+)", re.IGNORECASE)
@@ -274,11 +275,16 @@ def _register_assemblies(app: Flask, adapters: EngineServiceAdapters) -> None:
     register_execution(app, adapters)
 
 
+def _register_server(app: Flask, adapters: EngineServiceAdapters) -> None:
+    server_info.register_info(app, adapters)
+
+
 _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, EngineServiceAdapters], None]] = {
     "auth": register_auth,
     "tokens": _register_tokens,
     "enrollment": _register_enrollment,
     "devices": _register_devices,
+    "server": _register_server,
     "assemblies": _register_assemblies,
     "scheduled_jobs": _register_scheduled_jobs,
 }
