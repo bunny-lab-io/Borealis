@@ -1225,7 +1225,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
               {/* Search (about 20% wider) */}
               <ClickAwayListener onClickAway={() => setSearchOpen(false)}>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, ml: 1 }}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, ml: 2 }}>
                   {/* Category button unchanged... */}
 
                   <Box
