@@ -224,7 +224,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         </Section>
 
         {/* Automation */}
-        <Section title="Automation" k="automation">
+        <Section title="Task Automation" k="automation">
           <NavItem
             icon={<AssembliesIcon fontSize="small" />}
             label="Assemblies"
