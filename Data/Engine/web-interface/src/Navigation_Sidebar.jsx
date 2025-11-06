@@ -1,6 +1,6 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Navigation_Sidebar.jsx
+// Navigation_Sidebar.jsx — Clean Modern Matte + Glass Sidebar (no accent bars or header bubbles)
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Accordion,
   AccordionSummary,
@@ -8,7 +8,8 @@ import {
   Typography,
   Box,
   ListItemButton,
-  ListItemText
+  ListItemText,
+  Divider,
 } from "@mui/material";
 import {
   ExpandMore as ExpandMoreIcon,
@@ -16,20 +17,28 @@ import {
   FilterAlt as FilterIcon,
   Groups as GroupsIcon,
   Work as JobsIcon,
-  Polyline as WorkflowsIcon,
-  Code as ScriptIcon,
   PeopleOutline as CommunityIcon,
-  Apps as AssembliesIcon
-} from "@mui/icons-material";
-import { LocationCity as SitesIcon } from "@mui/icons-material";
-import {
+  Apps as AssembliesIcon,
+  LocationCity as SitesIcon,
   Dns as ServerInfoIcon,
   VpnKey as CredentialIcon,
   PersonOutline as UserIcon,
   GitHub as GitHubIcon,
   Key as KeyIcon,
-  AdminPanelSettings as AdminPanelSettingsIcon
+  AdminPanelSettings as AdminPanelSettingsIcon,
 } from "@mui/icons-material";
+
+const COLORS = {
+  cyan: "#7db7ff",
+  violet: "#c084fc",
+  text: "#cbd5e1",
+  textActive: "#e6f2ff",
+  matte: "#0f141c",
+  line: "rgba(125,183,255,0.14)",
+  hover: "rgba(255,255,255,0.05)",
+  itemActiveBg:
+    "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+};
 
 function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
   const [expandedNav, setExpandedNav] = useState({
@@ -38,8 +47,70 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
     automation: true,
     filters: true,
     access: true,
-    admin: true
+    admin: true,
   });
+
+  const groupActive = useMemo(
+    () => ({
+      sites: currentPage === "sites",
+      devices: [
+        "devices",
+        "ssh_devices",
+        "winrm_devices",
+        "agent_devices",
+        "admin_device_approvals",
+        "admin_enrollment_codes",
+      ].includes(currentPage),
+      automation: ["jobs", "assemblies", "community"].includes(currentPage),
+      filters: ["filters", "groups"].includes(currentPage),
+      access: [
+        "access_credentials",
+        "access_users",
+        "access_github_token",
+      ].includes(currentPage),
+      admin: ["server_info"].includes(currentPage),
+    }),
+    [currentPage]
+  );
+
+  const Section = ({ title, k, children }) => (
+    <Accordion
+      expanded={expandedNav[k]}
+      onChange={(_, e) => setExpandedNav((s) => ({ ...s, [k]: e }))}
+      square
+      disableGutters
+      sx={{
+        "&:before": { display: "none" },
+        m: 0,
+        bgcolor: "transparent",
+        border: 0,
+      }}
+    >
+      <AccordionSummary
+        expandIcon={<ExpandMoreIcon sx={{ color: COLORS.cyan }} />}
+        sx={{
+          minHeight: 38,
+          "& .MuiAccordionSummary-content": { m: 0, py: 0.5 },
+          backgroundColor: "rgba(255,255,255,0.02)",
+          borderTopRightRadius: 8,
+          borderBottomRightRadius: 8,
+          px: 1.5,
+        }}
+      >
+        <Typography
+          sx={{
+            fontSize: "0.85rem",
+            color: COLORS.cyan,
+            fontWeight: 700,
+            letterSpacing: 0.3,
+          }}
+        >
+          {title}
+        </Typography>
+      </AccordionSummary>
+      <AccordionDetails sx={{ p: 0 }}>{children}</AccordionDetails>
+    </Accordion>
+  );
 
   const NavItem = ({ icon, label, pageKey, indent = 0 }) => {
     const active = currentPage === pageKey;
@@ -49,47 +120,28 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         sx={{
           pl: indent ? 4 : 2,
           py: 1,
-          color: active ? "#e6f2ff" : "#ccc",
+          color: active ? COLORS.textActive : COLORS.text,
           position: "relative",
-          background: active
-            ? "linear-gradient(90deg, rgba(88,166,255,0.10) 0%, rgba(88,166,255,0.03) 60%, rgba(88,166,255,0.00) 100%)"
-            : "transparent",
-          borderTopRightRadius: 0,
-          borderBottomRightRadius: 0,
-          boxShadow: active
-            ? "inset 0 0 0 1px rgba(88,166,255,0.25)"
-            : "none",
-          transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease",
+          background: active ? COLORS.itemActiveBg : "transparent",
+          borderTopRightRadius: 10,
+          borderBottomRightRadius: 10,
+          transition:
+            "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
           "&:hover": {
-            background: active
-              ? "linear-gradient(90deg, rgba(88,166,255,0.14) 0%, rgba(88,166,255,0.06) 60%, rgba(88,166,255,0.00) 100%)"
-              : "#2c2c2c"
-          }
+            background: active ? COLORS.itemActiveBg : COLORS.hover,
+          },
+          "&:active": { transform: "translateY(0.5px)" },
         }}
         selected={active}
       >
-        <Box
-          sx={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: active ? 3 : 0,
-            bgcolor: "#58a6ff",
-            borderTopRightRadius: 2,
-            borderBottomRightRadius: 2,
-            boxShadow: active ? "0 0 6px rgba(88,166,255,0.35)" : "none",
-            transition: "width 180ms ease, box-shadow 200ms ease"
-          }}
-        />
         {icon && (
           <Box
             sx={{
               mr: 1,
               display: "flex",
               alignItems: "center",
-              color: active ? "#7db7ff" : "#58a6ff",
-              transition: "color 160ms ease"
+              color: active ? COLORS.cyan : "#8fbfff",
+              transition: "color 160ms ease",
             }}
           >
             {icon}
@@ -97,7 +149,11 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         )}
         <ListItemText
           primary={label}
-          primaryTypographyProps={{ fontSize: "0.75rem", fontWeight: active ? 600 : 400 }}
+          primaryTypographyProps={{
+            fontSize: "0.8rem",
+            fontWeight: active ? 600 : 400,
+            letterSpacing: 0.2,
+          }}
         />
       </ListItemButton>
     );
@@ -107,301 +163,133 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
     <Box
       sx={{
         width: 260,
-        bgcolor: "#121212",
-        borderRight: "1px solid #333",
         display: "flex",
         flexDirection: "column",
-        overflow: "hidden"
+        overflow: "hidden",
+        background:
+          "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), " +
+          COLORS.matte,
+        borderRight: `1px solid ${COLORS.line}`,
+        backdropFilter: "blur(8px) saturate(130%)",
       }}
     >
-      <Box sx={{ flex: 1, overflowY: "auto" }}>
+      <Divider sx={{ borderColor: COLORS.line }} />
+
+      <Box sx={{ flex: 1, overflowY: "auto", p: 0.25 }}>
         {/* Sites */}
-        {(() => {
-          const groupActive = currentPage === "sites";
-          return (
-        <Accordion
-          expanded={expandedNav.sites}
-          onChange={(_, e) => setExpandedNav((s) => ({ ...s, sites: e }))}
-          square
-          disableGutters
-          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            sx={{
-              position: "relative",
-              background: groupActive
-                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
-                : "#2c2c2c",
-              minHeight: "36px",
-              "& .MuiAccordionSummary-content": { margin: 0 },
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: groupActive ? 3 : 0,
-                bgcolor: "#58a6ff",
-                borderTopRightRadius: 2,
-                borderBottomRightRadius: 2,
-                transition: "width 160ms ease"
-              }
-            }}
-          >
-            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
-              <b>Sites</b>
-            </Typography>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-            <NavItem icon={<SitesIcon fontSize="small" />} label="All Sites" pageKey="sites" />
-          </AccordionDetails>
-        </Accordion>
-          );
-        })()}
+        <Section title="Sites" k="sites">
+          <NavItem
+            icon={<SitesIcon fontSize="small" />}
+            label="All Sites"
+            pageKey="sites"
+          />
+        </Section>
+
         {/* Inventory */}
-        {(() => {
-          const groupActive = ["devices", "ssh_devices", "winrm_devices", "agent_devices"].includes(currentPage);
-          return (
-        <Accordion
-          expanded={expandedNav.devices}
-          onChange={(_, e) => setExpandedNav((s) => ({ ...s, devices: e }))}
-          square
-          disableGutters
-          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            sx={{
-              position: "relative",
-              background: groupActive
-                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
-                : "#2c2c2c",
-              minHeight: "36px",
-              "& .MuiAccordionSummary-content": { margin: 0 },
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: groupActive ? 3 : 0,
-                bgcolor: "#58a6ff",
-                borderTopRightRadius: 2,
-                borderBottomRightRadius: 2,
-                transition: "width 160ms ease"
-              }
-            }}
-          >
-            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
-              <b>Inventory</b>
-            </Typography>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-            <NavItem icon={<AdminPanelSettingsIcon fontSize="small" />} label="Device Approvals" pageKey="admin_device_approvals" />
-            <NavItem icon={<KeyIcon fontSize="small" />} label="Enrollment Codes" pageKey="admin_enrollment_codes" indent />
-            <NavItem icon={<DevicesIcon fontSize="small" />} label="Devices" pageKey="devices" />
-            <NavItem icon={<DevicesIcon fontSize="small" />} label="Agent Devices" pageKey="agent_devices" indent />
-            <NavItem icon={<DevicesIcon fontSize="small" />} label="SSH Devices" pageKey="ssh_devices" indent />
-            <NavItem icon={<DevicesIcon fontSize="small" />} label="WinRM Devices" pageKey="winrm_devices" indent />
-          </AccordionDetails>
-        </Accordion>
-          );
-        })()}
+        <Section title="Inventory" k="devices">
+          <NavItem
+            icon={<AdminPanelSettingsIcon fontSize="small" />}
+            label="Device Approvals"
+            pageKey="admin_device_approvals"
+          />
+          <NavItem
+            icon={<KeyIcon fontSize="small" />}
+            label="Enrollment Codes"
+            pageKey="admin_enrollment_codes"
+            indent
+          />
+          <NavItem
+            icon={<DevicesIcon fontSize="small" />}
+            label="Devices"
+            pageKey="devices"
+          />
+          <NavItem
+            icon={<DevicesIcon fontSize="small" />}
+            label="Agent Devices"
+            pageKey="agent_devices"
+            indent
+          />
+          <NavItem
+            icon={<DevicesIcon fontSize="small" />}
+            label="SSH Devices"
+            pageKey="ssh_devices"
+            indent
+          />
+          <NavItem
+            icon={<DevicesIcon fontSize="small" />}
+            label="WinRM Devices"
+            pageKey="winrm_devices"
+            indent
+          />
+        </Section>
 
         {/* Automation */}
-        {(() => {
-          const groupActive = ["jobs", "assemblies", "community"].includes(currentPage);
-          return (
-        <Accordion
-          expanded={expandedNav.automation}
-          onChange={(_, e) => setExpandedNav((s) => ({ ...s, automation: e }))}
-          square
-          disableGutters
-          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            sx={{
-              position: "relative",
-              background: groupActive
-                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
-                : "#2c2c2c",
-              minHeight: "36px",
-              "& .MuiAccordionSummary-content": { margin: 0 },
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: groupActive ? 3 : 0,
-                bgcolor: "#58a6ff",
-                borderTopRightRadius: 2,
-                borderBottomRightRadius: 2,
-                transition: "width 160ms ease"
-              }
-            }}
-          >
-            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
-              <b>Automation</b>
-            </Typography>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-            <NavItem icon={<AssembliesIcon fontSize="small" />} label="Assemblies" pageKey="assemblies" />
-            <NavItem icon={<JobsIcon fontSize="small" />} label="Scheduled Jobs" pageKey="jobs" />
-            <NavItem icon={<CommunityIcon fontSize="small" />} label="Community Content" pageKey="community" />
-          </AccordionDetails>
-        </Accordion>
-          );
-        })()}
+        <Section title="Automation" k="automation">
+          <NavItem
+            icon={<AssembliesIcon fontSize="small" />}
+            label="Assemblies"
+            pageKey="assemblies"
+          />
+          <NavItem
+            icon={<JobsIcon fontSize="small" />}
+            label="Scheduled Jobs"
+            pageKey="jobs"
+          />
+          <NavItem
+            icon={<CommunityIcon fontSize="small" />}
+            label="Community Content"
+            pageKey="community"
+          />
+        </Section>
 
         {/* Filters & Groups */}
-        {(() => {
-          const groupActive = currentPage === "filters" || currentPage === "groups";
-          return (
-        <Accordion
-          expanded={expandedNav.filters}
-          onChange={(_, e) => setExpandedNav((s) => ({ ...s, filters: e }))}
-          square
-          disableGutters
-          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            sx={{
-              position: "relative",
-              background: groupActive
-                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
-                : "#2c2c2c",
-              minHeight: "36px",
-              "& .MuiAccordionSummary-content": { margin: 0 },
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: groupActive ? 3 : 0,
-                bgcolor: "#58a6ff",
-                borderTopRightRadius: 2,
-                borderBottomRightRadius: 2,
-                transition: "width 160ms ease"
-              }
-            }}
-          >
-            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
-              <b>Filters & Groups</b>
-            </Typography>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-            <NavItem icon={<FilterIcon fontSize="small" />} label="Filters" pageKey="filters" />
-            <NavItem icon={<GroupsIcon fontSize="small" />} label="Groups" pageKey="groups" />
-          </AccordionDetails>
-        </Accordion>
-          );
-        })()}
+        <Section title="Filters & Groups" k="filters">
+          <NavItem
+            icon={<FilterIcon fontSize="small" />}
+            label="Filters"
+            pageKey="filters"
+          />
+          <NavItem
+            icon={<GroupsIcon fontSize="small" />}
+            label="Groups"
+            pageKey="groups"
+          />
+        </Section>
 
         {/* Access Management */}
-        {(() => {
-          if (!isAdmin) return null;
-          const groupActive =
-            currentPage === "access_credentials" ||
-            currentPage === "access_users" ||
-            currentPage === "access_github_token";
-          return (
-        <Accordion
-          expanded={expandedNav.access}
-          onChange={(_, e) => setExpandedNav((s) => ({ ...s, access: e }))}
-          square
-          disableGutters
-          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            sx={{
-              position: "relative",
-              background: groupActive
-                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
-                : "#2c2c2c",
-              minHeight: "36px",
-              "& .MuiAccordionSummary-content": { margin: 0 },
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: groupActive ? 3 : 0,
-                bgcolor: "#58a6ff",
-                borderTopRightRadius: 2,
-                borderBottomRightRadius: 2,
-                transition: "width 160ms ease"
-              }
-            }}
-          >
-            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
-              <b>Access Management</b>
-            </Typography>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-            <NavItem icon={<CredentialIcon fontSize="small" />} label="Credentials" pageKey="access_credentials" />
-            <NavItem icon={<GitHubIcon fontSize="small" />} label="GitHub API Token" pageKey="access_github_token" />
-            <NavItem icon={<UserIcon fontSize="small" />} label="Users" pageKey="access_users" />
-          </AccordionDetails>
-        </Accordion>
-          );
-        })()}
+        {isAdmin && (
+          <Section title="Access Management" k="access">
+            <NavItem
+              icon={<CredentialIcon fontSize="small" />}
+              label="Credentials"
+              pageKey="access_credentials"
+            />
+            <NavItem
+              icon={<GitHubIcon fontSize="small" />}
+              label="GitHub API Token"
+              pageKey="access_github_token"
+            />
+            <NavItem
+              icon={<UserIcon fontSize="small" />}
+              label="Users"
+              pageKey="access_users"
+            />
+          </Section>
+        )}
 
-        {/* Admin */}
-        {(() => {
-          if (!isAdmin) return null;
-          const groupActive =
-            currentPage === "server_info" ||
-            currentPage === "admin_enrollment_codes" ||
-            currentPage === "admin_device_approvals";
-          return (
-        <Accordion
-          expanded={expandedNav.admin}
-          onChange={(_, e) => setExpandedNav((s) => ({ ...s, admin: e }))}
-          square
-          disableGutters
-          sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            sx={{
-              position: "relative",
-              background: groupActive
-                ? "linear-gradient(90deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.00) 100%)"
-                : "#2c2c2c",
-              minHeight: "36px",
-              "& .MuiAccordionSummary-content": { margin: 0 },
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: groupActive ? 3 : 0,
-                bgcolor: "#58a6ff",
-                borderTopRightRadius: 2,
-                borderBottomRightRadius: 2,
-                transition: "width 160ms ease"
-              }
-            }}
-          >
-            <Typography sx={{ fontSize: "0.85rem", color: "#58a6ff" }}>
-              <b>Admin Settings</b>
-            </Typography>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-            <NavItem icon={<ServerInfoIcon fontSize="small" />} label="Server Info" pageKey="server_info" />
-          </AccordionDetails>
-        </Accordion>
-          );
-        })()}
+        {/* Admin Settings */}
+        {isAdmin && (
+          <Section title="Admin Settings" k="admin">
+            <NavItem
+              icon={<ServerInfoIcon fontSize="small" />}
+              label="Server Info"
+              pageKey="server_info"
+            />
+          </Section>
+        )}
       </Box>
+
+      <Divider sx={{ borderColor: COLORS.line }} />
     </Box>
   );
 }
