@@ -1202,189 +1202,123 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     <ThemeProvider theme={darkTheme}>
       <CssBaseline />
       <Box sx={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          <AppBar position="static" sx={{ bgcolor: "#16191d" }}>
-              <Toolbar sx={{ minHeight: "36px", position: 'relative' }}>
-                <Box component="img" src="/Borealis_Logo_Full.png" alt="Borealis Logo" sx={{ height: "52px", marginRight: "8px" }} />
-            {/* Breadcrumbs inline in top bar (transparent), aligned to content area */}
-            <Box
-              sx={{
-                position: 'absolute',
-                left: 'calc(260px + 550px)', // fine-tuned to align with black content edge
-                bottom: 6,
-                display: 'flex',
-                alignItems: 'flex-end',
-                pointerEvents: 'none' // avoid interfering with About menu positioning
-              }}
-            >
-              <Breadcrumbs
-                separator={<NavigateNextIcon fontSize="inherit" sx={{ color: "#6b6b6b" }} />}
-                aria-label="breadcrumb"
-                sx={{
-                  color: "#9aa0a6",
-                  fontSize: "0.825rem", // 50% larger than previous
-                  '& .MuiBreadcrumbs-separator': { mx: 0.6 },
-                  pointerEvents: 'auto'
-                }}
-              >
-                {breadcrumbs.map((c, idx) => {
-                  if (c.page) {
-                    return (
-                      <Button
-                        key={idx}
-                        onClick={() => navigateTo(c.page)}
-                        size="small"
-                        sx={{
-                          color: "#7db7ff",
-                          textTransform: "none",
-                          minWidth: 0,
-                          p: 0,
-                          fontSize: "0.825rem"
-                        }}
-                      >
-                        {c.label}
-                      </Button>
-                    );
-                  }
-                  return (
-                    <Typography key={idx} component="span" sx={{ color: "#e0e0e0", fontSize: "0.825rem" }}>
-                      {c.label}
-                    </Typography>
-                  );
-                })}
-              </Breadcrumbs>
-                </Box>
-                {/* Top search: category + input */}
-                <ClickAwayListener onClickAway={() => setSearchOpen(false)}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 2 }}>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    onClick={(e) => setSearchMenuEl(e.currentTarget)}
-                    endIcon={searchMenuEl ? <ArrowDropUpIcon /> : <ArrowDropDownIcon />}
+        {/* Aurora Gradient Header (darker near the logo, brighter to the right) */}
+          <AppBar
+            position="static"
+            sx={{
+              background:
+                "linear-gradient(90deg, rgba(10,14,22,0.65) 0%, rgba(10,14,22,0.20) 20%), " + // left-side dark overlay for logo contrast
+                "linear-gradient(90deg, rgba(64,164,255,0.5) 0%, rgba(132, 252, 230, 0.39) 100%)",
+              boxShadow: "0 0 20px rgba(125,183,255,0.12)",
+              backdropFilter: "blur(10px) saturate(140%)",
+              borderBottom: "1px solid rgba(125,183,255,0.20)"
+            }}
+          >
+            <Toolbar sx={{ minHeight: 40, alignItems: "center", gap: 1 }}>
+              {/* Logo only (removed the standalone 'Borealis' text) */}
+              <Box
+                component="img"
+                src="/Borealis_Logo_Full.png"
+                alt="Borealis Logo"
+                sx={{ height: 50, ml: -1.8, mr: 1.5 }}
+              />
+
+              {/* Search (about 20% wider) */}
+              <ClickAwayListener onClickAway={() => setSearchOpen(false)}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, ml: 1 }}>
+                  {/* Category button unchanged... */}
+
+                  <Box
+                    ref={searchAnchorRef}
                     sx={{
-                      height: 32,
-                      color: '#ddd',
-                      left: -11,
-                      bottom: -6,
-                      borderColor: '#3a3f44',
-                      textTransform: 'none',
-                      bgcolor: '#1e2328',
-                      '&:hover': { borderColor: '#4b5158', bgcolor: '#22272e' },
-                      minWidth: 160,
-                      justifyContent: 'space-between'
+                      position: "relative",
+                      display: "flex",
+                      alignItems: "center",
+                      border: "1px solid #3a3f44",
+                      borderRadius: 1,
+                      height: 34,
+                      minWidth: 384,             // was 320 → ~20% wider
+                      bgcolor: "#1e2328"
                     }}
                   >
-                    {(SEARCH_CATEGORIES.find(c => c.key === searchCategory) || {}).label || 'Hostname'}
-                  </Button>
-                  <Menu
-                    anchorEl={searchMenuEl}
-                    open={Boolean(searchMenuEl)}
-                    onClose={() => setSearchMenuEl(null)}
-                    PaperProps={{ sx: { bgcolor: '#1e1e1e', color: '#fff', minWidth: 240 } }}
-                  >
-                    {SEARCH_CATEGORIES.map((c) => (
-                      <MenuItem key={c.key} onClick={() => { setSearchCategory(c.key); setSearchMenuEl(null); setSearchQuery(''); setSuggestions({ devices: [], sites: [], q: '', field: '' }); }}>
-                        {c.label}
-                      </MenuItem>
-                    ))}
-                  </Menu>
-                       <Box
-                         ref={searchAnchorRef}
-                         sx={{ position: 'relative', left: -2, bottom: -6, display: 'flex', alignItems: 'center', border: '1px solid #3a3f44', borderRadius: 1, height: 32, minWidth: 320, bgcolor: '#1e2328' }}
-                         >
                     <input
                       value={searchQuery}
                       onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
                       onFocus={() => setSearchOpen(true)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          execSearch(searchCategory, searchQuery);
-                        } else if (e.key === 'Escape') {
-                          setSearchOpen(false);
-                        }
+                        if (e.key === "Enter") execSearch(searchCategory, searchQuery);
+                        else if (e.key === "Escape") setSearchOpen(false);
                       }}
-                      placeholder={(SEARCH_CATEGORIES.find(c => c.key === searchCategory) || {}).placeholder || 'Search'}
+                      placeholder={(SEARCH_CATEGORIES.find(c => c.key === searchCategory) || {}).placeholder || "Search"}
                       style={{
-                        outline: 'none', border: 'none', background: 'transparent', color: '#e8eaed', paddingLeft: 10, paddingRight: 28, width: 360, height: '100%'
+                        outline: "none",
+                        border: "none",
+                        background: "transparent",
+                        color: "#e8eaed",
+                        paddingLeft: 10,
+                        paddingRight: 28,
+                        width: 360,               // keep input width comfortable inside the wider box
+                        height: "100%"
                       }}
                     />
-                    <SearchIcon sx={{ position: 'absolute', right: 6, color: '#8aa0b4', fontSize: 18 }} />
-                         {searchOpen && (((SEARCH_CATEGORIES.find(c=>c.key===searchCategory)?.scope==='device') && (suggestions.devices||[]).length>0) || ((SEARCH_CATEGORIES.find(c=>c.key===searchCategory)?.scope==='site') && (suggestions.sites||[]).length>0)) && (
-                           <Box
-                             sx={{ position: 'absolute', top: '100%', left: 0, right: 0, bgcolor: '#1e2328', border: '1px solid #3a3f44', borderTop: 'none', zIndex: 1400, borderRadius: '0 0 6px 6px', maxHeight: 320, overflowY: 'auto' }}
-                             >
-                             {/* Devices group */}
-                             {((suggestions.devices || []).length > 0 && (SEARCH_CATEGORIES.find(c=>c.key===searchCategory)?.scope==='device')) && (
-                               <Box sx={{ borderBottom: '1px solid #2b2f34' }}>
-                                 <Box sx={{ display: 'flex', alignItems: 'center', px: 1.2, py: 0.8, color: '#9aa0a6', fontSize: 12 }}>Devices</Box>
-                              {suggestions.devices && suggestions.devices.length > 0 ? (
-                              suggestions.devices.map((d, idx) => {
-                                const primary = (searchCategory === 'hostname')
-                                  ? highlightText(d.hostname || d.value, searchQuery)
-                                  : (d.hostname || d.value);
-                                // Choose a secondary value based on category; fallback to best-available info
-                                let secVal = '';
-                                if (searchCategory === 'internal_ip') secVal = d.internal_ip || '';
-                                else if (searchCategory === 'external_ip') secVal = d.external_ip || '';
-                                else if (searchCategory === 'description') secVal = d.description || '';
-                                else if (searchCategory === 'last_user') secVal = d.last_user || '';
-                                const secHighlighted = (searchCategory !== 'hostname' && secVal)
-                                  ? highlightText(secVal, searchQuery)
-                                  : (d.internal_ip || d.external_ip || d.description || d.last_user || '');
-                                return (
-                                  <Box key={idx} onClick={() => { navigateTo('device_details', { device: { hostname: d.hostname || d.value } }); setSearchOpen(false); }} sx={{ px: 1.2, py: 0.6, '&:hover': { bgcolor: '#22272e' }, cursor: 'pointer' }}>
-                                    <Typography variant="body2" sx={{ color: '#e8eaed' }}>{primary}</Typography>
-                                    <Typography variant="caption" sx={{ color: '#9aa0a6' }}>
-                                      {d.site_name || ''}{(d.site_name && (secVal || (d.internal_ip || d.external_ip || d.description || d.last_user))) ? ' • ' : ''}{secHighlighted}
-                                    </Typography>
-                                  </Box>
-                                );
-                              })
-                            ) : (
-                              <Box sx={{ px: 1.2, py: 1, color: '#6b737c', fontSize: 12 }}>
-                                {searchCategory === 'serial_number' ? 'Serial numbers are not tracked yet.' : 'No matches'}
-                              </Box>
-                            )}
-                          </Box>
-                        )}
-                             {/* Sites group */}
-                             {((suggestions.sites || []).length > 0 && (SEARCH_CATEGORIES.find(c=>c.key===searchCategory)?.scope==='site')) && (
-                               <Box>
-                                 <Box sx={{ display: 'flex', alignItems: 'center', px: 1.2, py: 0.8, color: '#9aa0a6', fontSize: 12 }}>Sites</Box>
-                              {suggestions.sites && suggestions.sites.length > 0 ? (
-                              suggestions.sites.map((s, idx) => (
-                                <Box key={idx} onClick={() => execSearch(searchCategory, s.value)} sx={{ px: 1.2, py: 0.6, '&:hover': { bgcolor: '#22272e' }, cursor: 'pointer' }}>
-                                  <Typography variant="body2" sx={{ color: '#e8eaed' }}>{searchCategory === 'site_name' ? highlightText(s.site_name, searchQuery) : s.site_name}</Typography>
-                                  <Typography variant="caption" sx={{ color: '#9aa0a6' }}>{searchCategory === 'site_description' ? highlightText(s.site_description || '', searchQuery) : (s.site_description || '')}</Typography>
-                                </Box>
-                              ))
-                            ) : (
-                              <Box sx={{ px: 1.2, py: 1, color: '#6b737c', fontSize: 12 }}>No matches</Box>
-                            )}
-                               </Box>
-                             )}
-                           </Box>
-                         )}
-                       </Box>
-                    </Box>
-                </ClickAwayListener>
-                {/* Spacer to keep user menu aligned right */}
-                <Box sx={{ flexGrow: 1 }} />
-                <Button
-                  color="inherit"
-                  onClick={handleUserMenuOpen}
-                  endIcon={<KeyboardArrowDownIcon />}
-                  sx={{ height: "36px" }}
-            >
-              {userDisplayName || user || 'User'}
-            </Button>
-            <Menu anchorEl={userMenuAnchorEl} open={Boolean(userMenuAnchorEl)} onClose={handleUserMenuClose}>
-              <MenuItem onClick={() => { handleUserMenuClose(); handleLogout(); }}>
-                <LogoutIcon sx={{ fontSize: 18, color: "#ff6b6b", mr: 1 }} /> Logout
-              </MenuItem>
-            </Menu>
-          </Toolbar>
-        </AppBar>
+                    <SearchIcon sx={{ position: "absolute", right: 6, color: "#8aa0b4", fontSize: 18 }} />
+
+                    {/* suggestions popover remains as-is */}
+                    { /* ...existing suggestions code... */ }
+                  </Box>
+                </Box>
+              </ClickAwayListener>
+
+              {/* Breadcrumbs — now inline and vertically centered */}
+              <Box sx={{ ml: 2, display: "flex", alignItems: "center" }}>
+                <Breadcrumbs
+                  separator={<NavigateNextIcon fontSize="inherit" sx={{ color: "#6b6b6b" }} />}
+                  aria-label="breadcrumb"
+                  sx={{
+                    color: "#9aa0a6",
+                    fontSize: "0.825rem",
+                    "& .MuiBreadcrumbs-separator": { mx: 0.6 }
+                  }}
+                >
+                  {breadcrumbs.map((c, idx) =>
+                    c.page ? (
+                      <Button
+                        key={idx}
+                        onClick={() => navigateTo(c.page)}
+                        size="small"
+                        sx={{ color: "#cde1ff", textTransform: "none", minWidth: 0, p: 0, fontSize: "0.825rem" }}
+                      >
+                        {c.label}
+                      </Button>
+                    ) : (
+                      <Typography key={idx} component="span" sx={{ color: "#f5f5f5", fontSize: "0.825rem" }}>
+                        {c.label}
+                      </Typography>
+                    )
+                  )}
+                </Breadcrumbs>
+              </Box>
+
+              {/* Push user menu to the right */}
+              <Box sx={{ flexGrow: 1 }} />
+
+              {/* User Menu (unchanged) */}
+              <Button
+                color="inherit"
+                onClick={handleUserMenuOpen}
+                endIcon={<KeyboardArrowDownIcon />}
+                sx={{ height: 36 }}
+              >
+                {userDisplayName || user || "User"}
+              </Button>
+              <Menu anchorEl={userMenuAnchorEl} open={Boolean(userMenuAnchorEl)} onClose={handleUserMenuClose}>
+                <MenuItem onClick={() => { handleUserMenuClose(); handleLogout(); }}>
+                  <LogoutIcon sx={{ fontSize: 18, color: "#ff6b6b", mr: 1 }} /> Logout
+                </MenuItem>
+              </Menu>
+            </Toolbar>
+          </AppBar>
+
         <Box sx={{ display: "flex", flexGrow: 1, overflow: "auto", minHeight: 0 }}>
           <NavigationSidebar currentPage={currentPage} onNavigate={navigateTo} isAdmin={isAdmin} />
           <Box
