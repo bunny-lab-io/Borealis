@@ -27,8 +27,8 @@ import AddDevice from "./Add_Device.jsx";
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const myTheme = themeQuartz.withParams({
-  accentColor: "#FFA6FF",
-  backgroundColor: "#1f2836",
+  accentColor: "#8b5cf6",
+  backgroundColor: "#070b1a",
   browserColorScheme: "dark",
   chromeBackgroundColor: {
     ref: "foregroundColor",
@@ -38,13 +38,93 @@ const myTheme = themeQuartz.withParams({
   fontFamily: {
     googleFont: "IBM Plex Sans",
   },
-  foregroundColor: "#FFF",
+  foregroundColor: "#f4f7ff",
   headerFontSize: 14,
 });
 
 const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
+
+const MAGIC_UI = {
+  shellBg:
+    "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
+    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+  panelBg:
+    "linear-gradient(135deg, rgba(10, 16, 31, 0.98) 0%, rgba(6, 10, 24, 0.94) 60%, rgba(15, 6, 26, 0.96) 100%)",
+  panelBorder: "rgba(148, 163, 184, 0.35)",
+  glassBorder: "rgba(94, 234, 212, 0.35)",
+  glow: "0 25px 80px rgba(6, 12, 30, 0.8)",
+  textMuted: "#94a3b8",
+  textBright: "#e2e8f0",
+  accentA: "#7dd3fc",
+  accentB: "#c084fc",
+  accentC: "#f472b6",
+  warning: "#f97316",
+  success: "#34d399",
+  surfaceOverlay: "rgba(15, 23, 42, 0.72)",
+};
+
+const StatTile = React.memo(function StatTile({ label, value, meta, gradient }) {
+  return (
+    <Box
+      sx={{
+        minWidth: 160,
+        px: 2,
+        py: 1.5,
+        borderRadius: 2,
+        border: `1px solid rgba(255,255,255,0.08)`,
+        background: gradient,
+        boxShadow: "0 15px 45px rgba(5, 8, 28, 0.45)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 0.5,
+      }}
+    >
+      <Typography sx={{ fontSize: "0.75rem", letterSpacing: 0.6, textTransform: "uppercase", color: "rgba(255,255,255,0.68)" }}>
+        {label}
+      </Typography>
+      <Typography sx={{ fontSize: "1.8rem", fontWeight: 700, color: "#f8fafc", lineHeight: 1 }}>
+        {value}
+      </Typography>
+      {meta ? (
+        <Typography sx={{ fontSize: "0.85rem", color: "rgba(226,232,240,0.75)" }}>{meta}</Typography>
+      ) : null}
+    </Box>
+  );
+});
+
+const HERO_BADGE_SX = {
+  px: 1.5,
+  py: 0.4,
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(12,18,35,0.85)",
+  fontSize: "0.72rem",
+  letterSpacing: 0.35,
+  textTransform: "uppercase",
+  color: MAGIC_UI.textBright,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 0.5,
+};
+
+const RAINBOW_BUTTON_SX = {
+  borderRadius: 999,
+  textTransform: "none",
+  fontWeight: 600,
+  px: 2.5,
+  color: "#f8fafc",
+  border: "1px solid transparent",
+  backgroundImage:
+    "linear-gradient(#05070f, #05070f), linear-gradient(120deg, #ff7c7c, #ffd36b, #7dffb7, #7dd3fc, #c084fc)",
+  backgroundOrigin: "border-box",
+  backgroundClip: "padding-box, border-box",
+  boxShadow: "0 18px 40px rgba(129, 140, 248, 0.35)",
+  "&:hover": {
+    boxShadow: "0 25px 55px rgba(99, 102, 241, 0.45)",
+  },
+};
 
 const getOsIconClass = (osName) => {
   const value = (osName || "").toString().toLowerCase();
@@ -512,6 +592,105 @@ export default function DeviceList({
     if (!agentHash) return "Needs Updated";
     return agentHash === repo ? "Up-to-Date" : "Needs Updated";
   }, []);
+
+  const heroStats = useMemo(() => {
+    const now = Date.now() / 1000;
+    const siteSet = new Set();
+    let online = 0;
+    let offline = 0;
+    let stale = 0;
+    let needsUpdate = 0;
+    rows.forEach((row) => {
+      const lastSeen =
+        row.lastSeen ??
+        row.summary?.last_seen ??
+        row.summary?.lastSeen ??
+        row.summary?.last_heartbeat;
+      if (lastSeen && now - lastSeen > 3600) {
+        stale += 1;
+      }
+      const siteName = (row.site || row.summary?.site_name || "").trim();
+      if (siteName && siteName.toLowerCase() !== "not configured") {
+        siteSet.add(siteName);
+      }
+      const statusRaw =
+        row.status ||
+        row.summary?.status ||
+        statusFromHeartbeat(lastSeen);
+      if ((statusRaw || "").toLowerCase() === "online") online += 1;
+      else offline += 1;
+      const agentHash =
+        row.agentHash ||
+        row.summary?.agent_hash ||
+        row.summary?.agentHash ||
+        row.summary?.agent_hash_value;
+      if (repoHash && computeAgentVersion(agentHash, repoHash) === "Needs Updated") {
+        needsUpdate += 1;
+      }
+    });
+    return {
+      total: rows.length,
+      online,
+      offline,
+      sites: siteSet.size,
+      stale,
+      needsUpdate,
+    };
+  }, [rows, repoHash, computeAgentVersion]);
+
+  const shortRepoSha = useMemo(() => (repoHash || "").slice(0, 7), [repoHash]);
+
+  const statTiles = useMemo(() => {
+    const total = heroStats.total || 1;
+    const onlinePct = Math.round((heroStats.online / total) * 100);
+    return [
+      {
+        key: "online",
+        label: "Online",
+        value: heroStats.online,
+        meta: `${onlinePct}% live`,
+        gradient: "linear-gradient(135deg, rgba(56, 189, 248, 0.35), rgba(34, 197, 94, 0.45))",
+      },
+      {
+        key: "stale",
+        label: "Stale (>1h)",
+        value: heroStats.stale,
+        meta: heroStats.stale ? "Needs attention" : "All synced",
+        gradient: "linear-gradient(135deg, rgba(249, 115, 22, 0.55), rgba(239, 68, 68, 0.55))",
+      },
+      {
+        key: "updates",
+        label: "Needs Agent Update",
+        value: heroStats.needsUpdate,
+        meta: repoHash ? `Repo Hash: ${shortRepoSha}` : "Syncing repo…",
+        gradient: "linear-gradient(135deg, rgba(192, 132, 252, 0.4), rgba(14, 165, 233, 0.35))",
+      },
+      {
+        key: "sites",
+        label: "Sites",
+        value: heroStats.sites,
+        meta: heroStats.sites === 1 ? "Single site" : "Multi-site",
+        gradient: "linear-gradient(135deg, rgba(125, 183, 255, 0.45), rgba(148, 163, 184, 0.35))",
+      },
+    ];
+  }, [heroStats, repoHash, shortRepoSha]);
+
+  const activeFilterCount = useMemo(
+    () => Object.keys(filters || {}).length,
+    [filters]
+  );
+  const hasActiveFilters = activeFilterCount > 0;
+
+  const heroSubtitle = useMemo(() => {
+    if (!heroStats.total) {
+      return "Connect your first device to start streaming telemetry into Borealis.";
+    }
+    const sitePart =
+      heroStats.sites > 0
+        ? `across ${heroStats.sites} ${heroStats.sites === 1 ? "managed site" : "managed sites"}`
+        : "across emerging sites";
+    return `Monitoring ${heroStats.total} managed endpoint(s) ${sitePart}.`;
+  }, [heroStats]);
 
   const fetchDevices = useCallback(async (options = {}) => {
     const { refreshRepo = false } = options || {};
@@ -1363,119 +1542,215 @@ export default function DeviceList({
   return (
     <Paper
       sx={{
-        m: 2,
+        m: 0,
         p: 0,
-        bgcolor: "#1e1e1e",
         fontFamily: gridFontFamily,
-        color: "#f5f7fa",
+        color: MAGIC_UI.textBright,
         display: "flex",
         flexDirection: "column",
         flexGrow: 1,
         minWidth: 0,
         height: "100%",
+        borderRadius: 0,
+        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        background: MAGIC_UI.shellBg,
+        boxShadow: MAGIC_UI.glow,
+        position: "relative",
+        overflow: "hidden",
       }}
-      elevation={2}
+      elevation={0}
     >
-      {/* Header area with title on left and controls on right */}
-      <Box sx={{ p: 2, pb: 1, display: "flex", flexDirection: 'column', gap: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
-            {computedTitle}
-          </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            {/* Views dropdown + add button */}
-            <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
-              <TextField
-                select
-                size="small"
-                value={selectedViewId}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setSelectedViewId(val);
-                  if (val === "default") applyView({ id: "default" });
-                  else {
-                    const v = views.find((x) => String(x.id) === String(val));
-                    if (v) applyView(v);
-                  }
-                }}
-                sx={{
-                  minWidth: 220,
-                  mr: 0,
-                  '& .MuiOutlinedInput-root': {
-                    height: 32,
-                    pr: 0,
-                    borderTopRightRadius: 0,
-                    borderBottomRightRadius: 0,
-                    '& fieldset': { borderColor: '#555', borderRight: '1px solid #555' },
-                    '&:hover fieldset': { borderColor: '#888' },
-                  },
-                  '& .MuiSelect-select': {
-                    display: 'flex',
-                    alignItems: 'center',
-                    py: 0,
-                  },
-                }}
-                SelectProps={{
-                  MenuProps: {
-                    PaperProps: { sx: { bgcolor: '#1e1e1e', color: '#fff' } },
-                  },
-                  renderValue: (val) => {
-                    if (val === "default") return "Default View";
-                    const v = views.find((x) => String(x.id) === String(val));
-                    return v ? v.name : "Default View";
-                  }
-                }}
-              >
-                <MenuItem value="default">Default View</MenuItem>
-                {views.map((v) => (
-                  <MenuItem key={v.id} value={v.id} disableRipple>
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                      <span>{v.name}</span>
-                      <IconButton
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setViewActionAnchor(e.currentTarget);
-                          setViewActionTarget(v);
-                        }}
-                        sx={{ color: '#ccc' }}
-                      >
-                        <MoreVertIcon fontSize="small" />
-                      </IconButton>
-                    </Box>
-                  </MenuItem>
-                ))}
-              </TextField>
-              <IconButton
-                size="small"
-                onClick={() => { setNewViewName(""); setCreateDialogOpen(true); }}
-                sx={{
-                  ml: '-1px',
-                  border: '1px solid #555',
-                  borderLeft: '1px solid #555',
-                  borderRadius: '0 4px 4px 0',
-                  color: '#bbb',
-                  height: 32,
-                  width: 32,
-                }}
-              >
-                <AddIcon fontSize="small" />
-              </IconButton>
+      <Box sx={{ position: "relative", zIndex: 1, p: { xs: 2, md: 3 }, pb: 2 }}>
+        <Box
+          sx={{
+            borderRadius: 4,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            background: MAGIC_UI.panelBg,
+            boxShadow: MAGIC_UI.glow,
+            p: { xs: 2, md: 3 },
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 3,
+            overflow: "hidden",
+            position: "relative",
+            isolation: "isolate",
+          }}
+        >
+          <Box
+            sx={{
+              flex: "1 1 320px",
+              minWidth: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: 1.25,
+              position: "relative",
+              zIndex: 1,
+            }}
+          >
+            <Typography
+              variant="h5"
+              sx={{
+                fontWeight: 700,
+                letterSpacing: 0.6,
+                color: MAGIC_UI.textBright,
+                textShadow: "0 10px 30px rgba(0,0,0,0.45)",
+              }}
+            >
+              {computedTitle}
+            </Typography>
+            <Typography sx={{ color: MAGIC_UI.textMuted, maxWidth: 560 }}>{heroSubtitle}</Typography>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+              {hasActiveFilters ? (
+                <Box sx={HERO_BADGE_SX}>
+                  <span>Filters</span>
+                  <Typography component="span" sx={{ fontWeight: 700, fontSize: "0.8rem", color: MAGIC_UI.accentA }}>
+                    {activeFilterCount}
+                  </Typography>
+                </Box>
+              ) : null}
+              {selectedIds.size > 0 ? (
+                <Box sx={HERO_BADGE_SX}>
+                  <span>Selected</span>
+                  <Typography component="span" sx={{ fontWeight: 700, fontSize: "0.8rem", color: MAGIC_UI.accentB }}>
+                    {selectedIds.size}
+                  </Typography>
+                </Box>
+              ) : null}
             </Box>
-            <Tooltip title="Refresh Devices to Detect Changes">
-              <IconButton
-                size="small"
-                onClick={() => fetchDevices({ refreshRepo: true })}
-                sx={{ color: "#bbb", mr: 1 }}
-              >
-                <CachedIcon fontSize="small" />
-              </IconButton>
+          </Box>
+          <Box sx={{ flex: "1 1 320px", minWidth: 0, position: "relative", zIndex: 1 }}>
+            <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 1.2 }}>
+              {statTiles.map((tile) => (
+                <StatTile key={tile.key} {...tile} />
+              ))}
+            </Box>
+          </Box>
+        </Box>
+      </Box>
+      <Box sx={{ px: { xs: 2, md: 3 }, pb: 1.5 }}>
+        <Typography sx={{ fontSize: "0.72rem", color: MAGIC_UI.textMuted, textTransform: "uppercase", letterSpacing: 0.45, mb: 0.5 }}>
+          Custom View
+        </Typography>
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
+          <Box sx={{ flex: "1 1 260px", minWidth: 220, display: "flex", alignItems: "center" }}>
+            <TextField
+              select
+              size="small"
+              value={selectedViewId}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedViewId(val);
+                if (val === "default") applyView({ id: "default" });
+                else {
+                  const v = views.find((x) => String(x.id) === String(val));
+                  if (v) applyView(v);
+                }
+              }}
+              sx={{
+                minWidth: 220,
+                mr: 0,
+                "& .MuiOutlinedInput-root": {
+                  height: 36,
+                  pr: 0,
+                  borderTopRightRadius: 0,
+                  borderBottomRightRadius: 0,
+                  background: "rgba(4,7,17,0.6)",
+                  "& fieldset": { borderColor: "rgba(148,163,184,0.4)", borderRight: "1px solid rgba(148,163,184,0.4)" },
+                  "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+                },
+                "& .MuiSelect-select": {
+                  display: "flex",
+                  alignItems: "center",
+                  py: 0,
+                },
+              }}
+              SelectProps={{
+                MenuProps: {
+                  PaperProps: { sx: { bgcolor: "rgba(8,12,24,0.98)", color: "#fff" } },
+                },
+                renderValue: (val) => {
+                  if (val === "default") return "Default View";
+                  const v = views.find((x) => String(x.id) === String(val));
+                  return v ? v.name : "Default View";
+                },
+              }}
+            >
+              <MenuItem value="default">Default View</MenuItem>
+              {views.map((v) => (
+                <MenuItem key={v.id} value={v.id} disableRipple>
+                  <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                    <span>{v.name}</span>
+                    <IconButton
+                      size="small"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setViewActionAnchor(e.currentTarget);
+                        setViewActionTarget(v);
+                      }}
+                      sx={{ color: "#ccc" }}
+                    >
+                      <MoreVertIcon fontSize="small" />
+                    </IconButton>
+                  </Box>
+                </MenuItem>
+              ))}
+            </TextField>
+            <IconButton
+              size="small"
+              onClick={() => {
+                setNewViewName("");
+                setCreateDialogOpen(true);
+              }}
+              sx={{
+                ml: "-1px",
+                border: "1px solid rgba(148,163,184,0.4)",
+                borderRadius: "0 8px 8px 0",
+                color: MAGIC_UI.textBright,
+                height: 36,
+                width: 36,
+                background: "rgba(12,18,35,0.8)",
+                "&:hover": { borderColor: MAGIC_UI.accentA },
+              }}
+            >
+              <AddIcon fontSize="small" />
+            </IconButton>
+          </Box>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap", ml: "auto" }}>
+            <Button
+              variant="contained"
+              size="small"
+              disabled={selectedIds.size === 0}
+              disableElevation
+              onClick={() => setQuickJobOpen(true)}
+              sx={{
+                borderRadius: 999,
+                px: 2.2,
+                textTransform: "none",
+                fontWeight: 600,
+                background: selectedIds.size === 0 ? "rgba(148,163,184,0.2)" : "linear-gradient(135deg, #34d399, #22d3ee)",
+                color: selectedIds.size === 0 ? MAGIC_UI.textMuted : "#041224",
+                border: selectedIds.size === 0 ? "1px solid rgba(148,163,184,0.35)" : "none",
+                boxShadow: selectedIds.size === 0 ? "none" : "0 15px 35px rgba(45, 212, 191, 0.35)",
+              }}
+            >
+              Quick Job
+            </Button>
+            <Tooltip title="Refresh devices to detect changes">
+              <span>
+                <IconButton
+                  size="small"
+                  onClick={() => fetchDevices({ refreshRepo: true })}
+                  sx={{ color: MAGIC_UI.textBright, border: "1px solid rgba(148,163,184,0.35)", borderRadius: 2 }}
+                >
+                  <CachedIcon fontSize="small" />
+                </IconButton>
+              </span>
             </Tooltip>
-            <Tooltip title="Column Chooser">
+            <Tooltip title="Column chooser">
               <IconButton
                 size="small"
                 onClick={(e) => setColChooserAnchor(e.currentTarget)}
-                sx={{ color: "#bbb", mr: 1 }}
+                sx={{ color: MAGIC_UI.textBright, border: "1px solid rgba(148,163,184,0.35)", borderRadius: 2 }}
               >
                 <ViewColumnIcon fontSize="small" />
               </IconButton>
@@ -1485,7 +1760,8 @@ export default function DeviceList({
                 variant="contained"
                 size="small"
                 startIcon={<AddIcon />}
-                sx={{ bgcolor: "#58a6ff", color: "#0b0f19" }}
+                disableElevation
+                sx={RAINBOW_BUTTON_SX}
                 onClick={() => {
                   setAddDeviceType(derivedDefaultType ?? null);
                   setAddDeviceOpen(true);
@@ -1496,25 +1772,8 @@ export default function DeviceList({
             )}
           </Box>
         </Box>
-        {/* Second row: Quick Job button aligned under header title */}
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button
-            variant="outlined"
-            size="small"
-            disabled={selectedIds.size === 0}
-            onClick={() => setQuickJobOpen(true)}
-            sx={{
-              color: selectedIds.size === 0 ? "#666" : "#58a6ff",
-              borderColor: selectedIds.size === 0 ? "#333" : "#58a6ff",
-              textTransform: "none"
-            }}
-          >
-            Quick Job
-          </Button>
-        </Box>
       </Box>
-      {/* The Size of the Grid itself and its margins relative to the overall page */}
-      <Box sx={{ mt: '10px', px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}> 
+      <Box sx={{ px: { xs: 2, md: 3 }, pb: 3, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Box
           className={gridWrapperClass}
           sx={{
@@ -1525,12 +1784,40 @@ export default function DeviceList({
             fontFamily: gridFontFamily,
             "--ag-font-family": gridFontFamily,
             "--ag-icon-font-family": iconFontFamily,
+            background: "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.85))",
+            borderRadius: 3,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            boxShadow: "0 20px 60px rgba(2,8,23,0.85)",
             "& .ag-root-wrapper": {
-              borderRadius: 1,
-              minHeight: 400,
+              borderRadius: 3,
+              minHeight: 420,
+              background: "transparent",
             },
             "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
               fontFamily: gridFontFamily,
+            },
+            "& .ag-header": {
+              backgroundColor: "rgba(15,23,42,0.9)",
+              borderBottom: "1px solid rgba(148,163,184,0.25)",
+            },
+            "& .ag-header-cell-label": {
+              color: "#e2e8f0",
+              fontWeight: 600,
+              letterSpacing: 0.3,
+            },
+            "& .ag-row": {
+              borderColor: "rgba(255,255,255,0.04)",
+              transition: "background 0.2s ease",
+            },
+            "& .ag-row:nth-of-type(even)": {
+              backgroundColor: "rgba(15,23,42,0.45)",
+            },
+            "& .ag-row-hover": {
+              backgroundColor: "rgba(124, 58, 237, 0.15) !important",
+            },
+            "& .ag-row-selected": {
+              backgroundColor: "rgba(56,189,248,0.18) !important",
+              boxShadow: "inset 0 0 0 1px rgba(56,189,248,0.35)",
             },
             "& .ag-icon": {
               fontFamily: iconFontFamily,
@@ -1569,7 +1856,8 @@ export default function DeviceList({
             rowSelection="multiple"
             rowMultiSelectWithClick
             pagination
-            paginationPageSize={25}
+            paginationPageSize={20}
+            paginationPageSizeSelector={[20, 50, 100]}
             animateRows
             onSelectionChanged={handleSelectionChanged}
             onFilterChanged={handleFilterChanged}
@@ -1590,7 +1878,15 @@ export default function DeviceList({
         anchorEl={viewActionAnchor}
         open={Boolean(viewActionAnchor)}
         onClose={() => { setViewActionAnchor(null); setViewActionTarget(null); }}
-        PaperProps={{ sx: { bgcolor: '#1e1e1e', color: '#fff', fontSize: '13px' } }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.96)",
+            color: "#fff",
+            fontSize: "13px",
+            border: "1px solid rgba(148,163,184,0.3)",
+            backdropFilter: "blur(16px)",
+          },
+        }}
       >
         <MenuItem onClick={() => {
           const v = viewActionTarget;
@@ -1677,7 +1973,16 @@ export default function DeviceList({
         anchorEl={colChooserAnchor}
         onClose={() => setColChooserAnchor(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: '#fff', p: 1 } }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.96)",
+            color: "#fff",
+            p: 1,
+            border: "1px solid rgba(148,163,184,0.3)",
+            boxShadow: "0 12px 30px rgba(2,8,23,0.8)",
+            backdropFilter: "blur(14px)",
+          },
+        }}
       >
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, p: 1 }}>
           {Object.entries(COL_LABELS)
@@ -1709,7 +2014,12 @@ export default function DeviceList({
               size="small"
               variant="outlined"
               onClick={() => setColumns(defaultColumns)}
-              sx={{ textTransform: 'none', borderColor: '#555', color: '#bbb' }}
+              sx={{
+                textTransform: 'none',
+                borderColor: 'rgba(148,163,184,0.4)',
+                color: MAGIC_UI.textBright,
+                '&:hover': { borderColor: MAGIC_UI.accentA },
+              }}
             >
               Reset Default
             </Button>
@@ -1720,7 +2030,15 @@ export default function DeviceList({
         anchorEl={menuAnchor}
         open={Boolean(menuAnchor)}
         onClose={closeMenu}
-        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.96)",
+            color: "#fff",
+            fontSize: "13px",
+            border: "1px solid rgba(148,163,184,0.3)",
+            backdropFilter: "blur(16px)",
+          },
+        }}
       >
         <MenuItem onClick={async () => {
           closeMenu();
@@ -1765,7 +2083,16 @@ export default function DeviceList({
           onClose={() => setAssignDialogOpen(false)}
           anchorReference="anchorPosition"
           anchorPosition={{ top: Math.max(Math.floor(window.innerHeight*0.5), 200), left: Math.max(Math.floor(window.innerWidth*0.5), 300) }}
-          PaperProps={{ sx: { bgcolor: '#1e1e1e', color: '#fff', p: 2, minWidth: 360 } }}
+          PaperProps={{
+            sx: {
+              bgcolor: "rgba(8,12,24,0.96)",
+              color: "#fff",
+              p: 2,
+              minWidth: 360,
+              border: "1px solid rgba(148,163,184,0.35)",
+              boxShadow: "0 16px 40px rgba(2,8,23,0.85)",
+            },
+          }}
         >
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             <Typography variant="subtitle1">Assign {assignTargets.length} device(s) to a site</Typography>
@@ -1775,14 +2102,32 @@ export default function DeviceList({
               label="Select Site"
               value={assignSiteId ?? ''}
               onChange={(e) => setAssignSiteId(Number(e.target.value))}
-              sx={{ '& .MuiOutlinedInput-root': { '& fieldset': { borderColor: '#444' }, '&:hover fieldset': { borderColor: '#666' } }, label: { color: '#aaa' } }}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  backgroundColor: 'rgba(4,7,17,0.65)',
+                  '& fieldset': { borderColor: 'rgba(148,163,184,0.4)' },
+                  '&:hover fieldset': { borderColor: MAGIC_UI.accentA },
+                },
+                label: { color: MAGIC_UI.textMuted },
+              }}
             >
               {sites.map((s) => (
                 <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>
               ))}
             </TextField>
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
-              <Button variant="outlined" size="small" onClick={() => setAssignDialogOpen(false)} sx={{ textTransform: 'none', borderColor: '#555', color: '#bbb' }}>Cancel</Button>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => setAssignDialogOpen(false)}
+                sx={{
+                  textTransform: 'none',
+                  borderColor: 'rgba(148,163,184,0.4)',
+                  color: MAGIC_UI.textBright,
+                }}
+              >
+                Cancel
+              </Button>
               <Button
                 variant="outlined"
                 size="small"
@@ -1806,7 +2151,11 @@ export default function DeviceList({
                     setRows((prev) => prev.map((r) => ({ ...r, site: mapping[r.hostname]?.site_name || 'Not Configured' })));
                   } catch {}
                 }}
-                sx={{ textTransform: 'none', borderColor: '#58a6ff', color: '#58a6ff' }}
+                sx={{
+                  textTransform: 'none',
+                  borderColor: MAGIC_UI.accentA,
+                  color: MAGIC_UI.accentA,
+                }}
               >
                 Assign
               </Button>
