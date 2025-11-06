@@ -15,7 +15,8 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  CircularProgress
+  CircularProgress,
+  Chip
 } from "@mui/material";
 import { Folder as FolderIcon, Description as DescriptionIcon } from "@mui/icons-material";
 import { SimpleTreeView, TreeItem } from "@mui/x-tree-view";
@@ -26,6 +27,26 @@ import {
   normalizeAssemblyPath,
   parseAssemblyExport
 } from "../Assemblies/assemblyUtils";
+
+const DIALOG_SHELL_SX = {
+  backgroundImage: "linear-gradient(120deg,#040711 0%,#0b1222 55%,#020617 100%)",
+  border: "1px solid rgba(148,163,184,0.35)",
+  boxShadow: "0 28px 60px rgba(2,6,12,0.65)",
+  borderRadius: 3,
+  color: "#e2e8f0",
+  overflow: "hidden"
+};
+
+const GLASS_PANEL_SX = {
+  backgroundColor: "rgba(15,23,42,0.78)",
+  border: "1px solid rgba(148,163,184,0.35)",
+  borderRadius: 3,
+  boxShadow: "0 16px 40px rgba(2,6,15,0.45)",
+  backdropFilter: "blur(22px)"
+};
+
+const PRIMARY_PILL_GRADIENT = "linear-gradient(135deg,#34d399,#22d3ee)";
+const SECONDARY_PILL_GRADIENT = "linear-gradient(135deg,#7dd3fc,#c084fc)";
 
 export default function QuickJob({ open, onClose, hostnames = [] }) {
   const [assemblyPayload, setAssemblyPayload] = useState({ items: [], queue: [] });
@@ -405,12 +426,49 @@ export default function QuickJob({ open, onClose, hostnames = [] }) {
     (credentialRequired && (!selectedCredentialId || !credentials.length));
   const activeTreeData = mode === "ansible" ? ansibleTreeData : scriptTreeData;
   const treeItems = Array.isArray(activeTreeData.root) ? activeTreeData.root : [];
+  const targetCount = hostnames.length;
+  const hostPreview = hostnames.slice(0, 3).join(", ");
+  const remainingHosts = Math.max(targetCount - 3, 0);
 
   return (
-    <Dialog open={open} onClose={running ? undefined : onClose} fullWidth maxWidth="md"
-      PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+    <Dialog
+      open={open}
+      onClose={running ? undefined : onClose}
+      fullWidth
+      maxWidth="lg"
+      PaperProps={{ sx: DIALOG_SHELL_SX }}
     >
-      <DialogTitle>Quick Job</DialogTitle>
+      <DialogTitle sx={{ pb: 0 }}>
+        <Box
+          sx={{
+            display: "flex",
+            flexDirection: { xs: "column", sm: "row" },
+            justifyContent: "space-between",
+            gap: 2
+          }}
+        >
+          <Box>
+            <Typography sx={{ fontWeight: 600, letterSpacing: 0.4 }}>Quick Job</Typography>
+            <Typography variant="body2" sx={{ color: "rgba(226,232,240,0.78)" }}>
+              Dispatch {mode === "ansible" ? "playbooks" : "scripts"} through the runner.
+            </Typography>
+          </Box>
+          <Box sx={{ display: "flex", gap: 1.5, flexWrap: "wrap" }}>
+            <Paper sx={{ ...GLASS_PANEL_SX, px: 2, py: 1 }}>
+              <Typography variant="caption" sx={{ textTransform: "uppercase", color: "rgba(226,232,240,0.7)", letterSpacing: 1 }}>
+                Targets
+              </Typography>
+              <Typography variant="h6">{hostnames.length || "—"}</Typography>
+            </Paper>
+            <Paper sx={{ ...GLASS_PANEL_SX, px: 2, py: 1 }}>
+              <Typography variant="caption" sx={{ textTransform: "uppercase", color: "rgba(226,232,240,0.7)", letterSpacing: 1 }}>
+                Mode
+              </Typography>
+              <Typography variant="h6">{mode === "ansible" ? "Ansible" : "Script"}</Typography>
+            </Paper>
+          </Box>
+        </Box>
+      </DialogTitle>
       <DialogContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
           <Button size="small" variant={mode === 'scripts' ? 'outlined' : 'text'} onClick={() => setMode('scripts')} sx={{ textTransform: 'none', color: '#58a6ff', borderColor: '#58a6ff' }}>Scripts</Button>
