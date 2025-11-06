@@ -18,7 +18,7 @@ database.db
 /Dependencies/Python/
 /Dependencies/AutoHotKey/
 /Dependencies/git/
-/Data/Server/Python_API_Endpoints/Tesseract-OCR/
+/Data/Engine/Python_API_Endpoints/
 
 # Misc Files/Folders
 .vs/s

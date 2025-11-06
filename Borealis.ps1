@@ -465,7 +465,7 @@ function Install_Server_Dependencies {
     Run-Step "Dependency: Tesseract-OCR" {
         $tessExeUrl     = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
         $tessExePath    = Join-Path $depsRoot "tesseract-installer.exe"
-        $tessInstallDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
+        $tessInstallDir = Join-Path $scriptDir "Data\Engine\Python_API_Endpoints\Tesseract-OCR"
 
         if (-not (Test-Path (Join-Path $tessInstallDir "tesseract.exe"))) {
             # Download the installer if it doesn't exist
@@ -492,7 +492,7 @@ function Install_Server_Dependencies {
 
     # Tesseract Language Data
     Run-Step "Dependency: Tesseract-OCR - Pre-Trained Model Data" {
-        $langDataDir = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR\tessdata"
+        $langDataDir = Join-Path $scriptDir "Data\Engine\Python_API_Endpoints\Tesseract-OCR\tessdata"
         $engPath     = Join-Path $langDataDir "eng.traineddata"
         $osdPath     = Join-Path $langDataDir "osd.traineddata"
 
@@ -1080,15 +1080,8 @@ ____ _  _ ___ ____ _  _ ____ ___ _ ____ _  _    ___  _    ____ ___ ____ ____ ___
 if (-not $choice) {
     Write-Host " "
     Write-Host "Please choose which function you want to launch:"
-    Write-Host " 1) Borealis Server" -ForegroundColor DarkGray
+    Write-Host " 1) Borealis Engine" -ForegroundColor DarkGray
     Write-Host " 2) Borealis Agent" -ForegroundColor DarkGray
-    Write-Host " 3) Build Electron App " -NoNewline -ForegroundColor DarkGray
-    Write-Host "[Experimental]" -ForegroundColor Red
-    Write-Host " 4) Package Self-Contained EXE of Server or Agent " -NoNewline -ForegroundColor DarkGray
-    Write-Host "[Experimental]" -ForegroundColor Red
-    Write-Host " 5) Borealis Engine " -NoNewline -ForegroundColor DarkGray
-    Write-Host "[In Development]" -ForegroundColor Cyan
-    # (Removed) AutoHotKey experimental testing
     Write-Host "Type a number and press " -NoNewLine
     Write-Host "<ENTER>" -ForegroundColor DarkCyan
     $choice = Read-Host
@@ -1096,244 +1089,6 @@ if (-not $choice) {
 
 switch ($choice) {
     "1" {
-        $host.UI.RawUI.WindowTitle = "Borealis Server"
-        Write-Host "Ensuring Server Dependencies Exist..." -ForegroundColor DarkCyan
-
-        Install_Shared_Dependencies
-        Install_Server_Dependencies
-
-        foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
-            if (-not (Test-Path $tool)) { Write-Host "`r$($symbols.Fail) Bundled executable not found at '$tool'." -ForegroundColor Red; exit 1 }
-        }
-    $nodeDir = Split-Path $nodeExe
-    $env:BOREALIS_NODE_DIR = $nodeDir
-    $env:BOREALIS_NPM_CMD  = $npmCmd
-    $env:BOREALIS_NPX_CMD  = $npxCmd
-    $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), $nodeDir, $env:PATH
-
-        if (-not $modeChoice) {
-            Write-Host " "
-            Write-Host "Configure Borealis Server Mode:" -ForegroundColor DarkYellow
-            Write-Host " 1) Build & Launch > Production Flask Server @ http://localhost:5000" -ForegroundColor DarkCyan
-            Write-Host " 2) [Skip Build] & Immediately Launch > Production Flask Server @ http://localhost:5000" -ForegroundColor DarkCyan
-            Write-Host " 3) Launch > [Hotload-Ready] Vite Dev Server @ http://localhost:5173" -ForegroundColor DarkCyan
-            $modeChoice = Read-Host "Enter choice [1/2/3]"
-        }
-
-        switch ($modeChoice) {
-            "1" { $borealis_operation_mode = "production" }
-            "2" {
-                Run-Step "Borealis: Launch Flask Server" {
-                    Push-Location (Join-Path $scriptDir "Server")
-                    & (Join-Path $scriptDir "Server\Scripts\python.exe") (Join-Path $scriptDir "Server\Borealis\server.py")
-                    Pop-Location
-                }
-                break
-            }
-            "3" { $borealis_operation_mode = "developer" }
-            default { Write-Host "Invalid mode choice: $modeChoice" -ForegroundColor Red; break }
-        }
-
-        Write-Host "Deploying Borealis Server in '$borealis_operation_mode' mode" -ForegroundColor Blue
-
-        $venvFolder       = "Server"
-        $dataSource       = "Data"
-        $dataDestination  = "$venvFolder\Borealis"
-        $customUIPath     = (Join-Path $scriptDir 'Engine\web-interface')
-        $webUIDestination = "$venvFolder\web-interface"
-        $venvPython       = Join-Path $venvFolder 'Scripts\python.exe'
-
-        Run-Step "Create Borealis Virtual Python Environment" {
-            if (-not (Test-Path "$venvFolder\Scripts\Activate")) { & $pythonExe -m venv $venvFolder | Out-Null }
-            if (Test-Path $dataSource) {
-                $preserveItems = @('auth_keys','server_secret.key','cache')
-                $preserveRoot = Join-Path $venvFolder '.__borealis_preserve'
-                if (Test-Path $dataDestination) {
-                    Remove-Item $preserveRoot -Recurse -Force -ErrorAction SilentlyContinue
-                    New-Item -Path $preserveRoot -ItemType Directory -Force | Out-Null
-                    foreach ($item in $preserveItems) {
-                        $sourcePath = Join-Path $dataDestination $item
-                        if (Test-Path $sourcePath) {
-                            $targetPath = Join-Path $preserveRoot $item
-                            $targetParent = Split-Path $targetPath -Parent
-                            if (-not (Test-Path $targetParent)) {
-                                New-Item -Path $targetParent -ItemType Directory -Force | Out-Null
-                            }
-                            Move-Item -Path $sourcePath -Destination $targetPath -Force
-                        }
-                    }
-                    Remove-Item $dataDestination -Recurse -Force -ErrorAction SilentlyContinue
-                }
-                New-Item -Path $dataDestination -ItemType Directory -Force | Out-Null
-                Copy-Item "$dataSource\Server\Python_API_Endpoints" $dataDestination -Recurse
-                Copy-Item "$dataSource\Server\Sounds"               $dataDestination -Recurse
-                Copy-Item "$dataSource\Server\Modules"               $dataDestination -Recurse
-                Copy-Item "$dataSource\Server\server.py"            $dataDestination
-                Copy-Item "$dataSource\Server\job_scheduler.py"     $dataDestination 
-                if (Test-Path $preserveRoot) {
-                    Get-ChildItem -Path $preserveRoot -Force | ForEach-Object {
-                        $target = Join-Path $dataDestination $_.Name
-                        if (Test-Path $target) {
-                            Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
-                        }
-                        Move-Item -Path $_.FullName -Destination $target -Force
-                    }
-                    Remove-Item $preserveRoot -Recurse -Force -ErrorAction SilentlyContinue
-                }
-            }
-            . "$venvFolder\Scripts\Activate"
-        }
-
-        Run-Step "Install Python Dependencies into Virtual Python Environment" {
-            if (Test-Path "$dataSource\Server\server-requirements.txt") { & $venvPython -m pip install --disable-pip-version-check -q -r "$dataSource\Server\server-requirements.txt" | Out-Null }
-        }
-
-        Run-Step "Copy Borealis WebUI Files into: $webUIDestination" {
-            Ensure-EngineWebInterface -ProjectRoot $scriptDir
-            if (Test-Path $webUIDestination) {
-                Remove-Item "$webUIDestination\public\*" -Recurse -Force -ErrorAction SilentlyContinue
-                Remove-Item "$webUIDestination\src\*"    -Recurse -Force -ErrorAction SilentlyContinue
-            } else {
-                New-Item -Path $webUIDestination -ItemType Directory -Force | Out-Null
-            }
-            if (-not (Test-Path $customUIPath)) { throw "Web interface source '$customUIPath' not found." }
-            Copy-Item "$customUIPath\*" $webUIDestination -Recurse -Force
-        }
-
-        Run-Step "Vite Web Frontend: Install NPM Packages" {
-            Push-Location $webUIDestination
-            $env:npm_config_loglevel = "silent"
-            & $npmCmd install --silent --no-fund --audit=false | Out-Null
-            Pop-Location
-        }
-
-        Run-Step "Vite Web Frontend: Start ($borealis_operation_mode)" {
-            Push-Location $webUIDestination
-            if ($borealis_operation_mode -eq "developer") { $viteSubCommand = "dev" } else { $viteSubCommand = "build" }
-            $certRoot = Join-Path $scriptDir 'Certificates\Server'
-            Ensure-EngineTlsMaterial -PythonPath $venvPython -CertificateRoot $certRoot
-            Start-Process -NoNewWindow -FilePath $npmCmd -ArgumentList @("run",$viteSubCommand)
-            Pop-Location
-        }
-
-        Run-Step "Borealis: Launch Flask Server" {
-            Push-Location (Join-Path $scriptDir "Server")
-            $py        = Join-Path $scriptDir "Server\Scripts\python.exe"
-            $server_py = Join-Path $scriptDir "Server\Borealis\server.py"
-            Write-Host "`nLaunching Borealis..." -ForegroundColor Green
-            Write-Host "===================================================================================="
-            Write-Host "$($symbols.Running) Python Flask API Server Started..."
-            & $py $server_py
-            Pop-Location
-        }
-        break
-    }
-
-    "2" {
-        $host.UI.RawUI.WindowTitle = "Borealis Agent"
-        Write-Host " "
-        # Ensure elevation before showing Agent menu
-        $scriptPath = $PSCommandPath
-        if (-not $scriptPath -or $scriptPath -eq '') { $scriptPath = $MyInvocation.MyCommand.Definition }
-        # If already elevated, skip prompt; otherwise prompt, then relaunch directly to the Agent menu via -Agent
-        $cont = Request-AgentElevation -ScriptPath $scriptPath -AgentActionParam $AgentAction
-        if (-not $cont -and -not (Test-IsAdmin)) { return }
-        if (Test-IsAdmin) {
-            Write-Host "Escalated Permissions Granted > Agent is Eligible for Deployment." -ForegroundColor Green
-        }
-        Write-Host "Agent Menu:" -ForegroundColor Cyan
-        Write-Host " 1) Install/Update Agent"
-        Write-Host " 2) Repair Borealis Agent"
-        Write-Host " 3) Remove Agent"
-        Write-Host " 4) Launch UserSession Helper (current session)"
-        Write-Host " 5) Back"
-        if (-not $agentSubChoice) { $agentSubChoice = Read-Host "Select an option" }
-
-        switch ($agentSubChoice) {
-            '1' { InstallOrUpdate-BorealisAgent; break }
-            '2' { Repair-BorealisAgent; break }
-            '3' { Remove-BorealisAgent; break }
-            '4' {
-                $venvPythonw = Join-Path $scriptDir 'Agent\Scripts\pythonw.exe'
-                $helper = Join-Path $scriptDir 'Agent\Borealis\agent.py'
-                if (-not (Test-Path $venvPythonw)) { Write-Host "pythonw.exe not found under Agent\Scripts" -ForegroundColor Yellow }
-                if (-not (Test-Path $helper)) { Write-Host "Helper not found under Agent\Borealis" -ForegroundColor Yellow }
-                if ((Test-Path $venvPythonw) -and (Test-Path $helper)) {
-                    Start-Process -FilePath $venvPythonw -ArgumentList @('-W','ignore::SyntaxWarning', $helper) -WorkingDirectory (Split-Path $helper -Parent)
-                    Write-Host "Launched user-session helper." -ForegroundColor Green
-                }
-                break
-            }
-            default { break }
-        }
-    }
-
-    "3" {
-        $host.UI.RawUI.WindowTitle = "Borealis Electron"
-        Clear-Host
-        Write-Host "Deploying Borealis Desktop App..." -ForegroundColor Cyan
-        Write-Host "===================================================================================="
-
-        $electronSource      = "Data\Electron"
-        $electronDestination = "ElectronApp"
-        $scriptDir           = Split-Path $MyInvocation.MyCommand.Path -Parent
-
-        Run-Step "Prepare ElectronApp folder" {
-            if (Test-Path $electronDestination) { Remove-Item $electronDestination -Recurse -Force }
-            New-Item -Path $electronDestination -ItemType Directory | Out-Null
-            $deployedServer = Join-Path $scriptDir 'Server\Borealis'
-            if (-not (Test-Path $deployedServer)) { throw "Server\Borealis not found - please run choice 1 first." }
-            Copy-Item $deployedServer "$electronDestination\Server" -Recurse
-            Copy-Item "$electronSource\package.json" "$electronDestination" -Force
-            Copy-Item "$electronSource\main.js"        "$electronDestination" -Force
-            $staticBuild = Join-Path $scriptDir 'Server\web-interface\build'
-            if (-not (Test-Path $staticBuild)) { throw "WebUI build not found - run choice 1 to build WebUI first." }
-            Copy-Item "$staticBuild\*" "$electronDestination\renderer" -Recurse -Force
-        }
-
-        Run-Step "ElectronApp: Install Node dependencies" {
-            Push-Location $electronDestination
-            $env:NODE_ENV = ''
-            $env:npm_config_production = ''
-            & $npmCmd install --silent --no-fund --audit=false
-            Pop-Location
-        }
-
-        Run-Step "ElectronApp: Package with electron-builder" {
-            Push-Location $electronDestination
-            & $npmCmd run dist
-            Pop-Location
-        }
-
-        Run-Step "ElectronApp: Launch in dev mode" {
-            Push-Location $electronDestination
-            & $npmCmd run dev
-            Pop-Location
-        }
-    }
-
-    "4" {
-        $host.UI.RawUI.WindowTitle = "Borealis Packager"
-        Write-Host "Choose which module to package into a self-contained EXE file:" -ForegroundColor DarkYellow
-        Write-Host " 1) Server" -ForegroundColor DarkGray
-        Write-Host " 2) Agent" -ForegroundColor DarkGray
-        $exePackageChoice = Read-Host "Enter choice [1/2]"
-        switch ($exePackageChoice) {
-            "1" {
-                $serverScriptDir = Join-Path -Path $PSScriptRoot -ChildPath "Data\Server"
-                Set-Location -Path $serverScriptDir
-                & (Join-Path -Path $serverScriptDir -ChildPath "Package-Borealis-Server.ps1")
-            }
-            "2" {
-                $agentScriptDir = Join-Path -Path $PSScriptRoot -ChildPath "Data\Agent"
-                Set-Location -Path $agentScriptDir
-                & (Join-Path -Path $agentScriptDir -ChildPath "Package_Borealis-Agent.ps1")
-            }
-            default { Write-Host "Invalid Choice. Exiting..." -ForegroundColor Red; exit 1 }
-        }
-    }
-
-    "5" {
         $host.UI.RawUI.WindowTitle = "Borealis Engine"
         Write-Host "Ensuring Engine Dependencies Exist..." -ForegroundColor DarkCyan
 
@@ -1540,8 +1295,44 @@ switch ($choice) {
             Pop-Location
         }
     }
+    
+    "2" {
+        $host.UI.RawUI.WindowTitle = "Borealis Agent"
+        Write-Host " "
+        # Ensure elevation before showing Agent menu
+        $scriptPath = $PSCommandPath
+        if (-not $scriptPath -or $scriptPath -eq '') { $scriptPath = $MyInvocation.MyCommand.Definition }
+        # If already elevated, skip prompt; otherwise prompt, then relaunch directly to the Agent menu via -Agent
+        $cont = Request-AgentElevation -ScriptPath $scriptPath -AgentActionParam $AgentAction
+        if (-not $cont -and -not (Test-IsAdmin)) { return }
+        if (Test-IsAdmin) {
+            Write-Host "Escalated Permissions Granted > Agent is Eligible for Deployment." -ForegroundColor Green
+        }
+        Write-Host "Agent Menu:" -ForegroundColor Cyan
+        Write-Host " 1) Install/Update Agent"
+        Write-Host " 2) Repair Borealis Agent"
+        Write-Host " 3) Remove Agent"
+        Write-Host " 4) Launch UserSession Helper (current session)"
+        Write-Host " 5) Back"
+        if (-not $agentSubChoice) { $agentSubChoice = Read-Host "Select an option" }
 
-    # (Removed) case "6" experimental AHK test
-
+        switch ($agentSubChoice) {
+            '1' { InstallOrUpdate-BorealisAgent; break }
+            '2' { Repair-BorealisAgent; break }
+            '3' { Remove-BorealisAgent; break }
+            '4' {
+                $venvPythonw = Join-Path $scriptDir 'Agent\Scripts\pythonw.exe'
+                $helper = Join-Path $scriptDir 'Agent\Borealis\agent.py'
+                if (-not (Test-Path $venvPythonw)) { Write-Host "pythonw.exe not found under Agent\Scripts" -ForegroundColor Yellow }
+                if (-not (Test-Path $helper)) { Write-Host "Helper not found under Agent\Borealis" -ForegroundColor Yellow }
+                if ((Test-Path $venvPythonw) -and (Test-Path $helper)) {
+                    Start-Process -FilePath $venvPythonw -ArgumentList @('-W','ignore::SyntaxWarning', $helper) -WorkingDirectory (Split-Path $helper -Parent)
+                    Write-Host "Launched user-session helper." -ForegroundColor Green
+                }
+                break
+            }
+            default { break }
+        }
+    }
     default { Write-Host "Invalid selection. Exiting..." -ForegroundColor Red; exit 1 }
 }
