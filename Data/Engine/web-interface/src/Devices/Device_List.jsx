@@ -120,9 +120,9 @@ const RAINBOW_BUTTON_SX = {
     "linear-gradient(#05070f, #05070f), linear-gradient(120deg, #ff7c7c, #ffd36b, #7dffb7, #7dd3fc, #c084fc)",
   backgroundOrigin: "border-box",
   backgroundClip: "padding-box, border-box",
-  boxShadow: "0 18px 40px rgba(129, 140, 248, 0.35)",
+  boxShadow: "0 0 26px rgba(45, 212, 191, 0.45)",
   "&:hover": {
-    boxShadow: "0 25px 55px rgba(99, 102, 241, 0.45)",
+    boxShadow: "0 0 32px rgba(45, 212, 191, 0.55)",
   },
 };
 
@@ -1730,7 +1730,7 @@ export default function DeviceList({
                 background: selectedIds.size === 0 ? "rgba(148,163,184,0.2)" : "linear-gradient(135deg, #34d399, #22d3ee)",
                 color: selectedIds.size === 0 ? MAGIC_UI.textMuted : "#041224",
                 border: selectedIds.size === 0 ? "1px solid rgba(148,163,184,0.35)" : "none",
-                boxShadow: selectedIds.size === 0 ? "none" : "0 15px 35px rgba(45, 212, 191, 0.35)",
+                boxShadow: selectedIds.size === 0 ? "none" : "0 0 24px rgba(45, 212, 191, 0.45)",
               }}
             >
               Quick Job
