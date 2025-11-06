@@ -16,7 +16,7 @@ import {
   Devices as DevicesIcon,
   FilterAlt as FilterIcon,
   Groups as GroupsIcon,
-  Work as JobsIcon,
+  Schedule as ScheduleIcon,
   PeopleOutline as CommunityIcon,
   Apps as AssembliesIcon,
   LocationCity as SitesIcon,
@@ -231,7 +231,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             pageKey="assemblies"
           />
           <NavItem
-            icon={<JobsIcon fontSize="small" />}
+            icon={<ScheduleIcon fontSize="small" />}
             label="Scheduled Jobs"
             pageKey="jobs"
           />
