@@ -1,4 +1,4 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/GUI_SYLING_GUIDE.md
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/GUI_STYLING_GUIDE.md
 
 # Borealis MagicUI Styling Guide
 
