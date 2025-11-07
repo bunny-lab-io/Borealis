@@ -1,6 +1,4 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Server/WebUI/src/Admin/Device_Approvals.jsx
-
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import {
   Alert,
   Box,
@@ -13,18 +11,11 @@ import {
   DialogContentText,
   DialogTitle,
   FormControl,
-  IconButton,
   InputLabel,
   MenuItem,
   Paper,
   Select,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   TextField,
   Tooltip,
   Typography,
@@ -35,6 +26,32 @@ import {
   Refresh as RefreshIcon,
   Security as SecurityIcon,
 } from "@mui/icons-material";
+import { AgGridReact } from "ag-grid-react";
+import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+// NOTE: Do NOT import global AG Grid CSS to avoid affecting other pages.
+// We rely on the Quartz theme class name + scoped CSS vars like the rest of MagicUI.
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+// MagicUI palette to match Enrollment Codes / Site List
+const MAGIC_UI = {
+  shellBg:
+    "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
+    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+  panelBorder: "rgba(148, 163, 184, 0.35)",
+  textBright: "#e2e8f0",
+  accentA: "#7dd3fc",
+};
+
+// Quartz theme instance (same params used across MagicUI pages)
+const gridTheme = themeQuartz.withParams({
+  accentColor: "#8b5cf6",
+  backgroundColor: "#070b1a",
+  browserColorScheme: "dark",
+  fontFamily: { googleFont: "IBM Plex Sans" },
+  foregroundColor: "#f4f7ff",
+  headerFontSize: 13,
+});
+const themeClassName = gridTheme.themeName || "ag-theme-quartz";
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All" },
@@ -73,7 +90,7 @@ const normalizeStatus = (status) => {
   return status.toLowerCase();
 };
 
-function DeviceApprovals() {
+export default function DeviceApprovals() {
   const [approvals, setApprovals] = useState([]);
   const [statusFilter, setStatusFilter] = useState("all");
   const [loading, setLoading] = useState(false);
@@ -82,6 +99,7 @@ function DeviceApprovals() {
   const [guidInputs, setGuidInputs] = useState({});
   const [actioningId, setActioningId] = useState(null);
   const [conflictPrompt, setConflictPrompt] = useState(null);
+  const gridRef = useRef(null);
 
   const loadApprovals = useCallback(async () => {
     setLoading(true);
@@ -102,9 +120,7 @@ function DeviceApprovals() {
     }
   }, [statusFilter]);
 
-  useEffect(() => {
-    loadApprovals();
-  }, [loadApprovals]);
+  useEffect(() => { loadApprovals(); }, [loadApprovals]);
 
   const dedupedApprovals = useMemo(() => {
     const normalized = approvals
@@ -183,13 +199,9 @@ function DeviceApprovals() {
         }
         const appliedResolution = (body.conflict_resolution || payload.conflict_resolution || "").toLowerCase();
         let successMessage = "Enrollment approved";
-        if (appliedResolution === "overwrite") {
-          successMessage = "Enrollment approved; existing device overwritten";
-        } else if (appliedResolution === "coexist") {
-          successMessage = "Enrollment approved; devices will co-exist";
-        } else if (appliedResolution === "auto_merge_fingerprint") {
-          successMessage = "Enrollment approved; device reconnected with its existing identity";
-        }
+        if (appliedResolution === "overwrite") successMessage = "Enrollment approved; existing device overwritten";
+        else if (appliedResolution === "coexist") successMessage = "Enrollment approved; devices will co-exist";
+        else if (appliedResolution === "auto_merge_fingerprint") successMessage = "Enrollment approved; device reconnected with its existing identity";
         setFeedback({ type: "success", message: successMessage });
         await loadApprovals();
       } catch (err) {
@@ -213,61 +225,13 @@ function DeviceApprovals() {
         const fallbackAlternate =
           record.alternate_hostname ||
           (record.hostname_claimed ? `${record.hostname_claimed}-1` : "");
-        setConflictPrompt({
-          record,
-          conflict,
-          alternate: fallbackAlternate || "",
-        });
+        setConflictPrompt({ record, conflict, alternate: fallbackAlternate || "" });
         return;
       }
       submitApproval(record);
     },
     [guidInputs, submitApproval]
   );
-
-  const handleConflictCancel = useCallback(() => {
-    setConflictPrompt(null);
-  }, []);
-
-  const handleConflictOverwrite = useCallback(() => {
-    if (!conflictPrompt?.record) {
-      setConflictPrompt(null);
-      return;
-    }
-    const { record, conflict } = conflictPrompt;
-    setConflictPrompt(null);
-    const conflictGuid = conflict?.guid != null ? String(conflict.guid).trim() : "";
-    submitApproval(record, {
-      guid: conflictGuid,
-      conflictResolution: "overwrite",
-    });
-  }, [conflictPrompt, submitApproval]);
-
-  const handleConflictCoexist = useCallback(() => {
-    if (!conflictPrompt?.record) {
-      setConflictPrompt(null);
-      return;
-    }
-    const { record } = conflictPrompt;
-    setConflictPrompt(null);
-    submitApproval(record, {
-      conflictResolution: "coexist",
-    });
-  }, [conflictPrompt, submitApproval]);
-
-  const conflictRecord = conflictPrompt?.record;
-  const conflictInfo = conflictPrompt?.conflict;
-  const conflictHostname = conflictRecord?.hostname_claimed || conflictRecord?.hostname || "";
-  const conflictSiteName = conflictInfo?.site_name || "";
-  const conflictSiteDescriptor = conflictInfo
-    ? conflictSiteName
-      ? `under site ${conflictSiteName}`
-      : "under site (not assigned)"
-    : "under site (not assigned)";
-  const conflictAlternate =
-    conflictPrompt?.alternate ||
-    (conflictHostname ? `${conflictHostname}-1` : "hostname-1");
-  const conflictGuidDisplay = conflictInfo?.guid || "";
 
   const handleDeny = useCallback(
     async (record) => {
@@ -297,171 +261,236 @@ function DeviceApprovals() {
     [loadApprovals]
   );
 
+  const columns = useMemo(() => [
+    {
+      headerName: "Status",
+      field: "status",
+      valueGetter: (p) => normalizeStatus(p.data?.status),
+      cellRenderer: (params) => {
+        const status = params.value || "pending";
+        // mimic MUI Chip coloring via text hues
+        const color = status === "completed" ? "#34d399"
+          : status === "approved" ? "#60a5fa"
+          : status === "denied" || status === "expired" ? "#9aa0a6"
+          : "#fbbf24";
+        return <span style={{ color, fontWeight: 600 }}>{status}</span>;
+      },
+      width: 120,
+    },
+    { headerName: "Hostname", field: "hostname_claimed", minWidth: 180 },
+    {
+      headerName: "Fingerprint",
+      field: "ssl_key_fingerprint_claimed",
+      valueFormatter: (p) => formatFingerprint(p.value),
+      cellStyle: { fontFamily: "monospace", whiteSpace: "nowrap" },
+      minWidth: 200,
+    },
+    {
+      headerName: "Enrollment Code",
+      field: "enrollment_code_id",
+      cellStyle: { fontFamily: "monospace" },
+      minWidth: 140,
+    },
+    { headerName: "Created", field: "created_at", valueFormatter: (p) => formatDateTime(p.value), minWidth: 160 },
+    { headerName: "Updated", field: "updated_at", valueFormatter: (p) => formatDateTime(p.value), minWidth: 160 },
+    {
+      headerName: "Approved By",
+      valueGetter: (p) => p.data?.approved_by_username || p.data?.approved_by_user_id || "—",
+      minWidth: 140,
+    },
+    {
+      headerName: "Actions",
+      cellRenderer: (params) => {
+        const record = params.data || {};
+        const status = normalizeStatus(record.status);
+        const showActions = status === "pending";
+        const guidValue = params.context.guidInputs[record.id] || "";
+        const { startApprove, handleDeny, handleGuidChange, actioningId } = params.context;
+        if (!showActions) {
+          return <Typography variant="body2" style={{ color: "#9aa0a6" }}>No actions available</Typography>;
+        }
+        const isBusy = actioningId === record.id;
+        return (
+          <Stack direction="row" spacing={8} alignItems="center">
+            <TextField
+              size="small"
+              label="Optional GUID"
+              placeholder="Leave empty to auto-generate"
+              value={guidValue}
+              onChange={(e) => handleGuidChange(record.id, e.target.value)}
+              sx={{ minWidth: 220 }}
+            />
+            <Stack direction="row" spacing={1}>
+              <Tooltip title="Approve enrollment">
+                <span>
+                  <Button
+                    color="success"
+                    variant="text"
+                    onClick={() => startApprove(record)}
+                    disabled={isBusy}
+                    startIcon={isBusy ? <CircularProgress size={16} color="success" /> : <ApproveIcon fontSize="small" />}
+                  >
+                    Approve
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title="Deny enrollment">
+                <span>
+                  <Button
+                    color="error"
+                    variant="text"
+                    onClick={() => handleDeny(record)}
+                    disabled={isBusy}
+                    startIcon={<DenyIcon fontSize="small" />}
+                  >
+                    Deny
+                  </Button>
+                </span>
+              </Tooltip>
+            </Stack>
+          </Stack>
+        );
+      },
+      minWidth: 480,
+      flex: 1,
+    },
+  ], []);
+
+  const defaultColDef = useMemo(() => ({
+    sortable: true,
+    filter: true,
+    resizable: true,
+    minWidth: 140,
+  }), []);
+
+  // Dialog helpers
+  const conflictRecord = conflictPrompt?.record;
+  const conflictInfo = conflictPrompt?.conflict;
+  const conflictHostname = conflictRecord?.hostname_claimed || conflictRecord?.hostname || "";
+  const conflictSiteName = conflictInfo?.site_name || "";
+  const conflictSiteDescriptor = conflictInfo
+    ? conflictSiteName
+      ? `under site ${conflictSiteName}`
+      : "under site (not assigned)"
+    : "under site (not assigned)";
+  const conflictAlternate =
+    conflictPrompt?.alternate ||
+    (conflictHostname ? `${conflictHostname}-1` : "hostname-1");
+  const conflictGuidDisplay = conflictInfo?.guid || "";
+
+  const handleConflictCancel = useCallback(() => setConflictPrompt(null), []);
+  const handleConflictOverwrite = useCallback(() => {
+    if (!conflictPrompt?.record) { setConflictPrompt(null); return; }
+    const { record, conflict } = conflictPrompt;
+    setConflictPrompt(null);
+    const conflictGuid = conflict?.guid != null ? String(conflict.guid).trim() : "";
+    submitApproval(record, { guid: conflictGuid, conflictResolution: "overwrite" });
+  }, [conflictPrompt, submitApproval]);
+  const handleConflictCoexist = useCallback(() => {
+    if (!conflictPrompt?.record) { setConflictPrompt(null); return; }
+    const { record } = conflictPrompt;
+    setConflictPrompt(null);
+    submitApproval(record, { conflictResolution: "coexist" });
+  }, [conflictPrompt, submitApproval]);
+
   return (
-    <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 3 }}>
-      <Stack direction="row" alignItems="center" spacing={2}>
-        <SecurityIcon color="primary" />
-        <Typography variant="h5">Device Approval Queue</Typography>
-      </Stack>
-
-      <Paper sx={{ p: 2, display: "flex", flexDirection: "column", gap: 2 }}>
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ xs: "stretch", sm: "center" }}>
-          <FormControl size="small" sx={{ minWidth: 200 }}>
-            <InputLabel id="approval-status-filter-label">Status</InputLabel>
-            <Select
-              labelId="approval-status-filter-label"
-              label="Status"
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <MenuItem key={option.value} value={option.value}>
-                  {option.label}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          <Button
-            variant="outlined"
-            startIcon={<RefreshIcon />}
-            onClick={loadApprovals}
-            disabled={loading}
-          >
-            Refresh
-          </Button>
+    <Paper
+      sx={{
+        m: 0,
+        p: 0,
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minWidth: 0,
+        height: "100%",
+        borderRadius: 0,
+        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        background: MAGIC_UI.shellBg,
+        boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
+        overflow: "hidden",
+      }}
+      elevation={0}
+    >
+      {/* Page header (no solid backdrop so gradient reaches the top) */}
+      <Box sx={{ p: 3 }}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between">
+          <Stack direction="row" spacing={1} alignItems="center">
+            <SecurityIcon sx={{ color: MAGIC_UI.accentA }} />
+            <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+              Device Approval Queue
+            </Typography>
+          </Stack>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ xs: "stretch", sm: "center" }}>
+            <FormControl size="small" sx={{ minWidth: 200 }}>
+              <InputLabel id="approval-status-filter-label">Status</InputLabel>
+              <Select
+                labelId="approval-status-filter-label"
+                label="Status"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadApprovals} disabled={loading}>
+              Refresh
+            </Button>
+          </Stack>
         </Stack>
+      </Box>
 
-        {feedback ? (
+      {/* Feedback */}
+      {feedback && (
+        <Box sx={{ px: 3 }}>
           <Alert severity={feedback.type} variant="outlined" onClose={() => setFeedback(null)}>
             {feedback.message}
           </Alert>
-        ) : null}
-
-        {error ? (
+        </Box>
+      )}
+      {error && (
+        <Box sx={{ px: 3 }}>
           <Alert severity="error" variant="outlined">
             {error}
           </Alert>
-        ) : null}
+        </Box>
+      )}
 
-        <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 480 }}>
-          <Table size="small" stickyHeader>
-            <TableHead>
-              <TableRow>
-                <TableCell>Status</TableCell>
-                <TableCell>Hostname</TableCell>
-                <TableCell>Fingerprint</TableCell>
-                <TableCell>Enrollment Code</TableCell>
-                <TableCell>Created</TableCell>
-                <TableCell>Updated</TableCell>
-                <TableCell>Approved By</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={8} align="center">
-                    <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
-                      <CircularProgress size={20} />
-                      <Typography variant="body2">Loading approvals…</Typography>
-                    </Stack>
-                  </TableCell>
-                </TableRow>
-              ) : dedupedApprovals.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} align="center">
-                    <Typography variant="body2" color="text.secondary">
-                      No enrollment requests match this filter.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                dedupedApprovals.map((record) => {
-                  const status = normalizeStatus(record.status);
-                  const showActions = status === "pending";
-                  const guidValue = guidInputs[record.id] || "";
-                  const approverDisplay = record.approved_by_username || record.approved_by_user_id;
-                  return (
-                    <TableRow hover key={record.id}>
-                      <TableCell>
-                        <Chip
-                          size="small"
-                          label={status}
-                          color={statusChipColor[status] || "default"}
-                          variant="outlined"
-                        />
-                      </TableCell>
-                      <TableCell>{record.hostname_claimed || "—"}</TableCell>
-                      <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
-                        {formatFingerprint(record.ssl_key_fingerprint_claimed)}
-                      </TableCell>
-                      <TableCell sx={{ fontFamily: "monospace" }}>
-                        {record.enrollment_code_id || "—"}
-                      </TableCell>
-                      <TableCell>{formatDateTime(record.created_at)}</TableCell>
-                      <TableCell>{formatDateTime(record.updated_at)}</TableCell>
-                      <TableCell>{approverDisplay || "—"}</TableCell>
-                      <TableCell align="right">
-                        {showActions ? (
-                          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="center">
-                            <TextField
-                              size="small"
-                              label="Optional GUID"
-                              placeholder="Leave empty to auto-generate"
-                              value={guidValue}
-                              onChange={(event) => handleGuidChange(record.id, event.target.value)}
-                              sx={{ minWidth: 200 }}
-                            />
-                            <Stack direction="row" spacing={1}>
-                              <Tooltip title="Approve enrollment">
-                                <span>
-                                  <IconButton
-                                    color="success"
-                                    onClick={() => startApprove(record)}
-                                    disabled={actioningId === record.id}
-                                  >
-                                    {actioningId === record.id ? (
-                                      <CircularProgress color="success" size={20} />
-                                    ) : (
-                                      <ApproveIcon fontSize="small" />
-                                    )}
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                              <Tooltip title="Deny enrollment">
-                                <span>
-                                  <IconButton
-                                    color="error"
-                                    onClick={() => handleDeny(record)}
-                                    disabled={actioningId === record.id}
-                                  >
-                                    <DenyIcon fontSize="small" />
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                            </Stack>
-                          </Stack>
-                        ) : (
-                          <Typography variant="body2" color="text.secondary">
-                            No actions available
-                          </Typography>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Paper>
-      <Dialog
-        open={Boolean(conflictPrompt)}
-        onClose={handleConflictCancel}
-        maxWidth="sm"
-        fullWidth
+      {/* Data Grid */}
+      <Box
+        className={themeClassName}
+        sx={{ flex: 1, p: 2, overflow: "hidden" }}
+        style={{
+          "--ag-background-color": "#070b1a",
+          "--ag-foreground-color": "#f4f7ff",
+          "--ag-header-background-color": "#0f172a",
+          "--ag-header-foreground-color": "#cfe0ff",
+          "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+          "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+          "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+          "--ag-font-family": "'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif",
+          "--ag-border-color": "rgba(125,183,255,0.18)",
+          "--ag-row-border-color": "rgba(125,183,255,0.14)",
+          "--ag-border-radius": "8px",
+        }}
       >
+        <AgGridReact
+          ref={gridRef}
+          rowData={dedupedApprovals}
+          columnDefs={columns}
+          defaultColDef={defaultColDef}
+          animateRows
+          pagination
+          paginationPageSize={20}
+          context={{ startApprove, handleDeny, handleGuidChange, actioningId, guidInputs }}
+        />
+      </Box>
+
+      {/* Conflict Dialog (unchanged logic) */}
+      <Dialog open={Boolean(conflictPrompt)} onClose={handleConflictCancel} maxWidth="sm" fullWidth>
         <DialogTitle>Hostname Conflict</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2}>
@@ -488,18 +517,11 @@ function DeviceApprovals() {
           <Button onClick={handleConflictCoexist} color="info" variant="outlined">
             Allow Both
           </Button>
-          <Button
-            onClick={handleConflictOverwrite}
-            color="primary"
-            variant="contained"
-            disabled={!conflictGuidDisplay}
-          >
+          <Button onClick={handleConflictOverwrite} color="primary" variant="contained" disabled={!conflictGuidDisplay}>
             Overwrite Existing
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </Paper>
   );
 }
-
-export default React.memo(DeviceApprovals);
