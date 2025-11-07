@@ -1,59 +1,73 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
-  Paper,
   Box,
+  Paper,
   Typography,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
-  TableSortLabel,
-  Checkbox,
   Button,
   IconButton,
-  Popover,
-  TextField,
-  MenuItem
+  Tooltip,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/DeleteOutline";
 import EditIcon from "@mui/icons-material/Edit";
-import FilterListIcon from "@mui/icons-material/FilterList";
-import ViewColumnIcon from "@mui/icons-material/ViewColumn";
+import { AgGridReact } from "ag-grid-react";
+import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, ConfirmDeleteDialog, RenameSiteDialog } from "../Dialogs.jsx";
 
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+const myTheme = themeQuartz.withParams({
+  accentColor: "#8b5cf6",
+  backgroundColor: "#070b1a",
+  browserColorScheme: "dark",
+  fontFamily: { googleFont: "IBM Plex Sans" },
+  foregroundColor: "#f4f7ff",
+  headerFontSize: 14,
+});
+
+const themeClassName = myTheme.themeName || "ag-theme-quartz";
+const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
+const iconFontFamily = '"Quartz Regular"';
+
+const MAGIC_UI = {
+  shellBg:
+    "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
+    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+  panelBg:
+    "linear-gradient(135deg, rgba(10, 16, 31, 0.98) 0%, rgba(6, 10, 24, 0.94) 60%, rgba(15, 6, 26, 0.96) 100%)",
+  panelBorder: "rgba(148, 163, 184, 0.35)",
+  textBright: "#e2e8f0",
+  textMuted: "#94a3b8",
+  accentA: "#7dd3fc",
+  accentB: "#c084fc",
+  success: "#34d399",
+};
+
+const RAINBOW_BUTTON_SX = {
+  borderRadius: 999,
+  textTransform: "none",
+  fontWeight: 600,
+  px: 2.5,
+  color: "#f8fafc",
+  border: "1px solid transparent",
+  backgroundImage:
+    "linear-gradient(#05070f, #05070f), linear-gradient(120deg, #ff7c7c, #ffd36b, #7dffb7, #7dd3fc, #c084fc)",
+  backgroundOrigin: "border-box",
+  backgroundClip: "padding-box, border-box",
+  boxShadow: "0 0 26px rgba(45, 212, 191, 0.45)",
+  "&:hover": {
+    boxShadow: "0 0 32px rgba(45, 212, 191, 0.55)",
+  },
+};
+
 export default function SiteList({ onOpenDevicesForSite }) {
-  const [rows, setRows] = useState([]); // {id, name, description, device_count}
-  const [orderBy, setOrderBy] = useState("name");
-  const [order, setOrder] = useState("asc");
+  const [rows, setRows] = useState([]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
-
-  // Columns configuration (similar style to Device_List)
-  const COL_LABELS = useMemo(() => ({
-    name: "Name",
-    description: "Description",
-    device_count: "Devices",
-  }), []);
-  const defaultColumns = useMemo(
-    () => [
-      { id: "name", label: COL_LABELS.name },
-      { id: "description", label: COL_LABELS.description },
-      { id: "device_count", label: COL_LABELS.device_count },
-    ],
-    [COL_LABELS]
-  );
-  const [columns, setColumns] = useState(defaultColumns);
-  const dragColId = useRef(null);
-  const [colChooserAnchor, setColChooserAnchor] = useState(null);
-
-  const [filters, setFilters] = useState({});
-  const [filterAnchor, setFilterAnchor] = useState(null); // { id, anchorEl }
-
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const gridRef = useRef(null);
 
   const fetchSites = useCallback(async () => {
     try {
@@ -67,275 +81,211 @@ export default function SiteList({ onOpenDevicesForSite }) {
 
   useEffect(() => { fetchSites(); }, [fetchSites]);
 
-  // Apply initial filters from global search
-  useEffect(() => {
-    try {
-      const json = localStorage.getItem('site_list_initial_filters');
-      if (json) {
-        const obj = JSON.parse(json);
-        if (obj && typeof obj === 'object') setFilters((prev) => ({ ...prev, ...obj }));
-        localStorage.removeItem('site_list_initial_filters');
-      }
-    } catch {}
-  }, []);
+  const columnDefs = useMemo(() => [
+    {
+      headerName: "",
+      field: "__select__",
+      checkboxSelection: true,
+      headerCheckboxSelection: true,
+      width: 52,
+      pinned: "left",
+    },
+    {
+      headerName: "Name",
+      field: "name",
+      minWidth: 180,
+      cellRenderer: (params) => (
+        <span
+          style={{ color: "#7dd3fc", cursor: "pointer", fontWeight: 500 }}
+          onClick={() => onOpenDevicesForSite && onOpenDevicesForSite(params.value)}
+        >
+          {params.value}
+        </span>
+      ),
+    },
+    { headerName: "Description", field: "description", minWidth: 220 },
+    { headerName: "Devices", field: "device_count", minWidth: 120 },
+  ], [onOpenDevicesForSite]);
 
-  const handleSort = (col) => {
-    if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
-    else { setOrderBy(col); setOrder("asc"); }
-  };
+  const defaultColDef = useMemo(() => ({
+    sortable: true,
+    filter: "agTextColumnFilter",
+    resizable: true,
+    flex: 1,
+    minWidth: 160,
+  }), []);
 
-  const filtered = useMemo(() => {
-    if (!filters || Object.keys(filters).length === 0) return rows;
-    return rows.filter((r) =>
-      Object.entries(filters).every(([k, v]) => {
-        const val = String(v || "").toLowerCase();
-        if (!val) return true;
-        return String(r[k] ?? "").toLowerCase().includes(val);
-      })
-    );
-  }, [rows, filters]);
-
-  const sorted = useMemo(() => {
-    const dir = order === "asc" ? 1 : -1;
-    const arr = [...filtered];
-    arr.sort((a, b) => {
-      if (orderBy === "device_count") return ((a.device_count||0) - (b.device_count||0)) * dir;
-      return String(a[orderBy] ?? "").localeCompare(String(b[orderBy] ?? "")) * dir;
-    });
-    return arr;
-  }, [filtered, orderBy, order]);
-
-  const onHeaderDragStart = (colId) => (e) => { dragColId.current = colId; try { e.dataTransfer.setData("text/plain", colId); } catch {} };
-  const onHeaderDragOver = (e) => { e.preventDefault(); };
-  const onHeaderDrop = (targetColId) => (e) => {
-    e.preventDefault();
-    const fromId = dragColId.current; if (!fromId || fromId === targetColId) return;
-    setColumns((prev) => {
-      const cur = [...prev];
-      const fromIdx = cur.findIndex((c) => c.id === fromId);
-      const toIdx = cur.findIndex((c) => c.id === targetColId);
-      if (fromIdx < 0 || toIdx < 0) return prev;
-      const [moved] = cur.splice(fromIdx, 1);
-      cur.splice(toIdx, 0, moved);
-      return cur;
-    });
-    dragColId.current = null;
-  };
-
-  const openFilter = (id) => (e) => setFilterAnchor({ id, anchorEl: e.currentTarget });
-  const closeFilter = () => setFilterAnchor(null);
-  const onFilterChange = (id) => (e) => setFilters((prev) => ({ ...prev, [id]: e.target.value }));
-
-  const isAllChecked = sorted.length > 0 && sorted.every((r) => selectedIds.has(r.id));
-  const isIndeterminate = selectedIds.size > 0 && !isAllChecked;
-  const toggleAll = (e) => {
-    const checked = e.target.checked;
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (checked) sorted.forEach((r) => next.add(r.id));
-      else next.clear();
-      return next;
-    });
-  };
-  const toggleOne = (id) => (e) => {
-    const checked = e.target.checked;
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(id); else next.delete(id);
-      return next;
-    });
-  };
+  const heroStats = useMemo(() => ({
+    totalSites: rows.length,
+    totalDevices: rows.reduce((acc, r) => acc + (r.device_count || 0), 0),
+    selected: selectedIds.size,
+  }), [rows, selectedIds]);
 
   return (
-    <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
-      <Box sx={{ p: 2, pb: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>Sites</Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<EditIcon />}
-            disabled={selectedIds.size !== 1}
-            onClick={() => {
-              // Prefill with the currently selected site's name
-              const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
-              if (selId != null) {
-                const site = rows.find((r) => r.id === selId);
-                setRenameValue(site?.name || "");
-                setRenameOpen(true);
-              }
-            }}
-            sx={{ color: selectedIds.size === 1 ? '#58a6ff' : '#666', borderColor: selectedIds.size === 1 ? '#58a6ff' : '#333', textTransform: 'none' }}
-          >
-            Rename
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<DeleteIcon />}
-            disabled={selectedIds.size === 0}
-            onClick={() => setDeleteOpen(true)}
-            sx={{ color: selectedIds.size ? '#ff8a8a' : '#666', borderColor: selectedIds.size ? '#ff4f4f' : '#333', textTransform: 'none' }}
-          >
-            Delete
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<AddIcon />}
-            onClick={() => setCreateOpen(true)}
-            sx={{ color: '#58a6ff', borderColor: '#58a6ff', textTransform: 'none' }}
-          >
-            Create Site
-          </Button>
+    <Paper
+      sx={{
+        m: 0,
+        p: 0,
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minWidth: 0,
+        height: "100%",
+        borderRadius: 0,
+        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        background: MAGIC_UI.shellBg,
+        boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
+        overflow: "hidden",
+      }}
+      elevation={0}
+    >
+      {/* Hero Section */}
+      <Box sx={{ p: { xs: 2, md: 3 }, pb: 1 }}>
+        <Box
+          sx={{
+            borderRadius: 4,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            background: MAGIC_UI.panelBg,
+            p: { xs: 2, md: 3 },
+            display: "flex",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 3,
+          }}
+        >
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <Typography variant="h5" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+              Managed Sites
+            </Typography>
+            <Typography sx={{ color: MAGIC_UI.textMuted }}>
+              {`Monitoring ${heroStats.totalDevices} devices across ${heroStats.totalSites} site(s)`}
+            </Typography>
+            {heroStats.selected > 0 && (
+              <Typography sx={{ color: MAGIC_UI.accentA, fontSize: "0.85rem", fontWeight: 600 }}>
+                {heroStats.selected} selected
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+            <Button variant="contained" size="small" startIcon={<AddIcon />} sx={RAINBOW_BUTTON_SX} onClick={() => setCreateOpen(true)}>
+              Create Site
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<EditIcon />}
+              disabled={selectedIds.size !== 1}
+              onClick={() => {
+                const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
+                if (selId != null) {
+                  const site = rows.find((r) => r.id === selId);
+                  setRenameValue(site?.name || "");
+                  setRenameOpen(true);
+                }
+              }}
+              sx={{
+                borderColor: "rgba(148,163,184,0.4)",
+                color: MAGIC_UI.textBright,
+                "&:hover": { borderColor: MAGIC_UI.accentA },
+              }}
+            >
+              Rename
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<DeleteIcon />}
+              disabled={selectedIds.size === 0}
+              onClick={() => setDeleteOpen(true)}
+              sx={{
+                borderColor: selectedIds.size ? "#f87171" : "rgba(148,163,184,0.3)",
+                color: selectedIds.size ? "#f87171" : MAGIC_UI.textMuted,
+                "&:hover": { borderColor: "#fb7185" },
+              }}
+            >
+              Delete
+            </Button>
+          </Box>
         </Box>
       </Box>
 
-      <Table size="small" sx={{ minWidth: 700 }}>
-        <TableHead>
-          <TableRow>
-            <TableCell padding="checkbox">
-              <Checkbox indeterminate={isIndeterminate} checked={isAllChecked} onChange={toggleAll} sx={{ color: '#777' }} />
-            </TableCell>
-            {columns.map((col) => (
-              <TableCell key={col.id} sortDirection={orderBy === col.id ? order : false} draggable onDragStart={onHeaderDragStart(col.id)} onDragOver={onHeaderDragOver} onDrop={onHeaderDrop(col.id)}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <TableSortLabel active={orderBy === col.id} direction={orderBy === col.id ? order : 'asc'} onClick={() => handleSort(col.id)}>
-                    {col.label}
-                  </TableSortLabel>
-                  <IconButton size="small" onClick={openFilter(col.id)} sx={{ color: filters[col.id] ? '#58a6ff' : '#888' }}>
-                    <FilterListIcon fontSize="inherit" />
-                  </IconButton>
-                </Box>
-              </TableCell>
-            ))}
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {sorted.map((r) => (
-            <TableRow key={r.id} hover>
-              <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
-                <Checkbox checked={selectedIds.has(r.id)} onChange={toggleOne(r.id)} sx={{ color: '#777' }} />
-              </TableCell>
-              {columns.map((col) => {
-                switch (col.id) {
-                  case 'name':
-                    return (
-                      <TableCell
-                        key={col.id}
-                        onClick={() => {
-                          if (onOpenDevicesForSite) onOpenDevicesForSite(r.name);
-                        }}
-                        sx={{ color: '#58a6ff', '&:hover': { cursor: 'pointer', textDecoration: 'underline' } }}
-                      >
-                        {r.name}
-                      </TableCell>
-                    );
-                  case 'description':
-                    return <TableCell key={col.id}>{r.description || ''}</TableCell>;
-                  case 'device_count':
-                    return <TableCell key={col.id}>{r.device_count ?? 0}</TableCell>;
-                  default:
-                    return <TableCell key={col.id} />;
-                }
-              })}
-            </TableRow>
-          ))}
-          {sorted.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={columns.length + 1} sx={{ color: '#888' }}>No sites defined.</TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
-
-      {/* Column chooser */}
-      <Popover
-        open={Boolean(colChooserAnchor)}
-        anchorEl={colChooserAnchor}
-        onClose={() => setColChooserAnchor(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        PaperProps={{ sx: { bgcolor: '#1e1e1e', color: '#fff', p: 1 } }}
-      >
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, p: 1 }}>
-          {[
-            { id: 'name', label: 'Name' },
-            { id: 'description', label: 'Description' },
-            { id: 'device_count', label: 'Devices' },
-          ].map((opt) => (
-            <MenuItem key={opt.id} disableRipple onClick={(e) => e.stopPropagation()} sx={{ gap: 1 }}>
-              <Checkbox
-                size="small"
-                checked={columns.some((c) => c.id === opt.id)}
-                onChange={(e) => {
-                  const checked = e.target.checked;
-                  setColumns((prev) => {
-                    const exists = prev.some((c) => c.id === opt.id);
-                    if (checked) {
-                      if (exists) return prev;
-                      return [...prev, { id: opt.id, label: opt.label }];
-                    }
-                    return prev.filter((c) => c.id !== opt.id);
-                  });
-                }}
-                sx={{ p: 0.3, color: '#bbb' }}
-              />
-              <Typography variant="body2" sx={{ color: '#ddd' }}>{opt.label}</Typography>
-            </MenuItem>
-          ))}
-          <Box sx={{ display: 'flex', gap: 1, pt: 0.5 }}>
-            <Button size="small" variant="outlined" onClick={() => setColumns(defaultColumns)} sx={{ textTransform: 'none', borderColor: '#555', color: '#bbb' }}>
-              Reset Default
-            </Button>
-          </Box>
+      {/* AG Grid */}
+      <Box sx={{ px: { xs: 2, md: 3 }, pb: 3, flexGrow: 1, display: "flex", flexDirection: "column" }}>
+        <Box
+          className={themeClassName}
+          sx={{
+            flexGrow: 1,
+            borderRadius: 3,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            background: "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.85))",
+            boxShadow: "0 20px 60px rgba(2,8,23,0.85)",
+            "--ag-font-family": gridFontFamily,
+            "--ag-icon-font-family": iconFontFamily,
+            "& .ag-header": {
+              backgroundColor: "rgba(15,23,42,0.9)",
+              borderBottom: "1px solid rgba(148,163,184,0.25)",
+            },
+            "& .ag-header-cell-label": {
+              color: "#e2e8f0",
+              fontWeight: 600,
+              letterSpacing: 0.3,
+            },
+            "& .ag-row": {
+              borderColor: "rgba(255,255,255,0.04)",
+              transition: "background 0.2s ease",
+            },
+            "& .ag-row:nth-of-type(even)": {
+              backgroundColor: "rgba(15,23,42,0.45)",
+            },
+            "& .ag-row-hover": {
+              backgroundColor: "rgba(124, 58, 237, 0.15) !important",
+            },
+            "& .ag-row-selected": {
+              backgroundColor: "rgba(56,189,248,0.18) !important",
+              boxShadow: "inset 0 0 0 1px rgba(56,189,248,0.35)",
+            },
+          }}
+        >
+          <AgGridReact
+            ref={gridRef}
+            rowData={rows}
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
+            rowSelection="multiple"
+            rowMultiSelectWithClick
+            pagination
+            paginationPageSize={20}
+            paginationPageSizeSelector={[20, 50, 100]}
+            animateRows
+            onSelectionChanged={() => {
+              const api = gridRef.current?.api;
+              if (!api) return;
+              const selected = api.getSelectedNodes().map((n) => n.data?.id).filter(Boolean);
+              setSelectedIds(new Set(selected));
+            }}
+            theme={myTheme}
+          />
         </Box>
-      </Popover>
+      </Box>
 
-      {/* Filter popover */}
-      <Popover
-        open={Boolean(filterAnchor)}
-        anchorEl={filterAnchor?.anchorEl || null}
-        onClose={closeFilter}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        PaperProps={{ sx: { bgcolor: '#1e1e1e', p: 1 } }}
-      >
-        {filterAnchor && (
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <TextField
-              autoFocus
-              size="small"
-              placeholder={`Filter ${columns.find((c) => c.id === filterAnchor.id)?.label || ''}`}
-              value={filters[filterAnchor.id] || ''}
-              onChange={onFilterChange(filterAnchor.id)}
-              onKeyDown={(e) => { if (e.key === 'Escape') closeFilter(); }}
-              sx={{
-                input: { color: '#fff' },
-                minWidth: 220,
-                '& .MuiOutlinedInput-root': { '& fieldset': { borderColor: '#555' }, '&:hover fieldset': { borderColor: '#888' } },
-              }}
-            />
-            <Button variant="outlined" size="small" onClick={() => { setFilters((prev) => ({ ...prev, [filterAnchor.id]: '' })); closeFilter(); }} sx={{ textTransform: 'none', borderColor: '#555', color: '#bbb' }}>
-              Clear
-            </Button>
-          </Box>
-        )}
-      </Popover>
-
-      {/* Create site dialog */}
       <CreateSiteDialog
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         onCreate={async (name, description) => {
           try {
-            const res = await fetch('/api/sites', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description }) });
-            if (!res.ok) return;
-            setCreateOpen(false);
-            await fetchSites();
+            const res = await fetch("/api/sites", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name, description }),
+            });
+            if (res.ok) {
+              setCreateOpen(false);
+              fetchSites();
+            }
           } catch {}
         }}
       />
 
-      {/* Delete confirmation */}
       <ConfirmDeleteDialog
         open={deleteOpen}
         message={`Delete ${selectedIds.size} selected site(s)? This cannot be undone.`}
@@ -343,41 +293,39 @@ export default function SiteList({ onOpenDevicesForSite }) {
         onConfirm={async () => {
           try {
             const ids = Array.from(selectedIds);
-            await fetch('/api/sites/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+            await fetch("/api/sites/delete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ids }),
+            });
           } catch {}
           setDeleteOpen(false);
           setSelectedIds(new Set());
-          await fetchSites();
+          fetchSites();
         }}
       />
 
-      {/* Rename site dialog */}
       <RenameSiteDialog
         open={renameOpen}
         value={renameValue}
         onChange={setRenameValue}
         onCancel={() => setRenameOpen(false)}
         onSave={async () => {
-          const newName = (renameValue || '').trim();
+          const newName = (renameValue || "").trim();
           if (!newName) return;
           const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
-          if (selId == null) return;
+          if (!selId) return;
           try {
-            const res = await fetch('/api/sites/rename', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ id: selId, new_name: newName })
+            const res = await fetch("/api/sites/rename", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: selId, new_name: newName }),
             });
-            if (!res.ok) {
-              // Keep dialog open on error; optionally log
-              try { const err = await res.json(); console.warn('Rename failed', err); } catch {}
-              return;
+            if (res.ok) {
+              setRenameOpen(false);
+              fetchSites();
             }
-            setRenameOpen(false);
-            await fetchSites();
-          } catch (e) {
-            console.warn('Rename error', e);
-          }
+          } catch {}
         }}
       />
     </Paper>
