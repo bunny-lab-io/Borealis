@@ -1,4 +1,4 @@
-// Navigation_Sidebar.jsx — Clean Modern Matte + Glass Sidebar (no accent bars or header bubbles)
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Navigation_Sidebar.jsx
 
 import React, { useMemo, useState } from "react";
 import {

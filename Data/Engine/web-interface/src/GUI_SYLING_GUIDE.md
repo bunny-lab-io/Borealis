@@ -1,3 +1,5 @@
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/GUI_SYLING_GUIDE.md
+
 # Borealis MagicUI Styling Guide
 
 - **Aurora Shells**: Page containers should sit on aurora gradients that blend deep navy (#040711) with soft cyan/violet blooms plus a subtle border (`rgba(148,163,184,0.35)`) and low, velvety drop shadows to create depth without harsh edges.
