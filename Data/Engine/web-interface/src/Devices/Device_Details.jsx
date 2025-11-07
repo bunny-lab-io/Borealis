@@ -1,23 +1,15 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Device_Details.js
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
-  Paper,
   Box,
   Tabs,
   Tab,
   Typography,
-  Table,
-  TableHead,
-  TableRow,
-  TableCell,
-  TableBody,
   Button,
   IconButton,
   Menu,
   MenuItem,
-  LinearProgress,
-  TableSortLabel,
   TextField,
   Dialog,
   DialogTitle,
@@ -38,14 +30,229 @@ import "prismjs/components/prism-batch";
 import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
 import QuickJob from "../Scheduling/Quick_Job.jsx";
+import { AgGridReact } from "ag-grid-react";
+import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+const MAGIC_UI = {
+  shellBg:
+    "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
+    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+  panelBg: "rgba(7,11,24,0.92)",
+  panelBorder: "rgba(148, 163, 184, 0.35)",
+  glassBorder: "rgba(94, 234, 212, 0.35)",
+  glow: "0 35px 80px rgba(2, 6, 23, 0.65)",
+  textMuted: "#94a3b8",
+  textBright: "#e2e8f0",
+  accentA: "#7dd3fc",
+  accentB: "#c084fc",
+  accentC: "#34d399",
+};
+
+const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
+const iconFontFamily = '"Quartz Regular"';
+
+const SECTION_HEIGHTS = {
+  summary: 360,
+  storage: 360,
+  memory: 260,
+  network: 260,
+};
+
+const TOP_TABS = ["Device Summary", "Storage", "Memory", "Network", "Installed Software", "Activity History"];
+
+const myTheme = themeQuartz.withParams({
+  accentColor: "#8b5cf6",
+  backgroundColor: "#070b1a",
+  browserColorScheme: "dark",
+  chromeBackgroundColor: {
+    ref: "foregroundColor",
+    mix: 0.07,
+    onto: "backgroundColor",
+  },
+  fontFamily: {
+    googleFont: "IBM Plex Sans",
+  },
+  foregroundColor: "#f4f7ff",
+  headerFontSize: 14,
+});
+
+const gridThemeClass = myTheme.themeName || "ag-theme-quartz";
+
+const GRID_SHELL_BASE_SX = {
+  width: "100%",
+  borderRadius: 3,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  background: "rgba(5,8,20,0.9)",
+  boxShadow: "0 18px 45px rgba(2,6,23,0.6)",
+  position: "relative",
+  overflow: "hidden",
+  "& .ag-root-wrapper": {
+    borderRadius: 3,
+    minHeight: "100%",
+    background: "transparent",
+  },
+  "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+    fontFamily: gridFontFamily,
+    background: "transparent",
+  },
+  "& .ag-header": {
+    backgroundColor: "rgba(3,7,18,0.85)",
+    borderBottom: "1px solid rgba(148,163,184,0.25)",
+  },
+  "& .ag-header-cell-label": {
+    color: "#e2e8f0",
+    fontWeight: 600,
+    letterSpacing: 0.3,
+  },
+  "& .ag-row": {
+    borderColor: "rgba(255,255,255,0.04)",
+    transition: "background 0.2s ease",
+  },
+  "& .ag-row:nth-of-type(even)": {
+    backgroundColor: "rgba(15,23,42,0.35)",
+  },
+  "& .ag-row-hover": {
+    backgroundColor: "rgba(124,58,237,0.12) !important",
+  },
+  "& .ag-row-selected": {
+    backgroundColor: "rgba(56,189,248,0.16) !important",
+    boxShadow: "inset 0 0 0 1px rgba(56,189,248,0.3)",
+  },
+  "& .ag-icon": {
+    fontFamily: iconFontFamily,
+  },
+  "& .ag-paging-panel": {
+    borderTop: "1px solid rgba(148,163,184,0.2)",
+    backgroundColor: "rgba(3,7,18,0.8)",
+  },
+};
+
+const GridShell = ({ children, sx }) => (
+  <Box className={gridThemeClass} sx={{ ...GRID_SHELL_BASE_SX, ...(sx || {}) }}>
+    {children}
+  </Box>
+);
+
+const HISTORY_STATUS_THEME = {
+  running: {
+    text: "#58a6ff",
+    background: "rgba(88,166,255,0.15)",
+    border: "1px solid rgba(88,166,255,0.4)",
+    dot: "#58a6ff",
+  },
+  success: {
+    text: "#00d18c",
+    background: "rgba(0,209,140,0.16)",
+    border: "1px solid rgba(0,209,140,0.35)",
+    dot: "#00d18c",
+  },
+  failed: {
+    text: "#ff7b89",
+    background: "rgba(255,123,137,0.16)",
+    border: "1px solid rgba(255,123,137,0.35)",
+    dot: "#ff7b89",
+  },
+  default: {
+    text: "#e2e8f0",
+    background: "rgba(226,232,240,0.12)",
+    border: "1px solid rgba(226,232,240,0.25)",
+    dot: "#e2e8f0",
+  },
+};
+
+const StatusPillCell = React.memo(function StatusPillCell(props) {
+  const value = String(props?.value || "");
+  if (!value) return null;
+  const theme = HISTORY_STATUS_THEME[value.toLowerCase()] || HISTORY_STATUS_THEME.default;
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: 76,
+        px: 1.5,
+        py: 0.4,
+        borderRadius: 999,
+        backgroundColor: theme.background,
+        border: theme.border,
+        color: theme.text,
+        fontWeight: 600,
+        fontSize: "13px",
+        lineHeight: 1,
+        fontFamily: gridFontFamily,
+        textTransform: "capitalize",
+        gap: 0.75,
+      }}
+    >
+      <Box
+        component="span"
+        sx={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          backgroundColor: theme.dot,
+          boxShadow: "0 0 0 2px rgba(0, 0, 0, 0.22)",
+        }}
+      />
+      {value}
+    </Box>
+  );
+});
+
+const HistoryActionsCell = React.memo(function HistoryActionsCell(props) {
+  const row = props.data || {};
+  const onViewOutput = props.context?.onViewOutput;
+  const onCancelAnsible = props.context?.onCancelAnsible;
+  const scriptType = String(row.script_type || "").toLowerCase();
+  const isRunningAnsible = scriptType === "ansible" && String(row.status || "").toLowerCase() === "running";
+
+  return (
+    <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+      {isRunningAnsible ? (
+        <Button
+          size="small"
+          sx={{ color: "#ff7b89", textTransform: "none", minWidth: 0, p: 0 }}
+          onClick={() => onCancelAnsible && onCancelAnsible(row)}
+        >
+          Cancel
+        </Button>
+      ) : null}
+      {row.has_stdout ? (
+        <Button
+          size="small"
+          sx={{ color: MAGIC_UI.accentA, textTransform: "none", minWidth: 0, p: 0 }}
+          onClick={() => onViewOutput && onViewOutput(row, "stdout")}
+        >
+          StdOut
+        </Button>
+      ) : null}
+      {row.has_stderr ? (
+        <Button
+          size="small"
+          sx={{ color: "#ff7b89", textTransform: "none", minWidth: 0, p: 0 }}
+          onClick={() => onViewOutput && onViewOutput(row, "stderr")}
+        >
+          StdErr
+        </Button>
+      ) : null}
+    </Box>
+  );
+});
+
+const GRID_COMPONENTS = {
+  StatusPillCell,
+  HistoryActionsCell,
+};
 
 export default function DeviceDetails({ device, onBack }) {
   const [tab, setTab] = useState(0);
   const [agent, setAgent] = useState(device || {});
   const [details, setDetails] = useState({});
   const [meta, setMeta] = useState({});
-  const [softwareOrderBy, setSoftwareOrderBy] = useState("name");
-  const [softwareOrder, setSoftwareOrder] = useState("asc");
   const [softwareSearch, setSoftwareSearch] = useState("");
   const [description, setDescription] = useState("");
   const [connectionType, setConnectionType] = useState("");
@@ -55,8 +262,6 @@ export default function DeviceDetails({ device, onBack }) {
   const [connectionMessage, setConnectionMessage] = useState("");
   const [connectionError, setConnectionError] = useState("");
   const [historyRows, setHistoryRows] = useState([]);
-  const [historyOrderBy, setHistoryOrderBy] = useState("ran_at");
-  const [historyOrder, setHistoryOrder] = useState("desc");
   const [outputOpen, setOutputOpen] = useState(false);
   const [outputTitle, setOutputTitle] = useState("");
   const [outputContent, setOutputContent] = useState("");
@@ -65,6 +270,7 @@ export default function DeviceDetails({ device, onBack }) {
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [assemblyNameMap, setAssemblyNameMap] = useState({});
+  const softwareGridApiRef = useRef(null);
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
     // Prefer status provided by the device list row if available
@@ -486,7 +692,7 @@ export default function DeviceDetails({ device, onBack }) {
     return `${num.toFixed(1)} ${units[i]}`;
   };
 
-  const formatTimestamp = (epochSec) => {
+  const formatTimestamp = useCallback((epochSec) => {
     const ts = Number(epochSec || 0);
     if (!ts) return "unknown";
     const d = new Date(ts * 1000);
@@ -498,29 +704,27 @@ export default function DeviceDetails({ device, onBack }) {
     hh = hh % 12 || 12;
     const min = String(d.getMinutes()).padStart(2, "0");
     return `${mm}/${dd}/${yyyy} @ ${hh}:${min} ${ampm}`;
-  };
+  }, []);
 
-  const handleSoftwareSort = (col) => {
-    if (softwareOrderBy === col) {
-      setSoftwareOrder(softwareOrder === "asc" ? "desc" : "asc");
-    } else {
-      setSoftwareOrderBy(col);
-      setSoftwareOrder("asc");
+  const softwareRows = useMemo(() => details.software || [], [details.software]);
+  const handleSoftwareGridReady = useCallback(
+    (params) => {
+      softwareGridApiRef.current = params.api;
+      params.api.setQuickFilter(softwareSearch);
+    },
+    [softwareSearch]
+  );
+
+  useEffect(() => {
+    if (softwareGridApiRef.current) {
+      softwareGridApiRef.current.setQuickFilter(softwareSearch);
     }
-  };
+  }, [softwareSearch]);
 
-  const softwareRows = useMemo(() => {
-    const rows = details.software || [];
-    const filtered = rows.filter((s) =>
-      s.name.toLowerCase().includes(softwareSearch.toLowerCase())
-    );
-    const dir = softwareOrder === "asc" ? 1 : -1;
-    return [...filtered].sort((a, b) => {
-      const A = a[softwareOrderBy] || "";
-      const B = b[softwareOrderBy] || "";
-      return String(A).localeCompare(String(B)) * dir;
-    });
-  }, [details.software, softwareSearch, softwareOrderBy, softwareOrder]);
+  const getSoftwareRowId = useCallback(
+    (params) => `${params.data?.name || "software"}-${params.data?.version || ""}-${params.rowIndex}`,
+    []
+  );
 
   const summary = details.summary || {};
   // Build a best-effort CPU display from summary fields
@@ -541,401 +745,555 @@ export default function DeviceDetails({ device, onBack }) {
     return { cores, ghz, name, display };
   }, [summary]);
 
-  const summaryItems = [
-    { label: "Hostname", value: meta.hostname || summary.hostname || agent.hostname || device?.hostname || "unknown" },
-    {
-      label: "Last User",
-      value: (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Box
-            component="span"
-            sx={{
-              display: 'inline-block',
-              width: 10,
-              height: 10,
-              borderRadius: 10,
-              bgcolor: agent?.collector_active ? '#00d18c' : '#ff4f4f'
-            }}
-          />
-          <span>{meta.lastUser || summary.last_user || 'unknown'}</span>
-        </Box>
-      )
-    },
-    { label: "Device Type", value: meta.deviceType || summary.device_type || 'unknown' },
-    {
-      label: "Created",
-      value: meta.created ? formatDateTime(meta.created) : summary.created ? formatDateTime(summary.created) : 'unknown'
-    },
-    {
-      label: "Last Seen",
-      value: formatLastSeen(meta.lastSeen || agent.last_seen || device?.lastSeen)
-    },
-    {
-      label: "Last Reboot",
-      value: meta.lastReboot ? formatDateTime(meta.lastReboot) : summary.last_reboot ? formatDateTime(summary.last_reboot) : 'unknown'
-    },
-    { label: "Operating System", value: meta.operatingSystem || summary.operating_system || agent.agent_operating_system || 'unknown' },
-    { label: "Agent ID", value: meta.agentId || summary.agent_id || 'unknown' },
-    { label: "Agent GUID", value: meta.agentGuid || summary.agent_guid || 'unknown' },
-    { label: "Agent Hash", value: meta.agentHash || summary.agent_hash || 'unknown' },
-  ];
-
-  const MetricCard = ({ icon, title, main, sub, color }) => {
-    const edgeColor = color || '#232323';
-    const parseHex = (hex) => {
-      const v = String(hex || '').replace('#', '');
-      const n = parseInt(v.length === 3 ? v.split('').map(c => c + c).join('') : v, 16);
-      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-    };
-    const hexToRgba = (hex, alpha = 1) => {
-      try { const { r, g, b } = parseHex(hex); return `rgba(${r}, ${g}, ${b}, ${alpha})`; } catch { return `rgba(88,166,255, ${alpha})`; }
-    };
-    const lightenToRgba = (hex, p = 0.5, alpha = 1) => {
-      try {
-        const { r, g, b } = parseHex(hex);
-        const mix = (c) => Math.round(c + (255 - c) * p);
-        const R = mix(r), G = mix(g), B = mix(b);
-        return `rgba(${R}, ${G}, ${B}, ${alpha})`;
-      } catch { return hexToRgba('#58a6ff', alpha); }
-    };
-    return (
-      <Paper elevation={0} sx={{
-        px: 2, py: 1.5, borderRadius: 2, position: 'relative',
-        color: '#fff', minWidth: 260,
-        border: '1px solid #2f2f2f',
-        // Base color with subtle left-to-right Borealis-blue gradient overlay
-        background: `linear-gradient(90deg, rgba(88,166,255,0.12) 0%, rgba(88,166,255,0.06) 55%, rgba(88,166,255,0) 100%), ${edgeColor}`,
-        boxShadow: `inset 0 0 0 1px ${lightenToRgba(edgeColor, 0.35, 0.6)}`
-      }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-          {icon}
-          <Typography variant="caption" sx={{ opacity: 0.95, fontWeight: 700 }}>{title}</Typography>
-        </Box>
-      <Typography variant="h6" sx={{ lineHeight: 1.2, mb: 1 }}>{main}</Typography>
-      <Box sx={{ flexGrow: 1, minHeight: 12 }} />
-      <Box sx={{ minHeight: 8 }} />
-      {sub ? <Typography variant="body2" sx={{ opacity: 0.85 }}>{sub}</Typography> : null}
-      </Paper>
-    );
-  };
-
-  const Island = ({ title, children, sx }) => (
-    <Paper elevation={0} sx={{ p: 1.5, borderRadius: 2, bgcolor: '#1c1c1c', border: '1px solid #2a2a2a', mb: 1.5, ...(sx || {}) }}>
-      <Typography variant="caption" sx={{ color: '#58a6ff', fontWeight: 400, fontSize: '14px', letterSpacing: 0.2, display: 'block', mb: 1 }}>{title}</Typography>
-      {children}
-    </Paper>
+  const summaryItems = useMemo(
+    () => [
+      {
+        label: "Hostname",
+        value: meta.hostname || summary.hostname || agent.hostname || device?.hostname || "unknown",
+      },
+      {
+        label: "Last User",
+        value: meta.lastUser || summary.last_user || "unknown",
+      },
+      { label: "Device Type", value: meta.deviceType || summary.device_type || "unknown" },
+      {
+        label: "Created",
+        value: meta.created
+          ? formatDateTime(meta.created)
+          : summary.created
+            ? formatDateTime(summary.created)
+            : "unknown",
+      },
+      {
+        label: "Last Seen",
+        value: formatLastSeen(meta.lastSeen || agent.last_seen || device?.lastSeen),
+      },
+      {
+        label: "Last Reboot",
+        value: meta.lastReboot
+          ? formatDateTime(meta.lastReboot)
+          : summary.last_reboot
+            ? formatDateTime(summary.last_reboot)
+            : "unknown",
+      },
+      {
+        label: "Operating System",
+        value:
+          meta.operatingSystem || summary.operating_system || agent.agent_operating_system || "unknown",
+      },
+      { label: "Agent ID", value: meta.agentId || summary.agent_id || "unknown" },
+      { label: "Agent GUID", value: meta.agentGuid || summary.agent_guid || "unknown" },
+      { label: "Agent Hash", value: meta.agentHash || summary.agent_hash || "unknown" },
+    ],
+    [meta, summary, agent, device, formatDateTime, formatLastSeen]
   );
 
-  const renderSummary = () => {
-    // Derive metric values
-    // CPU tile: model as main, speed as sub (like screenshot)
-    const cpuMain = (cpuInfo.name || (summary.processor || '') || '').split('\n')[0] || 'Unknown CPU';
-    const cpuSub = cpuInfo.ghz || cpuInfo.cores
-      ? (
-          <span>
-            {cpuInfo.ghz ? `${Number(cpuInfo.ghz).toFixed(2)}GHz ` : ''}
-            {cpuInfo.cores ? <span style={{ opacity: 0.75 }}>({cpuInfo.cores}-Cores)</span> : null}
-          </span>
-        )
-      : '';
+  const summaryFieldWidth = useMemo(() => {
+    const longest = summaryItems.reduce((max, item) => Math.max(max, item.label.length), 0);
+    return Math.min(260, Math.max(160, longest * 8));
+  }, [summaryItems]);
 
-    // MEMORY: total RAM
+  const summaryGridColumns = useMemo(
+    () => [
+      {
+        field: "label",
+        headerName: "Field",
+        width: summaryFieldWidth,
+        flex: 0,
+        sortable: false,
+        filter: false,
+        suppressSizeToFit: true,
+      },
+      { field: "value", headerName: "Value", flex: 1, minWidth: 220, sortable: false, filter: "agTextColumnFilter" },
+    ],
+    [summaryFieldWidth]
+  );
+
+  const summaryGridRows = useMemo(
+    () =>
+      summaryItems.map((item, idx) => ({
+        id: `${item.label}-${idx}`,
+        label: item.label,
+        value: typeof item.value === "string" ? item.value : String(item.value),
+      })),
+    [summaryItems]
+  );
+
+  const defaultGridColDef = useMemo(
+    () => ({
+      sortable: true,
+      resizable: true,
+      filter: "agTextColumnFilter",
+      flex: 1,
+      minWidth: 140,
+    }),
+    []
+  );
+
+  const softwareColumnDefs = useMemo(
+    () => [
+      {
+        field: "name",
+        headerName: "Software Name",
+        flex: 1.2,
+        minWidth: 240,
+        filter: "agTextColumnFilter",
+      },
+      {
+        field: "version",
+        headerName: "Version",
+        width: 180,
+        minWidth: 160,
+        filter: "agTextColumnFilter",
+      },
+    ],
+    []
+  );
+
+  const historyColumnDefs = useMemo(
+    () => [
+      {
+        headerName: "Assembly",
+        field: "script_type",
+        minWidth: 180,
+        valueGetter: (params) =>
+          String(params.data?.script_type || "").toLowerCase() === "ansible"
+            ? "Ansible Playbook"
+            : "Script",
+      },
+      {
+        headerName: "Task",
+        field: "script_display_name",
+        flex: 1.2,
+        minWidth: 240,
+        filter: "agTextColumnFilter",
+      },
+      {
+        headerName: "Ran On",
+        field: "ran_at",
+        width: 210,
+        valueFormatter: (params) => formatTimestamp(params.value),
+        sort: "desc",
+        comparator: (a, b) => (a || 0) - (b || 0),
+      },
+      {
+        headerName: "Job Status",
+        field: "status",
+        width: 160,
+        cellRenderer: "StatusPillCell",
+      },
+      {
+        headerName: "StdOut / StdErr",
+        colId: "stdout",
+        width: 220,
+        sortable: false,
+        filter: false,
+        cellRenderer: "HistoryActionsCell",
+      },
+    ],
+    [formatTimestamp]
+  );
+
+  const MetricCard = ({ icon, title, main, sub, compact = false }) => (
+    <Box
+      sx={{
+        px: compact ? 1.5 : 2.4,
+        py: compact ? 1.4 : 2,
+        borderRadius: compact ? 2 : 3,
+        border: "1px solid rgba(255,255,255,0.08)",
+        background: MAGIC_UI.panelBg,
+        boxShadow: "0 20px 45px rgba(2,6,23,0.5)",
+        minWidth: compact ? 170 : 220,
+        minHeight: compact ? 110 : 140,
+        display: "flex",
+        flexDirection: "column",
+        gap: 0.75,
+      }}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Box
+          sx={{
+            width: 36,
+            height: 36,
+            borderRadius: 2,
+            background: "rgba(4,7,17,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#fff",
+          }}
+        >
+          {icon}
+        </Box>
+        <Typography
+          sx={{
+            fontSize: "0.75rem",
+            letterSpacing: 0.6,
+            textTransform: "uppercase",
+            color: "rgba(255,255,255,0.72)",
+            fontWeight: 600,
+          }}
+        >
+          {title}
+        </Typography>
+      </Box>
+        <Typography
+          sx={{
+            fontSize: compact ? "1.2rem" : { xs: "1.4rem", md: "1.6rem" },
+            fontWeight: 700,
+            color: "#f8fafc",
+            lineHeight: 1.1,
+          }}
+        >
+          {main}
+        </Typography>
+      {sub ? (
+        <Typography sx={{ fontSize: "0.9rem", color: "rgba(226,232,240,0.78)" }}>{sub}</Typography>
+      ) : null}
+    </Box>
+  );
+
+  const Island = ({ title, children, sx }) => (
+    <Box
+      sx={{
+        p: 2,
+        borderRadius: 3,
+        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        background: MAGIC_UI.panelBg,
+        boxShadow: "0 18px 40px rgba(2,6,23,0.55)",
+        mb: 1.5,
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+        ...(sx || {}),
+      }}
+    >
+      <Typography
+        variant="caption"
+        sx={{
+          color: MAGIC_UI.accentA,
+          fontWeight: 500,
+          fontSize: "0.9rem",
+          letterSpacing: 0.35,
+          textTransform: "uppercase",
+          display: "block",
+          mb: 1.5,
+        }}
+      >
+        {title}
+      </Typography>
+      <Box sx={{ flexGrow: 1, minHeight: 0 }}>{children}</Box>
+    </Box>
+  );
+
+  const deviceMetricData = useMemo(() => {
+    const cpuMain = (cpuInfo.name || (summary.processor || "") || "").split("\n")[0] || "Unknown CPU";
+    const cpuSub =
+      cpuInfo.ghz || cpuInfo.cores
+        ? `${cpuInfo.ghz ? `${Number(cpuInfo.ghz).toFixed(2)}GHz ` : ""}${
+            cpuInfo.cores ? `(${cpuInfo.cores}-Cores)` : ""
+          }`.trim()
+        : "";
     let totalRam = summary.total_ram;
     if (!totalRam && Array.isArray(details.memory)) {
-      try { totalRam = details.memory.reduce((a, m) => a + (Number(m.capacity || 0) || 0), 0); } catch {}
+      totalRam = details.memory.reduce((a, m) => a + (Number(m.capacity || 0) || 0), 0);
     }
-    const memVal = totalRam ? `${formatBytes(totalRam)}` : 'Unknown';
-    // RAM speed best-effort: use max speed among modules
-    let memSpeed = '';
+    const memVal = totalRam ? `${formatBytes(totalRam)}` : "Unknown";
+    let memSpeed = "";
     try {
       const speeds = (details.memory || [])
-        .map(m => parseInt(String(m.speed || '').replace(/[^0-9]/g, ''), 10))
-        .filter(v => !Number.isNaN(v) && v > 0);
+        .map((m) => parseInt(String(m.speed || "").replace(/[^0-9]/g, ""), 10))
+        .filter((v) => !Number.isNaN(v) && v > 0);
       if (speeds.length) memSpeed = `Speed: ${Math.max(...speeds)} MT/s`;
     } catch {}
-
-    // STORAGE: OS drive (Windows C: if available)
     let osDrive = null;
     if (Array.isArray(details.storage)) {
-      osDrive = details.storage.find((d) => String(d.drive || '').toUpperCase().startsWith('C:')) || details.storage[0] || null;
+      osDrive =
+        details.storage.find((d) => String(d.drive || "").toUpperCase().startsWith("C:")) ||
+        details.storage[0] ||
+        null;
     }
-    const storageMain = osDrive && osDrive.total != null ? `${formatBytes(osDrive.total)}` : 'Unknown';
-    const storageSub = (osDrive && osDrive.used != null && osDrive.total != null)
-      ? `${formatBytes(osDrive.used)} of ${formatBytes(osDrive.total)} used`
-      : (osDrive && osDrive.free != null && osDrive.total != null)
-        ? `${formatBytes(osDrive.total - osDrive.free)} of ${formatBytes(osDrive.total)} used`
-        : '';
-
-    // NETWORK: Speed of adapter with internal IP or first
-    const primaryIp = (summary.internal_ip || '').trim();
+    const storageMain = osDrive && osDrive.total != null ? `${formatBytes(osDrive.total)}` : "Unknown";
+    const storageSub =
+      osDrive && osDrive.used != null && osDrive.total != null
+        ? `${formatBytes(osDrive.used)} of ${formatBytes(osDrive.total)} used`
+        : osDrive && osDrive.free != null && osDrive.total != null
+          ? `${formatBytes(osDrive.total - osDrive.free)} of ${formatBytes(osDrive.total)} used`
+          : "";
+    const primaryIp = (summary.internal_ip || "").trim();
     let nic = null;
     if (Array.isArray(details.network)) {
       nic = details.network.find((n) => (n.ips || []).includes(primaryIp)) || details.network[0] || null;
     }
-    function normalizeSpeed(val) {
-      const s = String(val || '').trim();
-      if (!s) return 'unknown';
+    const normalizeSpeed = (val) => {
+      const s = String(val || "").trim();
+      if (!s) return "Unknown";
       const low = s.toLowerCase();
-      if (low.includes('gbps') || low.includes('mbps')) return s;
+      if (low.includes("gbps") || low.includes("mbps")) return s;
       const m = low.match(/(\d+\.?\d*)\s*([gmk]?)(bps)/);
       if (!m) return s;
       let num = parseFloat(m[1]);
       const unit = m[2];
-      if (unit === 'g') return `${num} Gbps`;
-      if (unit === 'm') return `${num} Mbps`;
-      if (unit === 'k') return `${(num/1000).toFixed(1)} Mbps`;
-      // raw bps
-      if (num >= 1e9) return `${(num/1e9).toFixed(1)} Gbps`;
-      if (num >= 1e6) return `${(num/1e6).toFixed(0)} Mbps`;
+      if (unit === "g") return `${num} Gbps`;
+      if (unit === "m") return `${num} Mbps`;
+      if (unit === "k") return `${(num / 1000).toFixed(1)} Mbps`;
+      if (num >= 1e9) return `${(num / 1e9).toFixed(1)} Gbps`;
+      if (num >= 1e6) return `${(num / 1e6).toFixed(0)} Mbps`;
       return s;
-    }
-    const netVal = nic ? normalizeSpeed(nic.link_speed || nic.speed) : 'Unknown';
+    };
+    const netVal = nic ? normalizeSpeed(nic.link_speed || nic.speed) : "Unknown";
+    return {
+      cpuMain,
+      cpuSub,
+      memVal,
+      memSpeed,
+      storageMain,
+      storageSub,
+      netVal,
+      nicLabel: nic?.adapter || " ",
+    };
+  }, [summary, details.memory, details.storage, details.network, cpuInfo]);
 
+  const renderDeviceSummaryTab = () => {
     return (
-      <Box>
-        {/* Metrics row at the very top */}
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat( auto-fit, minmax(260px, 1fr) )', gap: 1.5, mb: 2 }}>
-          <MetricCard
-            icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 32, opacity: 0.95 }} />}
-            title="Processor"
-            main={cpuMain}
-            sub={cpuSub}
-            color="#132332"  
+      <Box sx={{ display: "flex", flexDirection: "column", gap: 3, minHeight: 0 }}>
+        <Box
+          sx={{
+            borderRadius: 3,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            background: MAGIC_UI.panelBg,
+            boxShadow: MAGIC_UI.glow,
+            p: { xs: 2, md: 3 },
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            minHeight: 0,
+          }}
+        >
+          <TextField
+            size="small"
+            label="Description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            onBlur={saveDescription}
+            placeholder="Add a friendly label"
+            sx={{
+              maxWidth: 420,
+              input: { color: "#fff" },
+              "& .MuiOutlinedInput-root": {
+                backgroundColor: "rgba(4,7,17,0.65)",
+                "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
+                "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+              },
+              label: { color: MAGIC_UI.textMuted },
+            }}
           />
-          <MetricCard
-            icon={<MemoryRoundedIcon sx={{ fontSize: 32, opacity: 0.95 }} />}
-            title="Installed RAM"
-            main={memVal}
-            sub={memSpeed || ' '}
-            color="#291a2e"
-          />
-          <MetricCard
-            icon={<StorageRoundedIcon sx={{ fontSize: 32, opacity: 0.95 }} />}
-            title="Storage"
-            main={storageMain}
-            sub={storageSub || ' '}
-            color="#142616"
-          />
-          <MetricCard
-            icon={<SpeedRoundedIcon sx={{ fontSize: 32, opacity: 0.95 }} />}
-            title="Network"
-            main={netVal}
-            sub={(nic && nic.adapter) ? nic.adapter : ' '}
-            color="#2b1a18"
-          />
-        </Box>
-        {/* Split pane: three-column layout (Summary | Storage | Memory/Network) */}
-        <Box sx={{
-          display: 'grid',
-          gridTemplateColumns: { xs: '1fr', md: '1.2fr 1fr 1fr' },
-          gap: 2
-        }}>
-          {/* Left column: Summary table */}
-          <Island title="Device Summary">
-            <Box>
-              <Table size="small">
-                <TableBody>
-                  <TableRow>
-                    <TableCell sx={{ fontWeight: 500 }}>Description</TableCell>
-                    <TableCell>
-                      <TextField
-                        size="small"
-                        value={description}
-                        onChange={(e) => setDescription(e.target.value)}
-                        onBlur={saveDescription}
-                        placeholder="Enter description"
-                        sx={{
-                          input: { color: '#fff' },
-                          '& .MuiOutlinedInput-root': {
-                            '& fieldset': { borderColor: '#555' },
-                            '&:hover fieldset': { borderColor: '#888' }
-                          }
-                        }}
-                      />
-                    </TableCell>
-                  </TableRow>
-                  {connectionType === "ssh" && (
-                    <TableRow>
-                      <TableCell sx={{ fontWeight: 500 }}>SSH Endpoint</TableCell>
-                      <TableCell>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                          <TextField
-                            size="small"
-                            value={connectionDraft}
-                            onChange={(e) => setConnectionDraft(e.target.value)}
-                            placeholder="user@host or host"
-                            sx={{
-                              maxWidth: 300,
-                              input: { color: '#fff' },
-                              '& .MuiOutlinedInput-root': {
-                                '& fieldset': { borderColor: '#555' },
-                                '&:hover fieldset': { borderColor: '#888' }
-                              }
-                            }}
-                          />
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            sx={{ color: '#58a6ff', borderColor: '#58a6ff' }}
-                            onClick={saveConnectionEndpoint}
-                            disabled={connectionSaving || connectionDraft.trim() === connectionEndpoint.trim()}
-                          >
-                            {connectionSaving ? "Saving..." : "Save"}
-                          </Button>
-                        </Box>
-                        {connectionMessage && (
-                          <Typography variant="caption" sx={{ color: '#7db7ff' }}>{connectionMessage}</Typography>
-                        )}
-                        {connectionError && (
-                          <Typography variant="caption" sx={{ color: '#ff8080' }}>{connectionError}</Typography>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {summaryItems.map((item) => (
-                    <TableRow key={item.label}>
-                      <TableCell sx={{ fontWeight: 500 }}>{item.label}</TableCell>
-                      <TableCell>{item.value}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+          {connectionType === "ssh" && (
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, alignItems: "center" }}>
+              <TextField
+                size="small"
+                label="SSH Endpoint"
+                value={connectionDraft}
+                onChange={(e) => setConnectionDraft(e.target.value)}
+                placeholder="user@host or host"
+                sx={{
+                  minWidth: 260,
+                  maxWidth: 360,
+                  input: { color: "#fff" },
+                  "& .MuiOutlinedInput-root": {
+                    backgroundColor: "rgba(4,7,17,0.65)",
+                    "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
+                    "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+                  },
+                  label: { color: MAGIC_UI.textMuted },
+                }}
+              />
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={saveConnectionEndpoint}
+                disabled={connectionSaving || connectionDraft.trim() === connectionEndpoint.trim()}
+                sx={{
+                  textTransform: "none",
+                  borderColor: MAGIC_UI.accentA,
+                  color: MAGIC_UI.accentA,
+                  borderRadius: 999,
+                  px: 2,
+                }}
+              >
+                {connectionSaving ? "Saving..." : "Save"}
+              </Button>
+              <Box sx={{ display: "flex", flexDirection: "column" }}>
+                {connectionMessage && (
+                  <Typography variant="caption" sx={{ color: MAGIC_UI.accentA }}>
+                    {connectionMessage}
+                  </Typography>
+                )}
+                {connectionError && (
+                  <Typography variant="caption" sx={{ color: "#ff7b89" }}>
+                    {connectionError}
+                  </Typography>
+                )}
+              </Box>
             </Box>
-          </Island>
-
-          {/* Middle column: Storage */}
-          <Island title="Storage">{renderStorage()}</Island>
-
-          {/* Right column: Memory + Network */}
-          <Box>
-            <Island title="Memory">{renderMemory()}</Island>
-            <Island title="Network">{renderNetwork()}</Island>
-          </Box>
+          )}
+          <GridShell sx={{ flexGrow: 1, minHeight: 0, height: SECTION_HEIGHTS.summary }}>
+            <AgGridReact
+              rowData={summaryGridRows}
+              columnDefs={summaryGridColumns}
+              defaultColDef={defaultGridColDef}
+              pagination={false}
+              suppressCellFocus
+              getRowId={(params) => params.data?.id ?? params.rowIndex}
+              theme={myTheme}
+              style={{
+                width: "100%",
+                height: "100%",
+                fontFamily: gridFontFamily,
+              }}
+            />
+          </GridShell>
         </Box>
       </Box>
     );
   };
 
-  const placeholderTable = (headers) => (
-    <Box>
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            {headers.map((h) => (
-              <TableCell key={h}>{h}</TableCell>
-            ))}
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          <TableRow>
-            <TableCell colSpan={headers.length} sx={{ color: "#888" }}>
-              No data available.
-            </TableCell>
-          </TableRow>
-        </TableBody>
-      </Table>
+  const renderStorageTab = () => (
+    <GridShell sx={{ height: SECTION_HEIGHTS.storage }}>
+      <AgGridReact
+        rowData={storageRows}
+        columnDefs={storageColumnDefs}
+        defaultColDef={defaultGridColDef}
+        pagination={false}
+        suppressCellFocus
+        getRowId={(params) => params.data?.id ?? params.rowIndex}
+        theme={myTheme}
+        style={{
+          width: "100%",
+          height: "100%",
+          fontFamily: gridFontFamily,
+        }}
+      />
+    </GridShell>
+  );
+
+  const renderMemoryTab = () => (
+    <GridShell sx={{ height: SECTION_HEIGHTS.memory }}>
+      <AgGridReact
+        rowData={memoryRows}
+        columnDefs={memoryColumnDefs}
+        defaultColDef={defaultGridColDef}
+        pagination={false}
+        suppressCellFocus
+        getRowId={(params) => params.data?.id ?? params.rowIndex}
+        theme={myTheme}
+        style={{
+          width: "100%",
+          height: "100%",
+          fontFamily: gridFontFamily,
+        }}
+      />
+    </GridShell>
+  );
+
+  const renderNetworkTab = () => (
+    <GridShell sx={{ height: SECTION_HEIGHTS.network }}>
+      <AgGridReact
+        rowData={networkRows}
+        columnDefs={networkColumnDefs}
+        defaultColDef={defaultGridColDef}
+        pagination={false}
+        suppressCellFocus
+        getRowId={(params) => params.data?.id ?? params.rowIndex}
+        theme={myTheme}
+        style={{
+          width: "100%",
+          height: "100%",
+          fontFamily: gridFontFamily,
+        }}
+      />
+    </GridShell>
+  );
+
+  const renderSoftware = () => (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 1.5,
+        flexGrow: 1,
+        minHeight: 0,
+      }}
+    >
+      <TextField
+        size="small"
+        placeholder="Search software..."
+        value={softwareSearch}
+        onChange={(e) => setSoftwareSearch(e.target.value)}
+        sx={{
+          maxWidth: 320,
+          input: { color: "#fff" },
+          "& .MuiOutlinedInput-root": {
+            backgroundColor: "rgba(4,7,17,0.65)",
+            "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
+            "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+          },
+          "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
+        }}
+      />
+      <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
+        <AgGridReact
+          rowData={softwareRows}
+          columnDefs={softwareColumnDefs}
+          defaultColDef={defaultGridColDef}
+          pagination
+          paginationPageSize={20}
+          paginationPageSizeSelector={[20, 50, 100]}
+          animateRows
+          onGridReady={handleSoftwareGridReady}
+          getRowId={getSoftwareRowId}
+          components={GRID_COMPONENTS}
+          theme={myTheme}
+          style={{
+            width: "100%",
+            height: "100%",
+            fontFamily: gridFontFamily,
+            "--ag-icon-font-family": iconFontFamily,
+          }}
+        />
+      </GridShell>
     </Box>
   );
 
-  const renderSoftware = () => {
-    if (!softwareRows.length)
-      return placeholderTable(["Software Name", "Version", "Action"]);
+  const memoryRows = useMemo(
+    () =>
+      (details.memory || []).map((m, idx) => ({
+        id: `${m.slot || idx}`,
+        slot: m.slot || `BANK ${idx}`,
+        speed: m.speed || "unknown",
+        serial: m.serial || "unknown",
+        capacity: m.capacity,
+      })),
+    [details.memory]
+  );
 
-    return (
-      <Box sx={{ width: '100%' }}>
-        <Box sx={{ mb: 1, width: '100%' }}>
-          <TextField
-            size="small"
-            placeholder="Search software..."
-            value={softwareSearch}
-            onChange={(e) => setSoftwareSearch(e.target.value)}
-            sx={{
-              input: { color: "#fff" },
-              "& .MuiOutlinedInput-root": {
-                "& fieldset": { borderColor: "#555" },
-                "&:hover fieldset": { borderColor: "#888" }
-              }
-            }}
-          />
-        </Box>
-        {/* Constrain the table height within the page and enable scrolling */}
-        <Box
-          sx={{
-            width: '100%',
-            maxHeight: 'calc(100vh - 320px)',
-            overflow: 'auto',
-            pr: 1,
-          }}
-        >
-          <Table size="small" sx={{ width: '100%' }}>
-            <TableHead>
-              <TableRow>
-                <TableCell sortDirection={softwareOrderBy === "name" ? softwareOrder : false}>
-                  <TableSortLabel
-                    active={softwareOrderBy === "name"}
-                    direction={softwareOrderBy === "name" ? softwareOrder : "asc"}
-                    onClick={() => handleSoftwareSort("name")}
-                  >
-                    Software Name
-                  </TableSortLabel>
-                </TableCell>
-                <TableCell sortDirection={softwareOrderBy === "version" ? softwareOrder : false}>
-                  <TableSortLabel
-                    active={softwareOrderBy === "version"}
-                    direction={softwareOrderBy === "version" ? softwareOrder : "asc"}
-                    onClick={() => handleSoftwareSort("version")}
-                  >
-                    Version
-                  </TableSortLabel>
-                </TableCell>
-                <TableCell>Action</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {softwareRows.map((s, i) => (
-                <TableRow key={`${s.name}-${i}`}>
-                  <TableCell>{s.name}</TableCell>
-                  <TableCell>{s.version}</TableCell>
-                  <TableCell></TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Box>
-      </Box>
-    );
-  };
+  const memoryColumnDefs = useMemo(
+    () => [
+      { field: "slot", headerName: "Slot", width: 120, flex: 0, sortable: false },
+      { field: "speed", headerName: "Speed", width: 130, flex: 0, sortable: false },
+      { field: "serial", headerName: "Serial Number", width: 170, flex: 0, sortable: false },
+      {
+        field: "capacity",
+        headerName: "Capacity",
+        width: 140,
+        flex: 0,
+        valueFormatter: (params) => formatBytes(params.value),
+      },
+    ],
+    []
+  );
 
-  const renderMemory = () => {
-    const rows = details.memory || [];
-    if (!rows.length) return placeholderTable(["Slot", "Speed", "Serial Number", "Capacity"]);
-    return (
-      <Box>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Slot</TableCell>
-              <TableCell>Speed</TableCell>
-              <TableCell>Serial Number</TableCell>
-              <TableCell>Capacity</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {rows.map((m, i) => (
-              <TableRow key={`${m.slot}-${i}`}>
-                <TableCell>{m.slot}</TableCell>
-                <TableCell>{m.speed}</TableCell>
-                <TableCell>{m.serial}</TableCell>
-                <TableCell>{formatBytes(m.capacity)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Box>
-    );
-  };
-
-  const renderStorage = () => {
+  const storageRows = useMemo(() => {
     const toNum = (val) => {
       if (val === undefined || val === null) return undefined;
       if (typeof val === "number") {
@@ -944,152 +1302,102 @@ export default function DeviceDetails({ device, onBack }) {
       const n = parseFloat(String(val).replace(/[^0-9.]+/g, ""));
       return Number.isNaN(n) ? undefined : n;
     };
-
-    const rows = (details.storage || []).map((d) => {
+    return (details.storage || []).map((d, idx) => {
       const total = toNum(d.total);
       let usagePct = toNum(d.usage);
       let usedBytes = toNum(d.used);
       let freeBytes = toNum(d.free);
-      let freePct;
-
-      if (usagePct !== undefined) {
-        if (usagePct <= 1) usagePct *= 100;
-        freePct = 100 - usagePct;
-      }
-
+      if (usagePct !== undefined && usagePct <= 1) usagePct *= 100;
       if (usedBytes === undefined && total !== undefined && usagePct !== undefined) {
         usedBytes = (usagePct / 100) * total;
       }
-
       if (freeBytes === undefined && total !== undefined && usedBytes !== undefined) {
         freeBytes = total - usedBytes;
       }
-
-      if (freePct === undefined && total !== undefined && freeBytes !== undefined) {
-        freePct = (freeBytes / total) * 100;
+      if (usagePct === undefined && total && usedBytes !== undefined) {
+        usagePct = (usedBytes / total) * 100;
       }
-
-      if (usagePct === undefined && freePct !== undefined) {
-        usagePct = 100 - freePct;
-      }
-
       return {
-        drive: d.drive,
-        disk_type: d.disk_type,
-        used: usedBytes,
-        freePct,
-        freeBytes,
+        id: `${d.drive || idx}`,
+        driveLabel: `Drive ${String(d.drive || "").replace("\\\\", "")}`,
+        disk_type: d.disk_type || "Fixed Disk",
         total,
+        used: usedBytes,
+        freeBytes,
         usage: usagePct,
       };
     });
+  }, [details.storage]);
 
-    if (!rows.length) {
-      return placeholderTable(["Drive", "Type", "Capacity"]);
-    }
+  const storageColumnDefs = useMemo(
+    () => [
+      {
+        field: "driveLabel",
+        headerName: "Drive",
+        width: 130,
+        flex: 0,
+        sortable: false,
+        filter: "agTextColumnFilter",
+      },
+      { field: "disk_type", headerName: "Type", width: 120, flex: 0, sortable: false },
+      {
+        field: "total",
+        headerName: "Capacity",
+        valueFormatter: (params) => formatBytes(params.value),
+        width: 140,
+        flex: 0,
+      },
+      {
+        field: "used",
+        headerName: "Used",
+        valueFormatter: (params) => formatBytes(params.value),
+        width: 130,
+        flex: 0,
+      },
+      {
+        field: "freeBytes",
+        headerName: "Free",
+        valueFormatter: (params) => formatBytes(params.value),
+        width: 130,
+        flex: 0,
+      },
+      {
+        field: "usage",
+        headerName: "Usage",
+        valueFormatter: (params) =>
+          params.value === undefined || Number.isNaN(params.value) ? "unknown" : `${Math.round(params.value)}%`,
+        width: 110,
+        flex: 0,
+      },
+    ],
+    []
+  );
 
-    const fmtPct = (v) => (v !== undefined && !Number.isNaN(v) ? `${v.toFixed(0)}%` : "unknown");
+  const networkRows = useMemo(
+    () =>
+      (details.network || []).map((n, idx) => ({
+        id: `${n.adapter || idx}`,
+        adapter: n.adapter || "Adapter",
+        ips: (n.ips || []).join(", "),
+        mac: formatMac(n.mac),
+        link_speed: n.link_speed || n.speed || "unknown",
+        internalIp: meta.internalIp || summary.internal_ip || "unknown",
+        externalIp: meta.externalIp || summary.external_ip || "unknown",
+      })),
+    [details.network, meta.internalIp, meta.externalIp, summary.internal_ip, summary.external_ip]
+  );
 
-    return (
-      <Box>
-        {rows.map((d, i) => {
-          const usage = d.usage ?? (d.total ? ((d.used || 0) / d.total) * 100 : 0);
-          const used = d.used;
-          const free = d.freeBytes;
-          const total = d.total;
-          return (
-            <Box key={`${d.drive}-${i}`} sx={{ p: 1, borderBottom: '1px solid #2a2a2a', '&:last-child': { borderBottom: 'none' } }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-                  <Box sx={{ width: 8, height: 8, bgcolor: '#58a6ff', borderRadius: 0.5 }} />
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{`Drive ${String(d.drive || '').replace('\\', '')}`}</Typography>
-                  <Typography variant="caption" sx={{ opacity: 0.7 }}>{d.disk_type || 'Fixed Disk'}</Typography>
-                </Box>
-                <Typography variant="body2" sx={{ opacity: 0.9 }}>{total !== undefined ? formatBytes(total) : 'unknown'}</Typography>
-              </Box>
-              <Box sx={{
-                position: 'relative', height: 8, borderRadius: 1,
-                bgcolor: '#2b2b2b',
-                background: 'linear-gradient(180deg, #323232 0%, #2a2a2a 100%)',
-                boxShadow: 'inset 0 0 0 1px #3a3a3a, inset 0 1px 0 rgba(255,255,255,0.06)'
-              }}>
-                <Box sx={{
-                  position: 'absolute', left: 0, top: 0, bottom: 0,
-                  width: `${Math.max(0, Math.min(100, usage || 0)).toFixed(0)}%`,
-                  borderRadius: 1,
-                  background: 'linear-gradient(90deg, rgba(0,209,140,0.95) 0%, rgba(0,209,140,0.80) 45%, rgba(0,209,140,0.70) 100%)',
-                  boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.15), 0 0 6px rgba(0,209,140,0.25)'
-                }} />
-              </Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.75 }}>
-                <Typography variant="caption" sx={{ opacity: 0.85 }}>
-                  {used !== undefined ? `${formatBytes(used)} - ${fmtPct(usage)} in use` : 'unknown'}
-                </Typography>
-                <Typography variant="caption" sx={{ opacity: 0.85 }}>
-                  {free !== undefined && total !== undefined ? `${formatBytes(free)} - ${fmtPct(100 - (usage || 0))} remaining` : ''}
-                </Typography>
-              </Box>
-            </Box>
-          );
-        })}
-      </Box>
-    );
-  };
-
-  const renderNetwork = () => {
-    const rows = details.network || [];
-    const internalIp = meta.internalIp || summary.internal_ip || "unknown";
-    const externalIp = meta.externalIp || summary.external_ip || "unknown";
-    const ipHeader = (
-      <Box sx={{ mb: rows.length ? 1.5 : 1 }}>
-        <Typography variant="body2" sx={{ display: 'block', opacity: 0.9 }}>
-          Internal IP: {internalIp || 'unknown'}
-        </Typography>
-        <Typography variant="body2" sx={{ display: 'block', opacity: 0.9 }}>
-          External IP: {externalIp || 'unknown'}
-        </Typography>
-      </Box>
-    );
-    if (!rows.length) {
-      return (
-        <Box>
-          {ipHeader}
-          {placeholderTable(["Adapter", "IP Address", "MAC Address"])}
-        </Box>
-      );
-    }
-    return (
-      <Box>
-        {ipHeader}
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Adapter</TableCell>
-              <TableCell>IP Address</TableCell>
-              <TableCell>MAC Address</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {rows.map((n, i) => (
-              <TableRow key={`${n.adapter}-${i}`}>
-                <TableCell>{n.adapter}</TableCell>
-                <TableCell>{(n.ips || []).join(", ")}</TableCell>
-                <TableCell>{formatMac(n.mac)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Box>
-    );
-  };
-
-  const jobStatusColor = (s) => {
-    const val = String(s || "").toLowerCase();
-    if (val === "running") return "#58a6ff"; // borealis blue
-    if (val === "success") return "#00d18c";
-    if (val === "failed") return "#ff4f4f";
-    return "#666";
-  };
+  const networkColumnDefs = useMemo(
+    () => [
+      { field: "adapter", headerName: "Adapter", width: 170, flex: 0 },
+      { field: "ips", headerName: "IP Address(es)", width: 220, flex: 0 },
+      { field: "mac", headerName: "MAC Address", width: 160, flex: 0 },
+      { field: "internalIp", headerName: "Internal IP", width: 150, flex: 0 },
+      { field: "externalIp", headerName: "External IP", width: 150, flex: 0 },
+      { field: "link_speed", headerName: "Link Speed", width: 140, flex: 0 },
+    ],
+    []
+  );
 
   const highlightCode = (code, lang) => {
     try {
@@ -1119,13 +1427,27 @@ export default function DeviceDetails({ device, onBack }) {
     }
   }, [resolveAssemblyName]);
 
-  const handleHistorySort = (col) => {
-    if (historyOrderBy === col) setHistoryOrder(historyOrder === "asc" ? "desc" : "asc");
-    else {
-      setHistoryOrderBy(col);
-      setHistoryOrder("asc");
+  const handleCancelAnsibleRun = useCallback(async (row) => {
+    if (!row?.id) return;
+    try {
+      const resp = await fetch(`/api/ansible/run_for_activity/${encodeURIComponent(row.id)}`);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      const runId = data.run_id;
+      if (runId) {
+        try {
+          const socket = window.BorealisSocket;
+          socket && socket.emit("ansible_playbook_cancel", { run_id: runId });
+        } catch {
+          /* ignore socket errors */
+        }
+      } else {
+        alert("Unable to locate run id for this playbook run.");
+      }
+    } catch (e) {
+      alert(String(e.message || e));
     }
-  };
+  }, []);
 
   const historyDisplayRows = useMemo(() => {
     return (historyRows || []).map((row) => ({
@@ -1134,161 +1456,171 @@ export default function DeviceDetails({ device, onBack }) {
     }));
   }, [historyRows, resolveAssemblyName]);
 
-  const sortedHistory = useMemo(() => {
-    const dir = historyOrder === "asc" ? 1 : -1;
-    const key = historyOrderBy === "script_name" ? "script_display_name" : historyOrderBy;
-    return [...historyDisplayRows].sort((a, b) => {
-      const A = a[key];
-      const B = b[key];
-      if (key === "ran_at") return ((A || 0) - (B || 0)) * dir;
-      return String(A ?? "").localeCompare(String(B ?? "")) * dir;
-    });
-  }, [historyDisplayRows, historyOrderBy, historyOrder]);
+  const getHistoryRowId = useCallback((params) => String(params.data?.id || params.rowIndex), []);
+
+  const historyGridContext = useMemo(
+    () => ({
+      onViewOutput: handleViewOutput,
+      onCancelAnsible: handleCancelAnsibleRun,
+    }),
+    [handleViewOutput, handleCancelAnsibleRun]
+  );
+
 
   const renderHistory = () => (
-    <Box>
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Assembly</TableCell>
-            <TableCell sortDirection={historyOrderBy === "script_name" ? historyOrder : false}>
-              <TableSortLabel active={historyOrderBy === "script_name"} direction={historyOrderBy === "script_name" ? historyOrder : "asc"} onClick={() => handleHistorySort("script_name")}>
-                Task
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={historyOrderBy === "ran_at" ? historyOrder : false}>
-              <TableSortLabel
-                active={historyOrderBy === "ran_at"}
-                direction={historyOrderBy === "ran_at" ? historyOrder : "asc"}
-                onClick={() => handleHistorySort("ran_at")}
-              >
-                Ran On
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={historyOrderBy === "status" ? historyOrder : false}>
-              <TableSortLabel
-                active={historyOrderBy === "status"}
-                direction={historyOrderBy === "status" ? historyOrder : "asc"}
-                onClick={() => handleHistorySort("status")}
-              >
-                Job Status
-              </TableSortLabel>
-            </TableCell>
-            <TableCell>
-              StdOut / StdErr
-            </TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {sortedHistory.map((r) => (
-            <TableRow key={r.id}>
-              <TableCell>{(r.script_type || '').toLowerCase() === 'ansible' ? 'Ansible Playbook' : 'Script'}</TableCell>
-            <TableCell>{r.script_display_name || r.script_name}</TableCell>
-              <TableCell>{formatTimestamp(r.ran_at)}</TableCell>
-              <TableCell>
-                <Box sx={{
-                  display: "inline-block",
-                  px: 1.2,
-                  py: 0.25,
-                  borderRadius: 999,
-                  bgcolor: jobStatusColor(r.status),
-                  color: "#fff",
-                  fontWeight: 600,
-                  fontSize: "12px"
-                }}>
-                  {r.status}
-                </Box>
-              </TableCell>
-              <TableCell>
-                <Box sx={{ display: "flex", gap: 1 }}>
-                  {(String(r.script_type || '').toLowerCase() === 'ansible' && String(r.status||'') === 'Running') ? (
-                    <Button size="small" sx={{ color: "#ff6666", textTransform: "none", minWidth: 0, p: 0 }}
-                      onClick={async () => {
-                        try {
-                          const resp = await fetch(`/api/ansible/run_for_activity/${encodeURIComponent(r.id)}`);
-                          const data = await resp.json();
-                          if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-                          const run_id = data.run_id;
-                          if (run_id) {
-                            try { const s = window.BorealisSocket; s && s.emit('ansible_playbook_cancel', { run_id }); } catch {}
-                          } else {
-                            alert('Unable to locate run id for this playbook run.');
-                          }
-                        } catch (e) {
-                          alert(String(e.message || e));
-                        }
-                      }}>Cancel</Button>
-                  ) : null}
-                  {r.has_stdout ? (
-                    <Button size="small" onClick={() => handleViewOutput(r, 'stdout')} sx={{ color: "#58a6ff", textTransform: "none", minWidth: 0, p: 0 }}>
-                      StdOut
-                    </Button>
-                  ) : null}
-                  {r.has_stderr ? (
-                    <Button size="small" onClick={() => handleViewOutput(r, 'stderr')} sx={{ color: "#ff4f4f", textTransform: "none", minWidth: 0, p: 0 }}>
-                      StdErr
-                    </Button>
-                  ) : null}
-                </Box>
-              </TableCell>
-            </TableRow>
-          ))}
-          {sortedHistory.length === 0 && (
-            <TableRow><TableCell colSpan={5} sx={{ color: "#888" }}>No activity yet.</TableCell></TableRow>
-          )}
-        </TableBody>
-      </Table>
-    </Box>
+    <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
+      <AgGridReact
+        rowData={historyDisplayRows}
+        columnDefs={historyColumnDefs}
+        defaultColDef={defaultGridColDef}
+        pagination
+        paginationPageSize={20}
+        paginationPageSizeSelector={[20, 50, 100]}
+        animateRows
+        components={GRID_COMPONENTS}
+        context={historyGridContext}
+        getRowId={getHistoryRowId}
+        suppressCellFocus
+        theme={myTheme}
+        style={{
+          width: "100%",
+          height: "100%",
+          fontFamily: gridFontFamily,
+          "--ag-icon-font-family": iconFontFamily,
+        }}
+      />
+    </GridShell>
   );
 
   
 
-  const tabs = [
-    { label: "Summary", content: renderSummary() },
-    { label: "Installed Software", content: renderSoftware() },
-    { label: "Activity History", content: renderHistory() }
-  ];
-  // Use the snapshotted status so it stays static while on this page
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
 
+  const topTabRenderers = [
+    renderDeviceSummaryTab,
+    renderStorageTab,
+    renderMemoryTab,
+    renderNetworkTab,
+    renderSoftware,
+    renderHistory,
+  ];
+  const tabContent = (topTabRenderers[tab] || renderDeviceSummaryTab)();
+
   return (
-    <Paper sx={{ m: 2, p: 2, bgcolor: "#1e1e1e" }} elevation={2}>
-      <Box sx={{ mb: 2, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <Box sx={{ display: "flex", alignItems: "center" }}>
+    <Box
+      sx={{
+        m: 0,
+        p: { xs: 2, md: 3 },
+        borderRadius: 0,
+        background: MAGIC_UI.shellBg,
+        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        boxShadow: MAGIC_UI.glow,
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minWidth: 0,
+        height: "100%",
+      }}
+    >
+      <Box
+        sx={{
+          mb: 3,
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", lg: "1.5fr auto auto" },
+          alignItems: "center",
+          gap: 2,
+        }}
+      >
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap", minWidth: 0 }}>
           {onBack && (
-            <Button variant="outlined" size="small" onClick={onBack} sx={{ mr: 2 }}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={onBack}
+              sx={{
+                textTransform: "none",
+                borderColor: "rgba(148,163,184,0.45)",
+                color: MAGIC_UI.textBright,
+                borderRadius: 999,
+                px: 2,
+              }}
+            >
               Back
             </Button>
           )}
-          <Typography
-            variant="h6"
-            sx={{ color: "#58a6ff", display: "flex", alignItems: "center" }}
-          >
-            <span
-              style={{
-                display: "inline-block",
-                width: 10,
-                height: 10,
-                borderRadius: 10,
-                background: statusColor(status),
-                marginRight: 8,
-              }}
-            />
-            {agent.hostname || "Device Details"}
-          </Typography>
+          <Box>
+            <Typography
+              variant="h6"
+              sx={{ color: MAGIC_UI.textBright, display: "flex", alignItems: "center", gap: 1 }}
+            >
+              <Box
+                component="span"
+                sx={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 10,
+                  backgroundColor: statusColor(status),
+                  boxShadow: `0 0 12px ${statusColor(status)}`,
+                }}
+              />
+              {agent.hostname || "Device Details"}
+            </Typography>
+            <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
+              GUID: {meta.agentGuid || summary.agent_guid || "unknown"}
+            </Typography>
+          </Box>
         </Box>
-        <Box>
+
+        <Box
+          sx={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 1.2,
+            justifyContent: { xs: "flex-start", lg: "center" },
+          }}
+        >
+          <MetricCard
+            compact
+            icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 24 }} />}
+            title="Processor"
+            main={deviceMetricData.cpuMain}
+            sub={deviceMetricData.cpuSub}
+          />
+          <MetricCard
+            compact
+            icon={<MemoryRoundedIcon sx={{ fontSize: 24 }} />}
+            title="RAM"
+            main={deviceMetricData.memVal}
+            sub={deviceMetricData.memSpeed || " "}
+          />
+          <MetricCard
+            compact
+            icon={<StorageRoundedIcon sx={{ fontSize: 24 }} />}
+            title="Storage"
+            main={deviceMetricData.storageMain}
+            sub={deviceMetricData.storageSub || " "}
+          />
+          <MetricCard
+            compact
+            icon={<SpeedRoundedIcon sx={{ fontSize: 24 }} />}
+            title="Network"
+            main={deviceMetricData.netVal}
+            sub={deviceMetricData.nicLabel}
+          />
+        </Box>
+
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, justifyContent: "flex-end" }}>
           <IconButton
             size="small"
             disabled={!(agent?.hostname || device?.hostname)}
             onClick={(e) => setMenuAnchor(e.currentTarget)}
             sx={{
-              color: !(agent?.hostname || device?.hostname) ? "#666" : "#58a6ff",
-              borderColor: !(agent?.hostname || device?.hostname) ? "#333" : "#58a6ff",
-              border: "1px solid",
-              borderRadius: 1,
-              width: 32,
-              height: 32
+              color: !(agent?.hostname || device?.hostname) ? MAGIC_UI.textMuted : MAGIC_UI.textBright,
+              border: "1px solid rgba(148,163,184,0.45)",
+              borderRadius: 2,
+              width: 38,
+              height: 38,
+              backgroundColor: "rgba(4,7,17,0.6)",
             }}
           >
             <MoreHorizIcon fontSize="small" />
@@ -1297,6 +1629,13 @@ export default function DeviceDetails({ device, onBack }) {
             anchorEl={menuAnchor}
             open={Boolean(menuAnchor)}
             onClose={() => setMenuAnchor(null)}
+            PaperProps={{
+              sx: {
+                bgcolor: "rgba(8,12,24,0.96)",
+                color: "#fff",
+                border: `1px solid ${MAGIC_UI.panelBorder}`,
+              },
+            }}
           >
             <MenuItem
               onClick={() => {
@@ -1320,58 +1659,101 @@ export default function DeviceDetails({ device, onBack }) {
       <Tabs
         value={tab}
         onChange={(e, v) => setTab(v)}
-        sx={{ borderBottom: 1, borderColor: "#333" }}
+        variant="scrollable"
+        scrollButtons="auto"
+        TabIndicatorProps={{
+          style: {
+            height: 3,
+            borderRadius: 3,
+            background: "linear-gradient(90deg, #7dd3fc, #c084fc)",
+          },
+        }}
+        sx={{
+          borderBottom: `1px solid rgba(148,163,184,0.35)`,
+          mb: 2,
+          "& .MuiTab-root": {
+            color: MAGIC_UI.textMuted,
+            textTransform: "none",
+            fontWeight: 600,
+          },
+          "& .Mui-selected": { color: MAGIC_UI.textBright },
+        }}
       >
-        {tabs.map((t) => (
-          <Tab key={t.label} label={t.label} />
+        {TOP_TABS.map((label) => (
+          <Tab key={label} label={label} />
         ))}
       </Tabs>
-      <Box sx={{ mt: 2 }}>{tabs[tab].content}</Box>
+      <Box sx={{ mt: 1, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        {tabContent}
+      </Box>
 
-      <Dialog open={outputOpen} onClose={() => setOutputOpen(false)} fullWidth maxWidth="md"
-        PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+      <Dialog
+        open={outputOpen}
+        onClose={() => setOutputOpen(false)}
+        fullWidth
+        maxWidth="md"
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.96)",
+            color: "#fff",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            boxShadow: "0 25px 80px rgba(2,6,23,0.85)",
+          },
+        }}
       >
         <DialogTitle>{outputTitle}</DialogTitle>
         <DialogContent>
-          <Box sx={{ border: "1px solid #333", borderRadius: 1, bgcolor: "#1e1e1e", maxHeight: 500, overflow: "auto" }}>
+          <Box
+            sx={{
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              borderRadius: 2,
+              bgcolor: "rgba(4,7,17,0.65)",
+              maxHeight: 500,
+              overflow: "auto",
+            }}
+          >
             <Editor
               value={outputContent}
               onValueChange={() => {}}
               highlight={(code) => highlightCode(code, outputLang)}
               padding={12}
               style={{
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                fontFamily:
+                  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
                 fontSize: 12,
                 color: "#e6edf3",
-                minHeight: 200
+                minHeight: 200,
               }}
               textareaProps={{ readOnly: true }}
             />
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOutputOpen(false)} sx={{ color: "#58a6ff" }}>Close</Button>
+          <Button
+            onClick={() => setOutputOpen(false)}
+            sx={{ color: MAGIC_UI.accentA, textTransform: "none" }}
+          >
+            Close
+          </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Recap dialog removed; recaps flow into Activity History stdout */}
+      <ClearDeviceActivityDialog
+        open={clearDialogOpen}
+        onCancel={() => setClearDialogOpen(false)}
+        onConfirm={() => {
+          clearHistory();
+          setClearDialogOpen(false);
+        }}
+      />
 
-        <ClearDeviceActivityDialog
-          open={clearDialogOpen}
-          onCancel={() => setClearDialogOpen(false)}
-          onConfirm={() => {
-            clearHistory();
-            setClearDialogOpen(false);
-          }}
+      {quickJobOpen && (
+        <QuickJob
+          open={quickJobOpen}
+          onClose={() => setQuickJobOpen(false)}
+          hostnames={[agent?.hostname || device?.hostname].filter(Boolean)}
         />
-
-        {quickJobOpen && (
-          <QuickJob
-            open={quickJobOpen}
-            onClose={() => setQuickJobOpen(false)}
-            hostnames={[agent?.hostname || device?.hostname].filter(Boolean)}
-          />
-        )}
-      </Paper>
-    );
-  }
+      )}
+    </Box>
+  );
+}
