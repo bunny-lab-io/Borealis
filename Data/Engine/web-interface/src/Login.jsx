@@ -1,7 +1,17 @@
 import React, { useMemo, useState } from "react";
 import { Box, TextField, Button, Typography } from "@mui/material";
 
+/**
+ * Borealis MagicUI Login
+ * - Preserves original auth + MFA logic
+ * - Adds MagicUI-inspired visuals:
+ *    • Aurora gradient background
+ *    • Flickering Grid backdrop
+ *    • ShineBorder card container
+ * - Minimal, component-local CSS (no external deps)
+ */
 export default function Login({ onLogin }) {
+  // ----------------- Original state & logic -----------------
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -156,179 +166,337 @@ export default function Login({ onLogin }) {
     ? "Multi-Factor Authentication"
     : "Borealis - Automation Platform";
 
+  // ----------------- UI helpers -----------------
+  const FieldLabel = ({ children }) => (
+    <Typography variant="caption" sx={{ color: "var(--text-dim)", letterSpacing: ".04em", display: "block", mt: 1.4, mb: 0.1 }}>
+      {children}
+    </Typography>
+  );
+
   return (
-    <Box
-      sx={{
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        height: "100vh",
-        backgroundColor: "#2b2b2b",
-      }}
-    >
-      <Box
-        component="form"
-        onSubmit={step === "mfa" ? handleMfaSubmit : handleCredentialsSubmit}
-        sx={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          width: 320,
-        }}
-      >
-        <img
-          src="/Borealis_Logo.png"
-          alt="Borealis Logo"
-          style={{ width: "120px", marginBottom: "16px" }}
-        />
-        <Typography variant="h6" sx={{ mb: 2, textAlign: "center" }}>
-          {formTitle}
-        </Typography>
+    <>
+      {/* Component-scoped styles for MagicUI effects */}
+      <style>{`
+        :root {
+          --bg: #0b0e14;
+          --panel: #0f1320;
+          --text: #e6f1ff;
+          --text-dim: #9ab0c8;
+          --accent: #58a6ff;
+          --accent-2: #a78bfa; /* purple */
+          --accent-3: #22d3ee; /* cyan */
+          --radius-xl: 20px;
+          --card-w: min(92vw, 420px);
+        }
 
-        {step === "credentials" ? (
-          <>
-            <TextField
-              label="Username"
-              variant="outlined"
-              fullWidth
-              value={username}
-              disabled={isSubmitting}
-              onChange={(e) => setUsername(e.target.value)}
-              margin="normal"
-            />
-            <TextField
-              label="Password"
-              type="password"
-              variant="outlined"
-              fullWidth
-              value={password}
-              disabled={isSubmitting}
-              onChange={(e) => setPassword(e.target.value)}
-              margin="normal"
-            />
-            {error && (
-              <Typography color="error" sx={{ mt: 1 }}>
-                {error}
-              </Typography>
-            )}
-            <Button
-              type="submit"
-              variant="contained"
-              fullWidth
-              disabled={isSubmitting}
-              sx={{ mt: 2, bgcolor: "#58a6ff", "&:hover": { bgcolor: "#1d82d3" } }}
-            >
-              {isSubmitting ? "Signing In..." : "Login"}
-            </Button>
-          </>
-        ) : (
-          <>
-            {mfaStage === "setup" ? (
-              <>
-                <Typography variant="body2" sx={{ color: "#ccc", textAlign: "center", mb: 2 }}>
-                  Scan the QR code with your authenticator app, then enter the 6-digit code to complete setup for {username}.
-                </Typography>
-                {setupQr ? (
-                  <Box sx={{ display: "flex", justifyContent: "center", mb: 1.5 }}>
-                    <img
-                      src={setupQr}
-                      alt="MFA enrollment QR code"
-                      style={{ width: "180px", height: "180px" }}
-                    />
-                  </Box>
-                ) : null}
-                {formattedSecret ? (
-                  <Box
-                    sx={{
-                      bgcolor: "#1d1d1d",
-                      borderRadius: 1,
-                      px: 2,
-                      py: 1,
-                      mb: 1.5,
-                      width: "100%",
-                    }}
-                  >
-                    <Typography variant="caption" sx={{ color: "#999" }}>
-                      Manual code
-                    </Typography>
-                    <Typography
-                      variant="body1"
-                      sx={{
-                        fontFamily: "monospace",
-                        letterSpacing: "0.3rem",
-                        color: "#fff",
-                        mt: 0.5,
-                        textAlign: "center",
-                        wordBreak: "break-word",
-                      }}
-                    >
-                      {formattedSecret}
-                    </Typography>
-                  </Box>
-                ) : null}
-                {setupUri ? (
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      color: "#888",
-                      mb: 2,
-                      wordBreak: "break-all",
-                      textAlign: "center",
-                    }}
-                  >
-                    {setupUri}
-                  </Typography>
-                ) : null}
-              </>
-            ) : (
-              <Typography variant="body2" sx={{ color: "#ccc", textAlign: "center", mb: 2 }}>
-                Enter the 6-digit code from your authenticator app for {username}.
-              </Typography>
-            )}
+        .login-wrap {
+          position: relative;
+          display: grid;
+          place-items: center;
+          min-height: 100vh;
+          background: radial-gradient(1200px 800px at 80% 20%, rgba(75,0,130,.18), transparent 60%),
+                      radial-gradient(900px 700px at 10% 90%, rgba(0,128,128,.16), transparent 60%),
+                      linear-gradient(160deg, #0b0e14 0%, #0a0f1f 50%, #0b0e14 100%);
+          overflow: hidden;
+          isolation: isolate;
+        }
 
-            <TextField
-              label="6-digit code"
-              variant="outlined"
-              fullWidth
-              value={mfaCode}
-              onChange={onCodeChange}
-              disabled={isSubmitting}
-              margin="normal"
-              inputProps={{
-                inputMode: "numeric",
-                pattern: "[0-9]*",
-                maxLength: 6,
-                style: { letterSpacing: "0.4rem", textAlign: "center", fontSize: "1.2rem" }
-              }}
-              autoComplete="one-time-code"
-            />
-            {error && (
-              <Typography color="error" sx={{ mt: 1, textAlign: "center" }}>
-                {error}
+        /* Aurora blobs */
+        .aurora {
+          position: absolute;
+          inset: -20% -20% -20% -20%;
+          pointer-events: none;
+          z-index: 0;
+          filter: blur(40px) saturate(120%);
+          opacity: .7;
+          background:
+            radial-gradient(650px 380px at 10% 20%, rgba(88,166,255,.25), transparent 60%),
+            radial-gradient(700px 420px at 80% 10%, rgba(167,139,250,.18), transparent 60%),
+            radial-gradient(600px 360px at 70% 90%, rgba(34,211,238,.18), transparent 60%);
+          animation: auroraShift 22s ease-in-out infinite alternate;
+        }
+        @keyframes auroraShift {
+          0%   { transform: translate3d(-3%, -2%, 0) scale(1.02); }
+          50%  { transform: translate3d(2%, 1%, 0) scale(1.04); }
+          100% { transform: translate3d(-1%, 3%, 0) scale(1.03); }
+        }
+
+        /* Flickering grid */
+        .grid {
+          position: absolute;
+          inset: 0;
+          background-image:
+            linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+          background-size: 32px 32px, 32px 32px;
+          mask-image: radial-gradient(60% 60% at 50% 50%, black 60%, transparent 100%);
+          z-index: 1;
+        }
+        .grid::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background:
+            repeating-radial-gradient(circle at 30% 30%, rgba(88,166,255,0.04) 0 2px, transparent 2px 6px);
+          mix-blend-mode: screen;
+          animation: flicker 4s infinite steps(60);
+          opacity: .7;
+        }
+        @keyframes flicker {
+          0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% { opacity: .75 }
+          20%, 24%, 55% { opacity: .45 }
+        }
+
+        /* Shine border container */
+        .shine {
+          position: relative;
+          width: var(--card-w);
+          border-radius: var(--radius-xl);
+          padding: 1px; /* border thickness */
+          background:
+            conic-gradient(from 0deg,
+              rgba(88,166,255,.0),
+              rgba(88,166,255,.45),
+              rgba(34,211,238,.0),
+              rgba(167,139,250,.45),
+              rgba(34,211,238,.0),
+              rgba(88,166,255,.45),
+              rgba(167,139,250,.0));
+          -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          -webkit-mask-composite: xor;
+                  mask-composite: exclude;
+          /* rotation disabled per bugfix */
+          box-shadow:
+            0 0 0 1px rgba(255,255,255,0.06) inset,
+            0 10px 30px rgba(0,0,0,.5);
+          z-index: 2;
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        .shine-inner {
+          border-radius: inherit;
+          background: linear-gradient(180deg, rgba(17,22,36,.9), rgba(11,14,20,.9));
+          backdrop-filter: blur(10px);
+          padding: 28px 24px;
+        }
+
+        .brand {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 8px;
+        }
+        .brand img { height: 32px; width: auto; }
+        .brand-title {
+          font-weight: 700;
+          letter-spacing: .04em;
+          color: var(--text);
+          font-size: 0.95rem;
+          text-transform: uppercase;
+          opacity: .9;
+        }
+
+        .title {
+          margin: 0 0 8px 0;
+          color: var(--text);
+          text-align: center;
+          font-weight: 700;
+          letter-spacing: .02em;
+        }
+
+        .helper {
+          color: var(--text-dim);
+          text-align: center;
+          margin-bottom: 8px;
+        }
+
+        .submit {
+          margin-top: 12px;
+          background: linear-gradient(135deg, #34d399, #22d3ee);
+          color: #0b0e14;
+          font-weight: 700;
+          text-transform: none;
+          border-radius: 14px;
+          box-shadow: 0 8px 18px rgba(88,166,255,.25);
+        }
+        .submit:hover {
+          filter: brightness(1.05);
+          box-shadow: 0 10px 22px rgba(88,166,255,.35);
+        }
+
+        .muted-btn {
+          color: var(--accent);
+          text-transform: none;
+          font-weight: 600;
+        }
+
+        .mono-box {
+          background: #0f172a;
+          border: 1px solid rgba(255,255,255,.08);
+          border-radius: 12px;
+          padding: 10px 12px;
+          margin-bottom: 12px;
+        }
+        .mono-text {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          letter-spacing: .28rem;
+          color: #e5e7eb;
+          text-align: center;
+          user-select: all;
+          word-break: break-word;
+        }
+
+        .error {
+          color: #ff6b6b;
+          text-align: center;
+          margin-top: 8px;
+          font-size: .9rem;
+        }
+      `}</style>
+
+      <div className="login-wrap">
+        {/* Background layers */}
+        <div className="aurora" />
+        <div className="grid" />
+
+        {/* Card with ShineBorder */}
+        <div className="shine">
+          <div className="shine-inner">
+            <Box
+              component="form"
+              onSubmit={step === "mfa" ? handleMfaSubmit : handleCredentialsSubmit}
+              sx={{ display: "flex", flexDirection: "column", gap: 1 }}
+            >
+              <div className="brand">
+                <img src="/Borealis_Logo_Full.png" alt="Borealis Automation" style={{ width: "345px", height: "auto" }} />
+              </div>
+
+              <Typography variant="h5" className="title">
+                {step === "mfa" ? "Multi‑Factor Authentication" : ""}
               </Typography>
-            )}
-            <Button
-              type="submit"
-              variant="contained"
-              fullWidth
-              disabled={isSubmitting || mfaCode.length < 6}
-              sx={{ mt: 2, bgcolor: "#58a6ff", "&:hover": { bgcolor: "#1d82d3" } }}
-            >
-              {isSubmitting ? "Verifying..." : "Verify Code"}
-            </Button>
-            <Button
-              type="button"
-              variant="text"
-              fullWidth
-              disabled={isSubmitting}
-              onClick={handleBackToLogin}
-              sx={{ mt: 1, color: "#58a6ff" }}
-            >
-              Use a different account
-            </Button>
-          </>
-        )}
-      </Box>
-    </Box>
+
+              {step === "credentials" ? (
+                <>
+                  <FieldLabel>Username</FieldLabel>
+                  <TextField
+                    placeholder="you@borealis"
+                    variant="outlined"
+                    fullWidth
+                    value={username}
+                    disabled={isSubmitting}
+                    onChange={(e) => setUsername(e.target.value)}
+                    margin="dense"
+                    InputProps={{ sx: { borderRadius: 2 } }}
+                  />
+
+                  <FieldLabel>Password</FieldLabel>
+                  <TextField
+                    type="password"
+                    variant="outlined"
+                    fullWidth
+                    value={password}
+                    disabled={isSubmitting}
+                    onChange={(e) => setPassword(e.target.value)}
+                    margin="dense"
+                    InputProps={{ sx: { borderRadius: 2 } }}
+                  />
+
+                  {error && <div className="error">{error}</div>}
+
+                  <Button
+                    type="submit"
+                    variant="contained"
+                    className="submit"
+                    disabled={isSubmitting}
+                  >
+                    {isSubmitting ? "Signing In..." : "Sign in"}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  {mfaStage === "setup" ? (
+                    <>
+                      <Typography variant="body2" className="helper">
+                        Scan the QR code with your authenticator app, then enter the 6‑digit code to
+                        complete setup for <strong>{username}</strong>.
+                      </Typography>
+                      {setupQr ? (
+                        <Box sx={{ display: "flex", justifyContent: "center", mb: 1.5 }}>
+                          <img
+                            src={setupQr}
+                            alt="MFA enrollment QR code"
+                            style={{ width: 180, height: 180, borderRadius: 12, boxShadow: "0 6px 18px rgba(0,0,0,.4)" }}
+                          />
+                        </Box>
+                      ) : null}
+                      {formattedSecret ? (
+                        <div className="mono-box">
+                          <FieldLabel>Manual code</FieldLabel>
+                          <div className="mono-text">{formattedSecret}</div>
+                        </div>
+                      ) : null}
+                      {setupUri ? (
+                        <Typography variant="caption" sx={{ color: "var(--text-dim)", wordBreak: "break-all", textAlign: "center" }}>
+                          {setupUri}
+                        </Typography>
+                      ) : null}
+                    </>
+                  ) : (
+                    <Typography variant="body2" className="helper">
+                      Enter the 6‑digit code from your authenticator app for <strong>{username}</strong>.
+                    </Typography>
+                  )}
+
+                  <FieldLabel>One‑time code</FieldLabel>
+                  <TextField
+                    variant="outlined"
+                    fullWidth
+                    value={mfaCode}
+                    onChange={(e) => {
+                      const raw = e.target.value || "";
+                      const digits = raw.replace(/\D/g, "").slice(0, 6);
+                      setMfaCode(digits);
+                    }}
+                    disabled={isSubmitting}
+                    margin="dense"
+                    inputProps={{
+                      inputMode: "numeric",
+                      pattern: "[0-9]*",
+                      maxLength: 6,
+                      style: { letterSpacing: "0.4rem", textAlign: "center", fontSize: "1.15rem" }
+                    }}
+                    autoComplete="one-time-code"
+                    placeholder="• • • • • •"
+                  />
+
+                  {error && <div className="error">{error}</div>}
+
+                  <Button
+                    type="submit"
+                    variant="contained"
+                    className="submit"
+                    disabled={isSubmitting || mfaCode.length < 6}
+                  >
+                    {isSubmitting ? "Verifying..." : "Verify code"}
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="text"
+                    className="muted-btn"
+                    disabled={isSubmitting}
+                    onClick={handleBackToLogin}
+                  >
+                    Use a different account
+                  </Button>
+                </>
+              )}
+            </Box>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
+
