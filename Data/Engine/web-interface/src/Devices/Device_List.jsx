@@ -1561,12 +1561,7 @@ export default function DeviceList({
       elevation={0}
     >
       <Box sx={{ position: "relative", zIndex: 1, p: { xs: 2, md: 3 }, pb: 2 }}>
-        <Box
-          sx={{
-            borderRadius: 4,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            background: MAGIC_UI.panelBg,
-            boxShadow: MAGIC_UI.glow,
+        <Box sx={{ borderRadius: 0, border: 'none', background: 'transparent', boxShadow: 'none',
             p: { xs: 2, md: 3 },
             display: "flex",
             flexWrap: "wrap",

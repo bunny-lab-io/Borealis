@@ -900,9 +900,9 @@ export default function DeviceDetails({ device, onBack }) {
         px: compact ? 1.5 : 2.4,
         py: compact ? 1.4 : 2,
         borderRadius: compact ? 2 : 3,
-        border: "1px solid rgba(255,255,255,0.08)",
-        background: MAGIC_UI.panelBg,
-        boxShadow: "0 20px 45px rgba(2,6,23,0.5)",
+        border: 'none',
+        background: 'transparent',
+        boxShadow: 'none',
         minWidth: compact ? 170 : 220,
         minHeight: compact ? 110 : 140,
         display: "flex",
@@ -959,7 +959,7 @@ export default function DeviceDetails({ device, onBack }) {
         p: 2,
         borderRadius: 3,
         border: `1px solid ${MAGIC_UI.panelBorder}`,
-        background: MAGIC_UI.panelBg,
+        background: 'transparent',
         boxShadow: "0 18px 40px rgba(2,6,23,0.55)",
         mb: 1.5,
         display: "flex",
@@ -1061,7 +1061,7 @@ export default function DeviceDetails({ device, onBack }) {
           sx={{
             borderRadius: 3,
             border: `1px solid ${MAGIC_UI.panelBorder}`,
-            background: MAGIC_UI.panelBg,
+            background: 'transparent',
             boxShadow: MAGIC_UI.glow,
             p: { xs: 2, md: 3 },
             display: "flex",
@@ -1577,6 +1577,7 @@ export default function DeviceDetails({ device, onBack }) {
             flexWrap: "wrap",
             gap: 1.2,
             justifyContent: { xs: "flex-start", lg: "center" },
+            "& > *": { background: "transparent !important", border: "none !important", boxShadow: "none !important", borderRadius: 0 },
           }}
         >
           <MetricCard
@@ -1620,7 +1621,7 @@ export default function DeviceDetails({ device, onBack }) {
               borderRadius: 2,
               width: 38,
               height: 38,
-              backgroundColor: "rgba(4,7,17,0.6)",
+              backgroundColor: "transparent",
             }}
           >
             <MoreHorizIcon fontSize="small" />
