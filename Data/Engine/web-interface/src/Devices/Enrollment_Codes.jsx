@@ -1,27 +1,17 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Server/WebUI/src/Admin/Enrollment_Codes.jsx
-
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import {
-  Alert,
   Box,
+  Paper,
+  Typography,
   Button,
-  Chip,
-  CircularProgress,
+  Stack,
+  Alert,
   FormControl,
-  IconButton,
   InputLabel,
   MenuItem,
-  Paper,
   Select,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
+  CircularProgress,
+  Tooltip
 } from "@mui/material";
 import {
   ContentCopy as CopyIcon,
@@ -29,6 +19,36 @@ import {
   Refresh as RefreshIcon,
   Key as KeyIcon,
 } from "@mui/icons-material";
+import { AgGridReact } from "ag-grid-react";
+import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+// IMPORTANT: Do NOT import global AG Grid CSS here to avoid overriding other pages.
+// We rely on the project's existing CSS and themeQuartz class name like other MagicUI pages.
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+// Match the palette used on other pages (see Site_List / Device_List)
+const MAGIC_UI = {
+  shellBg:
+    "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
+    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+  panelBg:
+    "linear-gradient(135deg, rgba(10, 16, 31, 0.98) 0%, rgba(6, 10, 24, 0.94) 60%, rgba(15, 6, 26, 0.96) 100%)",
+  panelBorder: "rgba(148, 163, 184, 0.35)",
+  textBright: "#e2e8f0",
+  textMuted: "#94a3b8",
+  accentA: "#7dd3fc",
+  accentB: "#c084fc",
+};
+
+// Generate a scoped Quartz theme class (same pattern as other pages)
+const gridTheme = themeQuartz.withParams({
+  accentColor: "#8b5cf6",
+  backgroundColor: "#070b1a",
+  browserColorScheme: "dark",
+  fontFamily: { googleFont: "IBM Plex Sans" },
+  foregroundColor: "#f4f7ff",
+  headerFontSize: 13,
+});
+const themeClassName = gridTheme.themeName || "ag-theme-quartz";
 
 const TTL_PRESETS = [
   { value: 1, label: "1 hour" },
@@ -38,10 +58,22 @@ const TTL_PRESETS = [
   { value: 24, label: "24 hours" },
 ];
 
-const statusColor = {
-  active: "success",
-  used: "default",
-  expired: "warning",
+const determineStatus = (record) => {
+  if (!record) return "expired";
+  const maxUses = Number.isFinite(record?.max_uses) ? record.max_uses : 1;
+  const useCount = Number.isFinite(record?.use_count) ? record.use_count : 0;
+  if (useCount >= Math.max(1, maxUses || 1)) return "used";
+  if (!record.expires_at) return "expired";
+  const expires = new Date(record.expires_at);
+  if (Number.isNaN(expires.getTime())) return "expired";
+  return expires.getTime() > Date.now() ? "active" : "expired";
+};
+
+const formatDateTime = (value) => {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 };
 
 const maskCode = (code) => {
@@ -56,25 +88,7 @@ const maskCode = (code) => {
     .join("-");
 };
 
-const formatDateTime = (value) => {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
-};
-
-const determineStatus = (record) => {
-  if (!record) return "expired";
-  const maxUses = Number.isFinite(record?.max_uses) ? record.max_uses : 1;
-  const useCount = Number.isFinite(record?.use_count) ? record.use_count : 0;
-  if (useCount >= Math.max(1, maxUses || 1)) return "used";
-  if (!record.expires_at) return "expired";
-  const expires = new Date(record.expires_at);
-  if (Number.isNaN(expires.getTime())) return "expired";
-  return expires.getTime() > Date.now() ? "active" : "expired";
-};
-
-function EnrollmentCodes() {
+export default function EnrollmentCodes() {
   const [codes, setCodes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -83,20 +97,14 @@ function EnrollmentCodes() {
   const [ttlHours, setTtlHours] = useState(6);
   const [generating, setGenerating] = useState(false);
   const [maxUses, setMaxUses] = useState(2);
-
-  const filteredCodes = useMemo(() => {
-    if (statusFilter === "all") return codes;
-    return codes.filter((code) => determineStatus(code) === statusFilter);
-  }, [codes, statusFilter]);
+  const gridRef = useRef(null);
 
   const fetchCodes = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
       const query = statusFilter === "all" ? "" : `?status=${encodeURIComponent(statusFilter)}`;
-      const resp = await fetch(`/api/admin/enrollment-codes${query}`, {
-        credentials: "include",
-      });
+      const resp = await fetch(`/api/admin/enrollment-codes${query}`, { credentials: "include" });
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
         throw new Error(body.error || `Request failed (${resp.status})`);
@@ -104,19 +112,16 @@ function EnrollmentCodes() {
       const data = await resp.json();
       setCodes(Array.isArray(data.codes) ? data.codes : []);
     } catch (err) {
-      setError(err.message || "Unable to load enrollment codes");
+      setError(err.message || "Unable to load codes");
     } finally {
       setLoading(false);
     }
   }, [statusFilter]);
 
-  useEffect(() => {
-    fetchCodes();
-  }, [fetchCodes]);
+  useEffect(() => { fetchCodes(); }, [fetchCodes]);
 
   const handleGenerate = useCallback(async () => {
     setGenerating(true);
-    setError("");
     try {
       const resp = await fetch("/api/admin/enrollment-codes", {
         method: "POST",
@@ -128,244 +133,237 @@ function EnrollmentCodes() {
         const body = await resp.json().catch(() => ({}));
         throw new Error(body.error || `Request failed (${resp.status})`);
       }
-      const created = await resp.json();
-      setFeedback({ type: "success", message: `Installer code ${created.code} created` });
       await fetchCodes();
+      setFeedback({ type: "success", message: "New installer code created" });
     } catch (err) {
-      setFeedback({ type: "error", message: err.message || "Failed to create code" });
+      setFeedback({ type: "error", message: err.message });
     } finally {
       setGenerating(false);
     }
-  }, [fetchCodes, ttlHours, maxUses]);
+  }, [ttlHours, maxUses, fetchCodes]);
 
-  const handleDelete = useCallback(
-    async (id) => {
-      if (!id) return;
-      const confirmDelete = window.confirm("Delete this unused installer code?");
-      if (!confirmDelete) return;
-      setError("");
-      try {
-        const resp = await fetch(`/api/admin/enrollment-codes/${encodeURIComponent(id)}`, {
-          method: "DELETE",
-          credentials: "include",
-        });
-        if (!resp.ok) {
-          const body = await resp.json().catch(() => ({}));
-          throw new Error(body.error || `Request failed (${resp.status})`);
-        }
-        setFeedback({ type: "success", message: "Installer code deleted" });
-        await fetchCodes();
-      } catch (err) {
-        setFeedback({ type: "error", message: err.message || "Failed to delete code" });
-      }
-    },
-    [fetchCodes]
-  );
-
-  const handleCopy = useCallback((code) => {
+  const handleCopy = (code) => {
     if (!code) return;
     try {
       if (navigator.clipboard?.writeText) {
         navigator.clipboard.writeText(code);
         setFeedback({ type: "success", message: "Code copied to clipboard" });
-      } else {
-        const textArea = document.createElement("textarea");
-        textArea.value = code;
-        textArea.style.position = "fixed";
-        textArea.style.opacity = "0";
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textArea);
-        setFeedback({ type: "success", message: "Code copied to clipboard" });
       }
-    } catch (err) {
-      setFeedback({ type: "error", message: err.message || "Unable to copy code" });
-    }
-  }, []);
-
-  const renderStatusChip = (record) => {
-    const status = determineStatus(record);
-    return <Chip size="small" label={status} color={statusColor[status] || "default"} variant="outlined" />;
+    } catch (_) {}
   };
 
+  const handleDelete = async (id) => {
+    if (!id) return;
+    if (!window.confirm("Delete this installer code?")) return;
+    try {
+      const resp = await fetch(`/api/admin/enrollment-codes/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.error || `Request failed (${resp.status})`);
+      }
+      await fetchCodes();
+      setFeedback({ type: "success", message: "Code deleted" });
+    } catch (err) {
+      setFeedback({ type: "error", message: err.message });
+    }
+  };
+
+  const columns = useMemo(() => [
+    {
+      headerName: "Status",
+      field: "status",
+      cellRenderer: (params) => {
+        const status = determineStatus(params.data);
+        const color =
+          status === "active" ? "#34d399" :
+          status === "used" ? "#7dd3fc" :
+          "#fbbf24";
+        return <span style={{ color, fontWeight: 600 }}>{status}</span>;
+      },
+      width: 120
+    },
+    {
+      headerName: "Installer Code",
+      field: "code",
+      cellRenderer: (params) => (
+        <span style={{ fontFamily: "monospace", color: "#7dd3fc" }}>{maskCode(params.value)}</span>
+      ),
+      minWidth: 200
+    },
+    { headerName: "Expires At", field: "expires_at", valueFormatter: p => formatDateTime(p.value) },
+    { headerName: "Created By", field: "created_by_user_id" },
+    {
+      headerName: "Usage",
+      valueGetter: (p) => `${p.data.use_count || 0} / ${p.data.max_uses || 1}`,
+      cellStyle: { fontFamily: "monospace" },
+      width: 120
+    },
+    { headerName: "Last Used", field: "last_used_at", valueFormatter: p => formatDateTime(p.value) },
+    { headerName: "Used By GUID", field: "used_by_guid" },
+    {
+      headerName: "Actions",
+      cellRenderer: (params) => {
+        const record = params.data;
+        const disableDelete = (record.use_count || 0) !== 0;
+        return (
+          <Stack direction="row" spacing={1} justifyContent="flex-end">
+            <Tooltip title="Copy code">
+              <span>
+                <Button size="small" onClick={() => handleCopy(record.code)}>
+                  <CopyIcon fontSize="small" />
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={disableDelete ? "Only unused codes can be deleted" : "Delete code"}>
+              <span>
+                <Button size="small" disabled={disableDelete} onClick={() => handleDelete(record.id)}>
+                  <DeleteIcon fontSize="small" />
+                </Button>
+              </span>
+            </Tooltip>
+          </Stack>
+        );
+      },
+      width: 160
+    }
+  ], []);
+
+  const defaultColDef = useMemo(() => ({
+    sortable: true,
+    filter: true,
+    resizable: true,
+    flex: 1,
+    minWidth: 140,
+  }), []);
+
   return (
-    <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 3 }}>
-      <Stack direction="row" alignItems="center" spacing={2}>
-        <KeyIcon color="primary" />
-        <Typography variant="h5">Enrollment Installer Codes</Typography>
-      </Stack>
-
-      <Paper sx={{ p: 2, display: "flex", flexDirection: "column", gap: 2 }}>
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ xs: "stretch", sm: "center" }}>
-          <FormControl size="small" sx={{ minWidth: 160 }}>
-            <InputLabel id="status-filter-label">Filter</InputLabel>
-            <Select
-              labelId="status-filter-label"
-              label="Filter"
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
+    <Paper
+      sx={{
+        m: 0,
+        p: 0,
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minWidth: 0,
+        height: "100%",
+        borderRadius: 0,
+        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        background: MAGIC_UI.shellBg,
+        boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
+        overflow: "hidden",
+      }}
+      elevation={0}
+    >
+      {/* Hero header */}
+      <Box sx={{ p: 3 }}>
+        <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
+          <Stack direction="row" spacing={1} alignItems="center">
+            <KeyIcon sx={{ color: MAGIC_UI.accentA }} />
+            <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+              Enrollment Installer Codes
+            </Typography>
+          </Stack>
+          <Stack direction="row" spacing={1}>
+            <Button
+              variant="contained"
+              disabled={generating}
+              startIcon={generating ? <CircularProgress size={16} color="inherit" /> : null}
+              onClick={handleGenerate}
+              sx={{ background: "linear-gradient(135deg,#7dd3fc,#c084fc)", borderRadius: 999 }}
             >
-              <MenuItem value="all">All</MenuItem>
-              <MenuItem value="active">Active</MenuItem>
-              <MenuItem value="used">Used</MenuItem>
-              <MenuItem value="expired">Expired</MenuItem>
-            </Select>
-          </FormControl>
-
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel id="ttl-select-label">Duration</InputLabel>
-            <Select
-              labelId="ttl-select-label"
-              label="Duration"
-              value={ttlHours}
-              onChange={(event) => setTtlHours(Number(event.target.value))}
-            >
-              {TTL_PRESETS.map((preset) => (
-                <MenuItem key={preset.value} value={preset.value}>
-                  {preset.label}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          <FormControl size="small" sx={{ minWidth: 160 }}>
-            <InputLabel id="uses-select-label">Allowed Uses</InputLabel>
-            <Select
-              labelId="uses-select-label"
-              label="Allowed Uses"
-              value={maxUses}
-              onChange={(event) => setMaxUses(Number(event.target.value))}
-            >
-              {[1, 2, 3, 5].map((uses) => (
-                <MenuItem key={uses} value={uses}>
-                  {uses === 1 ? "Single use" : `${uses} uses`}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleGenerate}
-            disabled={generating}
-            startIcon={generating ? <CircularProgress size={16} color="inherit" /> : null}
-          >
-            {generating ? "Generating…" : "Generate Code"}
-          </Button>
-
-          <Button
-            variant="outlined"
-            startIcon={<RefreshIcon />}
-            onClick={fetchCodes}
-            disabled={loading}
-          >
-            Refresh
-          </Button>
+              {generating ? "Generating…" : "Generate Code"}
+            </Button>
+            <Button variant="outlined" startIcon={<RefreshIcon />} onClick={fetchCodes} disabled={loading}>
+              Refresh
+            </Button>
+          </Stack>
         </Stack>
+      </Box>
 
-        {feedback ? (
-          <Alert
-            severity={feedback.type}
-            onClose={() => setFeedback(null)}
-            variant="outlined"
-          >
+      {/* Controls */}
+      <Box sx={{ p: 2, display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap" }}>
+        <FormControl size="small" sx={{ minWidth: 140 }}>
+          <InputLabel>Status</InputLabel>
+          <Select value={statusFilter} label="Status" onChange={(e) => setStatusFilter(e.target.value)}>
+            <MenuItem value="all">All</MenuItem>
+            <MenuItem value="active">Active</MenuItem>
+            <MenuItem value="used">Used</MenuItem>
+            <MenuItem value="expired">Expired</MenuItem>
+          </Select>
+        </FormControl>
+
+        <FormControl size="small" sx={{ minWidth: 160 }}>
+          <InputLabel>Duration</InputLabel>
+          <Select value={ttlHours} label="Duration" onChange={(e) => setTtlHours(Number(e.target.value))}>
+            {TTL_PRESETS.map((p) => (
+              <MenuItem key={p.value} value={p.value}>
+                {p.label}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        <FormControl size="small" sx={{ minWidth: 160 }}>
+          <InputLabel>Allowed Uses</InputLabel>
+          <Select value={maxUses} label="Allowed Uses" onChange={(e) => setMaxUses(Number(e.target.value))}>
+            {[1, 2, 3, 5].map((n) => (
+              <MenuItem key={n} value={n}>
+                {n === 1 ? "Single use" : `${n} uses`}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </Box>
+
+      {feedback && (
+        <Box sx={{ px: 3 }}>
+          <Alert severity={feedback.type} onClose={() => setFeedback(null)}>
             {feedback.message}
           </Alert>
-        ) : null}
+        </Box>
+      )}
+      {error && (
+        <Box sx={{ px: 3 }}>
+          <Alert severity="error">{error}</Alert>
+        </Box>
+      )}
 
-        {error ? (
-          <Alert severity="error" variant="outlined">
-            {error}
-          </Alert>
-        ) : null}
-
-        <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 420 }}>
-          <Table size="small" stickyHeader>
-            <TableHead>
-              <TableRow>
-                <TableCell>Status</TableCell>
-                <TableCell>Installer Code</TableCell>
-                <TableCell>Expires At</TableCell>
-                <TableCell>Created By</TableCell>
-                <TableCell>Usage</TableCell>
-                <TableCell>Last Used</TableCell>
-                <TableCell>Consumed At</TableCell>
-                <TableCell>Used By GUID</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={7} align="center">
-                    <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
-                      <CircularProgress size={20} />
-                      <Typography variant="body2">Loading installer codes…</Typography>
-                    </Stack>
-                  </TableCell>
-                </TableRow>
-              ) : filteredCodes.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} align="center">
-                    <Typography variant="body2" color="text.secondary">
-                      No installer codes match this filter.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredCodes.map((record) => {
-                  const status = determineStatus(record);
-                  const maxAllowed = Math.max(1, Number.isFinite(record?.max_uses) ? record.max_uses : 1);
-                  const usageCount = Math.max(0, Number.isFinite(record?.use_count) ? record.use_count : 0);
-                  const disableDelete = usageCount !== 0;
-                  return (
-                    <TableRow hover key={record.id}>
-                      <TableCell>{renderStatusChip(record)}</TableCell>
-                      <TableCell sx={{ fontFamily: "monospace" }}>{maskCode(record.code)}</TableCell>
-                      <TableCell>{formatDateTime(record.expires_at)}</TableCell>
-                      <TableCell>{record.created_by_user_id || "—"}</TableCell>
-                      <TableCell sx={{ fontFamily: "monospace" }}>{`${usageCount} / ${maxAllowed}`}</TableCell>
-                      <TableCell>{formatDateTime(record.last_used_at)}</TableCell>
-                      <TableCell>{formatDateTime(record.used_at)}</TableCell>
-                      <TableCell sx={{ fontFamily: "monospace" }}>
-                        {record.used_by_guid || "—"}
-                      </TableCell>
-                      <TableCell align="right">
-                        <Tooltip title="Copy code">
-                          <span>
-                            <IconButton
-                              size="small"
-                              onClick={() => handleCopy(record.code)}
-                              disabled={!record.code}
-                            >
-                              <CopyIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                        <Tooltip title={disableDelete ? "Only unused codes can be deleted" : "Delete code"}>
-                          <span>
-                            <IconButton
-                              size="small"
-                              onClick={() => handleDelete(record.id)}
-                              disabled={disableDelete}
-                            >
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Paper>
-    </Box>
+      {/* Grid wrapper — all overrides are SCOPED to this instance via inline CSS vars */}
+      <Box
+        className={themeClassName}
+        sx={{
+          flex: 1,
+          p: 2,
+          overflow: "hidden",
+        }}
+        // Inline style ensures the CSS variables only affect THIS grid instance
+        style={{
+          "--ag-background-color": "#070b1a",
+          "--ag-foreground-color": "#f4f7ff",
+          "--ag-header-background-color": "#0f172a",
+          "--ag-header-foreground-color": "#cfe0ff",
+          "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+          "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+          "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+          "--ag-font-family": "'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif",
+          "--ag-border-color": "rgba(125,183,255,0.18)",
+          "--ag-row-border-color": "rgba(125,183,255,0.14)",
+          "--ag-border-radius": "8px",
+        }}
+      >
+        <AgGridReact
+          ref={gridRef}
+          rowData={codes}
+          columnDefs={columns}
+          defaultColDef={defaultColDef}
+          animateRows
+          pagination
+          paginationPageSize={20}
+        />
+      </Box>
+    </Paper>
   );
 }
-
-export default React.memo(EnrollmentCodes);
