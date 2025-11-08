@@ -1,3 +1,5 @@
+# Borealis - Automation Platform Updater Script
+
 [CmdletBinding()]
 param()
 
