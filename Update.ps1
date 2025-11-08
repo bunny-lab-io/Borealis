@@ -465,7 +465,8 @@ function Initialize-BorealisTlsContext {
     foreach ($path in $candidatePaths) {
         $exists = $false
         try { $exists = Test-Path $path -PathType Leaf } catch {}
-        Write-Verbose ("Evaluating Borealis TLS candidate: {0} (exists={1})" -f $path, ($exists ? 'true' : 'false'))
+        $existsText = if ($exists) { 'true' } else { 'false' }
+        Write-Verbose ("Evaluating Borealis TLS candidate: {0} (exists={1})" -f $path, $existsText)
         if (-not $exists) { continue }
         try {
             $trusted += Get-CertificatesFromPem -Path $path
