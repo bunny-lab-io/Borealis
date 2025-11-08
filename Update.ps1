@@ -486,7 +486,19 @@ function Initialize-BorealisTlsContext {
     } catch {}
 
     try {
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
+        $protocolType = [System.Net.SecurityProtocolType]
+        $hasSystemDefault = [System.Enum]::IsDefined($protocolType, 'SystemDefault')
+        if ($hasSystemDefault) {
+            # Allow the OS to negotiate the strongest available protocol (TLS 1.3 on modern hosts).
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::SystemDefault
+        } else {
+            $protocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
+            if ([System.Enum]::IsDefined($protocolType, 'Tls13')) {
+                $tls13 = [System.Enum]::Parse($protocolType, 'Tls13')
+                $protocol = $protocol -bor $tls13
+            }
+            [System.Net.ServicePointManager]::SecurityProtocol = $protocol
+        }
     } catch {}
 
     if (-not $script:BorealisCallbackApplied) {
