@@ -885,6 +885,26 @@ export default function DeviceList({
     }
   }, [repoHash, fetchLatestRepoHash, computeAgentVersion, filterMode]);
 
+  useEffect(() => {
+    setRows((prev) => {
+      if (!Array.isArray(prev) || !prev.length) return prev;
+      let changed = false;
+      const next = prev.map((row) => {
+        const nextVersion = computeAgentVersion(row.agentHash, repoHash);
+        if (row.agentVersion === nextVersion) return row;
+        changed = true;
+        return { ...row, agentVersion: nextVersion };
+      });
+      return changed ? next : prev;
+    });
+    setSelected((prev) => {
+      if (!prev) return prev;
+      const nextVersion = computeAgentVersion(prev.agentHash, repoHash);
+      if (prev.agentVersion === nextVersion) return prev;
+      return { ...prev, agentVersion: nextVersion };
+    });
+  }, [repoHash, computeAgentVersion]);
+
   const fetchViews = useCallback(async () => {
     try {
       const res = await fetch("/api/device_list_views");
@@ -1307,6 +1327,8 @@ export default function DeviceList({
             width: 140,
             minWidth: 150,
             flex: 0,
+            valueGetter: (params) =>
+              computeAgentVersion(params.data?.agentHash, repoHash),
           };
         case "site":
           return {
@@ -1506,9 +1528,12 @@ export default function DeviceList({
   }, [
     columns,
     actionCellRenderer,
+    computeAgentVersion,
     formatCreated,
     handleDescriptionSave,
     hostnameCellRenderer,
+    osCellRenderer,
+    repoHash,
     statusCellRenderer,
   ]);
 
