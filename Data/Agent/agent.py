@@ -24,10 +24,12 @@ import threading
 import contextlib
 import errno
 import re
+import ipaddress
 from urllib.parse import urlparse
 from typing import Any, Dict, Optional, List, Callable, Tuple
 
 import requests
+from requests.adapters import HTTPAdapter
 try:
     import psutil
 except Exception:
@@ -248,6 +250,19 @@ def _settings_dir():
         return os.path.join(_find_project_root(), 'Agent', 'Borealis', 'Settings')
     except Exception:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), 'Settings'))
+
+
+def _is_literal_ip(value: Optional[str]) -> bool:
+    try:
+        if not value:
+            return False
+        candidate = value.strip().strip('[]')
+        if '%' in candidate:
+            candidate = candidate.split('%', 1)[0]
+        ipaddress.ip_address(candidate)
+        return True
+    except Exception:
+        return False
 
 
 class _CrossProcessFileLock:
@@ -863,6 +878,26 @@ CONFIG = ConfigManager(CONFIG_PATH)
 CONFIG.load()
 
 
+class _HostnameFlexibleAdapter(HTTPAdapter):
+    """HTTPAdapter that can disable urllib3 hostname verification."""
+
+    def __init__(self, *, disable_hostname_check: bool = False, **kwargs):
+        self._disable_hostname_check = disable_hostname_check
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        if self._disable_hostname_check:
+            pool_kwargs = dict(pool_kwargs or {})
+            pool_kwargs['assert_hostname'] = False
+        super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        if self._disable_hostname_check:
+            proxy_kwargs = dict(proxy_kwargs or {})
+            proxy_kwargs['assert_hostname'] = False
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
+
 class AgentHttpClient:
     def __init__(self):
         self.key_store = _key_store()
@@ -872,6 +907,12 @@ class AgentHttpClient:
         if context_label:
             self.session.headers.setdefault(_AGENT_CONTEXT_HEADER, context_label)
         self.base_url: Optional[str] = None
+        self._base_scheme: Optional[str] = None
+        self._base_netloc: Optional[str] = None
+        self._base_host: Optional[str] = None
+        self._base_host_is_ip: bool = False
+        self._hostname_adapter_prefix: Optional[str] = None
+        self._hostname_adapter_ip_active: bool = False
         self.guid: Optional[str] = None
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
@@ -899,8 +940,12 @@ class AgentHttpClient:
             url = "https://localhost:5000"
         if url.endswith("/"):
             url = url[:-1]
-        if url != self.base_url:
-            self.base_url = url
+        self.base_url = url
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            parsed = urlparse("https://localhost:5000")
+        self._update_base_url_state(parsed)
 
     def _configure_verify(self) -> None:
         cert_path = self.key_store.server_certificate_path()
@@ -914,6 +959,57 @@ class AgentHttpClient:
                 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # type: ignore[attr-defined]
             except Exception:
                 pass
+
+    def _update_base_url_state(self, parsed) -> None:
+        try:
+            host = (parsed.hostname or '').strip()
+            netloc = parsed.netloc or host
+            scheme = (parsed.scheme or 'https').lower()
+        except Exception:
+            host = ''
+            netloc = ''
+            scheme = 'https'
+        host_is_ip = _is_literal_ip(host)
+        state_changed = (
+            scheme != self._base_scheme
+            or netloc != self._base_netloc
+            or host != (self._base_host or '')
+            or host_is_ip != self._base_host_is_ip
+        )
+        self._base_scheme = scheme
+        self._base_netloc = netloc
+        self._base_host = host
+        self._base_host_is_ip = host_is_ip
+        if state_changed:
+            self._configure_hostname_adapter()
+
+    def _configure_hostname_adapter(self) -> None:
+        scheme = self._base_scheme
+        netloc = self._base_netloc
+        if not scheme or not netloc:
+            return
+        prefix = f"{scheme}://{netloc}"
+        if self._base_host_is_ip:
+            if (not self._hostname_adapter_ip_active) or (self._hostname_adapter_prefix != prefix):
+                adapter = _HostnameFlexibleAdapter(disable_hostname_check=True)
+                self.session.mount(prefix, adapter)
+                self._hostname_adapter_prefix = prefix
+                self._hostname_adapter_ip_active = True
+                _log_agent(
+                    f"Hostname verification disabled for literal IP target {prefix}",
+                    fname="agent.log",
+                )
+        else:
+            if self._hostname_adapter_ip_active:
+                restore_prefix = self._hostname_adapter_prefix or prefix
+                if restore_prefix:
+                    self.session.mount(restore_prefix, HTTPAdapter())
+                self._hostname_adapter_prefix = None
+                self._hostname_adapter_ip_active = False
+                _log_agent(
+                    "Hostname verification restored for primary agent HTTP session",
+                    fname="agent.log",
+                )
 
     def _reload_tokens_from_disk(self) -> None:
         raw_guid = self.key_store.load_guid()
@@ -1010,8 +1106,8 @@ class AgentHttpClient:
                 except Exception:
                     pass
 
-            context = None
             bundle_summary = {"count": None, "fingerprint": None, "layered_default": None}
+            bundle_fp = None
             context = None
             if isinstance(verify, str) and os.path.isfile(verify):
                 bundle_count, bundle_fp, layered_default = self.key_store.summarize_server_certificate()
@@ -1021,6 +1117,11 @@ class AgentHttpClient:
                     "layered_default": layered_default,
                 }
                 context = self.key_store.build_ssl_context()
+                if context is not None and self._base_host_is_ip:
+                    try:
+                        context.check_hostname = False
+                    except Exception:
+                        pass
                 if context is not None:
                     self._cached_ssl_context = context
                     if bundle_summary["layered_default"] is None:
@@ -1038,6 +1139,23 @@ class AgentHttpClient:
                         "SocketIO TLS alignment failed to build context from pinned bundle",  # noqa: E501
                         fname="agent.error.log",
                     )
+                    if self._base_host_is_ip:
+                        try:
+                            fallback_context = ssl.create_default_context()
+                            fallback_context.load_verify_locations(cafile=verify)
+                            fallback_context.check_hostname = False
+                            context = fallback_context
+                            self._cached_ssl_context = context
+                            _log_agent(
+                                "SocketIO TLS alignment generated hostname-relaxed SSLContext for literal IP target",
+                                fname="agent.log",
+                            )
+                        except Exception as exc:
+                            context = None
+                            _log_agent(
+                                f"SocketIO TLS fallback context creation failed: {exc}",
+                                fname="agent.error.log",
+                            )
 
             if context is not None:
                 _set_attr(engine, "ssl_context", context)

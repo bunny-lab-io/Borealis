@@ -598,6 +598,15 @@ class Role:
             pass
         return 'http://localhost:5000'
 
+    def _http_client(self):
+        try:
+            fn = (self.ctx.hooks or {}).get('http_client')
+            if callable(fn):
+                return fn()
+        except Exception:
+            pass
+        return None
+
     def _ansible_log(self, msg: str, error: bool = False, run_id: str = None):
         try:
             d = os.path.join(_project_root(), 'Agent', 'Logs')
@@ -629,30 +638,31 @@ class Role:
     async def _fetch_service_creds(self) -> dict:
         if self._svc_creds and isinstance(self._svc_creds, dict):
             return self._svc_creds
-        try:
-            import aiohttp
-            url = self._server_base().rstrip('/') + '/api/agent/checkin'
-            payload = {
-                'agent_id': self.ctx.agent_id,
-                'hostname': socket.gethostname(),
-                'username': DEFAULT_SERVICE_ACCOUNT,
-            }
-            self._ansible_log(f"[checkin] POST {url} agent_id={self.ctx.agent_id}")
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession(timeout=timeout) as sess:
-                async with sess.post(url, json=payload) as resp:
-                    js = await resp.json()
-            u = (js or {}).get('username') or DEFAULT_SERVICE_ACCOUNT
-            p = (js or {}).get('password') or ''
-            if u in LEGACY_SERVICE_ACCOUNTS:
-                self._ansible_log(f"[checkin] legacy service username {u!r}; requesting rotate", error=True)
-                return await self._rotate_service_creds(reason='legacy_username', force_username=DEFAULT_SERVICE_ACCOUNT)
-            self._svc_creds = {'username': u, 'password': p}
-            self._ansible_log(f"[checkin] received user={u} pw_len={len(p)}")
-            return self._svc_creds
-        except Exception:
-            self._ansible_log(f"[checkin] failed agent_id={self.ctx.agent_id}", error=True)
+        url = self._server_base().rstrip('/') + '/api/agent/checkin'
+        payload = {
+            'agent_id': self.ctx.agent_id,
+            'hostname': socket.gethostname(),
+            'username': DEFAULT_SERVICE_ACCOUNT,
+        }
+        self._ansible_log(f"[checkin] POST {url} agent_id={self.ctx.agent_id}")
+        client = self._http_client()
+        if client is None:
+            self._ansible_log(f"[checkin] http_client unavailable agent_id={self.ctx.agent_id}", error=True)
             return {'username': DEFAULT_SERVICE_ACCOUNT, 'password': ''}
+        try:
+            js = await client.async_post_json('/api/agent/checkin', payload, require_auth=True)
+        except Exception as exc:
+            self._ansible_log(f"[checkin] failed agent_id={self.ctx.agent_id} err={exc}", error=True)
+            return {'username': DEFAULT_SERVICE_ACCOUNT, 'password': ''}
+        js = js if isinstance(js, dict) else {}
+        u = js.get('username') or DEFAULT_SERVICE_ACCOUNT
+        p = js.get('password') or ''
+        if u in LEGACY_SERVICE_ACCOUNTS:
+            self._ansible_log(f"[checkin] legacy service username {u!r}; requesting rotate", error=True)
+            return await self._rotate_service_creds(reason='legacy_username', force_username=DEFAULT_SERVICE_ACCOUNT)
+        self._svc_creds = {'username': u, 'password': p}
+        self._ansible_log(f"[checkin] received user={u} pw_len={len(p)}")
+        return self._svc_creds
 
     def _normalize_playbook_content(self, content: str) -> str:
         try:
@@ -675,33 +685,34 @@ class Role:
             return content
 
     async def _rotate_service_creds(self, reason: str = 'bad_credentials', force_username: Optional[str] = None) -> dict:
-        try:
-            import aiohttp
-            url = self._server_base().rstrip('/') + '/api/agent/service-account/rotate'
-            payload = {
-                'agent_id': self.ctx.agent_id,
-                'reason': reason,
-            }
-            if force_username:
-                payload['username'] = force_username
-            self._ansible_log(f"[rotate] POST {url} agent_id={self.ctx.agent_id}")
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession(timeout=timeout) as sess:
-                async with sess.post(url, json=payload) as resp:
-                    js = await resp.json()
-            u = (js or {}).get('username') or force_username or DEFAULT_SERVICE_ACCOUNT
-            p = (js or {}).get('password') or ''
-            if u in LEGACY_SERVICE_ACCOUNTS and force_username != DEFAULT_SERVICE_ACCOUNT:
-                self._ansible_log(f"[rotate] legacy username {u!r} returned; retrying with default", error=True)
-                return await self._rotate_service_creds(reason='legacy_username', force_username=DEFAULT_SERVICE_ACCOUNT)
-            if u in LEGACY_SERVICE_ACCOUNTS:
-                u = DEFAULT_SERVICE_ACCOUNT
-            self._svc_creds = {'username': u, 'password': p}
-            self._ansible_log(f"[rotate] received user={u} pw_len={len(p)}")
-            return self._svc_creds
-        except Exception:
-            self._ansible_log(f"[rotate] failed agent_id={self.ctx.agent_id}", error=True)
+        url = self._server_base().rstrip('/') + '/api/agent/service-account/rotate'
+        payload = {
+            'agent_id': self.ctx.agent_id,
+            'reason': reason,
+        }
+        if force_username:
+            payload['username'] = force_username
+        self._ansible_log(f"[rotate] POST {url} agent_id={self.ctx.agent_id}")
+        client = self._http_client()
+        if client is None:
+            self._ansible_log(f"[rotate] http_client unavailable agent_id={self.ctx.agent_id}", error=True)
             return await self._fetch_service_creds()
+        try:
+            js = await client.async_post_json('/api/agent/service-account/rotate', payload, require_auth=True)
+        except Exception as exc:
+            self._ansible_log(f"[rotate] failed agent_id={self.ctx.agent_id} err={exc}", error=True)
+            return await self._fetch_service_creds()
+        js = js if isinstance(js, dict) else {}
+        u = js.get('username') or force_username or DEFAULT_SERVICE_ACCOUNT
+        p = js.get('password') or ''
+        if u in LEGACY_SERVICE_ACCOUNTS and force_username != DEFAULT_SERVICE_ACCOUNT:
+            self._ansible_log(f"[rotate] legacy username {u!r} returned; retrying with default", error=True)
+            return await self._rotate_service_creds(reason='legacy_username', force_username=DEFAULT_SERVICE_ACCOUNT)
+        if u in LEGACY_SERVICE_ACCOUNTS:
+            u = DEFAULT_SERVICE_ACCOUNT
+        self._svc_creds = {'username': u, 'password': p}
+        self._ansible_log(f"[rotate] received user={u} pw_len={len(p)}")
+        return self._svc_creds
 
     def _ps_module_path(self) -> str:
         # Place PS module under Roles so it's deployed with the agent
@@ -827,17 +838,16 @@ try {{
             return False
 
     async def _post_recap(self, payload: dict):
+        url = self._server_base().rstrip('/') + '/api/ansible/recap/report'
+        client = self._http_client()
+        if client is None:
+            self._log_local("Failed to post recap: http_client unavailable", error=True)
+            return
         try:
-            import aiohttp
-            url = self._server_base().rstrip('/') + '/api/ansible/recap/report'
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as sess:
-                async with sess.post(url, json=payload) as resp:
-                    # best-effort; ignore body
-                    await resp.read()
+            await client.async_post_json('/api/ansible/recap/report', payload, require_auth=True)
             self._log_local(f"Posted recap: run_id={payload.get('run_id')} status={payload.get('status')} bytes={len((payload.get('recap_text') or '').encode('utf-8'))}")
-        except Exception:
-            self._log_local(f"Failed to post recap for run_id={payload.get('run_id')}", error=True)
+        except Exception as exc:
+            self._log_local(f"Failed to post recap for run_id={payload.get('run_id')}: {exc}", error=True)
 
     async def _run_playbook_runner(self, run_id: str, playbook_content: str, playbook_name: str = '', activity_job_id=None, connection: str = 'local', exec_ctx: dict = None, files=None):
         exec_ctx = exec_ctx or {}
