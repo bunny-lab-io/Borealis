@@ -1299,8 +1299,7 @@ switch ($choice) {
 
             Push-Location $webUIDestinationAbsolute
             try {
-                $certRoot = Join-Path $scriptDir 'Certificates\Server'
-                Ensure-EngineTlsMaterial -PythonPath $venvPython -CertificateRoot $certRoot
+                Ensure-EngineTlsMaterial -PythonPath $venvPython
                 $requiredTlsFiles = @($env:BOREALIS_TLS_CERT, $env:BOREALIS_TLS_KEY, $env:BOREALIS_TLS_BUNDLE)
                 foreach ($tlsFile in $requiredTlsFiles) {
                     if ([string]::IsNullOrWhiteSpace($tlsFile) -or -not (Test-Path $tlsFile)) {
