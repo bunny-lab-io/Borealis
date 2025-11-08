@@ -5,11 +5,43 @@ $scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
 $script:BorealisTlsInitialized = $false
 $script:BorealisTrustedThumbprints = @()
 $script:BorealisCallbackApplied = $false
+$script:AgentPythonHttpHelper = ''
 $symbols = @{
     Success = [char]0x2705
     Running = [char]0x23F3
     Fail    = [char]0x274C
     Info    = [char]0x2139
+}
+
+function Write-UpdateLog {
+    param(
+        [string]$Message,
+        [string]$Level = 'INFO',
+        [string]$Color
+    )
+
+    if (-not $Message) { return }
+
+    $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $normalized = if ($Level) { $Level } else { 'INFO' }
+    $normalized = $normalized.ToUpperInvariant()
+
+    if (-not $Color) {
+        switch ($normalized) {
+            'WARN' { $Color = 'Yellow' }
+            'ERROR' { $Color = 'Red' }
+            'STEP' { $Color = 'Cyan' }
+            'SUCCESS' { $Color = 'Green' }
+            default { $Color = $null }
+        }
+    }
+
+    $line = "[{0}] [{1}] {2}" -f $timestamp, $normalized, $Message
+    if ($Color) {
+        Write-Host $line -ForegroundColor $Color
+    } else {
+        Write-Host $line
+    }
 }
 
 $repositoryUrl = 'https://github.com/bunny-lab-io/Borealis.git'
@@ -233,6 +265,7 @@ function Get-BorealisServerUrl {
         return 'https://localhost:5000'
     }
 
+    Write-UpdateLog ("Resolved Borealis server URL: {0}" -f $resolved) 'INFO'
     return $resolved
 }
 
@@ -278,6 +311,193 @@ function Resolve-BorealisServerUrl {
     }
 
     return $builder.Uri.AbsoluteUri.TrimEnd('/')
+}
+
+function Get-BorealisCertificateCandidates {
+    param(
+        [string]$AgentRoot
+    )
+
+    $paths = @()
+    if ($env:BOREALIS_ROOT_CA_PATH) {
+        $paths += $env:BOREALIS_ROOT_CA_PATH
+    }
+    if ($AgentRoot) {
+        $paths += (Join-Path $AgentRoot 'Certificates\borealis-root-ca.pem')
+        $paths += (Join-Path $AgentRoot 'Certificates\engine-root-ca.pem')
+        $paths += (Join-Path $AgentRoot 'Certificates\borealis-server-bundle.pem')
+        $paths += (Join-Path $AgentRoot 'Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
+        $paths += (Join-Path $AgentRoot 'Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
+        $paths += (Join-Path $AgentRoot 'Settings\server_certificate.pem')
+    }
+    if ($AgentRoot) {
+        $paths += (Join-Path $AgentRoot 'Trusted_Server_Cert\server_certificate.pem')
+        $paths += (Join-Path $AgentRoot 'Trusted_Server_Cert\server_bundle.pem')
+        $agentParent = ''
+        try { $agentParent = Split-Path $AgentRoot -Parent } catch { $agentParent = '' }
+        if ($agentParent) {
+            $paths += (Join-Path $agentParent 'Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
+            $paths += (Join-Path $agentParent 'Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
+        }
+    }
+    $paths += (Join-Path $scriptDir 'Engine\Certificates\borealis-root-ca.pem')
+    $paths += (Join-Path $scriptDir 'Engine\Certificates\borealis-server-bundle.pem')
+    $paths += (Join-Path $scriptDir 'Certificates\borealis-root-ca.pem')
+    $paths += (Join-Path $scriptDir 'Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
+    $paths += (Join-Path $scriptDir 'Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
+    $paths += (Join-Path $scriptDir 'Agent\Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
+    $paths += (Join-Path $scriptDir 'Agent\Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
+    $paths += (Join-Path $scriptDir 'Agent\Borealis\Settings\server_certificate.pem')
+    $paths += (Join-Path $scriptDir 'Data\Agent\Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
+    $paths += (Join-Path $scriptDir 'Data\Agent\Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
+    $paths += (Join-Path $scriptDir 'Data\Engine\Certificates\borealis-root-ca.pem')
+
+    $programData = $env:ProgramData
+    if ($programData) {
+        $paths += (Join-Path $programData 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
+        $paths += (Join-Path $programData 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
+    }
+    $localApp = $env:LOCALAPPDATA
+    if ($localApp) {
+        $paths += (Join-Path $localApp 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
+        $paths += (Join-Path $localApp 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
+    }
+    $commonApp = $env:COMMONAPPDATA
+    if ($commonApp) {
+        $paths += (Join-Path $commonApp 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
+        $paths += (Join-Path $commonApp 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
+    }
+
+    return $paths | Where-Object { $_ } | Select-Object -Unique
+}
+
+function Get-BorealisCertificatePaths {
+    param(
+        [string]$AgentRoot
+    )
+
+    $paths = @()
+    $existing = @()
+    foreach ($candidate in (Get-BorealisCertificateCandidates -AgentRoot $AgentRoot)) {
+        $exists = $false
+        try { $exists = Test-Path $candidate -PathType Leaf } catch {}
+        if ($exists) {
+            $existing += $candidate
+            $paths += $candidate
+        }
+    }
+
+    if ($paths.Count -eq 0) {
+        $searchRoots = @()
+        if ($AgentRoot) { $searchRoots += $AgentRoot }
+        $searchRoots += $scriptDir
+        $searchRoots = $searchRoots | Where-Object { $_ } | Select-Object -Unique
+        foreach ($root in $searchRoots) {
+            try {
+                if (-not (Test-Path $root -PathType Container)) { continue }
+                Write-UpdateLog ("Scanning {0} for server certificate bundles." -f $root) 'DEBUG'
+                $filters = @('server_certificate.pem','server_bundle.pem','borealis-root-ca.pem','engine-root-ca.pem')
+                foreach ($filter in $filters) {
+                    $foundCerts = Get-ChildItem -Path $root -Recurse -Filter $filter -ErrorAction SilentlyContinue -File
+                    foreach ($item in $foundCerts) {
+                        if ($item -and ($paths -notcontains $item.FullName)) {
+                            $paths += $item.FullName
+                        }
+                    }
+                    if ($paths.Count -gt 0) { break }
+                }
+                if ($paths.Count -gt 0) { break }
+            } catch {}
+        }
+    }
+
+    Write-UpdateLog ("Resolved {0} TLS certificate candidate(s)." -f ($paths.Count)) 'DEBUG'
+    return $paths
+}
+
+function Get-BorealisTrustBundlePath {
+    param(
+        [string]$AgentRoot
+    )
+
+    $paths = Get-BorealisCertificatePaths -AgentRoot $AgentRoot
+    if ($paths -and $paths.Count -gt 0) {
+        Write-UpdateLog ("Using TLS trust bundle: {0}" -f $paths[0]) 'DEBUG'
+        return $paths[0]
+    }
+    Write-UpdateLog "No TLS trust bundle located; HTTPS requests will rely on system store." 'WARN'
+    return ''
+}
+
+function Get-AgentCertificateDirectory {
+    param(
+        [string]$AgentRoot
+    )
+
+    $envRoot = $env:BOREALIS_AGENT_CERT_ROOT
+    if ($envRoot) {
+        return $envRoot
+    }
+
+    $envCertRoot = $env:BOREALIS_CERTIFICATES_ROOT
+    if (-not $envCertRoot) { $envCertRoot = $env:BOREALIS_CERT_ROOT }
+    if ($envCertRoot) {
+        return (Join-Path $envCertRoot 'Agent')
+    }
+
+    $settingsDir = Get-AgentSettingsDirectory -AgentRoot $AgentRoot
+    $candidate = $settingsDir
+    for ($i = 0; $i -lt 3; $i++) {
+        if (-not $candidate) { break }
+        $parent = Split-Path -Path $candidate -Parent
+        if (-not $parent) { break }
+        $candidate = $parent
+    }
+
+    if (-not $candidate) {
+        $candidate = Split-Path -Path $settingsDir -Parent
+    }
+    if (-not $candidate) {
+        $candidate = $scriptDir
+    }
+
+    return (Join-Path $candidate 'Certificates\Agent')
+}
+
+function Save-BorealisServerCertificate {
+    param(
+        [string]$AgentRoot,
+        [string]$CertificatePem
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CertificatePem)) {
+        return ''
+    }
+
+    $baseDir = Get-AgentCertificateDirectory -AgentRoot $AgentRoot
+    if (-not $baseDir) {
+        return ''
+    }
+
+    $targetDir = Join-Path $baseDir 'Trusted_Server_Cert'
+    try {
+        if (-not (Test-Path $targetDir -PathType Container)) {
+            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        }
+    } catch {
+        Write-UpdateLog ("Failed to create TLS certificate directory {0}: {1}" -f $targetDir, $_.Exception.Message) 'WARN'
+        return ''
+    }
+
+    $targetPath = Join-Path $targetDir 'server_certificate.pem'
+    try {
+        Set-Content -Path $targetPath -Value $CertificatePem -Encoding UTF8
+        Write-UpdateLog ("Saved server certificate to {0}" -f $targetPath) 'INFO'
+        return $targetPath
+    } catch {
+        Write-UpdateLog ("Failed to save server certificate: {0}" -f $_.Exception.Message) 'WARN'
+        return ''
+    }
 }
 
 function Get-CertificatesFromPem {
@@ -366,7 +586,12 @@ namespace Borealis.Update
     public static class CertificateValidator
     {
         private static readonly HashSet<string> _trusted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        public static bool AllowLoopback { get; set; } = true;
+        public static bool AllowLoopback { get; set; }
+
+        static CertificateValidator()
+        {
+            AllowLoopback = true;
+        }
 
         public static void ReplaceTrustedThumbprints(string[] thumbprints)
         {
@@ -416,14 +641,18 @@ namespace Borealis.Update
                 }
             }
 
-            if (AllowLoopback && sender is HttpWebRequest request && request.RequestUri != null)
+            if (AllowLoopback)
             {
-                var host = request.RequestUri.DnsSafeHost;
-                if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase))
+                var request = sender as HttpWebRequest;
+                if (request != null && request.RequestUri != null)
                 {
-                    return true;
+                    var host = request.RequestUri.DnsSafeHost;
+                    if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
                 }
             }
 
@@ -446,20 +675,7 @@ function Initialize-BorealisTlsContext {
         return
     }
 
-    $candidatePaths = @()
-    if ($env:BOREALIS_ROOT_CA_PATH) {
-        $candidatePaths += $env:BOREALIS_ROOT_CA_PATH
-    }
-    if ($AgentRoot) {
-        $candidatePaths += (Join-Path $AgentRoot 'Certificates\borealis-root-ca.pem')
-        $candidatePaths += (Join-Path $AgentRoot 'Certificates\engine-root-ca.pem')
-        $candidatePaths += (Join-Path $AgentRoot 'Certificates\borealis-server-bundle.pem')
-    }
-    $candidatePaths += (Join-Path $scriptDir 'Engine\Certificates\borealis-root-ca.pem')
-    $candidatePaths += (Join-Path $scriptDir 'Engine\Certificates\borealis-server-bundle.pem')
-    $candidatePaths += (Join-Path $scriptDir 'Certificates\borealis-root-ca.pem')
-    $candidatePaths += (Join-Path $scriptDir 'Data\Engine\Certificates\borealis-root-ca.pem')
-    $candidatePaths = $candidatePaths | Where-Object { $_ } | Select-Object -Unique
+    $candidatePaths = Get-BorealisCertificateCandidates -AgentRoot $AgentRoot
 
     $trusted = @()
     foreach ($path in $candidatePaths) {
@@ -467,6 +683,7 @@ function Initialize-BorealisTlsContext {
         try { $exists = Test-Path $path -PathType Leaf } catch {}
         $existsText = if ($exists) { 'true' } else { 'false' }
         Write-Verbose ("Evaluating Borealis TLS candidate: {0} (exists={1})" -f $path, $existsText)
+        Write-UpdateLog ("TLS candidate {0} exists={1}" -f $path, $existsText) 'DEBUG'
         if (-not $exists) { continue }
         try {
             $trusted += Get-CertificatesFromPem -Path $path
@@ -476,9 +693,11 @@ function Initialize-BorealisTlsContext {
     if ($trusted.Count -gt 0) {
         $script:BorealisTrustedThumbprints = $trusted | ForEach-Object { $_.Thumbprint.ToUpperInvariant() } | Sort-Object -Unique
         Write-Verbose ("Borealis TLS trust store loaded {0} certificate(s)." -f $script:BorealisTrustedThumbprints.Count)
+        Write-UpdateLog ("TLS trust store initialized with {0} certificate(s)." -f $script:BorealisTrustedThumbprints.Count) 'INFO'
     } else {
         $script:BorealisTrustedThumbprints = @()
         Write-Verbose "No Borealis TLS certificates located; loopback hosts will be allowed without CA verification."
+        Write-UpdateLog "No TLS certificates found; falling back to loopback-only allowance." 'WARN'
     }
 
     Ensure-BorealisCertificateValidator
@@ -492,6 +711,7 @@ function Initialize-BorealisTlsContext {
         if ($hasSystemDefault) {
             # Allow the OS to negotiate the strongest available protocol (TLS 1.3 on modern hosts).
             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::SystemDefault
+            Write-UpdateLog "SecurityProtocol configured to SystemDefault (OS-negotiated)." 'DEBUG'
         } else {
             $protocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
             if ([System.Enum]::IsDefined($protocolType, 'Tls13')) {
@@ -499,6 +719,7 @@ function Initialize-BorealisTlsContext {
                 $protocol = $protocol -bor $tls13
             }
             [System.Net.ServicePointManager]::SecurityProtocol = $protocol
+            Write-UpdateLog ("SecurityProtocol configured to legacy mask: {0}" -f $protocol) 'DEBUG'
         }
     } catch {}
 
@@ -511,6 +732,313 @@ function Initialize-BorealisTlsContext {
     }
 
     $script:BorealisTlsInitialized = $true
+}
+
+function Get-AgentPythonExecutable {
+    param(
+        [string]$AgentRoot
+    )
+
+    $candidates = @()
+    if ($AgentRoot) {
+        try {
+            $agentParent = Split-Path $AgentRoot -Parent
+            if ($agentParent) {
+                $candidates += (Join-Path $agentParent 'Scripts\python.exe')
+            }
+        } catch {}
+    }
+    $candidates += (Join-Path $scriptDir 'Agent\Scripts\python.exe')
+    $candidates += (Join-Path $scriptDir 'Dependencies\Python\python.exe')
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        try {
+            if (Test-Path $candidate -PathType Leaf) {
+                Write-UpdateLog ("Using Python executable for HTTP helper: {0}" -f $candidate) 'DEBUG'
+                return $candidate
+            }
+        } catch {}
+    }
+    Write-UpdateLog "No Python executable found for HTTP helper fallback." 'WARN'
+    return ''
+}
+
+function Ensure-AgentPythonHttpHelper {
+    if ($script:AgentPythonHttpHelper -and (Test-Path $script:AgentPythonHttpHelper -PathType Leaf)) {
+        return $script:AgentPythonHttpHelper
+    }
+
+    $helperDir = Join-Path ([System.IO.Path]::GetTempPath()) 'BorealisUpdate'
+    try {
+        if (-not (Test-Path $helperDir -PathType Container)) {
+            New-Item -ItemType Directory -Force -Path $helperDir | Out-Null
+        }
+    } catch {}
+
+    $helperPath = Join-Path $helperDir 'agent_http_client.py'
+    $helperSource = @"
+import json
+import ssl
+import sys
+import urllib.error
+import urllib.request
+
+
+def _build_context(cafile):
+    if cafile:
+        ctx = ssl.create_default_context()
+        try:
+            ctx.load_verify_locations(cafile=cafile)
+        except Exception:
+            pass
+        minimum = getattr(ssl, "TLSVersion", None)
+        if minimum is not None:
+            try:
+                ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            except Exception:
+                pass
+        return ctx
+    ctx = ssl._create_unverified_context()
+    try:
+        ctx.check_hostname = False
+    except Exception:
+        pass
+    try:
+        ctx.verify_mode = ssl.CERT_NONE
+    except Exception:
+        pass
+    return ctx
+
+
+def _read_payload():
+    data = sys.stdin.buffer.read()
+    if not data:
+        return {}
+    try:
+        text = data.decode("utf-8-sig")
+    except Exception:
+        text = data.decode("utf-8", errors="ignore")
+    return json.loads(text)
+
+
+def _peer_certificate(handle):
+    try:
+        raw = getattr(handle, "fp", None)
+        if raw is None:
+            raw = getattr(handle, "file", None)
+        if raw is None:
+            return None
+        raw = getattr(raw, "raw", raw)
+        sock = getattr(raw, "_sock", None)
+        if sock is None:
+            sock = getattr(raw, "socket", None)
+        if sock is None:
+            return None
+        der = sock.getpeercert(True)
+        if der:
+            return ssl.DER_cert_to_PEM_cert(der)
+    except Exception:
+        return None
+    return None
+
+
+def main():
+    try:
+        payload = _read_payload()
+    except Exception as exc:  # pragma: no cover - defensive
+        json.dump({"error": "payload decode failed: %s" % (exc,)}, sys.stdout)
+        return 1
+
+    method = (payload.get("method") or "GET").upper()
+    url = payload.get("url")
+    headers = payload.get("headers") or {}
+    body = payload.get("body")
+    content_type = payload.get("content_type")
+    timeout = payload.get("timeout") or 30
+    cafile = payload.get("cafile")
+
+    if body is not None and not isinstance(body, (bytes, bytearray)):
+        body = str(body).encode("utf-8")
+
+    request = urllib.request.Request(url=url, data=body, method=method)
+    for key, value in headers.items():
+        if value is None:
+            continue
+        request.add_header(str(key), str(value))
+
+    if content_type and all(k.lower() != "content-type" for k in request.headers):
+        request.add_header("Content-Type", str(content_type))
+
+    ctx = _build_context(cafile if isinstance(cafile, str) else None)
+
+    try:
+        with urllib.request.urlopen(request, timeout=float(timeout), context=ctx) as response:
+            text = response.read().decode("utf-8", errors="replace")
+            json.dump({"status": response.status, "body": text, "certificate": _peer_certificate(response)}, sys.stdout)
+            return 0
+    except urllib.error.HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        json.dump({"status": exc.code, "body": text, "certificate": _peer_certificate(exc)}, sys.stdout)
+        return 0
+    except Exception as exc:  # pragma: no cover - defensive
+        json.dump({"error": str(exc)}, sys.stdout)
+        return 1
+
+
+if __name__ == "__main__":  # pragma: no cover - defensive
+    raise SystemExit(main())
+"@
+
+    try {
+        Set-Content -Path $helperPath -Value $helperSource -Encoding UTF8 -Force
+        $script:AgentPythonHttpHelper = $helperPath
+        Write-UpdateLog ("Staged Python HTTP helper at {0}" -f $helperPath) 'DEBUG'
+    } catch {
+        $script:AgentPythonHttpHelper = ''
+    }
+
+    return $script:AgentPythonHttpHelper
+}
+
+function Invoke-AgentHttpRequest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Method,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+
+        [hashtable]$Headers,
+        [string]$Body,
+        [string]$ContentType,
+        [string]$AgentRoot,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $headersToUse = @{}
+    if ($Headers) {
+        foreach ($key in $Headers.Keys) {
+            $value = $Headers[$key]
+            if ($null -ne $value -and $value.ToString()) {
+                $headersToUse[$key] = $value
+            }
+        }
+    }
+
+    $invokeParams = @{
+        Uri            = $Uri
+        Method         = $Method
+        Headers        = $headersToUse
+        UseBasicParsing = $true
+        ErrorAction    = 'Stop'
+    }
+    if ($Body) { $invokeParams['Body'] = $Body }
+    if ($ContentType) { $invokeParams['ContentType'] = $ContentType }
+    if ($TimeoutSeconds -gt 0) { $invokeParams['TimeoutSec'] = $TimeoutSeconds }
+
+    Write-UpdateLog ("HTTP {0} {1}" -f $Method.ToUpperInvariant(), $Uri) 'DEBUG'
+    try {
+        $response = Invoke-WebRequest @invokeParams
+        Write-UpdateLog ("Invoke-WebRequest succeeded (HTTP {0})." -f $response.StatusCode) 'DEBUG'
+        return [pscustomobject]@{
+            StatusCode = $response.StatusCode
+            Content    = $response.Content
+        }
+    } catch {
+        Write-Verbose ("Invoke-WebRequest failed for {0}: {1}" -f $Uri, $_.Exception.Message)
+        Write-UpdateLog ("Invoke-WebRequest failed for {0}: {1}" -f $Uri, $_.Exception.Message) 'WARN'
+    }
+
+    $pythonExe = Get-AgentPythonExecutable -AgentRoot $AgentRoot
+    if (-not $pythonExe) {
+        Write-UpdateLog "Python executable for HTTP fallback not found." 'ERROR'
+        return $null
+    }
+
+    $helperScript = Ensure-AgentPythonHttpHelper
+    if (-not $helperScript) {
+        Write-UpdateLog "Unable to stage Python HTTP helper script." 'ERROR'
+        return $null
+    }
+
+    $cafile = Get-BorealisTrustBundlePath -AgentRoot $AgentRoot
+    if (-not $cafile) {
+        Write-UpdateLog "No TLS bundle available; helper will skip certificate validation for this request." 'WARN'
+    }
+    $payload = @{
+        method       = $Method
+        url          = $Uri
+        headers      = $headersToUse
+        body         = $Body
+        content_type = $ContentType
+        timeout      = $TimeoutSeconds
+        cafile       = $cafile
+    } | ConvertTo-Json -Depth 6
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $pythonExe
+    $psi.Arguments = ('"{0}"' -f $helperScript)
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    try {
+        $process = [System.Diagnostics.Process]::Start($psi)
+    } catch {
+        Write-Verbose ("Failed to start Python helper: {0}" -f $_.Exception.Message)
+        Write-UpdateLog ("Failed to launch Python helper: {0}" -f $_.Exception.Message) 'ERROR'
+        return $null
+    }
+
+    try {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        $bytes = $utf8NoBom.GetBytes($payload)
+        $process.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+        $process.StandardInput.BaseStream.Flush()
+        $process.StandardInput.Close()
+    } catch {
+        Write-UpdateLog ("Failed to write payload to Python helper stdin: {0}" -f $_.Exception.Message) 'WARN'
+        try { $process.StandardInput.Close() } catch {}
+    }
+
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+
+    if ($stderr) {
+        Write-Verbose ("Python helper stderr: {0}" -f $stderr.Trim())
+        Write-UpdateLog ("Python helper stderr: {0}" -f $stderr.Trim()) 'DEBUG'
+    }
+
+    if (-not $stdout) {
+        Write-UpdateLog "Python helper returned empty response." 'ERROR'
+        return $null
+    }
+
+    try {
+        $json = $stdout | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Write-Verbose ("Unable to parse Python helper output: {0}" -f $_.Exception.Message)
+        return $null
+    }
+
+    if ($json.error) {
+        Write-Verbose ("Python helper reported error: {0}" -f $json.error)
+        Write-UpdateLog ("Python helper error: {0}" -f $json.error) 'ERROR'
+        return $null
+    }
+
+    if ($json.certificate -and (-not $cafile)) {
+        Save-BorealisServerCertificate -AgentRoot $AgentRoot -CertificatePem $json.certificate
+    }
+
+    Write-UpdateLog ("Python helper completed HTTP call with status {0}." -f $json.status) 'DEBUG'
+    return [pscustomobject]@{
+        StatusCode  = $json.status
+        Content     = $json.body
+        Certificate = $json.certificate
+    }
 }
 
 function Get-AgentServiceId {
@@ -634,13 +1162,17 @@ function Invoke-AgentTokenRefresh {
         [string]$AgentGuid,
 
         [Parameter(Mandatory = $true)]
-        [string]$RefreshToken
+        [string]$RefreshToken,
+
+        [string]$AgentRoot
     )
 
     if ([string]::IsNullOrWhiteSpace($ServerBaseUrl) -or [string]::IsNullOrWhiteSpace($AgentGuid) -or [string]::IsNullOrWhiteSpace($RefreshToken)) {
+        Write-UpdateLog "Invoke-AgentTokenRefresh called with missing parameters." 'ERROR'
         return $null
     }
 
+    Write-UpdateLog ("Requesting access token refresh for agent {0}" -f $AgentGuid) 'STEP'
     $base = $ServerBaseUrl.TrimEnd('/')
     $uri = "$base/api/agent/token/refresh"
     $payload = @{
@@ -652,27 +1184,35 @@ function Invoke-AgentTokenRefresh {
         'Content-Type'  = 'application/json'
     }
 
-    try {
-        $resp = Invoke-WebRequest -Uri $uri -Method Post -Body $payload -Headers $headers -UseBasicParsing -ErrorAction Stop
-        $json = $resp.Content | ConvertFrom-Json
-        if ($json -and $json.access_token) {
-            $expiresIn = 900
-            try {
-                if ($json.expires_in) {
-                    $expiresIn = [int]$json.expires_in
-                }
-            } catch {}
-            $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-            $expiresAt = $now + [Math]::Max(0, $expiresIn - 5)
-            return [pscustomobject]@{
-                AccessToken = ($json.access_token).Trim()
-                ExpiresAt   = $expiresAt
-            }
-        }
-    } catch {
+    $response = Invoke-AgentHttpRequest -Method 'POST' -Uri $uri -Headers $headers -Body $payload -ContentType 'application/json' -AgentRoot $AgentRoot -TimeoutSeconds 60
+    if (-not $response) {
+        Write-UpdateLog "Token refresh request produced no response." 'ERROR'
         return $null
     }
 
+    try {
+        $json = $response.Content | ConvertFrom-Json
+    } catch {
+        Write-UpdateLog ("Token refresh response decode failed: {0}" -f $_.Exception.Message) 'ERROR'
+        return $null
+    }
+
+    if ($json -and $json.access_token) {
+        $expiresIn = 900
+        try {
+            if ($json.expires_in) {
+                $expiresIn = [int]$json.expires_in
+            }
+        } catch {}
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $expiresAt = $now + [Math]::Max(0, $expiresIn - 5)
+        return [pscustomobject]@{
+            AccessToken = ($json.access_token).Trim()
+            ExpiresAt   = $expiresAt
+        }
+    }
+
+    Write-UpdateLog "Token refresh response did not include access token." 'WARN'
     return $null
 }
 
@@ -686,6 +1226,7 @@ function Get-AgentAccessTokenContext {
     $settingsDir = Get-AgentSettingsDirectory -AgentRoot $AgentRoot
     if (-not $settingsDir) { return $null }
 
+    Write-UpdateLog ("Loading agent access tokens from {0}" -f $settingsDir) 'DEBUG'
     $accessPath = Join-Path $settingsDir 'access.jwt'
     $metaPath   = Join-Path $settingsDir 'access.meta.json'
     $refreshPath = Join-Path $settingsDir 'refresh.token'
@@ -717,6 +1258,8 @@ function Get-AgentAccessTokenContext {
 
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     if ($accessToken -and $expiresAt -gt ($now + 30)) {
+        $secondsLeft = $expiresAt - $now
+        Write-UpdateLog ("Using cached access token (expires in {0} seconds)." -f $secondsLeft) 'INFO'
         return [pscustomobject]@{
             AccessToken = $accessToken
             ExpiresAt   = $expiresAt
@@ -725,14 +1268,18 @@ function Get-AgentAccessTokenContext {
 
     $refreshToken = Get-ProtectedTokenString -Path $refreshPath
     if (-not $refreshToken) {
+        Write-UpdateLog "Refresh token unavailable; cannot authenticate with server." 'ERROR'
         return $null
     }
 
-    $refreshResult = Invoke-AgentTokenRefresh -ServerBaseUrl $ServerBaseUrl -AgentGuid $AgentGuid -RefreshToken $refreshToken
+    Write-UpdateLog "Cached token expired or missing; requesting refreshed access token." 'WARN'
+    $refreshResult = Invoke-AgentTokenRefresh -ServerBaseUrl $ServerBaseUrl -AgentGuid $AgentGuid -RefreshToken $refreshToken -AgentRoot $AgentRoot
     if ($refreshResult -and $refreshResult.AccessToken) {
+        Write-UpdateLog "Access token successfully refreshed." 'SUCCESS'
         return $refreshResult
     }
 
+    Write-UpdateLog "Failed to refresh access token." 'ERROR'
     return $null
 }
 function Get-RepositoryCommitHash {
@@ -755,6 +1302,10 @@ function Get-RepositoryCommitHash {
         }
     }
 
+    if ($candidates.Count -gt 0) {
+        Write-UpdateLog ("Evaluating repository hash from candidate roots: {0}" -f ([string]::Join(', ', $candidates))) 'DEBUG'
+    }
+
     if ($GitExe -and (Test-Path $GitExe -PathType Leaf)) {
         foreach ($root in $candidates) {
             try {
@@ -762,7 +1313,13 @@ function Get-RepositoryCommitHash {
                 $revParse = Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $root -Arguments @('rev-parse','HEAD')
                 if ($revParse) {
                     $candidate = ($revParse | Select-Object -Last 1)
-                    if ($candidate) { return ($candidate.Trim()) }
+                    if ($candidate) {
+                        $result = $candidate.Trim()
+                        if ($result) {
+                            Write-UpdateLog ("Repository hash determined via git: {0}" -f $result) 'INFO'
+                            return $result
+                        }
+                    }
                 }
             } catch {}
         }
@@ -829,9 +1386,13 @@ function Get-RepositoryCommitHash {
 
     if ($AgentRoot) {
         $stored = Get-StoredAgentHash -AgentRoot $AgentRoot
-        if ($stored) { return $stored }
+        if ($stored) {
+            Write-UpdateLog ("Using stored agent hash fallback: {0}" -f $stored) 'WARN'
+            return $stored
+        }
     }
 
+    Write-UpdateLog "Unable to determine repository hash from any source." 'WARN'
     return ''
 }
 
@@ -869,6 +1430,7 @@ function Set-StoredAgentHash {
         }
         $hashFile = Join-Path $settingsDir 'agent_hash.txt'
         Set-Content -Path $hashFile -Value $AgentHash.Trim() -Encoding UTF8
+        Write-UpdateLog ("Stored agent hash to {0}" -f $hashFile) 'DEBUG'
     } catch {}
 }
 
@@ -890,6 +1452,7 @@ function Set-GitFetchHeadHash {
         $branchSegment = if ([string]::IsNullOrWhiteSpace($BranchName)) { '' } else { "`tbranch '$BranchName'" }
         $content = "{0}{1}" -f ($CommitHash.Trim()), $branchSegment
         Set-Content -Path $fetchHead -Value $content -Encoding UTF8
+        Write-UpdateLog ("Wrote FETCH_HEAD in {0} to {1}" -f $gitDir, $CommitHash) 'DEBUG'
     } catch {}
 }
 
@@ -897,7 +1460,8 @@ function Get-ServerCurrentRepoHash {
     param(
         [Parameter(Mandatory = $true)]
         [string]$ServerBaseUrl,
-        [string]$AuthToken
+        [string]$AuthToken,
+        [string]$AgentRoot
     )
 
     if ([string]::IsNullOrWhiteSpace($ServerBaseUrl)) { return $null }
@@ -909,14 +1473,28 @@ function Get-ServerCurrentRepoHash {
         $headers['Authorization'] = "Bearer $AuthToken"
     }
 
-    try {
-        $resp = Invoke-WebRequest -Uri $uri -Method Get -Headers $headers -UseBasicParsing -ErrorAction Stop
-        $json = $resp.Content | ConvertFrom-Json
-        return $json
-    } catch {
-        Write-Verbose ("Get-ServerCurrentRepoHash request to {0} failed: {1}" -f $uri, $_.Exception.Message)
-        return $null
+    $response = Invoke-AgentHttpRequest -Method 'GET' -Uri $uri -Headers $headers -AgentRoot $AgentRoot -TimeoutSeconds 40
+    if ($response -and $response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
+        try {
+            $json = $response.Content | ConvertFrom-Json
+            Write-UpdateLog ("Received repo hash payload from server (branch={0}, sha={1})." -f $json.branch, $json.sha) 'SUCCESS'
+            return $json
+        } catch {
+            Write-Verbose ("Unable to decode repo hash response: {0}" -f $_.Exception.Message)
+            Write-UpdateLog ("Failed to decode repo hash response JSON: {0}" -f $_.Exception.Message) 'ERROR'
+            return $null
+        }
     }
+
+    if ($response) {
+        Write-Verbose ("Repo hash request returned HTTP {0}: {1}" -f $response.StatusCode, $response.Content)
+        Write-UpdateLog ("Repo hash request returned HTTP {0}: {1}" -f $response.StatusCode, $response.Content) 'WARN'
+    } else {
+        Write-Verbose ("Repo hash request to {0} returned no response." -f $uri)
+        Write-UpdateLog ("Repo hash request to {0} returned no response." -f $uri) 'ERROR'
+    }
+
+    return $null
 }
 
 function Submit-AgentHash {
@@ -932,7 +1510,9 @@ function Submit-AgentHash {
 
         [string]$AgentGuid,
 
-        [string]$AuthToken
+        [string]$AuthToken,
+
+        [string]$AgentRoot
     )
 
     if ([string]::IsNullOrWhiteSpace($ServerBaseUrl) -or [string]::IsNullOrWhiteSpace($AgentHash)) {
@@ -950,11 +1530,20 @@ function Submit-AgentHash {
         $headers['Authorization'] = "Bearer $AuthToken"
     }
 
-    $resp = Invoke-WebRequest -Uri $uri -Method Post -Headers $headers -Body $payload -ContentType 'application/json' -UseBasicParsing -ErrorAction Stop
+    $response = Invoke-AgentHttpRequest -Method 'POST' -Uri $uri -Headers $headers -Body $payload -ContentType 'application/json' -AgentRoot $AgentRoot -TimeoutSeconds 60
+    if (-not $response) {
+        Write-Verbose "Submit-AgentHash request returned no response."
+        Write-UpdateLog "Agent hash submission produced no response from server." 'ERROR'
+        return $null
+    }
+
+    Write-UpdateLog ("Agent hash submission HTTP status: {0}" -f $response.StatusCode) 'DEBUG'
     try {
-        $json = $resp.Content | ConvertFrom-Json
+        $json = $response.Content | ConvertFrom-Json
         return $json
     } catch {
+        Write-Verbose ("Submit-AgentHash response decode failed: {0}" -f $_.Exception.Message)
+        Write-UpdateLog ("Failed to parse agent hash submission response: {0}" -f $_.Exception.Message) 'ERROR'
         return $null
     }
 }
@@ -973,6 +1562,7 @@ function Sync-AgentHashRecord {
 
     if ([string]::IsNullOrWhiteSpace($AgentHash)) { return }
 
+    Write-UpdateLog ("Sync-AgentHashRecord invoked with hash {0}" -f $AgentHash) 'STEP'
     if ($ProjectRoot) {
         Set-GitFetchHeadHash -ProjectRoot $ProjectRoot -CommitHash $AgentHash -BranchName $BranchName
     }
@@ -983,23 +1573,29 @@ function Sync-AgentHashRecord {
     if ([string]::IsNullOrWhiteSpace($ServerBaseUrl)) { return }
 
     Write-Host ("Submitting agent hash to server: {0}" -f $AgentHash)
+    Write-UpdateLog ("Submitting agent hash to {0} (AgentId={1}, AgentGuid={2})" -f $ServerBaseUrl, $AgentId, $AgentGuid) 'STEP'
 
     if ([string]::IsNullOrWhiteSpace($AgentId) -and [string]::IsNullOrWhiteSpace($AgentGuid)) {
         Write-Host "Agent identifier unavailable; skipping agent hash submission." -ForegroundColor DarkYellow
+        Write-UpdateLog "Agent identifier unavailable; cannot submit hash to server." 'WARN'
         return
     }
 
     try {
-        $submitResult = Submit-AgentHash -ServerBaseUrl $ServerBaseUrl -AgentId $AgentId -AgentHash $AgentHash -AgentGuid $AgentGuid -AuthToken $AuthToken
+        $submitResult = Submit-AgentHash -ServerBaseUrl $ServerBaseUrl -AgentId $AgentId -AgentHash $AgentHash -AgentGuid $AgentGuid -AuthToken $AuthToken -AgentRoot $AgentRoot
         if ($submitResult -and ($submitResult.status -eq 'ok')) {
             Write-Host "The server-side agent hash database record was updated successfully."
+            Write-UpdateLog "Server acknowledged agent hash update." 'SUCCESS'
         } elseif ($submitResult -and ($submitResult.status -eq 'ignored')) {
             Write-Host "Server ignored the agent hash update (the agent is not enrolled with the server)." -ForegroundColor DarkYellow
+            Write-UpdateLog "Server returned 'ignored' for agent hash submission." 'WARN'
         } elseif ($submitResult) {
             Write-Host "Server agent_hash update response unrecognized.  We don't know what to do here. (Panic)" -ForegroundColor DarkYellow
+            Write-UpdateLog ("Unexpected server response for agent hash submission: {0}" -f ($submitResult | ConvertTo-Json -Depth 5)) 'WARN'
         }
     } catch {
         Write-Verbose ("Failed to Submit Agent Hash: {0}" -f $_.Exception.Message)
+        Write-UpdateLog ("Agent hash submission failed: {0}" -f $_.Exception.Message) 'ERROR'
     }
 }
 
@@ -1068,7 +1664,7 @@ function Invoke-BorealisUpdate {
     }
 
     Run-Step "Updating: Clone Repository Source" {
-        $cloneArgs = @('clone','--no-tags','--depth','1')
+        $cloneArgs = @('clone','--no-tags')
         if (-not [string]::IsNullOrWhiteSpace($BranchName)) {
             $cloneArgs += @('--branch', $BranchName)
         }
@@ -1137,6 +1733,7 @@ function Invoke-BorealisAgentUpdate {
     Write-Host "==============================================="
     Write-Host " Borealis - Automation Platform Updater Script "
     Write-Host "==============================================="
+    Write-UpdateLog "Starting Borealis updater execution." 'STEP'
 
     $agentRootCandidate = Join-Path $scriptDir 'Agent\Borealis'
     $agentRoot = $scriptDir
@@ -1147,13 +1744,16 @@ function Invoke-BorealisAgentUpdate {
             $agentRoot = $agentRootCandidate
         }
     }
+    Write-UpdateLog ("Agent root resolved to {0}" -f $agentRoot) 'INFO'
 
     $agentGuid = Get-AgentGuid -AgentRoot $agentRoot
     if ($agentGuid) {
         Write-Host ("Agent GUID: {0}" -f $agentGuid)
+        Write-UpdateLog ("Operating on agent GUID {0}" -f $agentGuid) 'INFO'
     } else {
         Write-Host "Warning: No agent GUID detected - Please deploy the agent, associating it with a Borealis server then try running the updater script again." -ForegroundColor Yellow
         Write-Host "⚠️ Borealis update aborted."
+        Write-UpdateLog "Agent GUID missing; aborting update." 'ERROR'
         return
     }
 
@@ -1162,16 +1762,19 @@ function Invoke-BorealisAgentUpdate {
     $serverBaseUrl = Get-BorealisServerUrl -AgentRoot $agentRoot
     Initialize-BorealisTlsContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl
     $agentId = Get-AgentServiceId -AgentRoot $agentRoot
+    Write-UpdateLog ("Agent service ID detected: {0}" -f $agentId) 'DEBUG'
 
     $authContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
     if (-not $authContext -or -not $authContext.AccessToken) {
         Write-Host "Unable to obtain agent authentication token. Ensure the agent is running and enrolled, then rerun the updater." -ForegroundColor Yellow
         Write-Host "⚠️ Borealis update aborted."
+        Write-UpdateLog "Authentication context unavailable; aborting update." 'ERROR'
         return
     }
     $authToken = $authContext.AccessToken
 
-    $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken
+    Write-UpdateLog "Querying Borealis server for current repository hash." 'STEP'
+    $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken -AgentRoot $agentRoot
     $serverHash = ''
     $serverBranch = 'main'
     if ($serverRepoInfo) {
@@ -1185,6 +1788,7 @@ function Invoke-BorealisAgentUpdate {
     $updateMode = $env:update_mode
     if ($updateMode) { $updateMode = $updateMode.ToLowerInvariant() } else { $updateMode = 'update' }
     $forceUpdate = $updateMode -eq 'force_update'
+    Write-UpdateLog ("Updater mode: {0} (force={1})" -f $updateMode, $forceUpdate) 'INFO'
 
     if ($currentHash) {
         Write-Host ("Local Agent Hash: {0}" -f $currentHash)
@@ -1205,22 +1809,27 @@ function Invoke-BorealisAgentUpdate {
 
     if ($forceUpdate) {
         Write-Host "Force update requested; skipping hash comparison." -ForegroundColor Yellow
+        Write-UpdateLog "Force update requested; bypassing hash comparison." 'WARN'
     } elseif (-not $serverHash) {
         Write-Host "Borealis server hash unavailable; cannot continue." -ForegroundColor Yellow
         Write-Host "⚠️ Borealis update aborted."
+        Write-UpdateLog "Server hash unavailable; aborting." 'ERROR'
         return
     } elseif (-not $needsUpdate) {
         Write-Host "Local agent files already match the server repository hash." -ForegroundColor Green
+        Write-UpdateLog "Local agent hash matches remote; ensuring server record is updated." 'SUCCESS'
         Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
         Write-Host "✅ Borealis - Automation Platform Already Up-to-Date"
         return
     } else {
         Write-Host "Repository hash mismatch detected; update required."
+        Write-UpdateLog ("Repository hash mismatch detected (local={0}, remote={1})." -f $currentHash, $serverHash) 'WARN'
     }
 
     if (-not ($gitExe) -or -not (Test-Path $gitExe -PathType Leaf)) {
-        Write-Host "Bundled Git dependency not found. Run '.\\Borealis.ps1 -Agent' to redeploy the agent dependencies and try again." -ForegroundColor Yellow
+        Write-Host "Bundled Git dependency not found. Run '.\Borealis.ps1 -Agent' to redeploy the agent dependencies and try again." -ForegroundColor Yellow
         Write-Host "⚠️ Borealis update aborted."
+        Write-UpdateLog "Bundled Git dependency missing; aborting update." 'ERROR'
         return
     }
 
@@ -1239,19 +1848,28 @@ function Invoke-BorealisAgentUpdate {
         $staging = Join-Path $scriptDir 'Update_Staging'
 
         $managedTasks = Stop-AgentScheduledTasks -TaskNames @('Borealis Agent','Borealis Agent (UserHelper)')
+        if ($managedTasks.Count -gt 0) {
+            Write-UpdateLog ("Managed tasks stopped: {0}" -f ($managedTasks -join ', ')) 'INFO'
+        } else {
+            Write-UpdateLog "No managed tasks were running when update started." 'DEBUG'
+        }
         Run-Step "Updating: Terminate Running Python Processes" { Stop-AgentPythonProcesses }
 
         $updateSucceeded = $false
         try {
+            Write-UpdateLog ("Starting repository sync to commit {0} (branch={1})." -f $serverHash, $serverBranch) 'STEP'
             Invoke-BorealisUpdate -GitExe $gitExe -RepositoryUrl $repositoryUrl -TargetHash $serverHash -BranchName $serverBranch -Silent
             $updateSucceeded = $true
+            Write-UpdateLog "Repository sync completed successfully." 'SUCCESS'
         } finally {
             if ($managedTasks.Count -gt 0) {
                 Start-AgentScheduledTasks -TaskNames $managedTasks
+                Write-UpdateLog "Agent scheduled tasks restarted." 'INFO'
             }
         }
 
         if (-not $updateSucceeded) {
+            Write-UpdateLog "Repository sync reported failure." 'ERROR'
             throw 'Borealis update failed.'
         }
 
@@ -1259,7 +1877,7 @@ function Invoke-BorealisAgentUpdate {
         if ($refreshedContext -and $refreshedContext.AccessToken) {
             $authToken = $refreshedContext.AccessToken
         }
-        $postUpdateInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken
+        $postUpdateInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken -AgentRoot $agentRoot
         if ($postUpdateInfo) {
             try {
                 $refreshedSha = (($postUpdateInfo.sha) -as [string]).Trim()
@@ -1284,15 +1902,19 @@ function Invoke-BorealisAgentUpdate {
         }
 
         if ($newHash) {
+            Write-UpdateLog ("Final agent hash determined: {0}" -f $newHash) 'INFO'
             Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
         } else {
             Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
+            Write-UpdateLog "Unable to determine final agent hash; skipping submission." 'WARN'
         }
 
         Write-Host "✅ Borealis - Automation Platform Successfully Updated"
+        Write-UpdateLog "Update workflow completed successfully." 'SUCCESS'
     } finally {
         if ($mutex -and $gotMutex) { $mutex.ReleaseMutex() | Out-Null }
         if ($mutex) { $mutex.Dispose() }
+        Write-UpdateLog "Released update mutex and cleaned up resources." 'DEBUG'
     }
 }
 
