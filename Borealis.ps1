@@ -183,6 +183,29 @@ function Write-AgentLog {
     "[$ts] $Message" | Out-File -FilePath $path -Append -Encoding UTF8
 }
 
+function Ensure-EngineLogDir {
+    $engineRoot = Join-Path $scriptDir 'Engine'
+    if (-not (Test-Path $engineRoot)) {
+        New-Item -ItemType Directory -Path $engineRoot -Force | Out-Null
+    }
+    $engineLogDir = Join-Path $engineRoot 'Logs'
+    if (-not (Test-Path $engineLogDir)) {
+        New-Item -ItemType Directory -Path $engineLogDir -Force | Out-Null
+    }
+    return $engineLogDir
+}
+
+function Write-ViteLog {
+    param(
+        [string]$Message,
+        [string]$ServiceName = 'vite-dev'
+    )
+    $engineLogDir = Ensure-EngineLogDir
+    $logPath = Join-Path $engineLogDir 'vite.log'
+    $timestamp = (Get-Date).ToString('s')
+    "$timestamp-$ServiceName-$Message" | Out-File -FilePath $logPath -Append -Encoding UTF8
+}
+
 function Ensure-EngineTlsMaterial {
     param(
         [string]$PythonPath,
@@ -211,7 +234,15 @@ print(certificates.engine_certificates_root())
     }
 
     if (-not $effectiveRoot -and $CertificateRoot) {
-        $effectiveRoot = $CertificateRoot
+        $certCandidate = Join-Path $CertificateRoot 'borealis-server-cert.pem'
+        $keyCandidate  = Join-Path $CertificateRoot 'borealis-server-key.pem'
+        if ((Test-Path $certCandidate) -and (Test-Path $keyCandidate)) {
+            $effectiveRoot = $CertificateRoot
+        } else {
+            $fallbackMessage = "Provided certificate root '$CertificateRoot' is missing expected TLS material; using Engine runtime certificates instead."
+            Write-Host $fallbackMessage -ForegroundColor Yellow
+            try { Write-ViteLog $fallbackMessage } catch {}
+        }
     }
 
     if (-not $effectiveRoot) {
@@ -1234,44 +1265,110 @@ switch ($choice) {
 
         Run-Step "Copy Borealis Engine WebUI Files into: $webUIDestination" {
             Ensure-EngineWebInterface -ProjectRoot $scriptDir
-            $engineWebUISource = Join-Path $scriptDir 'Engine\web-interface'
-            if (-not (Test-Path $engineWebUISource)) {
-                throw "Engine web interface staging directory not found at '$engineWebUISource'."
-            }
-
             $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
-            if (Test-Path $webUIDestinationAbsolute) {
-                Remove-Item (Join-Path $webUIDestinationAbsolute '*') -Recurse -Force -ErrorAction SilentlyContinue
-            } else {
-                New-Item -Path $webUIDestinationAbsolute -ItemType Directory -Force | Out-Null
+            if (-not (Test-Path (Join-Path $webUIDestinationAbsolute 'package.json'))) {
+                throw "Failed to stage Engine web interface into '$webUIDestinationAbsolute'."
             }
-
-            Copy-Item (Join-Path $engineWebUISource '*') $webUIDestinationAbsolute -Recurse -Force
         }
 
         Run-Step "Vite Web Frontend: Install NPM Packages" {
             $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
             if (Test-Path $webUIDestinationAbsolute) {
                 Push-Location $webUIDestinationAbsolute
-                $env:npm_config_loglevel = "silent"
-                & $npmCmd install --silent --no-fund --audit=false | Out-Null
-                Pop-Location
+                try {
+                    $env:npm_config_loglevel = "silent"
+                    & $npmCmd install --silent --no-fund --audit=false *> $null
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "npm install exited with code $LASTEXITCODE"
+                    }
+                } finally {
+                    Pop-Location
+                }
             } else {
                 Write-Host "Web interface destination '$webUIDestinationAbsolute' not found." -ForegroundColor Yellow
+                throw "Web interface destination missing; cannot install npm packages."
             }
         }
 
         Run-Step "Vite Web Frontend: Start ($engineOperationMode)" {
             $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
-            if (Test-Path $webUIDestinationAbsolute) {
-                Push-Location $webUIDestinationAbsolute
+            if (-not (Test-Path $webUIDestinationAbsolute)) {
+                Write-ViteLog "WebUI destination missing at '$webUIDestinationAbsolute'; skipping Vite start."
+                return
+            }
+
+            Push-Location $webUIDestinationAbsolute
+            try {
                 $certRoot = Join-Path $scriptDir 'Certificates\Server'
                 Ensure-EngineTlsMaterial -PythonPath $venvPython -CertificateRoot $certRoot
+                $requiredTlsFiles = @($env:BOREALIS_TLS_CERT, $env:BOREALIS_TLS_KEY, $env:BOREALIS_TLS_BUNDLE)
+                foreach ($tlsFile in $requiredTlsFiles) {
+                    if ([string]::IsNullOrWhiteSpace($tlsFile) -or -not (Test-Path $tlsFile)) {
+                        Write-ViteLog "TLS artifact missing or unreadable: '$tlsFile'"
+                        throw "Unable to locate Borealis TLS material needed for Vite."
+                    }
+                }
+                $tlsSummary = "cert=$env:BOREALIS_TLS_CERT bundle=$env:BOREALIS_TLS_BUNDLE"
+
                 if ($engineOperationMode -eq "developer") {
-                    Start-Process -NoNewWindow -FilePath $npmCmd -ArgumentList @("run", "dev")
+                    $engineLogDir = Ensure-EngineLogDir
+                    $viteStdOut = Join-Path $engineLogDir 'vite-dev.stdout.log'
+                    $viteStdErr = Join-Path $engineLogDir 'vite-dev.stderr.log'
+                    foreach ($logPath in @($viteStdOut, $viteStdErr)) {
+                        if (Test-Path $logPath) {
+                            $archivePath = '{0}.{1}' -f $logPath, (Get-Date).ToString('yyyyMMddHHmmss')
+                            Move-Item -Path $logPath -Destination $archivePath -Force
+                            Write-ViteLog ("Archived previous {0} -> {1}" -f (Split-Path $logPath -Leaf), (Split-Path $archivePath -Leaf))
+                        }
+                    }
+
+                    $nodeDirForVite = Split-Path $nodeExe -ErrorAction SilentlyContinue
+                    $localBin = Join-Path $webUIDestinationAbsolute 'node_modules\.bin'
+                    foreach ($candidate in @($nodeDirForVite, $localBin)) {
+                        if ([string]::IsNullOrWhiteSpace($candidate)) {
+                            continue
+                        }
+                        if (-not (Test-Path $candidate)) {
+                            continue
+                        }
+                        $pathParts = $env:PATH -split [System.IO.Path]::PathSeparator
+                        if ($pathParts -notcontains $candidate) {
+                            $env:PATH = "$candidate$([System.IO.Path]::PathSeparator)$env:PATH"
+                            Write-ViteLog "Appended '$candidate' to PATH for Vite session."
+                        }
+                    }
+
+                    Write-ViteLog "Starting Vite dev server from '$webUIDestinationAbsolute' using TLS ($tlsSummary)."
+                    Write-ViteLog "npm CLI: $npmCmd"
+                    $startInfoArgs = @('run', 'dev')
+                    try {
+                        $viteProcess = Start-Process -FilePath $npmCmd `
+                                                     -ArgumentList $startInfoArgs `
+                                                     -WorkingDirectory $webUIDestinationAbsolute `
+                                                     -RedirectStandardOutput $viteStdOut `
+                                                     -RedirectStandardError $viteStdErr `
+                                                     -NoNewWindow -PassThru
+                        Write-ViteLog ("Spawned npm run dev (PID {0}); streaming to {1} / {2}" -f $viteProcess.Id, (Split-Path $viteStdOut -Leaf), (Split-Path $viteStdErr -Leaf))
+                        Start-Sleep -Seconds 2
+                        if ($viteProcess.HasExited) {
+                            $stderrTail = ''
+                            if (Test-Path $viteStdErr) {
+                                $stderrTail = (Get-Content $viteStdErr -Tail 20) -join ' | '
+                            }
+                            Write-ViteLog ("npm run dev exited with code {0}. stderr tail: {1}" -f $viteProcess.ExitCode, $stderrTail)
+                            throw "Vite dev server failed to start. Review $viteStdErr for details."
+                        } else {
+                            Write-ViteLog "Vite dev server is listening on https://localhost:5173 (PID $($viteProcess.Id))."
+                        }
+                    } catch {
+                        Write-ViteLog ("Failed to launch npm run dev: {0}" -f $_.Exception.Message)
+                        throw
+                    }
                 } else {
+                    Write-ViteLog "Executing npm run build for production WebUI assets."
                     & $npmCmd run build
                 }
+            } finally {
                 Pop-Location
             }
         }
