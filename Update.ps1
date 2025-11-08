@@ -1,11 +1,14 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$Trace
+)
 
 $scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
 $script:BorealisTlsInitialized = $false
 $script:BorealisTrustedThumbprints = @()
 $script:BorealisCallbackApplied = $false
 $script:AgentPythonHttpHelper = ''
+$script:UpdateDebugEnabled = $Trace.IsPresent
 $symbols = @{
     Success = [char]0x2705
     Running = [char]0x23F3
@@ -25,6 +28,10 @@ function Write-UpdateLog {
     $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     $normalized = if ($Level) { $Level } else { 'INFO' }
     $normalized = $normalized.ToUpperInvariant()
+
+    if ($normalized -eq 'DEBUG' -and -not $script:UpdateDebugEnabled) {
+        return
+    }
 
     if (-not $Color) {
         switch ($normalized) {
@@ -362,7 +369,7 @@ function Save-ServerCertificateCache {
 
     try {
         Set-Content -Path $targetPath -Value $CertificatePem -Encoding UTF8
-        Write-UpdateLog ("Cached server certificate to {0}" -f $targetPath) 'INFO'
+        Write-UpdateLog ("Saved Borealis Engine certificate to {0}" -f $targetPath) 'INFO'
         return $targetPath
     } catch {
         Write-UpdateLog ("Failed to cache server certificate: {0}" -f $_.Exception.Message) 'WARN'
@@ -548,11 +555,11 @@ function Initialize-BorealisTlsContext {
     $trusted = @()
     $cachedCertPath = Get-ExistingServerCertificatePath -AgentRoot $AgentRoot
     if ($cachedCertPath) {
-        Write-UpdateLog ("Using cached TLS certificate: {0}" -f $cachedCertPath) 'INFO'
+        Write-UpdateLog ("Attempting Borealis Engine connection using cached certificate: {0}" -f $cachedCertPath) 'INFO'
         try {
             $trusted += Get-CertificatesFromPem -Path $cachedCertPath
         } catch {
-            Write-UpdateLog ("Failed to load cached TLS certificate: {0}" -f $_.Exception.Message) 'WARN'
+            Write-UpdateLog ("Unable to load cached certificate; continuing without it ({0})." -f $_.Exception.Message) 'WARN'
         }
     }
 
@@ -563,7 +570,7 @@ function Initialize-BorealisTlsContext {
     } else {
         $script:BorealisTrustedThumbprints = @()
         Write-Verbose "No Borealis TLS certificates located; loopback hosts will be allowed without CA verification."
-        Write-UpdateLog "No TLS certificates found; falling back to loopback-only allowance." 'WARN'
+        Write-UpdateLog "No cached Borealis Engine certificate available yet; limiting TLS checks to loopback hosts." 'WARN'
     }
 
     Ensure-BorealisCertificateValidator
@@ -828,9 +835,9 @@ function Invoke-AgentHttpRequest {
 
     $cafile = Get-ExistingServerCertificatePath -AgentRoot $AgentRoot
     if ($cafile) {
-        Write-UpdateLog ("Using cached TLS certificate for helper: {0}" -f $cafile) 'DEBUG'
+        Write-UpdateLog ("Attempting to contact Borealis Engine using cached certificate: {0}" -f $cafile) 'INFO'
     } else {
-        Write-UpdateLog "No TLS bundle available; helper will skip certificate validation for this request." 'WARN'
+        Write-UpdateLog "No cached Borealis Engine certificate found; establishing connection without validation." 'WARN'
     }
     $payload = @{
         method       = $Method
