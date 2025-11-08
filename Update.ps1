@@ -25,7 +25,6 @@ function Write-UpdateLog {
 
     if (-not $Message) { return }
 
-    $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     $normalized = if ($Level) { $Level } else { 'INFO' }
     $normalized = $normalized.ToUpperInvariant()
 
@@ -43,7 +42,7 @@ function Write-UpdateLog {
         }
     }
 
-    $line = "[{0}] [{1}] {2}" -f $timestamp, $normalized, $Message
+    $line = "[{0}] {1}" -f $normalized, $Message
     if ($Color) {
         Write-Host $line -ForegroundColor $Color
     } else {
@@ -1478,6 +1477,23 @@ function Sync-AgentHashRecord {
     }
 }
 
+function Invoke-AgentHashSyncStep {
+    param(
+        [string]$ProjectRoot,
+        [string]$AgentRoot,
+        [string]$AgentHash,
+        [string]$ServerBaseUrl,
+        [string]$AgentId,
+        [string]$AgentGuid,
+        [string]$AuthToken,
+        [string]$BranchName
+    )
+
+    Run-Step "Update Borealis Engine device record" {
+        Sync-AgentHashRecord -ProjectRoot $ProjectRoot -AgentRoot $AgentRoot -AgentHash $AgentHash -ServerBaseUrl $ServerBaseUrl -AgentId $AgentId -AgentGuid $AgentGuid -AuthToken $AuthToken -BranchName $BranchName
+    }
+}
+
 function Invoke-BorealisUpdate {
     param(
         [Parameter(Mandatory = $true)]
@@ -1652,8 +1668,13 @@ function Invoke-BorealisAgentUpdate {
     }
     $authToken = $authContext.AccessToken
 
-    Write-UpdateLog "Querying Borealis server for current repository hash." 'STEP'
-    $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken -AgentRoot $agentRoot
+    $serverRepoInfo = $null
+    Run-Step "Fetch Borealis Engine repository hash" {
+        $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken -AgentRoot $agentRoot
+        if (-not $serverRepoInfo) {
+            throw "Unable to retrieve repository hash from Borealis Engine."
+        }
+    }
     $serverHash = ''
     $serverBranch = 'main'
     if ($serverRepoInfo) {
@@ -1697,7 +1718,7 @@ function Invoke-BorealisAgentUpdate {
     } elseif (-not $needsUpdate) {
         Write-Host "Local agent files already match the server repository hash." -ForegroundColor Green
         Write-UpdateLog "Local agent hash matches remote; ensuring server record is updated." 'SUCCESS'
-        Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
+        Invoke-AgentHashSyncStep -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
         Write-Host "✅ Borealis - Automation Platform Already Up-to-Date"
         return
     } else {
@@ -1782,7 +1803,7 @@ function Invoke-BorealisAgentUpdate {
 
         if ($newHash) {
             Write-UpdateLog ("Final agent hash determined: {0}" -f $newHash) 'INFO'
-            Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
+            Invoke-AgentHashSyncStep -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
         } else {
             Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
             Write-UpdateLog "Unable to determine final agent hash; skipping submission." 'WARN'
