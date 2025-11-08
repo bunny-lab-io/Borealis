@@ -313,158 +313,29 @@ function Resolve-BorealisServerUrl {
     return $builder.Uri.AbsoluteUri.TrimEnd('/')
 }
 
-function Get-BorealisCertificateCandidates {
+function Get-AgentCertificateCachePath {
     param(
         [string]$AgentRoot
     )
 
-    $paths = @()
-    if ($env:BOREALIS_ROOT_CA_PATH) {
-        $paths += $env:BOREALIS_ROOT_CA_PATH
-    }
-    if ($AgentRoot) {
-        $paths += (Join-Path $AgentRoot 'Certificates\borealis-root-ca.pem')
-        $paths += (Join-Path $AgentRoot 'Certificates\engine-root-ca.pem')
-        $paths += (Join-Path $AgentRoot 'Certificates\borealis-server-bundle.pem')
-        $paths += (Join-Path $AgentRoot 'Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
-        $paths += (Join-Path $AgentRoot 'Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
-        $paths += (Join-Path $AgentRoot 'Settings\server_certificate.pem')
-    }
-    if ($AgentRoot) {
-        $paths += (Join-Path $AgentRoot 'Trusted_Server_Cert\server_certificate.pem')
-        $paths += (Join-Path $AgentRoot 'Trusted_Server_Cert\server_bundle.pem')
-        $agentParent = ''
-        try { $agentParent = Split-Path $AgentRoot -Parent } catch { $agentParent = '' }
-        if ($agentParent) {
-            $paths += (Join-Path $agentParent 'Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
-            $paths += (Join-Path $agentParent 'Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
-        }
-    }
-    $paths += (Join-Path $scriptDir 'Engine\Certificates\borealis-root-ca.pem')
-    $paths += (Join-Path $scriptDir 'Engine\Certificates\borealis-server-bundle.pem')
-    $paths += (Join-Path $scriptDir 'Certificates\borealis-root-ca.pem')
-    $paths += (Join-Path $scriptDir 'Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
-    $paths += (Join-Path $scriptDir 'Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
-    $paths += (Join-Path $scriptDir 'Agent\Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
-    $paths += (Join-Path $scriptDir 'Agent\Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
-    $paths += (Join-Path $scriptDir 'Agent\Borealis\Settings\server_certificate.pem')
-    $paths += (Join-Path $scriptDir 'Data\Agent\Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
-    $paths += (Join-Path $scriptDir 'Data\Agent\Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
-    $paths += (Join-Path $scriptDir 'Data\Engine\Certificates\borealis-root-ca.pem')
-
-    $programData = $env:ProgramData
-    if ($programData) {
-        $paths += (Join-Path $programData 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
-        $paths += (Join-Path $programData 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
-    }
-    $localApp = $env:LOCALAPPDATA
-    if ($localApp) {
-        $paths += (Join-Path $localApp 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
-        $paths += (Join-Path $localApp 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
-    }
-    $commonApp = $env:COMMONAPPDATA
-    if ($commonApp) {
-        $paths += (Join-Path $commonApp 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_certificate.pem')
-        $paths += (Join-Path $commonApp 'Borealis\Certificates\Agent\Trusted_Server_Cert\server_bundle.pem')
-    }
-
-    return $paths | Where-Object { $_ } | Select-Object -Unique
+    $settingsDir = Get-AgentSettingsDirectory -AgentRoot $AgentRoot
+    if (-not $settingsDir) { return '' }
+    return (Join-Path $settingsDir 'server_certificate.crt')
 }
 
-function Get-BorealisCertificatePaths {
+function Get-ExistingServerCertificatePath {
     param(
         [string]$AgentRoot
     )
 
-    $paths = @()
-    $existing = @()
-    foreach ($candidate in (Get-BorealisCertificateCandidates -AgentRoot $AgentRoot)) {
-        $exists = $false
-        try { $exists = Test-Path $candidate -PathType Leaf } catch {}
-        if ($exists) {
-            $existing += $candidate
-            $paths += $candidate
-        }
+    $path = Get-AgentCertificateCachePath -AgentRoot $AgentRoot
+    if ($path -and (Test-Path $path -PathType Leaf)) {
+        return $path
     }
-
-    if ($paths.Count -eq 0) {
-        $searchRoots = @()
-        if ($AgentRoot) { $searchRoots += $AgentRoot }
-        $searchRoots += $scriptDir
-        $searchRoots = $searchRoots | Where-Object { $_ } | Select-Object -Unique
-        foreach ($root in $searchRoots) {
-            try {
-                if (-not (Test-Path $root -PathType Container)) { continue }
-                Write-UpdateLog ("Scanning {0} for server certificate bundles." -f $root) 'DEBUG'
-                $filters = @('server_certificate.pem','server_bundle.pem','borealis-root-ca.pem','engine-root-ca.pem')
-                foreach ($filter in $filters) {
-                    $foundCerts = Get-ChildItem -Path $root -Recurse -Filter $filter -ErrorAction SilentlyContinue -File
-                    foreach ($item in $foundCerts) {
-                        if ($item -and ($paths -notcontains $item.FullName)) {
-                            $paths += $item.FullName
-                        }
-                    }
-                    if ($paths.Count -gt 0) { break }
-                }
-                if ($paths.Count -gt 0) { break }
-            } catch {}
-        }
-    }
-
-    Write-UpdateLog ("Resolved {0} TLS certificate candidate(s)." -f ($paths.Count)) 'DEBUG'
-    return $paths
-}
-
-function Get-BorealisTrustBundlePath {
-    param(
-        [string]$AgentRoot
-    )
-
-    $paths = Get-BorealisCertificatePaths -AgentRoot $AgentRoot
-    if ($paths -and $paths.Count -gt 0) {
-        Write-UpdateLog ("Using TLS trust bundle: {0}" -f $paths[0]) 'DEBUG'
-        return $paths[0]
-    }
-    Write-UpdateLog "No TLS trust bundle located; HTTPS requests will rely on system store." 'WARN'
     return ''
 }
 
-function Get-AgentCertificateDirectory {
-    param(
-        [string]$AgentRoot
-    )
-
-    $envRoot = $env:BOREALIS_AGENT_CERT_ROOT
-    if ($envRoot) {
-        return $envRoot
-    }
-
-    $envCertRoot = $env:BOREALIS_CERTIFICATES_ROOT
-    if (-not $envCertRoot) { $envCertRoot = $env:BOREALIS_CERT_ROOT }
-    if ($envCertRoot) {
-        return (Join-Path $envCertRoot 'Agent')
-    }
-
-    $settingsDir = Get-AgentSettingsDirectory -AgentRoot $AgentRoot
-    $candidate = $settingsDir
-    for ($i = 0; $i -lt 3; $i++) {
-        if (-not $candidate) { break }
-        $parent = Split-Path -Path $candidate -Parent
-        if (-not $parent) { break }
-        $candidate = $parent
-    }
-
-    if (-not $candidate) {
-        $candidate = Split-Path -Path $settingsDir -Parent
-    }
-    if (-not $candidate) {
-        $candidate = $scriptDir
-    }
-
-    return (Join-Path $candidate 'Certificates\Agent')
-}
-
-function Save-BorealisServerCertificate {
+function Save-ServerCertificateCache {
     param(
         [string]$AgentRoot,
         [string]$CertificatePem
@@ -474,28 +345,27 @@ function Save-BorealisServerCertificate {
         return ''
     }
 
-    $baseDir = Get-AgentCertificateDirectory -AgentRoot $AgentRoot
-    if (-not $baseDir) {
+    $targetPath = Get-AgentCertificateCachePath -AgentRoot $AgentRoot
+    if (-not $targetPath) {
         return ''
     }
 
-    $targetDir = Join-Path $baseDir 'Trusted_Server_Cert'
+    $targetDir = Split-Path -Path $targetPath -Parent
     try {
         if (-not (Test-Path $targetDir -PathType Container)) {
             New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
         }
     } catch {
-        Write-UpdateLog ("Failed to create TLS certificate directory {0}: {1}" -f $targetDir, $_.Exception.Message) 'WARN'
+        Write-UpdateLog ("Failed to create certificate cache directory {0}: {1}" -f $targetDir, $_.Exception.Message) 'WARN'
         return ''
     }
 
-    $targetPath = Join-Path $targetDir 'server_certificate.pem'
     try {
         Set-Content -Path $targetPath -Value $CertificatePem -Encoding UTF8
-        Write-UpdateLog ("Saved server certificate to {0}" -f $targetPath) 'INFO'
+        Write-UpdateLog ("Cached server certificate to {0}" -f $targetPath) 'INFO'
         return $targetPath
     } catch {
-        Write-UpdateLog ("Failed to save server certificate: {0}" -f $_.Exception.Message) 'WARN'
+        Write-UpdateLog ("Failed to cache server certificate: {0}" -f $_.Exception.Message) 'WARN'
         return ''
     }
 }
@@ -675,19 +545,15 @@ function Initialize-BorealisTlsContext {
         return
     }
 
-    $candidatePaths = Get-BorealisCertificateCandidates -AgentRoot $AgentRoot
-
     $trusted = @()
-    foreach ($path in $candidatePaths) {
-        $exists = $false
-        try { $exists = Test-Path $path -PathType Leaf } catch {}
-        $existsText = if ($exists) { 'true' } else { 'false' }
-        Write-Verbose ("Evaluating Borealis TLS candidate: {0} (exists={1})" -f $path, $existsText)
-        Write-UpdateLog ("TLS candidate {0} exists={1}" -f $path, $existsText) 'DEBUG'
-        if (-not $exists) { continue }
+    $cachedCertPath = Get-ExistingServerCertificatePath -AgentRoot $AgentRoot
+    if ($cachedCertPath) {
+        Write-UpdateLog ("Using cached TLS certificate: {0}" -f $cachedCertPath) 'INFO'
         try {
-            $trusted += Get-CertificatesFromPem -Path $path
-        } catch {}
+            $trusted += Get-CertificatesFromPem -Path $cachedCertPath
+        } catch {
+            Write-UpdateLog ("Failed to load cached TLS certificate: {0}" -f $_.Exception.Message) 'WARN'
+        }
     }
 
     if ($trusted.Count -gt 0) {
@@ -960,8 +826,10 @@ function Invoke-AgentHttpRequest {
         return $null
     }
 
-    $cafile = Get-BorealisTrustBundlePath -AgentRoot $AgentRoot
-    if (-not $cafile) {
+    $cafile = Get-ExistingServerCertificatePath -AgentRoot $AgentRoot
+    if ($cafile) {
+        Write-UpdateLog ("Using cached TLS certificate for helper: {0}" -f $cafile) 'DEBUG'
+    } else {
         Write-UpdateLog "No TLS bundle available; helper will skip certificate validation for this request." 'WARN'
     }
     $payload = @{
@@ -1029,8 +897,12 @@ function Invoke-AgentHttpRequest {
         return $null
     }
 
-    if ($json.certificate -and (-not $cafile)) {
-        Save-BorealisServerCertificate -AgentRoot $AgentRoot -CertificatePem $json.certificate
+    if ($json.certificate) {
+        $savedPath = Save-ServerCertificateCache -AgentRoot $AgentRoot -CertificatePem $json.certificate
+        if ($savedPath) {
+            $script:BorealisTlsInitialized = $false
+            Initialize-BorealisTlsContext -AgentRoot $AgentRoot -ServerBaseUrl $Uri
+        }
     }
 
     Write-UpdateLog ("Python helper completed HTTP call with status {0}." -f $json.status) 'DEBUG'
