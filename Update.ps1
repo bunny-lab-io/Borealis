@@ -1,13 +1,14 @@
-# Borealis - Automation Platform Updater Script
-
 [CmdletBinding()]
-param()
+param(
+    [switch]$Trace
+)
 
 $scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
 $script:BorealisTlsInitialized = $false
 $script:BorealisTrustedThumbprints = @()
 $script:BorealisCallbackApplied = $false
 $script:AgentPythonHttpHelper = ''
+$script:UpdateDebugEnabled = $Trace.IsPresent
 $symbols = @{
     Success = [char]0x2705
     Running = [char]0x23F3
@@ -24,8 +25,13 @@ function Write-UpdateLog {
 
     if (-not $Message) { return }
 
+    $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     $normalized = if ($Level) { $Level } else { 'INFO' }
     $normalized = $normalized.ToUpperInvariant()
+
+    if ($normalized -eq 'DEBUG' -and -not $script:UpdateDebugEnabled) {
+        return
+    }
 
     if (-not $Color) {
         switch ($normalized) {
@@ -37,7 +43,7 @@ function Write-UpdateLog {
         }
     }
 
-    $line = "[{0}] {1}" -f $normalized, $Message
+    $line = "[{0}] [{1}] {2}" -f $timestamp, $normalized, $Message
     if ($Color) {
         Write-Host $line -ForegroundColor $Color
     } else {
@@ -363,7 +369,7 @@ function Save-ServerCertificateCache {
 
     try {
         Set-Content -Path $targetPath -Value $CertificatePem -Encoding UTF8
-        Write-UpdateLog ("Cached server certificate to {0}" -f $targetPath) 'INFO'
+        Write-UpdateLog ("Saved Borealis Engine certificate to {0}" -f $targetPath) 'INFO'
         return $targetPath
     } catch {
         Write-UpdateLog ("Failed to cache server certificate: {0}" -f $_.Exception.Message) 'WARN'
@@ -549,11 +555,11 @@ function Initialize-BorealisTlsContext {
     $trusted = @()
     $cachedCertPath = Get-ExistingServerCertificatePath -AgentRoot $AgentRoot
     if ($cachedCertPath) {
-        Write-UpdateLog ("Using cached TLS certificate: {0}" -f $cachedCertPath) 'INFO'
+        Write-UpdateLog ("Attempting Borealis Engine connection using cached certificate: {0}" -f $cachedCertPath) 'INFO'
         try {
             $trusted += Get-CertificatesFromPem -Path $cachedCertPath
         } catch {
-            Write-UpdateLog ("Failed to load cached TLS certificate: {0}" -f $_.Exception.Message) 'WARN'
+            Write-UpdateLog ("Unable to load cached certificate; continuing without it ({0})." -f $_.Exception.Message) 'WARN'
         }
     }
 
@@ -564,7 +570,7 @@ function Initialize-BorealisTlsContext {
     } else {
         $script:BorealisTrustedThumbprints = @()
         Write-Verbose "No Borealis TLS certificates located; loopback hosts will be allowed without CA verification."
-        Write-UpdateLog "No TLS certificates found; falling back to loopback-only allowance." 'WARN'
+        Write-UpdateLog "No cached Borealis Engine certificate available yet; limiting TLS checks to loopback hosts." 'WARN'
     }
 
     Ensure-BorealisCertificateValidator
@@ -829,9 +835,9 @@ function Invoke-AgentHttpRequest {
 
     $cafile = Get-ExistingServerCertificatePath -AgentRoot $AgentRoot
     if ($cafile) {
-        Write-UpdateLog ("Using cached TLS certificate for helper: {0}" -f $cafile) 'DEBUG'
+        Write-UpdateLog ("Attempting to contact Borealis Engine using cached certificate: {0}" -f $cafile) 'INFO'
     } else {
-        Write-UpdateLog "No TLS bundle available; helper will skip certificate validation for this request." 'WARN'
+        Write-UpdateLog "No cached Borealis Engine certificate found; establishing connection without validation." 'WARN'
     }
     $payload = @{
         method       = $Method
@@ -1472,23 +1478,6 @@ function Sync-AgentHashRecord {
     }
 }
 
-function Invoke-AgentHashSyncStep {
-    param(
-        [string]$ProjectRoot,
-        [string]$AgentRoot,
-        [string]$AgentHash,
-        [string]$ServerBaseUrl,
-        [string]$AgentId,
-        [string]$AgentGuid,
-        [string]$AuthToken,
-        [string]$BranchName
-    )
-
-    Run-Step "Update Borealis Engine device record" {
-        Sync-AgentHashRecord -ProjectRoot $ProjectRoot -AgentRoot $AgentRoot -AgentHash $AgentHash -ServerBaseUrl $ServerBaseUrl -AgentId $AgentId -AgentGuid $AgentGuid -AuthToken $AuthToken -BranchName $BranchName
-    }
-}
-
 function Invoke-BorealisUpdate {
     param(
         [Parameter(Mandatory = $true)]
@@ -1663,13 +1652,8 @@ function Invoke-BorealisAgentUpdate {
     }
     $authToken = $authContext.AccessToken
 
-    $serverRepoInfo = $null
-    Run-Step "Fetch Borealis Engine repository hash" {
-        $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken -AgentRoot $agentRoot
-        if (-not $serverRepoInfo) {
-            throw "Unable to retrieve repository hash from Borealis Engine."
-        }
-    }
+    Write-UpdateLog "Querying Borealis server for current repository hash." 'STEP'
+    $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken -AgentRoot $agentRoot
     $serverHash = ''
     $serverBranch = 'main'
     if ($serverRepoInfo) {
@@ -1713,7 +1697,7 @@ function Invoke-BorealisAgentUpdate {
     } elseif (-not $needsUpdate) {
         Write-Host "Local agent files already match the server repository hash." -ForegroundColor Green
         Write-UpdateLog "Local agent hash matches remote; ensuring server record is updated." 'SUCCESS'
-        Invoke-AgentHashSyncStep -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
+        Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
         Write-Host "✅ Borealis - Automation Platform Already Up-to-Date"
         return
     } else {
@@ -1798,7 +1782,7 @@ function Invoke-BorealisAgentUpdate {
 
         if ($newHash) {
             Write-UpdateLog ("Final agent hash determined: {0}" -f $newHash) 'INFO'
-            Invoke-AgentHashSyncStep -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
+            Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
         } else {
             Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
             Write-UpdateLog "Unable to determine final agent hash; skipping submission." 'WARN'
