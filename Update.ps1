@@ -1206,7 +1206,7 @@ function Invoke-BorealisAgentUpdate {
     }
 
     if (-not ($gitExe) -or -not (Test-Path $gitExe -PathType Leaf)) {
-        Write-Host "Bundled Git dependency not found. Run '.\\Borealis.ps1 -Agent -AgentAction repair' to bootstrap dependencies and try again." -ForegroundColor Yellow
+        Write-Host "Bundled Git dependency not found. Run '.\\Borealis.ps1 -Agent' to redeploy the agent dependencies and try again." -ForegroundColor Yellow
         Write-Host "⚠️ Borealis update aborted."
         return
     }

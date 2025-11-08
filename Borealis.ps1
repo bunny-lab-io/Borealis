@@ -4,8 +4,6 @@
 param(
     [switch]$Server,
     [switch]$Agent,
-    [ValidateSet('install','repair','remove','launch','')]
-    [string]$AgentAction = '',
     [switch]$Vite,
     [switch]$Flask,
     [switch]$Quick,
@@ -18,7 +16,6 @@ param(
 # Preselect menu choices from CLI args (optional)
 $choice = $null
 $modeChoice = $null
-$agentSubChoice = $null
 $engineModeChoice = $null
 
 $scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
@@ -66,15 +63,8 @@ if ($Server) {
     $choice = '1'
 } elseif ($Agent) {
     $choice = '2'
-    switch ($AgentAction) {
-        'install' { $agentSubChoice = '1' }
-        'repair'  { $agentSubChoice = '2' }
-        'remove'  { $agentSubChoice = '3' }
-        'launch'  { $agentSubChoice = '4' }
-        default   { $agentSubChoice = '1' }
-    }
 } elseif ($EngineProduction -or $EngineDev) {
-    $choice = '5'
+    $choice = '1'
     if ($EngineProduction) { $engineModeChoice = '1' }
     if ($EngineDev) { $engineModeChoice = '3' }
 }
@@ -137,7 +127,6 @@ function Test-IsAdmin {
 function Request-AgentElevation {
     param(
         [string]$ScriptPath,
-        [string]$AgentActionParam,
         [switch]$Auto
     )
     if (Test-IsAdmin) { return $true }
@@ -151,9 +140,6 @@ function Request-AgentElevation {
     }
 
     $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File', '"' + $ScriptPath + '"', '-Agent')
-    if ($AgentActionParam -and $AgentActionParam.Trim()) {
-        $args += @('-AgentAction', $AgentActionParam)
-    }
     try {
         Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args -WindowStyle Normal | Out-Null
         return $false  # stop current non-elevated instance
@@ -353,31 +339,6 @@ function Remove-BorealisServicesAndTasks {
     } catch {}
     # Remove legacy watchdog script if present
     try { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:ProgramData 'Borealis\watchdog.ps1') } catch {}
-}
-
-# Repair routine: cleans services, ensures venv files, reinstalls and starts BorealisAgent
-function Repair-BorealisAgent {
-    $logName = 'Repair.log'
-    Write-AgentLog -FileName $logName -Message "=== Repair start ==="
-    Remove-BorealisServicesAndTasks -LogName $logName
-    InstallOrUpdate-BorealisAgent
-    Write-AgentLog -FileName $logName -Message "=== Repair end ==="
-}
-
-function Remove-BorealisAgent {
-    $logName = 'Removal.log'
-    Write-AgentLog -FileName $logName -Message "=== Removal start ==="
-    Remove-BorealisServicesAndTasks -LogName $logName
-    # Kill stray helpers
-    Write-AgentLog -FileName $logName -Message "Terminating stray helper processes"
-    Get-Process python,pythonw -ErrorAction SilentlyContinue | Where-Object { $_.Path -like (Join-Path $scriptDir 'Agent\*') } | ForEach-Object {
-        try { $_ | Stop-Process -Force } catch {}
-    }
-    # Remove venv folder
-    $venvFolder = Join-Path $scriptDir 'Agent'
-    Write-AgentLog -FileName $logName -Message "Removing folder: $venvFolder"
-    try { Remove-Item $venvFolder -Recurse -Force -ErrorAction SilentlyContinue } catch {}
-    Write-AgentLog -FileName $logName -Message "=== Removal end ==="
 }
 
 function Write-ProgressStep {
@@ -1395,40 +1356,18 @@ switch ($choice) {
     "2" {
         $host.UI.RawUI.WindowTitle = "Borealis Agent"
         Write-Host " "
-        # Ensure elevation before showing Agent menu
+        # Ensure elevation before performing Agent deployment
         $scriptPath = $PSCommandPath
         if (-not $scriptPath -or $scriptPath -eq '') { $scriptPath = $MyInvocation.MyCommand.Definition }
-        # If already elevated, skip prompt; otherwise prompt, then relaunch directly to the Agent menu via -Agent
-        $cont = Request-AgentElevation -ScriptPath $scriptPath -AgentActionParam $AgentAction
+        # If already elevated, skip prompt; otherwise prompt, then relaunch directly to the Agent deploy flow via -Agent
+        $cont = Request-AgentElevation -ScriptPath $scriptPath
         if (-not $cont -and -not (Test-IsAdmin)) { return }
         if (Test-IsAdmin) {
             Write-Host "Escalated Permissions Granted > Agent is Eligible for Deployment." -ForegroundColor Green
         }
-        Write-Host "Agent Menu:" -ForegroundColor Cyan
-        Write-Host " 1) Install/Update Agent"
-        Write-Host " 2) Repair Borealis Agent"
-        Write-Host " 3) Remove Agent"
-        Write-Host " 4) Launch UserSession Helper (current session)"
-        Write-Host " 5) Back"
-        if (-not $agentSubChoice) { $agentSubChoice = Read-Host "Select an option" }
-
-        switch ($agentSubChoice) {
-            '1' { InstallOrUpdate-BorealisAgent; break }
-            '2' { Repair-BorealisAgent; break }
-            '3' { Remove-BorealisAgent; break }
-            '4' {
-                $venvPythonw = Join-Path $scriptDir 'Agent\Scripts\pythonw.exe'
-                $helper = Join-Path $scriptDir 'Agent\Borealis\agent.py'
-                if (-not (Test-Path $venvPythonw)) { Write-Host "pythonw.exe not found under Agent\Scripts" -ForegroundColor Yellow }
-                if (-not (Test-Path $helper)) { Write-Host "Helper not found under Agent\Borealis" -ForegroundColor Yellow }
-                if ((Test-Path $venvPythonw) -and (Test-Path $helper)) {
-                    Start-Process -FilePath $venvPythonw -ArgumentList @('-W','ignore::SyntaxWarning', $helper) -WorkingDirectory (Split-Path $helper -Parent)
-                    Write-Host "Launched user-session helper." -ForegroundColor Green
-                }
-                break
-            }
-            default { break }
-        }
+        Write-Host "Deploying Borealis Agent (fresh install/update path)..." -ForegroundColor Cyan
+        InstallOrUpdate-BorealisAgent
+        break
     }
     default { Write-Host "Invalid selection. Exiting..." -ForegroundColor Red; exit 1 }
 }
