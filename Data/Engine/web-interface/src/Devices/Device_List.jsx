@@ -1560,7 +1560,7 @@ export default function DeviceList({
       }}
       elevation={0}
     >
-      <Box sx={{ position: "relative", zIndex: 1, p: { xs: 2, md: 3 }, pb: 2 }}>
+      <Box sx={{ position: "relative", zIndex: 1, p: { xs: 2, md: 0 }, pb: 2 }}>
         <Box sx={{ borderRadius: 0, border: 'none', background: 'transparent', boxShadow: 'none',
             p: { xs: 2, md: 3 },
             display: "flex",
