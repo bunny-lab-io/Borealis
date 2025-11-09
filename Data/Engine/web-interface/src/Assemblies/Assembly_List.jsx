@@ -25,6 +25,8 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
 import { ConfirmDeleteDialog, NewWorkflowDialog } from "../Dialogs";
 import { DomainBadge, DirtyStatePill, resolveDomainMeta, DOMAIN_OPTIONS } from "./Assembly_Badges";
 
+import { Apps as AppsIcon } from "@mui/icons-material";
+
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const myTheme = themeQuartz.withParams({
@@ -578,7 +580,10 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       sx={{
         m: 2,
         p: 0,
-        bgcolor: "#1e1e1e",
+        background: "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+border: "1px solid rgba(148,163,184,0.35)",
+boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
+borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
         fontFamily: gridFontFamily,
         color: "#f5f7fa",
         display: "flex",
@@ -590,7 +595,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       elevation={2}
     >
       <Box sx={{ px: 2, pt: 2, pb: 1 }}>
-        <Typography variant="h6" sx={{ color: BOREALIS_BLUE, mb: 0.5 }}>
+        <Typography variant="h6" sx={{ color: "#e2e8f0", fontWeight: 700, letterSpacing: 0.5, mb: 0.5 }}>
           Assemblies
         </Typography>
         <Typography variant="body2" sx={{ color: "#aaa" }}>
@@ -623,7 +628,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
           startIcon={<AddIcon />}
           onClick={(event) => setNewMenuAnchor(event.currentTarget)}
           sx={{
-            bgcolor: BOREALIS_BLUE,
+            background: "linear-gradient(135deg,#7dd3fc,#c084fc)", borderRadius: 999,
             "&:hover": { bgcolor: "#3975c7" },
             textTransform: "none",
           }}
@@ -634,7 +639,10 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
           anchorEl={newMenuAnchor}
           open={Boolean(newMenuAnchor)}
           onClose={() => setNewMenuAnchor(null)}
-          PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
+          PaperProps={{ sx: { background: "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+border: "1px solid rgba(148,163,184,0.35)",
+boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
+borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)", color: "#fff", fontSize: "13px" } }}
         >
           <MenuItem onClick={() => handleNewAssemblyOption("script")}>Script</MenuItem>
           <MenuItem onClick={() => handleNewAssemblyOption("workflow")}>Workflow</MenuItem>
@@ -644,6 +652,26 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       <Box sx={{ mt: "10px", px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Box
           className={gridWrapperClass}
+          sx={{
+            background: "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.85))",
+            borderRadius: 3,
+            border: "1px solid rgba(148,163,184,0.35)",
+            boxShadow: "0 20px 60px rgba(2,8,23,0.85)",
+            p: 2,
+          }}
+          style={{
+            "--ag-background-color": "#070b1a",
+            "--ag-foreground-color": "#f4f7ff",
+            "--ag-header-background-color": "#0f172a",
+            "--ag-header-foreground-color": "#cfe0ff",
+            "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+            "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+            "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+            "--ag-font-family": "'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif",
+            "--ag-border-color": "rgba(125,183,255,0.18)",
+            "--ag-row-border-color": "rgba(125,183,255,0.14)",
+            "--ag-border-radius": "8px",
+          }}
           sx={{
             width: "100%",
             flexGrow: 1,
@@ -723,7 +751,10 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         onClose={closeContextMenu}
         anchorReference="anchorPosition"
         anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
-        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
+        PaperProps={{ sx: { background: "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+border: "1px solid rgba(148,163,184,0.35)",
+boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
+borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)", color: "#fff", fontSize: "13px" } }}
       >
         <MenuItem
           onClick={() => {
