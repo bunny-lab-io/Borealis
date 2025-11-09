@@ -8,6 +8,8 @@ import {
   Tooltip,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
+import LocationCityIcon from "@mui/icons-material/LocationCity";
+
 import DeleteIcon from "@mui/icons-material/DeleteOutline";
 import EditIcon from "@mui/icons-material/Edit";
 import { AgGridReact } from "ag-grid-react";
@@ -139,77 +141,68 @@ export default function SiteList({ onOpenDevicesForSite }) {
       }}
       elevation={0}
     >
-      {/* Hero Section */}
-      <Box sx={{ p: { xs: 2, md: 3 }, pb: 1 }}>
-        <Box
-          sx={{
-            borderRadius: 4,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            background: MAGIC_UI.panelBg,
-            p: { xs: 2, md: 3 },
-            display: "flex",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: 3,
-          }}
-        >
-          <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-            <Typography variant="h5" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-              Managed Sites
-            </Typography>
-            <Typography sx={{ color: MAGIC_UI.textMuted }}>
-              {`Monitoring ${heroStats.totalDevices} devices across ${heroStats.totalSites} site(s)`}
-            </Typography>
-            {heroStats.selected > 0 && (
-              <Typography sx={{ color: MAGIC_UI.accentA, fontSize: "0.85rem", fontWeight: 600 }}>
-                {heroStats.selected} selected
-              </Typography>
-            )}
+      {/* Hero Section Removed — integrated header and buttons */}
+      <Box sx={{ p: { xs: 2, md: 3 }, pb: 1, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <LocationCityIcon sx={{ color: MAGIC_UI.accentA }} />
+            <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700, fontSize: "1.3rem" }}>
+            Managed Sites
+          </Typography>
           </Box>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
-            <Button variant="contained" size="small" startIcon={<AddIcon />} sx={RAINBOW_BUTTON_SX} onClick={() => setCreateOpen(true)}>
-              Create Site
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<EditIcon />}
-              disabled={selectedIds.size !== 1}
-              onClick={() => {
-                const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
-                if (selId != null) {
-                  const site = rows.find((r) => r.id === selId);
-                  setRenameValue(site?.name || "");
-                  setRenameOpen(true);
-                }
-              }}
-              sx={{
-                borderColor: "rgba(148,163,184,0.4)",
-                color: MAGIC_UI.textBright,
-                "&:hover": { borderColor: MAGIC_UI.accentA },
-              }}
-            >
-              Rename
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<DeleteIcon />}
-              disabled={selectedIds.size === 0}
-              onClick={() => setDeleteOpen(true)}
-              sx={{
-                borderColor: selectedIds.size ? "#f87171" : "rgba(148,163,184,0.3)",
-                color: selectedIds.size ? "#f87171" : MAGIC_UI.textMuted,
-                "&:hover": { borderColor: "#fb7185" },
-              }}
-            >
-              Delete
-            </Button>
-          </Box>
+          <Typography sx={{ color: MAGIC_UI.textMuted }}>
+            {`Monitoring ${heroStats.totalDevices} devices across ${heroStats.totalSites} site(s)`}
+          </Typography>
+          {heroStats.selected > 0 && (
+            <Typography sx={{ color: MAGIC_UI.accentA, fontSize: "0.85rem", fontWeight: 600 }}>
+              {heroStats.selected} selected
+            </Typography>
+          )}
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <Button variant="contained" size="small" startIcon={<AddIcon />} sx={RAINBOW_BUTTON_SX} onClick={() => setCreateOpen(true)}>
+            Create Site
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<EditIcon />}
+            disabled={selectedIds.size !== 1}
+            onClick={() => {
+              const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
+              if (selId != null) {
+                const site = rows.find((r) => r.id === selId);
+                setRenameValue(site?.name || "");
+                setRenameOpen(true);
+              }
+            }}
+            sx={{
+              borderColor: "rgba(148,163,184,0.4)",
+              color: MAGIC_UI.textBright,
+              "&:hover": { borderColor: MAGIC_UI.accentA },
+            }}
+          >
+            Rename
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<DeleteIcon />}
+            disabled={selectedIds.size === 0}
+            onClick={() => setDeleteOpen(true)}
+            sx={{
+              borderColor: selectedIds.size ? "#f87171" : "rgba(148,163,184,0.3)",
+              color: selectedIds.size ? "#f87171" : MAGIC_UI.textMuted,
+              "&:hover": { borderColor: "#fb7185" },
+            }}
+          >
+            Delete
+          </Button>
         </Box>
       </Box>
 
       {/* AG Grid */}
+}
       <Box sx={{ px: { xs: 2, md: 3 }, pb: 3, flexGrow: 1, display: "flex", flexDirection: "column" }}>
         <Box
           className={themeClassName}
