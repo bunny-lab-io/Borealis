@@ -1,15 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Box, TextField, Button, Typography } from "@mui/material";
 
-/**
- * Borealis MagicUI Login
- * - Preserves original auth + MFA logic
- * - Adds MagicUI-inspired visuals:
- *    • Aurora gradient background
- *    • Flickering Grid backdrop
- *    • ShineBorder card container
- * - Minimal, component-local CSS (no external deps)
- */
 export default function Login({ onLogin }) {
   // ----------------- Original state & logic -----------------
   const [username, setUsername] = useState("admin");
@@ -258,7 +249,7 @@ export default function Login({ onLogin }) {
               rgba(88,166,255,.0),
               rgba(88,166,255,.45),
               rgba(34,211,238,.0),
-              rgba(167,139,250,.45),
+              rgba(125, 255, 183, 0.3),
               rgba(34,211,238,.0),
               rgba(88,166,255,.45),
               rgba(167,139,250,.0));
@@ -369,7 +360,7 @@ export default function Login({ onLogin }) {
               sx={{ display: "flex", flexDirection: "column", gap: 1 }}
             >
               <div className="brand">
-                <img src="/Borealis_Logo_Full.png" alt="Borealis Automation" style={{ width: "345px", height: "auto" }} />
+                <img src="/Borealis_Logo_Full.png" alt="Borealis Automation" style={{ width: "480px", height: "auto" }} />
               </div>
 
               <Typography variant="h5" className="title">
@@ -386,7 +377,6 @@ export default function Login({ onLogin }) {
                     value={username}
                     disabled={isSubmitting}
                     onChange={(e) => setUsername(e.target.value)}
-                    margin="dense"
                     InputProps={{ sx: { borderRadius: 2 } }}
                   />
 
@@ -398,7 +388,6 @@ export default function Login({ onLogin }) {
                     value={password}
                     disabled={isSubmitting}
                     onChange={(e) => setPassword(e.target.value)}
-                    margin="dense"
                     InputProps={{ sx: { borderRadius: 2 } }}
                   />
 
@@ -410,7 +399,7 @@ export default function Login({ onLogin }) {
                     className="submit"
                     disabled={isSubmitting}
                   >
-                    {isSubmitting ? "Signing In..." : "Sign in"}
+                    {isSubmitting ? "Signing In..." : "Sign In"}
                   </Button>
                 </>
               ) : (
@@ -459,7 +448,6 @@ export default function Login({ onLogin }) {
                       setMfaCode(digits);
                     }}
                     disabled={isSubmitting}
-                    margin="dense"
                     inputProps={{
                       inputMode: "numeric",
                       pattern: "[0-9]*",

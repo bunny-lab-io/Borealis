@@ -183,7 +183,7 @@ export default function EnrollmentCodes() {
           "#fbbf24";
         return <span style={{ color, fontWeight: 600 }}>{status}</span>;
       },
-      width: 120
+      minWidth: 100
     },
     {
       headerName: "Installer Code",
@@ -191,9 +191,12 @@ export default function EnrollmentCodes() {
       cellRenderer: (params) => (
         <span style={{ fontFamily: "monospace", color: "#7dd3fc" }}>{maskCode(params.value)}</span>
       ),
-      minWidth: 200
+      minWidth: 340
     },
-    { headerName: "Expires At", field: "expires_at", valueFormatter: p => formatDateTime(p.value) },
+    { headerName: "Expires At", 
+      field: "expires_at", 
+      valueFormatter: p => formatDateTime(p.value)  
+    },
     { headerName: "Created By", field: "created_by_user_id" },
     {
       headerName: "Usage",

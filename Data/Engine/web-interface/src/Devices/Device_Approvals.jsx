@@ -275,7 +275,8 @@ export default function DeviceApprovals() {
           : "#fbbf24";
         return <span style={{ color, fontWeight: 600 }}>{status}</span>;
       },
-      width: 120,
+      minWidth: 110,
+      width: 110,
     },
     { headerName: "Hostname", field: "hostname_claimed", minWidth: 180 },
     {
@@ -283,20 +284,23 @@ export default function DeviceApprovals() {
       field: "ssl_key_fingerprint_claimed",
       valueFormatter: (p) => formatFingerprint(p.value),
       cellStyle: { fontFamily: "monospace", whiteSpace: "nowrap" },
-      minWidth: 200,
+      minWidth: 150,
+      Width: 150,
     },
     {
       headerName: "Enrollment Code",
       field: "enrollment_code_id",
       cellStyle: { fontFamily: "monospace" },
-      minWidth: 140,
+      minWidth: 100,
+      Width: 100,
     },
     { headerName: "Created", field: "created_at", valueFormatter: (p) => formatDateTime(p.value), minWidth: 160 },
     { headerName: "Updated", field: "updated_at", valueFormatter: (p) => formatDateTime(p.value), minWidth: 160 },
     {
       headerName: "Approved By",
       valueGetter: (p) => p.data?.approved_by_username || p.data?.approved_by_user_id || "—",
-      minWidth: 140,
+      minWidth: 100,
+      Width: 100,
     },
     {
       headerName: "Actions",
