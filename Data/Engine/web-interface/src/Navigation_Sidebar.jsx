@@ -25,6 +25,7 @@ import {
   PersonOutline as UserIcon,
   GitHub as GitHubIcon,
   Key as KeyIcon,
+  Dashboard as PageTemplateIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
 } from "@mui/icons-material";
 
@@ -68,7 +69,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         "access_users",
         "access_github_token",
       ].includes(currentPage),
-      admin: ["server_info"].includes(currentPage),
+      admin: ["server_info", "page_template"].includes(currentPage),
     }),
     [currentPage]
   );
@@ -284,6 +285,11 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
               icon={<ServerInfoIcon fontSize="small" />}
               label="Server Info"
               pageKey="server_info"
+            />
+            <NavItem
+              icon={<PageTemplateIcon fontSize="small" />}
+              label="Page Template"
+              pageKey="page_template"
             />
           </Section>
         )}

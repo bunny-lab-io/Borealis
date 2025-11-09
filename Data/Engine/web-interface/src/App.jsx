@@ -46,6 +46,7 @@ import CredentialList from "./Access_Management/Credential_List.jsx";
 import UserManagement from "./Access_Management/Users.jsx";
 import GithubAPIToken from "./Access_Management/Github_API_Token.jsx";
 import ServerInfo from "./Admin/Server_Info.jsx";
+import PageTemplate from "./Admin/Page_Template.jsx";
 import EnrollmentCodes from "./Devices/Enrollment_Codes.jsx";
 import DeviceApprovals from "./Devices/Device_Approvals.jsx";
 
@@ -224,6 +225,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return "/access_management/users";
       case "server_info":
         return "/admin/server_info";
+      case "page_template":
+        return "/admin/page_template";        
       case "admin_enrollment_codes":
         return "/admin/enrollment-codes";
       case "admin_device_approvals":
@@ -279,6 +282,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       if (path === "/access_management/github_token") return { page: "access_github_token", options: {} };
       if (path === "/access_management/credentials") return { page: "access_credentials", options: {} };
       if (path === "/admin/server_info") return { page: "server_info", options: {} };
+      if (path === "/admin/page_template") return { page: "page_template", options: {} };
       if (path === "/admin/enrollment-codes") return { page: "admin_enrollment_codes", options: {} };
       if (path === "/admin/device-approvals") return { page: "admin_device_approvals", options: {} };
       return { page: "devices", options: {} };
@@ -457,6 +461,10 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "server_info":
         items.push({ label: "Admin Settings" });
         items.push({ label: "Server Info", page: "server_info" });
+        break;
+      case "page_template":
+        items.push({ label: "Developer Tools" });
+        items.push({ label: "Page Template", page: "page_template" });
         break;
       case "admin_enrollment_codes":
         items.push({ label: "Admin Settings", page: "server_info" });
@@ -998,7 +1006,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       || currentPage === 'access_users'
       || currentPage === 'ssh_devices'
       || currentPage === 'winrm_devices'
-      || currentPage === 'agent_devices';
+      || currentPage === 'agent_devices'
+      || currentPage === 'page_template';
     if (!isAdmin && requiresAdmin) {
       setNotAuthorizedOpen(true);
       navigateTo('devices', { replace: true, suppressPending: true });
@@ -1123,6 +1132,9 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
       case "server_info":
         return <ServerInfo isAdmin={isAdmin} />;
+
+      case "page_template":
+        return <PageTemplate isAdmin={isAdmin} />;
 
       case "admin_enrollment_codes":
         return <EnrollmentCodes />;
