@@ -29,6 +29,9 @@ import { Apps as AppsIcon } from "@mui/icons-material";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
+/**
+ * MagicUI Theme: Quartz base with Borealis aurora accents
+ */
 const myTheme = themeQuartz.withParams({
   accentColor: "#FFA6FF",
   backgroundColor: "#1f2836",
@@ -51,6 +54,7 @@ const iconFontFamily = '"Quartz Regular"';
 const BOREALIS_BLUE = "#58a6ff";
 const DARKER_GRAY = "#9aa3ad";
 const PAGE_SIZE = 25;
+
 const SELECT_BASE_SX = {
   "& .MuiOutlinedInput-root": {
     bgcolor: "#1C1C1C",
@@ -70,12 +74,17 @@ const SELECT_BASE_SX = {
   },
   "& .MuiInputLabel-root.Mui-focused": { color: "#58a6ff" },
 };
+
 const MENU_PROPS = {
   PaperProps: {
     sx: {
-      bgcolor: "#1C1C1C",
-      color: "#e6edf3",
-      border: "1px solid #2b3544",
+      background:
+        "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+      border: "none",
+      boxShadow: "none",
+      borderRadius: 0,
+      color: "#fff",
+      fontSize: "13px",
       "& .MuiMenuItem-root.Mui-selected": {
         bgcolor: "rgba(88,166,255,0.16)",
       },
@@ -503,7 +512,6 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     () => ({
       sortable: true,
       filter: "agTextColumnFilter",
-      // Remove floating textboxes at the top (use column menu filters instead)
       floatingFilter: false,
       resizable: true,
       flex: 0,
@@ -578,12 +586,13 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   return (
     <Paper
       sx={{
-        m: 2,
+        m: 0, // Full-bleed to parent container
         p: 0,
-        background: "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
-border: "1px solid rgba(148,163,184,0.35)",
-boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
-borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
+        background:
+          "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+        border: "none",
+        boxShadow: "none",
+        borderRadius: 0,
         fontFamily: gridFontFamily,
         color: "#f5f7fa",
         display: "flex",
@@ -592,13 +601,16 @@ borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25p
         minWidth: 0,
         height: "100%",
       }}
-      elevation={2}
+      elevation={0}
     >
-      <Box sx={{ px: 2, pt: 2, pb: 1 }}>
-        <Typography variant="h6" sx={{ color: "#e2e8f0", fontWeight: 700, letterSpacing: 0.5, mb: 0.5 }}>
-          Assemblies
-        </Typography>
-        <Typography variant="body2" sx={{ color: "#aaa" }}>
+      <Box sx={{ px: 3, pt: 3, pb: 1 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+          <AppsIcon sx={{ fontSize: 22, color: "#7dd3fc" }} />
+          <Typography variant="h6" sx={{ color: "#e2e8f0", fontWeight: 700, letterSpacing: 0.5 }}>
+            Assemblies
+          </Typography>
+        </Box>
+        <Typography variant="body2" sx={{ color: "#aaa", mt: 0.5, mb: 2 }}>
           Collections of scripts, workflows, and playbooks used to automate tasks across devices.
         </Typography>
       </Box>
@@ -609,7 +621,7 @@ borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25p
             onClick={handleRefresh}
             sx={{
               color: "#ccc",
-              border: "1px solid #333",
+              border: "none",
               borderRadius: 1,
               "&:hover": { color: "#fff", borderColor: "#555" },
             }}
@@ -628,9 +640,16 @@ borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25p
           startIcon={<AddIcon />}
           onClick={(event) => setNewMenuAnchor(event.currentTarget)}
           sx={{
-            background: "linear-gradient(135deg,#7dd3fc,#c084fc)", borderRadius: 999,
-            "&:hover": { bgcolor: "#3975c7" },
+            backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+            color: "#0b1220",
+            borderRadius: 999,
             textTransform: "none",
+            boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
+            "&:hover": {
+              backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+              boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
+              filter: "none",
+            },
           }}
         >
           New Assembly
@@ -639,10 +658,7 @@ borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25p
           anchorEl={newMenuAnchor}
           open={Boolean(newMenuAnchor)}
           onClose={() => setNewMenuAnchor(null)}
-          PaperProps={{ sx: { background: "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
-border: "1px solid rgba(148,163,184,0.35)",
-boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
-borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)", color: "#fff", fontSize: "13px" } }}
+          PaperProps={MENU_PROPS.PaperProps}
         >
           <MenuItem onClick={() => handleNewAssemblyOption("script")}>Script</MenuItem>
           <MenuItem onClick={() => handleNewAssemblyOption("workflow")}>Workflow</MenuItem>
@@ -653,34 +669,26 @@ borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25p
         <Box
           className={gridWrapperClass}
           sx={{
-            background: "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.85))",
-            borderRadius: 3,
-            border: "1px solid rgba(148,163,184,0.35)",
-            boxShadow: "0 20px 60px rgba(2,8,23,0.85)",
-            p: 2,
-          }}
-          style={{
-            "--ag-background-color": "#070b1a",
-            "--ag-foreground-color": "#f4f7ff",
-            "--ag-header-background-color": "#0f172a",
-            "--ag-header-foreground-color": "#cfe0ff",
-            "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-            "--ag-row-hover-color": "rgba(125,183,255,0.08)",
-            "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
-            "--ag-font-family": "'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif",
-            "--ag-border-color": "rgba(125,183,255,0.18)",
-            "--ag-row-border-color": "rgba(125,183,255,0.14)",
-            "--ag-border-radius": "8px",
-          }}
-          sx={{
+            // Card chrome
+            background: "transparent",
+            borderRadius: 0,
+            border: "none",
+            boxShadow: "none",
+            p: 0,
+
+            // Layout
             width: "100%",
             flexGrow: 1,
             minHeight: 0,
             height: "100%",
+            position: "relative",
+
+            // Typography
             fontFamily: gridFontFamily,
             "--ag-font-family": gridFontFamily,
             "--ag-icon-font-family": iconFontFamily,
-            position: "relative",
+
+            // AG Grid overrides
             "& .ag-root-wrapper": {
               borderRadius: 1,
               minHeight: 400,
@@ -691,13 +699,25 @@ borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25p
             "& .ag-icon": {
               fontFamily: iconFontFamily,
             },
-            // Vertically center cell content across the board
             "& .ag-cell": {
               display: "flex",
               alignItems: "center",
               paddingTop: "8px",
               paddingBottom: "8px",
             },
+          }}
+          style={{
+            // Theme CSS variables for fine-grain color control
+            "--ag-background-color": "#070b1a",
+            "--ag-foreground-color": "#f4f7ff",
+            "--ag-header-background-color": "#0f172a",
+            "--ag-header-foreground-color": "#cfe0ff",
+            "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+            "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+            "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+            "--ag-border-color": "rgba(125,183,255,0.18)",
+            "--ag-row-border-color": "rgba(125,183,255,0.14)",
+            "--ag-border-radius": "8px",
           }}
         >
           <AgGridReact
@@ -751,10 +771,7 @@ borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25p
         onClose={closeContextMenu}
         anchorReference="anchorPosition"
         anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
-        PaperProps={{ sx: { background: "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
-border: "1px solid rgba(148,163,184,0.35)",
-boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
-borderRadius: "0", border: "1px solid rgba(148,163,184,0.35)", boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)", color: "#fff", fontSize: "13px" } }}
+        PaperProps={MENU_PROPS.PaperProps}
       >
         <MenuItem
           onClick={() => {
