@@ -86,7 +86,12 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
  *    • AURORA_SHELL.subtext    — subtitle/muted copy color.
  *    • Gradient buttons: `gradientButtonSx` (primary CTA look-and-feel).
  *
- *  NOTES ON SELECT-ALL RELIABILITY
+ *  HEADER CHECKBOX NUDGE
+    • Some builds visually render the header checkbox ~1–2px left of center due to
+      icon font metrics. We apply a tiny `transform: translateX(2px)` on the header
+      checkbox wrapper for optical centering.
+
+  NOTES ON SELECT-ALL RELIABILITY
  *    • Using AG Grid built-ins for selection (no custom header renderer) ensures
  *      the header checkbox correctly toggles rows and tracks indeterminate state.
  *    • We also provide a stable `getRowId` in case pages grow to use server-side
@@ -172,6 +177,8 @@ const SAMPLE_ROWS = [
 const selectionCol = {
   headerName: "",
   field: "__select__",
+  cellClass: 'ag-selection-centered',
+  cellStyle: { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 },
   width: 52,
   maxWidth: 52,
   checkboxSelection: true,
@@ -325,31 +332,62 @@ export default function PageTemplate() {
               paddingBottom: "8px",
             },
 
-            /* Center the selection column (header + body) */
+            /* Center the selection column (header + body) – class-based to beat defaults */
             "& .ag-header .ag-header-select-all, & .ag-header .ag-checkbox-input-wrapper": {
+            /* Absolute centering for selection column (CSS fallback) */
+            "& .ag-cell.ag-selection-centered": {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
+              padding: 0,
             },
-            "& .ag-cell[col-id='__select__']": {
-              paddingLeft: 0,
-              paddingRight: 0,
-            },
-            "& .ag-cell[col-id='__select__'] .ag-cell-wrapper": {
+            "& .ag-cell.ag-selection-centered .ag-cell-wrapper": {
+              gap: "0 !important",
               width: "100%",
               display: "flex",
               alignItems: "center",
-              justifyContent: "center !important",
-              paddingTop: 0,
-              paddingBottom: 0,
+              justifyContent: "center",
+              padding: 0,
             },
-            "& .ag-cell[col-id='__select__'] .ag-selection-checkbox, & .ag-cell[col-id='__select__'] .ag-checkbox-input-wrapper": {
-              margin: "0 auto !important",
+            "& .ag-cell.ag-selection-centered .ag-selection-checkbox, & .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
+              margin: "0 auto",
+            },
+
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
             },
-            "& .ag-center-cols-container .ag-cell[col-id='__select__'], & .ag-pinned-left-cols-container .ag-cell[col-id='__select__']": {
+            "& .ag-cell.ag-selection-centered": {
+              paddingLeft: 0,
+              paddingRight: 0,
+            },
+            "& .ag-cell.ag-selection-centered .ag-cell-wrapper": {
+              gap: "0 !important",
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              paddingTop: 0,
+              paddingBottom: 0,
+            },
+            "& .ag-cell.ag-selection-centered .ag-selection-checkbox, & .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
+              margin: "0 auto",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            },
+            
+            "& .ag-cell.ag-selection-centered .ag-selection-checkbox": {
+              display: "flex !important",
+              width: "100% !important",
+              justifyContent: "center !important",
+              margin: "0 !important",
+            },
+            "& .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
+              margin: "0 !important",
+            },
+
+            "& .ag-center-cols-container .ag-cell.ag-selection-centered, & .ag-pinned-left-cols-container .ag-cell.ag-selection-centered": {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",

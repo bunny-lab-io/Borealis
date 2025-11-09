@@ -1,0 +1,16 @@
+{
+  "category": "script",
+  "description": "Deletes Agent and Engine Logs from C:\\Borealis.",
+  "files": [],
+  "name": "Borealis - Delete Logs [WIN]",
+  "script": "UmVtb3ZlLUl0ZW0gLUxpdGVyYWxQYXRoICdDOlxCb3JlYWxpc1xBZ2VudFxMb2dzJywnQzpcQm9yZWFsaXNcRW5naW5lXExvZ3MnIC1SZWN1cnNlIC1Gb3JjZSAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZQ==",
+  "script_encoding": "base64",
+  "sites": {
+    "mode": "all",
+    "values": []
+  },
+  "timeout_seconds": 3600,
+  "type": "powershell",
+  "variables": [],
+  "version": 1
+}
