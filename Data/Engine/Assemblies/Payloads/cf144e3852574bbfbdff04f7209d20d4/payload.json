@@ -3,7 +3,7 @@
   "description": "Deletes Agent and Engine Logs from C:\\Borealis.",
   "files": [],
   "name": "Borealis - Delete Logs [WIN]",
-  "script": "UmVtb3ZlLUl0ZW0gLUxpdGVyYWxQYXRoICdDOlxCb3JlYWxpc1xBZ2VudFxMb2dzJywnQzpcQm9yZWFsaXNcRW5naW5lXExvZ3MnIC1SZWN1cnNlIC1Gb3JjZSAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZQ==",
+  "script": "UmVtb3ZlLUl0ZW0gLUxpdGVyYWxQYXRoICdDOlxCb3JlYWxpc1xBZ2VudFxMb2dzJywnQzpcQm9yZWFsaXNcRW5naW5lXExvZ3MnIC1SZWN1cnNlIC1Gb3JjZSAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZQpSZW1vdmUtSXRlbSAtTGl0ZXJhbFBhdGggJ0U6XEdpdEh1YlxCb3JlYWxpc1xBZ2VudFxMb2dzJywnRTpcR2l0SHViXEJvcmVhbGlzXEVuZ2luZVxMb2dzJyAtUmVjdXJzZSAtRm9yY2UgLUVycm9yQWN0aW9uIFNpbGVudGx5Q29udGludWU=",
   "script_encoding": "base64",
   "sites": {
     "mode": "all",

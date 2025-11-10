@@ -1,4 +1,12 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/WebUI/src/Scheduled_Jobs_List.jsx
+// /////////////////////////////////////////////////////////////////////////////
+//  Scheduled_Jobs_List — Borealis MagicUI styling parity with Page Template
+//  - Aurora gradient shell
+//  - Small Material icon LEFT of title
+//  - Subtitle under title
+//  - Top-right utility buttons (Refresh, Create Job, Settings)
+//  - AG Grid Quartz theme + square checkboxes, rounded chrome
+//  - Keeps all original logic + renderers
+// /////////////////////////////////////////////////////////////////////////////
 
 import React, {
   useCallback,
@@ -16,34 +24,68 @@ import {
   Dialog,
   DialogTitle,
   DialogActions,
-  CircularProgress
+  CircularProgress,
+  IconButton,
+  Stack,
+  Tooltip
 } from "@mui/material";
+import {
+  Schedule as HeaderIcon,
+  Cached as CachedIcon,
+  Add as AddIcon,
+  Tune as TuneIcon
+} from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DomainBadge, resolveDomainMeta } from "../Assemblies/Assembly_Badges";
 import { buildAssemblyIndex, resolveAssemblyForComponent } from "../Assemblies/assemblyUtils";
 
+// -----------------------------------------------------------------------------
+//  Register AG Grid community modules
+// -----------------------------------------------------------------------------
 ModuleRegistry.registerModules([AllCommunityModule]);
 
-const myTheme = themeQuartz.withParams({
-  accentColor: "#FFA6FF",
-  backgroundColor: "#1f2836",
+// -----------------------------------------------------------------------------
+//  MagicUI x Quartz Theme (parity with Page_Template)
+// -----------------------------------------------------------------------------
+const gridTheme = themeQuartz.withParams({
+  accentColor: "#8b5cf6",
+  backgroundColor: "#070b1a",
   browserColorScheme: "dark",
-  chromeBackgroundColor: {
-    ref: "foregroundColor",
-    mix: 0.07,
-    onto: "backgroundColor"
-  },
-  fontFamily: {
-    googleFont: "IBM Plex Sans"
-  },
-  foregroundColor: "#FFF",
-  headerFontSize: 14
+  fontFamily: { googleFont: "IBM Plex Sans" },
+  foregroundColor: "#f4f7ff",
+  headerFontSize: 13,
 });
+const themeClassName = gridTheme.themeName || "ag-theme-quartz";
 
-const themeClassName = myTheme.themeName || "ag-theme-quartz";
-const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
-const iconFontFamily = '"Quartz Regular"';
+// Typography
+const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
+const iconFontFamily = "'Quartz Regular'";
+
+// Aurora gradient shell colors
+const AURORA_SHELL = {
+  background:
+    "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
+    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+  text: "#e2e8f0",
+  subtext: "#9ba3b4",
+  accent: "#7dd3fc",
+};
+
+// Gradient button styling
+const gradientButtonSx = {
+  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+  color: "#0b1220",
+  borderRadius: 999,
+  textTransform: "none",
+  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
+  px: 2.6,
+  minWidth: 116,
+  "&:hover": {
+    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
+  },
+};
 
 function ResultsBar({ counts }) {
   const total = Math.max(1, Number(counts?.total_targets || 0));
@@ -67,24 +109,8 @@ function ResultsBar({ counts }) {
     .some((section) => Number(counts?.[section.key] || 0) > 0);
 
   return (
-    <Box
-      sx={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 0.25,
-        lineHeight: 1.7,
-        fontFamily: gridFontFamily
-      }}
-    >
-      <Box
-        sx={{
-          display: "flex",
-          borderRadius: 1,
-          overflow: "hidden",
-          width: 220,
-          height: 6
-        }}
-      >
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.25, lineHeight: 1.7, fontFamily: gridFontFamily }}>
+      <Box sx={{ display: "flex", borderRadius: 1, overflow: "hidden", width: 220, height: 6 }}>
         {sections.map((section) => {
           const value = Number(counts?.[section.key] || 0);
           if (!value) return null;
@@ -116,20 +142,8 @@ function ResultsBar({ counts }) {
           return sections
             .filter((section) => Number(counts?.[section.key] || 0) > 0)
             .map((section) => (
-              <Box
-                key={section.key}
-                component="span"
-                sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
-              >
-                <Box
-                  component="span"
-                  sx={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: 1,
-                    backgroundColor: section.color
-                  }}
-                />
+              <Box key={section.key} component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
+                <Box component="span" sx={{ width: 6, height: 6, borderRadius: 1, backgroundColor: section.color }} />
                 {counts?.[section.key]} {labelFor(section.key)}
               </Box>
             ));
@@ -478,12 +492,8 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
           onChange={handleToggle}
           onClick={(event) => event.stopPropagation()}
           sx={{
-            "& .MuiSwitch-switchBase.Mui-checked": {
-              color: "#58a6ff"
-            },
-            "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track": {
-              bgcolor: "#58a6ff"
-            }
+            "& .MuiSwitch-switchBase.Mui-checked": { color: "#58a6ff" },
+            "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track": { bgcolor: "#58a6ff" }
           }}
         />
       );
@@ -491,49 +501,42 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     []
   );
 
+  // Selection column parity (square, centered, pinned left)
+  const selectionCol = {
+    headerName: "",
+    field: "__select__",
+    width: 52,
+    maxWidth: 52,
+    checkboxSelection: true,
+    headerCheckboxSelection: true,
+    resizable: false,
+    sortable: false,
+    suppressMenu: true,
+    filter: false,
+    pinned: "left",
+    lockPosition: true,
+  };
+
   const columnDefs = useMemo(
     () => [
-      {
-        headerName: "",
-        field: "__checkbox__",
-        checkboxSelection: true,
-        headerCheckboxSelection: true,
-        maxWidth: 60,
-        minWidth: 60,
-        sortable: false,
-        filter: false,
-        resizable: false,
-        suppressMenu: true,
-        pinned: false
-      },
+      selectionCol,
       {
         headerName: "Name",
         field: "name",
         cellRenderer: nameCellRenderer,
-        sort: "asc"
+        sort: "asc",
+        minWidth: 220,
       },
       {
         headerName: "Assembly(s)",
         field: "componentsMeta",
-        minWidth: 240,
+        minWidth: 260,
         cellRenderer: assembliesCellRenderer
       },
-      {
-        headerName: "Target",
-        field: "target"
-      },
-      {
-        headerName: "Recurrence",
-        field: "occurrence"
-      },
-      {
-        headerName: "Last Run",
-        field: "lastRun"
-      },
-      {
-        headerName: "Next Run",
-        field: "nextRun"
-      },
+      { headerName: "Target", field: "target", minWidth: 140 },
+      { headerName: "Recurrence", field: "occurrence", minWidth: 160 },
+      { headerName: "Last Run", field: "lastRun", minWidth: 160 },
+      { headerName: "Next Run", field: "nextRun", minWidth: 160 },
       {
         headerName: "Results",
         field: "resultsCounts",
@@ -562,7 +565,6 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       sortable: true,
       filter: "agTextColumnFilter",
       resizable: true,
-      flex: 1,
       minWidth: 140,
       cellStyle: {
         display: "flex",
@@ -570,145 +572,181 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         color: "#f5f7fa",
         fontFamily: gridFontFamily,
         fontSize: "13px"
-      },
-      headerClass: "scheduled-jobs-grid-header"
+      }
     }),
     []
   );
 
+  const handleRefreshClick = useCallback(async () => {
+    await loadJobs({ showLoading: true });
+  }, [loadJobs]);
+
   return (
     <Paper
       sx={{
-        m: 2,
+        m: 0,
         p: 0,
-        bgcolor: "#1e1e1e",
-        color: "#f5f7fa",
-        fontFamily: gridFontFamily,
+        background: AURORA_SHELL.background,
+        border: "none",
+        boxShadow: "none",
+        borderRadius: 0,
         display: "flex",
         flexDirection: "column",
         flexGrow: 1,
         minWidth: 0,
-        minHeight: 420
+        minHeight: 420,
+        height: "100%",
+        color: AURORA_SHELL.text,
+        fontFamily: gridFontFamily,
       }}
-      elevation={2}
+      elevation={0}
     >
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          p: 2,
-          borderBottom: "1px solid #2a2a2a"
-        }}
-      >
-        <Box>
-          <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0.3 }}>
+      {/* Page header (keep padding: top 24px, left/right 24px) */}
+      <Box sx={{ px: 3, pt: 3, pb: 1 }}>
+        <Stack direction="row" alignItems="center" spacing={1.25}>
+          <HeaderIcon sx={{ fontSize: 22, color: AURORA_SHELL.accent }} />
+          <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 0.5 }}>
             Scheduled Jobs
           </Typography>
-          <Typography variant="body2" sx={{ color: "#aaa" }}>
-            List of automation jobs with schedules, results, and actions.
-          </Typography>
-        </Box>
-        <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-          <Button
-            variant="outlined"
-            size="small"
-            disabled={!anySelected}
-            sx={{
-              color: anySelected ? "#ff8080" : "#666",
-              borderColor: anySelected ? "#ff8080" : "#333",
-              textTransform: "none",
-              fontFamily: gridFontFamily,
-              "&:hover": {
-                borderColor: anySelected ? "#ff8080" : "#333"
-              }
-            }}
-            onClick={() => setBulkDeleteOpen(true)}
-          >
-            Delete Job
-          </Button>
-          <Button
-            variant="contained"
-            size="small"
-            sx={{
-              bgcolor: "#58a6ff",
-              color: "#0b0f19",
-              textTransform: "none",
-              fontFamily: gridFontFamily,
-              "&:hover": {
-                bgcolor: "#7db7ff"
-              }
-            }}
-            onClick={() => onCreateJob && onCreateJob()}
-          >
-            Create Job
-          </Button>
-        </Box>
+          <Box sx={{ flexGrow: 1 }} />
+          <Stack direction="row" spacing={1}>
+            <Tooltip title="Refresh">
+              <span>
+                <IconButton
+                  size="small"
+                  onClick={handleRefreshClick}
+                  sx={{ color: "#cbd5e1", borderRadius: 1, "&:hover": { color: "#ffffff" } }}
+                >
+                  <CachedIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Create Job">
+              <span>
+                <Button size="small" startIcon={<AddIcon />} sx={gradientButtonSx} onClick={() => onCreateJob && onCreateJob()}>
+                  Create Job
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title="Settings">
+              <span>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<TuneIcon />}
+                  sx={{
+                    borderColor: "rgba(148,163,184,0.35)",
+                    color: "#e2e8f0",
+                    textTransform: "none",
+                    borderRadius: 999,
+                    px: 1.7,
+                    minWidth: 86,
+                    "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
+                  }}
+                >
+                  Settings
+                </Button>
+              </span>
+            </Tooltip>
+          </Stack>
+        </Stack>
+
+        {/* Subtitle directly under title (muted color, small size) */}
+        <Typography variant="body2" sx={{ color: AURORA_SHELL.subtext, mt: 0.75 }}>
+          List of automation jobs with schedules, results, and actions.
+        </Typography>
       </Box>
 
-      {loading && (
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 1,
-            color: "#7db7ff",
-            px: 2,
-            py: 1.5,
-            borderBottom: "1px solid #2a2a2a"
-          }}
-        >
-          <CircularProgress size={18} sx={{ color: "#58a6ff" }} />
-          <Typography variant="body2">Loading scheduled jobs…</Typography>
-        </Box>
-      )}
-
-      {error && (
-        <Box sx={{ px: 2, py: 1.5, color: "#ff8080", borderBottom: "1px solid #2a2a2a" }}>
-          <Typography variant="body2">{error}</Typography>
-        </Box>
-      )}
-
-      <Box
-        sx={{
-          flexGrow: 1,
-          minHeight: 0,
-          display: "flex",
-          flexDirection: "column",
-          mt: "10px",
-          px: 2,
-          pb: 2
-        }}
-      >
+      {/* Content area — a bit more top space below subtitle */}
+      <Box sx={{ mt: "28px", px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Box
           className={themeClassName}
           sx={{
+            background: "transparent",
+            border: "none",
+            p: 0,
             width: "100%",
-            height: "100%",
             flexGrow: 1,
+            minHeight: 0,
+            height: "100%",
+            position: "relative",
             fontFamily: gridFontFamily,
             "--ag-font-family": gridFontFamily,
             "--ag-icon-font-family": iconFontFamily,
-            "--ag-row-border-style": "solid",
-            "--ag-row-border-color": "#2a2a2a",
-            "--ag-row-border-width": "1px",
-            "& .ag-root-wrapper": {
-              borderRadius: 1,
-              minHeight: 320
+
+            "& .ag-cell": {
+              display: "flex",
+              alignItems: "center",
+              paddingTop: "8px",
+              paddingBottom: "8px",
             },
-            "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
-              fontFamily: gridFontFamily
+
+            /* Center the selection column (header + body) */
+            "& .ag-header .ag-header-select-all, & .ag-header .ag-checkbox-input-wrapper": {
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
             },
-            "& .ag-icon": {
-              fontFamily: iconFontFamily
+            "& .ag-cell.ag-selection-centered": {
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              paddingLeft: 0,
+              paddingRight: 0,
             },
-            "& .scheduled-jobs-grid-header": {
-              fontFamily: gridFontFamily,
-              fontWeight: 600,
-              color: "#f5f7fa"
-            }
+            "& .ag-cell.ag-selection-centered .ag-cell-wrapper": {
+              gap: "0 !important",
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              paddingTop: 0,
+              paddingBottom: 0,
+            },
+            "& .ag-cell.ag-selection-centered .ag-selection-checkbox, & .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
+              margin: "0 auto",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            },
+          }}
+          style={{
+            "--ag-background-color": "#070b1a",
+            "--ag-foreground-color": "#f4f7ff",
+            "--ag-header-background-color": "#0f172a",
+            "--ag-header-foreground-color": "#cfe0ff",
+            "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+            "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+            "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+            "--ag-border-color": "rgba(125,183,255,0.18)",
+            "--ag-row-border-color": "rgba(125,183,255,0.14)",
+            "--ag-border-radius": "8px",
+            "--ag-checkbox-border-radius": "3px",
+            "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
+            "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
+            "--ag-checkbox-checked-color": "#7dd3fc",
           }}
         >
+          {/* Action bar for bulk delete stays above grid when needed */}
+          {anySelected && (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "#7db7ff", px: 1.5, py: 1 }}>
+              <Button
+                variant="outlined"
+                size="small"
+                sx={{
+                  color: "#ff8080",
+                  borderColor: "rgba(255,128,128,0.5)",
+                  textTransform: "none",
+                  borderRadius: 999,
+                  "&:hover": { borderColor: "#ff8080" },
+                }}
+                onClick={() => setBulkDeleteOpen(true)}
+              >
+                Delete Job
+              </Button>
+            </Box>
+          )}
+
           <AgGridReact
             rowData={rows}
             columnDefs={columnDefs}
@@ -724,13 +762,8 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No scheduled jobs found.</span>"
             onGridReady={handleGridReady}
             onSelectionChanged={handleSelectionChanged}
-            theme={myTheme}
-            style={{
-              width: "100%",
-              height: "100%",
-              fontFamily: gridFontFamily,
-              "--ag-icon-font-family": iconFontFamily
-            }}
+            theme={gridTheme}
+            style={{ width: "100%", height: "100%", fontFamily: gridFontFamily, "--ag-icon-font-family": iconFontFamily }}
           />
         </Box>
       </Box>

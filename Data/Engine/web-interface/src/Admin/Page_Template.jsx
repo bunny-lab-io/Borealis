@@ -177,13 +177,10 @@ const SAMPLE_ROWS = [
 const selectionCol = {
   headerName: "",
   field: "__select__",
-  cellClass: 'ag-selection-centered',
-  cellStyle: { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 },
   width: 52,
   maxWidth: 52,
   checkboxSelection: true,
   headerCheckboxSelection: true,
-  headerCheckboxSelectionFilteredOnly: false,
   resizable: false,
   sortable: false,
   suppressMenu: true,
