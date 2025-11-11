@@ -1335,8 +1335,8 @@ export default function DeviceList({
             field: "site",
             headerName: col.label,
             valueGetter: (params) => params.data?.site || "Not Configured",
-            width: 140,
-            minWidth: 140,
+            width: 100,
+            minWidth: 100,
             flex: 0,
           };
         case "hostname":
@@ -1344,8 +1344,8 @@ export default function DeviceList({
             field: "hostname",
             headerName: col.label,
             cellRenderer: hostnameCellRenderer,
-            width: 210,
-            minWidth: 210,
+            width: 150,
+            minWidth: 150,
             flex: 0,
           };
         case "description":
@@ -1365,16 +1365,16 @@ export default function DeviceList({
           return {
             field: "lastUser",
             headerName: col.label,
-            width: 220,
-            minWidth: 220,
+            width: 200,
+            minWidth: 200,
             flex: 0,
           };
         case "type":
           return {
             field: "type",
             headerName: col.label,
-            width: 170,
-            minWidth: 170,
+            width: 150,
+            minWidth: 150,
             flex: 0,
           };
         case "os":
