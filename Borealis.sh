@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 #////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Borealis.sh
-# Linux parity for Borealis.ps1 (Ubuntu/Rocky/Fedora/RHEL). Experimental but feature-complete.
+# Linux parity for Borealis.ps1 (Engine focus). Aims to be OS-agnostic across Ubuntu/Debian, RHEL/Rocky/Fedora, Arch.
+# - Installs system deps when needed (python3, venv, pip, curl, unzip, tesseract)
+# - Bundles portable NodeJS into Dependencies/NodeJS to keep a known-good version (no root required)
+# - Mirrors Windows flow: create Engine venv, stage Data/Engine, stage web-interface, Vite dev or prod build, Flask launch
+# - Supports flags: --server/--agent (agent kept for compatibility), --vite/--flask, --quick, --engine-tests,
+#                   --EngineProduction, --EngineDev (auto-select server mode), plus interactive menu
+# NOTE: This script focuses on ENGINE parity. Agent paths remain but are not the goal here.
 
 set -o errexit
 set -o nounset
@@ -21,58 +27,29 @@ cd "$SCRIPT_DIR"
 # ---- CLI flags (parity with Borealis.ps1) ----
 SERVER_FLAG=0
 AGENT_FLAG=0
-AGENT_ACTION=""
 VITE_FLAG=0
 FLASK_FLAG=0
 QUICK_FLAG=0
 ENGINE_TESTS_FLAG=0
+ENGINE_PROD_FLAG=0
+ENGINE_DEV_FLAG=0
+INSTALLER_CODE=""
 
 while (( "$#" )); do
   case "$1" in
     -Server|--server) SERVER_FLAG=1 ;;
     -Agent|--agent) AGENT_FLAG=1 ;;
-    -AgentAction|--agent-action) shift; AGENT_ACTION="${1:-}" ;;
     -Vite|--vite) VITE_FLAG=1 ;;
     -Flask|--flask) FLASK_FLAG=1 ;;
     -Quick|--quick) QUICK_FLAG=1 ;;
     -EngineTests|--engine-tests) ENGINE_TESTS_FLAG=1 ;;
+    -EngineProduction|--engine-production) ENGINE_PROD_FLAG=1 ;;
+    -EngineDev|--engine-dev) ENGINE_DEV_FLAG=1 ;;
+    -InstallerCode|--installer-code) shift; INSTALLER_CODE="${1:-}" ;;
     *) ;; # ignore unknown for flexibility
   esac
   shift || true
 done
-
-if (( ENGINE_TESTS_FLAG )); then
-  cd "$SCRIPT_DIR"
-  export BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}"
-
-  if command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="$(command -v python3)"
-  elif command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="$(command -v python)"
-  else
-    echo -e "${RED}Python interpreter not found. Install Python 3 to run Engine tests.${RESET}" >&2
-    exit 1
-  fi
-
-  "$PYTHON_BIN" -m pytest Data/Engine/Unit_Tests
-  exit $?
-fi
-
-# ---- Banner ----
-clear || true
-echo -e "${BOREALIS_BLUE}"
-cat << 'EOF'
-�����������                                        ����   ���         
-����۰�������                                      �����  ���          
- ����    ����  ������  ��������   ������   ������   ����  ����   ����� 
- �����������  ��۰���۰���۰���� ��۰���� ��������  ���� �����  ��۰�  
- ���۰������۰��� ���� ���� ��� ��������   �������  ����  ���� ������� 
- ����    ���۰��� ���� ����     ���۰��   ��۰����  ����  ����  �������
- ����������� ��������  �����    �������� ���������� ����� ����� ������ 
-�����������   ������  �����      ������   �������� ����� ����� ������  
-EOF
-echo -e "${RESET}"
-echo -e "${DARK_GRAY}Automation Platform${RESET}"
 
 # ---- Helpers ----
 run_step() {
@@ -96,10 +73,18 @@ detect_distro() {
   fi
 }
 
-ensure_log_dir() { mkdir -p "${SCRIPT_DIR}/Agent/Logs"; }
-log_agent() { ensure_log_dir; printf "[%s] %s\n" "$(date +%F\ %T)" "$1" >> "${SCRIPT_DIR}/Agent/Logs/$2"; }
-
 need_sudo() { [ "${EUID:-$(id -u)}" -ne 0 ]; }
+
+ensure_engine_log_dir() {
+  mkdir -p "${SCRIPT_DIR}/Engine/Logs"
+  echo "${SCRIPT_DIR}/Engine/Logs"
+}
+
+write_vite_log() {
+  local msg="$1"; local svc="${2:-vite-dev}"
+  local logdir; logdir=$(ensure_engine_log_dir)
+  printf "%s-%s-%s\n" "$(date +%FT%T)" "$svc" "$msg" >> "${logdir}/vite.log"
+}
 
 # ---- Dependency Installation (Linux) ----
 install_shared_dependencies() {
@@ -107,14 +92,27 @@ install_shared_dependencies() {
   if command -v python3 >/dev/null 2>&1 && command -v pip3 >/dev/null 2>&1; then :; else
     case "$DISTRO_ID" in
       ubuntu|debian)
-        sudo apt update -qq && sudo apt install -y python3 python3-venv python3-pip curl unzip ;;
+        sudo apt update -qq && sudo apt install -y python3 python3-venv python3-pip curl unzip ca-certificates ;;
       rhel|centos|fedora|rocky)
-        if command -v dnf >/dev/null 2>&1; then sudo dnf install -y python3 python3-pip curl unzip ; else sudo yum install -y python3 python3-pip curl unzip ; fi ;;
+        if command -v dnf >/dev/null 2>&1; then sudo dnf install -y python3 python3-pip python3-virtualenv curl unzip ca-certificates ; else sudo yum install -y python3 python3-pip python3-virtualenv curl unzip ca-certificates ; fi ;;
       arch)
-        sudo pacman -Sy --noconfirm python python-pip curl unzip ;; 
-      *) : ;; 
+        sudo pacman -Sy --noconfirm python python-pip python-virtualenv curl unzip ca-certificates ;;
+      *) : ;;
     esac
   fi
+}
+
+install_tesseract() {
+  detect_distro
+  case "$DISTRO_ID" in
+    ubuntu|debian)
+      sudo apt update -qq && sudo apt install -y tesseract-ocr ;;
+    rhel|centos|fedora|rocky)
+      if command -v dnf >/dev/null 2>&1; then sudo dnf install -y tesseract ; else sudo yum install -y tesseract ; fi ;;
+    arch)
+      sudo pacman -Sy --noconfirm tesseract ;;
+    *) : ;;
+  esac
 }
 
 NODE_VERSION="v23.11.0"
@@ -123,267 +121,232 @@ NODE_BIN="${NODE_DIR}/bin/node"
 NPM_BIN="${NODE_DIR}/bin/npm"
 NPX_BIN="${NODE_DIR}/bin/npx"
 
-install_server_dependencies() {
-  # Tesseract via system packages; OCR engines code uses system binary on Linux
-  detect_distro
-  case "$DISTRO_ID" in
-    ubuntu|debian)
-      sudo apt update -qq && sudo apt install -y tesseract-ocr ;; 
-    rhel|centos|fedora|rocky)
-      if command -v dnf >/dev/null 2>&1; then sudo dnf install -y tesseract; else sudo yum install -y tesseract; fi ;;
-    arch)
-      sudo pacman -Sy --noconfirm tesseract ;;
-    *) : ;;
-  esac
-
-  # NodeJS (portable into Dependencies/NodeJS)
-  if [[ ! -x "$NODE_BIN" ]]; then
-    mkdir -p "$NODE_DIR"
-    local tarball="node-${NODE_VERSION}-linux-x64.tar.xz"
-    local url="https://nodejs.org/dist/${NODE_VERSION}/${tarball}"
-    local dl_path="${SCRIPT_DIR}/Dependencies/${tarball}"
-    run_step "Dependency: NodeJS (${NODE_VERSION})" bash -c "
-      curl -fsSL -o '${dl_path}' '${url}' && \
-      rm -rf '${NODE_DIR:?}'/* && \
-      mkdir -p '${NODE_DIR}' && \
-      tar -xJf '${dl_path}' -C '${NODE_DIR}' --strip-components=1 && \
-      rm -f '${dl_path}'
-    "
-  fi
-  export PATH="${NODE_DIR}/bin:${PATH}"
+install_node_portable() {
+  if [[ -x "$NPM_BIN" ]]; then return 0; fi
+  mkdir -p "$NODE_DIR"
+  local tarball="node-${NODE_VERSION}-linux-x64.tar.xz"
+  local url="https://nodejs.org/dist/${NODE_VERSION}/${tarball}"
+  local dl_path="${SCRIPT_DIR}/Dependencies/${tarball}"
+  write_vite_log "Downloading NodeJS ${NODE_VERSION} from ${url}" "bootstrap"
+  curl -fsSL -o "$dl_path" "$url"
+  rm -rf "${NODE_DIR:?}"/*
+  tar -xJf "$dl_path" -C "$NODE_DIR" --strip-components=1
+  rm -f "$dl_path"
 }
 
 ensure_node_bins() {
-  if [[ -x "$NPM_BIN" ]]; then return 0; fi
+  if [[ -x "$NPM_BIN" ]]; then export PATH="${NODE_DIR}/bin:${PATH}"; return 0; fi
   if command -v npm >/dev/null 2>&1; then
     NPM_BIN="$(command -v npm)"; NPX_BIN="$(command -v npx || echo npx)"; return 0
   fi
-  echo -e "${RED}npm not found. Run server dependency install first.${RESET}" >&2
-  return 1
+  echo -e "${YELLOW}npm not found on PATH; installing portable NodeJS...${RESET}"
+  install_node_portable
+  export PATH="${NODE_DIR}/bin:${PATH}"
 }
 
-install_agent_dependencies() {
-  # No AHK on Linux; ensure python only
-  install_shared_dependencies
+install_server_dependencies() {
+  run_step "Dependency: Python (system)" install_shared_dependencies
+  run_step "Dependency: Tesseract-OCR (system)" install_tesseract
+  run_step "Dependency: NodeJS (portable)" install_node_portable
 }
 
-# ---- Process/task helpers (Linux) ----
-kill_agent_processes() {
-  # Kill only Python processes under this repo's Agent venv
-  if command -v pgrep >/dev/null 2>&1; then
-    pgrep -f "${SCRIPT_DIR}/Agent/.*/python.*${SCRIPT_DIR}/Agent/Borealis/agent.py" >/dev/null 2>&1 && \
-      pkill -f "${SCRIPT_DIR}/Agent/.*/python.*${SCRIPT_DIR}/Agent/Borealis/agent.py" || true
+# Prefer a resilient resolver for the Engine venv interpreter (some venvs only have 'python')
+engine_python_bin() {
+  if [[ -x "${SCRIPT_DIR}/Engine/bin/python3" ]]; then
+    echo "${SCRIPT_DIR}/Engine/bin/python3"
+  elif [[ -x "${SCRIPT_DIR}/Engine/bin/python" ]]; then
+    echo "${SCRIPT_DIR}/Engine/bin/python"
   else
-    pkill -f "Agent/Borealis/agent.py" || true
+    echo ""
   fi
 }
 
-ensure_cron_entry() {
-  # args: who command
-  local who="$1"; shift
-  local cmd="$*"
-  local tmp
-  tmp="$(mktemp)"
-  if [[ "$who" == "root" ]]; then
-    if need_sudo; then SUDO=sudo; else SUDO=""; fi
-    $SUDO crontab -l 2>/dev/null | grep -vF -- "$cmd" > "$tmp" || true
-    echo "@reboot ${cmd}" >> "$tmp"
-    $SUDO crontab "$tmp"
-  else
-    crontab -l 2>/dev/null | grep -vF -- "$cmd" > "$tmp" || true
-    echo "@reboot ${cmd}" >> "$tmp"
-    crontab "$tmp"
-  fi
-  rm -f "$tmp"
-}
-
-remove_cron_entries() {
-  # Remove entries we added previously
-  local sys_cmd user_cmd
-  sys_cmd="$1"; shift
-  user_cmd="$1"; shift || true
-  local tmp
-  tmp="$(mktemp)"; if need_sudo; then SUDO=sudo; else SUDO=""; fi
-  $SUDO crontab -l 2>/dev/null | grep -vF -- "$sys_cmd" > "$tmp" || true; $SUDO crontab "$tmp" || true
-  crontab -l 2>/dev/null | grep -vF -- "$user_cmd" > "$tmp" || true; crontab "$tmp" || true
-  rm -f "$tmp"
-}
-
-# ---- Agent deployment (Install / Repair / Remove) ----
-create_agent_venv_and_files() {
-  local venvFolder="Agent"
-  local agentDest="${venvFolder}/Borealis"
-  python3 -m venv "$venvFolder" 2>/dev/null || true
-  mkdir -p "$agentDest"
-  # Fresh copy of agent payload
-  rm -rf "${agentDest:?}"/*
-  cp -f "Data/Agent/agent.py"              "$agentDest/"
-  cp -f "Data/Agent/role_manager.py"       "$agentDest/"
-  cp -f "Data/Agent/agent_deployment.py"   "$agentDest/" 2>/dev/null || true
-  [ -f "Data/Agent/Borealis.ico" ] && cp -f "Data/Agent/Borealis.ico" "$agentDest/"
-  [ -d "Data/Agent/Python_API_Endpoints" ] && cp -r "Data/Agent/Python_API_Endpoints" "$agentDest/"
-  [ -d "Data/Agent/Roles" ] && cp -r "Data/Agent/Roles" "$agentDest/"
-  # Linux wrapper to guarantee working dir and capture logs
-  cat > "${agentDest}/launch_service.sh" << 'SH'
-#!/usr/bin/env bash
-set -o errexit
-set -o nounset
-set -o pipefail
-ROOT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
-cd "$ROOT_DIR"
-LOG_DIR="$(cd -- "$ROOT_DIR/../Logs" && pwd 2>/dev/null || echo "$ROOT_DIR/../Logs")"
-mkdir -p "$LOG_DIR"
-PY_BIN="${ROOT_DIR}/../bin/python3"
-exec "$PY_BIN" "$ROOT_DIR/agent.py" --system-service --config SYSTEM >>"$LOG_DIR/svc.out.log" 2>>"$LOG_DIR/svc.err.log"
-SH
-  chmod +x "${agentDest}/launch_service.sh"
-
-  # pip deps
-  if [[ -f "Data/Agent/agent-requirements.txt" ]]; then
-    "${SCRIPT_DIR}/Agent/bin/python3" -m pip install --disable-pip-version-check -q -r "Data/Agent/agent-requirements.txt"
-  fi
-}
-
-ensure_agent_tasks() {
-  # Register @reboot cron entries for system (root) and current user
-  local agentDest="${SCRIPT_DIR}/Agent/Borealis"
-  local sys_cmd="bash '${agentDest}/launch_service.sh'"
-  local user_cmd="bash -lc 'cd "${agentDest}" && "${SCRIPT_DIR}/Agent/bin/python3" ./agent.py --config CURRENTUSER'"
-
-  # Root/system entry
-  if need_sudo; then
-    echo -e "${YELLOW}Agent SYSTEM cron requires sudo. Prompting...${RESET}"
-  fi
-  ensure_cron_entry root "$sys_cmd"
-  ensure_cron_entry user "$user_cmd"
-}
-
-install_or_update_agent() {
-  echo -e "${GREEN}Ensuring Agent Dependencies...${RESET}"
-  install_shared_dependencies
-  install_agent_dependencies
-  log_agent "=== Install/Update start ===" install.log
-  kill_agent_processes || true
-  run_step "Create Agent venv and deploy files" create_agent_venv_and_files
-  run_step "Register cron tasks (SYSTEM, User)" ensure_agent_tasks
-  log_agent "=== Install/Update end ===" install.log
-}
-
-repair_agent() {
-  log_agent "=== Repair start ===" Repair.log
-  kill_agent_processes || true
-  install_or_update_agent
-  log_agent "=== Repair end ===" Repair.log
-}
-
-remove_agent() {
-  log_agent "=== Removal start ===" Removal.log
-  kill_agent_processes || true
-  local sys_cmd="bash '${SCRIPT_DIR}/Agent/Borealis/launch_service.sh'"
-  local user_cmd="bash -lc 'cd "${SCRIPT_DIR}/Agent/Borealis" && "${SCRIPT_DIR}/Agent/bin/python3" ./agent.py --config CURRENTUSER'"
-  remove_cron_entries "$sys_cmd" "$user_cmd" || true
-  rm -rf "${SCRIPT_DIR}/Agent" || true
-  log_agent "=== Removal end ===" Removal.log
-}
-
-launch_user_helper_now() {
-  local py="${SCRIPT_DIR}/Agent/bin/python3"
-  local helper="${SCRIPT_DIR}/Agent/Borealis/agent.py"
-  if [[ -x "$py" && -f "$helper" ]]; then
-    (cd "${SCRIPT_DIR}/Agent/Borealis" && nohup "$py" -W ignore::SyntaxWarning "$helper" --config CURRENTUSER >/dev/null 2>&1 & )
-    echo -e "${GREEN}Launched user-session helper.${RESET}"
-  else
-    echo -e "${YELLOW}Agent venv or helper missing; run install first.${RESET}"
-  fi
-}
-
-# ---- Server deployment ----
-copy_server_payload() {
-  local venvFolder="Server"
-  local dataSource="Data/Server"
-  local dataDestination="${venvFolder}/Borealis"
-  python3 -m venv "$venvFolder" 2>/dev/null || true
-  mkdir -p "$dataDestination"
-  rm -rf "${dataDestination:?}"/*
-  cp -r "${dataSource}/Python_API_Endpoints" "$dataDestination/"
-  cp -r "${dataSource}/Sounds"               "$dataDestination/"
-  [ -f "${dataSource}/server.py" ] && cp "${dataSource}/server.py" "$dataDestination/"
-  [ -f "${dataSource}/job_scheduler.py" ] && cp "${dataSource}/job_scheduler.py" "$dataDestination/"
-  # Python deps
-  if [[ -f "${dataSource}/server-requirements.txt" ]]; then
-    "${SCRIPT_DIR}/Server/bin/python3" -m pip install --disable-pip-version-check -q -r "${dataSource}/server-requirements.txt"
-  fi
-}
-
+# ---- Engine TLS material (parity with Ensure-EngineTlsMaterial) ----
 ensure_engine_tls_material() {
-  local python_bin="${SCRIPT_DIR}/Server/bin/python3"
-  local cert_dir="${SCRIPT_DIR}/Certificates/Server"
-  mkdir -p "$cert_dir"
-  if [[ -x "$python_bin" ]]; then
-    "$python_bin" - <<'PY'
-from Data.Engine.services.crypto import certificates
-certificates.ensure_certificate()
-PY
+  local py="$1" # engine venv python
+  local cert_root_arg="$2" # optional path with pre-provided certs
+  local effective_root=""
+
+  if [[ -x "$py" ]]; then
+    local code='from Data.Engine.security import certificates; certificates.ensure_certificate(); print(certificates.engine_certificates_root())'
+    set +e
+    effective_root="$("$py" -c "$code" 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+    set -e
   fi
-  export BOREALIS_CERT_DIR="$cert_dir"
-  export BOREALIS_TLS_CERT="${cert_dir}/borealis-server-cert.pem"
-  export BOREALIS_TLS_KEY="${cert_dir}/borealis-server-key.pem"
+
+  if [[ -z "$effective_root" && -n "${cert_root_arg}" ]]; then
+    if [[ -f "${cert_root_arg}/borealis-server-cert.pem" && -f "${cert_root_arg}/borealis-server-key.pem" ]]; then
+      effective_root="${cert_root_arg}"
+    else
+      write_vite_log "Provided certificate root '${cert_root_arg}' missing expected TLS material; using Engine runtime certificates instead." "tls"
+    fi
+  fi
+
+  if [[ -z "$effective_root" ]]; then
+    effective_root="${SCRIPT_DIR}/Engine/Certificates"
+    mkdir -p "$effective_root"
+  fi
+
+  export BOREALIS_CERT_DIR="$effective_root"
+  export BOREALIS_TLS_CERT="${effective_root}/borealis-server-cert.pem"
+  export BOREALIS_TLS_KEY="${effective_root}/borealis-server-key.pem"
+  export BOREALIS_TLS_BUNDLE="${effective_root}/borealis-server-bundle.pem"
 }
 
-ensure_engine_webui_source() {
-  local engineSource="Engine/web-interface"
-  if [[ -d "${engineSource}/src" && -f "${engineSource}/package.json" ]]; then
-    return 0
-  fi
-  local stageSource="Data/Engine/web-interface"
-  if [[ ! -d "$stageSource" ]]; then
-    echo "${RED}Engine web interface source '$stageSource' not found.${RESET}" >&2
-    return 1
-  fi
-  mkdir -p "$engineSource"
-  find "$engineSource" -mindepth 1 -maxdepth 1 \
-    ! -name '.gitignore' ! -name 'README.md' -exec rm -rf {} +
-  cp -a "$stageSource/." "$engineSource/"
-  if [[ ! -f "${engineSource}/package.json" ]]; then
-    echo "${RED}Failed to stage Engine web interface into '$engineSource' from '$stageSource'.${RESET}" >&2
-    return 1
-  fi
+# ---- Engine web interface staging (parity with Ensure-EngineWebInterface) ----
+ensure_engine_web_interface() {
+  local project_root="$1"
+  local dest="${project_root}/Engine/web-interface"
+  local stage="${project_root}/Data/Engine/web-interface"
+  [[ -d "$stage" ]] || { echo -e "${RED}Engine web interface source missing at '$stage'.${RESET}" >&2; return 1; }
+  rm -rf "$dest" 2>/dev/null || true
+  mkdir -p "$dest"
+  cp -a "${stage}/." "$dest/"
+  [[ -f "${dest}/package.json" ]] || { echo -e "${RED}Failed to stage Engine web interface into '$dest'.${RESET}" >&2; return 1; }
 }
 
-prepare_webui() {
-  local customUIPath="Engine/web-interface"
-  local webUIDestination="Server/web-interface"
-  ensure_engine_webui_source || return 1
-  mkdir -p "$webUIDestination"
-  rm -rf "${webUIDestination}/public" "${webUIDestination}/src" "${webUIDestination}/build" 2>/dev/null || true
-  cp -r "${customUIPath}/"* "$webUIDestination/"
+# ---- Engine build+launch flow ----
+create_engine_venv_and_stage_data() {
+  local venv_dir="${SCRIPT_DIR}/Engine"
+  local engine_src="${SCRIPT_DIR}/Data/Engine"
+  local data_dest="${venv_dir}/Data/Engine"
+
+  [[ -d "$venv_dir" ]] || python3 -m venv "$venv_dir"
+  mkdir -p "${venv_dir}/Data"
+
+  rm -rf "$data_dest" 2>/dev/null || true
+  mkdir -p "$data_dest"
+
+  # Copy everything except Assemblies (handled separately)
+  shopt -s dotglob nullglob
+  for item in "${engine_src}"/*; do
+    base="$(basename "$item")"
+    if [[ "$base" == "Assemblies" ]]; then continue; fi
+    cp -a "$item" "$data_dest/"
+  done
+  shopt -u dotglob nullglob
+
+  # Assemblies runtime folder
+  [[ -d "${SCRIPT_DIR}/Engine/Assemblies" ]] || {
+    if [[ -d "${engine_src}/Assemblies" ]]; then
+      cp -a "${engine_src}/Assemblies" "${SCRIPT_DIR}/Engine/Assemblies"
+    else
+      mkdir -p "${SCRIPT_DIR}/Engine/Assemblies"
+    fi
+  }
+
+  # Auth_Tokens and database
+  mkdir -p "${SCRIPT_DIR}/Engine/Auth_Tokens"
+  # database.db will be created by the app if not present; ensure dir exists
+}
+
+install_engine_python_deps() {
+  local venv_py
+  venv_py="$(engine_python_bin)"
+  if [[ -z "$venv_py" ]]; then
+    # Try to create the venv if it doesn't exist yet
+    python3 -m venv "${SCRIPT_DIR}/Engine" || true
+    venv_py="$(engine_python_bin)"
+  fi
+  local engine_src="${SCRIPT_DIR}/Data/Engine"
+  local reqs=( "${engine_src}/engine-requirements.txt" "${engine_src}/requirements.txt" )
+  for r in "${reqs[@]}"; do
+    if [[ -f "$r" && -n "$venv_py" ]]; then
+      "$venv_py" -m pip install --disable-pip-version-check -q -r "$r"
+      return 0
+    fi
+  done
+  return 0
+}
+
+vite_web_frontend_install() {
+  local engine_ui_dest="${SCRIPT_DIR}/Engine/web-interface"
   ensure_node_bins
-  ( cd "$webUIDestination" && "$NPM_BIN" install --silent --no-fund --audit=false >/dev/null )
+  ( cd "$engine_ui_dest" && "$NPM_BIN" install --silent --no-fund --audit=false >/dev/null )
 }
 
-vite_start() {
+vite_web_frontend_start() {
   local mode="$1" # developer|production
-  local webUIDestination="Server/web-interface"
-  local subcmd="build"; [[ "$mode" == "developer" ]] && subcmd="dev"
+  local engine_ui_dest="${SCRIPT_DIR}/Engine/web-interface"
   ensure_node_bins
-  ensure_engine_tls_material
-  ( cd "$webUIDestination" && nohup "$NPM_BIN" run "$subcmd" >/dev/null 2>&1 & )
+  ensure_engine_tls_material "$(engine_python_bin)" ""
+
+  if [[ "$mode" == "developer" ]]; then
+    local logdir; logdir=$(ensure_engine_log_dir)
+    local stdout_log="${logdir}/vite-dev.stdout.log"
+    local stderr_log="${logdir}/vite-dev.stderr.log"
+    mv -f "$stdout_log" "${stdout_log}.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    mv -f "$stderr_log" "${stderr_log}.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    write_vite_log "Starting Vite dev server using TLS (cert=$BOREALIS_TLS_CERT bundle=$BOREALIS_TLS_BUNDLE)" "vite-dev"
+    (
+      cd "$engine_ui_dest"
+      PATH="${NODE_DIR}/bin:${PATH}" nohup "$NPM_BIN" run dev >"$stdout_log" 2>"$stderr_log" &
+    )
+  else
+    write_vite_log "Executing npm run build for production WebUI assets." "vite-build"
+    ( cd "$engine_ui_dest" && "$NPM_BIN" run build )
+  fi
 }
 
-flask_run() {
-  local py="${SCRIPT_DIR}/Server/bin/python3"
-  local server_py="${SCRIPT_DIR}/Server/Borealis/server.py"
-  echo -e "\n${GREEN}Launching Borealis Flask Server...${RESET}"
+flask_engine_launch() {
+  local mode="$1" # production|developer
+  pushd "${SCRIPT_DIR}/Engine" >/dev/null
+  local py
+  py="$(engine_python_bin)"
+  if [[ -z "$py" ]]; then
+    python3 -m venv "${SCRIPT_DIR}/Engine" || true
+    py="$(engine_python_bin)"
+  fi
+  local prev_mode="${BOREALIS_ENGINE_MODE:-}"
+  local prev_port="${BOREALIS_ENGINE_PORT:-}"
+  local prev_root="${BOREALIS_PROJECT_ROOT:-}"
+  export BOREALIS_ENGINE_MODE="$mode"
+  export BOREALIS_ENGINE_PORT="5000"
+  export BOREALIS_PROJECT_ROOT="$SCRIPT_DIR"
+  echo -e "\n${GREEN}Launching Borealis Engine...${RESET}"
   echo "===================================================================================="
-  "$py" "$server_py"
+  echo "${HOURGLASS} Engine Socket Server Started..."
+  "$py" -m Data.Engine.bootstrapper || true
+  # restore env
+  if [[ -n "$prev_mode" ]]; then export BOREALIS_ENGINE_MODE="$prev_mode"; else unset BOREALIS_ENGINE_MODE; fi
+  if [[ -n "$prev_port" ]]; then export BOREALIS_ENGINE_PORT="$prev_port"; else unset BOREALIS_ENGINE_PORT; fi
+  if [[ -n "$prev_root" ]]; then export BOREALIS_PROJECT_ROOT="$prev_root"; else unset BOREALIS_PROJECT_ROOT; fi
+  popd >/dev/null
 }
+
+# ---- Tests parity ----
+if (( ENGINE_TESTS_FLAG )); then
+  export BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}"
+  PYTHON_BIN="$(command -v python3 || command -v python || true)"
+  if [[ -z "${PYTHON_BIN}" ]]; then
+    echo -e "${RED}Python interpreter not found. Install Python 3 to run Engine tests.${RESET}" >&2
+    exit 1
+  fi
+  "${PYTHON_BIN}" -m pytest 'Data/Engine/Unit_Tests'
+  exit $?
+fi
+
+# ---- Banner ----
+clear || true
+printf "%b" "${BOREALIS_BLUE}"
+cat << 'EOF'
+:::::::::   ::::::::  :::::::::  ::::::::::     :::     :::        ::::::::::: :::::::: 
+:+:    :+: :+:    :+: :+:    :+: :+:          :+: :+:   :+:            :+:    :+:    :+:
++:+    +:+ +:+    +:+ +:+    +:+ +:+         +:+   +:+  +:+            +:+    +:+       
++#++:++#+  +#+    +:+ +#++:++#:  +#++:++#   +#++:++#++: +#+            +#+    +#++:++#++
++#+    +#+ +#+    +#+ +#+    +#+ +#+        +#+     +#+ +#+            +#+           +#+
+#+#    #+# #+#    #+# #+#    #+# #+#        #+#     #+# #+#            #+#    #+#    #+#
+#########   ########  ###    ### ########## ###     ### ########## ########### ######## 
+EOF
+printf "%b" "${RESET}"
+printf "%b\n" "${DARK_GRAY}Automation Platform${RESET}"
 
 # ---- Menus ----
 server_menu() {
-  echo -e "\nConfigure Borealis Server Mode:"
-  echo -e " 1) Build & Launch > Production Flask Server @ http://localhost:5000"
-  echo -e " 2) [Skip Build] & Immediately Launch > Production Flask Server @ http://localhost:5000"
-  echo -e " 3) Launch > [Hotload-Ready] Vite Dev Server @ http://localhost:5173"
+  echo -e "\nConfigure Borealis Engine Mode:"
+  echo -e " 1) Build & Launch > Production Flask Server @ https://localhost:5000"
+  echo -e " 2) [Skip Build] & Immediately Launch > Production Flask Server @ https://localhost:5000"
+  echo -e " 3) Launch > [Hotload-Ready] Vite Dev Server @ https://localhost:5173"
   read -r -p "Enter choice [1/2/3]: " modeChoice
 
   case "$modeChoice" in
@@ -393,150 +356,80 @@ server_menu() {
     *) echo -e "${RED}Invalid mode choice${RESET}"; return 1 ;;
   esac
 
-  # Common deps
-  echo -e "${GREEN}Ensuring Server Dependencies...${RESET}"
-  install_shared_dependencies
+  echo -e "${GREEN}Ensuring Engine Dependencies Exist...${RESET}"
   install_server_dependencies
   export PATH="${NODE_DIR}/bin:${PATH}"
 
   if [[ "$modeChoice" == "2" ]]; then
-    flask_run
+    # Immediate launch of Flask without rebuild
+    flask_engine_launch "$borealis_operation_mode"
     return 0
   fi
 
-  run_step "Create Server venv & deploy files" copy_server_payload
-  run_step "Copy WebUI assets" prepare_webui
-  run_step "Start Vite (${borealis_operation_mode})" vite_start "$borealis_operation_mode"
-  flask_run
+  run_step "Create Borealis Engine Virtual Python Environment & Stage Data" create_engine_venv_and_stage_data
+  run_step "Install Engine Python Dependencies" install_engine_python_deps
+  run_step "Copy Engine WebUI Files" ensure_engine_web_interface "$SCRIPT_DIR"
+  run_step "Vite Web Frontend: Install NPM Packages" vite_web_frontend_install
+  run_step "Vite Web Frontend: Start (${borealis_operation_mode})" vite_web_frontend_start "$borealis_operation_mode"
+  flask_engine_launch "$borealis_operation_mode"
 }
-
-agent_menu() {
-  echo -e "Agent Menu:"
-  echo -e " 1) Install/Update Agent"
-  echo -e " 2) Repair Borealis Agent"
-  echo -e " 3) Remove Agent"
-  echo -e " 4) Launch UserSession Helper (current session)"
-  echo -e " 5) Back"
-  read -r -p "Select an option: " agentChoice
-  case "$agentChoice" in
-    1) install_or_update_agent ;;
-    2) repair_agent ;;
-    3) remove_agent ;;
-    4) launch_user_helper_now ;;
-    5) return 0 ;;
-    *) echo -e "${RED}Invalid selection${RESET}" ;;
-  esac
-}
-
-electron_menu() {
-  echo -e "Deploying Borealis Desktop App..."
-  echo "===================================================================================="
-  local electronSource="Data/Electron"
-  local electronDestination="ElectronApp"
-
-  run_step "Prepare ElectronApp folder" bash -c "
-    rm -rf '${electronDestination}' && mkdir -p '${electronDestination}'
-    [ -d 'Server/Borealis' ] || { echo 'Server/Borealis not found - please run Server build first.' >&2; exit 1; }
-    cp -r 'Server/Borealis' '${electronDestination}/Server'
-    cp '${electronSource}/package.json' '${electronDestination}'
-    cp '${electronSource}/main.js' '${electronDestination}'
-    [ -d 'Server/web-interface/build' ] || { echo 'WebUI build not found - run Server build first.' >&2; exit 1; }
-    mkdir -p '${electronDestination}/renderer'
-    cp -r 'Server/web-interface/build/'* '${electronDestination}/renderer/'
-  "
-
-  run_step "ElectronApp: Install Node dependencies" bash -c "
-    export PATH='${NODE_DIR}/bin:'"'${PATH}'" && cd '${electronDestination}' && (command -v npm >/dev/null 2>&1 || exit 1) && npm install --silent --no-fund --audit=false
-  "
-
-  run_step "ElectronApp: Package with electron-builder" bash -c "
-    export PATH='${NODE_DIR}/bin:'"'${PATH}'" && cd '${electronDestination}' && npm run dist
-  "
-
-  run_step "ElectronApp: Launch in dev mode" bash -c "
-    export PATH='${NODE_DIR}/bin:'"'${PATH}'" && cd '${electronDestination}' && npm run dev
-  "
-}
-
-update_borealis() {
-  echo -e "\nUpdating Borealis..."
-  local staging="${SCRIPT_DIR}/Update_Staging"
-  local updateZip="${staging}/main.zip"
-  local updateDir="${staging}/Borealis-main"
-  local preservePath="${SCRIPT_DIR}/Data/Server/Python_API_Endpoints/Tesseract-OCR"
-  local preserveBackupPath="${staging}/Tesseract-OCR"
-  mkdir -p "$staging"
-
-  run_step "Updating: Move Tesseract-OCR to staging (if present)" bash -c "
-    [ -d '${preservePath}' ] && { rm -rf '${preserveBackupPath}'; mkdir -p '${staging}'; mv '${preservePath}' '${preserveBackupPath}'; } || true
-  "
-  run_step "Updating: Clean folders before update" bash -c "
-    rm -rf 'Data' 'Server/web-interface/src' 'Server/web-interface/build' 'Server/web-interface/public' 'Server/Borealis' || true
-  "
-  run_step "Updating: Download update" bash -c "
-    curl -fsSL -o '${updateZip}' 'https://github.com/bunny-lab-io/Borealis/archive/refs/heads/main.zip'
-  "
-  run_step "Updating: Extract update" bash -c "
-    unzip -oq '${updateZip}' -d '${staging}'
-  "
-  run_step "Updating: Copy update into repo" bash -c "
-    cp -r '${updateDir}/'* '${SCRIPT_DIR}/'
-  "
-  run_step "Updating: Restore Tesseract-OCR" bash -c "
-    [ -d '${preserveBackupPath}' ] && { mkdir -p 'Data/Server/Python_API_Endpoints'; mv '${preserveBackupPath}' 'Data/Server/Python_API_Endpoints/'; } || true
-  "
-  run_step "Updating: Clean staging" bash -c "rm -rf '${staging}'"
-  echo -e "\n${GREEN}Update Complete! Re-launch Borealis.${RESET}"
-}
-
-# ---- Main entry ----
 
 main_menu() {
   echo -e "\nPlease choose which function you want to launch:"
-  echo -e " 1) Borealis Server"
-  echo -e " 2) Borealis Agent"
-  echo -e " 3) Build Electron App [Experimental]"
-  echo -e " 4) Package Self-Contained App [Experimental]"
-  echo -e " 5) Update Borealis [Requires Re-Build]"
+  echo -e " 1) Borealis Engine"
+  echo -e " 2) Borealis Agent (not the focus on Linux)"
+  echo -e " 3) Exit"
   read -r -p "Enter a number: " choice
   case "$choice" in
     1) server_menu ;;
-    2) agent_menu ;;
-    3) electron_menu ;;
-    4) echo -e "${YELLOW}Packaging to single-file EXE not supported on Linux yet.${RESET}" ;;
-    5) update_borealis ;;
+    2) echo -e "${YELLOW}Agent management is out-of-scope for this parity pass. Use Windows for full Agent features.${RESET}" ;;
+    3) exit 0 ;;
     *) echo -e "${RED}Invalid selection. Exiting...${RESET}"; exit 1 ;;
   esac
 }
 
-# Auto-select when flags provided
+# ---- Flag-driven auto-select (parity logic) ----
 if [[ $SERVER_FLAG -eq 1 && $AGENT_FLAG -eq 1 ]]; then
   echo -e "${RED}Cannot use --server and --agent together.${RESET}"; exit 1
 fi
 
+# Auto-select main menu option for Server when EngineProduction/EngineDev provided
+if [[ $ENGINE_PROD_FLAG -eq 1 || $ENGINE_DEV_FLAG -eq 1 ]]; then
+  SERVER_FLAG=1
+fi
+
 if [[ $SERVER_FLAG -eq 1 ]]; then
-  # Resolve server mode from flags
   if [[ $VITE_FLAG -eq 1 && $FLASK_FLAG -eq 1 ]]; then
     echo -e "${RED}Cannot combine --vite and --flask.${RESET}"; exit 1
   fi
-  if [[ $VITE_FLAG -eq 1 ]]; then
-    borealis_operation_mode="developer"; server_menu <<< $'3\n'
-  elif [[ $FLASK_FLAG -eq 1 && $QUICK_FLAG -eq 1 ]]; then
-    borealis_operation_mode="production"; server_menu <<< $'2\n'
-  else
-    borealis_operation_mode="production"; server_menu <<< $'1\n'
+  if [[ $ENGINE_PROD_FLAG -eq 1 && $ENGINE_DEV_FLAG -eq 1 ]]; then
+    echo -e "${RED}Cannot combine --EngineProduction and --EngineDev.${RESET}"; exit 1
   fi
-  exit $?
-fi
 
-if [[ $AGENT_FLAG -eq 1 ]]; then
-  case "${AGENT_ACTION:-install}" in
-    install) install_or_update_agent ;;
-    repair)  repair_agent ;;
-    remove)  remove_agent ;;
-    launch)  launch_user_helper_now ;;
-    *) install_or_update_agent ;;
-  esac
+  if [[ $ENGINE_PROD_FLAG -eq 1 || $ENGINE_DEV_FLAG -eq 1 ]]; then
+    # Map to menu choice automatically
+    if [[ $ENGINE_PROD_FLAG -eq 1 ]]; then
+      if [[ $QUICK_FLAG -eq 1 ]]; then
+        server_menu <<< $'2\n' # skip build, immediate launch
+      else
+        server_menu <<< $'1\n' # build & launch
+      fi
+      exit $?
+    fi
+    if [[ $ENGINE_DEV_FLAG -eq 1 ]]; then
+      server_menu <<< $'3\n' # Vite dev
+      exit $?
+    fi
+  fi
+
+  # Resolve server mode from flags (legacy compatibility)
+  if [[ $VITE_FLAG -eq 1 ]]; then
+    server_menu <<< $'3\n'
+  elif [[ $FLASK_FLAG -eq 1 && $QUICK_FLAG -eq 1 ]]; then
+    server_menu <<< $'2\n'
+  else
+    server_menu <<< $'1\n'
+  fi
   exit $?
 fi
 

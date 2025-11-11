@@ -202,7 +202,6 @@ export default function SiteList({ onOpenDevicesForSite }) {
       </Box>
 
       {/* AG Grid */}
-}
       <Box sx={{ px: { xs: 2, md: 3 }, pb: 3, flexGrow: 1, display: "flex", flexDirection: "column" }}>
         <Box
           className={themeClassName}
