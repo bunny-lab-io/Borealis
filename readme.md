@@ -12,25 +12,45 @@ Borealis is a remote management platform with a simple, visual automation layer,
 - **Playbooks**: Run scripted procedures; ((*Ansible playbook support is in progress*)).
 - **Windows‑first**. Linux server and agent deployment scripts are planned, as the core of Borealis is Python-based, it is already Linux-friendly; this just involves some housekeeping to bring the Linux experience to parity with Windows.  
 
-## Screenshots
-Device List Overview:
-![Device List](Docs/images/repo_screenshots/borealis_device_list.png)
+## Device Management
+Device List:
+![Device List](Docs/images/repo_screenshots/Device_List.png)
 
 Device Details:
-![Device Details](Docs/images/repo_screenshots/borealis_device_details.png)
+![Device Details](Docs/images/repo_screenshots/Device_Details.png)
 
+Device Approval Queue:
+![Device Approval Queue](Docs/images/repo_screenshots/Device_Approval_Queue.png)
+
+Device Enrollment Codes:
+![Device Enrollment Codes](Docs/images/repo_screenshots/Device_Enrollment_Codes.png)
+
+## Assembly Management
 Assembly List:
-![Assembly List](Docs/images/repo_screenshots/borealis_assembly_list.png)
+![Assembly List](Docs/images/repo_screenshots/Assembly_List.png)
 
 Assembly Editor:
-![Assembly Editor](Docs/images/repo_screenshots/borealis_assembly_editor.png)
-
-Scheduled Job History View:
-![Scheduled Job History](Docs/images/repo_screenshots/borealis_scheduled_job_history.png)
+![Assembly Editor](Docs/images/repo_screenshots/Assembly_Editor.png)
 
 Workflow Editor:
-[![Workflow Editor Demonstration](Docs/images/repo_screenshots/borealis_flow_editor.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
+[![Workflow Editor Demonstration](Docs/images/repo_screenshots/Workflow_Editor.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
 
+# Log Management
+PLACEHOLDER:
+![Log Management](Docs/images/repo_screenshots/Log_Management.png)
+
+PLACEHOLDER:
+![Log Management (Raw)](Docs/images/repo_screenshots/Log_Management_Raw.png)
+
+## Misc Management Sections
+Scheduled Job List:
+![Scheduled Job List](Docs/images/repo_screenshots/Scheduled_Job_List.png)
+
+Scheduled Job History:
+![Scheduled Job History](Docs/images/repo_screenshots/Scheduled_Job_History.png)
+
+Site List:
+![Site List](Docs/images/repo_screenshots/Site_List.png)
 
 ## Getting Started
 
