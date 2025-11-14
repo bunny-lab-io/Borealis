@@ -95,13 +95,13 @@ class AssemblyDatabaseManager:
         """Ensure all databases exist, apply schema, and mirror to the runtime directory."""
 
         for domain in AssemblyDomain:
+            self._ensure_runtime_database(domain)
             conn = self._open_connection(domain)
             try:
                 self._apply_schema(conn)
                 conn.commit()
             finally:
                 conn.close()
-            self._mirror_database(domain)
 
     def reset_domain(self, domain: AssemblyDomain) -> None:
         """Remove all assemblies and payload metadata for the specified domain."""
@@ -284,15 +284,43 @@ class AssemblyDatabaseManager:
             conn.commit()
         finally:
             conn.close()
-            self._mirror_database(domain)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _ensure_runtime_database(self, domain: AssemblyDomain) -> None:
+        """Ensure the runtime database exists by copying the staging asset when needed."""
+
+        paths = self._paths[domain]
+        runtime_db = paths.runtime
+        staging_db = paths.staging
+        runtime_db.parent.mkdir(parents=True, exist_ok=True)
+        if runtime_db.exists():
+            return
+
+        if staging_db.exists():
+            for suffix in ("", "-wal", "-shm"):
+                staging_candidate = staging_db.parent / f"{staging_db.name}{suffix}"
+                runtime_candidate = runtime_db.parent / f"{runtime_db.name}{suffix}"
+                if staging_candidate.exists():
+                    try:
+                        shutil.copy2(staging_candidate, runtime_candidate)
+                    except Exception as exc:  # pragma: no cover - best effort seed
+                        self._logger.debug(
+                            "Failed to seed runtime assembly database file %s -> %s: %s",
+                            staging_candidate,
+                            runtime_candidate,
+                            exc,
+                        )
+            return
+
+        runtime_db.touch()
+
     def _open_connection(self, domain: AssemblyDomain, *, readonly: bool = False) -> sqlite3.Connection:
+        self._ensure_runtime_database(domain)
         paths = self._paths[domain]
         flags = "ro" if readonly else "rwc"
-        uri = f"file:{paths.staging.as_posix()}?mode={flags}&cache=shared"
+        uri = f"file:{paths.runtime.as_posix()}?mode={flags}&cache=shared"
         conn = sqlite3.connect(uri, uri=True, timeout=30)
         if readonly:
             conn.isolation_level = None
@@ -313,26 +341,6 @@ class AssemblyDatabaseManager:
             cur.execute(statement)
         conn.commit()
 
-    def _mirror_database(self, domain: AssemblyDomain) -> None:
-        paths = self._paths[domain]
-        staging_db = paths.staging
-        runtime_db = paths.runtime
-        runtime_db.parent.mkdir(parents=True, exist_ok=True)
-
-        for suffix in ("", "-wal", "-shm"):
-            staging_candidate = staging_db.parent / f"{staging_db.name}{suffix}"
-            runtime_candidate = runtime_db.parent / f"{runtime_db.name}{suffix}"
-            if staging_candidate.exists():
-                try:
-                    shutil.copy2(staging_candidate, runtime_candidate)
-                except Exception as exc:  # pragma: no cover - best effort mirror
-                    self._logger.debug(
-                        "Failed to mirror assembly database file %s -> %s: %s",
-                        staging_candidate,
-                        runtime_candidate,
-                        exc,
-                    )
-    
     def _migrate_legacy_schema(self, cur: sqlite3.Cursor) -> None:
         """Upgrade legacy assembly/payload tables to the consolidated schema."""
 

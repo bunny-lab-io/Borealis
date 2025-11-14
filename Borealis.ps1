@@ -1160,8 +1160,95 @@ switch ($choice) {
 
         Run-Step "Create Borealis Engine Virtual Python Environment" {
             $venvActivate = Join-Path $venvFolder 'Scripts\Activate'
+            $pyvenvCfg = Join-Path $venvFolder 'pyvenv.cfg'
+            $expectedPython = $pythonExe
+            $expectedPythonNorm = $null
+            $expectedHomeNorm = $null
+            try {
+                if (Test-Path $pythonExe -PathType Leaf) {
+                    $expectedPython = (Resolve-Path $pythonExe -ErrorAction Stop).ProviderPath
+                }
+            } catch {
+                $expectedPython = $pythonExe
+            }
+            if ($expectedPython) {
+                $expectedPythonNorm = $expectedPython.ToLowerInvariant()
+                try {
+                    $expectedHome = Split-Path -Path $expectedPython -Parent
+                } catch {
+                    $expectedHome = $null
+                }
+                if ($expectedHome) {
+                    $expectedHomeNorm = $expectedHome.ToLowerInvariant()
+                }
+            }
+
+            $venvNeedsUpgrade = $false
+            if (Test-Path $pyvenvCfg -PathType Leaf) {
+                try {
+                    $cfgLines = Get-Content -Path $pyvenvCfg -ErrorAction Stop
+                    $cfgMap = @{}
+                    foreach ($line in $cfgLines) {
+                        $trimmed = $line.Trim()
+                        if (-not $trimmed -or $trimmed.StartsWith('#')) {
+                            continue
+                        }
+                        $parts = $trimmed -split '=', 2
+                        if ($parts.Count -ne 2) {
+                            continue
+                        }
+                        $cfgMap[$parts[0].Trim().ToLowerInvariant()] = $parts[1].Trim()
+                    }
+
+                    $cfgExecutable = $cfgMap['executable']
+                    $cfgHome = $cfgMap['home']
+
+                    if ($cfgExecutable -and -not (Test-Path $cfgExecutable -PathType Leaf)) {
+                        $venvNeedsUpgrade = $true
+                    } elseif ($cfgHome -and -not (Test-Path $cfgHome -PathType Container)) {
+                        $venvNeedsUpgrade = $true
+                    } else {
+                        if ($cfgExecutable -and $expectedPythonNorm) {
+                            try {
+                                $resolvedExe = (Resolve-Path $cfgExecutable -ErrorAction Stop).ProviderPath
+                            } catch {
+                                $resolvedExe = $cfgExecutable
+                            }
+                            if ($resolvedExe) {
+                                $resolvedExeNorm = $resolvedExe.ToLowerInvariant()
+                            } else {
+                                $resolvedExeNorm = $null
+                            }
+                            if ($resolvedExeNorm -and $resolvedExeNorm -ne $expectedPythonNorm) {
+                                $venvNeedsUpgrade = $true
+                            }
+                        }
+                        if (-not $venvNeedsUpgrade -and $cfgHome -and $expectedHomeNorm) {
+                            try {
+                                $resolvedHome = (Resolve-Path $cfgHome -ErrorAction Stop).ProviderPath
+                            } catch {
+                                $resolvedHome = $cfgHome
+                            }
+                            if ($resolvedHome) {
+                                $resolvedHomeNorm = $resolvedHome.ToLowerInvariant()
+                            } else {
+                                $resolvedHomeNorm = $null
+                            }
+                            if ($resolvedHomeNorm -and $resolvedHomeNorm -ne $expectedHomeNorm) {
+                                $venvNeedsUpgrade = $true
+                            }
+                        }
+                    }
+                } catch {
+                    $venvNeedsUpgrade = $true
+                }
+            }
+
             if (-not (Test-Path $venvActivate)) {
                 & $pythonExe -m venv $venvFolder | Out-Null
+            } elseif ($venvNeedsUpgrade) {
+                Write-Host "Detected relocated Engine virtual environment. Rebuilding interpreter bindings..." -ForegroundColor Yellow
+                & $pythonExe -m venv --upgrade $venvFolder | Out-Null
             }
 
             $engineDataRoot = Join-Path $venvFolder 'Data'
