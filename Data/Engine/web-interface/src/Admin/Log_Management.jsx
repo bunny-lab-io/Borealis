@@ -144,7 +144,7 @@ export default function LogManagement({ isAdmin = false }) {
     []
   );
 
-  const defaultColDef = useMemo(
+const defaultColDef = useMemo(
     () => ({
       sortable: true,
       filter: true,
@@ -328,30 +328,19 @@ export default function LogManagement({ isAdmin = false }) {
         flexDirection: "column",
       }}
     >
-      <Box sx={{ p: 3, borderBottom: `1px solid ${AURORA_SHELL.border}` }}>
-        <Stack direction="row" spacing={2} alignItems="center">
-          <Box
+      <Box sx={{ px: 3, pt: 3, pb: 1, borderBottom: `1px solid ${AURORA_SHELL.border}` }}>
+        <Stack direction="row" spacing={1.25} alignItems="center">
+          <LogsIcon sx={{ fontSize: 22, color: AURORA_SHELL.accent, mt: 0.25 }} />
+          <Typography
+            variant="h6"
             sx={{
-              width: 40,
-              height: 40,
-              borderRadius: "12px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              bgcolor: "rgba(125,183,255,0.15)",
-              color: AURORA_SHELL.accent,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              color: AURORA_SHELL.text,
             }}
           >
-            <LogsIcon fontSize="small" />
-          </Box>
-          <Box>
-            <Typography variant="h5" sx={{ color: AURORA_SHELL.text, fontWeight: 600 }}>
-              Log Management
-            </Typography>
-            <Typography sx={{ color: AURORA_SHELL.muted }}>
-              Analyze engine logs and adjust log retention periods for different engine services.
-            </Typography>
-          </Box>
+            Log Management
+          </Typography>
           <Box sx={{ flexGrow: 1 }} />
           <Stack direction="row" spacing={1}>
             <Button
@@ -367,6 +356,9 @@ export default function LogManagement({ isAdmin = false }) {
             </Button>
           </Stack>
         </Stack>
+        <Typography variant="body2" sx={{ color: AURORA_SHELL.muted, mt: 0.75, mb: 2.5 }}>
+          Analyze engine logs and adjust log retention periods for different engine services.
+        </Typography>
       </Box>
 
       {error && (
@@ -399,6 +391,36 @@ export default function LogManagement({ isAdmin = false }) {
               label="Log Domain"
               value={selectedDomain || ""}
               onChange={(e) => setSelectedDomain(e.target.value)}
+              sx={{
+                "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.35)" },
+                "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.6)" },
+                "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.accent },
+                "& .MuiSelect-select": {
+                  bgcolor: "rgba(8,15,32,0.85)",
+                  color: AURORA_SHELL.text,
+                  borderRadius: 1,
+                },
+                "& svg": { color: AURORA_SHELL.accent },
+              }}
+              MenuProps={{
+                PaperProps: {
+                  sx: {
+                    bgcolor: "rgba(12,18,36,0.98)",
+                    border: `1px solid rgba(148,163,184,0.35)`,
+                    mt: 1,
+                    boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+                    "& .MuiMenuItem-root": {
+                      color: AURORA_SHELL.text,
+                      "&.Mui-selected": {
+                        bgcolor: "rgba(125,183,255,0.18)",
+                      },
+                      "&.Mui-selected:hover": {
+                        bgcolor: "rgba(125,183,255,0.25)",
+                      },
+                    },
+                  },
+                },
+              }}
             >
               {logs.map((log) => (
                 <MenuItem key={log.file} value={log.file}>
@@ -407,7 +429,12 @@ export default function LogManagement({ isAdmin = false }) {
                     <Chip
                       label={formatBytes(log.size_bytes || 0)}
                       size="small"
-                      sx={{ bgcolor: "rgba(125,183,255,0.15)", color: AURORA_SHELL.text }}
+                      sx={{
+                        bgcolor: "rgba(96,165,250,0.16)",
+                        color: AURORA_SHELL.text,
+                        borderRadius: 999,
+                        border: "1px solid rgba(96,165,250,0.45)",
+                      }}
                     />
                   </Stack>
                 </MenuItem>
@@ -424,6 +451,32 @@ export default function LogManagement({ isAdmin = false }) {
                   label="Log File"
                   value={selectedFile || ""}
                   onChange={(e) => setSelectedFile(e.target.value)}
+                  sx={{
+                    "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.35)" },
+                    "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.6)" },
+                    "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.accent },
+                    "& .MuiSelect-select": {
+                      bgcolor: "rgba(8,15,32,0.85)",
+                      color: AURORA_SHELL.text,
+                      borderRadius: 1,
+                    },
+                    "& svg": { color: AURORA_SHELL.accent },
+                  }}
+                  MenuProps={{
+                    PaperProps: {
+                      sx: {
+                        bgcolor: "rgba(12,18,36,0.98)",
+                        border: `1px solid rgba(148,163,184,0.35)`,
+                        mt: 1,
+                        boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+                        "& .MuiMenuItem-root": {
+                          color: AURORA_SHELL.text,
+                          "&.Mui-selected": { bgcolor: "rgba(125,183,255,0.18)" },
+                          "&.Mui-selected:hover": { bgcolor: "rgba(125,183,255,0.25)" },
+                        },
+                      },
+                    },
+                  }}
                 >
                   {(selectedDomainData.versions || [{ file: selectedDomainData.file, label: "Active" }]).map(
                     (ver) => (
