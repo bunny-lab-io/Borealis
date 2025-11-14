@@ -41,7 +41,7 @@ from .devices import routes as device_routes
 from .devices.approval import register_admin_endpoints
 from .devices.management import register_management
 from .scheduled_jobs import management as scheduled_jobs_management
-from .server import info as server_info
+from .server import info as server_info, log_management
 
 DEFAULT_API_GROUPS: Sequence[str] = ("core", "auth", "tokens", "enrollment", "devices", "server", "assemblies", "scheduled_jobs")
 
@@ -277,6 +277,7 @@ def _register_assemblies(app: Flask, adapters: EngineServiceAdapters) -> None:
 
 def _register_server(app: Flask, adapters: EngineServiceAdapters) -> None:
     server_info.register_info(app, adapters)
+    log_management.register_log_management(app, adapters)
 
 
 _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, EngineServiceAdapters], None]] = {

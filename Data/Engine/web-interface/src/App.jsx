@@ -47,6 +47,7 @@ import UserManagement from "./Access_Management/Users.jsx";
 import GithubAPIToken from "./Access_Management/Github_API_Token.jsx";
 import ServerInfo from "./Admin/Server_Info.jsx";
 import PageTemplate from "./Admin/Page_Template.jsx";
+import LogManagement from "./Admin/Log_Management.jsx";
 import EnrollmentCodes from "./Devices/Enrollment_Codes.jsx";
 import DeviceApprovals from "./Devices/Device_Approvals.jsx";
 
@@ -461,6 +462,10 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "server_info":
         items.push({ label: "Admin Settings" });
         items.push({ label: "Server Info", page: "server_info" });
+        break;
+      case "log_management":
+        items.push({ label: "Admin Settings" });
+        items.push({ label: "Log Management", page: "log_management" });
         break;
       case "page_template":
         items.push({ label: "Developer Tools" });
@@ -1004,6 +1009,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       || currentPage === 'access_credentials'
       || currentPage === 'access_github_token'
       || currentPage === 'access_users'
+      || currentPage === 'log_management'
       || currentPage === 'ssh_devices'
       || currentPage === 'winrm_devices'
       || currentPage === 'agent_devices'
@@ -1132,6 +1138,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
       case "server_info":
         return <ServerInfo isAdmin={isAdmin} />;
+      case "log_management":
+        return <LogManagement isAdmin={isAdmin} />;
 
       case "page_template":
         return <PageTemplate isAdmin={isAdmin} />;

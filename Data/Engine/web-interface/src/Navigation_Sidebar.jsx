@@ -27,6 +27,7 @@ import {
   Key as KeyIcon,
   Dashboard as PageTemplateIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
+  ReceiptLong as LogsIcon,
 } from "@mui/icons-material";
 
 const COLORS = {
@@ -69,7 +70,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         "access_users",
         "access_github_token",
       ].includes(currentPage),
-      admin: ["server_info", "page_template"].includes(currentPage),
+      admin: ["server_info", "log_management", "page_template"].includes(currentPage),
     }),
     [currentPage]
   );
@@ -285,6 +286,11 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
               icon={<ServerInfoIcon fontSize="small" />}
               label="Server Info"
               pageKey="server_info"
+            />
+            <NavItem
+              icon={<LogsIcon fontSize="small" />}
+              label="Log Management"
+              pageKey="log_management"
             />
             <NavItem
               icon={<PageTemplateIcon fontSize="small" />}
