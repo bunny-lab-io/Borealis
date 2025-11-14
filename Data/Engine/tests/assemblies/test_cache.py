@@ -150,3 +150,13 @@ def test_cache_flush_waits_for_locked_database(assembly_runtime) -> None:
     records = db_manager.load_all(AssemblyDomain.USER)
     summaries = {entry.assembly_guid: entry.summary for entry in records}
     assert summaries[guid] == "Updated summary after lock."
+
+
+def test_resolve_document_matches_virtual_path(assembly_runtime) -> None:
+    service, _cache, _db_manager = assembly_runtime
+    payload = _script_payload(display_name="User Created Script")
+    record = service.create_assembly(payload)
+
+    resolved = service.resolve_document_by_source_path("Scripts/User_Created_Script")
+    assert resolved is not None
+    assert resolved["assembly_guid"] == record["assembly_guid"]
