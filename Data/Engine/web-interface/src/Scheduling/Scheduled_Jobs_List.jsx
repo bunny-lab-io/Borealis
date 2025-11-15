@@ -174,8 +174,16 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   const gridApiRef = useRef(null);
 
   const deriveRowKey = useCallback((row, index = "") => {
-    const candidate = row?.id ?? row?.name ?? index ?? "";
-    return String(candidate);
+    if (row && row.id != null && row.id !== "") {
+      return String(row.id);
+    }
+    if (row && row.name) {
+      return String(row.name);
+    }
+    if (index !== undefined && index !== null && index !== "") {
+      return `__row_${index}`;
+    }
+    return "";
   }, []);
 
   const assembliesCellRenderer = useCallback((params) => {
@@ -471,13 +479,13 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     const api = gridApiRef.current;
     if (!api) return;
     api.forEachNode((node) => {
-      const nodeId = String(node?.id ?? "");
-      const shouldSelect = selectedIds.has(nodeId);
+      const nodeKey = deriveRowKey(node?.data, node?.rowIndex);
+      const shouldSelect = nodeKey && selectedIds.has(nodeKey);
       if (node.isSelected() !== shouldSelect) {
         node.setSelected(shouldSelect);
       }
     });
-  }, [filteredRows, selectedIds]);
+  }, [deriveRowKey, filteredRows, selectedIds]);
 
   const anySelected = selectedIds.size > 0;
 
@@ -487,12 +495,13 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     const selectedNodes = api.getSelectedNodes();
     const next = new Set();
     selectedNodes.forEach((node) => {
-      if (node?.id != null) {
-        next.add(String(node.id));
+      const nodeKey = deriveRowKey(node?.data, node?.rowIndex);
+      if (nodeKey) {
+        next.add(nodeKey);
       }
     });
     setSelectedIds(next);
-  }, []);
+  }, [deriveRowKey]);
 
   const getRowId = useCallback(
     (params) => deriveRowKey(params?.data, params?.rowIndex),
