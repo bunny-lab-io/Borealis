@@ -90,6 +90,7 @@ const gradientButtonSx = {
 const FILTER_OPTIONS = [
   { key: "all", label: "All" },
   { key: "immediate", label: "Immediate" },
+  { key: "scheduled", label: "Scheduled" },
   { key: "recurring", label: "Recurring" },
   { key: "completed", label: "Completed" },
 ];
@@ -310,24 +311,53 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             ? `${j.targets.length} device${j.targets.length !== 1 ? "s" : ""}`
             : "";
           const occurrence = pretty(j.schedule_type || "immediately");
+          const fallbackTargetCount = Array.isArray(j.targets) ? j.targets.length : 0;
           const resultsCounts = {
-            total_targets: Array.isArray(j.targets) ? j.targets.length : 0,
-            pending: Array.isArray(j.targets) ? j.targets.length : 0,
+            total_targets: fallbackTargetCount,
+            pending: fallbackTargetCount,
             ...(j.result_counts || {})
           };
-          if (resultsCounts && resultsCounts.total_targets == null) {
-            resultsCounts.total_targets = Array.isArray(j.targets) ? j.targets.length : 0;
+          if (resultsCounts.total_targets == null || Number.isNaN(Number(resultsCounts.total_targets))) {
+            resultsCounts.total_targets = fallbackTargetCount;
           }
+          const normalizeCount = (value) => {
+            const num = Number(value);
+            return Number.isFinite(num) ? num : 0;
+          };
+          const totalTargets = normalizeCount(resultsCounts.total_targets);
+          const pendingCount = normalizeCount(resultsCounts.pending);
+          const runningCount = normalizeCount(resultsCounts.running);
+          const successCount = normalizeCount(resultsCounts.success);
+          const failedCount = normalizeCount(resultsCounts.failed);
+          const expiredCount = normalizeCount(resultsCounts.expired);
+          const timedOutCount = normalizeCount(resultsCounts.timed_out || resultsCounts.timedOut);
+          const totalFinished = successCount + failedCount + expiredCount + timedOutCount;
+          const allTargetsEvaluated =
+            totalTargets > 0
+              ? totalFinished >= totalTargets && pendingCount === 0 && runningCount === 0
+              : pendingCount === 0 && runningCount === 0;
+          const everyTargetSuccessful =
+            totalTargets > 0
+              ? successCount >= totalTargets && pendingCount === 0 && runningCount === 0
+              : pendingCount === 0 &&
+                runningCount === 0 &&
+                failedCount === 0 &&
+                expiredCount === 0 &&
+                timedOutCount === 0;
+          const jobExpiredFlag =
+            expiredCount > 0 || String(j.last_status || "").toLowerCase() === "expired";
           const scheduleRaw = String(j.schedule_type || "").toLowerCase();
-          const isImmediateType = scheduleRaw === "immediately" || scheduleRaw === "once";
-          const hasNextRun = j.next_run_ts != null && Number(j.next_run_ts) > 0;
-          const hasLastRun = j.last_run_ts != null && Number(j.last_run_ts) > 0;
-          const isEnabled = Boolean(j.enabled);
-          const isCompleted = !isEnabled || (!hasNextRun && hasLastRun);
+          const isImmediateType = scheduleRaw === "immediately";
+          const isScheduledType = scheduleRaw === "once";
+          const showImmediate = isImmediateType && !allTargetsEvaluated;
+          const showScheduled = isScheduledType && !allTargetsEvaluated;
+          const canComplete = isImmediateType || isScheduledType;
+          const showCompleted = canComplete && (jobExpiredFlag || everyTargetSuccessful);
           const categoryFlags = {
-            immediate: isImmediateType,
-            recurring: !isImmediateType,
-            completed: isCompleted
+            immediate: showImmediate,
+            scheduled: showScheduled,
+            recurring: !isImmediateType && !isScheduledType,
+            completed: showCompleted
           };
           return {
             id: j.id,
@@ -401,9 +431,10 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   }, []);
 
   const filterCounts = useMemo(() => {
-    const totals = { all: rows.length, immediate: 0, recurring: 0, completed: 0 };
+    const totals = { all: rows.length, immediate: 0, scheduled: 0, recurring: 0, completed: 0 };
     rows.forEach((row) => {
       if (row?.categoryFlags?.immediate) totals.immediate += 1;
+      if (row?.categoryFlags?.scheduled) totals.scheduled += 1;
       if (row?.categoryFlags?.recurring) totals.recurring += 1;
       if (row?.categoryFlags?.completed) totals.completed += 1;
     });
