@@ -111,6 +111,7 @@ The process that agents go through when authenticating securely with a Borealis 
 - All device APIs now require Authorization: Bearer headers and a service-context (e.g. SYSTEM or CURRENTUSER) marker; missing, expired, mismatched, or revoked credentials are rejected before any business logic runs.  Operator-driven revoking / device quarantining logic is not yet implemented.
 - Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (15 min) with 30-day refresh tokens hashed via SHA-256.
 - Centralized logging under Logs/Server and Agent/Logs captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review.
+- The Engine’s operator-facing API endpoints (device inventory, assemblies, job history, etc.) require an authenticated operator session or bearer token; unauthenticated requests are rejected with 401/403 responses before any inventory or script metadata is returned and the requesting user is logged with each quick-run dispatch.
 #### Server Security
 - Auto-manages PKI: a persistent Borealis root CA (ECDSA SECP384R1) signs leaf certificates that include localhost SANs, tightened filesystem permissions, and a combined bundle for agent identity / cert pinning.
 - Script delivery is code-signed with an Ed25519 key stored under Certificates/Server/Code-Signing; agents refuse any payload whose signature or hash does not match the pinned public key.

@@ -4,24 +4,25 @@
 #
 # API Endpoints (if applicable):
 # - POST /api/agent/details (Device Authenticated) - Ingests hardware and inventory payloads from enrolled agents.
-# - GET /api/devices (No Authentication) - Returns a summary list of known devices for the WebUI transition.
-# - GET /api/devices/<guid> (No Authentication) - Retrieves a single device record by GUID, including summary fields.
-# - GET /api/device/details/<hostname> (No Authentication) - Returns full device details keyed by hostname.
+# - GET /api/agents (Token Authenticated) - Lists online collectors grouped by hostname and run context.
+# - GET /api/devices (Token Authenticated) - Returns a summary list of known devices for the WebUI transition.
+# - GET /api/devices/<guid> (Token Authenticated) - Retrieves a single device record by GUID, including summary fields.
+# - GET /api/device/details/<hostname> (Token Authenticated) - Returns full device details keyed by hostname.
 # - POST /api/device/description/<hostname> (Token Authenticated) - Updates the human-readable description for a device.
-# - GET /api/device_list_views (No Authentication) - Lists saved device table view definitions.
-# - GET /api/device_list_views/<int:view_id> (No Authentication) - Retrieves a specific saved device table view definition.
+# - GET /api/device_list_views (Token Authenticated) - Lists saved device table view definitions.
+# - GET /api/device_list_views/<int:view_id> (Token Authenticated) - Retrieves a specific saved device table view definition.
 # - POST /api/device_list_views (Token Authenticated) - Creates a custom device list view for the signed-in operator.
 # - PUT /api/device_list_views/<int:view_id> (Token Authenticated) - Updates an existing device list view definition.
 # - DELETE /api/device_list_views/<int:view_id> (Token Authenticated) - Deletes a saved device list view.
-# - GET /api/sites (No Authentication) - Lists known sites and their summary metadata.
+# - GET /api/sites (Token Authenticated) - Lists known sites and their summary metadata.
 # - POST /api/sites (Token Authenticated (Admin)) - Creates a new site for grouping devices.
 # - POST /api/sites/delete (Token Authenticated (Admin)) - Deletes one or more sites by identifier.
-# - GET /api/sites/device_map (No Authentication) - Provides hostname to site assignment mapping data.
+# - GET /api/sites/device_map (Token Authenticated) - Provides hostname to site assignment mapping data.
 # - POST /api/sites/assign (Token Authenticated (Admin)) - Assigns a set of devices to a given site.
 # - POST /api/sites/rename (Token Authenticated (Admin)) - Renames an existing site record.
-# - GET /api/repo/current_hash (No Authentication) - Fetches the current agent repository hash (with caching).
+# - GET /api/repo/current_hash (Token Authenticated) - Fetches the current agent repository hash (with caching).
 # - GET/POST /api/agent/hash (Device Authenticated) - Retrieves or updates an agent hash record bound to the authenticated device.
-# - GET /api/agent/hash_list (Loopback Restricted) - Returns stored agent hash metadata for localhost diagnostics.
+# - GET /api/agent/hash_list (Token Authenticated (Admin + Loopback)) - Returns stored agent hash metadata for localhost diagnostics.
 # ======================================================
 
 """Device management endpoints for the Borealis Engine API."""
@@ -1584,21 +1585,37 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/agents", methods=["GET"])
     def _list_agents():
+        requirement = service._require_login()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.list_agents()
         return jsonify(payload), status
 
     @blueprint.route("/api/devices", methods=["GET"])
     def _list_devices():
+        requirement = service._require_login()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.list_devices()
         return jsonify(payload), status
 
     @blueprint.route("/api/devices/<guid>", methods=["GET"])
     def _device_by_guid(guid: str):
+        requirement = service._require_login()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.get_device_by_guid(guid)
         return jsonify(payload), status
 
     @blueprint.route("/api/device/details/<hostname>", methods=["GET"])
     def _device_details(hostname: str):
+        requirement = service._require_login()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.get_device_details(hostname)
         return jsonify(payload), status
 
@@ -1615,11 +1632,19 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/device_list_views", methods=["GET"])
     def _list_views():
+        requirement = service._require_login()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.list_views()
         return jsonify(payload), status
 
     @blueprint.route("/api/device_list_views/<int:view_id>", methods=["GET"])
     def _get_view(view_id: int):
+        requirement = service._require_login()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.get_view(view_id)
         return jsonify(payload), status
 
@@ -1679,6 +1704,10 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/sites", methods=["GET"])
     def _sites_list():
+        requirement = service._require_login()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.list_sites()
         return jsonify(payload), status
 
@@ -1707,6 +1736,10 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/sites/device_map", methods=["GET"])
     def _sites_device_map():
+        requirement = service._require_login()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.sites_device_map(request.args.get("hostnames"))
         return jsonify(payload), status
 
@@ -1732,11 +1765,19 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/repo/current_hash", methods=["GET"])
     def _repo_current_hash():
+        requirement = service._require_login()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.repo_current_hash()
         return jsonify(payload), status
 
     @blueprint.route("/api/agent/hash_list", methods=["GET"])
     def _agent_hash_list():
+        requirement = service._require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.agent_hash_list()
         return jsonify(payload), status
 

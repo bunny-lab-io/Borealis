@@ -28,6 +28,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
 
 from ...assemblies.service import AssemblyRuntimeService
+from ...auth import RequestAuthContext
 
 
 def _assemblies_root() -> Path:
@@ -404,9 +405,18 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
     if assembly_cache is None:
         raise RuntimeError("Assembly cache is not initialised; ensure Engine bootstrap executed.")
     assembly_runtime = AssemblyRuntimeService(assembly_cache, logger=adapters.context.logger)
+    auth = RequestAuthContext(
+        app=app,
+        dev_mode_manager=adapters.dev_mode_manager,
+        config=adapters.config,
+        logger=adapters.context.logger,
+    )
 
     @blueprint.route("/api/scripts/quick_run", methods=["POST"])
     def scripts_quick_run():
+        user, error = auth.require_user()
+        if error:
+            return jsonify(error[0]), error[1]
         data = request.get_json(silent=True) or {}
         rel_path_input = data.get("script_path")
         rel_path_normalized = _normalize_script_relpath(rel_path_input)
@@ -419,6 +429,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "Missing script_path or hostnames[]"}), 400
 
         rel_path_canonical = rel_path_normalized
+        username = (user.get("username") if isinstance(user, dict) else None) or "unknown"
 
         assembly_source = "runtime"
         assembly_guid: Optional[str] = None
@@ -455,7 +466,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
             except Exception as exc:  # pragma: no cover - defensive guard
                 service_log(
                     "assemblies",
-                    f"quick job failed to resolve script path={rel_path_input!r}: {exc}",
+                    f"quick job failed to resolve script path={rel_path_input!r} user={username}: {exc}",
                     level="ERROR",
                 )
                 return jsonify({"error": "Failed to resolve script path"}), 500
@@ -470,7 +481,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
             if not within_scripts or not os.path.isfile(abs_path_str):
                 service_log(
                     "assemblies",
-                    f"quick job requested missing or out-of-scope script input={rel_path_input!r} normalized={rel_path_canonical}",
+                    f"quick job requested missing or out-of-scope script input={rel_path_input!r} normalized={rel_path_canonical} user={username}",
                     level="WARNING",
                 )
                 return jsonify({"error": "Script not found"}), 404
@@ -597,7 +608,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                 results.append({"hostname": host, "job_id": job_id, "status": "Running"})
                 service_log(
                     "assemblies",
-                    f"quick job queued hostname={host} path={rel_path_canonical} run_mode={run_mode} source={assembly_source}",
+                    f"quick job queued hostname={host} path={rel_path_canonical} run_mode={run_mode} source={assembly_source} requested_by={username}",
                 )
         except Exception as exc:
             if conn is not None:
@@ -611,10 +622,16 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/ansible/quick_run", methods=["POST"])
     def ansible_quick_run():
+        _, error = auth.require_user()
+        if error:
+            return jsonify(error[0]), error[1]
         return jsonify({"error": "Ansible quick run is not yet available in the Engine runtime."}), 501
 
     @blueprint.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
     def device_activity(hostname: str):
+        _, error = auth.require_user()
+        if error:
+            return jsonify(error[0]), error[1]
         conn = None
         try:
             conn = adapters.db_conn_factory()
@@ -657,6 +674,9 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/device/activity/job/<int:job_id>", methods=["GET"])
     def device_activity_job(job_id: int):
+        _, error = auth.require_user()
+        if error:
+            return jsonify(error[0]), error[1]
         conn = None
         try:
             conn = adapters.db_conn_factory()

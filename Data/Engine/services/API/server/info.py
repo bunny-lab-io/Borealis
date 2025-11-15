@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any, Dict
 
 from flask import Blueprint, Flask, jsonify
 
+from ...auth import RequestAuthContext
+
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
 
@@ -31,13 +33,22 @@ def _serialize_time(now_local: datetime, now_utc: datetime) -> Dict[str, Any]:
     }
 
 
-def register_info(app: Flask, _adapters: "EngineServiceAdapters") -> None:
+def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Expose server telemetry endpoints used by the admin interface."""
 
     blueprint = Blueprint("engine_server_info", __name__)
+    auth = RequestAuthContext(
+        app=app,
+        dev_mode_manager=adapters.dev_mode_manager,
+        config=adapters.config,
+        logger=adapters.context.logger,
+    )
 
     @blueprint.route("/api/server/time", methods=["GET"])
     def server_time() -> Any:
+        _, error = auth.require_user()
+        if error:
+            return jsonify(error[0]), error[1]
         now_utc = datetime.now(timezone.utc)
         now_local = now_utc.astimezone()
         payload = _serialize_time(now_local, now_utc)
