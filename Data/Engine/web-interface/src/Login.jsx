@@ -243,20 +243,6 @@ export default function Login({ onLogin }) {
           position: relative;
           width: var(--card-w);
           border-radius: var(--radius-xl);
-          padding: 1px; /* border thickness */
-          background:
-            conic-gradient(from 0deg,
-              rgba(88,166,255,.0),
-              rgba(88,166,255,.45),
-              rgba(34,211,238,.0),
-              rgba(125, 255, 183, 0.3),
-              rgba(34,211,238,.0),
-              rgba(88,166,255,.45),
-              rgba(167,139,250,.0));
-          -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-          -webkit-mask-composite: xor;
-                  mask-composite: exclude;
-          /* rotation disabled per bugfix */
           box-shadow:
             0 0 0 1px rgba(255,255,255,0.06) inset,
             0 10px 30px rgba(0,0,0,.5);
@@ -267,7 +253,18 @@ export default function Login({ onLogin }) {
         }
         .shine-inner {
           border-radius: inherit;
-          background: linear-gradient(180deg, rgba(17,22,36,.9), rgba(11,14,20,.9));
+          position: relative;
+          border: 1px solid transparent;
+          background:
+            linear-gradient(180deg, rgba(17,22,36,.92), rgba(11,14,20,.92)) padding-box,
+            conic-gradient(from 0deg,
+              rgba(88,166,255,.0),
+              rgba(88,166,255,.45),
+              rgba(34,211,238,.0),
+              rgba(125, 255, 183, 0.3),
+              rgba(34,211,238,.0),
+              rgba(88,166,255,.45),
+              rgba(167,139,250,.0)) border-box;
           backdrop-filter: blur(10px);
           padding: 28px 24px;
         }
@@ -487,4 +484,3 @@ export default function Login({ onLogin }) {
     </>
   );
 }
-
