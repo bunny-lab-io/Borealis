@@ -173,6 +173,11 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   const [assembliesError, setAssembliesError] = useState("");
   const gridApiRef = useRef(null);
 
+  const deriveRowKey = useCallback((row, index = "") => {
+    const candidate = row?.id ?? row?.name ?? index ?? "";
+    return String(candidate);
+  }, []);
+
   const assembliesCellRenderer = useCallback((params) => {
     const list = params?.data?.componentsMeta || [];
     if (!list.length) {
@@ -380,7 +385,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         setSelectedIds((prev) => {
           if (!prev.size) return prev;
           const valid = new Set(
-            mappedRows.map((row, index) => row.id ?? row.name ?? String(index))
+            mappedRows.map((row, index) => deriveRowKey(row, index))
           );
           let changed = false;
           const next = new Set();
@@ -403,7 +408,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         }
       }
     },
-    [assemblyIndex]
+    [assemblyIndex, deriveRowKey]
   );
 
   useEffect(() => {
@@ -466,7 +471,8 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     const api = gridApiRef.current;
     if (!api) return;
     api.forEachNode((node) => {
-      const shouldSelect = selectedIds.has(node.id);
+      const nodeId = String(node?.id ?? "");
+      const shouldSelect = selectedIds.has(nodeId);
       if (node.isSelected() !== shouldSelect) {
         node.setSelected(shouldSelect);
       }
@@ -488,13 +494,10 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     setSelectedIds(next);
   }, []);
 
-  const getRowId = useCallback((params) => {
-    return (
-      params?.data?.id ??
-      params?.data?.name ??
-      String(params?.rowIndex ?? "")
-    );
-  }, []);
+  const getRowId = useCallback(
+    (params) => deriveRowKey(params?.data, params?.rowIndex),
+    [deriveRowKey]
+  );
 
   const nameCellRenderer = useCallback(
     (params) => {
