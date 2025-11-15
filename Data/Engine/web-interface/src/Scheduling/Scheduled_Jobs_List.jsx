@@ -1,13 +1,3 @@
-// /////////////////////////////////////////////////////////////////////////////
-//  Scheduled_Jobs_List — Borealis MagicUI styling parity with Page Template
-//  - Aurora gradient shell
-//  - Small Material icon LEFT of title
-//  - Subtitle under title
-//  - Top-right utility buttons (Refresh, Create Job, Settings)
-//  - AG Grid Quartz theme + square checkboxes, rounded chrome
-//  - Keeps all original logic + renderers
-// /////////////////////////////////////////////////////////////////////////////
-
 import React, {
   useCallback,
   useEffect,
@@ -94,6 +84,15 @@ const FILTER_OPTIONS = [
   { key: "recurring", label: "Recurring" },
   { key: "completed", label: "Completed" },
 ];
+const AUTO_SIZE_COLUMNS = [
+  "name",
+  "componentsMeta",
+  "target",
+  "occurrence",
+  "lastRun",
+  "nextRun",
+  "resultsCounts",
+];
 
 function ResultsBar({ counts }) {
   const total = Math.max(1, Number(counts?.total_targets || 0));
@@ -172,6 +171,22 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   const [assembliesLoading, setAssembliesLoading] = useState(false);
   const [assembliesError, setAssembliesError] = useState("");
   const gridApiRef = useRef(null);
+  const autoSizeTrackedColumns = useCallback(() => {
+    const api = gridApiRef.current;
+    if (!api) return;
+    const run = () => {
+      try {
+        api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
+      } catch {
+        /* ignore auto-size errors triggered during async refresh */
+      }
+    };
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(run);
+    } else {
+      setTimeout(run, 0);
+    }
+  }, []);
 
   const deriveRowKey = useCallback((row, index = "") => {
     if (row && row.id != null && row.id !== "") {
@@ -439,9 +454,13 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     };
   }, [loadJobs, refreshToken]);
 
-  const handleGridReady = useCallback((params) => {
-    gridApiRef.current = params.api;
-  }, []);
+  const handleGridReady = useCallback(
+    (params) => {
+      gridApiRef.current = params.api;
+      autoSizeTrackedColumns();
+    },
+    [autoSizeTrackedColumns]
+  );
 
   const filterCounts = useMemo(() => {
     const totals = { all: rows.length, immediate: 0, scheduled: 0, recurring: 0, completed: 0 };
@@ -488,6 +507,10 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   }, [deriveRowKey, filteredRows, selectedIds]);
 
   const anySelected = selectedIds.size > 0;
+  useEffect(() => {
+    if (!filteredRows.length || loading) return;
+    autoSizeTrackedColumns();
+  }, [filteredRows, loading, autoSizeTrackedColumns]);
 
   const handleSelectionChanged = useCallback(() => {
     const api = gridApiRef.current;
@@ -607,23 +630,26 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         field: "name",
         cellRenderer: nameCellRenderer,
         sort: "asc",
-        minWidth: 220,
+        minWidth: 150,
+        cellClass: "auto-col-tight",
       },
       {
         headerName: "Assembly(s)",
         field: "componentsMeta",
-        minWidth: 260,
-        cellRenderer: assembliesCellRenderer
+        minWidth: 180,
+        cellRenderer: assembliesCellRenderer,
+        cellClass: "auto-col-tight",
       },
-      { headerName: "Target", field: "target", minWidth: 140 },
-      { headerName: "Recurrence", field: "occurrence", minWidth: 160 },
-      { headerName: "Last Run", field: "lastRun", minWidth: 160 },
-      { headerName: "Next Run", field: "nextRun", minWidth: 160 },
+      { headerName: "Target", field: "target", minWidth: 140, cellClass: "auto-col-tight" },
+      { headerName: "Recurrence", field: "occurrence", minWidth: 150, cellClass: "auto-col-tight" },
+      { headerName: "Last Run", field: "lastRun", minWidth: 150, cellClass: "auto-col-tight" },
+      { headerName: "Next Run", field: "nextRun", minWidth: 150, cellClass: "auto-col-tight" },
       {
         headerName: "Results",
         field: "resultsCounts",
         minWidth: 280,
         cellRenderer: resultsCellRenderer,
+        cellClass: "auto-col-tight",
         sortable: false,
         filter: false
       },
@@ -631,8 +657,9 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         headerName: "Enabled",
         field: "enabled",
         minWidth: 140,
-        maxWidth: 160,
+        flex: 1,
         cellRenderer: enabledCellRenderer,
+        cellClass: "auto-col-tight",
         sortable: false,
         filter: false,
         resizable: false,
@@ -858,6 +885,10 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
+            },
+            "& .ag-cell.auto-col-tight": {
+              paddingRight: 0,
+              paddingLeft: 0,
             },
           }}
           style={{
