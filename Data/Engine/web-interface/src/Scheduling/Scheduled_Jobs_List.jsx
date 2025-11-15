@@ -87,6 +87,13 @@ const gradientButtonSx = {
   },
 };
 
+const FILTER_OPTIONS = [
+  { key: "all", label: "All" },
+  { key: "immediate", label: "Immediate" },
+  { key: "recurring", label: "Recurring" },
+  { key: "completed", label: "Completed" },
+];
+
 function ResultsBar({ counts }) {
   const total = Math.max(1, Number(counts?.total_targets || 0));
   const sections = [
@@ -159,6 +166,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   const [error, setError] = useState("");
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [jobFilterMode, setJobFilterMode] = useState("all");
   const [assembliesPayload, setAssembliesPayload] = useState({ items: [], queue: [] });
   const [assembliesLoading, setAssembliesLoading] = useState(false);
   const [assembliesError, setAssembliesError] = useState("");
@@ -310,6 +318,17 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
           if (resultsCounts && resultsCounts.total_targets == null) {
             resultsCounts.total_targets = Array.isArray(j.targets) ? j.targets.length : 0;
           }
+          const scheduleRaw = String(j.schedule_type || "").toLowerCase();
+          const isImmediateType = scheduleRaw === "immediately" || scheduleRaw === "once";
+          const hasNextRun = j.next_run_ts != null && Number(j.next_run_ts) > 0;
+          const hasLastRun = j.last_run_ts != null && Number(j.last_run_ts) > 0;
+          const isEnabled = Boolean(j.enabled);
+          const isCompleted = !isEnabled || (!hasNextRun && hasLastRun);
+          const categoryFlags = {
+            immediate: isImmediateType,
+            recurring: !isImmediateType,
+            completed: isCompleted
+          };
           return {
             id: j.id,
             name: j.name,
@@ -322,6 +341,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             result: j.last_status || (j.next_run_ts ? "Scheduled" : ""),
             resultsCounts,
             enabled: Boolean(j.enabled),
+            categoryFlags,
             raw: { ...j, components: normalizedComponents }
           };
         });
@@ -380,17 +400,36 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     gridApiRef.current = params.api;
   }, []);
 
+  const filterCounts = useMemo(() => {
+    const totals = { all: rows.length, immediate: 0, recurring: 0, completed: 0 };
+    rows.forEach((row) => {
+      if (row?.categoryFlags?.immediate) totals.immediate += 1;
+      if (row?.categoryFlags?.recurring) totals.recurring += 1;
+      if (row?.categoryFlags?.completed) totals.completed += 1;
+    });
+    return totals;
+  }, [rows]);
+
+  const filteredRows = useMemo(() => {
+    if (jobFilterMode === "all") return rows;
+    return rows.filter((row) => row?.categoryFlags?.[jobFilterMode]);
+  }, [rows, jobFilterMode]);
+  const activeFilterLabel = useMemo(() => {
+    const match = FILTER_OPTIONS.find((option) => option.key === jobFilterMode);
+    return match ? match.label : jobFilterMode;
+  }, [jobFilterMode]);
+
   useEffect(() => {
     const api = gridApiRef.current;
     if (!api) return;
     if (loading) {
       api.showLoadingOverlay();
-    } else if (!rows.length) {
+    } else if (!filteredRows.length) {
       api.showNoRowsOverlay();
     } else {
       api.hideOverlay();
     }
-  }, [loading, rows]);
+  }, [loading, filteredRows]);
 
   useEffect(() => {
     const api = gridApiRef.current;
@@ -401,7 +440,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         node.setSelected(shouldSelect);
       }
     });
-  }, [rows, selectedIds]);
+  }, [filteredRows, selectedIds]);
 
   const anySelected = selectedIds.size > 0;
 
@@ -659,6 +698,74 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
 
       {/* Content area — a bit more top space below subtitle */}
       <Box sx={{ mt: "28px", px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 1.5, mb: 2, px: 0.5 }}>
+          <Box
+            sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 0.75,
+              background: "linear-gradient(120deg, rgba(8,12,24,0.92), rgba(4,7,17,0.85))",
+              borderRadius: 999,
+              border: "1px solid rgba(148,163,184,0.35)",
+              boxShadow: "0 18px 48px rgba(2,8,23,0.45)",
+              padding: "4px"
+            }}
+          >
+            {FILTER_OPTIONS.map((option) => {
+              const active = jobFilterMode === option.key;
+              return (
+                <Box
+                  key={option.key}
+                  component="button"
+                  type="button"
+                  onClick={() => setJobFilterMode(option.key)}
+                  sx={{
+                    border: "none",
+                    outline: "none",
+                    background: active ? "linear-gradient(135deg,#7dd3fc,#c084fc)" : "transparent",
+                    color: active ? "#041224" : "#cbd5e1",
+                    fontWeight: 600,
+                    fontSize: 13,
+                    px: 2,
+                    py: 0.5,
+                    borderRadius: 999,
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 0.6,
+                    boxShadow: active ? "0 0 18px rgba(125,211,252,0.35)" : "none",
+                    transition: "all 0.2s ease",
+                  }}
+                >
+                  <Box component="span" sx={{ userSelect: "none" }}>{option.label}</Box>
+                  <Box
+                    component="span"
+                    sx={{
+                      minWidth: 28,
+                      textAlign: "center",
+                      borderRadius: 999,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      px: 0.75,
+                      py: 0.1,
+                      color: active ? "#041224" : "#94a3b8",
+                      backgroundColor: active ? "rgba(4,18,36,0.2)" : "rgba(15,23,42,0.65)",
+                      border: active ? "1px solid rgba(4,18,36,0.3)" : "1px solid rgba(148,163,184,0.3)"
+                    }}
+                  >
+                    {filterCounts[option.key] ?? 0}
+                  </Box>
+                </Box>
+              );
+            })}
+          </Box>
+          <Typography variant="body2" sx={{ color: AURORA_SHELL.subtext }}>
+            {jobFilterMode === "all"
+              ? `Showing ${filterCounts.all || 0} jobs`
+              : `Showing ${filterCounts[jobFilterMode] || 0} ${activeFilterLabel} job${(filterCounts[jobFilterMode] || 0) === 1 ? "" : "s"}`}
+          </Typography>
+        </Box>
+
         <Box
           className={themeClassName}
           sx={{
@@ -748,7 +855,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
           )}
 
           <AgGridReact
-            rowData={rows}
+            rowData={filteredRows}
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
             animateRows

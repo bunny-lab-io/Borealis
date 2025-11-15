@@ -355,7 +355,7 @@ function ComponentCard({ comp, onRemove, onVariableChange, errors = {} }) {
   );
 }
 
-export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
+export default function CreateJob({ onCancel, onCreated, initialJob = null, quickJobDraft = null, onConsumeQuickJobDraft }) {
   const [tab, setTab] = useState(0);
   const [jobName, setJobName] = useState("");
   const [pageTitleJobName, setPageTitleJobName] = useState("");
@@ -376,6 +376,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [assembliesLoading, setAssembliesLoading] = useState(false);
   const [assembliesError, setAssembliesError] = useState("");
   const assemblyExportCacheRef = useRef(new Map());
+  const quickDraftAppliedRef = useRef(null);
 
   const loadCredentials = useCallback(async () => {
     setCredentialLoading(true);
@@ -508,6 +509,25 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
   const [selectedTargets, setSelectedTargets] = useState({}); // map hostname->bool
   const [deviceSearch, setDeviceSearch] = useState("");
   const [componentVarErrors, setComponentVarErrors] = useState({});
+  const [quickJobMeta, setQuickJobMeta] = useState(null);
+  const primaryComponentName = useMemo(() => {
+    if (!components.length) return "";
+    const first = components[0] || {};
+    const candidates = [
+      first.displayName,
+      first.name,
+      first.component_name,
+      first.script_name,
+      first.script_path,
+      first.path
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+    return "";
+  }, [components]);
   const [deviceRows, setDeviceRows] = useState([]);
   const [deviceStatusFilter, setDeviceStatusFilter] = useState(null);
   const [deviceOrderBy, setDeviceOrderBy] = useState("hostname");
@@ -917,8 +937,27 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
     return true;
   }, [jobName, components.length, targets.length, scheduleType, startDateTime, remoteExec, selectedCredentialId, execContext, useSvcAccount]);
 
+  const handleJobNameInputChange = useCallback((value) => {
+    setJobName(value);
+    setQuickJobMeta((prev) => {
+      if (!prev?.allowAutoRename) return prev;
+      if (!prev.currentAutoName) return prev;
+      if (value.trim() !== prev.currentAutoName.trim()) {
+        return { ...prev, allowAutoRename: false };
+      }
+      return prev;
+    });
+  }, []);
+
   const [confirmOpen, setConfirmOpen] = useState(false);
   const editing = !!(initialJob && initialJob.id);
+
+  useEffect(() => {
+    if (editing) {
+      quickDraftAppliedRef.current = null;
+      setQuickJobMeta(null);
+    }
+  }, [editing]);
 
   // --- Job History (only when editing) ---
   const [historyRows, setHistoryRows] = useState([]);
@@ -1550,6 +1589,60 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
     return base;
   }, [editing]);
 
+  useEffect(() => {
+    if (editing) return;
+    if (!quickJobDraft || !quickJobDraft.id) return;
+    if (quickDraftAppliedRef.current === quickJobDraft.id) return;
+    quickDraftAppliedRef.current = quickJobDraft.id;
+    const uniqueTargets = [];
+    const pushTarget = (value) => {
+      const normalized = typeof value === "string" ? value.trim() : "";
+      if (!normalized) return;
+      if (!uniqueTargets.includes(normalized)) uniqueTargets.push(normalized);
+    };
+    const incoming = Array.isArray(quickJobDraft.hostnames) ? quickJobDraft.hostnames : [];
+    incoming.forEach(pushTarget);
+    setTargets(uniqueTargets);
+    setSelectedTargets({});
+    setComponents([]);
+    setComponentVarErrors({});
+    const normalizedSchedule = String(quickJobDraft.scheduleType || "immediately").trim().toLowerCase() || "immediately";
+    setScheduleType(normalizedSchedule);
+    const placeholderAssembly = (quickJobDraft.placeholderAssemblyLabel || "Choose Assembly").trim() || "Choose Assembly";
+    const deviceLabel = (quickJobDraft.deviceLabel || uniqueTargets[0] || "Selected Device").trim() || "Selected Device";
+    const initialName = `Quick Job - ${placeholderAssembly} - ${deviceLabel}`;
+    setJobName(initialName);
+    setPageTitleJobName(initialName.trim());
+    setQuickJobMeta({
+      id: quickJobDraft.id,
+      deviceLabel,
+      allowAutoRename: true,
+      currentAutoName: initialName
+    });
+    const targetTabKey = quickJobDraft.initialTabKey || "components";
+    const tabIndex = tabDefs.findIndex((t) => t.key === targetTabKey);
+    if (tabIndex >= 0) setTab(tabIndex);
+    else if (tabDefs.length > 1) setTab(1);
+    if (typeof onConsumeQuickJobDraft === "function") {
+      onConsumeQuickJobDraft(quickJobDraft.id);
+    }
+  }, [editing, quickJobDraft, tabDefs, onConsumeQuickJobDraft]);
+
+  useEffect(() => {
+    if (!quickJobMeta?.allowAutoRename) return;
+    if (!primaryComponentName) return;
+    const deviceLabel = quickJobMeta.deviceLabel || "Selected Device";
+    const newName = `Quick Job - ${primaryComponentName} - ${deviceLabel}`;
+    if (jobName === newName) return;
+    setJobName(newName);
+    setPageTitleJobName(newName.trim());
+    setQuickJobMeta((prev) => {
+      if (!prev) return prev;
+      if (!prev.allowAutoRename) return prev;
+      return { ...prev, currentAutoName: newName };
+    });
+  }, [primaryComponentName, quickJobMeta, jobName]);
+
   return (
     <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e", overflow: "auto" }} elevation={2}>
       <Box sx={{ p: 2, pb: 1 }}>
@@ -1604,7 +1697,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null }) {
               }}
               placeholder="Example Job Name"
               value={jobName}
-              onChange={(e) => setJobName(e.target.value)}
+              onChange={(e) => handleJobNameInputChange(e.target.value)}
               onBlur={(e) => setPageTitleJobName(e.target.value.trim())}
               InputLabelProps={{ shrink: true }}
               error={jobName.trim().length === 0}

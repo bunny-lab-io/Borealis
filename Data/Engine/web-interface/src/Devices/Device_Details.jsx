@@ -29,7 +29,6 @@ import "prismjs/components/prism-powershell";
 import "prismjs/components/prism-batch";
 import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
-import QuickJob from "../Scheduling/Quick_Job.jsx";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 
@@ -248,7 +247,7 @@ const GRID_COMPONENTS = {
   HistoryActionsCell,
 };
 
-export default function DeviceDetails({ device, onBack }) {
+export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
   const [tab, setTab] = useState(0);
   const [agent, setAgent] = useState(device || {});
   const [details, setDetails] = useState({});
@@ -266,7 +265,6 @@ export default function DeviceDetails({ device, onBack }) {
   const [outputTitle, setOutputTitle] = useState("");
   const [outputContent, setOutputContent] = useState("");
   const [outputLang, setOutputLang] = useState("powershell");
-  const [quickJobOpen, setQuickJobOpen] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [assemblyNameMap, setAssemblyNameMap] = useState({});
@@ -281,6 +279,18 @@ export default function DeviceDetails({ device, onBack }) {
     const now = Date.now() / 1000;
     return now - tsSec <= 300 ? "Online" : "Offline";
   });
+  const quickJobTargets = useMemo(() => {
+    const values = [];
+    const push = (value) => {
+      const normalized = typeof value === "string" ? value.trim() : "";
+      if (!normalized) return;
+      if (!values.includes(normalized)) values.push(normalized);
+    };
+    push(agent?.hostname);
+    push(device?.hostname);
+    return values;
+  }, [agent, device]);
+  const canLaunchQuickJob = quickJobTargets.length > 0 && typeof onQuickJobLaunch === "function";
 
   useEffect(() => {
     setConnectionError("");
@@ -1626,11 +1636,11 @@ export default function DeviceDetails({ device, onBack }) {
           >
             <MoreHorizIcon fontSize="small" />
           </IconButton>
-          <Menu
-            anchorEl={menuAnchor}
-            open={Boolean(menuAnchor)}
-            onClose={() => setMenuAnchor(null)}
-            PaperProps={{
+        <Menu
+          anchorEl={menuAnchor}
+          open={Boolean(menuAnchor)}
+          onClose={() => setMenuAnchor(null)}
+          PaperProps={{
               sx: {
                 bgcolor: "rgba(8,12,24,0.96)",
                 color: "#fff",
@@ -1639,9 +1649,11 @@ export default function DeviceDetails({ device, onBack }) {
             }}
           >
             <MenuItem
+              disabled={!canLaunchQuickJob}
               onClick={() => {
                 setMenuAnchor(null);
-                setQuickJobOpen(true);
+                if (!canLaunchQuickJob) return;
+                onQuickJobLaunch && onQuickJobLaunch(quickJobTargets);
               }}
             >
               Quick Job
@@ -1748,13 +1760,6 @@ export default function DeviceDetails({ device, onBack }) {
         }}
       />
 
-      {quickJobOpen && (
-        <QuickJob
-          open={quickJobOpen}
-          onClose={() => setQuickJobOpen(false)}
-          hostnames={[agent?.hostname || device?.hostname].filter(Boolean)}
-        />
-      )}
     </Box>
   );
 }

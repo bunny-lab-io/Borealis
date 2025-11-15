@@ -21,7 +21,6 @@ import CachedIcon from "@mui/icons-material/Cached";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
-import QuickJob from "../Scheduling/Quick_Job.jsx";
 import AddDevice from "./Add_Device.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -339,6 +338,7 @@ function formatUptime(seconds) {
 
 export default function DeviceList({
   onSelectDevice,
+  onQuickJobLaunch,
   filterMode = "all",
   title,
   showAddButton,
@@ -351,7 +351,7 @@ export default function DeviceList({
   const [confirmOpen, setConfirmOpen] = useState(false);
   // Track selection by agent id to avoid duplicate hostname collisions
   const [selectedIds, setSelectedIds] = useState(() => new Set());
-  const [quickJobOpen, setQuickJobOpen] = useState(false);
+  const canLaunchQuickJob = selectedIds.size > 0 && typeof onQuickJobLaunch === "function";
   const [addDeviceOpen, setAddDeviceOpen] = useState(false);
   const [addDeviceType, setAddDeviceType] = useState(null);
   const computedTitle = useMemo(() => {
@@ -1739,18 +1739,26 @@ export default function DeviceList({
             <Button
               variant="contained"
               size="small"
-              disabled={selectedIds.size === 0}
+              disabled={!canLaunchQuickJob}
               disableElevation
-              onClick={() => setQuickJobOpen(true)}
+              onClick={() => {
+                if (!canLaunchQuickJob) return;
+                const hostnames = rows
+                  .filter((r) => selectedIds.has(r.id))
+                  .map((r) => r.hostname)
+                  .filter((hostname) => Boolean(hostname));
+                if (!hostnames.length) return;
+                onQuickJobLaunch(hostnames);
+              }}
               sx={{
                 borderRadius: 999,
                 px: 2.2,
                 textTransform: "none",
                 fontWeight: 600,
-                background: selectedIds.size === 0 ? "rgba(148,163,184,0.2)" : "linear-gradient(135deg, #34d399, #22d3ee)",
-                color: selectedIds.size === 0 ? MAGIC_UI.textMuted : "#041224",
-                border: selectedIds.size === 0 ? "1px solid rgba(148,163,184,0.35)" : "none",
-                boxShadow: selectedIds.size === 0 ? "none" : "0 0 24px rgba(45, 212, 191, 0.45)",
+                background: canLaunchQuickJob ? "linear-gradient(135deg, #34d399, #22d3ee)" : "rgba(148,163,184,0.2)",
+                color: canLaunchQuickJob ? "#041224" : MAGIC_UI.textMuted,
+                border: canLaunchQuickJob ? "none" : "1px solid rgba(148,163,184,0.35)",
+                boxShadow: canLaunchQuickJob ? "0 0 24px rgba(45, 212, 191, 0.45)" : "none",
               }}
             >
               Quick Job
@@ -2090,13 +2098,6 @@ export default function DeviceList({
         onConfirm={handleDelete}
       />
 
-      {quickJobOpen && (
-        <QuickJob
-          open={quickJobOpen}
-          onClose={() => setQuickJobOpen(false)}
-          hostnames={rows.filter((r) => selectedIds.has(r.id)).map((r) => r.hostname)}
-        />
-      )}
       {assignDialogOpen && (
         <Popover
           open={assignDialogOpen}

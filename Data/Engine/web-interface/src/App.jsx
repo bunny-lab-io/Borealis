@@ -115,10 +115,12 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   const [userDisplayName, setUserDisplayName] = useState(null);
   const [editingJob, setEditingJob] = useState(null);
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
+  const [quickJobDraft, setQuickJobDraft] = useState(null);
   const [assemblyEditorState, setAssemblyEditorState] = useState(null); // { mode: 'script'|'ansible', row, nonce }
   const [sessionResolved, setSessionResolved] = useState(false);
   const initialPathRef = useRef(window.location.pathname + window.location.search);
   const pendingPathRef = useRef(null);
+  const quickJobSeedRef = useRef(0);
       const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
 
       // Top-bar search state
@@ -379,6 +381,45 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     navigateToRef.current = navigateTo;
     navigateByPathRef.current = navigateByPath;
   }, [navigateTo, navigateByPath]);
+
+  const handleQuickJobLaunch = useCallback(
+    (hostnames) => {
+      const list = Array.isArray(hostnames) ? hostnames : [hostnames];
+      const normalized = Array.from(
+        new Set(
+          list
+            .map((host) => (typeof host === "string" ? host.trim() : ""))
+            .filter((host) => Boolean(host))
+        )
+      );
+      if (!normalized.length) {
+        return;
+      }
+      quickJobSeedRef.current += 1;
+      const primary = normalized[0];
+      const extraCount = normalized.length - 1;
+      const deviceLabel = extraCount > 0 ? `${primary} +${extraCount} more` : primary;
+      setEditingJob(null);
+      setQuickJobDraft({
+        id: `${Date.now()}_${quickJobSeedRef.current}`,
+        hostnames: normalized,
+        deviceLabel,
+        initialTabKey: "components",
+        scheduleType: "immediately",
+        placeholderAssemblyLabel: "Choose Assembly",
+      });
+      navigateTo("create_job");
+    },
+    [navigateTo]
+  );
+
+  const handleConsumeQuickJobDraft = useCallback((draftId) => {
+    setQuickJobDraft((prev) => {
+      if (!prev) return prev;
+      if (draftId && prev.id !== draftId) return prev;
+      return null;
+    });
+  }, []);
 
   // Build breadcrumb items for current view
   const breadcrumbs = React.useMemo(() => {
@@ -1039,6 +1080,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             onSelectDevice={(d) => {
               navigateTo("device_details", { device: d });
             }}
+            onQuickJobLaunch={handleQuickJobLaunch}
           />
         );
       case "agent_devices":
@@ -1047,17 +1089,19 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             onSelectDevice={(d) => {
               navigateTo("device_details", { device: d });
             }}
+            onQuickJobLaunch={handleQuickJobLaunch}
           />
         );
       case "ssh_devices":
-        return <SSHDevices />;
+        return <SSHDevices onQuickJobLaunch={handleQuickJobLaunch} />;
       case "winrm_devices":
-        return <WinRMDevices />;
+        return <WinRMDevices onQuickJobLaunch={handleQuickJobLaunch} />;
 
       case "device_details":
         return (
           <DeviceDetails
             device={selectedDevice}
+            onQuickJobLaunch={handleQuickJobLaunch}
             onBack={() => {
               navigateTo("devices");
               setSelectedDevice(null);
@@ -1078,8 +1122,19 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return (
           <CreateJob
             initialJob={editingJob}
-            onCancel={() => { navigateTo("jobs"); setEditingJob(null); }}
-            onCreated={() => { navigateTo("jobs"); setEditingJob(null); setJobsRefreshToken(Date.now()); }}
+            quickJobDraft={quickJobDraft}
+            onConsumeQuickJobDraft={handleConsumeQuickJobDraft}
+            onCancel={() => {
+              navigateTo("jobs");
+              setEditingJob(null);
+              setQuickJobDraft(null);
+            }}
+            onCreated={() => {
+              navigateTo("jobs");
+              setEditingJob(null);
+              setJobsRefreshToken(Date.now());
+              setQuickJobDraft(null);
+            }}
           />
         );
 
