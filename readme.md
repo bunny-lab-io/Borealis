@@ -56,8 +56,8 @@ Site List:
 
 ### Installation
 1) Start the Server:
-   - Windows: `./Borealis.ps1 -EngineProduction` *Production Server @ http://localhost:5000*
-   - Windows: `./Borealis.ps1 -EngineDev` *Development Server @ http://localhost:5173*
+   - Windows: `./Borealis.ps1 -EngineProduction` *Production Server @ https://localhost:5000*
+   - Windows: `./Borealis.ps1 -EngineDev` *Development Server @ https://localhost:5173*
 2) (*Optional*) Install the Agent (*elevated PowerShell*):
    - Windows: `./Borealis.ps1 -Agent`
 
