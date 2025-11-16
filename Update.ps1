@@ -189,8 +189,40 @@ function Start-AgentScheduledTasks {
 
 function Stop-AgentPythonProcesses {
     param(
-        [string[]]$ProcessNames = @('python', 'pythonw')
+        [string[]]$ProcessNames = @('python', 'pythonw'),
+        [string]$ProjectRoot,
+        [switch]$SkipEngine = $true
     )
+
+    $enginePids = @()
+    $engineRoot = ''
+    $dataEngineRoot = ''
+    if ($ProjectRoot) {
+        try { $engineRoot = (Join-Path $ProjectRoot 'Engine') } catch {}
+        try { $dataEngineRoot = (Join-Path $ProjectRoot 'Data\Engine') } catch {}
+    }
+
+    if ($SkipEngine) {
+        try {
+            $cims = Get-CimInstance -ClassName Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction Stop
+            foreach ($proc in $cims) {
+                try {
+                    $pid = [int]$proc.ProcessId
+                } catch { continue }
+                $cmd = ($proc.CommandLine -as [string])
+                $exePath = ($proc.ExecutablePath -as [string])
+                $isEngine = $false
+                foreach ($marker in @($engineRoot, $dataEngineRoot, '\Engine\', '\Data\Engine\', 'Engine\server.py', 'Data\Engine\server.py')) {
+                    if (-not $marker) { continue }
+                    try {
+                        if ($cmd -and $cmd.ToLowerInvariant().Contains($marker.ToLowerInvariant())) { $isEngine = $true; break }
+                        if ($exePath -and $exePath.ToLowerInvariant().Contains($marker.ToLowerInvariant())) { $isEngine = $true; break }
+                    } catch {}
+                }
+                if ($isEngine -and ($enginePids -notcontains $pid)) { $enginePids += $pid }
+            }
+        } catch {}
+    }
 
     foreach ($name in ($ProcessNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
         $name = $name.Trim()
@@ -206,12 +238,28 @@ function Stop-AgentPythonProcesses {
         foreach ($proc in $processes) {
             $procId = $null
             $procName = $null
+            $procPath = $null
             try {
                 $procId = $proc.Id
                 $procName = $proc.ProcessName
+                $procPath = $proc.Path
             } catch {}
 
             if ($procId -eq $null) { continue }
+
+            $isEngineProc = $false
+            try {
+                if ($enginePids -and ($enginePids -contains $procId)) { $isEngineProc = $true }
+                foreach ($marker in @($engineRoot, $dataEngineRoot)) {
+                    if (-not $marker) { continue }
+                    if ($procPath -and $procPath.ToLowerInvariant().StartsWith($marker.ToLowerInvariant())) { $isEngineProc = $true; break }
+                }
+            } catch {}
+
+            if ($SkipEngine -and $isEngineProc) {
+                Write-Host "Skipping Engine python process: PID $procId ($procName)" -ForegroundColor Cyan
+                continue
+            }
 
             if (-not $procName) { $procName = $name }
 
@@ -1732,7 +1780,7 @@ function Invoke-BorealisAgentUpdate {
         } else {
             Write-UpdateLog "No managed tasks were running when update started." 'DEBUG'
         }
-        Run-Step "Updating: Terminate Running Python Processes" { Stop-AgentPythonProcesses }
+        Run-Step "Updating: Terminate Running Python Processes" { Stop-AgentPythonProcesses -ProjectRoot $scriptDir -SkipEngine }
 
         $updateSucceeded = $false
         try {
