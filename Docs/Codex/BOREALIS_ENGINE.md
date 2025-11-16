@@ -3,17 +3,14 @@
 Use this doc for Engine work (successor to the legacy server). For shared guidance, see `Docs/Codex/SHARED.md`.
 
 ## Scope & Runtime Paths
-- Role: actively developed replacement for `Data/Server/server.py` covering Python services, REST APIs, WebSockets, and Flask/Vite frontends.
-- Bootstrap: `Borealis.ps1` launches the Engine by default while keeping the legacy server switch for regressions.
-- Edit in `Data/Engine`; runtime copies live under `/Engine` and are discarded. `/Server` remains untouched unless explicitly running the legacy path.
+- Bootstrap: `Borealis.ps1` launches the Engine and/or Agent.  The equivalant bootstrap script exists for Linux when running `Borealis.sh`.
+- Edit in `Data/Engine`; runtime copies live under `/Engine` and are discarded every time the engine is launched.
 
-## Migration & Architecture
-- Migration tracker: `Engine/Data/Engine/CODE_MIGRATION_TRACKER.md` (Stages 1–5 complete; Stage 6 WebUI migration in progress; Stage 7 WebSocket migration queued).
+## Architecture
 - Runtime: `Data/Engine/server.py` with NodeJS + Vite for live dev and Flask for production serving/API endpoints.
 
 ## Development Guidelines
-- Every new Python module under `Data/Engine` or `Engine/Data/Engine` starts with the standard commentary header (purpose + API endpoints). Add the header to any existing module before further edits.
-- Check the migration tracker to avoid jumping ahead of approved stages.
+- Every Python module under `Data/Engine` or `Engine/Data/Engine` starts with the standard commentary header (purpose + API endpoints). Add the header to any existing module before further edits.
 
 ## Logging
 - Primary log: `Engine/Logs/engine.log` with daily rotation (`engine.log.YYYY-MM-DD`); do not auto-delete rotated files.

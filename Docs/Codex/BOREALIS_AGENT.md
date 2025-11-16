@@ -4,7 +4,7 @@ Use this doc for agent-only work (Borealis agent runtime under `Data/Agent` → 
 
 ## Scope & Runtime Paths
 - Purpose: outbound-only connectivity, device telemetry, scripting, UI helpers.
-- Bootstrap: `Borealis.ps1` preps dependencies, activates the agent venv, and co-launches the Engine (legacy server boot is still available for parity checks).
+- Bootstrap: `Borealis.ps1` preps dependencies, activates the agent venv, and co-launches the Engine.
 - Edit in `Data/Agent`, not `/Agent`; runtime copies are ephemeral and wiped regularly.
 
 ## Logging
