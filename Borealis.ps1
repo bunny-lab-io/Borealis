@@ -851,19 +851,76 @@ function InstallOrUpdate-BorealisAgent {
     $existingServerUrl      = $null
 
     Run-Step "Create Virtual Python Environment" {
-        if (-not (Test-Path (Join-Path $venvFolderPath 'Scripts\Activate'))) {
-            $pythonForVenv = $pythonExe
-            if (-not (Test-Path $pythonForVenv)) {
-                $pyCmd = Get-Command py -ErrorAction SilentlyContinue
-                $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-                if ($pyCmd) { $pythonForVenv = $pyCmd.Source }
-                elseif ($pythonCmd) { $pythonForVenv = $pythonCmd.Source }
-                else {
-                    Write-Host "Python not found. Install Python or run Server setup (option 1)." -ForegroundColor Red
-                    exit 1
-                }
+        $venvActivate = Join-Path $venvFolderPath 'Scripts\Activate'
+        $pyvenvCfg    = Join-Path $venvFolderPath 'pyvenv.cfg'
+        $pythonForVenv = $pythonExe
+        if (-not (Test-Path $pythonForVenv)) {
+            $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+            $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+            if ($pyCmd) { $pythonForVenv = $pyCmd.Source }
+            elseif ($pythonCmd) { $pythonForVenv = $pythonCmd.Source }
+            else {
+                Write-Host "Python not found. Install Python or run Server setup (option 1)." -ForegroundColor Red
+                exit 1
             }
+        }
+
+        $expectedPython     = $pythonForVenv
+        $expectedPythonNorm = $null
+        $expectedHomeNorm   = $null
+        try {
+            if (Test-Path $expectedPython -PathType Leaf) {
+                $expectedPython = (Resolve-Path $expectedPython -ErrorAction Stop).ProviderPath
+            }
+        } catch { $expectedPython = $pythonForVenv }
+        if ($expectedPython) {
+            $expectedPythonNorm = $expectedPython.ToLowerInvariant()
+            try {
+                $expectedHome = Split-Path -Path $expectedPython -Parent
+            } catch { $expectedHome = $null }
+            if ($expectedHome) { $expectedHomeNorm = $expectedHome.ToLowerInvariant() }
+        }
+
+        $venvNeedsUpgrade = $false
+        if (Test-Path $pyvenvCfg -PathType Leaf) {
+            try {
+                $cfgLines = Get-Content -Path $pyvenvCfg -ErrorAction Stop
+                $cfgMap = @{}
+                foreach ($line in $cfgLines) {
+                    $trimmed = $line.Trim()
+                    if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+                    $parts = $trimmed -split '=', 2
+                    if ($parts.Count -ne 2) { continue }
+                    $cfgMap[$parts[0].Trim().ToLowerInvariant()] = $parts[1].Trim()
+                }
+
+                $cfgExecutable = $cfgMap['executable']
+                $cfgHome = $cfgMap['home']
+
+                if ($cfgExecutable -and -not (Test-Path $cfgExecutable -PathType Leaf)) {
+                    $venvNeedsUpgrade = $true
+                } elseif ($cfgHome -and -not (Test-Path $cfgHome -PathType Container)) {
+                    $venvNeedsUpgrade = $true
+                } else {
+                    if ($cfgExecutable -and $expectedPythonNorm) {
+                        try { $resolvedExe = (Resolve-Path $cfgExecutable -ErrorAction Stop).ProviderPath } catch { $resolvedExe = $cfgExecutable }
+                        $resolvedExeNorm = if ($resolvedExe) { $resolvedExe.ToLowerInvariant() } else { $null }
+                        if ($resolvedExeNorm -and $resolvedExeNorm -ne $expectedPythonNorm) { $venvNeedsUpgrade = $true }
+                    }
+                    if (-not $venvNeedsUpgrade -and $cfgHome -and $expectedHomeNorm) {
+                        try { $resolvedHome = (Resolve-Path $cfgHome -ErrorAction Stop).ProviderPath } catch { $resolvedHome = $cfgHome }
+                        $resolvedHomeNorm = if ($resolvedHome) { $resolvedHome.ToLowerInvariant() } else { $null }
+                        if ($resolvedHomeNorm -and $resolvedHomeNorm -ne $expectedHomeNorm) { $venvNeedsUpgrade = $true }
+                    }
+                }
+            } catch { $venvNeedsUpgrade = $true }
+        }
+
+        if (-not (Test-Path $venvActivate)) {
             & $pythonForVenv -m venv $venvFolderPath
+        } elseif ($venvNeedsUpgrade) {
+            Write-Host "Detected relocated Agent virtual environment. Rebuilding interpreter bindings..." -ForegroundColor Yellow
+            & $pythonForVenv -m venv --upgrade $venvFolderPath
         }
         if (Test-Path $agentSourcePath) {
             # Cleanup Previous Agent Folder & Create New Folder
