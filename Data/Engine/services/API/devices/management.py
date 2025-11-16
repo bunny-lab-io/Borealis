@@ -20,7 +20,7 @@
 # - GET /api/sites/device_map (Token Authenticated) - Provides hostname to site assignment mapping data.
 # - POST /api/sites/assign (Token Authenticated (Admin)) - Assigns a set of devices to a given site.
 # - POST /api/sites/rename (Token Authenticated (Admin)) - Renames an existing site record.
-# - GET /api/repo/current_hash (Token Authenticated) - Fetches the current agent repository hash (with caching).
+# - GET /api/repo/current_hash (Device or Token Authenticated) - Fetches the current agent repository hash (with caching).
 # - GET/POST /api/agent/hash (Device Authenticated) - Retrieves or updates an agent hash record bound to the authenticated device.
 # - GET /api/agent/hash_list (Token Authenticated (Admin + Loopback)) - Returns stored agent hash metadata for localhost diagnostics.
 # ======================================================
@@ -42,7 +42,7 @@ from flask import Blueprint, jsonify, request, session, g
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ....auth.guid_utils import normalize_guid
-from ....auth.device_auth import require_device_auth
+from ....auth.device_auth import DeviceAuthError, require_device_auth
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
@@ -418,6 +418,29 @@ class DeviceManagementService:
         if not self._current_user():
             return {"error": "unauthorized"}, 401
         return None
+
+    def _require_device_or_login(self) -> Optional[Tuple[Dict[str, Any], int]]:
+        user = self._current_user()
+        if user:
+            return None
+
+        manager = getattr(self.adapters, "device_auth_manager", None)
+        if manager is None:
+            return {"error": "unauthorized"}, 401
+
+        try:
+            ctx = manager.authenticate()
+            g.device_auth = ctx
+            return None
+        except DeviceAuthError as exc:
+            payload: Dict[str, Any] = {"error": exc.message}
+            retry_after = getattr(exc, "retry_after", None)
+            if retry_after:
+                payload["retry_after"] = retry_after
+            return payload, getattr(exc, "status_code", 401) or 401
+        except Exception:
+            self.service_log("server", "/api/repo/current_hash auth failure", level="ERROR")
+            return {"error": "unauthorized"}, 401
 
     def _require_admin(self) -> Optional[Tuple[Dict[str, Any], int]]:
         user = self._current_user()
@@ -1765,7 +1788,7 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/repo/current_hash", methods=["GET"])
     def _repo_current_hash():
-        requirement = service._require_login()
+        requirement = service._require_device_or_login()
         if requirement:
             payload, status = requirement
             return jsonify(payload), status

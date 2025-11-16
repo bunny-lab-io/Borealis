@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from Data.Engine.auth import jwt_service as jwt_service_module
 from Data.Engine.integrations import github as github_integration
 from Data.Engine.services.API.devices import management as device_management
 
@@ -22,6 +23,37 @@ def _client_with_admin_session(harness: EngineTestHarness):
         sess["username"] = "admin"
         sess["role"] = "Admin"
     return client
+
+
+def _device_headers() -> dict:
+    jwt_service = jwt_service_module.load_service()
+    token = jwt_service.issue_access_token(
+        "GUID-TEST-0001",
+        "ff:ff:ff",
+        1,
+        expires_in=900,
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _patch_repo_call(monkeypatch: pytest.MonkeyPatch, calls: dict) -> None:
+    class DummyResponse:
+        def __init__(self, status_code: int, payload: Any):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self) -> Any:
+            return self._payload
+
+    request_exception = getattr(github_integration.requests, "RequestException", RuntimeError)
+
+    def fake_get(url: str, headers: Any, timeout: int) -> DummyResponse:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return DummyResponse(200, {"commit": {"sha": "abc123"}})
+        raise request_exception("network error")
+
+    monkeypatch.setattr(github_integration.requests, "get", fake_get)
 
 
 def test_list_devices(engine_harness: EngineTestHarness) -> None:
@@ -103,25 +135,9 @@ def test_device_list_views_lifecycle(engine_harness: EngineTestHarness) -> None:
 def test_repo_current_hash_uses_cache(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"count": 0}
 
-    class DummyResponse:
-        def __init__(self, status_code: int, payload: Any):
-            self.status_code = status_code
-            self._payload = payload
+    _patch_repo_call(monkeypatch, calls)
 
-        def json(self) -> Any:
-            return self._payload
-
-    request_exception = getattr(github_integration.requests, "RequestException", RuntimeError)
-
-    def fake_get(url: str, headers: Any, timeout: int) -> DummyResponse:
-        calls["count"] += 1
-        if calls["count"] == 1:
-            return DummyResponse(200, {"commit": {"sha": "abc123"}})
-        raise request_exception("network error")
-
-    monkeypatch.setattr(github_integration.requests, "get", fake_get)
-
-    client = engine_harness.app.test_client()
+    client = _client_with_admin_session(engine_harness)
     first = client.get("/api/repo/current_hash?repo=test/test&branch=main")
     assert first.status_code == 200
     assert first.get_json()["sha"] == "abc123"
@@ -130,6 +146,21 @@ def test_repo_current_hash_uses_cache(engine_harness: EngineTestHarness, monkeyp
     second_payload = second.get_json()
     assert second_payload["sha"] == "abc123"
     assert second_payload["cached"] is True or second_payload["source"].startswith("cache")
+    assert calls["count"] == 1
+
+
+def test_repo_current_hash_allows_device_token(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"count": 0}
+    _patch_repo_call(monkeypatch, calls)
+
+    client = engine_harness.app.test_client()
+    response = client.get(
+        "/api/repo/current_hash?repo=test/test&branch=main",
+        headers=_device_headers(),
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["sha"] == "abc123"
     assert calls["count"] == 1
 
 
