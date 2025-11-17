@@ -38,7 +38,7 @@ ENROLLMENT_CODE=""
 while (( "$#" )); do
   case "$1" in
     -Server|--server) SERVER_FLAG=1 ;;
-    -Agent|--agent) AGENT_FLAG=1 ;;
+    -Agent|--agent|--Agent) AGENT_FLAG=1 ;;
     -Vite|--vite) VITE_FLAG=1 ;;
     -Flask|--flask) FLASK_FLAG=1 ;;
     -Quick|--quick) QUICK_FLAG=1 ;;

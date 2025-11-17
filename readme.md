@@ -70,7 +70,7 @@ If you plan on deploying the agent via something like a Group Policy or other ex
 ```
 **Linux**:
 ```sh
-./Borealis.sh --agent --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
+./Borealis.sh --Agent --EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
 ```
 
 ### Reverse Proxy Configuration
