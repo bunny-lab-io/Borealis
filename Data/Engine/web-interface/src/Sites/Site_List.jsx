@@ -6,12 +6,15 @@ import {
   Button,
   IconButton,
   Tooltip,
+  CircularProgress,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import LocationCityIcon from "@mui/icons-material/LocationCity";
 
 import DeleteIcon from "@mui/icons-material/DeleteOutline";
 import EditIcon from "@mui/icons-material/Edit";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, ConfirmDeleteDialog, RenameSiteDialog } from "../Dialogs.jsx";
@@ -69,6 +72,7 @@ export default function SiteList({ onOpenDevicesForSite }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [rotatingId, setRotatingId] = useState(null);
   const gridRef = useRef(null);
 
   const fetchSites = useCallback(async () => {
@@ -82,6 +86,42 @@ export default function SiteList({ onOpenDevicesForSite }) {
   }, []);
 
   useEffect(() => { fetchSites(); }, [fetchSites]);
+
+  const handleCopy = useCallback(async (code) => {
+    const value = (code || "").trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      window.prompt("Copy enrollment code", value);
+    }
+  }, []);
+
+  const handleRotate = useCallback(async (site) => {
+    if (!site?.id) return;
+    const confirmRotate = window.confirm(
+      "Are you sure you want to rotate the enrollment code associated with this site? "
+      + "If there are automations that deploy agents to endpoints, the enrollment code associated with them will need to also be updated."
+    );
+    if (!confirmRotate) return;
+    setRotatingId(site.id);
+    try {
+      const resp = await fetch("/api/sites/rotate_code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ site_id: site.id }),
+      });
+      if (resp.ok) {
+        const updated = await resp.json();
+        setRows((prev) => prev.map((row) => (row.id === site.id ? { ...row, ...updated } : row)));
+      }
+    } catch {
+      // Silently fail the rotate if the request errors; grid will refresh on next fetch.
+    } finally {
+      setRotatingId(null);
+      fetchSites();
+    }
+  }, [fetchSites]);
 
   const columnDefs = useMemo(() => [
     {
@@ -105,9 +145,51 @@ export default function SiteList({ onOpenDevicesForSite }) {
         </span>
       ),
     },
+    {
+      headerName: "Agent Enrollment Code",
+      field: "enrollment_code",
+      minWidth: 320,
+      flex: 1.2,
+      cellRenderer: (params) => {
+        const code = params.value || "—";
+        const site = params.data || {};
+        const busy = rotatingId === site.id;
+        return (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Tooltip title="Rotate Code">
+              <span>
+                <IconButton
+                  size="small"
+                  onClick={() => handleRotate(site)}
+                  disabled={busy}
+                  sx={{ color: MAGIC_UI.accentA, border: "1px solid rgba(148,163,184,0.35)" }}
+                >
+                  {busy ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon fontSize="small" />}
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Typography variant="body2" sx={{ fontFamily: "monospace", color: MAGIC_UI.textBright }}>
+              {code}
+            </Typography>
+            <Tooltip title="Copy">
+              <span>
+                <IconButton
+                  size="small"
+                  onClick={() => handleCopy(code)}
+                  disabled={!code || code === "—"}
+                  sx={{ color: MAGIC_UI.textMuted }}
+                >
+                  <ContentCopyIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
+        );
+      },
+    },
     { headerName: "Description", field: "description", minWidth: 220 },
     { headerName: "Devices", field: "device_count", minWidth: 120 },
-  ], [onOpenDevicesForSite]);
+  ], [onOpenDevicesForSite, handleRotate, handleCopy, rotatingId]);
 
   const defaultColDef = useMemo(() => ({
     sortable: true,

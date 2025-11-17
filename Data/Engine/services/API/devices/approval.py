@@ -357,19 +357,23 @@ class AdminDeviceService:
                     da.hostname_claimed,
                     da.ssl_key_fingerprint_claimed,
                     da.enrollment_code_id,
+                    da.site_id,
                     da.status,
                     da.client_nonce,
                     da.server_nonce,
                     da.created_at,
                     da.updated_at,
                     da.approved_by_user_id,
-                    u.username AS approved_by_username
+                    u.username AS approved_by_username,
+                    s.name AS site_name
                   FROM device_approvals AS da
              LEFT JOIN users AS u
                     ON (
                         CAST(da.approved_by_user_id AS TEXT) = CAST(u.id AS TEXT)
                         OR LOWER(da.approved_by_user_id) = LOWER(u.username)
                     )
+             LEFT JOIN sites AS s
+                    ON s.id = da.site_id
             """
             status_norm = (status_filter or "").strip().lower()
             if status_norm and status_norm != "all":
@@ -409,17 +413,19 @@ class AdminDeviceService:
                         "hostname_claimed": hostname,
                         "ssl_key_fingerprint_claimed": fingerprint_claimed,
                         "enrollment_code_id": row[5],
-                        "status": row[6],
-                        "client_nonce": row[7],
-                        "server_nonce": row[8],
-                        "created_at": row[9],
-                        "updated_at": row[10],
-                        "approved_by_user_id": row[11],
+                        "site_id": row[6],
+                        "status": row[7],
+                        "client_nonce": row[8],
+                        "server_nonce": row[9],
+                        "created_at": row[10],
+                        "updated_at": row[11],
+                        "approved_by_user_id": row[12],
                         "hostname_conflict": conflict,
                         "alternate_hostname": alternate,
                         "conflict_requires_prompt": requires_prompt,
                         "fingerprint_match": fingerprint_match,
-                        "approved_by_username": row[12],
+                        "approved_by_username": row[13],
+                        "site_name": row[14],
                     }
                 )
         finally:
@@ -578,4 +584,3 @@ def register_admin_endpoints(app, adapters: "EngineServiceAdapters") -> None:
         return jsonify(payload), status
 
     app.register_blueprint(blueprint)
-

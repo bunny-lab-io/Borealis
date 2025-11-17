@@ -294,6 +294,12 @@ export default function DeviceApprovals() {
       minWidth: 100,
       Width: 100,
     },
+    {
+      headerName: "Site",
+      field: "site_name",
+      valueGetter: (p) => p.data?.site_name || (p.data?.site_id ? `Site ${p.data.site_id}` : "—"),
+      minWidth: 160,
+    },
     { headerName: "Created", field: "created_at", valueFormatter: (p) => formatDateTime(p.value), minWidth: 160 },
     { headerName: "Updated", field: "updated_at", valueFormatter: (p) => formatDateTime(p.value), minWidth: 160 },
     {

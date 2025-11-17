@@ -57,7 +57,7 @@ def _patch_repo_call(monkeypatch: pytest.MonkeyPatch, calls: dict) -> None:
 
 
 def test_list_devices(engine_harness: EngineTestHarness) -> None:
-    client = engine_harness.app.test_client()
+    client = _client_with_admin_session(engine_harness)
     response = client.get("/api/devices")
     assert response.status_code == 200
     payload = response.get_json()
@@ -70,7 +70,7 @@ def test_list_devices(engine_harness: EngineTestHarness) -> None:
 
 
 def test_list_agents(engine_harness: EngineTestHarness) -> None:
-    client = engine_harness.app.test_client()
+    client = _client_with_admin_session(engine_harness)
     response = client.get("/api/agents")
     assert response.status_code == 200
     payload = response.get_json()
@@ -82,7 +82,7 @@ def test_list_agents(engine_harness: EngineTestHarness) -> None:
 
 
 def test_device_details(engine_harness: EngineTestHarness) -> None:
-    client = engine_harness.app.test_client()
+    client = _client_with_admin_session(engine_harness)
     response = client.get("/api/device/details/test-device")
     assert response.status_code == 200
     payload = response.get_json()
@@ -165,7 +165,7 @@ def test_repo_current_hash_allows_device_token(engine_harness: EngineTestHarness
 
 
 def test_agent_hash_list_permissions(engine_harness: EngineTestHarness) -> None:
-    client = engine_harness.app.test_client()
+    client = _client_with_admin_session(engine_harness)
     forbidden = client.get("/api/agent/hash_list", environ_base={"REMOTE_ADDR": "192.0.2.10"})
     assert forbidden.status_code == 403
     allowed = client.get("/api/agent/hash_list", environ_base={"REMOTE_ADDR": "127.0.0.1"})
@@ -208,21 +208,20 @@ def test_sites_lifecycle(engine_harness: EngineTestHarness) -> None:
     assert delete_resp.status_code == 200
 
 
-def test_admin_enrollment_code_flow(engine_harness: EngineTestHarness) -> None:
+def test_site_enrollment_code_rotation(engine_harness: EngineTestHarness) -> None:
     client = _client_with_admin_session(engine_harness)
-    create_resp = client.post(
-        "/api/admin/enrollment-codes",
-        json={"ttl_hours": 1, "max_uses": 2},
-    )
-    assert create_resp.status_code == 201
-    code_id = create_resp.get_json()["id"]
+    sites_resp = client.get("/api/sites")
+    assert sites_resp.status_code == 200
+    sites = sites_resp.get_json()["sites"]
+    assert sites and sites[0]["enrollment_code"]
+    site_id = sites[0]["id"]
+    original_code = sites[0]["enrollment_code"]
 
-    list_resp = client.get("/api/admin/enrollment-codes")
-    codes = list_resp.get_json()["codes"]
-    assert any(code["id"] == code_id for code in codes)
-
-    delete_resp = client.delete(f"/api/admin/enrollment-codes/{code_id}")
-    assert delete_resp.status_code == 200
+    rotate_resp = client.post("/api/sites/rotate_code", json={"site_id": site_id})
+    assert rotate_resp.status_code == 200
+    rotated = rotate_resp.get_json()
+    assert rotated["id"] == site_id
+    assert rotated["enrollment_code"] and rotated["enrollment_code"] != original_code
 
 
 def test_admin_device_approvals(engine_harness: EngineTestHarness) -> None:

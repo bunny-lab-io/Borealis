@@ -155,7 +155,8 @@ def _ensure_install_code_table(conn: sqlite3.Connection) -> None:
             used_by_guid TEXT,
             max_uses INTEGER NOT NULL DEFAULT 1,
             use_count INTEGER NOT NULL DEFAULT 0,
-            last_used_at TEXT
+            last_used_at TEXT,
+            site_id INTEGER
         )
         """
     )
@@ -188,6 +189,13 @@ def _ensure_install_code_table(conn: sqlite3.Connection) -> None:
                 ADD COLUMN last_used_at TEXT
             """
         )
+    if "site_id" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes
+                ADD COLUMN site_id INTEGER
+            """
+        )
 
 
 def _ensure_install_code_persistence_table(conn: sqlite3.Connection) -> None:
@@ -207,7 +215,8 @@ def _ensure_install_code_persistence_table(conn: sqlite3.Connection) -> None:
             last_used_at TEXT,
             is_active INTEGER NOT NULL DEFAULT 1,
             archived_at TEXT,
-            consumed_at TEXT
+            consumed_at TEXT,
+            site_id INTEGER
         )
         """
     )
@@ -274,6 +283,13 @@ def _ensure_install_code_persistence_table(conn: sqlite3.Connection) -> None:
                 ADD COLUMN last_used_at TEXT
             """
         )
+    if "site_id" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE enrollment_install_codes_persistent
+                ADD COLUMN site_id INTEGER
+            """
+        )
 
 
 def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
@@ -287,6 +303,7 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
             hostname_claimed TEXT NOT NULL,
             ssl_key_fingerprint_claimed TEXT NOT NULL,
             enrollment_code_id TEXT NOT NULL,
+            site_id INTEGER,
             status TEXT NOT NULL,
             client_nonce TEXT NOT NULL,
             server_nonce TEXT NOT NULL,
@@ -297,6 +314,16 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    cur.execute("PRAGMA table_info(device_approvals)")
+    columns = {row[1] for row in cur.fetchall()}
+    if "site_id" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE device_approvals
+                ADD COLUMN site_id INTEGER
+            """
+        )
+
     cur.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_da_status
@@ -307,6 +334,12 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_da_fp_status
             ON device_approvals(ssl_key_fingerprint_claimed, status)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_da_site
+            ON device_approvals(site_id)
         """
     )
 

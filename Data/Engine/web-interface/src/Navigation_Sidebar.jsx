@@ -24,7 +24,6 @@ import {
   VpnKey as CredentialIcon,
   PersonOutline as UserIcon,
   GitHub as GitHubIcon,
-  Key as KeyIcon,
   Dashboard as PageTemplateIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
   ReceiptLong as LogsIcon,
@@ -61,7 +60,6 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         "winrm_devices",
         "agent_devices",
         "admin_device_approvals",
-        "admin_enrollment_codes",
       ].includes(currentPage),
       automation: ["jobs", "assemblies", "community"].includes(currentPage),
       filters: ["filters", "groups"].includes(currentPage),
@@ -193,12 +191,6 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             icon={<AdminPanelSettingsIcon fontSize="small" />}
             label="Device Approvals"
             pageKey="admin_device_approvals"
-          />
-          <NavItem
-            icon={<KeyIcon fontSize="small" />}
-            label="Enrollment Codes"
-            pageKey="admin_enrollment_codes"
-            indent
           />
           <NavItem
             icon={<DevicesIcon fontSize="small" />}

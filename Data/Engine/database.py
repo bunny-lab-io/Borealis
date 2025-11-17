@@ -10,8 +10,11 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import sqlite3
 import time
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -22,6 +25,15 @@ _DEFAULT_ADMIN_HASH = (
     "e6c83b282aeb2e022844595721cc00bbda47cb24537c1779f9bb84f04039e167"
     "6e6ba8573e588da1052510e3aa0a32a9e55879ae22b0c2d62136fc0a3e85f8bb"
 )
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _generate_install_code() -> str:
+    raw = secrets.token_hex(16).upper()
+    return "-".join(raw[i : i + 4] for i in range(0, len(raw), 4))
 
 
 def initialise_engine_database(database_path: str, *, logger: Optional[logging.Logger] = None) -> None:
@@ -46,6 +58,7 @@ def initialise_engine_database(database_path: str, *, logger: Optional[logging.L
         _ensure_activity_history(conn, logger=logger)
         _ensure_device_list_views(conn, logger=logger)
         _ensure_sites(conn, logger=logger)
+        _ensure_site_enrollment_codes(conn, logger=logger)
         _ensure_users_table(conn, logger=logger)
         _ensure_default_admin(conn, logger=logger)
         _ensure_ansible_recaps(conn, logger=logger)
@@ -92,7 +105,8 @@ def _restore_persisted_enrollment_codes(conn: sqlite3.Connection, *, logger: Opt
                 used_by_guid,
                 max_uses,
                 use_count,
-                last_used_at
+                last_used_at,
+                site_id
             )
             SELECT
                 p.id,
@@ -103,7 +117,8 @@ def _restore_persisted_enrollment_codes(conn: sqlite3.Connection, *, logger: Opt
                 p.used_by_guid,
                 p.max_uses,
                 p.last_known_use_count,
-                p.last_used_at
+                p.last_used_at,
+                p.site_id
               FROM enrollment_install_codes_persistent AS p
              WHERE p.is_active = 1
             ON CONFLICT(id) DO UPDATE
@@ -114,7 +129,8 @@ def _restore_persisted_enrollment_codes(conn: sqlite3.Connection, *, logger: Opt
                       used_by_guid = excluded.used_by_guid,
                       max_uses = excluded.max_uses,
                       use_count = excluded.use_count,
-                      last_used_at = excluded.last_used_at
+                      last_used_at = excluded.last_used_at,
+                      site_id = excluded.site_id
             """
         )
         conn.commit()
@@ -185,7 +201,8 @@ def _ensure_sites(conn: sqlite3.Connection, *, logger: Optional[logging.Logger])
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL,
                 description TEXT,
-                created_at INTEGER
+                created_at INTEGER,
+                enrollment_code_id TEXT
             )
             """
         )
@@ -199,9 +216,154 @@ def _ensure_sites(conn: sqlite3.Connection, *, logger: Optional[logging.Logger])
             )
             """
         )
+        cur.execute("PRAGMA table_info(sites)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "enrollment_code_id" not in columns:
+            cur.execute("ALTER TABLE sites ADD COLUMN enrollment_code_id TEXT")
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure site tables: %s", exc, exc_info=True)
+        else:
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_site_enrollment_codes(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, enrollment_code_id FROM sites")
+        sites = cur.fetchall()
+        if not sites:
+            return
+
+        now = datetime.now(tz=timezone.utc)
+        long_expiry = _iso(now + timedelta(days=3650))
+        for site_id, current_code_id in sites:
+            active_code_id: Optional[str] = None
+            if current_code_id:
+                cur.execute(
+                    "SELECT id, site_id FROM enrollment_install_codes WHERE id = ?",
+                    (current_code_id,),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    active_code_id = current_code_id
+                    if existing[1] is None:
+                        cur.execute(
+                            "UPDATE enrollment_install_codes SET site_id = ? WHERE id = ?",
+                            (site_id, current_code_id),
+                        )
+                        cur.execute(
+                            "UPDATE enrollment_install_codes_persistent SET site_id = COALESCE(site_id, ?) WHERE id = ?",
+                            (site_id, current_code_id),
+                        )
+
+            if not active_code_id:
+                cur.execute(
+                    """
+                    SELECT id, code, created_at, expires_at, max_uses, last_known_use_count, last_used_at, site_id
+                      FROM enrollment_install_codes_persistent
+                     WHERE site_id = ? AND is_active = 1
+                     ORDER BY datetime(created_at) DESC
+                     LIMIT 1
+                    """,
+                    (site_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    active_code_id = row[0]
+                    if row[7] is None:
+                        cur.execute(
+                            "UPDATE enrollment_install_codes_persistent SET site_id = ? WHERE id = ?",
+                            (site_id, active_code_id),
+                        )
+                    cur.execute(
+                        """
+                        INSERT OR REPLACE INTO enrollment_install_codes (
+                            id,
+                            code,
+                            expires_at,
+                            created_by_user_id,
+                            used_at,
+                            used_by_guid,
+                            max_uses,
+                            use_count,
+                            last_used_at,
+                            site_id
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            row[0],
+                            row[1],
+                            row[3] or long_expiry,
+                            "system",
+                            None,
+                            None,
+                            row[4] or 0,
+                            row[5] or 0,
+                            row[6],
+                            site_id,
+                        ),
+                    )
+
+            if not active_code_id:
+                new_id = str(uuid.uuid4())
+                code_value = _generate_install_code()
+                issued_at = _iso(now)
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO enrollment_install_codes (
+                        id,
+                        code,
+                        expires_at,
+                        created_by_user_id,
+                        used_at,
+                        used_by_guid,
+                        max_uses,
+                        use_count,
+                        last_used_at,
+                        site_id
+                    )
+                    VALUES (?, ?, ?, 'system', NULL, NULL, 0, 0, NULL, ?)
+                    """,
+                    (new_id, code_value, long_expiry, site_id),
+                )
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO enrollment_install_codes_persistent (
+                        id,
+                        code,
+                        created_at,
+                        expires_at,
+                        created_by_user_id,
+                        used_at,
+                        used_by_guid,
+                        max_uses,
+                        last_known_use_count,
+                        last_used_at,
+                        is_active,
+                        archived_at,
+                        consumed_at,
+                        site_id
+                    )
+                    VALUES (?, ?, ?, ?, 'system', NULL, NULL, 0, 0, NULL, 1, NULL, NULL, ?)
+                    """,
+                    (new_id, code_value, issued_at, long_expiry, site_id),
+                )
+                active_code_id = new_id
+
+            if active_code_id and active_code_id != current_code_id:
+                cur.execute(
+                    "UPDATE sites SET enrollment_code_id = ? WHERE id = ?",
+                    (active_code_id, site_id),
+                )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        if logger:
+            logger.error("Failed to ensure site enrollment codes: %s", exc, exc_info=True)
         else:
             raise
     finally:

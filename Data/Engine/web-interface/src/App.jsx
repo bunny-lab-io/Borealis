@@ -48,7 +48,6 @@ import GithubAPIToken from "./Access_Management/Github_API_Token.jsx";
 import ServerInfo from "./Admin/Server_Info.jsx";
 import PageTemplate from "./Admin/Page_Template.jsx";
 import LogManagement from "./Admin/Log_Management.jsx";
-import EnrollmentCodes from "./Devices/Enrollment_Codes.jsx";
 import DeviceApprovals from "./Devices/Device_Approvals.jsx";
 
 // Networking Imports
@@ -230,8 +229,6 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return "/admin/server_info";
       case "page_template":
         return "/admin/page_template";        
-      case "admin_enrollment_codes":
-        return "/admin/enrollment-codes";
       case "admin_device_approvals":
         return "/admin/device-approvals";
       default:
@@ -286,7 +283,6 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       if (path === "/access_management/credentials") return { page: "access_credentials", options: {} };
       if (path === "/admin/server_info") return { page: "server_info", options: {} };
       if (path === "/admin/page_template") return { page: "page_template", options: {} };
-      if (path === "/admin/enrollment-codes") return { page: "admin_enrollment_codes", options: {} };
       if (path === "/admin/device-approvals") return { page: "admin_device_approvals", options: {} };
       return { page: "devices", options: {} };
     } catch {
@@ -511,10 +507,6 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "page_template":
         items.push({ label: "Developer Tools" });
         items.push({ label: "Page Template", page: "page_template" });
-        break;
-      case "admin_enrollment_codes":
-        items.push({ label: "Admin Settings", page: "server_info" });
-        items.push({ label: "Installer Codes", page: "admin_enrollment_codes" });
         break;
       case "admin_device_approvals":
         items.push({ label: "Admin Settings", page: "server_info" });
@@ -1045,7 +1037,6 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
   useEffect(() => {
     const requiresAdmin = currentPage === 'server_info'
-      || currentPage === 'admin_enrollment_codes'
       || currentPage === 'admin_device_approvals'
       || currentPage === 'access_credentials'
       || currentPage === 'access_github_token'
@@ -1198,9 +1189,6 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
       case "page_template":
         return <PageTemplate isAdmin={isAdmin} />;
-
-      case "admin_enrollment_codes":
-        return <EnrollmentCodes />;
 
       case "admin_device_approvals":
         return <DeviceApprovals />;
