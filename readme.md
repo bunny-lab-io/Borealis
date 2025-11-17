@@ -61,6 +61,18 @@ Site List:
 2) (*Optional*) Install the Agent (*elevated PowerShell*):
    - Windows: `./Borealis.ps1 -Agent`
 
+## Automated Agent Enrollment
+If you plan on deploying the agent via something like a Group Policy or other existing automation platform, you can use the following commandline arguments to install an agent automatically with an enrollment code pre-injected.  *The enrollment code below is simply an example*.
+
+**Windows**:
+```powershell
+.\Borealis.ps1 -Agent -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
+```
+**Linux**:
+```sh
+./Borealis.sh --agent --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
+```
+
 ### Reverse Proxy Configuration
 Traefik Dynamic Config: `Replace Service URL with actual IP of Borealis server`
 ```yml
