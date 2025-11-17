@@ -10,7 +10,7 @@ param(
     [switch]$EngineTests,
     [switch]$EngineProduction,
     [switch]$EngineDev,
-    [string]$InstallerCode = ''
+    [string]$EnrollmentCode = ''
 )
 
 # Preselect menu choices from CLI args (optional)
@@ -1034,6 +1034,7 @@ function InstallOrUpdate-BorealisAgent {
             config_file_watcher_interval = 2
             agent_id = ''
             regions = @{}
+            enrollment_code = ''
             installer_code = ''
         }
         $config = [ordered]@{}
@@ -1058,40 +1059,44 @@ function InstallOrUpdate-BorealisAgent {
             $config['regions'] = @{}
         }
 
-        $existingInstallerCode = ''
-        if ('installer_code' -in $config.Keys -and $null -ne $config['installer_code']) {
-            $existingInstallerCode = [string]$config['installer_code']
+        $existingEnrollmentCode = ''
+        if ('enrollment_code' -in $config.Keys -and $null -ne $config['enrollment_code']) {
+            $existingEnrollmentCode = [string]$config['enrollment_code']
+        } elseif ('installer_code' -in $config.Keys -and $null -ne $config['installer_code']) {
+            $existingEnrollmentCode = [string]$config['installer_code']
         }
 
-        $providedInstallerCode = ''
-        if ($InstallerCode -and $InstallerCode.Trim()) {
-            $providedInstallerCode = $InstallerCode.Trim()
-        } elseif ($env:BOREALIS_INSTALLER_CODE -and $env:BOREALIS_INSTALLER_CODE.Trim()) {
-            $providedInstallerCode = $env:BOREALIS_INSTALLER_CODE.Trim()
+        $providedEnrollmentCode = ''
+        if ($EnrollmentCode -and $EnrollmentCode.Trim()) {
+            $providedEnrollmentCode = $EnrollmentCode.Trim()
+        } elseif ($env:BOREALIS_ENROLLMENT_CODE -and $env:BOREALIS_ENROLLMENT_CODE.Trim()) {
+            $providedEnrollmentCode = $env:BOREALIS_ENROLLMENT_CODE.Trim()
         }
 
-        if (-not $providedInstallerCode) {
-            $defaultDisplay = if ($existingInstallerCode) { $existingInstallerCode } else { '' }
-            Write-Host ""; Write-Host "Set an installer code for agent enrollment." -ForegroundColor DarkYellow
-            $inputCode = Read-Host ("Installer Code [{0}] (e.g. A4E1-••••-••••-••••-••••-••••-••••-350A)" -f $defaultDisplay)
+        if (-not $providedEnrollmentCode) {
+            $defaultDisplay = if ($existingEnrollmentCode) { $existingEnrollmentCode } else { '' }
+            Write-Host ""; Write-Host "Set an enrollment code for agent enrollment." -ForegroundColor DarkYellow
+            $inputCode = Read-Host ("Enrollment Code [{0}] (e.g. A4E1-••••-••••-••••-••••-••••-••••-350A)" -f $defaultDisplay)
             if ($inputCode -and $inputCode.Trim()) {
-                $providedInstallerCode = $inputCode.Trim()
+                $providedEnrollmentCode = $inputCode.Trim()
             } elseif ($defaultDisplay) {
-                $providedInstallerCode = $defaultDisplay
+                $providedEnrollmentCode = $defaultDisplay
             } else {
-                $providedInstallerCode = ''
+                $providedEnrollmentCode = ''
             }
         }
 
-        $config['installer_code'] = $providedInstallerCode
+        $config['enrollment_code'] = $providedEnrollmentCode
+        # Retain legacy key to avoid breaking existing agent readers
+        $config['installer_code'] = $providedEnrollmentCode
 
         try {
             $configJson = $config | ConvertTo-Json -Depth 10
             [System.IO.File]::WriteAllText($configPath, $configJson, $utf8NoBom)
-            if ($providedInstallerCode) {
-                Write-Host "Installer code saved to agent_settings.json." -ForegroundColor Green
+            if ($providedEnrollmentCode) {
+                Write-Host "Enrollment code saved to agent_settings.json." -ForegroundColor Green
             } else {
-                Write-Host "Installer code cleared in agent_settings.json." -ForegroundColor Yellow
+                Write-Host "Enrollment code cleared in agent_settings.json." -ForegroundColor Yellow
             }
         } catch {
             Write-AgentLog -FileName 'Install.log' -Message ("[CONFIG] Failed to persist agent_settings.json: {0}" -f $_.Exception.Message)
