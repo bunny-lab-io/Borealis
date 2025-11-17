@@ -1,6 +1,6 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Devices/Device_Details.jsx
 
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Box,
   Tabs,
@@ -268,7 +268,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [assemblyNameMap, setAssemblyNameMap] = useState({});
-  const softwareGridApiRef = useRef(null);
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
     // Prefer status provided by the device list row if available
@@ -717,19 +716,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
   }, []);
 
   const softwareRows = useMemo(() => details.software || [], [details.software]);
-  const handleSoftwareGridReady = useCallback(
-    (params) => {
-      softwareGridApiRef.current = params.api;
-      params.api.setQuickFilter(softwareSearch);
-    },
-    [softwareSearch]
-  );
-
-  useEffect(() => {
-    if (softwareGridApiRef.current) {
-      softwareGridApiRef.current.setQuickFilter(softwareSearch);
-    }
-  }, [softwareSearch]);
 
   const getSoftwareRowId = useCallback(
     (params) => `${params.data?.name || "software"}-${params.data?.version || ""}-${params.rowIndex}`,
@@ -1260,7 +1246,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
           paginationPageSize={20}
           paginationPageSizeSelector={[20, 50, 100]}
           animateRows
-          onGridReady={handleSoftwareGridReady}
+          quickFilterText={softwareSearch}
           getRowId={getSoftwareRowId}
           components={GRID_COMPONENTS}
           theme={myTheme}
