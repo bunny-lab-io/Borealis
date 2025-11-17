@@ -5,7 +5,7 @@
 # - Bundles portable NodeJS into Dependencies/NodeJS to keep a known-good version (no root required)
 # - Mirrors Windows flow: create Engine venv, stage Data/Engine, stage web-interface, Vite dev or prod build, Flask launch
 # - Supports flags: --server/--agent (agent kept for compatibility), --vite/--flask, --quick, --engine-tests,
-#                   --EngineProduction, --EngineDev (auto-select server mode), plus interactive menu
+#                   --EngineProduction, --EngineDev (auto-select server mode), --enrollmentcode, plus interactive menu
 # NOTE: This script focuses on ENGINE parity. Agent paths remain but are not the goal here.
 
 set -o errexit
@@ -33,7 +33,7 @@ QUICK_FLAG=0
 ENGINE_TESTS_FLAG=0
 ENGINE_PROD_FLAG=0
 ENGINE_DEV_FLAG=0
-INSTALLER_CODE=""
+ENROLLMENT_CODE=""
 
 while (( "$#" )); do
   case "$1" in
@@ -45,7 +45,8 @@ while (( "$#" )); do
     -EngineTests|--engine-tests) ENGINE_TESTS_FLAG=1 ;;
     -EngineProduction|--engine-production) ENGINE_PROD_FLAG=1 ;;
     -EngineDev|--engine-dev) ENGINE_DEV_FLAG=1 ;;
-    -InstallerCode|--installer-code) shift; INSTALLER_CODE="${1:-}" ;;
+    # Enrollment: prefer lowercase --enrollmentcode, keep old alias for compatibility
+    -EnrollmentCode|--EnrollmentCode|--enrollmentcode|--enrollment-code) shift; ENROLLMENT_CODE="${1:-}" ;;
     *) ;; # ignore unknown for flexibility
   esac
   shift || true
@@ -84,6 +85,126 @@ write_vite_log() {
   local msg="$1"; local svc="${2:-vite-dev}"
   local logdir; logdir=$(ensure_engine_log_dir)
   printf "%s-%s-%s\n" "$(date +%FT%T)" "$svc" "$msg" >> "${logdir}/vite.log"
+}
+
+# ---- Agent (settings-only parity) ----
+configure_agent_settings() {
+  echo -e "${GREEN}Configuring Borealis Agent settings...${RESET}"
+  local settings_dir="${SCRIPT_DIR}/Agent/Borealis/Settings"
+  local legacy_settings_dir="${SCRIPT_DIR}/Agent/Settings"
+  local server_url_path="${settings_dir}/server_url.txt"
+  local config_path="${settings_dir}/agent_settings.json"
+
+  mkdir -p "${settings_dir}"
+  if [[ ! -f "${server_url_path}" && -f "${legacy_settings_dir}/server_url.txt" ]]; then
+    cp -f "${legacy_settings_dir}/server_url.txt" "${server_url_path}" 2>/dev/null || true
+  fi
+
+  local default_url="https://localhost:5000"
+  local current_url="${default_url}"
+  if [[ -n "${BOREALIS_SERVER_URL:-}" ]]; then
+    current_url="${BOREALIS_SERVER_URL}"
+  elif [[ -f "${server_url_path}" ]]; then
+    current_url="$(head -n 1 "${server_url_path}" || echo "${default_url}")"
+  fi
+
+  if [[ -t 0 ]]; then
+    read -r -p "Server URL [${current_url}]: " input_url
+  else
+    input_url=""
+  fi
+  input_url="${input_url:-${current_url}}"
+  input_url="$(echo -n "${input_url}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if [[ -z "${input_url}" ]]; then input_url="${default_url}"; fi
+  printf "%s" "${input_url}" > "${server_url_path}"
+
+  local provided_code="${ENROLLMENT_CODE:-}"
+  if [[ -z "${provided_code}" && -n "${BOREALIS_ENROLLMENT_CODE:-}" ]]; then
+    provided_code="${BOREALIS_ENROLLMENT_CODE}"
+  fi
+
+  if [[ -z "${provided_code}" ]]; then
+    local existing_code=""
+    if [[ -f "${config_path}" ]]; then
+      if command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
+        existing_code="$(CONFIG_PATH="${config_path}" python3 - <<'PY' 2>/dev/null || CONFIG_PATH="${config_path}" python - <<'PY' 2>/dev/null || true
+import json, os
+path = os.environ.get("CONFIG_PATH")
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if isinstance(data, dict):
+        print(data.get("enrollment_code") or data.get("installer_code") or "")
+except Exception:
+    pass
+PY
+        )"
+      fi
+    fi
+    existing_code="${existing_code:-}"
+    if [[ -t 0 ]]; then
+      read -r -p "Enrollment Code [${existing_code}]: " input_code
+    else
+      input_code=""
+    fi
+    if [[ -n "${input_code// }" ]]; then
+      provided_code="${input_code}"
+    elif [[ -n "${existing_code}" ]]; then
+      provided_code="${existing_code}"
+    else
+      provided_code=""
+    fi
+  fi
+
+  local py_bin
+  py_bin="$(command -v python3 || command -v python || true)"
+
+  if [[ -n "${py_bin}" ]]; then
+    CONFIG_PATH="${config_path}" ENROLLMENT_CODE_VALUE="${provided_code}" "${py_bin}" - <<'PY'
+import json, os
+
+path = os.environ["CONFIG_PATH"]
+code = os.environ.get("ENROLLMENT_CODE_VALUE", "")
+defaults = {
+    "config_file_watcher_interval": 2,
+    "agent_id": "",
+    "regions": {},
+    "enrollment_code": "",
+    "installer_code": "",
+}
+data = defaults.copy()
+if os.path.exists(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            existing = json.load(fh)
+        if isinstance(existing, dict):
+            data.update(existing)
+    except Exception:
+        pass
+data["enrollment_code"] = code
+data["installer_code"] = code
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh)
+PY
+  else
+    cat > "${config_path}" <<EOF
+{
+  "config_file_watcher_interval": 2,
+  "agent_id": "",
+  "regions": {},
+  "enrollment_code": "${provided_code}",
+  "installer_code": "${provided_code}"
+}
+EOF
+  fi
+
+  if [[ -n "${provided_code}" ]]; then
+    echo -e "${GREEN}Enrollment code saved to agent_settings.json.${RESET}"
+  else
+    echo -e "${YELLOW}Enrollment code cleared in agent_settings.json.${RESET}"
+  fi
+  echo -e "${INFO} Agent runtime remains Windows-first; Linux flow configures settings only." 
 }
 
 # ---- Dependency Installation (Linux) ----
@@ -382,7 +503,7 @@ main_menu() {
   read -r -p "Enter a number: " choice
   case "$choice" in
     1) server_menu ;;
-    2) echo -e "${YELLOW}Agent management is out-of-scope for this parity pass. Use Windows for full Agent features.${RESET}" ;;
+    2) configure_agent_settings ;;
     3) exit 0 ;;
     *) echo -e "${RED}Invalid selection. Exiting...${RESET}"; exit 1 ;;
   esac
@@ -391,6 +512,11 @@ main_menu() {
 # ---- Flag-driven auto-select (parity logic) ----
 if [[ $SERVER_FLAG -eq 1 && $AGENT_FLAG -eq 1 ]]; then
   echo -e "${RED}Cannot use --server and --agent together.${RESET}"; exit 1
+fi
+
+if [[ $AGENT_FLAG -eq 1 ]]; then
+  configure_agent_settings
+  exit $?
 fi
 
 # Auto-select main menu option for Server when EngineProduction/EngineDev provided
