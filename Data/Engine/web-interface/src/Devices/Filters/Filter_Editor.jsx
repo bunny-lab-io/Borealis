@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Paper,
   Box,
@@ -21,7 +21,12 @@ import {
   Add as AddIcon,
   Remove as RemoveIcon,
   Cached as CachedIcon,
+  PlayArrow as PlayIcon,
 } from "@mui/icons-material";
+import { AgGridReact } from "ag-grid-react";
+import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+
+ModuleRegistry.registerModules([AllCommunityModule]);
 
 const AURORA_SHELL = {
   background:
@@ -132,6 +137,25 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
   const [lastEditedTs, setLastEditedTs] = useState(resolveLastEdited(initialFilter));
   const [loadingFilter, setLoadingFilter] = useState(false);
   const [loadError, setLoadError] = useState(null);
+  const [previewRows, setPreviewRows] = useState([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
+  const [previewAppliedAt, setPreviewAppliedAt] = useState(null);
+  const gridRef = useRef(null);
+  const gridTheme = useMemo(
+    () =>
+      themeQuartz.withParams({
+        accentColor: "#8b5cf6",
+        backgroundColor: "#070b1a",
+        browserColorScheme: "dark",
+        fontFamily: { googleFont: "IBM Plex Sans" },
+        foregroundColor: "#f4f7ff",
+        headerFontSize: 13,
+      }),
+    []
+  );
+  const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
+  const iconFontFamily = "'Quartz Regular'";
 
   const applyFilterData = useCallback((filter) => {
     if (!filter) return;
@@ -147,6 +171,161 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
   useEffect(() => {
     applyFilterData(initialFilter);
   }, [applyFilterData, initialFilter]);
+
+  const handleGridReady = useCallback((params) => {
+    gridRef.current = params.api;
+    requestAnimationFrame(() => {
+      try {
+        params.api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
+      } catch {}
+    });
+  }, []);
+
+  const autoSizeGrid = useCallback(() => {
+    if (!gridRef.current || !previewRows.length) return;
+    requestAnimationFrame(() => {
+      try {
+        gridRef.current.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
+      } catch {}
+    });
+  }, [previewRows.length]);
+
+  useEffect(() => {
+    autoSizeGrid();
+  }, [previewRows, autoSizeGrid]);
+
+  const getDeviceField = (device, field) => {
+    const summary = device && typeof device.summary === "object" ? device.summary : {};
+    switch (field) {
+      case "status":
+        return device.status || summary.status || "";
+      case "site":
+        return device.site || device.site_name || summary.site || "";
+      case "hostname":
+        return device.hostname || summary.hostname || "";
+      case "description":
+        return device.description || summary.description || "";
+      case "type":
+        return device.type || summary.type || summary.device_type || device.device_type || "";
+      default:
+        return device[field] || summary[field] || "";
+    }
+  };
+
+  const evaluateCondition = (device, condition) => {
+    const operator = (condition.operator || "contains").toLowerCase();
+    const value = String(condition.value ?? "").trim();
+    const fieldValueRaw = getDeviceField(device, condition.field);
+    const fieldValue = fieldValueRaw == null ? "" : String(fieldValueRaw);
+    const lcField = fieldValue.toLowerCase();
+    const lcValue = value.toLowerCase();
+
+    switch (operator) {
+      case "contains":
+        return lcField.includes(lcValue);
+      case "not_contains":
+        return !lcField.includes(lcValue);
+      case "empty":
+        return lcField.length === 0;
+      case "not_empty":
+        return lcField.length > 0;
+      case "begins_with":
+        return lcField.startsWith(lcValue);
+      case "not_begins_with":
+        return !lcField.startsWith(lcValue);
+      case "ends_with":
+        return lcField.endsWith(lcValue);
+      case "not_ends_with":
+        return !lcField.endsWith(lcValue);
+      case "equals":
+        return lcField === lcValue;
+      case "not_equals":
+        return lcField !== lcValue;
+      default:
+        return false;
+    }
+  };
+
+  const evaluateGroup = (device, group) => {
+    const conditions = group?.conditions || [];
+    if (!conditions.length) return true;
+    let result = evaluateCondition(device, conditions[0]);
+    for (let i = 1; i < conditions.length; i++) {
+      const cond = conditions[i];
+      const joiner = (cond.joinWith || "AND").toUpperCase();
+      const res = evaluateCondition(device, cond);
+      result = joiner === "OR" ? result || res : result && res;
+    }
+    return result;
+  };
+
+  const evaluateCriteria = useCallback(
+    (device) => {
+      if (!groups.length) return true;
+      let result = evaluateGroup(device, groups[0]);
+      for (let i = 1; i < groups.length; i++) {
+        const group = groups[i];
+        const joiner = (group.joinWith || "OR").toUpperCase();
+        const res = evaluateGroup(device, group);
+        result = joiner === "AND" ? result && res : result || res;
+      }
+      return result;
+    },
+    [groups]
+  );
+
+  const applyCriteria = useCallback(async () => {
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const resp = await fetch("/api/devices");
+      if (!resp.ok) {
+        throw new Error(`Failed to load devices (${resp.status})`);
+      }
+      const payload = await resp.json();
+      const list = Array.isArray(payload?.devices) ? payload.devices : [];
+      const filtered = list.filter((d) => evaluateCriteria(d));
+      const rows = filtered.map((d, idx) => ({
+        id: d.agent_guid || d.agent_id || d.hostname || `device-${idx}`,
+        status: getDeviceField(d, "status"),
+        site: getDeviceField(d, "site"),
+        hostname: getDeviceField(d, "hostname"),
+        description: getDeviceField(d, "description"),
+        type: getDeviceField(d, "type"),
+      }));
+      setPreviewRows(rows);
+      setPreviewAppliedAt(new Date());
+    } catch (err) {
+      setPreviewError(err?.message || "Unable to apply criteria");
+      setPreviewRows([]);
+    } finally {
+      setPreviewLoading(false);
+      autoSizeGrid();
+    }
+  }, [autoSizeGrid, evaluateCriteria]);
+
+  const previewColumns = useMemo(
+    () => [
+      { field: "status", headerName: "Status", minWidth: 110, cellClass: "auto-col-tight" },
+      { field: "site", headerName: "Site", minWidth: 140, cellClass: "auto-col-tight" },
+      { field: "hostname", headerName: "Hostname", minWidth: 160, cellClass: "auto-col-tight" },
+      { field: "description", headerName: "Description", minWidth: 200, cellClass: "auto-col-tight" },
+      { field: "type", headerName: "Device Type", minWidth: 140, cellClass: "auto-col-tight" },
+    ],
+    []
+  );
+
+  const defaultPreviewColDef = useMemo(
+    () => ({
+      sortable: true,
+      filter: "agTextColumnFilter",
+      resizable: true,
+      flex: 1,
+      cellClass: "auto-col-tight",
+      suppressMenu: true,
+    }),
+    []
+  );
 
   useEffect(() => {
     if (!initialFilter?.id) return;
@@ -734,6 +913,88 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
           >
             Add Group
           </Button>
+        </Box>
+
+        <Box
+          sx={{
+            background: AURORA_SHELL.glass,
+            border: `1px solid ${AURORA_SHELL.border}`,
+            borderRadius: 2.5,
+            p: 2,
+            boxShadow: "0 18px 38px rgba(3,7,18,0.65)",
+            backdropFilter: "blur(12px)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 1.5,
+          }}
+        >
+          <Stack direction="row" alignItems="center" justifyContent="space-between">
+            <Box>
+              <Typography sx={{ fontWeight: 700 }}>Results</Typography>
+              <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
+                Apply criteria to preview matching devices (20 per page).
+              </Typography>
+              {previewAppliedAt && (
+                <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.85rem" }}>
+                  Last applied: {previewAppliedAt.toLocaleString()}
+                </Typography>
+              )}
+              {previewError ? (
+                <Typography sx={{ color: "#ffb4b4", fontSize: "0.9rem", mt: 0.5 }}>{previewError}</Typography>
+              ) : null}
+            </Box>
+            <Button
+              variant="contained"
+              startIcon={previewLoading ? <CachedIcon /> : <PlayIcon />}
+              onClick={applyCriteria}
+              disabled={previewLoading}
+              sx={gradientButtonSx}
+            >
+              {previewLoading ? "Applying..." : "Apply Criteria"}
+            </Button>
+          </Stack>
+
+          <Box
+            className={gridTheme.themeName}
+            sx={{
+              height: 420,
+              "& .ag-root-wrapper": { borderRadius: 1.5 },
+              "& .ag-cell.auto-col-tight": { paddingLeft: 8, paddingRight: 6 },
+            }}
+            style={{
+              "--ag-icon-font-family": iconFontFamily,
+              "--ag-background-color": "#070b1a",
+              "--ag-foreground-color": "#f4f7ff",
+              "--ag-header-background-color": "#0f172a",
+              "--ag-header-foreground-color": "#cfe0ff",
+              "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+              "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+              "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+              "--ag-border-color": "rgba(125,183,255,0.18)",
+              "--ag-row-border-color": "rgba(125,183,255,0.14)",
+              "--ag-border-radius": "8px",
+              "--ag-checkbox-border-radius": "3px",
+              "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
+              "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
+              "--ag-checkbox-checked-color": "#7dd3fc",
+            }}
+          >
+            <AgGridReact
+              rowData={previewRows}
+              columnDefs={previewColumns}
+              defaultColDef={defaultPreviewColDef}
+              animateRows
+              rowHeight={46}
+              headerHeight={44}
+              suppressCellFocus
+              overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>Apply criteria to preview devices.</span>"
+              onGridReady={handleGridReady}
+              theme={gridTheme}
+              pagination
+              paginationPageSize={20}
+              style={{ width: "100%", height: "100%", fontFamily: gridFontFamily }}
+            />
+          </Box>
         </Box>
 
         {saveError ? (
