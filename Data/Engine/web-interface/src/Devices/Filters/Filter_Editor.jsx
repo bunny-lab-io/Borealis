@@ -22,6 +22,8 @@ import {
   Remove as RemoveIcon,
   Cached as CachedIcon,
   PlayArrow as PlayIcon,
+  CheckCircle as CheckCircleIcon,
+  HighlightOff as HighlightOffIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
@@ -106,6 +108,20 @@ const buildEmptyGroup = (joinWith = null) => ({
   conditions: [buildEmptyCondition()],
 });
 
+const statusTokenTheme = {
+  Online: { background: "rgba(74,222,128,0.18)", color: "#bbf7d0", icon: CheckCircleIcon },
+  Offline: { background: "rgba(239,68,68,0.18)", color: "#fecdd3", icon: HighlightOffIcon },
+  default: { background: "rgba(148,163,184,0.2)", color: "#e2e8f0", icon: HighlightOffIcon },
+};
+
+const OS_ICON_MAP = {
+  windows: "fab fa-windows",
+  linux: "fab fa-linux",
+  mac: "fab fa-apple",
+};
+
+const AUTO_SIZE_COLUMNS = ["status", "site", "hostname", "description", "type", "os"];
+
 const resolveApplyAll = (filter) => Boolean(filter?.applyToAllSites ?? filter?.apply_to_all_sites);
 
 const resolveLastEdited = (filter) =>
@@ -117,10 +133,28 @@ const resolveSiteScope = (filter) => {
   return normalized === "scoped" ? "scoped" : "global";
 };
 
-const resolveGroups = (filter) => {
-  const candidate = filter?.groups || filter?.raw?.groups;
-  if (candidate && Array.isArray(candidate) && candidate.length) return candidate;
-  return [buildEmptyGroup()];
+const normalizeGroupsForUI = (rawGroups) => {
+  if (!Array.isArray(rawGroups) || !rawGroups.length) {
+    return [buildEmptyGroup()];
+  }
+  return rawGroups.map((g, gIdx) => {
+    const groupId = g.id || genId("group");
+    const conditions = Array.isArray(g.conditions) ? g.conditions : [];
+    const normalizedConditions = conditions.length
+      ? conditions.map((c, cIdx) => ({
+          id: c.id || genId("condition"),
+          field: c.field || DEVICE_FIELDS[0].value,
+          operator: c.operator || "contains",
+          value: c.value ?? "",
+          joinWith: cIdx === 0 ? null : c.joinWith || "AND",
+        }))
+      : [buildEmptyCondition()];
+    return {
+      id: groupId,
+      joinWith: gIdx === 0 ? null : g.joinWith || "OR",
+      conditions: normalizedConditions,
+    };
+  });
 };
 
 export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved }) {
@@ -129,7 +163,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
   const [scope, setScope] = useState(initialScope === "scoped" ? "site" : "global");
   const [applyToAllSites, setApplyToAllSites] = useState(initialScope !== "scoped");
   const [targetSite, setTargetSite] = useState(initialFilter?.site || initialFilter?.siteName || "");
-  const [groups, setGroups] = useState(resolveGroups(initialFilter));
+  const [groups, setGroups] = useState(normalizeGroupsForUI(initialFilter?.groups || initialFilter?.raw?.groups));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [sites, setSites] = useState([]);
@@ -164,7 +198,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
     setScope(resolvedScope === "scoped" ? "site" : "global");
     setApplyToAllSites(resolvedScope !== "scoped");
     setTargetSite(filter?.site || filter?.site_scope || filter?.siteName || filter?.site_name || "");
-    setGroups(resolveGroups(filter));
+    setGroups(normalizeGroupsForUI(filter?.groups || filter?.raw?.groups));
     setLastEditedTs(resolveLastEdited(filter));
   }, []);
 
@@ -205,6 +239,8 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
         return device.hostname || summary.hostname || "";
       case "description":
         return device.description || summary.description || "";
+      case "os":
+        return device.os || summary.os || summary.operating_system || "";
       case "type":
         return device.type || summary.type || summary.device_type || device.device_type || "";
       default:
@@ -292,6 +328,8 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
         hostname: getDeviceField(d, "hostname"),
         description: getDeviceField(d, "description"),
         type: getDeviceField(d, "type"),
+        os: getDeviceField(d, "os"),
+        raw: d,
       }));
       setPreviewRows(rows);
       setPreviewAppliedAt(new Date());
@@ -306,11 +344,92 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
 
   const previewColumns = useMemo(
     () => [
-      { field: "status", headerName: "Status", minWidth: 110, cellClass: "auto-col-tight" },
+      {
+        field: "status",
+        headerName: "Status",
+        minWidth: 120,
+        cellRenderer: (params) => {
+          const status = params.value || "";
+          const theme = statusTokenTheme[status] || statusTokenTheme.default;
+          const Icon = theme.icon || CheckCircleIcon;
+          return (
+            <Box
+              component="span"
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 0.75,
+                px: 1.5,
+                py: 0.4,
+                borderRadius: 999,
+                backgroundColor: theme.background,
+                color: theme.color,
+                fontWeight: 600,
+                fontSize: "0.9rem",
+              }}
+            >
+              <Icon sx={{ fontSize: 18 }} />
+              {status || "Unknown"}
+            </Box>
+          );
+        },
+        cellClass: "auto-col-tight",
+      },
       { field: "site", headerName: "Site", minWidth: 140, cellClass: "auto-col-tight" },
-      { field: "hostname", headerName: "Hostname", minWidth: 160, cellClass: "auto-col-tight" },
-      { field: "description", headerName: "Description", minWidth: 200, cellClass: "auto-col-tight" },
+      {
+        field: "hostname",
+        headerName: "Hostname",
+        minWidth: 180,
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => {
+          const name = params.value || "";
+          const raw = params.data?.raw;
+          const device = raw || {};
+          const deviceId =
+            device?.agent_guid ||
+            device?.agent_id ||
+            device?.id ||
+            device?.hostname ||
+            device?.summary?.agent_guid ||
+            device?.summary?.hostname;
+          const href = deviceId ? `/device/${encodeURIComponent(deviceId)}` : "#";
+          return (
+            <a
+              href={href}
+              onClick={(e) => {
+                if (href === "#") return;
+                e.preventDefault();
+                window.history.pushState({}, "", href);
+                window.dispatchEvent(new PopStateEvent("popstate"));
+              }}
+              style={{ color: "#7dd3fc", textDecoration: "none", fontWeight: 600 }}
+            >
+              {name}
+            </a>
+          );
+        },
+      },
+      { field: "description", headerName: "Description", minWidth: 220, cellClass: "auto-col-tight" },
       { field: "type", headerName: "Device Type", minWidth: 140, cellClass: "auto-col-tight" },
+      {
+        field: "os",
+        headerName: "OS",
+        minWidth: 170,
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => {
+          const value = params.value || "";
+          const key = String(value || "").toLowerCase();
+          const iconClass =
+            OS_ICON_MAP[key] ||
+            (key.includes("mac") || key.includes("os x") ? OS_ICON_MAP.mac : key.includes("win") ? OS_ICON_MAP.windows : key.includes("linux") ? OS_ICON_MAP.linux : null);
+          return (
+            <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
+              {iconClass ? <i className={iconClass} style={{ color: "#a5e0ff" }} /> : null}
+              <span>{value || "Unknown"}</span>
+            </Box>
+          );
+        },
+      },
     ],
     []
   );
@@ -955,12 +1074,12 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
           </Stack>
 
           <Box
-            className={gridTheme.themeName}
-            sx={{
-              height: 420,
-              "& .ag-root-wrapper": { borderRadius: 1.5 },
-              "& .ag-cell.auto-col-tight": { paddingLeft: 8, paddingRight: 6 },
-            }}
+          className={gridTheme.themeName}
+          sx={{
+            height: 420,
+            "& .ag-root-wrapper": { borderRadius: 1.5 },
+            "& .ag-cell.auto-col-tight": { paddingLeft: 2, paddingRight: 2 },
+          }}
             style={{
               "--ag-icon-font-family": iconFontFamily,
               "--ag-background-color": "#070b1a",
