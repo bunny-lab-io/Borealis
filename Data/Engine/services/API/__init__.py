@@ -40,10 +40,11 @@ from .assemblies.execution import register_execution
 from .devices import routes as device_routes
 from .devices.approval import register_admin_endpoints
 from .devices.management import register_management
+from .filters import management as filters_management
 from .scheduled_jobs import management as scheduled_jobs_management
 from .server import info as server_info, log_management
 
-DEFAULT_API_GROUPS: Sequence[str] = ("core", "auth", "tokens", "enrollment", "devices", "server", "assemblies", "scheduled_jobs")
+DEFAULT_API_GROUPS: Sequence[str] = ("core", "auth", "tokens", "enrollment", "devices", "filters", "server", "assemblies", "scheduled_jobs")
 
 _SERVER_SCOPE_PATTERN = re.compile(r"\\b(?:scope|context|agent_context)=([A-Za-z0-9_-]+)", re.IGNORECASE)
 _SERVER_AGENT_ID_PATTERN = re.compile(r"\\bagent_id=([^\\s,]+)", re.IGNORECASE)
@@ -265,6 +266,9 @@ def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
     register_admin_endpoints(app, adapters)
     device_routes.register_agents(app, adapters)
 
+def _register_filters(app: Flask, adapters: EngineServiceAdapters) -> None:
+    filters_management.register_filters(app, adapters)
+
 
 def _register_scheduled_jobs(app: Flask, adapters: EngineServiceAdapters) -> None:
     scheduled_jobs_management.register_management(app, adapters)
@@ -285,6 +289,7 @@ _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, EngineServiceAdapters], None]] 
     "tokens": _register_tokens,
     "enrollment": _register_enrollment,
     "devices": _register_devices,
+    "filters": _register_filters,
     "server": _register_server,
     "assemblies": _register_assemblies,
     "scheduled_jobs": _register_scheduled_jobs,
@@ -309,6 +314,8 @@ def register_api(app: Flask, context: EngineContext) -> None:
 
     enabled_groups: Iterable[str] = context.api_groups or DEFAULT_API_GROUPS
     normalized = [group.strip().lower() for group in enabled_groups if group]
+    if "filters" not in normalized:
+        normalized.append("filters")
     adapters: Optional[EngineServiceAdapters] = None
 
     for group in normalized:

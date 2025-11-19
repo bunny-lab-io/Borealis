@@ -65,6 +65,7 @@ def initialise_engine_database(database_path: str, *, logger: Optional[logging.L
         _ensure_agent_service_accounts(conn, logger=logger)
         _ensure_credentials(conn, logger=logger)
         _ensure_github_token(conn, logger=logger)
+        _ensure_device_filters(conn, database_path=str(path), logger=logger)
         _ensure_scheduled_jobs(conn, logger=logger)
         conn.commit()
     except Exception as exc:  # pragma: no cover - defensive runtime guard
@@ -577,6 +578,122 @@ def _ensure_github_token(conn: sqlite3.Connection, *, logger: Optional[logging.L
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure github_token table: %s", exc, exc_info=True)
+        else:
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_device_filters(
+    conn: sqlite3.Connection, *, database_path: Optional[str] = None, logger: Optional[logging.Logger] = None
+) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_filters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                site_scope TEXT NOT NULL DEFAULT 'global',
+                site_name TEXT,
+                criteria_json TEXT,
+                last_edited_by TEXT,
+                last_edited TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        cur.execute("PRAGMA table_info(device_filters)")
+        columns: Sequence[Sequence[object]] = cur.fetchall()
+        existing = {row[1] for row in columns}
+
+        alterations = [
+            ("site_scope", "ALTER TABLE device_filters ADD COLUMN site_scope TEXT"),
+            ("site_name", "ALTER TABLE device_filters ADD COLUMN site_name TEXT"),
+            ("criteria_json", "ALTER TABLE device_filters ADD COLUMN criteria_json TEXT"),
+            ("last_edited_by", "ALTER TABLE device_filters ADD COLUMN last_edited_by TEXT"),
+            ("last_edited", "ALTER TABLE device_filters ADD COLUMN last_edited TEXT"),
+            ("created_at", "ALTER TABLE device_filters ADD COLUMN created_at TEXT"),
+            ("updated_at", "ALTER TABLE device_filters ADD COLUMN updated_at TEXT"),
+        ]
+        for column, statement in alterations:
+            if column not in existing:
+                cur.execute(statement)
+
+        # Rebuild table if legacy columns are present (scope/apply_to_all_sites)
+        rebuild_needed = "scope" in existing or "apply_to_all_sites" in existing
+        if rebuild_needed:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS device_filters_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    site_scope TEXT NOT NULL DEFAULT 'global',
+                    site_name TEXT,
+                    criteria_json TEXT,
+                    last_edited_by TEXT,
+                    last_edited TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                SELECT id, name, scope, apply_to_all_sites, site_name, site_scope, criteria_json,
+                       last_edited_by, last_edited, created_at, updated_at
+                  FROM device_filters
+                """
+            )
+            rows = cur.fetchall()
+            payloads = []
+            for (
+                pid,
+                name,
+                legacy_scope,
+                apply_all,
+                site_name,
+                site_scope,
+                criteria_json,
+                last_edited_by,
+                last_edited,
+                created_at,
+                updated_at,
+            ) in rows:
+                basis = (site_scope or legacy_scope or "global")
+                basis = str(basis).lower()
+                resolved_scope = "global" if basis == "global" or bool(apply_all) else "scoped"
+                payloads.append(
+                    (
+                        pid,
+                        name,
+                        resolved_scope,
+                        site_name,
+                        criteria_json,
+                        last_edited_by,
+                        last_edited,
+                        created_at,
+                        updated_at,
+                    )
+                )
+            if payloads:
+                cur.executemany(
+                    """
+                    INSERT INTO device_filters_new (
+                        id, name, site_scope, site_name, criteria_json,
+                        last_edited_by, last_edited, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    payloads,
+                )
+            cur.execute("DROP TABLE device_filters")
+            cur.execute("ALTER TABLE device_filters_new RENAME TO device_filters")
+
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure device_filters table: %s", exc, exc_info=True)
         else:
             raise
     finally:

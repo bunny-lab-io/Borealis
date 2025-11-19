@@ -62,7 +62,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         "admin_device_approvals",
       ].includes(currentPage),
       automation: ["jobs", "assemblies", "community"].includes(currentPage),
-      filters: ["filters", "groups"].includes(currentPage),
+      filters: ["filters", "filter_editor", "groups"].includes(currentPage),
       access: [
         "access_credentials",
         "access_users",

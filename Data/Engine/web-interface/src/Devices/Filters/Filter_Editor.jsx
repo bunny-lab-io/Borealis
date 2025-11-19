@@ -1,0 +1,755 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Paper,
+  Box,
+  Typography,
+  Button,
+  IconButton,
+  Stack,
+  TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  Switch,
+  Chip,
+  Tooltip,
+  Autocomplete,
+} from "@mui/material";
+import {
+  FilterAlt as HeaderIcon,
+  Save as SaveIcon,
+  Close as CloseIcon,
+  Add as AddIcon,
+  Remove as RemoveIcon,
+  Cached as CachedIcon,
+} from "@mui/icons-material";
+
+const AURORA_SHELL = {
+  background:
+    "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
+    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+  text: "#e2e8f0",
+  subtext: "#94a3b8",
+  border: "rgba(148,163,184,0.35)",
+  glass: "rgba(15,23,42,0.72)",
+};
+
+const gradientButtonSx = {
+  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+  color: "#0b1220",
+  borderRadius: 999,
+  textTransform: "none",
+  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
+  px: 2.4,
+  minWidth: 126,
+  "&:hover": {
+    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
+  },
+};
+
+const DEVICE_FIELDS = [
+  { value: "hostname", label: "Hostname" },
+  { value: "description", label: "Description" },
+  { value: "site", label: "Site" },
+  { value: "os", label: "Operating System" },
+  { value: "type", label: "Device Type" },
+  { value: "status", label: "Status" },
+  { value: "agentVersion", label: "Agent Version" },
+  { value: "lastUser", label: "Last User" },
+  { value: "internalIp", label: "Internal IP" },
+  { value: "externalIp", label: "External IP" },
+  { value: "lastReboot", label: "Last Reboot" },
+  { value: "lastSeen", label: "Last Seen" },
+  { value: "domain", label: "Domain" },
+  { value: "memory", label: "Memory" },
+  { value: "network", label: "Network" },
+  { value: "software", label: "Software" },
+  { value: "storage", label: "Storage" },
+  { value: "cpu", label: "CPU" },
+  { value: "agentId", label: "Agent ID" },
+  { value: "agentGuid", label: "Agent GUID" },
+];
+
+const OPERATORS = [
+  { value: "contains", label: "contains" },
+  { value: "not_contains", label: "does not contain" },
+  { value: "empty", label: "is empty" },
+  { value: "not_empty", label: "is not empty" },
+  { value: "begins_with", label: "begins with" },
+  { value: "not_begins_with", label: "does not begin with" },
+  { value: "ends_with", label: "ends with" },
+  { value: "not_ends_with", label: "does not end with" },
+  { value: "equals", label: "equals" },
+  { value: "not_equals", label: "does not equal" },
+];
+
+const operatorNeedsValue = (op) => !["empty", "not_empty"].includes(op);
+const genId = (prefix) =>
+  `${prefix}-${typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 10)}`;
+
+const buildEmptyCondition = () => ({
+  id: genId("condition"),
+  field: DEVICE_FIELDS[0].value,
+  operator: "contains",
+  value: "",
+  joinWith: "AND",
+});
+
+const buildEmptyGroup = (joinWith = null) => ({
+  id: genId("group"),
+  joinWith,
+  conditions: [buildEmptyCondition()],
+});
+
+const resolveApplyAll = (filter) => Boolean(filter?.applyToAllSites ?? filter?.apply_to_all_sites);
+
+const resolveLastEdited = (filter) =>
+  filter?.lastEdited || filter?.last_edited || filter?.updated_at || filter?.updated || null;
+
+const resolveSiteScope = (filter) => {
+  const raw = filter?.site_scope || filter?.siteScope || filter?.scope || filter?.type;
+  const normalized = String(raw || "").toLowerCase();
+  return normalized === "scoped" ? "scoped" : "global";
+};
+
+const resolveGroups = (filter) => {
+  const candidate = filter?.groups || filter?.raw?.groups;
+  if (candidate && Array.isArray(candidate) && candidate.length) return candidate;
+  return [buildEmptyGroup()];
+};
+
+export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved }) {
+  const [name, setName] = useState(initialFilter?.name || "");
+  const initialScope = resolveSiteScope(initialFilter);
+  const [scope, setScope] = useState(initialScope === "scoped" ? "site" : "global");
+  const [applyToAllSites, setApplyToAllSites] = useState(initialScope !== "scoped");
+  const [targetSite, setTargetSite] = useState(initialFilter?.site || initialFilter?.siteName || "");
+  const [groups, setGroups] = useState(resolveGroups(initialFilter));
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const [sites, setSites] = useState([]);
+  const [loadingSites, setLoadingSites] = useState(false);
+  const [lastEditedTs, setLastEditedTs] = useState(resolveLastEdited(initialFilter));
+  const [loadingFilter, setLoadingFilter] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+
+  const applyFilterData = useCallback((filter) => {
+    if (!filter) return;
+    setName(filter?.name || "");
+    const resolvedScope = resolveSiteScope(filter);
+    setScope(resolvedScope === "scoped" ? "site" : "global");
+    setApplyToAllSites(resolvedScope !== "scoped");
+    setTargetSite(filter?.site || filter?.site_scope || filter?.siteName || filter?.site_name || "");
+    setGroups(resolveGroups(filter));
+    setLastEditedTs(resolveLastEdited(filter));
+  }, []);
+
+  useEffect(() => {
+    applyFilterData(initialFilter);
+  }, [applyFilterData, initialFilter]);
+
+  useEffect(() => {
+    if (!initialFilter?.id) return;
+    const missingGroups = !initialFilter.groups || initialFilter.groups.length === 0;
+    if (!missingGroups) return;
+    let canceled = false;
+    setLoadingFilter(true);
+    setLoadError(null);
+    fetch(`/api/device_filters/${encodeURIComponent(initialFilter.id)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Failed to load filter (${r.status})`))))
+      .then((data) => {
+        if (canceled) return;
+        if (data?.filter) {
+          applyFilterData(data.filter);
+        } else if (data) {
+          applyFilterData(data);
+        }
+      })
+      .catch((err) => {
+        if (canceled) return;
+        setLoadError(err?.message || "Unable to load filter");
+      })
+      .finally(() => {
+        if (!canceled) setLoadingFilter(false);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [applyFilterData, initialFilter]);
+
+  const loadSites = useCallback(async () => {
+    setLoadingSites(true);
+    try {
+      const resp = await fetch("/api/sites");
+      const json = await resp.json().catch(() => []);
+      const siteList = Array.isArray(json?.sites) ? json.sites : Array.isArray(json) ? json : [];
+      const normalized = siteList.map((s, idx) => ({
+        label: s.name || s.site_name || `Site ${idx + 1}`,
+        value: s.id || s.site_id || s.name || s.site_name || idx,
+      }));
+      setSites(normalized);
+    } catch {
+      setSites([]);
+    } finally {
+      setLoadingSites(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSites();
+  }, [loadSites]);
+
+  const updateGroup = useCallback((groupId, updater) => {
+    setGroups((prev) =>
+      prev.map((g) => {
+        if (g.id !== groupId) return g;
+        const next = typeof updater === "function" ? updater(g) : updater;
+        return { ...next };
+      })
+    );
+  }, []);
+
+  const updateCondition = useCallback((groupId, conditionId, updater) => {
+    updateGroup(groupId, (group) => ({
+      ...group,
+      conditions: group.conditions.map((c, idx) => {
+        if (c.id !== conditionId) return c;
+        const updated = typeof updater === "function" ? updater(c, idx) : updater;
+        return { ...updated };
+      }),
+    }));
+  }, [updateGroup]);
+
+  const addCondition = useCallback((groupId) => {
+    updateGroup(groupId, (group) => ({
+      ...group,
+      conditions: [
+        ...group.conditions,
+        { ...buildEmptyCondition(), joinWith: group.conditions.length === 0 ? null : "AND" },
+      ],
+    }));
+  }, [updateGroup]);
+
+  const removeCondition = useCallback((groupId, conditionId) => {
+    updateGroup(groupId, (group) => {
+      const filtered = group.conditions.filter((c) => c.id !== conditionId);
+      return { ...group, conditions: filtered.length ? filtered : [buildEmptyCondition()] };
+    });
+  }, [updateGroup]);
+
+  const addGroup = useCallback((joinWith = "OR") => {
+    setGroups((prev) => [...prev, buildEmptyGroup(prev.length === 0 ? null : joinWith)]);
+  }, []);
+
+  const removeGroup = useCallback((groupId) => {
+    setGroups((prev) => {
+      const filtered = prev.filter((g) => g.id !== groupId);
+      if (!filtered.length) return [buildEmptyGroup()];
+      const next = filtered.map((g, idx) => ({ ...g, joinWith: idx === 0 ? null : g.joinWith || "OR" }));
+      return next;
+    });
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    setSaving(true);
+    setSaveError(null);
+    const siteScope = scope === "site" && !applyToAllSites ? "scoped" : "global";
+    const payload = {
+      id: initialFilter?.id || initialFilter?.filter_id,
+      name: name.trim() || "Unnamed Filter",
+      site_scope: siteScope,
+      site: siteScope === "scoped" ? targetSite : null,
+      groups: groups.map((g, gIdx) => ({
+        join_with: gIdx === 0 ? null : g.joinWith || "OR",
+        conditions: (g.conditions || []).map((c, cIdx) => ({
+          join_with: cIdx === 0 ? null : c.joinWith || "AND",
+          field: c.field,
+          operator: c.operator,
+          value: operatorNeedsValue(c.operator) ? c.value : "",
+        })),
+      })),
+    };
+
+    try {
+      const method = payload.id ? "PUT" : "POST";
+      const url = payload.id ? `/api/device_filters/${encodeURIComponent(payload.id)}` : "/api/device_filters";
+      const resp = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        throw new Error(`Failed to save filter (${resp.status})`);
+      }
+      const json = await resp.json().catch(() => ({}));
+      const saved = json?.filter || json || payload;
+      onSaved?.(saved);
+    } catch (err) {
+      setSaveError(err?.message || "Unable to save filter");
+    } finally {
+      setSaving(false);
+    }
+  }, [applyToAllSites, groups, initialFilter, name, onSaved, scope, targetSite]);
+
+  const renderConditionRow = (groupId, condition, isFirst) => {
+    const label = DEVICE_FIELDS.find((f) => f.value === condition.field)?.label || condition.field;
+    const needsValue = operatorNeedsValue(condition.operator);
+    return (
+      <Box
+        key={condition.id}
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "120px 220px 220px 1fr auto",
+          gap: 1,
+          alignItems: "center",
+          background: "rgba(12,18,35,0.7)",
+          border: `1px solid ${AURORA_SHELL.border}`,
+          borderRadius: 2,
+          px: 1.5,
+          py: 1,
+        }}
+      >
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          {!isFirst && (
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              value={condition.joinWith || "AND"}
+              onChange={(_, val) => {
+                if (!val) return;
+                updateCondition(groupId, condition.id, (c) => ({ ...c, joinWith: val }));
+              }}
+              color="info"
+              sx={{
+                "& .MuiToggleButton-root": {
+                  px: 1.5,
+                  textTransform: "uppercase",
+                  fontSize: "0.7rem",
+                },
+              }}
+            >
+              <ToggleButton value="AND">AND</ToggleButton>
+              <ToggleButton value="OR">OR</ToggleButton>
+            </ToggleButtonGroup>
+          )}
+        </Box>
+
+        <Autocomplete
+          disablePortal
+          options={DEVICE_FIELDS}
+          value={DEVICE_FIELDS.find((f) => f.value === condition.field) || DEVICE_FIELDS[0]}
+          getOptionLabel={(option) => option?.label || ""}
+          isOptionEqualToValue={(option, value) => option?.value === value?.value}
+          onChange={(_, val) =>
+            updateCondition(groupId, condition.id, (c) => ({ ...c, field: val?.value || DEVICE_FIELDS[0].value }))
+          }
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              label="Field"
+              size="small"
+              sx={{
+                "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
+                "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
+              }}
+            />
+          )}
+        />
+
+        <TextField
+          select
+          size="small"
+          label="Operator"
+          value={condition.operator}
+          onChange={(e) =>
+            updateCondition(groupId, condition.id, (c) => ({ ...c, operator: e.target.value }))
+          }
+          SelectProps={{ native: true }}
+          sx={{
+            "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
+            "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
+          }}
+        >
+          {OPERATORS.map((op) => (
+            <option key={op.value} value={op.value}>
+              {op.label}
+            </option>
+          ))}
+        </TextField>
+
+        <TextField
+          size="small"
+          label={`Value${needsValue ? "" : " (ignored)"}`}
+          value={condition.value}
+          onChange={(e) =>
+            updateCondition(groupId, condition.id, (c) => ({ ...c, value: e.target.value }))
+          }
+          disabled={!needsValue}
+          placeholder={needsValue ? `Enter value for ${label}` : "Not needed for this operator"}
+          sx={{
+            "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
+            "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
+          }}
+        />
+
+        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+          <Tooltip title="Add condition">
+            <IconButton size="small" onClick={() => addCondition(groupId)} sx={{ color: "#7dd3fc" }}>
+              <AddIcon fontSize="inherit" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Remove condition">
+            <IconButton
+              size="small"
+              onClick={() => removeCondition(groupId, condition.id)}
+              sx={{ color: "#ffb4b4" }}
+            >
+              <RemoveIcon fontSize="inherit" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      </Box>
+    );
+  };
+
+  return (
+    <Paper
+      elevation={0}
+      sx={{
+        minHeight: "100vh",
+        background: AURORA_SHELL.background,
+        color: AURORA_SHELL.text,
+        p: 3,
+        borderRadius: 0,
+      }}
+    >
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", mb: 3 }}>
+        <Box sx={{ display: "flex", gap: 1.5, alignItems: "flex-start" }}>
+          <Box
+            sx={{
+              width: 36,
+              height: 36,
+              borderRadius: 2,
+              background: "linear-gradient(135deg, rgba(125,211,252,0.28), rgba(192,132,252,0.32))",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#0f172a",
+            }}
+          >
+            <HeaderIcon fontSize="small" />
+          </Box>
+          <Box>
+            <Typography sx={{ fontSize: "1.35rem", fontWeight: 700, lineHeight: 1.2 }}>
+              {initialFilter ? "Edit Device Filter" : "Create Device Filter"}
+            </Typography>
+            <Typography sx={{ color: AURORA_SHELL.subtext, mt: 0.2 }}>
+              Combine grouped criteria with AND/OR logic to build reusable device scopes for automation and reporting.
+            </Typography>
+            {lastEditedTs && (
+              <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.9rem", mt: 0.4 }}>
+                Last edited {new Date(lastEditedTs).toLocaleString()}
+              </Typography>
+            )}
+          </Box>
+        </Box>
+
+        <Stack direction="row" spacing={1}>
+          <Tooltip title="Cancel and return">
+            <Button
+              variant="outlined"
+              startIcon={<CloseIcon />}
+              onClick={() => onCancel?.()}
+              sx={{
+                textTransform: "none",
+                borderColor: AURORA_SHELL.border,
+                color: AURORA_SHELL.text,
+                borderRadius: 999,
+              }}
+            >
+              Cancel
+            </Button>
+          </Tooltip>
+          <Tooltip title="Save filter">
+            <Button
+              variant="contained"
+              startIcon={saving ? <CachedIcon /> : <SaveIcon />}
+              onClick={handleSave}
+              disabled={saving}
+              sx={gradientButtonSx}
+            >
+              {saving ? "Saving..." : "Save Filter"}
+            </Button>
+          </Tooltip>
+        </Stack>
+      </Box>
+
+      {loadingFilter ? (
+        <Box sx={{ mb: 2, color: "#7dd3fc" }}>Loading filter...</Box>
+      ) : null}
+      {loadError ? (
+        <Box
+          sx={{
+            mb: 2,
+            background: "rgba(255,179,179,0.08)",
+            color: "#ffb4b4",
+            border: "1px solid rgba(255,179,179,0.35)",
+            borderRadius: 1.5,
+            p: 1.5,
+          }}
+        >
+          {loadError}
+        </Box>
+      ) : null}
+
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+        }}
+      >
+        <Box
+          sx={{
+            background: AURORA_SHELL.glass,
+            border: `1px solid ${AURORA_SHELL.border}`,
+            borderRadius: 2.5,
+            p: 2,
+            boxShadow: "0 18px 38px rgba(3,7,18,0.65)",
+            backdropFilter: "blur(12px)",
+          }}
+        >
+          <Typography sx={{ fontWeight: 700, mb: 1 }}>Name</Typography>
+          <TextField
+            fullWidth
+            size="small"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Filter name or convention (e.g., RMM targeting)"
+            sx={{
+              "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
+              "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
+            }}
+          />
+        </Box>
+
+        <Box
+          sx={{
+            background: AURORA_SHELL.glass,
+            border: `1px solid ${AURORA_SHELL.border}`,
+            borderRadius: 2.5,
+            p: 2,
+            boxShadow: "0 18px 38px rgba(3,7,18,0.65)",
+            backdropFilter: "blur(12px)",
+          }}
+        >
+          <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1.5}>
+            <Box>
+              <Typography sx={{ fontWeight: 700 }}>Scope</Typography>
+              <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
+                Choose whether this filter is global or pinned to a specific site.
+              </Typography>
+            </Box>
+            <ToggleButtonGroup
+              exclusive
+              value={scope}
+              onChange={(_, val) => {
+                if (!val) return;
+                setScope(val);
+              }}
+              color="info"
+              sx={{
+                background: "rgba(7,12,26,0.8)",
+                borderRadius: 2,
+                "& .MuiToggleButton-root": {
+                  textTransform: "none",
+                  color: AURORA_SHELL.text,
+                  borderColor: "rgba(148,163,184,0.4)",
+                },
+                "& .Mui-selected": {
+                  background: "linear-gradient(135deg, rgba(125,211,252,0.24), rgba(192,132,252,0.22))",
+                  color: "#0b1220",
+                },
+              }}
+            >
+              <ToggleButton value="global">Global</ToggleButton>
+              <ToggleButton value="site">Site</ToggleButton>
+            </ToggleButtonGroup>
+          </Stack>
+
+          {scope === "site" && (
+            <Box sx={{ mt: 2, display: "flex", flexDirection: "column", gap: 1.5 }}>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Switch
+                  checked={applyToAllSites}
+                  onChange={(e) => setApplyToAllSites(e.target.checked)}
+                  color="info"
+                />
+                <Box>
+                  <Typography sx={{ fontWeight: 600 }}>Add filter to all Sites</Typography>
+                  <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.9rem" }}>
+                    Future sites will also inherit this filter when enabled.
+                  </Typography>
+                </Box>
+              </Stack>
+
+              {!applyToAllSites && (
+                <Autocomplete
+                  disablePortal
+                  loading={loadingSites}
+                  options={sites}
+                  value={sites.find((s) => s.value === targetSite) || null}
+                  getOptionLabel={(option) => option?.label || ""}
+                  isOptionEqualToValue={(option, value) => option?.value === value?.value}
+                  onChange={(_, val) => setTargetSite(val?.value || "")}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Target Site"
+                      size="small"
+                      placeholder="Search sites"
+                      sx={{
+                        "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
+                        "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
+                      }}
+                    />
+                  )}
+                />
+              )}
+            </Box>
+          )}
+        </Box>
+
+        <Box
+          sx={{
+            background: AURORA_SHELL.glass,
+            border: `1px solid ${AURORA_SHELL.border}`,
+            borderRadius: 2.5,
+            p: 2,
+            boxShadow: "0 18px 38px rgba(3,7,18,0.65)",
+            backdropFilter: "blur(12px)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+          }}
+        >
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Typography sx={{ fontWeight: 700 }}>Criteria</Typography>
+            <Chip label="Grouped AND / OR" size="small" sx={{ backgroundColor: "rgba(125,211,252,0.12)", color: "#7dd3fc" }} />
+          </Box>
+          <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem", mb: 1 }}>
+            Add conditions inside each group, mixing AND/OR as needed. Groups themselves can be chained with AND or OR to
+            mirror complex targeting logic (e.g., (A AND B) OR (C AND D)).
+          </Typography>
+
+          {groups.map((group, idx) => (
+            <Box key={group.id} sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+              {idx > 0 && (
+                <ToggleButtonGroup
+                  exclusive
+                  size="small"
+                  value={group.joinWith || "OR"}
+                  onChange={(_, val) => {
+                    if (!val) return;
+                    updateGroup(group.id, { ...group, joinWith: val });
+                  }}
+                  color="info"
+                  sx={{
+                    alignSelf: "center",
+                    "& .MuiToggleButton-root": { px: 2, textTransform: "uppercase", fontSize: "0.8rem" },
+                  }}
+                >
+                  <ToggleButton value="AND">AND</ToggleButton>
+                  <ToggleButton value="OR">OR</ToggleButton>
+                </ToggleButtonGroup>
+              )}
+
+              <Box
+                sx={{
+                  border: `1px solid ${AURORA_SHELL.border}`,
+                  borderRadius: 2,
+                  background: "linear-gradient(135deg, rgba(7,10,22,0.85), rgba(9,11,24,0.92))",
+                  p: 1.5,
+                  boxShadow: "0 12px 28px rgba(3,7,18,0.5)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 1,
+                }}
+              >
+                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                  <Typography sx={{ fontWeight: 600 }}>Criteria Group {idx + 1}</Typography>
+                  <Stack direction="row" spacing={1}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<AddIcon />}
+                      onClick={() => addCondition(group.id)}
+                      sx={{
+                        textTransform: "none",
+                        color: "#7dd3fc",
+                        borderColor: "rgba(125,211,252,0.5)",
+                        borderRadius: 1.5,
+                      }}
+                    >
+                      Add Condition
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<RemoveIcon />}
+                      disabled={groups.length === 1}
+                      onClick={() => removeGroup(group.id)}
+                      sx={{
+                        textTransform: "none",
+                        color: "#ffb4b4",
+                        borderColor: "rgba(255,180,180,0.5)",
+                        borderRadius: 1.5,
+                      }}
+                    >
+                      Remove Group
+                    </Button>
+                  </Stack>
+                </Stack>
+
+                <Stack spacing={1}>
+                  {group.conditions.map((condition, cIdx) =>
+                    renderConditionRow(group.id, condition, cIdx === 0)
+                  )}
+                </Stack>
+              </Box>
+            </Box>
+          ))}
+
+          <Button
+            startIcon={<AddIcon />}
+            variant="outlined"
+            onClick={() => addGroup("OR")}
+            sx={{
+              textTransform: "none",
+              alignSelf: "flex-start",
+              color: "#a5e0ff",
+              borderColor: "rgba(125,183,255,0.5)",
+              borderRadius: 1.5,
+            }}
+          >
+            Add Group
+          </Button>
+        </Box>
+
+        {saveError ? (
+          <Box
+            sx={{
+              background: "rgba(255,179,179,0.08)",
+              color: "#ffb4b4",
+              border: "1px solid rgba(255,179,179,0.35)",
+              borderRadius: 1.5,
+              p: 1.5,
+            }}
+          >
+            {saveError}
+          </Box>
+        ) : null}
+      </Box>
+    </Paper>
+  );
+}

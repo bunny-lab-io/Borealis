@@ -38,6 +38,8 @@ import DeviceDetails from "./Devices/Device_Details";
 import AgentDevices from "./Devices/Agent_Devices.jsx";
 import SSHDevices from "./Devices/SSH_Devices.jsx";
 import WinRMDevices from "./Devices/WinRM_Devices.jsx";
+import DeviceFilterList from "./Devices/Filters/Filter_List.jsx";
+import DeviceFilterEditor from "./Devices/Filters/Filter_Editor.jsx";
 import AssemblyList from "./Assemblies/Assembly_List";
 import AssemblyEditor from "./Assemblies/Assembly_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
@@ -116,6 +118,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
   const [quickJobDraft, setQuickJobDraft] = useState(null);
   const [assemblyEditorState, setAssemblyEditorState] = useState(null); // { mode: 'script'|'ansible', row, nonce }
+  const [filterEditorState, setFilterEditorState] = useState(null);
+  const [filtersRefreshToken, setFiltersRefreshToken] = useState(0);
   const [sessionResolved, setSessionResolved] = useState(false);
   const initialPathRef = useRef(window.location.pathname + window.location.search);
   const pendingPathRef = useRef(null);
@@ -177,6 +181,21 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           return "/devices/ssh";
         case "winrm_devices":
           return "/devices/winrm";
+        case "filters":
+          return "/devices/filters";
+        case "filter_editor": {
+          const params = new URLSearchParams();
+          const filterId =
+            options.filterId ||
+            filterEditorState?.id ||
+            filterEditorState?.filter_id ||
+            filterEditorState?.raw?.id ||
+            filterEditorState?.raw?.filter_id ||
+            null;
+          if (filterId) params.set("id", filterId);
+          const query = params.toString();
+          return query ? `/devices/filters/editor?${query}` : "/devices/filters/editor";
+        }
         case "device_details": {
           const device =
             options.device ||
@@ -254,6 +273,11 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       if (path === "/devices/agent") return { page: "agent_devices", options: {} };
       if (path === "/devices/ssh") return { page: "ssh_devices", options: {} };
       if (path === "/devices/winrm") return { page: "winrm_devices", options: {} };
+      if (path === "/devices/filters") return { page: "filters", options: {} };
+      if (path === "/devices/filters/editor") {
+        const filterId = params.get("id");
+        return { page: "filter_editor", options: filterId ? { filterId } : {} };
+      }
       if (segments[0] === "device" && segments[1]) {
         const id = decodeURIComponent(segments[1]);
         return {
@@ -314,8 +338,17 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       if ((page === "scripts" || page === "ansible_editor") && options.assemblyState) {
         setAssemblyEditorState(options.assemblyState);
       }
+      if (page === "filter_editor") {
+        if (options.filter) {
+          setFilterEditorState(options.filter);
+        } else if (options.filterId && !filterEditorState) {
+          setFilterEditorState({ id: options.filterId });
+        }
+      } else if (!options.preserveFilter) {
+        setFilterEditorState(null);
+      }
     },
-    [setAssemblyEditorState, setCurrentPageState, setSelectedDevice]
+    [filterEditorState, setAssemblyEditorState, setCurrentPageState, setFilterEditorState, setSelectedDevice]
   );
 
   const navigateTo = useCallback(
@@ -516,6 +549,11 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         items.push({ label: "Filters & Groups", page: "filters" });
         items.push({ label: "Filters", page: "filters" });
         break;
+      case "filter_editor":
+        items.push({ label: "Filters & Groups", page: "filters" });
+        items.push({ label: "Filters", page: "filters" });
+        items.push({ label: filterEditorState?.name ? `Edit ${filterEditorState.name}` : "Filter Editor" });
+        break;
       case "groups":
         items.push({ label: "Filters & Groups", page: "filters" });
         items.push({ label: "Groups", page: "groups" });
@@ -525,7 +563,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         if (currentPage) items.push({ label: String(currentPage) });
     }
     return items;
-  }, [currentPage, selectedDevice, editingJob]);
+  }, [currentPage, selectedDevice, editingJob, filterEditorState]);
 
   useEffect(() => {
     let canceled = false;
@@ -1087,6 +1125,37 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return <SSHDevices onQuickJobLaunch={handleQuickJobLaunch} />;
       case "winrm_devices":
         return <WinRMDevices onQuickJobLaunch={handleQuickJobLaunch} />;
+
+      case "filters":
+        return (
+          <DeviceFilterList
+            refreshToken={filtersRefreshToken}
+            onCreateFilter={() => {
+              setFilterEditorState(null);
+              navigateTo("filter_editor");
+            }}
+            onEditFilter={(filter) => {
+              setFilterEditorState(filter);
+              navigateTo("filter_editor", { filterId: filter?.id });
+            }}
+          />
+        );
+
+      case "filter_editor":
+        return (
+          <DeviceFilterEditor
+            initialFilter={filterEditorState}
+            onCancel={() => {
+              setFilterEditorState(null);
+              navigateTo("filters");
+            }}
+            onSaved={(filter) => {
+              setFilterEditorState(null);
+              setFiltersRefreshToken(Date.now());
+              navigateTo("filters");
+            }}
+          />
+        );
 
       case "device_details":
         return (

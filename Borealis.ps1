@@ -10,7 +10,6 @@ param(
     [switch]$EngineTests,
     [switch]$EngineProduction,
     [switch]$EngineDev,
-    [Alias('enrollmentcode','Enrollmentcode')]
     [string]$EnrollmentCode = ''
 )
 
