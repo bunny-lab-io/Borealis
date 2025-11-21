@@ -14,9 +14,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from typing import Any, Dict, TYPE_CHECKING
+from typing import Any, Dict, TYPE_CHECKING, List
 
 from flask import Blueprint, Flask, jsonify, request
+
+from Data.Engine.services.filters.matcher import DeviceFilterMatcher
 
 if TYPE_CHECKING:
     from .. import EngineServiceAdapters
@@ -100,6 +102,30 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             "updated_at": now_iso,
         }
 
+    matcher = DeviceFilterMatcher(db_conn_factory=adapters.db_conn_factory)
+
+    def _attach_match_counts(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not records:
+            return records
+        try:
+            devices = matcher.fetch_devices()
+        except Exception:
+            devices = None
+        for record in records:
+            try:
+                record["matching_device_count"] = matcher.count_filter_devices(record, devices=devices)
+            except Exception as exc:  # pragma: no cover - defensive log path
+                record["matching_device_count"] = 0
+                try:
+                    adapters.service_log(
+                        "device_filters",
+                        f"failed to compute device match count for filter {record.get('id')}: {exc}",
+                        level="ERROR",
+                    )
+                except Exception:
+                    pass
+        return records
+
     blueprint = Blueprint("device_filters", __name__, url_prefix="/api/device_filters")
 
     @blueprint.route("", methods=["GET"])
@@ -115,7 +141,9 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
                 """
             )
             rows = cur.fetchall()
-            return jsonify({"filters": [_row_to_filter(r) for r in rows]})
+            filters = [_row_to_filter(r) for r in rows]
+            _attach_match_counts(filters)
+            return jsonify({"filters": filters})
         finally:
             conn.close()
 
@@ -124,6 +152,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         record = _select_filter(filter_id)
         if not record:
             return jsonify({"error": "Filter not found"}), 404
+        _attach_match_counts([record])
         return jsonify({"filter": record})
 
     @blueprint.route("", methods=["POST"])
@@ -153,6 +182,8 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             )
             conn.commit()
             record = _select_filter(cur.lastrowid)
+            if record:
+                _attach_match_counts([record])
             adapters.service_log("device_filters", f"Created device filter '{payload['name']}'.")
             return jsonify({"filter": record or payload}), 201
         finally:
@@ -187,6 +218,8 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             )
             conn.commit()
             record = _select_filter(filter_id)
+            if record:
+                _attach_match_counts([record])
             adapters.service_log("device_filters", f"Updated device filter '{payload['name']}' (id={filter_id}).")
             return jsonify({"filter": record or payload})
         finally:

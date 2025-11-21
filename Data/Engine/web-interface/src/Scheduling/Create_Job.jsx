@@ -89,6 +89,30 @@ const DEVICE_COLUMNS = [
   { key: "output", label: "StdOut / StdErr" }
 ];
 
+const normalizeFilterCatalog = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item, idx) => {
+      const idValue = item?.id ?? item?.filter_id ?? idx;
+      const id = Number(idValue);
+      if (!Number.isFinite(id)) return null;
+      const scopeText = String(item?.site_scope || item?.scope || item?.type || "global").toLowerCase();
+      const scope = scopeText === "scoped" ? "scoped" : "global";
+      const deviceCount =
+        typeof item?.matching_device_count === "number" && Number.isFinite(item.matching_device_count)
+          ? item.matching_device_count
+          : null;
+      return {
+        id,
+        name: item?.name || `Filter ${idx + 1}`,
+        scope,
+        site: item?.site || item?.site_name || item?.target_site || null,
+        deviceCount,
+      };
+    })
+    .filter(Boolean);
+};
+
 function StatusNode({ data }) {
   const { label, color, count, onClick, isActive, Icon } = data || {};
   const displayCount = Number.isFinite(count) ? count : Number(count) || 0;
@@ -361,7 +385,37 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
   const [pageTitleJobName, setPageTitleJobName] = useState("");
   // Components the job will run: {type:'script'|'workflow', path, name, description}
   const [components, setComponents] = useState([]);
-  const [targets, setTargets] = useState([]); // array of hostnames
+  const [targets, setTargets] = useState([]); // array of target descriptors
+  const [filterCatalog, setFilterCatalog] = useState([]);
+  const [loadingFilterCatalog, setLoadingFilterCatalog] = useState(false);
+  const filterCatalogMapRef = useRef({});
+  const loadFilterCatalog = useCallback(async () => {
+    setLoadingFilterCatalog(true);
+    try {
+      const resp = await fetch("/api/device_filters");
+      if (resp.ok) {
+        const data = await resp.json();
+        setFilterCatalog(normalizeFilterCatalog(data?.filters || data || []));
+      } else {
+        setFilterCatalog([]);
+      }
+    } catch {
+      setFilterCatalog([]);
+    } finally {
+      setLoadingFilterCatalog(false);
+    }
+  }, []);
+  useEffect(() => {
+    loadFilterCatalog();
+  }, [loadFilterCatalog]);
+  useEffect(() => {
+    const nextMap = {};
+    filterCatalog.forEach((entry) => {
+      nextMap[entry.id] = entry;
+      nextMap[String(entry.id)] = entry;
+    });
+    filterCatalogMapRef.current = nextMap;
+  }, [filterCatalog]);
   const [scheduleType, setScheduleType] = useState("immediately");
   const [startDateTime, setStartDateTime] = useState(() => dayjs().add(5, "minute").second(0));
   const [stopAfterEnabled, setStopAfterEnabled] = useState(false);
@@ -506,8 +560,11 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
 
   const [addTargetOpen, setAddTargetOpen] = useState(false);
   const [availableDevices, setAvailableDevices] = useState([]); // [{hostname, display, online}]
-  const [selectedTargets, setSelectedTargets] = useState({}); // map hostname->bool
+  const [selectedDeviceTargets, setSelectedDeviceTargets] = useState({});
+  const [selectedFilterTargets, setSelectedFilterTargets] = useState({});
   const [deviceSearch, setDeviceSearch] = useState("");
+  const [filterSearch, setFilterSearch] = useState("");
+  const [targetPickerTab, setTargetPickerTab] = useState("devices");
   const [componentVarErrors, setComponentVarErrors] = useState({});
   const [quickJobMeta, setQuickJobMeta] = useState(null);
   const primaryComponentName = useMemo(() => {
@@ -536,6 +593,144 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
   const [filterAnchorEl, setFilterAnchorEl] = useState(null);
   const [activeFilterColumn, setActiveFilterColumn] = useState(null);
   const [pendingFilterValue, setPendingFilterValue] = useState("");
+
+  const normalizeTarget = useCallback((rawTarget) => {
+    if (!rawTarget) return null;
+    if (typeof rawTarget === "string") {
+      const host = rawTarget.trim();
+      return host ? { kind: "device", hostname: host } : null;
+    }
+    if (typeof rawTarget === "object") {
+      const rawKind = String(rawTarget.kind || "").toLowerCase();
+      if (rawKind === "device" || rawTarget.hostname) {
+        const host = String(rawTarget.hostname || "").trim();
+        return host ? { kind: "device", hostname: host } : null;
+      }
+      if (rawKind === "filter" || rawTarget.filter_id != null || rawTarget.id != null) {
+        const idValue = rawTarget.filter_id ?? rawTarget.id;
+        const filterId = Number(idValue);
+        if (!Number.isFinite(filterId)) return null;
+        const catalogEntry =
+          filterCatalogMapRef.current[filterId] || filterCatalogMapRef.current[String(filterId)] || {};
+        const scopeText = String(rawTarget.site_scope || rawTarget.scope || rawTarget.type || catalogEntry.scope || "global").toLowerCase();
+        const scope = scopeText === "scoped" ? "scoped" : "global";
+        const deviceCount =
+          typeof rawTarget.deviceCount === "number" && Number.isFinite(rawTarget.deviceCount)
+            ? rawTarget.deviceCount
+            : typeof rawTarget.matching_device_count === "number" && Number.isFinite(rawTarget.matching_device_count)
+            ? rawTarget.matching_device_count
+            : typeof catalogEntry.deviceCount === "number"
+            ? catalogEntry.deviceCount
+            : null;
+        return {
+          kind: "filter",
+          filter_id: filterId,
+          name: rawTarget.name || catalogEntry.name || `Filter #${filterId}`,
+          site_scope: scope,
+          site: rawTarget.site || rawTarget.site_name || catalogEntry.site || null,
+          deviceCount,
+        };
+      }
+    }
+    return null;
+  }, []);
+
+  const targetKey = useCallback((target) => {
+    if (!target) return "";
+    if (target.kind === "filter") return `filter-${target.filter_id}`;
+    if (target.kind === "device") return `device-${(target.hostname || "").toLowerCase()}`;
+    return "";
+  }, []);
+
+  const normalizeTargetList = useCallback(
+    (list) => {
+      if (!Array.isArray(list)) return [];
+      const seen = new Set();
+      const next = [];
+      list.forEach((entry) => {
+        const normalized = normalizeTarget(entry);
+        if (!normalized) return;
+        const key = targetKey(normalized);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        next.push(normalized);
+      });
+      return next;
+    },
+    [normalizeTarget, targetKey]
+  );
+
+  const serializeTargetsForSave = useCallback((list) => {
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((target) => {
+        if (!target) return null;
+        if (target.kind === "filter") {
+          return {
+            kind: "filter",
+            filter_id: target.filter_id,
+            name: target.name,
+            site_scope: target.site_scope,
+            site: target.site,
+          };
+        }
+        if (target.kind === "device") {
+          return target.hostname;
+        }
+        return null;
+      })
+      .filter(Boolean);
+  }, []);
+
+  const addTargets = useCallback(
+    (entries) => {
+      const candidateList = Array.isArray(entries) ? entries : [entries];
+      setTargets((prev) => {
+        const seen = new Set(prev.map((existing) => targetKey(existing)).filter(Boolean));
+        const additions = [];
+        candidateList.forEach((entry) => {
+          const normalized = normalizeTarget(entry);
+          if (!normalized) return;
+          const key = targetKey(normalized);
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          additions.push(normalized);
+        });
+        if (!additions.length) return prev;
+        return [...prev, ...additions];
+      });
+    },
+    [normalizeTarget, targetKey]
+  );
+
+  const removeTarget = useCallback(
+    (targetToRemove) => {
+      const removalKey = targetKey(targetToRemove);
+      if (!removalKey) return;
+      setTargets((prev) => prev.filter((target) => targetKey(target) !== removalKey));
+    },
+    [targetKey]
+  );
+
+  useEffect(() => {
+    setTargets((prev) => {
+      let changed = false;
+      const next = prev.map((target) => {
+        if (target?.kind === "filter") {
+          const normalized = normalizeTarget(target);
+          if (normalized) {
+            const sameKey = targetKey(normalized) === targetKey(target);
+            if (!sameKey || normalized.name !== target.name || normalized.deviceCount !== target.deviceCount || normalized.site !== target.site) {
+              changed = true;
+              return normalized;
+            }
+          }
+        }
+        return target;
+      });
+      return changed ? next : prev;
+    });
+  }, [filterCatalog, normalizeTarget, targetKey]);
 
   const generateLocalId = useCallback(
     () => `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -1423,7 +1618,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
       if (initialJob && initialJob.id) {
         setJobName(initialJob.name || "");
         setPageTitleJobName(typeof initialJob.name === "string" ? initialJob.name.trim() : "");
-        setTargets(Array.isArray(initialJob.targets) ? initialJob.targets : []);
+        setTargets(normalizeTargetList(initialJob.targets || []));
         setScheduleType(initialJob.schedule_type || initialJob.schedule?.type || "immediately");
         setStartDateTime(initialJob.start_ts ? dayjs(Number(initialJob.start_ts) * 1000).second(0) : (initialJob.schedule?.start ? dayjs(initialJob.schedule.start).second(0) : dayjs().add(5, "minute").second(0)));
         setStopAfterEnabled(Boolean(initialJob.duration_stop_enabled));
@@ -1453,7 +1648,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
     return () => {
       canceled = true;
     };
-  }, [initialJob, hydrateExistingComponents]);
+  }, [initialJob, hydrateExistingComponents, normalizeTargetList]);
 
   const openAddComponent = async () => {
     setAddCompOpen(true);
@@ -1506,7 +1701,10 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
 
   const openAddTargets = async () => {
     setAddTargetOpen(true);
-    setSelectedTargets({});
+    setTargetPickerTab("devices");
+    setSelectedDeviceTargets({});
+    setSelectedFilterTargets({});
+    loadFilterCatalog();
     try {
       const resp = await fetch("/api/agents");
       if (resp.ok) {
@@ -1555,7 +1753,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
     const payload = {
       name: jobName,
       components: payloadComponents,
-      targets,
+      targets: serializeTargetsForSave(targets),
       schedule: { type: scheduleType, start: scheduleType !== "immediately" ? (() => { try { const d = startDateTime?.toDate?.() || new Date(startDateTime); d.setSeconds(0,0); return d.toISOString(); } catch { return startDateTime; } })() : null },
       duration: { stopAfterEnabled, expiration },
       execution_context: execContext,
@@ -1594,22 +1792,18 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
     if (!quickJobDraft || !quickJobDraft.id) return;
     if (quickDraftAppliedRef.current === quickJobDraft.id) return;
     quickDraftAppliedRef.current = quickJobDraft.id;
-    const uniqueTargets = [];
-    const pushTarget = (value) => {
-      const normalized = typeof value === "string" ? value.trim() : "";
-      if (!normalized) return;
-      if (!uniqueTargets.includes(normalized)) uniqueTargets.push(normalized);
-    };
     const incoming = Array.isArray(quickJobDraft.hostnames) ? quickJobDraft.hostnames : [];
-    incoming.forEach(pushTarget);
-    setTargets(uniqueTargets);
-    setSelectedTargets({});
+    const normalizedTargets = normalizeTargetList(incoming);
+    setTargets(normalizedTargets);
+    setSelectedDeviceTargets({});
+    setSelectedFilterTargets({});
     setComponents([]);
     setComponentVarErrors({});
     const normalizedSchedule = String(quickJobDraft.scheduleType || "immediately").trim().toLowerCase() || "immediately";
     setScheduleType(normalizedSchedule);
     const placeholderAssembly = (quickJobDraft.placeholderAssemblyLabel || "Choose Assembly").trim() || "Choose Assembly";
-    const deviceLabel = (quickJobDraft.deviceLabel || uniqueTargets[0] || "Selected Device").trim() || "Selected Device";
+    const defaultDeviceLabel = normalizedTargets[0]?.hostname || incoming[0] || "Selected Device";
+    const deviceLabel = (quickJobDraft.deviceLabel || defaultDeviceLabel).trim() || "Selected Device";
     const initialName = `Quick Job - ${placeholderAssembly} - ${deviceLabel}`;
     setJobName(initialName);
     setPageTitleJobName(initialName.trim());
@@ -1626,7 +1820,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
     if (typeof onConsumeQuickJobDraft === "function") {
       onConsumeQuickJobDraft(quickJobDraft.id);
     }
-  }, [editing, quickJobDraft, tabDefs, onConsumeQuickJobDraft]);
+  }, [editing, quickJobDraft, tabDefs, onConsumeQuickJobDraft, normalizeTargetList]);
 
   useEffect(() => {
     if (!quickJobMeta?.allowAutoRename) return;
@@ -1749,26 +1943,38 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell>Name</TableCell>
-                  <TableCell>Status</TableCell>
+                  <TableCell>Type</TableCell>
+                  <TableCell>Target</TableCell>
+                  <TableCell>Details</TableCell>
                   <TableCell align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {targets.map((h) => (
-                  <TableRow key={h} hover>
-                    <TableCell>{h}</TableCell>
-                    <TableCell>—</TableCell>
-                    <TableCell align="right">
-                      <IconButton size="small" onClick={() => setTargets((prev) => prev.filter((x) => x !== h))} sx={{ color: "#ff6666" }}>
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {targets.map((target) => {
+                  const key = targetKey(target) || target.hostname || target.filter_id || Math.random().toString(36);
+                  const isFilter = target?.kind === "filter";
+                  const deviceCount = typeof target?.deviceCount === "number" && Number.isFinite(target.deviceCount) ? target.deviceCount : null;
+                  const detailText = isFilter
+                    ? `${deviceCount != null ? deviceCount.toLocaleString() : "—"} device${deviceCount === 1 ? "" : "s"}${
+                        target?.site_scope === "scoped" ? ` • ${target?.site || "Specific site"}` : ""
+                      }`
+                    : "—";
+                  return (
+                    <TableRow key={key} hover>
+                      <TableCell>{isFilter ? "Filter" : "Device"}</TableCell>
+                      <TableCell>{isFilter ? (target?.name || `Filter #${target?.filter_id}`) : target?.hostname}</TableCell>
+                      <TableCell>{detailText}</TableCell>
+                      <TableCell align="right">
+                        <IconButton size="small" onClick={() => removeTarget(target)} sx={{ color: "#ff6666" }}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
                 {targets.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={3} sx={{ color: "#888" }}>No targets selected.</TableCell>
+                    <TableCell colSpan={4} sx={{ color: "#888" }}>No targets selected.</TableCell>
                   </TableRow>
                 )}
               </TableBody>
@@ -2193,53 +2399,141 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
       >
         <DialogTitle>Select Targets</DialogTitle>
         <DialogContent>
-          <Box sx={{ mb: 2, display: "flex", gap: 2 }}>
-            <TextField
-              size="small"
-              placeholder="Search devices..."
-              value={deviceSearch}
-              onChange={(e) => setDeviceSearch(e.target.value)}
-              sx={{ flex: 1, "& .MuiOutlinedInput-root": { bgcolor: "#1b1b1b" }, "& .MuiInputBase-input": { color: "#e6edf3" } }}
-            />
-          </Box>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell width={40}></TableCell>
-                <TableCell>Name</TableCell>
-                <TableCell>Status</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {availableDevices
-                .filter((d) => d.display.toLowerCase().includes(deviceSearch.toLowerCase()))
-                .map((d) => (
-                <TableRow key={d.hostname} hover onClick={() => setSelectedTargets((prev) => ({ ...prev, [d.hostname]: !prev[d.hostname] }))}>
-                  <TableCell>
-                    <Checkbox size="small" checked={!!selectedTargets[d.hostname]}
-                      onChange={(e) => setSelectedTargets((prev) => ({ ...prev, [d.hostname]: e.target.checked }))}
-                    />
-                  </TableCell>
-                  <TableCell>{d.display}</TableCell>
-                  <TableCell>
-                    <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 10, background: d.online ? "#00d18c" : "#ff4f4f", marginRight: 8, verticalAlign: "middle" }} />
-                    {d.online ? "Online" : "Offline"}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {availableDevices.length === 0 && (
-                <TableRow><TableCell colSpan={3} sx={{ color: "#888" }}>No devices available.</TableCell></TableRow>
-              )}
-            </TableBody>
-          </Table>
+          <Tabs
+            value={targetPickerTab}
+            onChange={(_, value) => setTargetPickerTab(value)}
+            sx={{ mb: 2 }}
+            textColor="inherit"
+            indicatorColor="primary"
+          >
+            <Tab label="Devices" value="devices" />
+            <Tab label="Filters" value="filters" />
+          </Tabs>
+
+          {targetPickerTab === "devices" ? (
+            <>
+              <Box sx={{ mb: 2, display: "flex", gap: 2 }}>
+                <TextField
+                  size="small"
+                  placeholder="Search devices..."
+                  value={deviceSearch}
+                  onChange={(e) => setDeviceSearch(e.target.value)}
+                  sx={{ flex: 1, "& .MuiOutlinedInput-root": { bgcolor: "#1b1b1b" }, "& .MuiInputBase-input": { color: "#e6edf3" } }}
+                />
+              </Box>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell width={40}></TableCell>
+                    <TableCell>Name</TableCell>
+                    <TableCell>Status</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {availableDevices
+                    .filter((d) => d.display.toLowerCase().includes(deviceSearch.toLowerCase()))
+                    .map((d) => (
+                      <TableRow key={d.hostname} hover onClick={() => setSelectedDeviceTargets((prev) => ({ ...prev, [d.hostname]: !prev[d.hostname] }))}>
+                        <TableCell>
+                          <Checkbox
+                            size="small"
+                            checked={!!selectedDeviceTargets[d.hostname]}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              setSelectedDeviceTargets((prev) => ({ ...prev, [d.hostname]: e.target.checked }));
+                            }}
+                          />
+                        </TableCell>
+                        <TableCell>{d.display}</TableCell>
+                        <TableCell>
+                          <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 10, background: d.online ? "#00d18c" : "#ff4f4f", marginRight: 8, verticalAlign: "middle" }} />
+                          {d.online ? "Online" : "Offline"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  {availableDevices.length === 0 && (
+                    <TableRow><TableCell colSpan={3} sx={{ color: "#888" }}>No devices available.</TableCell></TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </>
+          ) : (
+            <>
+              <Box sx={{ mb: 2, display: "flex", gap: 2 }}>
+                <TextField
+                  size="small"
+                  placeholder="Search filters..."
+                  value={filterSearch}
+                  onChange={(e) => setFilterSearch(e.target.value)}
+                  sx={{ flex: 1, "& .MuiOutlinedInput-root": { bgcolor: "#1b1b1b" }, "& .MuiInputBase-input": { color: "#e6edf3" } }}
+                />
+              </Box>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell width={40}></TableCell>
+                    <TableCell>Filter</TableCell>
+                    <TableCell>Devices</TableCell>
+                    <TableCell>Scope</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {(filterCatalog || [])
+                    .filter((f) => (f.name || "").toLowerCase().includes(filterSearch.toLowerCase()))
+                    .map((f) => (
+                      <TableRow key={f.id} hover onClick={() => setSelectedFilterTargets((prev) => ({ ...prev, [f.id]: !prev[f.id] }))}>
+                        <TableCell>
+                          <Checkbox
+                            size="small"
+                            checked={!!selectedFilterTargets[f.id]}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              setSelectedFilterTargets((prev) => ({ ...prev, [f.id]: e.target.checked }));
+                            }}
+                          />
+                        </TableCell>
+                        <TableCell>{f.name}</TableCell>
+                        <TableCell>{typeof f.deviceCount === "number" ? f.deviceCount.toLocaleString() : "—"}</TableCell>
+                        <TableCell>{f.scope === "scoped" ? (f.site || "Specific Site") : "All Sites"}</TableCell>
+                      </TableRow>
+                    ))}
+                  {!loadingFilterCatalog && (!filterCatalog || filterCatalog.length === 0) && (
+                    <TableRow><TableCell colSpan={4} sx={{ color: "#888" }}>No filters available.</TableCell></TableRow>
+                  )}
+                  {loadingFilterCatalog && (
+                    <TableRow><TableCell colSpan={4} sx={{ color: "#888" }}>Loading filters…</TableCell></TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAddTargetOpen(false)} sx={{ color: "#58a6ff" }}>Cancel</Button>
-          <Button onClick={() => {
-            const chosen = Object.keys(selectedTargets).filter((h) => selectedTargets[h]);
-            setTargets((prev) => Array.from(new Set([...prev, ...chosen])));
-            setAddTargetOpen(false);
-          }} sx={{ color: "#58a6ff" }}>Add Selected</Button>
+          <Button
+            onClick={() => {
+              if (targetPickerTab === "filters") {
+                const additions = filterCatalog
+                  .filter((f) => selectedFilterTargets[f.id])
+                  .map((f) => ({
+                    kind: "filter",
+                    filter_id: f.id,
+                    name: f.name,
+                    site_scope: f.scope,
+                    site: f.site,
+                    deviceCount: f.deviceCount,
+                  }));
+                if (additions.length) addTargets(additions);
+              } else {
+                const chosenHosts = Object.keys(selectedDeviceTargets).filter((hostname) => selectedDeviceTargets[hostname]);
+                if (chosenHosts.length) addTargets(chosenHosts);
+              }
+              setAddTargetOpen(false);
+            }}
+            sx={{ color: "#58a6ff" }}
+          >
+            Add Selected
+          </Button>
         </DialogActions>
       </Dialog>
 
@@ -2258,6 +2552,3 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
     </Paper>
   );
 }
-
-
-

@@ -54,7 +54,7 @@ const gradientButtonSx = {
   },
 };
 
-const AUTO_SIZE_COLUMNS = ["name", "type", "site", "lastEditedBy", "lastEdited"];
+const AUTO_SIZE_COLUMNS = ["name", "type", "deviceCount", "site", "lastEditedBy", "lastEdited"];
 
 const SAMPLE_ROWS = [
   {
@@ -64,6 +64,7 @@ const SAMPLE_ROWS = [
     site: null,
     lastEditedBy: "System",
     lastEdited: new Date().toISOString(),
+    deviceCount: 24,
   },
   {
     id: "sample-site",
@@ -72,6 +73,7 @@ const SAMPLE_ROWS = [
     site: "West Campus",
     lastEditedBy: "Demo User",
     lastEdited: new Date(Date.now() - 1000 * 60 * 60 * 24 * 3).toISOString(),
+    deviceCount: 6,
   },
 ];
 
@@ -91,6 +93,12 @@ function normalizeFilters(raw) {
     site: f.site || f.site_scope || f.site_name || f.target_site || null,
     lastEditedBy: f.last_edited_by || f.owner || f.updated_by || "Unknown",
     lastEdited: f.last_edited || f.updated_at || f.updated || f.created_at || null,
+    deviceCount:
+      typeof f.matching_device_count === "number"
+        ? f.matching_device_count
+        : typeof f.devices_targeted === "number"
+        ? f.devices_targeted
+        : null,
     raw: f,
   }));
 }
@@ -193,6 +201,18 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
           const type = String(params.value || "").toLowerCase() === "site" ? "Site" : "Global";
           const color = type === "Global" ? "success" : "info";
           return <Chip size="small" label={type} color={color} sx={{ fontSize: "0.75rem" }} />;
+        },
+        cellClass: "auto-col-tight",
+      },
+      {
+        headerName: "Devices Targeted",
+        field: "deviceCount",
+        width: 160,
+        valueFormatter: (params) => {
+          if (typeof params.value === "number" && Number.isFinite(params.value)) {
+            return params.value.toLocaleString();
+          }
+          return "—";
         },
         cellClass: "auto-col-tight",
       },
