@@ -3229,23 +3229,47 @@ const heroTiles = useMemo(() => {
               justifyContent: "space-between",
             }}
           >
-            <Box sx={{ display: "flex", gap: 1 }}>
-              {["scripts", "ansible", "workflows"].map((key) => (
-                <Button
-                  key={key}
-                  size="small"
-                  variant={compTab === key ? "outlined" : "text"}
-                  onClick={() => setCompTab(key)}
-                  sx={{
-                    textTransform: "none",
-                    color: compTab === key ? MAGIC_UI.accentA : MAGIC_UI.textMuted,
-                    borderColor: MAGIC_UI.accentA,
-                  }}
-                >
-                  {key.charAt(0).toUpperCase() + key.slice(1)}
-                </Button>
-              ))}
-            </Box>
+            <Tabs
+              value={compTab}
+              onChange={(_, value) => setCompTab(value)}
+              TabIndicatorProps={{
+                style: {
+                  height: 3,
+                  borderRadius: 3,
+                  background: "linear-gradient(90deg, #7dd3fc, #c084fc)",
+                },
+              }}
+              sx={{
+                minHeight: 0,
+                borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+                "& .MuiTab-root": {
+                  textTransform: "none",
+                  color: MAGIC_UI.textMuted,
+                  fontFamily: '"IBM Plex Sans","Helvetica Neue",Arial,sans-serif',
+                  fontSize: 15,
+                  fontWeight: 600,
+                  minHeight: 40,
+                  opacity: 1,
+                  borderRadius: 1,
+                  transition: "background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease",
+                  "&:hover": {
+                    color: MAGIC_UI.textBright,
+                    backgroundImage: TAB_HOVER_GRADIENT,
+                    boxShadow: "0 0 0 1px rgba(148,163,184,0.25) inset",
+                  },
+                },
+                "& .Mui-selected": {
+                  color: MAGIC_UI.textBright,
+                  "&:hover": {
+                    backgroundImage: TAB_HOVER_GRADIENT,
+                  },
+                },
+              }}
+            >
+              <Tab label="Scripts" value="scripts" />
+              <Tab label="Ansible" value="ansible" />
+              <Tab label="Workflows" value="workflows" />
+            </Tabs>
             <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
               <TextField
                 size="small"
@@ -3342,14 +3366,39 @@ const heroTiles = useMemo(() => {
           <Tabs
             value={targetPickerTab}
             onChange={(_, value) => setTargetPickerTab(value)}
+            TabIndicatorProps={{
+              style: {
+                height: 3,
+                borderRadius: 3,
+                background: "linear-gradient(90deg, #7dd3fc, #c084fc)",
+              },
+            }}
             sx={{
               mb: 2,
               borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
-              "& .MuiTab-root": { textTransform: "none", color: MAGIC_UI.textMuted },
-              "& .Mui-selected": { color: MAGIC_UI.textBright },
+              "& .MuiTab-root": {
+                textTransform: "none",
+                color: MAGIC_UI.textMuted,
+                fontFamily: '"IBM Plex Sans","Helvetica Neue",Arial,sans-serif',
+                fontSize: 15,
+                fontWeight: 600,
+                minHeight: 44,
+                opacity: 1,
+                borderRadius: 1,
+                transition: "background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease",
+                "&:hover": {
+                  color: MAGIC_UI.textBright,
+                  backgroundImage: TAB_HOVER_GRADIENT,
+                  boxShadow: "0 0 0 1px rgba(148,163,184,0.25) inset",
+                },
+              },
+              "& .Mui-selected": {
+                color: MAGIC_UI.textBright,
+                "&:hover": {
+                  backgroundImage: TAB_HOVER_GRADIENT,
+                },
+              },
             }}
-            textColor="inherit"
-            indicatorColor="primary"
           >
             <Tab label="Devices" value="devices" />
             <Tab label="Filters" value="filters" />
