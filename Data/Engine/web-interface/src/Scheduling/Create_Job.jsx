@@ -329,6 +329,15 @@ const GLASS_PANEL_BASE_SX = {
   p: { xs: 2, md: 3 },
 };
 
+const TAB_SECTION_SX = {
+  width: "100%",
+  display: "flex",
+  flexDirection: "column",
+  gap: 1.5,
+  px: { xs: 1.5, md: 2 },
+  py: { xs: 1.25, md: 1.75 },
+};
+
 const PRIMARY_CTA_SX = {
   borderRadius: 999,
   px: 3,
@@ -547,23 +556,23 @@ function StatusNode({ data }) {
   );
 }
 
-function SectionHeader({ title, action }) {
+function SectionHeader({ title, action, sx }) {
   return (
     <Box
       sx={{
-        mt: 1,
         mb: 1.5,
         display: "flex",
-        alignItems: "center",
+        alignItems: action ? "flex-start" : "center",
         justifyContent: "space-between",
         gap: 2,
+        ...sx,
       }}
     >
       <Typography
         variant="subtitle2"
         sx={{
           color: MAGIC_UI.textBright,
-          fontWeight: 600,
+          fontWeight: 400,
           letterSpacing: 0.4,
           textTransform: "uppercase",
           fontSize: 13,
@@ -2709,7 +2718,7 @@ const heroTiles = useMemo(() => {
 
       <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 3 }}>
         {tab === 0 && (
-          <GlassPanel>
+          <Box sx={TAB_SECTION_SX}>
             <SectionHeader title="Job Name" />
             <TextField
               fullWidth
@@ -2722,11 +2731,11 @@ const heroTiles = useMemo(() => {
               error={jobName.trim().length === 0}
               helperText={jobName.trim().length === 0 ? "Job name is required" : ""}
             />
-          </GlassPanel>
+          </Box>
         )}
 
         {tab === 1 && (
-          <GlassPanel>
+          <Box sx={TAB_SECTION_SX}>
             <SectionHeader
               title="Assemblies"
               action={
@@ -2760,11 +2769,11 @@ const heroTiles = useMemo(() => {
                 At least one assembly is required.
               </Typography>
             )}
-          </GlassPanel>
+          </Box>
         )}
 
         {tab === 2 && (
-          <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+          <Box sx={TAB_SECTION_SX}>
             <SectionHeader
               title="Targets"
               action={
@@ -2806,9 +2815,9 @@ const heroTiles = useMemo(() => {
         )}
 
         {tab === 3 && (
-        <GlassPanel>
-          <SectionHeader title="Schedule" />
-          <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+          <Box sx={TAB_SECTION_SX}>
+            <SectionHeader title="Schedule" />
+            <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
               <TextField
                 select
                 size="small"
@@ -2885,11 +2894,11 @@ const heroTiles = useMemo(() => {
               <MenuItem value="2d">2 Days</MenuItem>
               <MenuItem value="3d">3 Days</MenuItem>
             </TextField>
-          </GlassPanel>
+          </Box>
         )}
 
         {tab === 4 && (
-          <GlassPanel>
+          <Box sx={TAB_SECTION_SX}>
             <SectionHeader title="Execution Context" />
             <TextField
               select
@@ -2976,7 +2985,7 @@ const heroTiles = useMemo(() => {
                   )}
               </Box>
             )}
-          </GlassPanel>
+          </Box>
         )}
 
         {editing && tab === historyTabIndex && (
