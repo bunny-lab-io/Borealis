@@ -678,10 +678,14 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       cellStyle: {
         display: "flex",
         alignItems: "center",
+        justifyContent: "flex-start",
         color: "#f5f7fa",
         fontFamily: gridFontFamily,
-        fontSize: "13px"
-      }
+        fontSize: "13px",
+        textAlign: "left",
+        paddingLeft: "8px",
+        paddingRight: "6px",
+      },
     }),
     []
   );
@@ -851,11 +855,32 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             "--ag-font-family": gridFontFamily,
             "--ag-icon-font-family": iconFontFamily,
 
-            "& .ag-cell": {
+            "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
               display: "flex",
               alignItems: "center",
+              justifyContent: "flex-start",
+              textAlign: "left",
               paddingTop: "8px",
               paddingBottom: "8px",
+              paddingLeft: "18px",
+              paddingRight: "12px",
+              gap: 0,
+            },
+            "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              gap: 0,
+              paddingTop: 0,
+              paddingBottom: 0,
+            },
+            "& .ag-center-cols-container .ag-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell .ag-cell-value": {
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              textAlign: "left",
             },
 
             /* Center the selection column (header + body) */
@@ -886,9 +911,18 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
               alignItems: "center",
               justifyContent: "center",
             },
-            "& .ag-cell.auto-col-tight": {
-              paddingRight: 0,
-              paddingLeft: 0,
+            "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+              paddingLeft: "12px",
+              paddingRight: "9px",
+              justifyContent: "flex-start !important",
+              textAlign: "left !important",
+            },
+            "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper": {
+              justifyContent: "flex-start !important",
+            },
+            "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-value": {
+              textAlign: "left !important",
+              justifyContent: "flex-start !important",
             },
           }}
           style={{
@@ -906,6 +940,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
             "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
             "--ag-checkbox-checked-color": "#7dd3fc",
+            "--ag-cell-horizontal-padding": "18px",
           }}
         >
           {/* Action bar for bulk delete stays above grid when needed */}

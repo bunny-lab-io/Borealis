@@ -22,7 +22,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Buttons & chips: gradient pills for primary CTAs (`linear-gradient(135deg,#34d399,#22d3ee)` success; `#7dd3fc→#c084fc` creation); neutral actions use rounded outlines with `rgba(148,163,184,0.4)` borders and uppercase microcopy.
 - Rainbow accents: for creation CTAs, use dark-fill pills with rainbow border gradients + teal halo (shared with Quick Job).
 - AG Grid treatment: Quartz theme with matte navy headers, subtle alternating row opacity, cyan/magenta interaction glows, rounded wrappers, soft borders, inset selection glows.
-- Default grid cell padding: leave a small left inset (≈4px) on value cells (including `auto-col-tight`) so text doesn’t hug column edges; keep right padding modest (≈6px) to balance density.
+- Default grid cell padding: keep roughly 18px on the left edge and 12px on the right for standard cells (12px/9px for `auto-col-tight`) so text never hugs a column edge. Target the center + pinned containers so both regions stay aligned.
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
 
 ## AG Grid Column Behavior (All Tables)
@@ -31,6 +31,28 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Helper: store the grid API in a ref and call `api.autoSizeColumns(AUTO_SIZE_COLUMNS, true)` inside `requestAnimationFrame` (or `setTimeout(...,0)` fallback); swallow errors because it can run before rows render.
 - Hook the helper into both `onGridReady` and a `useEffect` watching the dataset (e.g., `[filteredRows, loading]`); skip while `loading` or when there are zero rows.
 - Column defs: apply shared `cellClass: "auto-col-tight"` (or equivalent) to every auto-sized column for consistent padding. Last column keeps the class for styling consistency.
-- CSS override: add `& .ag-cell.auto-col-tight { padding-left: 8px; padding-right: 6px; }` (or equivalent) in the theme scope to keep text away from the left edge.
+- CSS override: ensure the wrapper targets both center and pinned containers so every cell shares the same flex alignment. Then apply the tighter inset to `auto-col-tight`:
+  ```jsx
+  "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    textAlign: "left",
+    padding: "8px 12px 8px 18px",
+  },
+  "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+    width: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    padding: 0,
+  },
+  "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+    paddingLeft: "12px",
+    paddingRight: "9px",
+  },
+  ```
+- Style helper: reuse a `GRID_STYLE_BASE` (or similar) to set fonts/icons and `--ag-cell-horizontal-padding: "18px"` on every grid, then merge it with per-grid dimensions.
 - Fill column: last column `{ flex: 1, minWidth: X }` (no width/maxWidth) to stretch when horizontal space remains.
+- Pagination baseline: every Quartz grid ships with `pagination`, `paginationPageSize={20}`, and `paginationPageSizeSelector={[20, 50, 100]}`. This matches Device List behavior and prevents infinitely tall tables (Targets, assembly pickers, job histories, etc.).
 - Example: follow the scaffolding in `Engine/web-interface/src/Scheduling/Scheduled_Jobs_List.jsx` and the structure in `Data/Engine/web-interface/src/Admin/Page_Template.jsx`.

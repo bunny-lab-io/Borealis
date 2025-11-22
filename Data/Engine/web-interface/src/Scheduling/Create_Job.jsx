@@ -87,6 +87,20 @@ const gridTheme = themeQuartz.withParams({
 const gridThemeClass = gridTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans","Helvetica Neue",Arial,sans-serif';
 const iconFontFamily = '"Quartz Regular"';
+const LEFT_ALIGN_CELL_STYLE = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-start",
+  textAlign: "left",
+};
+
+const GRID_STYLE_BASE = {
+  width: "100%",
+  height: "100%",
+  fontFamily: gridFontFamily,
+  "--ag-icon-font-family": iconFontFamily,
+  "--ag-cell-horizontal-padding": "18px",
+};
 
 const GRID_WRAPPER_SX = {
   width: "100%",
@@ -133,9 +147,53 @@ const GRID_WRAPPER_SX = {
   "& .ag-checkbox-input-wrapper": {
     borderRadius: "3px",
   },
-  "& .ag-cell.auto-col-tight": {
-    paddingLeft: 8,
-    paddingRight: 6,
+  "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    textAlign: "left",
+    paddingTop: "8px",
+    paddingBottom: "8px",
+    paddingLeft: "18px",
+    paddingRight: "12px",
+    gap: 0,
+  },
+  "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+    width: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    gap: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
+  "& .ag-center-cols-container .ag-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell .ag-cell-value": {
+    flexGrow: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    textAlign: "left",
+  },
+  "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+    paddingLeft: "12px",
+    paddingRight: "9px",
+    justifyContent: "flex-start",
+    textAlign: "left",
+    alignItems: "center",
+    gap: 0,
+  },
+  "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper": {
+    flex: 1,
+    justifyContent: "flex-start",
+    alignItems: "center",
+    gap: 0,
+  },
+  "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-value": {
+    width: "100%",
+    textAlign: "left",
+    display: "flex",
+    justifyContent: "flex-start",
+    alignItems: "center",
   },
   "& .status-pill-cell": {
     display: "flex",
@@ -922,7 +980,8 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
       suppressMenu: false,
       filter: true,
       floatingFilter: false,
-      cellClass: "auto-col-tight"
+      cellClass: "auto-col-tight",
+      cellStyle: LEFT_ALIGN_CELL_STYLE,
     }),
     []
   );
@@ -1197,6 +1256,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
       filter: true,
       floatingFilter: false,
       cellClass: "auto-col-tight",
+      cellStyle: LEFT_ALIGN_CELL_STYLE,
     }),
     []
   );
@@ -2729,11 +2789,14 @@ const heroTiles = useMemo(() => {
                 suppressCellFocus
                 headerHeight={44}
                 rowHeight={48}
+                pagination
+                paginationPageSize={20}
+                paginationPageSizeSelector={[20, 50, 100]}
                 overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No targets selected.</span>"
                 getRowId={(params) => params.data?.id || params.rowIndex}
                 onGridReady={handleTargetGridReady}
                 theme={gridTheme}
-                style={{ width: "100%", height: "100%", fontFamily: gridFontFamily, "--ag-icon-font-family": iconFontFamily }}
+                style={GRID_STYLE_BASE}
               />
             </Box>
             {targets.length === 0 && (
@@ -2980,16 +3043,14 @@ const heroTiles = useMemo(() => {
                   suppressCellFocus
                   headerHeight={44}
                   rowHeight={50}
+                  pagination
+                  paginationPageSize={20}
+                  paginationPageSizeSelector={[20, 50, 100]}
                   overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No targets found for this job.</span>"
                   getRowId={(params) => params.data?.id || params.rowIndex}
                   onGridReady={handleJobHistoryGridReady}
                   theme={gridTheme}
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    fontFamily: gridFontFamily,
-                    "--ag-icon-font-family": iconFontFamily,
-                  }}
+                  style={GRID_STYLE_BASE}
                 />
               </Box>
               <Menu
@@ -3036,11 +3097,14 @@ const heroTiles = useMemo(() => {
                   suppressCellFocus
                   headerHeight={44}
                   rowHeight={48}
+                  pagination
+                  paginationPageSize={20}
+                  paginationPageSizeSelector={[20, 50, 100]}
                   overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No runs in the last 30 days.</span>"
                   getRowId={(params) => params.data?.key || params.rowIndex}
                   onGridReady={handleHistorySummaryGridReady}
                   theme={gridTheme}
-                  style={{ width: "100%", height: "100%", fontFamily: gridFontFamily, "--ag-icon-font-family": iconFontFamily }}
+                  style={GRID_STYLE_BASE}
                 />
               </Box>
             </GlassPanel>
@@ -3208,8 +3272,11 @@ const heroTiles = useMemo(() => {
               rowHeight={48}
               domLayout="normal"
               overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No assemblies available.</span>"
+              pagination
+              paginationPageSize={20}
+              paginationPageSizeSelector={[20, 50, 100]}
               theme={gridTheme}
-              style={{ width: "100%", height: "100%", fontFamily: gridFontFamily, "--ag-icon-font-family": iconFontFamily }}
+              style={GRID_STYLE_BASE}
               rowSelection="single"
               animateRows
               getRowId={(params) => params.data?.id || params.rowIndex}
