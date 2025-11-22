@@ -25,6 +25,63 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Default grid cell padding: keep roughly 18px on the left edge and 12px on the right for standard cells (12px/9px for `auto-col-tight`) so text never hugs a column edge. Target the center + pinned containers so both regions stay aligned.
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
 
+## Aurora Tabs (MagicUI Tabbed Interfaces)
+- Placement: sit directly below the hero title/subtitle band (8–16px gap). Tabs span the full width of the content column and anchor secondary hero metrics (see `Scheduling/Create_Job.jsx` and `Devices/Device_Details.jsx`).
+- Typography: IBM Plex Sans, `fontSize: 15`, mixed case labels (`textTransform: "none"`). Use `fontWeight: 600` for emphasis, but avoid uppercase that crowds the aurora glow.
+- Indicator: 3px tall bar with rounded corners that uses the cyan→violet aurora gradient `linear-gradient(90deg,#7dd3fc,#c084fc)`. Keep it flush with the bottom border so it looks like a light strip under the active tab.
+- Hover/active treatment: tabs float on a translucent aurora panel `linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))` with a 1px inset steel outline. This gradient applies on hover for both selected and non-selected tabs to keep parity.
+- Colors: base text `MAGIC_UI.textMuted` (`#94a3b8`). Hovering switches to `MAGIC_UI.textBright` (`#e2e8f0`). Always force `opacity: 1` to avoid MUI’s default faded text on unfocused tabs.
+- Shape/spacing: tabs are pill-like with `borderRadius: 4` (MUI unit `1`). Maintain `minHeight: 44px` so targets are touchable. Provide `borderBottom: 1px solid MAGIC_UI.panelBorder` to anchor the rail.
+- CSS/SX snippet to copy into new tab stacks:
+  ```jsx
+  const TAB_HOVER_GRADIENT = "linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))";
+
+  <Tabs
+    value={tab}
+    onChange={(_, v) => setTab(v)}
+    variant="scrollable"
+    scrollButtons="auto"
+    TabIndicatorProps={{
+      style: {
+        height: 3,
+        borderRadius: 3,
+        background: "linear-gradient(90deg,#7dd3fc,#c084fc)",
+      },
+    }}
+    sx={{
+      borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+      "& .MuiTab-root": {
+        color: MAGIC_UI.textMuted,
+        fontFamily: "\"IBM Plex Sans\", \"Helvetica Neue\", Arial, sans-serif",
+        fontSize: 15,
+        textTransform: "none",
+        fontWeight: 600,
+        minHeight: 44,
+        opacity: 1,
+        borderRadius: 1,
+        transition: "background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease",
+        "&:hover": {
+          color: MAGIC_UI.textBright,
+          backgroundImage: TAB_HOVER_GRADIENT,
+          boxShadow: "0 0 0 1px rgba(148,163,184,0.25) inset",
+        },
+      },
+      "& .Mui-selected": {
+        color: MAGIC_UI.textBright,
+        "&:hover": {
+          backgroundImage: TAB_HOVER_GRADIENT,
+        },
+      },
+    }}
+  >
+    {TABS.map((t) => (
+      <Tab key={t} label={t} />
+    ))}
+  </Tabs>
+  ```
+- Interaction rules: tabs should never scroll vertically; rely on horizontal scroll for overflow. Always align the tab rail with the first section header on the page so the aurora indicator lines up with hero metrics.
+- Accessibility: keep `aria-label`/`aria-controls` pairs when the panes hold complex content, and ensure the gradient backgrounds preserve 4.5:1 contrast for the text (the current cyan on dark meets this).
+
 ## AG Grid Column Behavior (All Tables)
 - Auto-size value columns and let the last column absorb remaining width so views span available space.
 - Declare `AUTO_SIZE_COLUMNS` near the grid component (exclude the fill column).

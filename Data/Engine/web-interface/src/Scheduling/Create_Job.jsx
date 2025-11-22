@@ -338,6 +338,8 @@ const TAB_SECTION_SX = {
   py: { xs: 1.25, md: 1.75 },
 };
 
+const TAB_HOVER_GRADIENT = "linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))";
+
 const PRIMARY_CTA_SX = {
   borderRadius: 999,
   px: 3,
@@ -2700,14 +2702,21 @@ const heroTiles = useMemo(() => {
             color: MAGIC_UI.textMuted,
             textTransform: "none",
             fontWeight: 600,
-            transition: "background 0.2s ease, color 0.2s ease",
+            opacity: 1,
+            borderRadius: 1,
+            transition: "background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease",
             "&:hover": {
-              color: MAGIC_UI.accentA,
-              backgroundColor: "rgba(30,64,175,0.35)",
+              color: MAGIC_UI.textBright,
+              backgroundImage: TAB_HOVER_GRADIENT,
+              opacity: 1,
+              boxShadow: "0 0 0 1px rgba(148,163,184,0.25) inset",
             },
           },
           "& .Mui-selected": {
             color: MAGIC_UI.textBright,
+            "&:hover": {
+              backgroundImage: TAB_HOVER_GRADIENT,
+            },
           },
         }}
       >

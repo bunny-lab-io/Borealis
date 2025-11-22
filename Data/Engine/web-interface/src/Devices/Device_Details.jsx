@@ -49,6 +49,8 @@ const MAGIC_UI = {
   accentC: "#34d399",
 };
 
+const TAB_HOVER_GRADIENT = "linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))";
+
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
@@ -1668,14 +1670,30 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
           },
         }}
         sx={{
-          borderBottom: `1px solid rgba(148,163,184,0.35)`,
+          borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
           mb: 2,
           "& .MuiTab-root": {
             color: MAGIC_UI.textMuted,
             textTransform: "none",
             fontWeight: 600,
+            fontFamily: '"IBM Plex Sans","Helvetica Neue",Arial,sans-serif',
+            fontSize: 15,
+            minHeight: 44,
+            opacity: 1,
+            borderRadius: 1,
+            transition: "background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease",
+            "&:hover": {
+              color: MAGIC_UI.textBright,
+              backgroundImage: TAB_HOVER_GRADIENT,
+              boxShadow: "0 0 0 1px rgba(148,163,184,0.25) inset",
+            },
           },
-          "& .Mui-selected": { color: MAGIC_UI.textBright },
+          "& .Mui-selected": {
+            color: MAGIC_UI.textBright,
+            "&:hover": {
+              backgroundImage: TAB_HOVER_GRADIENT,
+            },
+          },
         }}
       >
         {TOP_TABS.map((label) => (
