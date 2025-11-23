@@ -33,6 +33,9 @@ def register(
     def _hash_token(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
+    def _iso(dt: datetime) -> str:
+        return dt.astimezone(timezone.utc).isoformat()
+
     def _iso_now() -> str:
         return datetime.now(tz=timezone.utc).isoformat()
 

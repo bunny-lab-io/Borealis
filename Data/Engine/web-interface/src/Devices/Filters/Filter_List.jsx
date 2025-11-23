@@ -7,13 +7,11 @@ import {
   IconButton,
   Stack,
   Tooltip,
-  Chip,
 } from "@mui/material";
 import {
   FilterAlt as HeaderIcon,
   Cached as CachedIcon,
   Add as AddIcon,
-  OpenInNew as DetailsIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
@@ -55,6 +53,20 @@ const gradientButtonSx = {
 };
 
 const AUTO_SIZE_COLUMNS = ["name", "type", "deviceCount", "site", "lastEditedBy", "lastEdited"];
+const FILTER_TYPE_META = {
+  global: {
+    label: "Global",
+    textColor: "#8fdaa2",
+    backgroundColor: "rgba(56,161,105,0.16)",
+    borderColor: "rgba(56,161,105,0.4)",
+  },
+  site: {
+    label: "Site-Scoped",
+    textColor: "#8ab4ff",
+    backgroundColor: "rgba(125,180,255,0.16)",
+    borderColor: "rgba(125,180,255,0.42)",
+  },
+};
 
 const SAMPLE_ROWS = [
   {
@@ -84,6 +96,55 @@ function formatTimestamp(ts) {
   return date.toLocaleString();
 }
 
+function resolveLastEditor(filter) {
+  const candidate =
+    filter?.last_edited_by_username ||
+    filter?.last_edited_by_name ||
+    filter?.last_edited_by ||
+    filter?.lastEditedBy ||
+    filter?.last_editor ||
+    filter?.lastEditor ||
+    filter?.updated_by ||
+    filter?.updatedBy ||
+    filter?.owner ||
+    filter?.user ||
+    filter?.modified_by;
+  if (candidate && typeof candidate === "object") {
+    if (candidate.name) return candidate.name;
+    if (candidate.username) return candidate.username;
+    if (candidate.user) return candidate.user;
+  }
+  if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  return "Unknown";
+}
+
+function FilterTypePill({ type }) {
+  const key = String(type || "").toLowerCase() === "site" ? "site" : "global";
+  const meta = FILTER_TYPE_META[key];
+  return (
+    <Box
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        px: 1.1,
+        py: 0.25,
+        borderRadius: 8,
+        minWidth: 58,
+        justifyContent: "center",
+        fontWeight: 600,
+        fontSize: "0.72rem",
+        letterSpacing: 0.2,
+        color: meta.textColor,
+        border: `1px solid ${meta.borderColor}`,
+        backgroundColor: meta.backgroundColor,
+        textTransform: "none",
+      }}
+    >
+      {meta.label}
+    </Box>
+  );
+}
+
 function normalizeFilters(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.map((f, idx) => ({
@@ -91,7 +152,7 @@ function normalizeFilters(raw) {
     name: f.name || f.title || "Unnamed Filter",
     type: (f.site_scope || f.scope || f.type || "global") === "scoped" ? "site" : "global",
     site: f.site || f.site_scope || f.site_name || f.target_site || null,
-    lastEditedBy: f.last_edited_by || f.owner || f.updated_by || "Unknown",
+    lastEditedBy: resolveLastEditor(f),
     lastEdited: f.last_edited || f.updated_at || f.updated || f.created_at || null,
     deviceCount:
       typeof f.matching_device_count === "number"
@@ -196,11 +257,10 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
       {
         headerName: "Type",
         field: "type",
-        width: 120,
+        minWidth: 150,
         cellRenderer: (params) => {
           const type = String(params.value || "").toLowerCase() === "site" ? "Site" : "Global";
-          const color = type === "Global" ? "success" : "info";
-          return <Chip size="small" label={type} color={color} sx={{ fontSize: "0.75rem" }} />;
+          return <FilterTypePill type={type} />;
         },
         cellClass: "auto-col-tight",
       },
@@ -236,31 +296,8 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
         headerName: "Last Edited",
         field: "lastEdited",
         minWidth: 180,
-        valueFormatter: (params) => formatTimestamp(params.value),
-        cellClass: "auto-col-tight",
-      },
-      {
-        headerName: "Details",
-        field: "details",
-        width: 120,
-        minWidth: 140,
         flex: 1,
-        cellRenderer: (params) => (
-          <IconButton
-            aria-label="Open filter details"
-            size="small"
-            onClick={() => onEditFilter?.(params.data)}
-            sx={{
-              color: "#7dd3fc",
-              border: "1px solid rgba(148,163,184,0.4)",
-              borderRadius: 1.5,
-              backgroundColor: "rgba(255,255,255,0.03)",
-              "&:hover": { backgroundColor: "rgba(125,183,255,0.12)" },
-            }}
-          >
-            <DetailsIcon fontSize="inherit" />
-          </IconButton>
-        ),
+        valueFormatter: (params) => formatTimestamp(params.value),
         cellClass: "auto-col-tight",
       },
     ];
@@ -273,6 +310,12 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
       resizable: true,
       cellClass: "auto-col-tight",
       suppressMenu: true,
+      cellStyle: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "flex-start",
+        textAlign: "left",
+      },
     }),
     []
   );
@@ -281,11 +324,15 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
     <Paper
       elevation={0}
       sx={{
+        height: "100vh",
         minHeight: "100vh",
         background: AURORA_SHELL.background,
         color: AURORA_SHELL.text,
         p: 3,
         borderRadius: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
       }}
     >
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", mb: 2.5 }}>
@@ -341,76 +388,84 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
       </Box>
 
       <Box
+        className={gridTheme.themeName}
         sx={{
-          background: "rgba(10,16,31,0.85)",
-          border: "1px solid rgba(148,163,184,0.3)",
-          borderRadius: 2,
-          boxShadow: "0 18px 38px rgba(3,7,18,0.65)",
-          overflow: "hidden",
-        }}
-      >
-        <Box
-          sx={{
+          flexGrow: 1,
+          minHeight: 0,
+          pb: 2,
+          width: "100%",
+          fontFamily: gridFontFamily,
+          "& .ag-root-wrapper": { borderRadius: 0 },
+          "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
-            px: 2,
-            py: 1.25,
-            borderBottom: "1px solid rgba(148,163,184,0.2)",
-            background: "linear-gradient(90deg, rgba(148,163,184,0.08), rgba(148,163,184,0.04))",
-          }}
-        >
-          <Typography sx={{ color: "#e2e8f0", fontWeight: 600 }}>Filters</Typography>
-          <Typography sx={{ color: "rgba(226,232,240,0.7)", fontSize: "0.9rem" }}>
-            {loading ? "Loading…" : `${rows.length} filter${rows.length === 1 ? "" : "s"}`}
-          </Typography>
-        </Box>
-
-        {error ? (
-          <Box sx={{ px: 2, py: 1.5, color: "#ffb4b4", borderBottom: "1px solid rgba(255,179,179,0.4)" }}>
-            {error}
-          </Box>
-        ) : null}
-
-        <Box
-          className={gridTheme.themeName}
-          sx={{
-            height: "calc(100vh - 220px)",
-            "& .ag-root-wrapper": { borderRadius: 0 },
-            "& .ag-cell.auto-col-tight": { paddingLeft: 8, paddingRight: 6 },
-          }}
-          style={{
-            "--ag-icon-font-family": iconFontFamily,
-            "--ag-background-color": "#070b1a",
-            "--ag-foreground-color": "#f4f7ff",
-            "--ag-header-background-color": "#0f172a",
-            "--ag-header-foreground-color": "#cfe0ff",
-            "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-            "--ag-row-hover-color": "rgba(125,183,255,0.08)",
-            "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
-            "--ag-border-color": "rgba(125,183,255,0.18)",
-            "--ag-row-border-color": "rgba(125,183,255,0.14)",
-            "--ag-border-radius": "0px",
-            "--ag-checkbox-border-radius": "3px",
-            "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
-            "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
-            "--ag-checkbox-checked-color": "#7dd3fc",
-          }}
-        >
-          <AgGridReact
-            rowData={rows}
-            columnDefs={columnDefs}
-            defaultColDef={defaultColDef}
-            animateRows
-            rowHeight={46}
-            headerHeight={44}
-            suppressCellFocus
-            overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No device filters found.</span>"
-            onGridReady={handleGridReady}
-            theme={gridTheme}
-            style={{ width: "100%", height: "100%", fontFamily: gridFontFamily }}
-          />
-        </Box>
+            justifyContent: "flex-start",
+            textAlign: "left",
+            paddingTop: "8px",
+            paddingBottom: "8px",
+            paddingLeft: "18px",
+            paddingRight: "12px",
+          },
+          "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            padding: 0,
+          },
+          "& .ag-center-cols-container .ag-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell .ag-cell-value": {
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            textAlign: "left",
+          },
+          "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+            paddingLeft: "12px",
+            paddingRight: "9px",
+          },
+          "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper": {
+            justifyContent: "flex-start",
+          },
+          "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-value": {
+            textAlign: "left",
+            justifyContent: "flex-start",
+          },
+        }}
+        style={{
+          "--ag-icon-font-family": iconFontFamily,
+          "--ag-background-color": "#070b1a",
+          "--ag-foreground-color": "#f4f7ff",
+          "--ag-header-background-color": "#0f172a",
+          "--ag-header-foreground-color": "#cfe0ff",
+          "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+          "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+          "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+          "--ag-border-color": "rgba(125,183,255,0.18)",
+          "--ag-row-border-color": "rgba(125,183,255,0.14)",
+          "--ag-border-radius": "0px",
+          "--ag-checkbox-border-radius": "3px",
+          "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
+          "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
+          "--ag-checkbox-checked-color": "#7dd3fc",
+        }}
+      >
+        <AgGridReact
+          rowData={rows}
+          columnDefs={columnDefs}
+          defaultColDef={defaultColDef}
+          animateRows
+          rowHeight={46}
+          headerHeight={44}
+          suppressCellFocus
+          pagination
+          paginationPageSize={20}
+          paginationPageSizeSelector={[20, 50, 100]}
+          overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No device filters found.</span>"
+          onGridReady={handleGridReady}
+          theme={gridTheme}
+          style={{ width: "100%", height: "100%", fontFamily: gridFontFamily }}
+        />
       </Box>
     </Paper>
   );

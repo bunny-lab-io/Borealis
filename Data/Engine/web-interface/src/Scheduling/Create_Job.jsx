@@ -17,11 +17,6 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  Table,
-  TableHead,
-  TableRow,
-  TableCell,
-  TableBody,
   GlobalStyles,
   CircularProgress
 } from "@mui/material";
@@ -420,21 +415,6 @@ const SCHEDULE_LABELS = {
   weekly: "Weekly cadence",
   monthly: "Monthly cadence",
   yearly: "Yearly cadence",
-};
-
-const TABLE_BASE_SX = {
-  "& .MuiTableCell-root": {
-    borderColor: "rgba(148,163,184,0.18)",
-    color: MAGIC_UI.textBright,
-  },
-  "& .MuiTableHead-root .MuiTableCell-root": {
-    color: MAGIC_UI.textMuted,
-    fontWeight: 600,
-    backgroundColor: "rgba(8,12,24,0.7)",
-  },
-  "& .MuiTableBody-root .MuiTableRow-root:hover": {
-    backgroundColor: "rgba(56,189,248,0.08)",
-  },
 };
 
 const hiddenHandleStyle = {
@@ -1082,6 +1062,8 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
   const [filterAnchorEl, setFilterAnchorEl] = useState(null);
   const [activeFilterColumn, setActiveFilterColumn] = useState(null);
   const [pendingFilterValue, setPendingFilterValue] = useState("");
+  const devicePickerGridApiRef = useRef(null);
+  const filterPickerGridApiRef = useRef(null);
 
   const normalizeTarget = useCallback((rawTarget) => {
     if (!rawTarget) return null;
@@ -1093,7 +1075,19 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
       const rawKind = String(rawTarget.kind || "").toLowerCase();
       if (rawKind === "device" || rawTarget.hostname) {
         const host = String(rawTarget.hostname || "").trim();
-        return host ? { kind: "device", hostname: host } : null;
+        if (!host) return null;
+        const osValue =
+          rawTarget.os ||
+          rawTarget.operating_system ||
+          rawTarget.device_os ||
+          rawTarget.platform ||
+          rawTarget.agent_os ||
+          rawTarget.system ||
+          rawTarget.os_name ||
+          (rawTarget.summary && (rawTarget.summary.os || rawTarget.summary.operating_system)) ||
+          "";
+        const siteValue = rawTarget.site || rawTarget.site_name || rawTarget.site_scope || rawTarget.siteScope || "";
+        return { kind: "device", hostname: host, os: osValue, site: siteValue };
       }
       if (rawKind === "filter" || rawTarget.filter_id != null || rawTarget.id != null) {
         const idValue = rawTarget.filter_id ?? rawTarget.id;
@@ -1200,10 +1194,109 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
     },
     [targetKey]
   );
+  const availableDeviceMap = useMemo(() => {
+    const map = new Map();
+    availableDevices.forEach((device) => {
+      const key = String(device?.hostname || "").toLowerCase();
+      if (!key) return;
+      map.set(key, device);
+    });
+    return map;
+  }, [availableDevices]);
+  const devicePickerRows = useMemo(() => {
+    const query = deviceSearch.trim().toLowerCase();
+    if (query.length < 3) return [];
+    return availableDevices
+      .filter((device) => {
+        const display = String(device?.display || device?.hostname || "").toLowerCase();
+        return display.includes(query);
+      })
+      .map((device, index) => ({
+        id: String(device?.hostname || device?.display || `device-${index}`).toLowerCase(),
+        name: device?.display || device?.hostname || "Device",
+        status: device?.online ? "Online" : "Offline",
+        os: device?.os || "",
+        site: device?.site || "",
+        raw: device,
+      }));
+  }, [availableDevices, deviceSearch]);
+  const devicePickerOverlay = useMemo(
+    () =>
+      deviceSearch.trim().length < 3
+        ? "Type 3+ characters to search devices."
+        : "No devices match your search.",
+    [deviceSearch]
+  );
+  const filterPickerRows = useMemo(() => {
+    const query = filterSearch.trim().toLowerCase();
+    if (query.length < 3) return [];
+    return (filterCatalog || [])
+      .filter((f) => String(f?.name || "").toLowerCase().includes(query))
+      .map((f, index) => ({
+        id: String(f.id ?? f.filter_id ?? index),
+        name: f.name || `Filter ${index + 1}`,
+        deviceCount: typeof f.deviceCount === "number" ? f.deviceCount : f.devices_targeted ?? f.matching_device_count ?? null,
+        scope: (f.scope || f.site_scope || f.type) === "scoped" ? "Site" : "Global",
+        site: f.site || f.site_name || "",
+        raw: f,
+      }));
+  }, [filterCatalog, filterSearch]);
+  const filterPickerOverlay = useMemo(
+    () =>
+      filterSearch.trim().length < 3
+        ? "Type 3+ characters to search filters."
+        : "No filters match your search.",
+    [filterSearch]
+  );
+  const deviceRowsMap = useMemo(() => {
+    const map = new Map();
+    deviceRows.forEach((device) => {
+      const key = String(device?.hostname || device?.agent_hostname || device?.id || "").toLowerCase();
+      if (!key) return;
+      const osValue =
+        device?.os ||
+        device?.operating_system ||
+        device?.agent_os ||
+        device?.system ||
+        device?.os_name ||
+        (device?.summary && (device.summary.os || device.summary.operating_system)) ||
+        "";
+      const siteValue = device?.site || device?.site_name || device?.site_scope || device?.summary?.site || "";
+      map.set(key, { ...device, os: osValue, site: siteValue });
+    });
+    return map;
+  }, [deviceRows]);
   const targetGridRows = useMemo(() => {
+    const resolveOs = (target) => {
+      if (!target || target.kind !== "device") return "";
+      const explicit =
+        target.os ||
+        target.operating_system ||
+        target.device_os ||
+        target.platform ||
+        target.agent_os ||
+        target.system ||
+        target.os_name;
+      if (explicit) return explicit;
+      const key = String(target.hostname || "").toLowerCase();
+      if (!key) return "";
+      const fromAvailable = availableDeviceMap.get(key);
+      if (fromAvailable?.os) return fromAvailable.os;
+      const fromHistory = deviceRowsMap.get(key);
+      if (fromHistory?.os) return fromHistory.os;
+      return "";
+    };
     return targets.map((target) => {
       const key = targetKey(target) || `${target?.kind || "target"}-${Math.random().toString(36).slice(2, 8)}`;
       const isFilter = target?.kind === "filter";
+      const siteLabel = isFilter
+        ? "N/A"
+        : target?.site ||
+          target?.site_name ||
+          (() => {
+            const key = String(target.hostname || "").toLowerCase();
+            return availableDeviceMap.get(key)?.site || deviceRowsMap.get(key)?.site || "";
+          })();
       const deviceCount =
         typeof target?.deviceCount === "number" && Number.isFinite(target.deviceCount) ? target.deviceCount : null;
       const detailText = isFilter
@@ -1211,25 +1304,45 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
             target?.site_scope === "scoped" ? ` • ${target?.site || "Specific site"}` : ""
           }`
         : "—";
+      const osLabel = isFilter ? "—" : resolveOs(target) || "Unknown";
       return {
         id: key,
         typeLabel: isFilter ? "Filter" : "Device",
+        siteLabel,
         targetLabel: isFilter ? target?.name || `Filter #${target?.filter_id}` : target?.hostname,
         detailText,
+        osLabel,
         rawTarget: target,
       };
     });
-  }, [targets, targetKey]);
+  }, [targets, targetKey, availableDeviceMap, deviceRowsMap]);
   const targetGridColumnDefs = useMemo(
     () => [
-      { field: "typeLabel", headerName: "Type", minWidth: 120, filter: "agTextColumnFilter" },
-      { field: "targetLabel", headerName: "Target", minWidth: 200, flex: 1.1, filter: "agTextColumnFilter" },
-      { field: "detailText", headerName: "Details", minWidth: 200, flex: 1.4, filter: "agTextColumnFilter" },
+      { field: "typeLabel", headerName: "Type", minWidth: 120, flex: 0.9, filter: "agTextColumnFilter" },
+      {
+        field: "siteLabel",
+        headerName: "Site",
+        minWidth: 160,
+        flex: 1,
+        filter: "agTextColumnFilter",
+        cellRenderer: (params) => {
+          const isFilter = params?.data?.typeLabel === "Filter";
+          return (
+            <Box component="span" sx={{ color: isFilter ? "rgba(226,232,240,0.7)" : "#e2e8f0" }}>
+              {params.value || ""}
+            </Box>
+          );
+        },
+        cellClass: "auto-col-tight",
+      },
+      { field: "targetLabel", headerName: "Target", minWidth: 200, flex: 1.2, filter: "agTextColumnFilter" },
+      { field: "osLabel", headerName: "Operating System", minWidth: 170, flex: 1.1, filter: "agTextColumnFilter" },
+      { field: "detailText", headerName: "Details", minWidth: 200, flex: 1, filter: "agTextColumnFilter" },
       {
         field: "actions",
         headerName: "",
-        minWidth: 80,
-        maxWidth: 100,
+        minWidth: 100,
+        flex: 1.5,
         cellRenderer: "TargetActionsRenderer",
         sortable: false,
         suppressMenu: true,
@@ -1241,19 +1354,21 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
   const targetGridComponents = useMemo(
     () => ({
       TargetActionsRenderer: (params) => (
-        <IconButton
-          size="small"
-          onClick={(e) => {
-            e.stopPropagation();
-            params.context?.removeTarget?.(params.data?.rawTarget);
-          }}
-          sx={{
-            color: "#fb7185",
-            "&:hover": { color: "#fecdd3" },
-          }}
-        >
-          <DeleteIcon fontSize="small" />
-        </IconButton>
+        <Box sx={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+          <IconButton
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              params.context?.removeTarget?.(params.data?.rawTarget);
+            }}
+            sx={{
+              color: "#fb7185",
+              "&:hover": { color: "#fecdd3" },
+            }}
+          >
+            <DeleteIcon fontSize="small" />
+          </IconButton>
+        </Box>
       ),
     }),
     []
@@ -1272,7 +1387,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
     []
   );
   const targetGridApiRef = useRef(null);
-  const TARGET_AUTO_COLS = useRef(["typeLabel", "targetLabel", "detailText"]);
+  const TARGET_AUTO_COLS = useRef(["typeLabel", "targetLabel", "osLabel", "detailText"]);
   const handleTargetGridReady = useCallback((params) => {
     targetGridApiRef.current = params.api;
     requestAnimationFrame(() => {
@@ -1289,6 +1404,116 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
       } catch {}
     });
   }, [targetGridRows]);
+
+  const devicePickerSelectionCol = {
+    headerName: "",
+    field: "__select__",
+    width: 52,
+    maxWidth: 52,
+    checkboxSelection: true,
+    headerCheckboxSelection: true,
+    resizable: false,
+    sortable: false,
+    suppressMenu: true,
+    filter: false,
+    pinned: "left",
+    lockPosition: true,
+  };
+  const devicePickerColumnDefs = useMemo(
+    () => [
+      devicePickerSelectionCol,
+      { field: "site", headerName: "Site", minWidth: 160, flex: 1, cellClass: "auto-col-tight" },
+      { field: "name", headerName: "Name", minWidth: 200, flex: 1.2, cellClass: "auto-col-tight" },
+      { field: "status", headerName: "Status", minWidth: 140, flex: 0.9, cellClass: "auto-col-tight" },
+      { field: "os", headerName: "OS", minWidth: 180, flex: 1.8, cellClass: "auto-col-tight" },
+    ],
+    []
+  );
+  const devicePickerDefaultColDef = useMemo(
+    () => ({
+      sortable: true,
+      filter: "agTextColumnFilter",
+      resizable: true,
+      flex: 1,
+      cellClass: "auto-col-tight",
+      cellStyle: LEFT_ALIGN_CELL_STYLE,
+    }),
+    []
+  );
+  const handleDevicePickerReady = useCallback((params) => {
+    devicePickerGridApiRef.current = params.api;
+    requestAnimationFrame(() => {
+      try {
+        params.api.autoSizeColumns(["name", "status", "os"], true);
+      } catch {}
+    });
+  }, []);
+  useEffect(() => {
+    const api = devicePickerGridApiRef.current;
+    if (!api) return;
+    api.forEachNode((node) => {
+      const selected = !!selectedDeviceTargets[node?.data?.id];
+      if (node.isSelected() !== selected) {
+        node.setSelected(selected);
+      }
+    });
+  }, [selectedDeviceTargets, devicePickerRows]);
+  const handleDevicePickerSelectionChanged = useCallback(() => {
+    const api = devicePickerGridApiRef.current;
+    if (!api) return;
+    const next = {};
+    api.getSelectedNodes().forEach((node) => {
+      if (node?.data?.id) next[node.data.id] = true;
+    });
+    setSelectedDeviceTargets(next);
+  }, []);
+
+  const filterPickerSelectionCol = { ...devicePickerSelectionCol };
+  const filterPickerColumnDefs = useMemo(
+    () => [
+      filterPickerSelectionCol,
+      { field: "name", headerName: "Filter", minWidth: 220, flex: 1.4, cellClass: "auto-col-tight" },
+      {
+        field: "deviceCount",
+        headerName: "Devices",
+        minWidth: 140,
+        flex: 0.8,
+        valueFormatter: (params) => (typeof params.value === "number" ? params.value.toLocaleString() : "—"),
+        cellClass: "auto-col-tight",
+      },
+      { field: "scope", headerName: "Scope", minWidth: 140, flex: 0.9, cellClass: "auto-col-tight" },
+      { field: "site", headerName: "Site", minWidth: 160, flex: 1, cellClass: "auto-col-tight" },
+    ],
+    []
+  );
+  const filterPickerDefaultColDef = devicePickerDefaultColDef;
+  const handleFilterPickerReady = useCallback((params) => {
+    filterPickerGridApiRef.current = params.api;
+    requestAnimationFrame(() => {
+      try {
+        params.api.autoSizeColumns(["name", "deviceCount", "scope", "site"], true);
+      } catch {}
+    });
+  }, []);
+  useEffect(() => {
+    const api = filterPickerGridApiRef.current;
+    if (!api) return;
+    api.forEachNode((node) => {
+      const selected = !!selectedFilterTargets[node?.data?.id];
+      if (node.isSelected() !== selected) {
+        node.setSelected(selected);
+      }
+    });
+  }, [selectedFilterTargets, filterPickerRows]);
+  const handleFilterPickerSelectionChanged = useCallback(() => {
+    const api = filterPickerGridApiRef.current;
+    if (!api) return;
+    const next = {};
+    api.getSelectedNodes().forEach((node) => {
+      if (node?.data?.id) next[node.data.id] = true;
+    });
+    setSelectedFilterTargets(next);
+  }, []);
 
   useEffect(() => {
     setTargets((prev) => {
@@ -2401,7 +2626,17 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
         const list = Object.values(data || {}).map((a) => ({
           hostname: a.hostname || a.agent_hostname || a.id || "unknown",
           display: a.hostname || a.agent_hostname || a.id || "unknown",
-          online: !!a.collector_active
+          online: !!a.collector_active,
+          site: a.site || a.site_name || a.site_scope || a.group || "",
+          os:
+            a.os ||
+            a.operating_system ||
+            a.platform ||
+            a.agent_os ||
+            a.system ||
+            a.os_name ||
+            (a.summary && (a.summary.os || a.summary.operating_system)) ||
+            "",
         }));
         list.sort((a, b) => a.display.localeCompare(b.display));
         setAvailableDevices(list);
@@ -2729,18 +2964,19 @@ const heroTiles = useMemo(() => {
         {tab === 0 && (
           <Box sx={TAB_SECTION_SX}>
             <SectionHeader title="Job Name" />
-            <TextField
-              fullWidth
-              sx={{ width: { xs: "100%", md: "60%" }, maxWidth: 540, ...INPUT_FIELD_SX }}
-              placeholder="Example Job Name"
-              value={jobName}
-              onChange={(e) => handleJobNameInputChange(e.target.value)}
-              onBlur={(e) => setPageTitleJobName(e.target.value.trim())}
-              InputLabelProps={{ shrink: true }}
-              error={jobName.trim().length === 0}
-              helperText={jobName.trim().length === 0 ? "Job name is required" : ""}
-            />
-          </Box>
+          <TextField
+            fullWidth
+            sx={{ width: { xs: "100%", md: "60%" }, maxWidth: 540, ...INPUT_FIELD_SX }}
+            placeholder="Example Job Name"
+            value={jobName}
+            onChange={(e) => handleJobNameInputChange(e.target.value)}
+            onBlur={(e) => setPageTitleJobName(e.target.value.trim())}
+            InputLabelProps={{ shrink: true }}
+            error={jobName.trim().length === 0}
+            helperText={jobName.trim().length === 0 ? "Job name is required" : ""}
+            inputProps={{ sx: { py: 0.9 } }}
+          />
+        </Box>
         )}
 
         {tab === 1 && (
@@ -2782,7 +3018,7 @@ const heroTiles = useMemo(() => {
         )}
 
         {tab === 2 && (
-          <Box sx={TAB_SECTION_SX}>
+          <Box sx={{ ...TAB_SECTION_SX, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 1.5 }}>
             <SectionHeader
               title="Targets"
               action={
@@ -2797,7 +3033,16 @@ const heroTiles = useMemo(() => {
                 </Button>
               }
             />
-            <Box className={gridThemeClass} sx={{ ...GRID_WRAPPER_SX, height: 320 }}>
+            <Box
+              className={gridThemeClass}
+              sx={{
+                ...GRID_WRAPPER_SX,
+                flexGrow: 1,
+                minHeight: 420,
+                height: "100%",
+                maxHeight: "100%",
+              }}
+            >
               <AgGridReact
                 rowData={targetGridRows}
                 columnDefs={targetGridColumnDefs}
@@ -3207,18 +3452,22 @@ const heroTiles = useMemo(() => {
         open={addCompOpen}
         onClose={() => setAddCompOpen(false)}
         fullWidth
-        maxWidth="md"
+        maxWidth={false}
         PaperProps={{
           sx: {
             background: MAGIC_UI.panelBg,
             color: MAGIC_UI.textBright,
             border: `1px solid ${MAGIC_UI.panelBorder}`,
             boxShadow: MAGIC_UI.glow,
+            width: "95vw",
+            maxWidth: "95vw",
+            height: "95vh",
+            maxHeight: "95vh",
           },
         }}
       >
         <DialogTitle>Select an Assembly</DialogTitle>
-        <DialogContent>
+        <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, height: "100%", pb: 0.5, pt: 2 }}>
           <Box
             sx={{
               display: "flex",
@@ -3267,30 +3516,17 @@ const heroTiles = useMemo(() => {
               }}
             >
               <Tab label="Scripts" value="scripts" />
-              <Tab label="Ansible" value="ansible" />
+              <Tab label="Ansible Playbooks" value="ansible" />
               <Tab label="Workflows" value="workflows" />
             </Tabs>
-            <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+            <Box sx={{ display: "flex", gap: 1, alignItems: "center", ml: "auto" }}>
               <TextField
                 size="small"
                 placeholder="Search assemblies…"
                 value={assemblyFilterText}
                 onChange={(e) => setAssemblyFilterText(e.target.value)}
-                sx={{ minWidth: 220, ...INPUT_FIELD_SX }}
+                sx={{ minWidth: 352, maxWidth: 520, ...INPUT_FIELD_SX }}
               />
-              <IconButton
-                size="small"
-                onClick={() => loadAssemblies()}
-                sx={{
-                  color: MAGIC_UI.accentA,
-                  border: `1px solid ${MAGIC_UI.panelBorder}`,
-                  borderRadius: 2,
-                  width: 38,
-                  height: 38,
-                }}
-              >
-                <RefreshIcon fontSize="small" />
-              </IconButton>
             </Box>
           </Box>
           {assembliesError ? (
@@ -3304,7 +3540,16 @@ const heroTiles = useMemo(() => {
               <Typography variant="body2">Loading assemblies…</Typography>
             </Box>
           )}
-          <Box className={gridThemeClass} sx={{ ...GRID_WRAPPER_SX, height: 420 }}>
+          <Box
+            className={gridThemeClass}
+            sx={{
+              ...GRID_WRAPPER_SX,
+              flexGrow: 1,
+              minHeight: 520,
+              maxHeight: "calc(95vh - 210px)",
+              height: "100%",
+            }}
+          >
             <AgGridReact
               rowData={filteredAssemblyRows}
               columnDefs={assemblyColumnDefs}
@@ -3404,145 +3649,141 @@ const heroTiles = useMemo(() => {
             <Tab label="Filters" value="filters" />
           </Tabs>
 
-          {targetPickerTab === "devices" ? (
-            <>
-              <Box sx={{ mb: 2, display: "flex", gap: 2 }}>
+              {targetPickerTab === "devices" ? (
+                <>
+                  <Box sx={{ mb: 1.25, display: "flex", gap: 2 }}>
                 <TextField
                   size="small"
                   placeholder="Search devices..."
                   value={deviceSearch}
                   onChange={(e) => setDeviceSearch(e.target.value)}
                   sx={{ flex: 1, ...INPUT_FIELD_SX }}
+                  helperText={deviceSearch.trim().length < 3 ? "Type at least 3 characters to search devices." : ""}
+                  FormHelperTextProps={{ sx: { color: MAGIC_UI.textMuted } }}
                 />
               </Box>
-              <Table size="small" sx={TABLE_BASE_SX}>
-                <TableHead>
-                  <TableRow>
-                    <TableCell width={40}></TableCell>
-                    <TableCell>Name</TableCell>
-                    <TableCell>Status</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {availableDevices
-                    .filter((d) => d.display.toLowerCase().includes(deviceSearch.toLowerCase()))
-                    .map((d) => (
-                      <TableRow key={d.hostname} hover onClick={() => setSelectedDeviceTargets((prev) => ({ ...prev, [d.hostname]: !prev[d.hostname] }))}>
-                        <TableCell>
-                          <Checkbox
-                            size="small"
-                            checked={!!selectedDeviceTargets[d.hostname]}
-                            onChange={(e) => {
-                              e.stopPropagation();
-                              setSelectedDeviceTargets((prev) => ({ ...prev, [d.hostname]: e.target.checked }));
-                            }}
-                            sx={{
-                              color: MAGIC_UI.accentA,
-                              "&.Mui-checked": { color: MAGIC_UI.accentB },
-                            }}
-                          />
-                        </TableCell>
-                        <TableCell>{d.display}</TableCell>
-                        <TableCell>
-                          <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 10, background: d.online ? "#00d18c" : "#ff4f4f", marginRight: 8, verticalAlign: "middle" }} />
-                          {d.online ? "Online" : "Offline"}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  {availableDevices.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={3} sx={{ color: MAGIC_UI.textMuted }}>
-                        No devices available.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+              <Box
+                className={gridThemeClass}
+                sx={{
+                  ...GRID_WRAPPER_SX,
+                  height: 420,
+                }}
+              >
+                <AgGridReact
+                  rowData={devicePickerRows}
+                  columnDefs={devicePickerColumnDefs}
+                  defaultColDef={devicePickerDefaultColDef}
+                  animateRows
+                  rowHeight={46}
+                  headerHeight={44}
+                  suppressCellFocus
+        rowSelection="multiple"
+        rowMultiSelectWithClick
+        overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${devicePickerOverlay}</span>`}
+        getRowId={(params) => params.data?.id || params.rowIndex}
+        onGridReady={handleDevicePickerReady}
+        onSelectionChanged={handleDevicePickerSelectionChanged}
+        pagination
+        paginationPageSize={20}
+        paginationPageSizeSelector={[20, 50, 100]}
+        theme={gridTheme}
+        style={{ width: "100%", height: "100%", fontFamily: gridFontFamily, "--ag-icon-font-family": iconFontFamily }}
+      />
+              </Box>
             </>
-          ) : (
-            <>
-              <Box sx={{ mb: 2, display: "flex", gap: 2 }}>
+              ) : (
+                <>
+              <Box sx={{ mb: 1.25, display: "flex", gap: 2 }}>
                 <TextField
                   size="small"
                   placeholder="Search filters..."
                   value={filterSearch}
                   onChange={(e) => setFilterSearch(e.target.value)}
                   sx={{ flex: 1, ...INPUT_FIELD_SX }}
+                  helperText={filterSearch.trim().length < 3 ? "Type at least 3 characters to search filters." : ""}
+                  FormHelperTextProps={{ sx: { color: MAGIC_UI.textMuted } }}
                 />
               </Box>
-              <Table size="small" sx={TABLE_BASE_SX}>
-                <TableHead>
-                  <TableRow>
-                    <TableCell width={40}></TableCell>
-                    <TableCell>Filter</TableCell>
-                    <TableCell>Devices</TableCell>
-                    <TableCell>Scope</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {(filterCatalog || [])
-                    .filter((f) => (f.name || "").toLowerCase().includes(filterSearch.toLowerCase()))
-                    .map((f) => (
-                      <TableRow key={f.id} hover onClick={() => setSelectedFilterTargets((prev) => ({ ...prev, [f.id]: !prev[f.id] }))}>
-                        <TableCell>
-                          <Checkbox
-                            size="small"
-                            checked={!!selectedFilterTargets[f.id]}
-                            onChange={(e) => {
-                              e.stopPropagation();
-                              setSelectedFilterTargets((prev) => ({ ...prev, [f.id]: e.target.checked }));
-                            }}
-                            sx={{
-                              color: MAGIC_UI.accentA,
-                              "&.Mui-checked": { color: MAGIC_UI.accentB },
-                            }}
-                          />
-                        </TableCell>
-                        <TableCell>{f.name}</TableCell>
-                        <TableCell>{typeof f.deviceCount === "number" ? f.deviceCount.toLocaleString() : "—"}</TableCell>
-                        <TableCell>{f.scope === "scoped" ? (f.site || "Specific Site") : "All Sites"}</TableCell>
-                      </TableRow>
-                    ))}
-                  {!loadingFilterCatalog && (!filterCatalog || filterCatalog.length === 0) && (
-                    <TableRow>
-                      <TableCell colSpan={4} sx={{ color: MAGIC_UI.textMuted }}>
-                        No filters available.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {loadingFilterCatalog && (
-                    <TableRow>
-                      <TableCell colSpan={4} sx={{ color: MAGIC_UI.textMuted }}>
-                        Loading filters…
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+              <Box
+                className={gridThemeClass}
+                sx={{
+                  ...GRID_WRAPPER_SX,
+                  height: 420,
+                }}
+              >
+                <AgGridReact
+                  rowData={filterPickerRows}
+                  columnDefs={filterPickerColumnDefs}
+                  defaultColDef={filterPickerDefaultColDef}
+                  animateRows
+                  rowHeight={46}
+                  headerHeight={44}
+                  suppressCellFocus
+                  rowSelection="multiple"
+                  rowMultiSelectWithClick
+                  overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${filterPickerOverlay}</span>`}
+                  getRowId={(params) => params.data?.id || params.rowIndex}
+                  onGridReady={handleFilterPickerReady}
+                  onSelectionChanged={handleFilterPickerSelectionChanged}
+                  pagination
+                  paginationPageSize={20}
+                  paginationPageSizeSelector={[20, 50, 100]}
+                  theme={gridTheme}
+                  style={{ width: "100%", height: "100%", fontFamily: gridFontFamily, "--ag-icon-font-family": iconFontFamily }}
+                />
+              </Box>
             </>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAddTargetOpen(false)} sx={{ color: MAGIC_UI.textMuted, textTransform: "none" }}>
-            Cancel
-          </Button>
-          <Button
-            onClick={() => {
-              if (targetPickerTab === "filters") {
-                const additions = filterCatalog
-                  .filter((f) => selectedFilterTargets[f.id])
+              <DialogActions>
+                <Button onClick={() => setAddTargetOpen(false)} sx={{ color: MAGIC_UI.textMuted, textTransform: "none" }}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (targetPickerTab === "filters") {
+                const selectedIds = new Set(
+                  Object.entries(selectedFilterTargets)
+                    .filter(([, checked]) => checked)
+                    .map(([id]) => String(id))
+                );
+                const additions = (filterCatalog || [])
+                  .filter((f) => selectedIds.has(String(f.id ?? f.filter_id)))
                   .map((f) => ({
                     kind: "filter",
-                    filter_id: f.id,
+                    filter_id: f.id ?? f.filter_id,
                     name: f.name,
-                    site_scope: f.scope,
+                    site_scope: f.scope || f.site_scope || f.type,
                     site: f.site,
-                    deviceCount: f.deviceCount,
+                    deviceCount: f.deviceCount ?? f.devices_targeted ?? f.matching_device_count,
                   }));
+                // Fallback to visible picker rows if catalog didn't return anything yet
+                if (!additions.length && selectedIds.size) {
+                  filterPickerRows.forEach((row) => {
+                    if (!selectedIds.has(String(row.id))) return;
+                    additions.push({
+                      kind: "filter",
+                      filter_id: Number(row.id),
+                      name: row.name,
+                      site_scope: row.scope,
+                      site: row.site,
+                      deviceCount: row.deviceCount,
+                    });
+                  });
+                }
                 if (additions.length) addTargets(additions);
               } else {
-                const chosenHosts = Object.keys(selectedDeviceTargets).filter((hostname) => selectedDeviceTargets[hostname]);
-                if (chosenHosts.length) addTargets(chosenHosts);
+                const chosenDevices = Object.keys(selectedDeviceTargets)
+                  .filter((hostname) => selectedDeviceTargets[hostname])
+                  .map((hostname) => {
+                    const normalized = String(hostname || "").toLowerCase();
+                    const lookup = availableDeviceMap.get(normalized);
+                    if (lookup) {
+                      return { kind: "device", hostname: lookup.hostname, os: lookup.os, site: lookup.site };
+                    }
+                    return { kind: "device", hostname };
+                  });
+                if (chosenDevices.length) addTargets(chosenDevices);
               }
               setAddTargetOpen(false);
             }}

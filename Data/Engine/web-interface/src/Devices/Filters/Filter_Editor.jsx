@@ -120,12 +120,53 @@ const OS_ICON_MAP = {
   mac: "fab fa-apple",
 };
 
+const TAB_HOVER_GRADIENT = "linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))";
+
 const AUTO_SIZE_COLUMNS = ["status", "site", "hostname", "description", "type", "os"];
 
 const resolveApplyAll = (filter) => Boolean(filter?.applyToAllSites ?? filter?.apply_to_all_sites);
 
 const resolveLastEdited = (filter) =>
   filter?.lastEdited || filter?.last_edited || filter?.updated_at || filter?.updated || null;
+
+const resolveLastEditedBy = (filter) => {
+  const candidate =
+    filter?.last_edited_by_username ||
+    filter?.last_edited_by_name ||
+    filter?.last_edited_by ||
+    filter?.lastEditedBy ||
+    filter?.last_editor ||
+    filter?.lastEditor ||
+    filter?.updated_by ||
+    filter?.updatedBy ||
+    filter?.owner ||
+    filter?.user ||
+    filter?.modified_by;
+  if (candidate && typeof candidate === "object") {
+    if (candidate.name) return candidate.name;
+    if (candidate.username) return candidate.username;
+    if (candidate.user) return candidate.user;
+  }
+  if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  return "Unknown";
+};
+
+const formatLastEditedLabel = (ts, user) => {
+  if (!ts) return "";
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return "";
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getFullYear();
+  let hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const suffix = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12 || 12;
+  const datePart = `${month}/${day}/${year}`;
+  const timePart = `${hours}:${minutes}${suffix}`;
+  const editor = user && typeof user === "string" && user.trim() ? user : "Unknown";
+  return `Last edited by ${editor} @ ${datePart} @ ${timePart}`;
+};
 
 const resolveSiteScope = (filter) => {
   const raw = filter?.site_scope || filter?.siteScope || filter?.scope || filter?.type;
@@ -169,6 +210,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
   const [sites, setSites] = useState([]);
   const [loadingSites, setLoadingSites] = useState(false);
   const [lastEditedTs, setLastEditedTs] = useState(resolveLastEdited(initialFilter));
+  const [lastEditedBy, setLastEditedBy] = useState(resolveLastEditedBy(initialFilter));
   const [loadingFilter, setLoadingFilter] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
@@ -200,6 +242,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
     setTargetSite(filter?.site || filter?.site_scope || filter?.siteName || filter?.site_name || "");
     setGroups(normalizeGroupsForUI(filter?.groups || filter?.raw?.groups));
     setLastEditedTs(resolveLastEdited(filter));
+    setLastEditedBy(resolveLastEditedBy(filter));
   }, []);
 
   useEffect(() => {
@@ -597,17 +640,17 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
         key={condition.id}
         sx={{
           display: "grid",
-          gridTemplateColumns: "120px 220px 220px 1fr auto",
-          gap: 1,
+          gridTemplateColumns: "110px 220px 220px 1fr auto",
+          gap: 0.5,
           alignItems: "center",
           background: "rgba(12,18,35,0.7)",
           border: `1px solid ${AURORA_SHELL.border}`,
           borderRadius: 2,
-          px: 1.5,
+          px: 1.25,
           py: 1,
         }}
       >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
           {!isFirst && (
             <ToggleButtonGroup
               exclusive
@@ -716,6 +759,10 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
       sx={{
         minHeight: "100vh",
         background: AURORA_SHELL.background,
+        backgroundRepeat: "no-repeat",
+        backgroundSize: "100% 520px",
+        backgroundAttachment: "scroll",
+        backgroundColor: "#040711",
         color: AURORA_SHELL.text,
         p: 3,
         borderRadius: 0,
@@ -746,7 +793,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
             </Typography>
             {lastEditedTs && (
               <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.9rem", mt: 0.4 }}>
-                Last edited {new Date(lastEditedTs).toLocaleString()}
+                {formatLastEditedLabel(lastEditedTs, lastEditedBy)}
               </Typography>
             )}
           </Box>
@@ -800,83 +847,70 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
         </Box>
       ) : null}
 
-      <Box
-        sx={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 2,
-        }}
-      >
         <Box
           sx={{
-            background: AURORA_SHELL.glass,
-            border: `1px solid ${AURORA_SHELL.border}`,
-            borderRadius: 2.5,
-            p: 2,
-            boxShadow: "0 18px 38px rgba(3,7,18,0.65)",
-            backdropFilter: "blur(12px)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 2.75,
           }}
         >
-          <Typography sx={{ fontWeight: 700, mb: 1 }}>Name</Typography>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+          <Typography sx={{ fontWeight: 700 }}>Name</Typography>
           <TextField
-            fullWidth
             size="small"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Filter name or convention (e.g., RMM targeting)"
             sx={{
+              width: { xs: "100%", md: "50%" },
+              maxWidth: 420,
               "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
               "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
             }}
           />
         </Box>
 
-        <Box
-          sx={{
-            background: AURORA_SHELL.glass,
-            border: `1px solid ${AURORA_SHELL.border}`,
-            borderRadius: 2.5,
-            p: 2,
-            boxShadow: "0 18px 38px rgba(3,7,18,0.65)",
-            backdropFilter: "blur(12px)",
-          }}
-        >
-          <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1.5}>
-            <Box>
-              <Typography sx={{ fontWeight: 700 }}>Scope</Typography>
-              <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
-                Choose whether this filter is global or pinned to a specific site.
-              </Typography>
-            </Box>
-            <ToggleButtonGroup
-              exclusive
-              value={scope}
-              onChange={(_, val) => {
-                if (!val) return;
-                setScope(val);
-              }}
-              color="info"
-              sx={{
-                background: "rgba(7,12,26,0.8)",
-                borderRadius: 2,
-                "& .MuiToggleButton-root": {
-                  textTransform: "none",
-                  color: AURORA_SHELL.text,
-                  borderColor: "rgba(148,163,184,0.4)",
-                },
-                "& .Mui-selected": {
-                  background: "linear-gradient(135deg, rgba(125,211,252,0.24), rgba(192,132,252,0.22))",
-                  color: "#0b1220",
-                },
-              }}
-            >
-              <ToggleButton value="global">Global</ToggleButton>
-              <ToggleButton value="site">Site</ToggleButton>
-            </ToggleButtonGroup>
-          </Stack>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25 }}>
+          <Typography sx={{ fontWeight: 700 }}>Scope</Typography>
+          <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
+            Choose whether this filter is global or pinned to a specific site.
+          </Typography>
+          <ToggleButtonGroup
+            exclusive
+            value={scope}
+            onChange={(_, val) => {
+              if (!val) return;
+              setScope(val);
+            }}
+            color="info"
+            sx={{
+              alignSelf: "flex-start",
+              background: "rgba(7,12,26,0.7)",
+              borderRadius: 2,
+              "& .MuiToggleButton-root": {
+                textTransform: "none",
+                color: AURORA_SHELL.text,
+                borderColor: "rgba(148,163,184,0.35)",
+                minHeight: 32,
+                paddingTop: 0.25,
+                paddingBottom: 0.25,
+                paddingLeft: 1.6,
+                paddingRight: 1.6,
+                fontWeight: 700,
+              },
+              "& .Mui-selected": {
+                background: TAB_HOVER_GRADIENT,
+                color: "#0b1220",
+                boxShadow: "0 0 0 1px rgba(148,163,184,0.35) inset",
+              },
+            }}
+          >
+            <ToggleButton value="global">Global</ToggleButton>
+            <ToggleButton value="site">Site</ToggleButton>
+          </ToggleButtonGroup>
 
           {scope === "site" && (
-            <Box sx={{ mt: 2, display: "flex", flexDirection: "column", gap: 1.5 }}>
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25 }}>
               <Stack direction="row" alignItems="center" spacing={1}>
                 <Switch
                   checked={applyToAllSites}
@@ -907,6 +941,8 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
                       size="small"
                       placeholder="Search sites"
                       sx={{
+                        width: { xs: "100%", md: "50%" },
+                        maxWidth: 420,
                         "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
                         "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
                       }}
@@ -918,19 +954,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
           )}
         </Box>
 
-        <Box
-          sx={{
-            background: AURORA_SHELL.glass,
-            border: `1px solid ${AURORA_SHELL.border}`,
-            borderRadius: 2.5,
-            p: 2,
-            boxShadow: "0 18px 38px rgba(3,7,18,0.65)",
-            backdropFilter: "blur(12px)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-          }}
-        >
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2.75 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <Typography sx={{ fontWeight: 700 }}>Criteria</Typography>
             <Chip label="Grouped AND / OR" size="small" sx={{ backgroundColor: "rgba(125,211,252,0.12)", color: "#7dd3fc" }} />
@@ -1034,24 +1058,12 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
           </Button>
         </Box>
 
-        <Box
-          sx={{
-            background: AURORA_SHELL.glass,
-            border: `1px solid ${AURORA_SHELL.border}`,
-            borderRadius: 2.5,
-            p: 2,
-            boxShadow: "0 18px 38px rgba(3,7,18,0.65)",
-            backdropFilter: "blur(12px)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 1.5,
-          }}
-        >
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between">
             <Box>
               <Typography sx={{ fontWeight: 700 }}>Results</Typography>
               <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
-                Apply criteria to preview matching devices (20 per page).
+                Apply criteria to preview matching devices.
               </Typography>
               {previewAppliedAt && (
                 <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.85rem" }}>
