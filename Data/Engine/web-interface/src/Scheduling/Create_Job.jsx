@@ -450,8 +450,9 @@ const normalizeFilterCatalog = (raw) => {
       const idValue = item?.id ?? item?.filter_id ?? idx;
       const id = Number(idValue);
       if (!Number.isFinite(id)) return null;
-      const scopeText = String(item?.site_scope || item?.scope || item?.type || "global").toLowerCase();
-      const scope = scopeText === "scoped" ? "scoped" : "global";
+      const scopeText = String(item?.site_scope || item?.scope || item?.type || "global").trim().toLowerCase();
+      const scope = scopeText === "scoped" || scopeText === "site" ? "scoped" : "global";
+      const siteName = item?.site || item?.site_name || item?.target_site || item?.site_scope_value || null;
       const deviceCount =
         typeof item?.matching_device_count === "number" && Number.isFinite(item.matching_device_count)
           ? item.matching_device_count
@@ -460,7 +461,9 @@ const normalizeFilterCatalog = (raw) => {
         id,
         name: item?.name || `Filter ${idx + 1}`,
         scope,
-        site: item?.site || item?.site_name || item?.target_site || null,
+        site_scope: scope,
+        site: siteName,
+        site_name: siteName,
         deviceCount,
       };
     })
@@ -1033,6 +1036,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
   const [availableDevices, setAvailableDevices] = useState([]); // [{hostname, display, online}]
   const [selectedDeviceTargets, setSelectedDeviceTargets] = useState({});
   const [selectedFilterTargets, setSelectedFilterTargets] = useState({});
+  const [selectedFilterRows, setSelectedFilterRows] = useState([]);
   const [deviceSearch, setDeviceSearch] = useState("");
   const [filterSearch, setFilterSearch] = useState("");
   const [targetPickerTab, setTargetPickerTab] = useState("devices");
@@ -1095,8 +1099,12 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
         if (!Number.isFinite(filterId)) return null;
         const catalogEntry =
           filterCatalogMapRef.current[filterId] || filterCatalogMapRef.current[String(filterId)] || {};
-        const scopeText = String(rawTarget.site_scope || rawTarget.scope || rawTarget.type || catalogEntry.scope || "global").toLowerCase();
-        const scope = scopeText === "scoped" ? "scoped" : "global";
+        const scopeText = String(
+          rawTarget.site_scope || rawTarget.scope || rawTarget.type || catalogEntry.scope || "global"
+        )
+          .trim()
+          .toLowerCase();
+        const scope = scopeText === "scoped" || scopeText === "site" ? "scoped" : "global";
         const deviceCount =
           typeof rawTarget.deviceCount === "number" && Number.isFinite(rawTarget.deviceCount)
             ? rawTarget.deviceCount
@@ -1231,23 +1239,42 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
     const query = filterSearch.trim().toLowerCase();
     if (query.length < 3) return [];
     return (filterCatalog || [])
-      .filter((f) => String(f?.name || "").toLowerCase().includes(query))
-      .map((f, index) => ({
-        id: String(f.id ?? f.filter_id ?? index),
-        name: f.name || `Filter ${index + 1}`,
-        deviceCount: typeof f.deviceCount === "number" ? f.deviceCount : f.devices_targeted ?? f.matching_device_count ?? null,
-        scope: (f.scope || f.site_scope || f.type) === "scoped" ? "Site" : "Global",
-        site: f.site || f.site_name || "",
-        raw: f,
-      }));
+      .filter((f) => {
+        if (!query) return true;
+        return String(f?.name || "").toLowerCase().includes(query);
+      })
+      .map((f, index) => {
+        const scopeRaw = String(f.scope || f.site_scope || f.type || "").toLowerCase();
+        const scoped = scopeRaw === "scoped" || scopeRaw === "site";
+        const deviceCount =
+          typeof f.deviceCount === "number"
+            ? f.deviceCount
+            : f.devices_targeted ?? f.matching_device_count ?? null;
+        return {
+          id: String(f.id ?? f.filter_id ?? index),
+          name: f.name || `Filter ${index + 1}`,
+          deviceCount,
+          scope: scoped ? "Site" : "Global",
+          scopeKey: scoped ? "scoped" : "global",
+          site: "",
+          raw: f,
+        };
+      });
   }, [filterCatalog, filterSearch]);
-  const filterPickerOverlay = useMemo(
-    () =>
-      filterSearch.trim().length < 3
-        ? "Type 3+ characters to search filters."
-        : "No filters match your search.",
-    [filterSearch]
-  );
+  const filterPickerRowMap = useMemo(() => {
+    const map = new Map();
+    filterPickerRows.forEach((row) => {
+      map.set(String(row.id), row);
+    });
+    return map;
+  }, [filterPickerRows]);
+  const filterPickerOverlay = useMemo(() => {
+    if (!filterCatalog?.length) return "No device filters available.";
+    const query = filterSearch.trim();
+    if (query.length < 3) return "Type 3+ characters to search filters.";
+    if (query && filterPickerRows.length === 0) return "No filters match your search.";
+    return "Select filters to target.";
+  }, [filterCatalog?.length, filterPickerRows.length, filterSearch]);
   const deviceRowsMap = useMemo(() => {
     const map = new Map();
     deviceRows.forEach((device) => {
@@ -1290,7 +1317,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
       const key = targetKey(target) || `${target?.kind || "target"}-${Math.random().toString(36).slice(2, 8)}`;
       const isFilter = target?.kind === "filter";
       const siteLabel = isFilter
-        ? "N/A"
+        ? ""
         : target?.site ||
           target?.site_name ||
           (() => {
@@ -1300,14 +1327,12 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
       const deviceCount =
         typeof target?.deviceCount === "number" && Number.isFinite(target.deviceCount) ? target.deviceCount : null;
       const detailText = isFilter
-        ? `${deviceCount != null ? deviceCount.toLocaleString() : "—"} device${deviceCount === 1 ? "" : "s"}${
-            target?.site_scope === "scoped" ? ` • ${target?.site || "Specific site"}` : ""
-          }`
+        ? `${deviceCount != null ? deviceCount.toLocaleString() : "—"} device${deviceCount === 1 ? "" : "s"}`
         : "—";
       const osLabel = isFilter ? "—" : resolveOs(target) || "Unknown";
       return {
         id: key,
-        typeLabel: isFilter ? "Filter" : "Device",
+        typeLabel: isFilter ? "Device Filter" : "Device",
         siteLabel,
         targetLabel: isFilter ? target?.name || `Filter #${target?.filter_id}` : target?.hostname,
         detailText,
@@ -1325,14 +1350,11 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
         minWidth: 160,
         flex: 1,
         filter: "agTextColumnFilter",
-        cellRenderer: (params) => {
-          const isFilter = params?.data?.typeLabel === "Filter";
-          return (
-            <Box component="span" sx={{ color: isFilter ? "rgba(226,232,240,0.7)" : "#e2e8f0" }}>
-              {params.value || ""}
-            </Box>
-          );
-        },
+        cellRenderer: (params) => (
+          <Box component="span" sx={{ color: "#e2e8f0" }}>
+            {params.value || ""}
+          </Box>
+        ),
         cellClass: "auto-col-tight",
       },
       { field: "targetLabel", headerName: "Target", minWidth: 200, flex: 1.2, filter: "agTextColumnFilter" },
@@ -1482,7 +1504,6 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
         cellClass: "auto-col-tight",
       },
       { field: "scope", headerName: "Scope", minWidth: 140, flex: 0.9, cellClass: "auto-col-tight" },
-      { field: "site", headerName: "Site", minWidth: 160, flex: 1, cellClass: "auto-col-tight" },
     ],
     []
   );
@@ -1491,7 +1512,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
     filterPickerGridApiRef.current = params.api;
     requestAnimationFrame(() => {
       try {
-        params.api.autoSizeColumns(["name", "deviceCount", "scope", "site"], true);
+        params.api.autoSizeColumns(["name", "deviceCount", "scope"], true);
       } catch {}
     });
   }, []);
@@ -1505,13 +1526,27 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
       }
     });
   }, [selectedFilterTargets, filterPickerRows]);
-  const handleFilterPickerSelectionChanged = useCallback(() => {
-    const api = filterPickerGridApiRef.current;
+  const handleFilterPickerSelectionChanged = useCallback((params) => {
+    const api = params?.api || filterPickerGridApiRef.current;
     if (!api) return;
     const next = {};
-    api.getSelectedNodes().forEach((node) => {
-      if (node?.data?.id) next[node.data.id] = true;
-    });
+    const rows = typeof api.getSelectedRows === "function" ? api.getSelectedRows() : [];
+    if (rows.length) {
+      rows.forEach((row) => {
+        if (row?.id != null) next[row.id] = true;
+      });
+      setSelectedFilterRows(rows);
+    } else {
+      const nodes = api.getSelectedNodes ? api.getSelectedNodes() : [];
+      const collectedRows = [];
+      nodes.forEach((node) => {
+        if (node?.data?.id != null) {
+          next[node.data.id] = true;
+          collectedRows.push(node.data);
+        }
+      });
+      setSelectedFilterRows(collectedRows);
+    }
     setSelectedFilterTargets(next);
   }, []);
 
@@ -2618,6 +2653,7 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
     setTargetPickerTab("devices");
     setSelectedDeviceTargets({});
     setSelectedFilterTargets({});
+    setSelectedFilterRows([]);
     loadFilterCatalog();
     try {
       const resp = await fetch("/api/agents");
@@ -3742,36 +3778,92 @@ const heroTiles = useMemo(() => {
                 <Button
                   onClick={() => {
                     if (targetPickerTab === "filters") {
-                const selectedIds = new Set(
+                const gridNodes =
+                  (filterPickerGridApiRef.current &&
+                    filterPickerGridApiRef.current.getSelectedNodes()) ||
+                  [];
+                const additions = [];
+                const api = filterPickerGridApiRef.current;
+                const fromStateIds = new Set(
                   Object.entries(selectedFilterTargets)
                     .filter(([, checked]) => checked)
                     .map(([id]) => String(id))
                 );
-                const additions = (filterCatalog || [])
-                  .filter((f) => selectedIds.has(String(f.id ?? f.filter_id)))
-                  .map((f) => ({
+
+                const rowsToUse =
+                  (selectedFilterRows && selectedFilterRows.length
+                    ? selectedFilterRows
+                    : null) ||
+                  (() => {
+                    if (api && typeof api.getSelectedRows === "function") {
+                      const rows = api.getSelectedRows();
+                      if (Array.isArray(rows) && rows.length) return rows;
+                    }
+                    if (gridNodes.length) {
+                      const rows = gridNodes.map((n) => n?.data).filter(Boolean);
+                      if (rows.length) return rows;
+                    }
+                    if (api && typeof api.forEachNode === "function") {
+                      const rows = [];
+                      api.forEachNode((node) => {
+                        if (node && node.isSelected && node.isSelected()) {
+                          rows.push(node.data);
+                        }
+                      });
+                      if (rows.length) return rows;
+                    }
+                    return [];
+                  })();
+
+                rowsToUse.forEach((row) => {
+                  const parsedId = Number(row?.id ?? row?.filter_id);
+                  if (!Number.isFinite(parsedId)) return;
+                  additions.push({
                     kind: "filter",
-                    filter_id: f.id ?? f.filter_id,
-                    name: f.name,
-                    site_scope: f.scope || f.site_scope || f.type,
-                    site: f.site,
-                    deviceCount: f.deviceCount ?? f.devices_targeted ?? f.matching_device_count,
-                  }));
-                // Fallback to visible picker rows if catalog didn't return anything yet
-                if (!additions.length && selectedIds.size) {
-                  filterPickerRows.forEach((row) => {
-                    if (!selectedIds.has(String(row.id))) return;
+                    filter_id: parsedId,
+                    name: row?.name || `Filter #${parsedId}`,
+                    site_scope: row?.scopeKey || row?.scope || "global",
+                    site: null,
+                    deviceCount: row?.deviceCount,
+                  });
+                });
+
+                if (!additions.length && fromStateIds.size) {
+                  fromStateIds.forEach((id) => {
+                    const catalog =
+                      filterCatalogMapRef.current[id] || filterCatalogMapRef.current[String(id)] || null;
+                    const source = catalog || null;
+                    const parsedId = Number(source?.id ?? source?.filter_id ?? id);
+                    if (!Number.isFinite(parsedId)) return;
                     additions.push({
                       kind: "filter",
-                      filter_id: Number(row.id),
-                      name: row.name,
-                      site_scope: row.scope,
-                      site: row.site,
-                      deviceCount: row.deviceCount,
+                      filter_id: parsedId,
+                      name: source?.name || `Filter #${parsedId}`,
+                      site_scope: source?.site_scope || source?.scope || source?.type || "global",
+                      site: null,
+                      deviceCount: source?.deviceCount ?? source?.devices_targeted ?? source?.matching_device_count,
                     });
                   });
                 }
-                if (additions.length) addTargets(additions);
+                if (!additions.length && filterPickerRows.length === 1) {
+                  const row = filterPickerRows[0];
+                  const parsedId = Number(row?.id ?? row?.filter_id);
+                  if (Number.isFinite(parsedId)) {
+                    additions.push({
+                      kind: "filter",
+                      filter_id: parsedId,
+                      name: row?.name || `Filter #${parsedId}`,
+                      site_scope: row?.scopeKey || row?.scope || "global",
+                      site: null,
+                      deviceCount: row?.deviceCount,
+                    });
+                  }
+                }
+                if (additions.length) {
+                  addTargets(additions);
+                } else {
+                  alert("Select at least one filter to add.");
+                }
               } else {
                 const chosenDevices = Object.keys(selectedDeviceTargets)
                   .filter((hostname) => selectedDeviceTargets[hostname])

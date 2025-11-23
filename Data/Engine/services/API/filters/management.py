@@ -40,7 +40,8 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         except Exception:
             groups = []
         scope = (row["site_scope"] or "global").lower()
-        site_value = row["site_scope"] or row["site_name"]
+        site_name = row["site_name"] or ""
+        site_value = site_name or row["site_scope"] or ""
         return {
             "id": row["id"],
             "name": row["name"],
@@ -49,7 +50,8 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             "applyToAllSites": scope != "scoped",
             "site": site_value,
             "site_name": site_value,
-            "site_scope": site_value,
+            "site_scope": scope,
+            "site_scope_value": site_value,
             "groups": groups,
             "last_edited_by": row["last_edited_by"],
             "last_edited": row["last_edited"],
