@@ -312,9 +312,11 @@ def register(
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     def _issue_refresh_token(cur: sqlite3.Cursor, guid: str) -> Dict[str, Any]:
+        # Sliding window expiration; refreshed on each successful token refresh call.
+        REFRESH_TOKEN_TTL_DAYS = 90
         token = secrets.token_urlsafe(48)
         now = _now()
-        expires_at = now.replace(microsecond=0) + timedelta(days=30)
+        expires_at = now.replace(microsecond=0) + timedelta(days=REFRESH_TOKEN_TTL_DAYS)
         cur.execute(
             """
             INSERT INTO refresh_tokens (id, guid, token_hash, created_at, expires_at)

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Callable
 
 from flask import Blueprint, current_app, jsonify, request
@@ -28,6 +28,7 @@ def register(
     dpop_validator: DPoPValidator,
 ) -> None:
     blueprint = Blueprint("tokens", __name__)
+    REFRESH_TOKEN_TTL_DAYS = 90
 
     def _hash_token(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -70,7 +71,8 @@ def register(
                 return jsonify({"error": "refresh_token_revoked"}), 401
             if expires_at:
                 try:
-                    if _parse_iso(expires_at) <= datetime.now(tz=timezone.utc):
+                    parsed_expiry = _parse_iso(expires_at)
+                    if parsed_expiry <= datetime.now(tz=timezone.utc):
                         return jsonify({"error": "refresh_token_expired"}), 401
                 except Exception:
                     pass
@@ -124,10 +126,16 @@ def register(
                 """
                 UPDATE refresh_tokens
                    SET last_used_at = ?,
+                       expires_at = ?,
                        dpop_jkt = COALESCE(NULLIF(?, ''), dpop_jkt)
                  WHERE id = ?
                 """,
-                (_iso_now(), jkt, record_id),
+                (
+                    _iso_now(),
+                    _iso(datetime.now(tz=timezone.utc) + timedelta(days=REFRESH_TOKEN_TTL_DAYS)),
+                    jkt,
+                    record_id,
+                ),
             )
             conn.commit()
         finally:

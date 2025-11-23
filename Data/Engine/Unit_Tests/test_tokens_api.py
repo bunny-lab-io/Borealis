@@ -77,14 +77,16 @@ def test_refresh_token_success(engine_harness: EngineTestHarness) -> None:
     with sqlite3.connect(str(harness.db_path)) as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT last_used_at, revoked_at FROM refresh_tokens WHERE guid = ?",
+            "SELECT last_used_at, revoked_at, expires_at FROM refresh_tokens WHERE guid = ?",
             (guid,),
         )
         row = cur.fetchone()
     assert row is not None
-    last_used_at, revoked_at = row
+    last_used_at, revoked_at, bumped_expires_at = row
     assert last_used_at is not None
     assert revoked_at is None
+    refreshed_expiry = datetime.fromisoformat(bumped_expires_at)
+    assert refreshed_expiry > now + timedelta(days=80)
 
 
 def test_refresh_token_requires_payload(engine_harness: EngineTestHarness) -> None:
