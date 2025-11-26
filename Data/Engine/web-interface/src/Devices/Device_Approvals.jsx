@@ -415,7 +415,7 @@ export default function DeviceApprovals() {
         height: "100%",
         borderRadius: 0,
         border: `1px solid ${MAGIC_UI.panelBorder}`,
-        background: MAGIC_UI.shellBg,
+        background: "transparent",
         boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
         overflow: "hidden",
       }}

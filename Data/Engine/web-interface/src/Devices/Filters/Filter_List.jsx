@@ -123,21 +123,14 @@ function FilterTypePill({ type }) {
   const meta = FILTER_TYPE_META[key];
   return (
     <Box
+      component="span"
       sx={{
         display: "inline-flex",
         alignItems: "center",
-        px: 1.1,
-        py: 0.25,
-        borderRadius: 8,
-        minWidth: 58,
-        justifyContent: "center",
-        fontWeight: 600,
-        fontSize: "0.72rem",
+        fontWeight: 700,
+        fontSize: "0.9rem",
         letterSpacing: 0.2,
         color: meta.textColor,
-        border: `1px solid ${meta.borderColor}`,
-        backgroundColor: meta.backgroundColor,
-        textTransform: "none",
       }}
     >
       {meta.label}
@@ -326,7 +319,7 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
       sx={{
         height: "100vh",
         minHeight: "100vh",
-        background: AURORA_SHELL.background,
+        backgroundColor: "transparent",
         color: AURORA_SHELL.text,
         p: 3,
         borderRadius: 0,

@@ -30,7 +30,7 @@ import FilterListIcon from "@mui/icons-material/FilterList";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
 
 /* ---------- Formatting helpers to keep this page in lockstep with Device_List ---------- */
-const tablePaperSx = { m: 2, p: 0, bgcolor: "#1e1e1e" };
+const tablePaperSx = { m: 2, p: 0, bgcolor: "transparent" };
 const tableSx = {
   minWidth: 820,
   "& th, & td": {

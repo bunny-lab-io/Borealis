@@ -229,7 +229,7 @@ export default function PageTemplate() {
       sx={{
         m: 0,
         p: 0,
-        background: AURORA_SHELL.background,
+        background: "transparent",
         border: "none",
         boxShadow: "none",
         borderRadius: 0,

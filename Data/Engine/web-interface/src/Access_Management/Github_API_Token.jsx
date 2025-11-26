@@ -17,7 +17,7 @@ import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 const paperSx = {
   m: 2,
   p: 0,
-  bgcolor: "#1e1e1e",
+  bgcolor: "transparent",
   color: "#f5f7fa",
   display: "flex",
   flexDirection: "column",
@@ -147,7 +147,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
 
   if (!isAdmin) {
     return (
-      <Paper sx={{ m: 2, p: 3, bgcolor: "#1e1e1e" }}>
+      <Paper sx={{ m: 2, p: 3, bgcolor: "transparent" }}>
         <Typography variant="h6" sx={{ color: "#ff8080" }}>
           Access denied
         </Typography>

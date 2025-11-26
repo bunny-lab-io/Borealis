@@ -276,7 +276,7 @@ export default function CredentialList({ isAdmin = false }) {
 
   if (!isAdmin) {
     return (
-      <Paper sx={{ m: 2, p: 3, bgcolor: "#1e1e1e" }}>
+      <Paper sx={{ m: 2, p: 3, bgcolor: "transparent" }}>
         <Typography variant="h6" sx={{ color: "#ff8080" }}>
           Access denied
         </Typography>
@@ -293,7 +293,7 @@ export default function CredentialList({ isAdmin = false }) {
         sx={{
           m: 2,
           p: 0,
-          bgcolor: "#1e1e1e",
+          bgcolor: "transparent",
           fontFamily: gridFontFamily,
           color: "#f5f7fa",
           display: "flex",

@@ -33,7 +33,8 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 const AURORA_SHELL = {
   background:
     "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
-    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), " +
+    "linear-gradient(180deg, #040711 0%, #050816 45%, #050816 100%)",
   text: "#e2e8f0",
   subtext: "#94a3b8",
   border: "rgba(148,163,184,0.35)",
@@ -402,13 +403,9 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 0.75,
-                px: 1.5,
-                py: 0.4,
-                borderRadius: 999,
-                backgroundColor: theme.background,
                 color: theme.color,
-                fontWeight: 600,
-                fontSize: "0.9rem",
+                fontWeight: 700,
+                fontSize: "0.95rem",
               }}
             >
               <Icon sx={{ fontSize: 18 }} />
@@ -758,14 +755,14 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
       elevation={0}
       sx={{
         minHeight: "100vh",
-        background: AURORA_SHELL.background,
-        backgroundRepeat: "no-repeat",
-        backgroundSize: "100% 520px",
-        backgroundAttachment: "scroll",
-        backgroundColor: "#040711",
+        backgroundColor: "transparent",
         color: AURORA_SHELL.text,
         p: 3,
         borderRadius: 0,
+        display: "flex",
+        flexDirection: "column",
+        gap: 3,
+        pb: 6,
       }}
     >
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", mb: 3 }}>
@@ -852,6 +849,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
             display: "flex",
             flexDirection: "column",
             gap: 2.75,
+            flex: 1,
           }}
         >
         <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>

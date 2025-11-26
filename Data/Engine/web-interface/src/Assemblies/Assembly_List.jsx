@@ -588,8 +588,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       sx={{
         m: 0, // Full-bleed to parent container
         p: 0,
-        background:
-          "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
+        background: "transparent",
         border: "none",
         boxShadow: "none",
         borderRadius: 0,

@@ -32,7 +32,7 @@ export default function ServerInfo({ isAdmin = false }) {
   if (!isAdmin) return null;
 
   return (
-    <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
+    <Paper sx={{ m: 2, p: 0, bgcolor: "transparent" }} elevation={2}>
       <Box sx={{ p: 2 }}>
         <Typography variant="h6" sx={{ color: "#58a6ff", mb: 1 }}>Server Info</Typography>
         <Typography sx={{ color: '#aaa', mb: 1 }}>Basic server information will appear here for informative and debug purposes.</Typography>

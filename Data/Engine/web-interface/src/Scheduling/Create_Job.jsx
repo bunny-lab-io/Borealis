@@ -2862,7 +2862,7 @@ const heroTiles = useMemo(() => {
         flexDirection: "column",
         gap: 3,
         borderRadius: 0,
-        background: MAGIC_UI.shellBg,
+        background: "transparent",
         border: `1px solid ${MAGIC_UI.panelBorder}`,
         boxShadow: MAGIC_UI.glow,
       }}

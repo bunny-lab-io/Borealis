@@ -95,6 +95,11 @@ const darkTheme = createTheme({
   }
 });
 
+const APP_AURORA_BACKGROUND =
+  "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
+  "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), " +
+  "linear-gradient(180deg, #040711 0%, #050816 45%, #050816 100%)";
+
 const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
   export default function App() {
@@ -1333,7 +1338,19 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   return (
     <ThemeProvider theme={darkTheme}>
       <CssBaseline />
-      <Box sx={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <Box
+        sx={{
+          width: "100vw",
+          height: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          background: APP_AURORA_BACKGROUND,
+          backgroundRepeat: "no-repeat",
+          backgroundSize: "cover",
+          backgroundColor: "#040711",
+        }}
+      >
         {/* Aurora Gradient Header (darker near the logo, brighter to the right) */}
           <AppBar
             position="static"
@@ -1451,7 +1468,18 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             </Toolbar>
           </AppBar>
 
-        <Box sx={{ display: "flex", flexGrow: 1, overflow: "auto", minHeight: 0 }}>
+        <Box
+          sx={{
+            display: "flex",
+            flexGrow: 1,
+            overflow: "auto",
+            minHeight: 0,
+            background: APP_AURORA_BACKGROUND,
+            backgroundRepeat: "no-repeat",
+            backgroundSize: "cover",
+            backgroundColor: "#040711",
+          }}
+        >
           <NavigationSidebar currentPage={currentPage} onNavigate={navigateTo} isAdmin={isAdmin} />
           <Box
             sx={{

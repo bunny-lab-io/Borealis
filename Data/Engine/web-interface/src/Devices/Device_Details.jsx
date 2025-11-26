@@ -1510,7 +1510,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
         m: 0,
         p: { xs: 2, md: 3 },
         borderRadius: 0,
-        background: MAGIC_UI.shellBg,
+        background: "transparent",
         border: `1px solid ${MAGIC_UI.panelBorder}`,
         boxShadow: MAGIC_UI.glow,
         display: "flex",

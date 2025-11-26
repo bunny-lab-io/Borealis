@@ -230,7 +230,7 @@ export default function SSHDevices({ type = "ssh" }) {
   };
 
   return (
-    <Paper sx={{ m: 2, p: 0, bgcolor: "#1e1e1e" }} elevation={2}>
+    <Paper sx={{ m: 2, p: 0, bgcolor: "transparent" }} elevation={2}>
       <Box
         sx={{
           display: "flex",

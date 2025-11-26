@@ -1578,7 +1578,7 @@ export default function DeviceList({
         height: "100%",
         borderRadius: 0,
         border: `1px solid ${MAGIC_UI.panelBorder}`,
-        background: MAGIC_UI.shellBg,
+        background: "transparent",
         boxShadow: MAGIC_UI.glow,
         position: "relative",
         overflow: "hidden",
