@@ -18,6 +18,7 @@ import MoreVertIcon from "@mui/icons-material/MoreVert";
 import ViewColumnIcon from "@mui/icons-material/ViewColumn";
 import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
+import DevicesOtherIcon from "@mui/icons-material/DevicesOther";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
@@ -63,6 +64,8 @@ const MAGIC_UI = {
   success: "#34d399",
   surfaceOverlay: "rgba(15, 23, 42, 0.72)",
 };
+
+const PAGE_ICON = DevicesOtherIcon;
 
 const StatTile = React.memo(function StatTile({ label, value, meta, gradient }) {
   return (
@@ -344,6 +347,7 @@ export default function DeviceList({
   showAddButton,
   addButtonLabel,
   defaultAddType,
+  onPageMetaChange,
 }) {
   const [rows, setRows] = useState([]);
   const [menuAnchor, setMenuAnchor] = useState(null);
@@ -691,6 +695,15 @@ export default function DeviceList({
         : "across emerging sites";
     return `Monitoring ${heroStats.total} managed endpoint(s) ${sitePart}.`;
   }, [heroStats]);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: computedTitle,
+      page_subtitle: heroSubtitle,
+      page_icon: PAGE_ICON,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [computedTitle, heroSubtitle, onPageMetaChange]);
 
   const fetchDevices = useCallback(async (options = {}) => {
     const { refreshRepo = false } = options || {};
@@ -1577,16 +1590,21 @@ export default function DeviceList({
         minWidth: 0,
         height: "100%",
         borderRadius: 0,
-        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        border: "none",
         background: "transparent",
-        boxShadow: MAGIC_UI.glow,
+        boxShadow: "none",
         position: "relative",
         overflow: "hidden",
       }}
       elevation={0}
     >
       <Box sx={{ position: "relative", zIndex: 1, p: { xs: 2, md: 0 }, pb: 2 }}>
-        <Box sx={{ borderRadius: 0, border: 'none', background: 'transparent', boxShadow: 'none',
+        <Box
+          sx={{
+            borderRadius: 0,
+            border: "none",
+            background: "transparent",
+            boxShadow: "none",
             p: { xs: 2, md: 3 },
             display: "flex",
             flexWrap: "wrap",
@@ -1596,47 +1614,23 @@ export default function DeviceList({
             isolation: "isolate",
           }}
         >
-          <Box
-            sx={{
-              flex: "1 1 320px",
-              minWidth: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: 1.25,
-              position: "relative",
-              zIndex: 1,
-            }}
-          >
-            <Typography
-              variant="h5"
-              sx={{
-                fontWeight: 700,
-                letterSpacing: 0.6,
-                color: MAGIC_UI.textBright,
-                textShadow: "0 10px 30px rgba(0,0,0,0.45)",
-              }}
-            >
-              {computedTitle}
-            </Typography>
-            <Typography sx={{ color: MAGIC_UI.textMuted, maxWidth: 560 }}>{heroSubtitle}</Typography>
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-              {hasActiveFilters ? (
-                <Box sx={HERO_BADGE_SX}>
-                  <span>Filters</span>
-                  <Typography component="span" sx={{ fontWeight: 700, fontSize: "0.8rem", color: MAGIC_UI.accentA }}>
-                    {activeFilterCount}
-                  </Typography>
-                </Box>
-              ) : null}
-              {selectedIds.size > 0 ? (
-                <Box sx={HERO_BADGE_SX}>
-                  <span>Selected</span>
-                  <Typography component="span" sx={{ fontWeight: 700, fontSize: "0.8rem", color: MAGIC_UI.accentB }}>
-                    {selectedIds.size}
-                  </Typography>
-                </Box>
-              ) : null}
-            </Box>
+          <Box sx={{ flex: "1 1 320px", minWidth: 0, display: "flex", flexWrap: "wrap", gap: 1 }}>
+            {hasActiveFilters ? (
+              <Box sx={HERO_BADGE_SX}>
+                <span>Filters</span>
+                <Typography component="span" sx={{ fontWeight: 700, fontSize: "0.8rem", color: MAGIC_UI.accentA }}>
+                  {activeFilterCount}
+                </Typography>
+              </Box>
+            ) : null}
+            {selectedIds.size > 0 ? (
+              <Box sx={HERO_BADGE_SX}>
+                <span>Selected</span>
+                <Typography component="span" sx={{ fontWeight: 700, fontSize: "0.8rem", color: MAGIC_UI.accentB }}>
+                  {selectedIds.size}
+                </Typography>
+              </Box>
+            ) : null}
           </Box>
           <Box sx={{ flex: "1 1 320px", minWidth: 0, position: "relative", zIndex: 1 }}>
             <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 1.2 }}>

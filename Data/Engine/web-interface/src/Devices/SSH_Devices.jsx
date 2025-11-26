@@ -16,27 +16,84 @@ import {
   DialogContent,
   DialogActions,
   TextField,
-  CircularProgress
+  CircularProgress,
+  Stack,
+  Tooltip,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import LanIcon from "@mui/icons-material/Lan";
+import DesktopWindowsIcon from "@mui/icons-material/DesktopWindows";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
 import AddDevice from "./Add_Device.jsx";
 
+const MAGIC_UI = {
+  panelBg: "linear-gradient(160deg, rgba(7,11,24,0.92), rgba(5,9,20,0.94))",
+  panelBorder: "rgba(148,163,184,0.32)",
+  glass: "rgba(12,18,35,0.8)",
+  textBright: "#e2e8f0",
+  textMuted: "#94a3b8",
+  accentA: "#7dd3fc",
+  accentB: "#c084fc",
+  accentSuccess: "#34d399",
+  accentWarn: "#f97316",
+  glow: "0 24px 60px rgba(2,6,23,0.7)",
+};
+
+const gradientButtonSx = {
+  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+  color: "#0b1220",
+  borderRadius: 999,
+  textTransform: "none",
+  fontWeight: 700,
+  boxShadow: "0 12px 32px rgba(124,58,237,0.32)",
+  px: 2.2,
+  "&:hover": {
+    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+    boxShadow: "0 16px 40px rgba(124,58,237,0.42)",
+  },
+};
+
 const tableStyles = {
+  minWidth: "100%",
   "& th, & td": {
-    color: "#ddd",
-    borderColor: "#2a2a2a",
+    color: MAGIC_UI.textBright,
+    borderColor: "rgba(148,163,184,0.18)",
     fontSize: 13,
-    py: 0.75
+    py: 1,
+    px: 1.5,
+    backgroundColor: "transparent",
   },
   "& th": {
-    fontWeight: 600
+    fontWeight: 700,
+    backgroundColor: "rgba(5,8,18,0.85)",
+    letterSpacing: 0.2,
   },
-  "& th .MuiTableSortLabel-root": { color: "#ddd" },
-  "& th .MuiTableSortLabel-root.Mui-active": { color: "#ddd" }
+  "& tbody tr": {
+    "&:nth-of-type(odd)": {
+      backgroundColor: "rgba(255,255,255,0.02)",
+    },
+    "&:hover": {
+      backgroundColor: "rgba(125,183,255,0.08)",
+    },
+  },
+  "& th .MuiTableSortLabel-root": { color: MAGIC_UI.textBright },
+  "& th .MuiTableSortLabel-root.Mui-active": { color: MAGIC_UI.textBright },
+};
+
+const TYPE_META = {
+  ssh: {
+    label: "SSH Devices",
+    description: "Manage remote endpoints reachable via SSH for playbook execution.",
+    icon: LanIcon,
+  },
+  winrm: {
+    label: "WinRM Devices",
+    description: "Manage remote endpoints reachable via WinRM for playbook execution.",
+    icon: DesktopWindowsIcon,
+  },
 };
 
 const defaultForm = {
@@ -46,17 +103,16 @@ const defaultForm = {
   operating_system: ""
 };
 
-export default function SSHDevices({ type = "ssh" }) {
+export default function SSHDevices({ type = "ssh", onPageMetaChange, onQuickJobLaunch }) {
   const typeLabel = type === "winrm" ? "WinRM" : "SSH";
+  const meta = TYPE_META[type] || TYPE_META.ssh;
   const apiBase = type === "winrm" ? "/api/winrm_devices" : "/api/ssh_devices";
-  const pageTitle = `${typeLabel} Devices`;
+  const pageTitle = meta.label;
+  const pageSubtitle = meta.description;
   const addButtonLabel = `Add ${typeLabel} Device`;
   const addressLabel = `${typeLabel} Address`;
   const loadingLabel = `Loading ${typeLabel} devices…`;
   const emptyLabel = `No ${typeLabel} devices have been added yet.`;
-  const descriptionText = type === "winrm"
-    ? "Manage remote endpoints reachable via WinRM for playbook execution."
-    : "Manage remote endpoints reachable via SSH for playbook execution.";
   const editDialogTitle = `Edit ${typeLabel} Device`;
   const newDialogTitle = `New ${typeLabel} Device`;
   const [rows, setRows] = useState([]);
@@ -98,6 +154,16 @@ export default function SSHDevices({ type = "ssh" }) {
   useEffect(() => {
     loadDevices();
   }, [loadDevices]);
+
+  useEffect(() => {
+    const IconComponent = meta.icon || LanIcon;
+    onPageMetaChange?.({
+      page_title: pageTitle,
+      page_subtitle: pageSubtitle,
+      page_icon: IconComponent,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [meta.icon, onPageMetaChange, pageSubtitle, pageTitle]);
 
   const sortedRows = useMemo(() => {
     const list = [...rows];
@@ -229,141 +295,214 @@ export default function SSHDevices({ type = "ssh" }) {
     }
   };
 
+  const accentColor = type === "winrm" ? MAGIC_UI.accentB : MAGIC_UI.accentA;
+  const HeaderIconComponent = meta.icon || LanIcon;
+
   return (
-    <Paper sx={{ m: 2, p: 0, bgcolor: "transparent" }} elevation={2}>
+    <Paper
+      sx={{
+        m: 0,
+        p: 0,
+        background: "transparent",
+        border: "none",
+        boxShadow: "none",
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minHeight: 0,
+      }}
+      elevation={0}
+    >
       <Box
         sx={{
+          px: 3,
+          pt: 3,
+          pb: 1,
           display: "flex",
+          flexWrap: "wrap",
           alignItems: "center",
           justifyContent: "space-between",
-          p: 2,
-          borderBottom: "1px solid #2a2a2a"
+          gap: 2,
         }}
       >
-        <Box>
-          <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
-            {pageTitle}
-          </Typography>
-          <Typography variant="body2" sx={{ color: "#aaa" }}>
-            {descriptionText}
-          </Typography>
-        </Box>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<RefreshIcon />}
-            sx={{ color: "#58a6ff", borderColor: "#58a6ff" }}
-            onClick={loadDevices}
-            disabled={loading}
-          >
-            Refresh
-          </Button>
+        <Box sx={{ flexGrow: 1 }} />
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Tooltip title="Refresh list">
+            <span>
+              <IconButton
+                size="small"
+                onClick={loadDevices}
+                disabled={loading}
+                sx={{
+                  color: MAGIC_UI.textBright,
+                  border: `1px solid ${MAGIC_UI.panelBorder}`,
+                  borderRadius: 2,
+                  background: "rgba(12,18,35,0.65)",
+                  "&:hover": { borderColor: MAGIC_UI.accentA },
+                }}
+              >
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
           <Button
             size="small"
             variant="contained"
             startIcon={<AddIcon />}
-            sx={{ bgcolor: "#58a6ff", color: "#0b0f19" }}
+            sx={gradientButtonSx}
             onClick={openCreate}
           >
             {addButtonLabel}
           </Button>
-        </Box>
+        </Stack>
       </Box>
 
       {error && (
-        <Box sx={{ px: 2, py: 1.5, color: "#ff8080" }}>
-          <Typography variant="body2">{error}</Typography>
+        <Box sx={{ px: 3, pb: 1 }}>
+          <Box
+            sx={{
+              px: 2,
+              py: 1.5,
+              borderRadius: 2,
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              background: "rgba(255,124,124,0.08)",
+              color: "#ffb4b4",
+            }}
+          >
+            <Typography variant="body2">{error}</Typography>
+          </Box>
         </Box>
       )}
       {loading && (
-        <Box sx={{ px: 2, py: 1.5, display: "flex", alignItems: "center", gap: 1, color: "#7db7ff" }}>
-          <CircularProgress size={18} sx={{ color: "#58a6ff" }} />
-          <Typography variant="body2">{loadingLabel}</Typography>
+        <Box sx={{ px: 3, pb: 1 }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              px: 2,
+              py: 1.25,
+              borderRadius: 2,
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              background: "rgba(12,18,35,0.7)",
+              color: MAGIC_UI.textBright,
+            }}
+          >
+            <CircularProgress size={18} sx={{ color: accentColor }} />
+            <Typography variant="body2">{loadingLabel}</Typography>
+          </Box>
         </Box>
       )}
 
-      <Table size="small" sx={tableStyles}>
-        <TableHead>
-          <TableRow>
-            <TableCell sortDirection={orderBy === "hostname" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "hostname"}
-                direction={orderBy === "hostname" ? order : "asc"}
-                onClick={handleSort("hostname")}
-              >
-                Hostname
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={orderBy === "address" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "address"}
-                direction={orderBy === "address" ? order : "asc"}
-                onClick={handleSort("address")}
-              >
-                {addressLabel}
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={orderBy === "description" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "description"}
-                direction={orderBy === "description" ? order : "asc"}
-                onClick={handleSort("description")}
-              >
-                Description
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sortDirection={orderBy === "created_at" ? order : false}>
-              <TableSortLabel
-                active={orderBy === "created_at"}
-                direction={orderBy === "created_at" ? order : "asc"}
-                onClick={handleSort("created_at")}
-              >
-                Added
-              </TableSortLabel>
-            </TableCell>
-            <TableCell align="right">Actions</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {sortedRows.map((row) => {
-            const createdTs = Number(row.created_at || 0) * 1000;
-            const createdDisplay = createdTs
-              ? new Date(createdTs).toLocaleString()
-              : (row.summary?.created || "");
-            return (
-              <TableRow key={row.hostname}>
-                <TableCell>{row.hostname}</TableCell>
-                <TableCell>{row.connection_endpoint || ""}</TableCell>
-                <TableCell>{row.description || ""}</TableCell>
-                <TableCell>{createdDisplay}</TableCell>
-                <TableCell align="right">
-                  <IconButton size="small" sx={{ color: "#7db7ff" }} onClick={() => openEdit(row)}>
-                    <EditIcon fontSize="small" />
-                  </IconButton>
-                  <IconButton size="small" sx={{ color: "#ff8080" }} onClick={() => setDeleteTarget(row)}>
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
+      <Box sx={{ px: 3, pb: 3, flexGrow: 1, minHeight: 0 }}>
+        <Box
+          sx={{
+            borderRadius: 3,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            background: MAGIC_UI.panelBg,
+            boxShadow: MAGIC_UI.glow,
+            overflow: "hidden",
+          }}
+        >
+          <Table size="small" sx={tableStyles}>
+            <TableHead>
+              <TableRow>
+                <TableCell sortDirection={orderBy === "hostname" ? order : false}>
+                  <TableSortLabel
+                    active={orderBy === "hostname"}
+                    direction={orderBy === "hostname" ? order : "asc"}
+                    onClick={handleSort("hostname")}
+                  >
+                    Hostname
+                  </TableSortLabel>
                 </TableCell>
+                <TableCell sortDirection={orderBy === "address" ? order : false}>
+                  <TableSortLabel
+                    active={orderBy === "address"}
+                    direction={orderBy === "address" ? order : "asc"}
+                    onClick={handleSort("address")}
+                  >
+                    {addressLabel}
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell sortDirection={orderBy === "description" ? order : false}>
+                  <TableSortLabel
+                    active={orderBy === "description"}
+                    direction={orderBy === "description" ? order : "asc"}
+                    onClick={handleSort("description")}
+                  >
+                    Description
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell sortDirection={orderBy === "created_at" ? order : false}>
+                  <TableSortLabel
+                    active={orderBy === "created_at"}
+                    direction={orderBy === "created_at" ? order : "asc"}
+                    onClick={handleSort("created_at")}
+                  >
+                    Added
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell align="right">Actions</TableCell>
               </TableRow>
-            );
-          })}
-          {!sortedRows.length && !loading && (
-            <TableRow>
-              <TableCell colSpan={5} sx={{ textAlign: "center", color: "#888" }}>
-                {emptyLabel}
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+            </TableHead>
+            <TableBody>
+              {sortedRows.map((row) => {
+                const createdTs = Number(row.created_at || 0) * 1000;
+                const createdDisplay = createdTs
+                  ? new Date(createdTs).toLocaleString()
+                  : row.summary?.created || "";
+                return (
+                  <TableRow key={row.hostname}>
+                    <TableCell>{row.hostname}</TableCell>
+                    <TableCell>{row.connection_endpoint || ""}</TableCell>
+                    <TableCell>{row.description || ""}</TableCell>
+                    <TableCell>{createdDisplay}</TableCell>
+                    <TableCell align="right">
+                      <IconButton
+                        size="small"
+                        sx={{ color: MAGIC_UI.accentA }}
+                        onClick={() => openEdit(row)}
+                      >
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        sx={{ color: "#ff8a8a" }}
+                        onClick={() => setDeleteTarget(row)}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {!sortedRows.length && !loading && (
+                <TableRow>
+                  <TableCell colSpan={5} sx={{ textAlign: "center", color: MAGIC_UI.textMuted }}>
+                    {emptyLabel}
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </Box>
+      </Box>
 
       <Dialog
         open={dialogOpen}
         onClose={handleDialogClose}
         fullWidth
         maxWidth="sm"
-        PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.95)",
+            color: MAGIC_UI.textBright,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            boxShadow: MAGIC_UI.glow,
+            backdropFilter: "blur(14px)",
+          },
+        }}
       >
         <DialogTitle>{isEdit ? editDialogTitle : newDialogTitle}</DialogTitle>
         <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
@@ -376,12 +515,13 @@ export default function SSHDevices({ type = "ssh" }) {
             size="small"
             sx={{
               "& .MuiOutlinedInput-root": {
-                backgroundColor: "#1f1f1f",
-                color: "#fff",
-                "& fieldset": { borderColor: "#555" },
-                "&:hover fieldset": { borderColor: "#888" }
+                backgroundColor: "rgba(12,18,35,0.75)",
+                color: MAGIC_UI.textBright,
+                "& fieldset": { borderColor: MAGIC_UI.panelBorder },
+                "&:hover fieldset": { borderColor: accentColor },
+                "&.Mui-focused fieldset": { borderColor: accentColor },
               },
-              "& .MuiInputLabel-root": { color: "#aaa" }
+              "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
             }}
             helperText="Hostname used within Borealis (unique)."
           />
@@ -393,12 +533,13 @@ export default function SSHDevices({ type = "ssh" }) {
             size="small"
             sx={{
               "& .MuiOutlinedInput-root": {
-                backgroundColor: "#1f1f1f",
-                color: "#fff",
-                "& fieldset": { borderColor: "#555" },
-                "&:hover fieldset": { borderColor: "#888" }
+                backgroundColor: "rgba(12,18,35,0.75)",
+                color: MAGIC_UI.textBright,
+                "& fieldset": { borderColor: MAGIC_UI.panelBorder },
+                "&:hover fieldset": { borderColor: accentColor },
+                "&.Mui-focused fieldset": { borderColor: accentColor },
               },
-              "& .MuiInputLabel-root": { color: "#aaa" }
+              "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
             }}
             helperText={`IP or FQDN Borealis can reach over ${typeLabel}.`}
           />
@@ -410,12 +551,13 @@ export default function SSHDevices({ type = "ssh" }) {
             size="small"
             sx={{
               "& .MuiOutlinedInput-root": {
-                backgroundColor: "#1f1f1f",
-                color: "#fff",
-                "& fieldset": { borderColor: "#555" },
-                "&:hover fieldset": { borderColor: "#888" }
+                backgroundColor: "rgba(12,18,35,0.75)",
+                color: MAGIC_UI.textBright,
+                "& fieldset": { borderColor: MAGIC_UI.panelBorder },
+                "&:hover fieldset": { borderColor: accentColor },
+                "&.Mui-focused fieldset": { borderColor: accentColor },
               },
-              "& .MuiInputLabel-root": { color: "#aaa" }
+              "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
             }}
           />
           <TextField
@@ -426,28 +568,33 @@ export default function SSHDevices({ type = "ssh" }) {
             size="small"
             sx={{
               "& .MuiOutlinedInput-root": {
-                backgroundColor: "#1f1f1f",
-                color: "#fff",
-                "& fieldset": { borderColor: "#555" },
-                "&:hover fieldset": { borderColor: "#888" }
+                backgroundColor: "rgba(12,18,35,0.75)",
+                color: MAGIC_UI.textBright,
+                "& fieldset": { borderColor: MAGIC_UI.panelBorder },
+                "&:hover fieldset": { borderColor: accentColor },
+                "&.Mui-focused fieldset": { borderColor: accentColor },
               },
-              "& .MuiInputLabel-root": { color: "#aaa" }
+              "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
             }}
           />
           {error && (
-            <Typography variant="body2" sx={{ color: "#ff8080" }}>
+            <Typography variant="body2" sx={{ color: "#ffb4b4" }}>
               {error}
             </Typography>
           )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={handleDialogClose} sx={{ color: "#58a6ff" }} disabled={submitting}>
+          <Button
+            onClick={handleDialogClose}
+            sx={{ color: MAGIC_UI.textMuted, textTransform: "none" }}
+            disabled={submitting}
+          >
             Cancel
           </Button>
           <Button
             onClick={handleSubmit}
-            variant="outlined"
-            sx={{ color: "#58a6ff", borderColor: "#58a6ff" }}
+            variant="contained"
+            sx={gradientButtonSx}
             disabled={submitting}
           >
             {submitting ? "Saving..." : "Save"}

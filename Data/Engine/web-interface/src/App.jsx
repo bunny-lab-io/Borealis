@@ -130,6 +130,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   const pendingPathRef = useRef(null);
   const quickJobSeedRef = useRef(0);
       const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
+  const [pageHeader, setPageHeader] = useState({ title: "", subtitle: "", Icon: null });
 
       // Top-bar search state
       const SEARCH_CATEGORIES = [
@@ -170,6 +171,21 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           return t;
         }
       }, []);
+
+  const handlePageMetaChange = useCallback((meta) => {
+    if (!meta) {
+      setPageHeader({ title: "", subtitle: "", Icon: null });
+      return;
+    }
+    const titleValue = typeof meta.page_title === "string" ? meta.page_title : meta.title;
+    const subtitleValue = typeof meta.page_subtitle === "string" ? meta.page_subtitle : meta.subtitle;
+    const iconValue = meta.page_icon || meta.Icon || null;
+    setPageHeader({
+      title: typeof titleValue === "string" ? titleValue : "",
+      subtitle: typeof subtitleValue === "string" ? subtitleValue : "",
+      Icon: iconValue || null,
+    });
+  }, []);
 
   const pageToPath = useCallback(
     (page, options = {}) => {
@@ -1076,6 +1092,10 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     [navigateTo, setTabs, setActiveTabId]
   );
 
+  useEffect(() => {
+    setPageHeader({ title: "", subtitle: "", Icon: null });
+  }, [currentPage]);
+
   const isAdmin = (String(userRole || '').toLowerCase() === 'admin');
 
   useEffect(() => {
@@ -1100,6 +1120,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "sites":
         return (
           <SiteList
+            onPageMetaChange={handlePageMetaChange}
             onOpenDevicesForSite={(siteName) => {
               try {
                 localStorage.setItem('device_list_initial_site_filter', String(siteName || ''));
@@ -1111,6 +1132,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "devices":
         return (
           <DeviceList
+            onPageMetaChange={handlePageMetaChange}
             onSelectDevice={(d) => {
               navigateTo("device_details", { device: d });
             }}
@@ -1120,6 +1142,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "agent_devices":
         return (
           <AgentDevices
+            onPageMetaChange={handlePageMetaChange}
             onSelectDevice={(d) => {
               navigateTo("device_details", { device: d });
             }}
@@ -1127,13 +1150,14 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           />
         );
       case "ssh_devices":
-        return <SSHDevices onQuickJobLaunch={handleQuickJobLaunch} />;
+        return <SSHDevices onQuickJobLaunch={handleQuickJobLaunch} onPageMetaChange={handlePageMetaChange} />;
       case "winrm_devices":
-        return <WinRMDevices onQuickJobLaunch={handleQuickJobLaunch} />;
+        return <WinRMDevices onQuickJobLaunch={handleQuickJobLaunch} onPageMetaChange={handlePageMetaChange} />;
 
       case "filters":
         return (
           <DeviceFilterList
+            onPageMetaChange={handlePageMetaChange}
             refreshToken={filtersRefreshToken}
             onCreateFilter={() => {
               setFilterEditorState(null);
@@ -1149,6 +1173,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "filter_editor":
         return (
           <DeviceFilterEditor
+            onPageMetaChange={handlePageMetaChange}
             initialFilter={filterEditorState}
             onCancel={() => {
               setFilterEditorState(null);
@@ -1165,6 +1190,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "device_details":
         return (
           <DeviceDetails
+            onPageMetaChange={handlePageMetaChange}
             device={selectedDevice}
             onQuickJobLaunch={handleQuickJobLaunch}
             onBack={() => {
@@ -1177,6 +1203,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "jobs":
         return (
           <ScheduledJobsList
+            onPageMetaChange={handlePageMetaChange}
             onCreateJob={() => { setEditingJob(null); navigateTo("create_job"); }}
             onEditJob={(job) => { setEditingJob(job); navigateTo("create_job"); }}
             refreshToken={jobsRefreshToken}
@@ -1186,6 +1213,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "create_job":
         return (
           <CreateJob
+            onPageMetaChange={handlePageMetaChange}
             initialJob={editingJob}
             quickJobDraft={quickJobDraft}
             onConsumeQuickJobDraft={handleConsumeQuickJobDraft}
@@ -1206,6 +1234,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "workflows":
         return (
           <AssemblyList
+            onPageMetaChange={handlePageMetaChange}
             onOpenWorkflow={openWorkflowFromList}
             onOpenScript={openScriptFromList}
             userRole={userRole || 'User'}
@@ -1215,6 +1244,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "assemblies":
         return (
           <AssemblyList
+            onPageMetaChange={handlePageMetaChange}
             onOpenWorkflow={openWorkflowFromList}
             onOpenScript={openScriptFromList}
             userRole={userRole || 'User'}
@@ -1225,6 +1255,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return (
           <AssemblyEditor
             mode="script"
+            onPageMetaChange={handlePageMetaChange}
             initialAssembly={assemblyEditorState && assemblyEditorState.mode === 'script' ? assemblyEditorState : null}
             onConsumeInitialData={() => {
               setAssemblyEditorState((prev) => (prev && prev.mode === 'script' ? null : prev));
@@ -1238,6 +1269,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return (
           <AssemblyEditor
             mode="ansible"
+            onPageMetaChange={handlePageMetaChange}
             initialAssembly={assemblyEditorState && assemblyEditorState.mode === 'ansible' ? assemblyEditorState : null}
             onConsumeInitialData={() => {
               setAssemblyEditorState((prev) => (prev && prev.mode === 'ansible' ? null : prev));
@@ -1248,24 +1280,24 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         );
 
       case "access_credentials":
-        return <CredentialList isAdmin={isAdmin} />;
+        return <CredentialList isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
 
       case "access_github_token":
-        return <GithubAPIToken isAdmin={isAdmin} />;
+        return <GithubAPIToken isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
 
       case "access_users":
-        return <UserManagement isAdmin={isAdmin} />;
+        return <UserManagement isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
 
       case "server_info":
-        return <ServerInfo isAdmin={isAdmin} />;
+        return <ServerInfo isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
       case "log_management":
-        return <LogManagement isAdmin={isAdmin} />;
+        return <LogManagement isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
 
       case "page_template":
-        return <PageTemplate isAdmin={isAdmin} />;
+        return <PageTemplate isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
 
       case "admin_device_approvals":
-        return <DeviceApprovals />;
+        return <DeviceApprovals onPageMetaChange={handlePageMetaChange} />;
 
       case "workflow-editor":
         return (
@@ -1334,6 +1366,9 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       </ThemeProvider>
     );
   }
+
+  const HeaderIcon = pageHeader.Icon;
+  const hasPageHeader = Boolean(pageHeader.title);
 
   return (
     <ThemeProvider theme={darkTheme}>
@@ -1484,18 +1519,45 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           <Box
             sx={{
               flexGrow: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'auto',
+              display: "flex",
+              flexDirection: "column",
+              overflow: "auto",
               minHeight: 0,
-              // Ensure primary page container (usually a Paper with m:2) fills to the bottom
-              '& > *': {
-                alignSelf: 'stretch',
-                minHeight: 'calc(100% - 32px)' // account for typical m:2 top+bottom margins
-              }
             }}
           >
-            {renderMainContent()}
+            {hasPageHeader ? (
+              <Box sx={{ px: 3, pt: 3, pb: 1, flexShrink: 0 }}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+                  {HeaderIcon ? <HeaderIcon sx={{ fontSize: 22, color: "#7dd3fc" }} /> : null}
+                  <Typography variant="h6" sx={{ color: "#e2e8f0", fontWeight: 700, letterSpacing: 0.5 }}>
+                    {pageHeader.title}
+                  </Typography>
+                </Box>
+                {pageHeader.subtitle ? (
+                  <Typography variant="body2" sx={{ color: "#aaa", mt: 0.5, mb: 2 }}>
+                    {pageHeader.subtitle}
+                  </Typography>
+                ) : (
+                  <Box sx={{ mb: 2 }} />
+                )}
+              </Box>
+            ) : null}
+            <Box
+              sx={{
+                flexGrow: 1,
+                display: "flex",
+                flexDirection: "column",
+                overflow: "auto",
+                minHeight: 0,
+                // Ensure primary page container (usually a Paper with m:2) fills to the bottom
+                "& > *": {
+                  alignSelf: "stretch",
+                  minHeight: "calc(100% - 32px)", // account for typical m:2 top+bottom margins
+                },
+              }}
+            >
+              {renderMainContent()}
+            </Box>
           </Box>
         </Box>
       </Box>

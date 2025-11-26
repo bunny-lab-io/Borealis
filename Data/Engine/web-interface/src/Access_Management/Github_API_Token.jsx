@@ -13,11 +13,14 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import SaveIcon from "@mui/icons-material/Save";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import GitHubIcon from "@mui/icons-material/GitHub";
 
 const paperSx = {
-  m: 2,
+  m: 0,
   p: 0,
   bgcolor: "transparent",
+  border: "none",
+  boxShadow: "none",
   color: "#f5f7fa",
   display: "flex",
   flexDirection: "column",
@@ -29,17 +32,31 @@ const paperSx = {
 const fieldSx = {
   mt: 2,
   "& .MuiOutlinedInput-root": {
-    bgcolor: "#181818",
+    bgcolor: "rgba(255,255,255,0.04)",
     color: "#f5f7fa",
-    "& fieldset": { borderColor: "#2a2a2a" },
-    "&:hover fieldset": { borderColor: "#58a6ff" },
-    "&.Mui-focused fieldset": { borderColor: "#58a6ff" }
+    borderRadius: 1,
+    "& fieldset": { borderColor: "rgba(148,163,184,0.35)" },
+    "&:hover fieldset": { borderColor: "rgba(148,163,184,0.55)" },
+    "&.Mui-focused fieldset": { borderColor: "#7dd3fc" }
   },
   "& .MuiInputLabel-root": { color: "#bbb" },
   "& .MuiInputLabel-root.Mui-focused": { color: "#7db7ff" }
 };
 
-export default function GithubAPIToken({ isAdmin = false }) {
+const gradientButtonSx = {
+  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+  color: "#0b1220",
+  borderRadius: 999,
+  textTransform: "none",
+  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
+  "&:hover": {
+    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
+    filter: "none",
+  },
+};
+
+export default function GithubAPIToken({ isAdmin = false, onPageMetaChange }) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [token, setToken] = useState("");
@@ -145,6 +162,15 @@ export default function GithubAPIToken({ isAdmin = false }) {
     setShowToken((prev) => !prev);
   }, []);
 
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: "GitHub API Token",
+      page_subtitle: "Increase GitHub API rate limits for Borealis by storing a personal access token.",
+      page_icon: GitHubIcon,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange]);
+
   if (!isAdmin) {
     return (
       <Paper sx={{ m: 2, p: 3, bgcolor: "transparent" }}>
@@ -159,23 +185,10 @@ export default function GithubAPIToken({ isAdmin = false }) {
   }
 
   return (
-    <Paper sx={paperSx} elevation={2}>
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          p: 2,
-          borderBottom: "1px solid #2a2a2a"
-        }}
-      >
-        <Box>
-          <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0.3 }}>
-            Github API Token
-          </Typography>
-          <Typography variant="body2" sx={{ color: "#aaa" }}>
-            Using a Github "Personal Access Token" increases the Github API rate limits from 60/hr to 5,000/hr.  This is important for production Borealis usage as it likes to hit its unauthenticated API limits sometimes despite my best efforts.
-            <br></br>Navigate to{' '}
+    <Paper sx={paperSx} elevation={0}>
+      <Box sx={{ px: 2, py: 2, display: "flex", flexDirection: "column", gap: 1.5 }}>
+        <Typography variant="body2" sx={{ color: "#ccc" }}>
+          Using a GitHub Personal Access Token raises rate limits from 60/hr to 5,000/hr. Generate one at{" "}
           <Link
             href="https://github.com/settings/tokens"
             target="_blank"
@@ -183,32 +196,26 @@ export default function GithubAPIToken({ isAdmin = false }) {
             sx={{ color: "#7db7ff" }}
           >
             https://github.com/settings/tokens
-          </Link>{' '}
-          &#10095; <b>Personal Access Tokens &#10095; Tokens (Classic) &#10095; Generate New Token &#10095; New Personal Access Token (Classic)</b>
-          </Typography>
-
-        <br></br>
+          </Link>{" "}
+          under <b>Personal Access Tokens → Tokens (Classic)</b>.
+        </Typography>
         <Typography variant="body2" sx={{ color: "#ccc" }}>
-          <Box component="span" sx={{ fontWeight: 600 }}>Note:</Box>{' '}
+          <Box component="span" sx={{ fontWeight: 600 }}>Note:</Box>{" "}
           <Box component="code" sx={{ bgcolor: "#222", px: 0.75, py: 0.25, borderRadius: 1, fontSize: "0.85rem" }}>
             Borealis Automation Platform
           </Box>
-        </Typography>
-        <Typography variant="body2" sx={{ color: "#ccc" }}>
-          <Box component="span" sx={{ fontWeight: 600 }}>Scope:</Box>{' '}
+          {"  "}
+          <Box component="span" sx={{ fontWeight: 600, ml: 2 }}>Scope:</Box>{" "}
           <Box component="code" sx={{ bgcolor: "#222", px: 0.75, py: 0.25, borderRadius: 1, fontSize: "0.85rem" }}>
             public_repo
           </Box>
-        </Typography>
-        <Typography variant="body2" sx={{ color: "#ccc" }}>
-          <Box component="span" sx={{ fontWeight: 600 }}>Expiration:</Box>{' '}
+          {"  "}
+          <Box component="span" sx={{ fontWeight: 600, ml: 2 }}>Expiration:</Box>{" "}
           <Box component="code" sx={{ bgcolor: "#222", px: 0.75, py: 0.25, borderRadius: 1, fontSize: "0.85rem" }}>
             No Expiration
           </Box>
         </Typography>
-        </Box>
-      </Box>
-      <Box sx={{ px: 2, py: 2, display: "flex", flexDirection: "column", gap: 1.5 }}>
+
         <TextField
           label="Personal Access Token"
           value={inputValue}
@@ -246,13 +253,7 @@ export default function GithubAPIToken({ isAdmin = false }) {
                   onClick={handleSave}
                   disabled={saving || loading}
                   startIcon={!saving ? <SaveIcon /> : null}
-                  sx={{
-                    bgcolor: "#58a6ff",
-                    color: "#0b0f19",
-                    minWidth: 88,
-                    mr: 1,
-                    "&:hover": { bgcolor: "#7db7ff" }
-                  }}
+                  sx={gradientButtonSx}
                 >
                   {saving ? <CircularProgress size={16} sx={{ color: "#0b0f19" }} /> : "Save"}
                 </Button>
@@ -273,7 +274,15 @@ export default function GithubAPIToken({ isAdmin = false }) {
             variant="outlined"
             size="small"
             startIcon={<RefreshIcon />}
-            sx={{ borderColor: "#58a6ff", color: "#58a6ff" }}
+            sx={{
+              borderColor: "rgba(148,163,184,0.35)",
+              color: "#e2e8f0",
+              textTransform: "none",
+              borderRadius: 999,
+              px: 1.7,
+              minWidth: 86,
+              "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
+            }}
             onClick={hydrate}
             disabled={loading || saving}
           >

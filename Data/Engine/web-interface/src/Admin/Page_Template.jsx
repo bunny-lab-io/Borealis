@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useCallback } from "react";
+import React, { useMemo, useRef, useCallback, useEffect } from "react";
 import {
   Paper,
   Box,
@@ -215,7 +215,7 @@ const iconFontFamily = "'Quartz Regular'";
 // -----------------------------------------------------------------------------
 //  Page Template Component
 // -----------------------------------------------------------------------------
-export default function PageTemplate() {
+export default function PageTemplate({ onPageMetaChange }) {
   const gridRef = useRef(null);
   const columnDefs = useMemo(() => sampleColumnDefs, []);
   const getRowId = useCallback((params) => params.data?.id || String(params.rowIndex ?? ""), []);
@@ -223,6 +223,15 @@ export default function PageTemplate() {
   const handleRefresh = () => {
     console.log("Refresh clicked (template; no-op).");
   };
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: "Page Template",
+      page_subtitle: "Page Styling Guide and Template — use as a baseline when designing new pages.",
+      page_icon: TemplateIcon,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange]);
 
   return (
     <Paper
@@ -243,68 +252,66 @@ export default function PageTemplate() {
       }}
       elevation={0}
     >
-      {/* Page header (keep padding: top 24px, left/right 24px) */}
-      <Box sx={{ px: 3, pt: 3, pb: 1 }}>
-        <Stack direction="row" alignItems="center" spacing={1.25}>
-          <TemplateIcon sx={{ fontSize: 22, color: AURORA_SHELL.accent }} />
-          <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 0.5 }}>
-            Page Template
-          </Typography>
-          <Box sx={{ flexGrow: 1 }} />
-          <Stack direction="row" spacing={1}>
-            <Tooltip title="Refresh">
-              <span>
-                <IconButton
-                  size="small"
-                  onClick={handleRefresh}
-                  sx={{
-                    color: "#cbd5e1",
-                    borderRadius: 1,
-                    "&:hover": { color: "#ffffff" },
-                  }}
-                >
-                  <CachedIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Tooltip title="New (example)">
-              <span>
-                <Button size="small" startIcon={<AddIcon />} sx={gradientButtonSx}>
-                  New Item
-                </Button>
-              </span>
-            </Tooltip>
-            <Tooltip title="Settings (example)">
-              <span>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<TuneIcon />}
-                  sx={{
-                    borderColor: "rgba(148,163,184,0.35)",
-                    color: "#e2e8f0",
-                    textTransform: "none",
-                    borderRadius: 999,
-                    px: 1.7,          // ~5% wider than previous
-                    minWidth: 86,
-                    "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
-                  }}
-                >
-                  Settings
-                </Button>
-              </span>
-            </Tooltip>
-          </Stack>
+      <Box
+        sx={{
+          px: 2,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 1,
+          mt: 1,
+        }}
+      >
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+          <Tooltip title="Refresh">
+            <span>
+              <IconButton
+                size="small"
+                onClick={handleRefresh}
+                sx={{
+                  color: "#cbd5e1",
+                  borderRadius: 1,
+                  "&:hover": { color: "#ffffff" },
+                }}
+              >
+                <CachedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
+        <Stack direction="row" spacing={1}>
+          <Tooltip title="New (example)">
+            <span>
+              <Button size="small" startIcon={<AddIcon />} sx={gradientButtonSx}>
+                New Item
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="Settings (example)">
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<TuneIcon />}
+                sx={{
+                  borderColor: "rgba(148,163,184,0.35)",
+                  color: "#e2e8f0",
+                  textTransform: "none",
+                  borderRadius: 999,
+                  px: 1.7, // ~5% wider than previous
+                  minWidth: 86,
+                  "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
+                }}
+              >
+                Settings
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
-
-        {/* Subtitle directly under title (muted color, small size) */}
-        <Typography variant="body2" sx={{ color: AURORA_SHELL.subtext, mt: 0.75 }}>
-          Page Styling Guide and Template — use as a baseline when designing new pages.
-        </Typography>
       </Box>
 
-      {/* Content area — add a little more top-space below subtitle */}
-      <Box sx={{ mt: "28px", px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      {/* Content area — offset a little below the shared header */}
+      <Box sx={{ mt: "10px", px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Box
           className={themeClassName}
           sx={{

@@ -62,6 +62,10 @@ const AURORA_SHELL = {
   accent: "#7dd3fc",
 };
 
+const PAGE_TITLE = "Scheduled Jobs";
+const PAGE_SUBTITLE = "Monitor scheduled, recurring, and completed Borealis jobs with live status.";
+const PAGE_ICON = HeaderIcon;
+
 // Gradient button styling
 const gradientButtonSx = {
   backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
@@ -160,7 +164,7 @@ function ResultsBar({ counts }) {
   );
 }
 
-export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken }) {
+export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken, onPageMetaChange }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -171,6 +175,16 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   const [assembliesLoading, setAssembliesLoading] = useState(false);
   const [assembliesError, setAssembliesError] = useState("");
   const gridApiRef = useRef(null);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: PAGE_TITLE,
+      page_subtitle: PAGE_SUBTITLE,
+      page_icon: PAGE_ICON,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange]);
+
   const autoSizeTrackedColumns = useCallback(() => {
     const api = gridApiRef.current;
     if (!api) return;
@@ -714,64 +728,48 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       }}
       elevation={0}
     >
-      {/* Page header (keep padding: top 24px, left/right 24px) */}
-      <Box sx={{ px: 3, pt: 3, pb: 1 }}>
-        <Stack direction="row" alignItems="center" spacing={1.25}>
-          <HeaderIcon sx={{ fontSize: 22, color: AURORA_SHELL.accent }} />
-          <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 0.5 }}>
-            Scheduled Jobs
-          </Typography>
-          <Box sx={{ flexGrow: 1 }} />
-          <Stack direction="row" spacing={1}>
-            <Tooltip title="Refresh">
-              <span>
-                <IconButton
-                  size="small"
-                  onClick={handleRefreshClick}
-                  sx={{ color: "#cbd5e1", borderRadius: 1, "&:hover": { color: "#ffffff" } }}
-                >
-                  <CachedIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Tooltip title="Create Job">
-              <span>
-                <Button size="small" startIcon={<AddIcon />} sx={gradientButtonSx} onClick={() => onCreateJob && onCreateJob()}>
-                  Create Job
-                </Button>
-              </span>
-            </Tooltip>
-            <Tooltip title="Settings">
-              <span>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<TuneIcon />}
-                  sx={{
-                    borderColor: "rgba(148,163,184,0.35)",
-                    color: "#e2e8f0",
-                    textTransform: "none",
-                    borderRadius: 999,
-                    px: 1.7,
-                    minWidth: 86,
-                    "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
-                  }}
-                >
-                  Settings
-                </Button>
-              </span>
-            </Tooltip>
-          </Stack>
-        </Stack>
-
-        {/* Subtitle directly under title (muted color, small size) */}
-        <Typography variant="body2" sx={{ color: AURORA_SHELL.subtext, mt: 0.75 }}>
-          List of automation jobs with schedules, results, and actions.
-        </Typography>
+      <Box sx={{ px: 3, pt: 3, pb: 1, display: "flex", justifyContent: "flex-end", gap: 1.5 }}>
+        <Tooltip title="Refresh">
+          <span>
+            <IconButton
+              size="small"
+              onClick={handleRefreshClick}
+              sx={{ color: "#cbd5e1", borderRadius: 1, "&:hover": { color: "#ffffff" } }}
+            >
+              <CachedIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Create Job">
+          <span>
+            <Button size="small" startIcon={<AddIcon />} sx={gradientButtonSx} onClick={() => onCreateJob && onCreateJob()}>
+              Create Job
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title="Settings">
+          <span>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<TuneIcon />}
+              sx={{
+                borderColor: "rgba(148,163,184,0.35)",
+                color: "#e2e8f0",
+                textTransform: "none",
+                borderRadius: 999,
+                px: 1.7,
+                minWidth: 86,
+                "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
+              }}
+            >
+              Settings
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
 
-      {/* Content area — a bit more top space below subtitle */}
-      <Box sx={{ mt: "28px", px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <Box sx={{ mt: 2, px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 1.5, mb: 2, px: 0.5 }}>
           <Box
             sx={{

@@ -5,12 +5,11 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 ## Page Template Reference
 - Purpose: visual-only baseline for new pages; copy structure but wire your data in real pages.
 - Header: small Material icon left of the title, subtitle beneath, utility buttons on the top-right.
-- Shell: full-bleed aurora gradient container; avoid gutters on the Paper.
+- Shell: avoid gutters on the Paper.
 - Selection column (for bulk actions): pinned left, square checkboxes, header checkbox enabled, ~52px fixed width, no menu/sort/resize; rely on AG Grid built-ins.
 - Typography/buttons: IBM Plex Sans, gradient primary buttons, rounded corners (~8px), themed Quartz grid wrapper.
 
 ## MagicUI Styling Language (Visual System)
-- Aurora shells: gradient backgrounds blending deep navy (#040711) with soft cyan/violet blooms, subtle borders (`rgba(148,163,184,0.35)`), and low, velvety shadows.
 - Full-bleed canvas: hero shells run edge-to-edge; inset padding lives inside cards so gradients feel immersive.
 - Glass panels: glassmorphic layers (`rgba(15,23,42,0.7)`), rounded 16–24px corners, blurred backdrops, micro borders, optional radial flares for motion.
 - Hero storytelling: start views with stat-forward heroes—gradient StatTiles (min 160px) and uppercase pills (HERO_BADGE_SX) summarizing live signals/filters.

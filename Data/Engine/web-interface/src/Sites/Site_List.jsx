@@ -48,6 +48,10 @@ const MAGIC_UI = {
   success: "#34d399",
 };
 
+const PAGE_TITLE = "Sites";
+const PAGE_SUBTITLE = "Manage site enrollment codes, rotate secrets, and open device inventories by site.";
+const PAGE_ICON = LocationCityIcon;
+
 const RAINBOW_BUTTON_SX = {
   borderRadius: 999,
   textTransform: "none",
@@ -65,7 +69,7 @@ const RAINBOW_BUTTON_SX = {
   },
 };
 
-export default function SiteList({ onOpenDevicesForSite }) {
+export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
   const [rows, setRows] = useState([]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [createOpen, setCreateOpen] = useState(false);
@@ -74,6 +78,15 @@ export default function SiteList({ onOpenDevicesForSite }) {
   const [renameValue, setRenameValue] = useState("");
   const [rotatingId, setRotatingId] = useState(null);
   const gridRef = useRef(null);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: PAGE_TITLE,
+      page_subtitle: PAGE_SUBTITLE,
+      page_icon: PAGE_ICON,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange]);
 
   const fetchSites = useCallback(async () => {
     try {
@@ -216,31 +229,19 @@ export default function SiteList({ onOpenDevicesForSite }) {
         minWidth: 0,
         height: "100%",
         borderRadius: 0,
-        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        border: "none",
         background: "transparent",
-        boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
+        boxShadow: "none",
         overflow: "hidden",
       }}
       elevation={0}
     >
-      {/* Hero Section Removed — integrated header and buttons */}
-      <Box sx={{ p: { xs: 2, md: 3 }, pb: 1, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <LocationCityIcon sx={{ color: MAGIC_UI.accentA }} />
-            <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700, fontSize: "1.3rem" }}>
-            Managed Sites
+      <Box sx={{ p: { xs: 2, md: 3 }, pb: 1, display: "flex", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: 1 }}>
+        {heroStats.selected > 0 ? (
+          <Typography sx={{ color: MAGIC_UI.accentA, fontSize: "0.85rem", fontWeight: 600, mr: 1 }}>
+            {heroStats.selected} selected
           </Typography>
-          </Box>
-          <Typography sx={{ color: MAGIC_UI.textMuted }}>
-            {`Monitoring ${heroStats.totalDevices} devices across ${heroStats.totalSites} site(s)`}
-          </Typography>
-          {heroStats.selected > 0 && (
-            <Typography sx={{ color: MAGIC_UI.accentA, fontSize: "0.85rem", fontWeight: 600 }}>
-              {heroStats.selected} selected
-            </Typography>
-          )}
-        </Box>
+        ) : null}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <Button variant="contained" size="small" startIcon={<AddIcon />} sx={RAINBOW_BUTTON_SX} onClick={() => setCreateOpen(true)}>
             Create Site

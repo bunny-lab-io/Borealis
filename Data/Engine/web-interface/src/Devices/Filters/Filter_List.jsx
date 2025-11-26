@@ -38,6 +38,11 @@ const AURORA_SHELL = {
   accent: "#7dd3fc",
 };
 
+const PAGE_TITLE = "Device Filters";
+const PAGE_SUBTITLE =
+  "Build reusable filter definitions to target devices and assemblies without per-site duplication.";
+const PAGE_ICON = HeaderIcon;
+
 const gradientButtonSx = {
   backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
   color: "#0b1220",
@@ -157,7 +162,7 @@ function normalizeFilters(raw) {
   }));
 }
 
-export default function DeviceFilterList({ onCreateFilter, onEditFilter, refreshToken }) {
+export default function DeviceFilterList({ onCreateFilter, onEditFilter, refreshToken, onPageMetaChange }) {
   const gridRef = useRef(null);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -187,6 +192,15 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: PAGE_TITLE,
+      page_subtitle: PAGE_SUBTITLE,
+      page_icon: PAGE_ICON,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange]);
 
   useEffect(() => {
     loadFilters();
@@ -328,32 +342,7 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
         overflow: "hidden",
       }}
     >
-      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", mb: 2.5 }}>
-        <Box sx={{ display: "flex", gap: 1.5, alignItems: "flex-start" }}>
-          <Box
-            sx={{
-              width: 36,
-              height: 36,
-              borderRadius: 2,
-              background: "linear-gradient(135deg, rgba(125,211,252,0.28), rgba(192,132,252,0.32))",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#0f172a",
-            }}
-          >
-            <HeaderIcon fontSize="small" />
-          </Box>
-          <Box>
-            <Typography sx={{ fontSize: "1.35rem", fontWeight: 700, lineHeight: 1.2 }}>
-              Device Filters
-            </Typography>
-            <Typography sx={{ color: AURORA_SHELL.subtext, mt: 0.2 }}>
-              Build reusable filter definitions to target devices and assemblies without per-site duplication.
-            </Typography>
-          </Box>
-        </Box>
-
+      <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", mb: 2.5 }}>
         <Stack direction="row" gap={1}>
           <Tooltip title="Refresh">
             <IconButton

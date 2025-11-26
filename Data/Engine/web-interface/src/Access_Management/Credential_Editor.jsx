@@ -18,6 +18,55 @@ import {
 } from "@mui/material";
 import UploadIcon from "@mui/icons-material/UploadFile";
 import ClearIcon from "@mui/icons-material/Clear";
+import VpnKeyIcon from "@mui/icons-material/VpnKey";
+
+const MAGIC_UI = {
+  panelBg: "rgba(8,12,24,0.96)",
+  panelBorder: "rgba(148,163,184,0.35)",
+  textBright: "#e2e8f0",
+  textMuted: "#94a3b8",
+  accentA: "#7dd3fc",
+  accentB: "#c084fc",
+  danger: "#ff8a8a",
+};
+
+const GRADIENT_BUTTON_SX = {
+  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+  color: "#041224",
+  borderRadius: 999,
+  textTransform: "none",
+  fontWeight: 700,
+  boxShadow: "0 12px 30px rgba(124,58,237,0.32)",
+  "&:hover": {
+    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+    boxShadow: "0 14px 38px rgba(124,58,237,0.42)",
+  },
+};
+
+const OUTLINE_BUTTON_SX = {
+  textTransform: "none",
+  borderRadius: 2,
+  borderColor: MAGIC_UI.panelBorder,
+  color: MAGIC_UI.textBright,
+  "&:hover": { borderColor: MAGIC_UI.accentA },
+};
+
+const INPUT_SX = {
+  "& .MuiOutlinedInput-root": {
+    backgroundColor: "rgba(12,18,35,0.75)",
+    color: MAGIC_UI.textBright,
+    borderRadius: 2,
+    "& fieldset": { borderColor: MAGIC_UI.panelBorder },
+    "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+    "&.Mui-focused fieldset": { borderColor: MAGIC_UI.accentA },
+  },
+  "& .MuiOutlinedInput-input": {
+    padding: "10px 12px",
+  },
+  "& .MuiInputLabel-root": {
+    color: MAGIC_UI.textMuted,
+  },
+};
 
 const CREDENTIAL_TYPES = [
   { value: "machine", label: "Machine" },
@@ -280,7 +329,7 @@ export default function CredentialEditor({
   };
 
   const title = isEdit ? "Edit Credential" : "Create Credential";
-  const helperStyle = { fontSize: 12, color: "#8a8a8a", mt: 0.5 };
+  const helperStyle = { fontSize: 12, color: MAGIC_UI.textMuted, mt: 0.5 };
 
   return (
     <Dialog
@@ -288,19 +337,40 @@ export default function CredentialEditor({
       onClose={handleCancel}
       maxWidth="md"
       fullWidth
-      PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+      PaperProps={{
+        sx: {
+          bgcolor: MAGIC_UI.panelBg,
+          color: MAGIC_UI.textBright,
+          border: `1px solid ${MAGIC_UI.panelBorder}`,
+          boxShadow: "0 22px 60px rgba(2,6,23,0.75)",
+          backdropFilter: "blur(14px)",
+        },
+      }}
     >
-      <DialogTitle sx={{ pb: 1 }}>{title}</DialogTitle>
-      <DialogContent dividers sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <DialogTitle sx={{ pb: 1, display: "flex", alignItems: "center", gap: 1.2 }}>
+        <VpnKeyIcon sx={{ color: MAGIC_UI.accentA }} />
+        {title}
+      </DialogTitle>
+      <DialogContent
+        dividers
+        sx={{ display: "flex", flexDirection: "column", gap: 2, borderColor: MAGIC_UI.panelBorder }}
+      >
         {fetchingDetail && (
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "#aaa" }}>
-            <CircularProgress size={18} sx={{ color: "#58a6ff" }} />
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: MAGIC_UI.textMuted }}>
+            <CircularProgress size={18} sx={{ color: MAGIC_UI.accentA }} />
             <Typography variant="body2">Loading credential details…</Typography>
           </Box>
         )}
         {error && (
-          <Box sx={{ bgcolor: "#2c1c1c", border: "1px solid #663939", borderRadius: 1, p: 1 }}>
-            <Typography variant="body2" sx={{ color: "#ff8080" }}>{error}</Typography>
+          <Box
+            sx={{
+              bgcolor: "rgba(255,124,124,0.1)",
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              borderRadius: 2,
+              p: 1.5,
+            }}
+          >
+            <Typography variant="body2" sx={{ color: MAGIC_UI.danger }}>{error}</Typography>
           </Box>
         )}
         <TextField
@@ -309,10 +379,7 @@ export default function CredentialEditor({
           onChange={updateField("name")}
           required
           disabled={disableSave}
-          sx={{
-            "& .MuiInputBase-root": { bgcolor: "#1f1f1f", color: "#fff" },
-            "& label": { color: "#888" }
-          }}
+          sx={INPUT_SX}
         />
         <TextField
           label="Description"
@@ -321,19 +388,16 @@ export default function CredentialEditor({
           disabled={disableSave}
           multiline
           minRows={2}
-          sx={{
-            "& .MuiInputBase-root": { bgcolor: "#1f1f1f", color: "#fff" },
-            "& label": { color: "#888" }
-          }}
+          sx={INPUT_SX}
         />
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
           <FormControl sx={{ minWidth: 220 }} size="small" disabled={disableSave}>
-            <InputLabel sx={{ color: "#aaa" }}>Site</InputLabel>
+            <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Site</InputLabel>
             <Select
               value={form.site_id}
               label="Site"
               onChange={updateField("site_id")}
-              sx={{ bgcolor: "#1f1f1f", color: "#fff" }}
+              sx={INPUT_SX}
             >
               <MenuItem value="">(None)</MenuItem>
               {sites.map((site) => (
@@ -344,12 +408,12 @@ export default function CredentialEditor({
             </Select>
           </FormControl>
           <FormControl sx={{ minWidth: 180 }} size="small" disabled={disableSave}>
-            <InputLabel sx={{ color: "#aaa" }}>Credential Type</InputLabel>
+            <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Credential Type</InputLabel>
             <Select
               value={form.credential_type}
               label="Credential Type"
               onChange={updateField("credential_type")}
-              sx={{ bgcolor: "#1f1f1f", color: "#fff" }}
+              sx={INPUT_SX}
             >
               {CREDENTIAL_TYPES.map((opt) => (
                 <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
@@ -357,12 +421,12 @@ export default function CredentialEditor({
             </Select>
           </FormControl>
           <FormControl sx={{ minWidth: 180 }} size="small" disabled={disableSave}>
-            <InputLabel sx={{ color: "#aaa" }}>Connection</InputLabel>
+            <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Connection</InputLabel>
             <Select
               value={form.connection_type}
               label="Connection"
               onChange={updateField("connection_type")}
-              sx={{ bgcolor: "#1f1f1f", color: "#fff" }}
+              sx={INPUT_SX}
             >
               {CONNECTION_TYPES.map((opt) => (
                 <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
@@ -375,10 +439,7 @@ export default function CredentialEditor({
           value={form.username}
           onChange={updateField("username")}
           disabled={disableSave}
-          sx={{
-            "& .MuiInputBase-root": { bgcolor: "#1f1f1f", color: "#fff" },
-            "& label": { color: "#888" }
-          }}
+          sx={INPUT_SX}
         />
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <TextField
@@ -387,15 +448,11 @@ export default function CredentialEditor({
             value={form.password}
             onChange={updateField("password")}
             disabled={disableSave}
-            sx={{
-              flex: 1,
-              "& .MuiInputBase-root": { bgcolor: "#1f1f1f", color: "#fff" },
-              "& label": { color: "#888" }
-            }}
+            sx={{ flex: 1, ...INPUT_SX }}
           />
           {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
             <Tooltip title="Clear stored password">
-              <IconButton size="small" onClick={() => setClearPassword(true)} sx={{ color: "#ff8080" }}>
+              <IconButton size="small" onClick={() => setClearPassword(true)} sx={{ color: MAGIC_UI.danger }}>
                 <ClearIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -405,7 +462,7 @@ export default function CredentialEditor({
           <Typography sx={helperStyle}>Stored password will remain unless you change or clear it.</Typography>
         )}
         {clearPassword && (
-          <Typography sx={{ ...helperStyle, color: "#ffaaaa" }}>Password will be removed when saving.</Typography>
+          <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Password will be removed when saving.</Typography>
         )}
 
         <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
@@ -419,8 +476,8 @@ export default function CredentialEditor({
             maxRows={12}
             sx={{
               flex: 1,
-              "& .MuiInputBase-root": { bgcolor: "#1f1f1f", color: "#fff", fontFamily: "monospace" },
-              "& label": { color: "#888" }
+              ...INPUT_SX,
+              "& .MuiOutlinedInput-input": { fontFamily: "monospace" },
             }}
           />
           <Button
@@ -428,14 +485,14 @@ export default function CredentialEditor({
             component="label"
             startIcon={<UploadIcon />}
             disabled={disableSave}
-            sx={{ alignSelf: "center", borderColor: "#58a6ff", color: "#58a6ff" }}
+            sx={{ alignSelf: "center", ...OUTLINE_BUTTON_SX }}
           >
             Upload
             <input type="file" hidden accept=".pem,.key,.txt" onChange={handlePrivateKeyUpload} />
           </Button>
           {isEdit && currentCredentialFlags.hasPrivateKey && !privateKeyDirty && !clearPrivateKey && (
             <Tooltip title="Clear stored private key">
-              <IconButton size="small" onClick={() => setClearPrivateKey(true)} sx={{ color: "#ff8080" }}>
+              <IconButton size="small" onClick={() => setClearPrivateKey(true)} sx={{ color: MAGIC_UI.danger }}>
                 <ClearIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -445,7 +502,7 @@ export default function CredentialEditor({
           <Typography sx={helperStyle}>Private key is stored. Upload or paste a new one to replace, or clear it.</Typography>
         )}
         {clearPrivateKey && (
-          <Typography sx={{ ...helperStyle, color: "#ffaaaa" }}>Private key will be removed when saving.</Typography>
+          <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Private key will be removed when saving.</Typography>
         )}
 
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -455,15 +512,11 @@ export default function CredentialEditor({
             value={form.private_key_passphrase}
             onChange={updateField("private_key_passphrase")}
             disabled={disableSave}
-            sx={{
-              flex: 1,
-              "& .MuiInputBase-root": { bgcolor: "#1f1f1f", color: "#fff" },
-              "& label": { color: "#888" }
-            }}
+            sx={{ flex: 1, ...INPUT_SX }}
           />
           {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase && (
             <Tooltip title="Clear stored passphrase">
-              <IconButton size="small" onClick={() => setClearPassphrase(true)} sx={{ color: "#ff8080" }}>
+              <IconButton size="small" onClick={() => setClearPassphrase(true)} sx={{ color: MAGIC_UI.danger }}>
                 <ClearIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -473,17 +526,17 @@ export default function CredentialEditor({
           <Typography sx={helperStyle}>A passphrase is stored for this key.</Typography>
         )}
         {clearPassphrase && (
-          <Typography sx={{ ...helperStyle, color: "#ffaaaa" }}>Key passphrase will be removed when saving.</Typography>
+          <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Key passphrase will be removed when saving.</Typography>
         )}
 
         <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           <FormControl sx={{ minWidth: 180 }} size="small" disabled={disableSave}>
-            <InputLabel sx={{ color: "#aaa" }}>Privilege Escalation</InputLabel>
+            <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Privilege Escalation</InputLabel>
             <Select
               value={form.become_method}
               label="Privilege Escalation"
               onChange={updateField("become_method")}
-              sx={{ bgcolor: "#1f1f1f", color: "#fff" }}
+              sx={INPUT_SX}
             >
               {BECOME_METHODS.map((opt) => (
                 <MenuItem key={opt.value || "none"} value={opt.value}>{opt.label}</MenuItem>
@@ -495,12 +548,7 @@ export default function CredentialEditor({
             value={form.become_username}
             onChange={updateField("become_username")}
             disabled={disableSave}
-            sx={{
-              flex: 1,
-              minWidth: 200,
-              "& .MuiInputBase-root": { bgcolor: "#1f1f1f", color: "#fff" },
-              "& label": { color: "#888" }
-            }}
+            sx={{ flex: 1, minWidth: 200, ...INPUT_SX }}
           />
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -510,15 +558,11 @@ export default function CredentialEditor({
             value={form.become_password}
             onChange={updateField("become_password")}
             disabled={disableSave}
-            sx={{
-              flex: 1,
-              "& .MuiInputBase-root": { bgcolor: "#1f1f1f", color: "#fff" },
-              "& label": { color: "#888" }
-            }}
+            sx={{ flex: 1, ...INPUT_SX }}
           />
           {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword && (
             <Tooltip title="Clear stored escalation password">
-              <IconButton size="small" onClick={() => setClearBecomePassword(true)} sx={{ color: "#ff8080" }}>
+              <IconButton size="small" onClick={() => setClearBecomePassword(true)} sx={{ color: MAGIC_UI.danger }}>
                 <ClearIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -528,20 +572,20 @@ export default function CredentialEditor({
           <Typography sx={helperStyle}>Escalation password is stored.</Typography>
         )}
         {clearBecomePassword && (
-          <Typography sx={{ ...helperStyle, color: "#ffaaaa" }}>Escalation password will be removed when saving.</Typography>
+          <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Escalation password will be removed when saving.</Typography>
         )}
       </DialogContent>
       <DialogActions sx={{ px: 3, py: 2 }}>
-        <Button onClick={handleCancel} sx={{ color: "#58a6ff" }} disabled={loading}>
+        <Button onClick={handleCancel} sx={OUTLINE_BUTTON_SX} disabled={loading}>
           Cancel
         </Button>
         <Button
           onClick={handleSave}
-          variant="outlined"
-          sx={{ color: "#58a6ff", borderColor: "#58a6ff" }}
+          variant="contained"
+          sx={GRADIENT_BUTTON_SX}
           disabled={disableSave}
         >
-          {loading ? <CircularProgress size={18} sx={{ color: "#58a6ff" }} /> : "Save"}
+          {loading ? <CircularProgress size={18} sx={{ color: "#041224" }} /> : "Save"}
         </Button>
       </DialogActions>
     </Dialog>

@@ -71,6 +71,10 @@ const MAGIC_UI = {
   glow: "0 30px 70px rgba(2,6,23,0.85)",
 };
 
+const PAGE_ICON = PendingActionsIcon;
+const PAGE_TITLE = "Create Job";
+const PAGE_SUBTITLE = "Configure scheduled or immediate jobs against targeted devices or filters.";
+
 const gridTheme = themeQuartz.withParams({
   accentColor: "#8b5cf6",
   backgroundColor: "#070b1a",
@@ -793,7 +797,14 @@ function ComponentCard({ comp, onRemove, onVariableChange, errors = {} }) {
   );
 }
 
-export default function CreateJob({ onCancel, onCreated, initialJob = null, quickJobDraft = null, onConsumeQuickJobDraft }) {
+export default function CreateJob({
+  onCancel,
+  onCreated,
+  initialJob = null,
+  quickJobDraft = null,
+  onConsumeQuickJobDraft,
+  onPageMetaChange,
+}) {
   const [tab, setTab] = useState(0);
   const [jobName, setJobName] = useState("");
   const [pageTitleJobName, setPageTitleJobName] = useState("");
@@ -839,6 +850,26 @@ export default function CreateJob({ onCancel, onCreated, initialJob = null, quic
   const [credentialLoading, setCredentialLoading] = useState(false);
   const [credentialError, setCredentialError] = useState("");
   const [selectedCredentialId, setSelectedCredentialId] = useState("");
+
+  const resolvedPageTitle = useMemo(
+    () => (pageTitleJobName ? `Scheduled Job: ${pageTitleJobName}` : PAGE_TITLE),
+    [pageTitleJobName]
+  );
+  const resolvedPageSubtitle = useMemo(() => {
+    if (scheduleType === "immediately") {
+      return "Launch immediately or save as a quick job with your selected assemblies.";
+    }
+    return PAGE_SUBTITLE;
+  }, [scheduleType]);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: resolvedPageTitle,
+      page_subtitle: resolvedPageSubtitle,
+      page_icon: PAGE_ICON,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, resolvedPageSubtitle, resolvedPageTitle]);
   const [useSvcAccount, setUseSvcAccount] = useState(true);
   const [assembliesPayload, setAssembliesPayload] = useState({ items: [], queue: [] });
   const [assembliesLoading, setAssembliesLoading] = useState(false);
@@ -2863,8 +2894,8 @@ const heroTiles = useMemo(() => {
         gap: 3,
         borderRadius: 0,
         background: "transparent",
-        border: `1px solid ${MAGIC_UI.panelBorder}`,
-        boxShadow: MAGIC_UI.glow,
+        border: "none",
+        boxShadow: "none",
       }}
     >
       <Box
@@ -2873,25 +2904,9 @@ const heroTiles = useMemo(() => {
           flexWrap: "wrap",
           gap: 2,
           alignItems: "center",
-          justifyContent: "space-between",
+          justifyContent: "flex-end",
         }}
       >
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 0.75 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <PendingActionsIcon sx={{ color: MAGIC_UI.accentA }} />
-            <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-              Scheduled Job
-              {pageTitleJobName ? (
-                <Box component="span" sx={{ color: "rgba(226,232,240,0.65)", fontWeight: 500 }}>
-                  {`: "${pageTitleJobName}"`}
-                </Box>
-              ) : null}
-            </Typography>
-          </Box>
-          <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-            Configure advanced scheduled jobs against one or several targeted devices or device filters.
-          </Typography>
-        </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
           <Button onClick={onCancel} sx={OUTLINE_BUTTON_SX}>
             Cancel

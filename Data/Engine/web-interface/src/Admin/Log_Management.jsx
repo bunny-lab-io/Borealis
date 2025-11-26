@@ -109,7 +109,7 @@ function formatTimestamp(ts) {
   return ts;
 }
 
-export default function LogManagement({ isAdmin = false }) {
+export default function LogManagement({ isAdmin = false, onPageMetaChange }) {
   const [logs, setLogs] = useState([]);
   const [defaultRetention, setDefaultRetention] = useState(30);
   const [selectedDomain, setSelectedDomain] = useState(null);
@@ -124,6 +124,7 @@ export default function LogManagement({ isAdmin = false }) {
   const [actionMessage, setActionMessage] = useState(null);
   const [quickFilter, setQuickFilter] = useState("");
   const gridRef = useRef(null);
+  const useGlobalHeader = Boolean(onPageMetaChange);
 
   const logMap = useMemo(() => {
     const map = new Map();
@@ -213,6 +214,15 @@ const defaultColDef = useMemo(
   useEffect(() => {
     if (isAdmin) fetchLogs();
   }, [fetchLogs, isAdmin]);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: "Log Management",
+      page_subtitle: "Analyze engine logs and adjust retention across services.",
+      page_icon: LogsIcon,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange]);
 
   useEffect(() => {
     if (!logs.length) {
@@ -317,7 +327,7 @@ const defaultColDef = useMemo(
 
   return (
     <Paper
-      elevation={3}
+      elevation={0}
       sx={{
         m: 0,
         p: 0,
@@ -329,38 +339,55 @@ const defaultColDef = useMemo(
         flexDirection: "column",
       }}
     >
-      <Box sx={{ px: 3, pt: 3, pb: 1, borderBottom: `1px solid ${AURORA_SHELL.border}` }}>
-        <Stack direction="row" spacing={1.25} alignItems="center">
-          <LogsIcon sx={{ fontSize: 22, color: AURORA_SHELL.accent, mt: 0.25 }} />
-          <Typography
-            variant="h6"
-            sx={{
-              fontWeight: 700,
-              letterSpacing: 0.5,
-              color: AURORA_SHELL.text,
-            }}
-          >
-            Log Management
-          </Typography>
-          <Box sx={{ flexGrow: 1 }} />
-          <Stack direction="row" spacing={1}>
-            <Button
-              variant="contained"
-              startIcon={<RefreshIcon />}
-              onClick={() => {
-                fetchLogs();
-                if (selectedFile) fetchEntries(selectedFile);
+      {!useGlobalHeader && (
+        <Box sx={{ px: 3, pt: 3, pb: 1, borderBottom: `1px solid ${AURORA_SHELL.border}` }}>
+          <Stack direction="row" spacing={1.25} alignItems="center">
+            <LogsIcon sx={{ fontSize: 22, color: AURORA_SHELL.accent, mt: 0.25 }} />
+            <Typography
+              variant="h6"
+              sx={{
+                fontWeight: 700,
+                letterSpacing: 0.5,
+                color: AURORA_SHELL.text,
               }}
-              sx={gradientButtonSx}
             >
-              Refresh
-            </Button>
+              Log Management
+            </Typography>
+            <Box sx={{ flexGrow: 1 }} />
+            <Stack direction="row" spacing={1}>
+              <Button
+                variant="contained"
+                startIcon={<RefreshIcon />}
+                onClick={() => {
+                  fetchLogs();
+                  if (selectedFile) fetchEntries(selectedFile);
+                }}
+                sx={gradientButtonSx}
+              >
+                Refresh
+              </Button>
+            </Stack>
           </Stack>
-        </Stack>
-        <Typography variant="body2" sx={{ color: AURORA_SHELL.muted, mt: 0.75, mb: 2.5 }}>
-          Analyze engine logs and adjust log retention periods for different engine services.
-        </Typography>
-      </Box>
+          <Typography variant="body2" sx={{ color: AURORA_SHELL.muted, mt: 0.75, mb: 2.5 }}>
+            Analyze engine logs and adjust log retention periods for different engine services.
+          </Typography>
+        </Box>
+      )}
+      {useGlobalHeader && (
+        <Box sx={{ px: 3, pt: 2, pb: 1, display: "flex", justifyContent: "flex-end" }}>
+          <Button
+            variant="contained"
+            startIcon={<RefreshIcon />}
+            onClick={() => {
+              fetchLogs();
+              if (selectedFile) fetchEntries(selectedFile);
+            }}
+            sx={gradientButtonSx}
+          >
+            Refresh
+          </Button>
+        </Box>
+      )}
 
       {error && (
         <Box sx={{ px: 3, pt: 2 }}>

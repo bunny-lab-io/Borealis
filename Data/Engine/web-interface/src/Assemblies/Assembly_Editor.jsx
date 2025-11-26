@@ -17,7 +17,12 @@ import {
   DialogActions,
   ListItemText
 } from "@mui/material";
-import { Add as AddIcon, Delete as DeleteIcon, UploadFile as UploadFileIcon } from "@mui/icons-material";
+import {
+  Add as AddIcon,
+  Delete as DeleteIcon,
+  UploadFile as UploadFileIcon,
+  Code as CodeIcon,
+} from "@mui/icons-material";
 import Prism from "prismjs";
 import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-bash";
@@ -118,6 +123,12 @@ const SECTION_CARD_SX = {
   borderRadius: 2,
   border: "1px solid #262f3d",
 };
+
+const PAGE_ICON = CodeIcon;
+const PAGE_TITLE_SCRIPT = "Assembly Editor";
+const PAGE_TITLE_ANSIBLE = "Ansible Assembly Editor";
+const PAGE_SUBTITLE_SCRIPT = "Edit Borealis script assemblies, variables, and payloads before scheduling.";
+const PAGE_SUBTITLE_ANSIBLE = "Author Ansible playbooks with Borealis variables, inventory, and credential bindings.";
 
 const MENU_PROPS = {
   PaperProps: {
@@ -341,6 +352,7 @@ export default function AssemblyEditor({
   onConsumeInitialData,
   onSaved,
   userRole = "User",
+  onPageMetaChange,
 }) {
   const normalizedMode = mode === "ansible" ? "ansible" : "script";
   const isAnsible = normalizedMode === "ansible";
@@ -364,6 +376,24 @@ export default function AssemblyEditor({
   const [menuAnchorEl, setMenuAnchorEl] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
   const isAdmin = (userRole || "").toLowerCase() === "admin";
+
+  const pageTitle = useMemo(
+    () => (isAnsible ? PAGE_TITLE_ANSIBLE : PAGE_TITLE_SCRIPT),
+    [isAnsible]
+  );
+  const pageSubtitle = useMemo(
+    () => (isAnsible ? PAGE_SUBTITLE_ANSIBLE : PAGE_SUBTITLE_SCRIPT),
+    [isAnsible]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: pageTitle,
+      page_subtitle: pageSubtitle,
+      page_icon: PAGE_ICON,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageSubtitle, pageTitle]);
 
   const TYPE_OPTIONS = useMemo(
     () => (isAnsible ? TYPE_OPTIONS_ALL.filter((o) => o.key === "ansible") : TYPE_OPTIONS_ALL.filter((o) => o.key !== "ansible")),

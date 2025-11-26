@@ -232,7 +232,7 @@ const normalizeRow = (item, queueEntry) => {
   };
 };
 
-export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = "User" }) {
+export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = "User", onPageMetaChange }) {
   const gridRef = useRef(null);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -252,6 +252,15 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [cloneDialog, setCloneDialog] = useState({ open: false, row: null, targetDomain: "user" });
   const isAdmin = (userRole || "").toLowerCase() === "admin";
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: "Assemblies",
+      page_subtitle: "Collections of scripts, workflows, and playbooks used to automate tasks across devices.",
+      page_icon: AppsIcon,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange]);
 
   const fetchAssemblies = useCallback(async () => {
     setLoading(true);
@@ -602,18 +611,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       }}
       elevation={0}
     >
-      <Box sx={{ px: 3, pt: 3, pb: 1 }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
-          <AppsIcon sx={{ fontSize: 22, color: "#7dd3fc" }} />
-          <Typography variant="h6" sx={{ color: "#e2e8f0", fontWeight: 700, letterSpacing: 0.5 }}>
-            Assemblies
-          </Typography>
-        </Box>
-        <Typography variant="body2" sx={{ color: "#aaa", mt: 0.5, mb: 2 }}>
-          Collections of scripts, workflows, and playbooks used to automate tasks across devices.
-        </Typography>
-      </Box>
-      <Box sx={{ px: 2, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1 }}>
+      <Box sx={{ px: 2, mt: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <IconButton
             size="small"

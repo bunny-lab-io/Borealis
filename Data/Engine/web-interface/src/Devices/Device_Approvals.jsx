@@ -90,7 +90,7 @@ const normalizeStatus = (status) => {
   return status.toLowerCase();
 };
 
-export default function DeviceApprovals() {
+export default function DeviceApprovals({ onPageMetaChange }) {
   const [approvals, setApprovals] = useState([]);
   const [statusFilter, setStatusFilter] = useState("all");
   const [loading, setLoading] = useState(false);
@@ -100,6 +100,7 @@ export default function DeviceApprovals() {
   const [actioningId, setActioningId] = useState(null);
   const [conflictPrompt, setConflictPrompt] = useState(null);
   const gridRef = useRef(null);
+  const useGlobalHeader = Boolean(onPageMetaChange);
 
   const loadApprovals = useCallback(async () => {
     setLoading(true);
@@ -121,6 +122,15 @@ export default function DeviceApprovals() {
   }, [statusFilter]);
 
   useEffect(() => { loadApprovals(); }, [loadApprovals]);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: "Device Approval Queue",
+      page_subtitle: "Review pending device enrollments and resolve conflicts with existing records.",
+      page_icon: SecurityIcon,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange]);
 
   const dedupedApprovals = useMemo(() => {
     const normalized = approvals
@@ -414,22 +424,49 @@ export default function DeviceApprovals() {
         minWidth: 0,
         height: "100%",
         borderRadius: 0,
-        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        border: "none",
         background: "transparent",
-        boxShadow: "0 25px 80px rgba(6, 12, 30, 0.8)",
+        boxShadow: "none",
         overflow: "hidden",
       }}
       elevation={0}
     >
-      {/* Page header (no solid backdrop so gradient reaches the top) */}
-      <Box sx={{ p: 3 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between">
-          <Stack direction="row" spacing={1} alignItems="center">
-            <SecurityIcon sx={{ color: MAGIC_UI.accentA }} />
-            <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-              Device Approval Queue
-            </Typography>
+      {!useGlobalHeader && (
+        <Box sx={{ p: 3 }}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between">
+            <Stack direction="row" spacing={1} alignItems="center">
+              <SecurityIcon sx={{ color: MAGIC_UI.accentA }} />
+              <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+                Device Approval Queue
+              </Typography>
+            </Stack>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ xs: "stretch", sm: "center" }}>
+              <FormControl size="small" sx={{ minWidth: 200 }}>
+                <InputLabel id="approval-status-filter-label">Status</InputLabel>
+                <Select
+                  labelId="approval-status-filter-label"
+                  label="Status"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                >
+                  {STATUS_OPTIONS.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadApprovals} disabled={loading}>
+                Refresh
+              </Button>
+            </Stack>
           </Stack>
+        </Box>
+      )}
+
+      {/* Filters under shared header */}
+      {useGlobalHeader && (
+        <Box sx={{ px: 3, pt: 2, pb: 1 }}>
           <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ xs: "stretch", sm: "center" }}>
             <FormControl size="small" sx={{ minWidth: 200 }}>
               <InputLabel id="approval-status-filter-label">Status</InputLabel>
@@ -450,8 +487,8 @@ export default function DeviceApprovals() {
               Refresh
             </Button>
           </Stack>
-        </Stack>
-      </Box>
+        </Box>
+      )}
 
       {/* Feedback */}
       {feedback && (

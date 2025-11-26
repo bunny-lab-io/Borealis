@@ -49,6 +49,8 @@ const MAGIC_UI = {
   accentC: "#34d399",
 };
 
+const PAGE_ICON = DeveloperBoardRoundedIcon;
+
 const TAB_HOVER_GRADIENT = "linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))";
 
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
@@ -249,7 +251,7 @@ const GRID_COMPONENTS = {
   HistoryActionsCell,
 };
 
-export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
+export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPageMetaChange }) {
   const [tab, setTab] = useState(0);
   const [agent, setAgent] = useState(device || {});
   const [details, setDetails] = useState({});
@@ -956,7 +958,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
       sx={{
         p: 2,
         borderRadius: 3,
-        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        border: "none",
         background: 'transparent',
         boxShadow: "0 18px 40px rgba(2,6,23,0.55)",
         mb: 1.5,
@@ -1494,6 +1496,26 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
 
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
 
+  const displayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "Device Details";
+  const guidForSubtitle =
+    meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || device?.agentGuid || "";
+  const osLabel =
+    meta.operatingSystem || summary.operating_system || agent.agent_operating_system || agent.operating_system || "";
+  const subtitleParts = [];
+  if (status) subtitleParts.push(`Status: ${status}`);
+  if (osLabel) subtitleParts.push(osLabel);
+  if (guidForSubtitle) subtitleParts.push(`GUID ${guidForSubtitle}`);
+  const pageSubtitle = subtitleParts.join(" | ");
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: displayHostname,
+      page_subtitle: pageSubtitle,
+      page_icon: PAGE_ICON,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [displayHostname, onPageMetaChange, pageSubtitle]);
+
   const topTabRenderers = [
     renderDeviceSummaryTab,
     renderStorageTab,
@@ -1512,7 +1534,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
         borderRadius: 0,
         background: "transparent",
         border: `1px solid ${MAGIC_UI.panelBorder}`,
-        boxShadow: MAGIC_UI.glow,
+        boxShadow: "none",
         display: "flex",
         flexDirection: "column",
         flexGrow: 1,
@@ -1529,7 +1551,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
           gap: 2,
         }}
       >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap", minWidth: 0 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap", minWidth: 0 }}>
           {onBack && (
             <Button
               variant="outlined"
@@ -1546,27 +1568,19 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch }) {
               Back
             </Button>
           )}
-          <Box>
-            <Typography
-              variant="h6"
-              sx={{ color: MAGIC_UI.textBright, display: "flex", alignItems: "center", gap: 1 }}
-            >
-              <Box
-                component="span"
-                sx={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: 10,
-                  backgroundColor: statusColor(status),
-                  boxShadow: `0 0 12px ${statusColor(status)}`,
-                }}
-              />
-              {agent.hostname || "Device Details"}
-            </Typography>
-            <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-              GUID: {meta.agentGuid || summary.agent_guid || "unknown"}
-            </Typography>
-          </Box>
+          <Box
+            component="span"
+            sx={{
+              width: 10,
+              height: 10,
+              borderRadius: 10,
+              backgroundColor: statusColor(status),
+              boxShadow: `0 0 12px ${statusColor(status)}`,
+            }}
+          />
+          <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
+            GUID: {meta.agentGuid || summary.agent_guid || "unknown"}
+          </Typography>
         </Box>
 
         <Box

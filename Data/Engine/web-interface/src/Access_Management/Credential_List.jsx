@@ -41,6 +41,18 @@ const myTheme = themeQuartz.withParams({
 const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
+const gradientButtonSx = {
+  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+  color: "#0b1220",
+  borderRadius: 999,
+  textTransform: "none",
+  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
+  "&:hover": {
+    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
+    filter: "none",
+  },
+};
 
 function formatTs(ts) {
   if (!ts) return "-";
@@ -62,7 +74,7 @@ function connectionIcon(connection) {
   return <ComputerIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
 }
 
-export default function CredentialList({ isAdmin = false }) {
+export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -216,6 +228,15 @@ export default function CredentialList({ isAdmin = false }) {
     fetchCredentials();
   }, [fetchCredentials]);
 
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: "Credentials",
+      page_subtitle: "Stored credentials for remote automation tasks and Ansible playbook runs.",
+      page_icon: LockIcon,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange]);
+
   const handleCreate = () => {
     setEditorMode("create");
     setEditingCredential(null);
@@ -291,9 +312,11 @@ export default function CredentialList({ isAdmin = false }) {
     <>
       <Paper
         sx={{
-          m: 2,
+          m: 0,
           p: 0,
           bgcolor: "transparent",
+          border: "none",
+          boxShadow: "none",
           fontFamily: gridFontFamily,
           color: "#f5f7fa",
           display: "flex",
@@ -302,31 +325,32 @@ export default function CredentialList({ isAdmin = false }) {
           minWidth: 0,
           minHeight: 420
         }}
-        elevation={2}
+        elevation={0}
       >
         <Box
           sx={{
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            p: 2,
-            borderBottom: "1px solid #2a2a2a"
+            px: 2,
+            pt: 1,
+            pb: 1,
           }}
         >
-          <Box>
-            <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0.3 }}>
-              Credentials
-            </Typography>
-            <Typography variant="body2" sx={{ color: "#aaa" }}>
-              Stored credentials for remote automation tasks and Ansible playbook runs.
-            </Typography>
-          </Box>
           <Box sx={{ display: "flex", gap: 1 }}>
             <Button
               variant="outlined"
               size="small"
               startIcon={<RefreshIcon />}
-              sx={{ borderColor: "#58a6ff", color: "#58a6ff" }}
+              sx={{
+                borderColor: "rgba(148,163,184,0.35)",
+                color: "#e2e8f0",
+                textTransform: "none",
+                borderRadius: 999,
+                px: 1.7,
+                minWidth: 86,
+                "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
+              }}
               onClick={fetchCredentials}
               disabled={loading}
             >
@@ -336,7 +360,7 @@ export default function CredentialList({ isAdmin = false }) {
               variant="contained"
               size="small"
               startIcon={<AddIcon />}
-              sx={{ bgcolor: "#58a6ff", color: "#0b0f19" }}
+              sx={gradientButtonSx}
               onClick={handleCreate}
             >
               New Credential
@@ -352,7 +376,6 @@ export default function CredentialList({ isAdmin = false }) {
               color: "#7db7ff",
               px: 2,
               py: 1.5,
-              borderBottom: "1px solid #2a2a2a"
             }}
           >
             <CircularProgress size={18} sx={{ color: "#58a6ff" }} />
@@ -360,7 +383,7 @@ export default function CredentialList({ isAdmin = false }) {
           </Box>
         )}
         {error && (
-          <Box sx={{ px: 2, py: 1.5, color: "#ff8080", borderBottom: "1px solid #2a2a2a" }}>
+          <Box sx={{ px: 2, py: 1.5, color: "#ff8080" }}>
             <Typography variant="body2">{error}</Typography>
           </Box>
         )}

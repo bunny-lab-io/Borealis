@@ -27,10 +27,11 @@ import {
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import FilterListIcon from "@mui/icons-material/FilterList";
+import GroupIcon from "@mui/icons-material/Group";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
 
 /* ---------- Formatting helpers to keep this page in lockstep with Device_List ---------- */
-const tablePaperSx = { m: 2, p: 0, bgcolor: "transparent" };
+const tablePaperSx = { m: 0, p: 0, bgcolor: "transparent", border: "none", boxShadow: "none" };
 const tableSx = {
   minWidth: 820,
   "& th, & td": {
@@ -51,6 +52,19 @@ const filterFieldSx = {
     "&:hover fieldset": { borderColor: "#888" }
   }
 };
+
+const gradientButtonSx = {
+  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+  color: "#0b1220",
+  borderRadius: 999,
+  textTransform: "none",
+  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
+  "&:hover": {
+    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
+    filter: "none",
+  },
+};
 /* -------------------------------------------------------------------- */
 
 function formatTs(tsSec) {
@@ -69,7 +83,7 @@ async function sha512(text) {
   return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export default function UserManagement({ isAdmin = false }) {
+export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
   const [rows, setRows] = useState([]); // {username, display_name, role, last_login}
   const [orderBy, setOrderBy] = useState("username");
   const [order, setOrder] = useState("asc");
@@ -91,6 +105,7 @@ export default function UserManagement({ isAdmin = false }) {
   const [mfaBusyUser, setMfaBusyUser] = useState(null);
   const [resetMfaOpen, setResetMfaOpen] = useState(false);
   const [resetMfaTarget, setResetMfaTarget] = useState(null);
+  const useGlobalHeader = Boolean(onPageMetaChange);
 
   // Columns and filters
   const columns = useMemo(() => ([
@@ -139,6 +154,15 @@ export default function UserManagement({ isAdmin = false }) {
     })();
     fetchUsers();
   }, [fetchUsers, isAdmin]);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: "User Management",
+      page_subtitle: "Manage platform users, roles, MFA, and credentials.",
+      page_icon: GroupIcon,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange]);
 
   const handleSort = (col) => {
     if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
@@ -397,21 +421,13 @@ export default function UserManagement({ isAdmin = false }) {
 
   return (
     <>
-      <Paper sx={tablePaperSx} elevation={2}>
-        <Box sx={{ p: 2, pb: 1, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <Box>
-            <Typography variant="h6" sx={{ color: "#58a6ff", mb: 0 }}>
-              User Management
-            </Typography>
-            <Typography variant="body2" sx={{ color: "#aaa" }}>
-              Manage authorized users of the Borealis Automation Platform.
-            </Typography>
-          </Box>
+      <Paper sx={tablePaperSx} elevation={0}>
+        <Box sx={{ p: 2, pb: 1, display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 1 }}>
           <Button
-            variant="outlined"
+            variant="contained"
             size="small"
             onClick={openCreate}
-            sx={{ color: "#58a6ff", borderColor: "#58a6ff", textTransform: "none" }}
+            sx={gradientButtonSx}
           >
             Create User
           </Button>
