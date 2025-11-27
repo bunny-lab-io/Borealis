@@ -2,6 +2,8 @@
 
 Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page_Template.jsx` as the canonical visual reference (no API/business logic). Keep this doc as the single source of truth for styling rules and AG Grid behavior.
 
+- Toast notifications: see `Docs/Codex/TOAST_NOTIFICATIONS.md` for endpoint, payload, severity variants, and quick test commands.
+
 ## Page Template Reference
 - Purpose: visual-only baseline for new pages; copy structure but wire your data in real pages.
 - Header: small Material icon left of the title, subtitle beneath, utility buttons on the top-right.

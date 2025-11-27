@@ -51,6 +51,7 @@ import ServerInfo from "./Admin/Server_Info.jsx";
 import PageTemplate from "./Admin/Page_Template.jsx";
 import LogManagement from "./Admin/Log_Management.jsx";
 import DeviceApprovals from "./Devices/Device_Approvals.jsx";
+import Notifications from "./Notifications.jsx";
 
 // Networking Imports
 import { io } from "socket.io-client";
@@ -1369,6 +1370,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   return (
     <ThemeProvider theme={darkTheme}>
       <CssBaseline />
+      <Notifications socket={window.BorealisSocket} currentUser={user} />
       <Box
         sx={{
           width: "100vw",
