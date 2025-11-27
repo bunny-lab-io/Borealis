@@ -104,9 +104,13 @@ def _rotate_daily(path: Path) -> None:
         pass
 
 
+_QUIET_SERVICE_LOGS = {"scheduled_jobs"}
+
+
 def _make_service_logger(base: Path, logger: logging.Logger) -> Callable[[str, str, Optional[str]], None]:
     def _log(service: str, msg: str, scope: Optional[str] = None, *, level: str = "INFO") -> None:
         level_upper = level.upper()
+        service_key = (service or "").strip().lower()
         try:
             base.mkdir(parents=True, exist_ok=True)
             path = base / f"{service}.log"
@@ -123,7 +127,8 @@ def _make_service_logger(base: Path, logger: logging.Logger) -> Callable[[str, s
             logger.debug("Failed to write service log entry", exc_info=True)
 
         numeric_level = getattr(logging, level_upper, logging.INFO)
-        logger.log(numeric_level, "[service:%s] %s", service, msg)
+        if service_key not in _QUIET_SERVICE_LOGS:
+            logger.log(numeric_level, "[service:%s] %s", service, msg)
 
     return _log
 
