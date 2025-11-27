@@ -71,7 +71,47 @@ export default function GithubAPIToken({ isAdmin = false, onPageMetaChange }) {
     error: ""
   });
 
-  const hydrate = useCallback(async () => {
+  const sendNotification = useCallback(async ({ message, variant = "info" }) => {
+    if (!message) return;
+    try {
+      await fetch("/api/notifications/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title: "GitHub API Token",
+          message,
+          icon: "github",
+          variant,
+        }),
+      });
+    } catch {
+      /* Swallow notification transport errors */
+    }
+  }, []);
+
+  const broadcastVerificationResult = useCallback(
+    (payload) => {
+      if (!payload) return;
+      const isValid = payload.valid === true;
+      const status = (payload.status || "").toLowerCase();
+      const hasToken = Boolean((payload.token || "").trim());
+      if (isValid) {
+        sendNotification({
+          variant: "info",
+          message: "Github Personal Access Token Successfully Validated and Working",
+        });
+      } else if ((hasToken || status) && status !== "missing") {
+        sendNotification({
+          variant: "error",
+          message: "Github Personal Access Token is either Invalid or Expired",
+        });
+      }
+    },
+    [sendNotification]
+  );
+
+  const hydrate = useCallback(async (shouldNotify = false) => {
     setLoading(true);
     setFetchError("");
     try {
@@ -91,6 +131,9 @@ export default function GithubAPIToken({ isAdmin = false, onPageMetaChange }) {
         rateLimit: typeof data?.rate_limit === "number" ? data.rate_limit : null,
         error: typeof data?.error === "string" ? data.error : ""
       });
+      if (shouldNotify) {
+        broadcastVerificationResult(data);
+      }
     } catch (err) {
       const message = err && typeof err.message === "string" ? err.message : String(err);
       setFetchError(message);
@@ -100,7 +143,7 @@ export default function GithubAPIToken({ isAdmin = false, onPageMetaChange }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [broadcastVerificationResult]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -131,13 +174,14 @@ export default function GithubAPIToken({ isAdmin = false, onPageMetaChange }) {
         rateLimit: typeof data?.rate_limit === "number" ? data.rate_limit : null,
         error: typeof data?.error === "string" ? data.error : ""
       });
+      broadcastVerificationResult(data);
     } catch (err) {
       const message = err && typeof err.message === "string" ? err.message : String(err);
       setFetchError(message);
     } finally {
       setSaving(false);
     }
-  }, [inputValue]);
+  }, [broadcastVerificationResult, inputValue]);
 
   const dirty = useMemo(() => inputValue !== token, [inputValue, token]);
 
@@ -283,7 +327,7 @@ export default function GithubAPIToken({ isAdmin = false, onPageMetaChange }) {
               minWidth: 86,
               "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
             }}
-            onClick={hydrate}
+            onClick={() => hydrate(true)}
             disabled={loading || saving}
           >
             Refresh

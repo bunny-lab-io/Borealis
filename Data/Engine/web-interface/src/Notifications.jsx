@@ -11,6 +11,13 @@ import {
   CloudDone as CloudDoneIcon,
   Update as UpdateIcon,
   DeviceHub as DeviceHubIcon,
+  GitHub as GitHubIcon,
+  Group as GroupIcon,
+  ReceiptLong as ReceiptLongIcon,
+  Apps as AppsIcon,
+  Code as CodeIcon,
+  PendingActions as PendingActionsIcon,
+  LocationCity as LocationCityIcon,
 } from "@mui/icons-material";
 
 const ICON_MAP = {
@@ -32,6 +39,29 @@ const ICON_MAP = {
   synced: CloudDoneIcon,
   update: UpdateIcon,
   device: DeviceHubIcon,
+  github: GitHubIcon,
+  git: GitHubIcon,
+  user: GroupIcon,
+  users: GroupIcon,
+  group: GroupIcon,
+  groups: GroupIcon,
+  people: GroupIcon,
+  log: ReceiptLongIcon,
+  logs: ReceiptLongIcon,
+  receipt: ReceiptLongIcon,
+  receiptlong: ReceiptLongIcon,
+  app: AppsIcon,
+  apps: AppsIcon,
+  assembly: AppsIcon,
+  assemblies: AppsIcon,
+  code: CodeIcon,
+  dev: CodeIcon,
+  developer: CodeIcon,
+  pendingactions: PendingActionsIcon,
+  queue: PendingActionsIcon,
+  locationcity: LocationCityIcon,
+  site: LocationCityIcon,
+  sites: LocationCityIcon,
 };
 
 const THEMES = {

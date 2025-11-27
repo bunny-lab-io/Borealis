@@ -125,6 +125,24 @@ export default function LogManagement({ isAdmin = false, onPageMetaChange }) {
   const [quickFilter, setQuickFilter] = useState("");
   const gridRef = useRef(null);
   const useGlobalHeader = Boolean(onPageMetaChange);
+  const sendNotification = useCallback(async (message) => {
+    if (!message) return;
+    try {
+      await fetch("/api/notifications/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title: "Log Management",
+          message,
+          icon: "logs",
+          variant: "info",
+        }),
+      });
+    } catch {
+      /* notifications are best-effort */
+    }
+  }, []);
 
   const logMap = useMemo(() => {
     const map = new Map();
@@ -305,11 +323,14 @@ const defaultColDef = useMemo(
         setEntries([]);
         setEntriesMeta(null);
         setActionMessage("Log files deleted.");
+        if (target) {
+          sendNotification(`Log "${target}" Deleted Successfully`);
+        }
       } catch (err) {
         setError(String(err));
       }
     },
-    [logs, selectedDomainData, selectedFile]
+    [logs, selectedDomainData, selectedFile, sendNotification]
   );
 
   const disableRetentionSave =

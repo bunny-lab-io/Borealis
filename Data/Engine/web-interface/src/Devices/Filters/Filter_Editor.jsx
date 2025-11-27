@@ -219,6 +219,24 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
   const [previewError, setPreviewError] = useState(null);
   const [previewAppliedAt, setPreviewAppliedAt] = useState(null);
   const gridRef = useRef(null);
+  const sendNotification = useCallback(async (message) => {
+    if (!message) return;
+    try {
+      await fetch("/api/notifications/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title: "Device Filters",
+          message,
+          icon: "filter",
+          variant: "info",
+        }),
+      });
+    } catch {
+      /* ignore notification transport errors */
+    }
+  }, []);
   const gridTheme = useMemo(
     () =>
       themeQuartz.withParams({
@@ -622,12 +640,16 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
       const json = await resp.json().catch(() => ({}));
       const saved = json?.filter || json || payload;
       onSaved?.(saved);
+      if (method === "POST") {
+        const createdName = saved?.name || payload.name || "Filter";
+        sendNotification(`File ${createdName} Created Successfully`);
+      }
     } catch (err) {
       setSaveError(err?.message || "Unable to save filter");
     } finally {
       setSaving(false);
     }
-  }, [applyToAllSites, groups, initialFilter, name, onSaved, scope, targetSite]);
+  }, [applyToAllSites, groups, initialFilter, name, onSaved, scope, sendNotification, targetSite]);
 
   const renderConditionRow = (groupId, condition, isFirst) => {
     const label = DEVICE_FIELDS.find((f) => f.value === condition.field)?.label || condition.field;

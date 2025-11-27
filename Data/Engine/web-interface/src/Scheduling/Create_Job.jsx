@@ -861,6 +861,27 @@ export default function CreateJob({
     }
     return PAGE_SUBTITLE;
   }, [scheduleType]);
+  const sendNotification = useCallback(
+    async (message) => {
+      if (!message) return;
+      try {
+        await fetch("/api/notifications/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            title: resolvedPageTitle,
+            message,
+            icon: "pendingactions",
+            variant: "info",
+          }),
+        });
+      } catch {
+        /* notification failures are non-blocking */
+      }
+    },
+    [resolvedPageTitle]
+  );
 
   useEffect(() => {
     onPageMetaChange?.({
@@ -2759,7 +2780,12 @@ export default function CreateJob({
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      onCreated && onCreated(data.job || payload);
+      const savedJob = data.job || payload;
+      if (!(initialJob && initialJob.id)) {
+        const createdName = savedJob?.name || jobName || "Job";
+        sendNotification(`Job ${createdName} Created Successfully`);
+      }
+      onCreated && onCreated(savedJob);
       onCancel && onCancel();
     } catch (err) {
       alert(String(err.message || err));

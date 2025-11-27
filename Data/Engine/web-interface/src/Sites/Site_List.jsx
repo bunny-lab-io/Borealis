@@ -78,6 +78,24 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
   const [renameValue, setRenameValue] = useState("");
   const [rotatingId, setRotatingId] = useState(null);
   const gridRef = useRef(null);
+  const sendNotification = useCallback(async (message) => {
+    if (!message) return;
+    try {
+      await fetch("/api/notifications/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title: PAGE_TITLE,
+          message,
+          icon: "locationcity",
+          variant: "info",
+        }),
+      });
+    } catch {
+      /* notification transport errors are non-blocking */
+    }
+  }, []);
 
   useEffect(() => {
     onPageMetaChange?.({
@@ -355,6 +373,9 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
             });
             if (res.ok) {
               setCreateOpen(false);
+              if (name) {
+                sendNotification(`Site ${name} Created Successfully`);
+              }
               fetchSites();
             }
           } catch {}
@@ -368,11 +389,18 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
         onConfirm={async () => {
           try {
             const ids = Array.from(selectedIds);
-            await fetch("/api/sites/delete", {
+            const selectedNames = rows
+              .filter((row) => ids.includes(row.id))
+              .map((row) => row?.name)
+              .filter(Boolean);
+            const resp = await fetch("/api/sites/delete", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ ids }),
             });
+            if (resp.ok) {
+              selectedNames.forEach((name) => sendNotification(`Site ${name} Deleted Successfully`));
+            }
           } catch {}
           setDeleteOpen(false);
           setSelectedIds(new Set());
@@ -390,6 +418,7 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
           if (!newName) return;
           const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
           if (!selId) return;
+          const oldName = rows.find((r) => r.id === selId)?.name || "Site";
           try {
             const res = await fetch("/api/sites/rename", {
               method: "POST",
@@ -398,6 +427,7 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
             });
             if (res.ok) {
               setRenameOpen(false);
+              sendNotification(`Site ${oldName} Renamed as ${newName} Successfully`);
               fetchSites();
             }
           } catch {}

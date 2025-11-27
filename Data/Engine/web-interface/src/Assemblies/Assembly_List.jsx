@@ -252,6 +252,24 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [cloneDialog, setCloneDialog] = useState({ open: false, row: null, targetDomain: "user" });
   const isAdmin = (userRole || "").toLowerCase() === "admin";
+  const sendNotification = useCallback(async (message) => {
+    if (!message) return;
+    try {
+      await fetch("/api/notifications/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title: "Assemblies",
+          message,
+          icon: "apps",
+          variant: "info",
+        }),
+      });
+    } catch {
+      /* notification transport is best-effort */
+    }
+  }, []);
 
   useEffect(() => {
     onPageMetaChange?.({
@@ -433,6 +451,10 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       }
       if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       setDeleteDialogOpen(false);
+      const label = target.name || target.fileName || target.assemblyGuid;
+      if (label) {
+        sendNotification(`Assembly "${label}" Deleted Successfully`);
+      }
       await fetchAssemblies();
     } catch (err) {
       console.error("Failed to delete assembly:", err);

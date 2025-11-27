@@ -106,6 +106,24 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
   const [resetMfaOpen, setResetMfaOpen] = useState(false);
   const [resetMfaTarget, setResetMfaTarget] = useState(null);
   const useGlobalHeader = Boolean(onPageMetaChange);
+  const sendNotification = useCallback(async (message) => {
+    if (!message) return;
+    try {
+      await fetch("/api/notifications/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title: "User Management",
+          message,
+          icon: "group",
+          variant: "info",
+        }),
+      });
+    } catch {
+      /* notification transport errors are non-critical */
+    }
+  }, []);
 
   // Columns and filters
   const columns = useMemo(() => ([
@@ -223,6 +241,9 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         return;
       }
       await fetchUsers();
+      if (user?.username) {
+        sendNotification(`User ${user.username} Deleted Successfully`);
+      }
     } catch (e) {
       console.error(e);
       setWarnMessage("Failed to delete user");
@@ -262,6 +283,10 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         return;
       }
       await fetchUsers();
+      if (user?.username) {
+        const action = (nextRole || "").toLowerCase() === "admin" ? "Promoted to Admin" : "Demoted to User";
+        sendNotification(`User ${user.username} ${action}`);
+      }
     } catch (e) {
       console.error(e);
       setWarnMessage("Failed to change role");
@@ -297,6 +322,9 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         return;
       }
       await fetchUsers();
+      if (username) {
+        sendNotification(`MFA Reset for "${username}"`);
+      }
     } catch (err) {
       console.error(err);
       setWarnMessage("Failed to reset MFA for this user.");
@@ -376,6 +404,9 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
       setResetOpen(false);
       setResetTarget(null);
       setNewPassword("");
+      if (user?.username) {
+        sendNotification(`Password Reset for ${user.username}`);
+      }
     } catch (e) {
       console.error(e);
       alert("Failed to reset password");
@@ -411,6 +442,7 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
       }
       setCreateOpen(false);
       await fetchUsers();
+      sendNotification(`User ${u} Created Successfully`);
     } catch (e) {
       console.error(e);
       alert("Failed to create user");

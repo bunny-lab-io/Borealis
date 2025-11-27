@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Paper,
@@ -385,6 +385,27 @@ export default function AssemblyEditor({
     () => (isAnsible ? PAGE_SUBTITLE_ANSIBLE : PAGE_SUBTITLE_SCRIPT),
     [isAnsible]
   );
+  const sendNotification = useCallback(
+    async ({ message, variant = "info" }) => {
+      if (!message) return;
+      try {
+        await fetch("/api/notifications/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            title: pageTitle,
+            message,
+            icon: "code",
+            variant,
+          }),
+        });
+      } catch {
+        /* notifications are best-effort */
+      }
+    },
+    [pageTitle]
+  );
 
   useEffect(() => {
     onPageMetaChange?.({
@@ -749,7 +770,12 @@ export default function AssemblyEditor({
       if (!resp.ok) {
         throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
       }
-      setDevModeEnabled(Boolean(data?.dev_mode));
+      const nextDevMode = Boolean(data?.dev_mode);
+      setDevModeEnabled(nextDevMode);
+      sendNotification({
+        variant: nextDevMode ? "warning" : "info",
+        message: nextDevMode ? "Developer Mode Enabled" : "Developer Mode Disabled",
+      });
     } catch (err) {
       console.error("Failed to toggle Dev Mode:", err);
       const message = err?.message || "Failed to update Dev Mode.";

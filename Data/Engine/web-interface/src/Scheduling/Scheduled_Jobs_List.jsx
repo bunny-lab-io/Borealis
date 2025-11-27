@@ -175,6 +175,24 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   const [assembliesLoading, setAssembliesLoading] = useState(false);
   const [assembliesError, setAssembliesError] = useState("");
   const gridApiRef = useRef(null);
+  const sendNotification = useCallback(async (message) => {
+    if (!message) return;
+    try {
+      await fetch("/api/notifications/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title: PAGE_TITLE,
+          message,
+          icon: "schedule",
+          variant: "info",
+        }),
+      });
+    } catch {
+      /* best-effort notification */
+    }
+  }, []);
 
   useEffect(() => {
     onPageMetaChange?.({
@@ -997,6 +1015,10 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
               try {
                 const ids = Array.from(selectedIds);
                 const idSet = new Set(ids);
+                const selectedJobs = rows.filter((job, index) => {
+                  const key = getRowId({ data: job, rowIndex: index });
+                  return idSet.has(key);
+                });
                 await Promise.allSettled(
                   ids.map((id) => fetch(`/api/scheduled_jobs/${id}`, { method: "DELETE" }))
                 );
@@ -1007,6 +1029,10 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
                   })
                 );
                 setSelectedIds(() => new Set());
+                selectedJobs
+                  .map((job) => job?.name)
+                  .filter(Boolean)
+                  .forEach((name) => sendNotification(`Job ${name} Deleted Successfully`));
               } catch {
                 // ignore delete errors here; a fresh load will surface them
               }
