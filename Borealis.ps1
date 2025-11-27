@@ -270,6 +270,41 @@ function Ensure-EngineWebInterface {
     }
 }
 
+function Get-WebUiLatestWriteTime {
+    param([string]$Root)
+
+    if (-not (Test-Path $Root)) { return $null }
+
+    $exclusions = @('\node_modules\', '\build\', '\dist\')
+    $files = Get-ChildItem -Path $Root -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+        $full = $_.FullName
+        -not ($exclusions | Where-Object { $full -like "*$_*" })
+    }
+    if (-not $files) { return $null }
+    return ($files | Sort-Object -Property LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+}
+
+function Test-WebUiBuildFresh {
+    param(
+        [string]$SourceRoot,
+        [string]$BuildRoot
+    )
+
+    $sourceLatest = Get-WebUiLatestWriteTime -Root $SourceRoot
+    if (-not $sourceLatest) { return $false }
+
+    $buildIndex = Join-Path $BuildRoot 'index.html'
+    if (-not (Test-Path $buildIndex -PathType Leaf)) { return $false }
+
+    try {
+        $buildTime = (Get-Item $buildIndex -ErrorAction Stop).LastWriteTime
+    } catch {
+        return $false
+    }
+
+    return ($buildTime -ge $sourceLatest)
+}
+
 $script:Utf8CodePageChanged = $false
 
 function Ensure-SystemUtf8CodePage {
@@ -1181,6 +1216,16 @@ switch ($choice) {
             default {
                 Write-Host "Invalid mode choice: $engineModeChoice" -ForegroundColor Red
                 break
+            }
+        }
+
+        if ($engineImmediateLaunch) {
+            $webUiSourceRoot = Join-Path $scriptDir 'Data\Engine\web-interface'
+            $webUiBuildRoot  = Join-Path $scriptDir 'Engine\web-interface\build'
+            $webUiFresh = Test-WebUiBuildFresh -SourceRoot $webUiSourceRoot -BuildRoot $webUiBuildRoot
+            if (-not $webUiFresh) {
+                Write-Host "Detected WebUI changes newer than the last production build. Running full build instead of Quick/Skip." -ForegroundColor Yellow
+                $engineImmediateLaunch = $false
             }
         }
 

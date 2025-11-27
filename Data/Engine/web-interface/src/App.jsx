@@ -1092,10 +1092,6 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     [navigateTo, setTabs, setActiveTabId]
   );
 
-  useEffect(() => {
-    setPageHeader({ title: "", subtitle: "", Icon: null });
-  }, [currentPage]);
-
   const isAdmin = (String(userRole || '').toLowerCase() === 'admin');
 
   useEffect(() => {

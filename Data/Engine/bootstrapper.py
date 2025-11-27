@@ -88,6 +88,25 @@ def _stage_web_interface_assets(logger: Optional[logging.Logger] = None, *, forc
     engine_web_root = project_root / "Engine" / "web-interface"
     modern_source = project_root / "Data" / "Engine" / "web-interface"
 
+    def _latest_mtime(root: Path) -> Optional[float]:
+        """Return the most recent mtime under root, excluding build artifacts."""
+
+        try:
+            candidates = []
+            for path in root.rglob("*"):
+                # Skip heavy/ephemeral directories so we only compare source files
+                if any(part in {"node_modules", "build", "dist"} for part in path.parts):
+                    continue
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                if path.is_file():
+                    candidates.append(stat.st_mtime)
+            return max(candidates) if candidates else None
+        except Exception:
+            return None
+
     if not modern_source.is_dir():
         raise RuntimeError(
             f"Engine web interface source missing: {modern_source}"
@@ -95,8 +114,15 @@ def _stage_web_interface_assets(logger: Optional[logging.Logger] = None, *, forc
 
     index_path = engine_web_root / "index.html"
     if engine_web_root.exists() and index_path.is_file() and not force:
-        logger.info("Engine web interface already staged at %s; skipping copy.", engine_web_root)
-        return engine_web_root
+        source_mtime = _latest_mtime(modern_source)
+        dest_mtime = _latest_mtime(engine_web_root)
+        if dest_mtime is not None and source_mtime is not None and dest_mtime >= source_mtime:
+            logger.info("Engine web interface already staged at %s; skipping copy (destination up-to-date).", engine_web_root)
+            return engine_web_root
+        logger.info(
+            "Engine web interface detected newer source assets; refreshing staging directory %s.",
+            engine_web_root,
+        )
 
     if engine_web_root.exists():
         shutil.rmtree(engine_web_root)
