@@ -120,6 +120,8 @@ _QUIET_SERVICE_LOGS = {"scheduled_jobs"}
 
 
 def _make_service_logger(base: Path, logger: logging.Logger) -> Callable[[str, str, Optional[str]], None]:
+    quiet_services = {name.strip().lower().replace("-", "_") for name in _QUIET_SERVICE_LOGS if name}
+
     def _log(service: str, msg: str, scope: Optional[str] = None, *, level: str = "INFO") -> None:
         level_upper = level.upper()
         service_key = (service or "").strip().lower()
@@ -134,12 +136,13 @@ def _make_service_logger(base: Path, logger: logging.Logger) -> Callable[[str, s
                 prefix_parts.append(f"[CONTEXT-{resolved_scope}]")
             prefix = "".join(prefix_parts)
             with path.open("a", encoding="utf-8") as handle:
-                handle.write(f"[{timestamp}] {prefix} {msg}\\n")
+                handle.write(f"[{timestamp}] {prefix} {msg}\n")
         except Exception:
             logger.debug("Failed to write service log entry", exc_info=True)
 
         numeric_level = getattr(logging, level_upper, logging.INFO)
-        if service_key not in _QUIET_SERVICE_LOGS:
+        suppress_engine_log = service_key in quiet_services or service_key.replace("-", "_") in quiet_services
+        if not suppress_engine_log:
             logger.log(numeric_level, "[service:%s] %s", service, msg)
 
     return _log

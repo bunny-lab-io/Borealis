@@ -322,7 +322,6 @@ const defaultColDef = useMemo(
         setLogs(Array.isArray(data?.logs) ? data.logs : logs);
         setEntries([]);
         setEntriesMeta(null);
-        setActionMessage("Log files deleted.");
         if (target) {
           sendNotification(`Log "${target}" Deleted Successfully`);
         }

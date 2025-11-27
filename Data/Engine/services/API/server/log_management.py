@@ -203,6 +203,46 @@ class EngineLogManager:
                 files.append(entry)
         return files
 
+    def _truncate_active_log(self, path: Path) -> bool:
+        """Best-effort truncate for logs held open by logging handlers (Windows-safe)."""
+
+        resolved = path.resolve()
+        truncated = False
+        for logger_name in list(logging.root.manager.loggerDict.keys()) + [self.logger.name]:
+            try:
+                logger_obj = logging.getLogger(logger_name)
+            except Exception:
+                continue
+            handlers = list(getattr(logger_obj, "handlers", []))
+            for handler in handlers:
+                base = getattr(handler, "baseFilename", None)
+                if not base:
+                    continue
+                try:
+                    if Path(base).resolve() != resolved:
+                        continue
+                except Exception:
+                    continue
+                try:
+                    handler.acquire()
+                    stream = getattr(handler, "stream", None)
+                    if stream:
+                        stream.seek(0)
+                        stream.truncate()
+                        stream.flush()
+                    else:
+                        with resolved.open("w", encoding="utf-8"):
+                            pass
+                    truncated = True
+                except Exception:
+                    self.logger.debug("Failed to truncate active log file: %s", path, exc_info=True)
+                finally:
+                    try:
+                        handler.release()
+                    except Exception:
+                        pass
+        return truncated
+
     def apply_retention(self, retention: Mapping[str, int], default_days: int) -> List[str]:
         deleted: List[str] = []
         now = datetime.now(tz=timezone.utc)
@@ -306,7 +346,11 @@ class EngineLogManager:
 
     def delete_file(self, filename: str) -> str:
         path = self._resolve(filename)
-        path.unlink()
+        try:
+            path.unlink()
+        except PermissionError:
+            if not self._truncate_active_log(path):
+                raise
         return filename
 
     def delete_family(self, filename: str) -> List[str]:
@@ -320,6 +364,12 @@ class EngineLogManager:
                 entry.unlink()
             except FileNotFoundError:
                 continue
+            except PermissionError:
+                handled = self._truncate_active_log(entry)
+                if handled:
+                    deleted.append(entry.name)
+                else:
+                    self.logger.debug("Failed to delete family log file (in use): %s", entry, exc_info=True)
             except Exception:
                 self.logger.debug("Failed to delete family log file: %s", entry, exc_info=True)
             else:
