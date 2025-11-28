@@ -55,7 +55,7 @@ const gradientButtonSx = {
   },
 };
 
-const AUTO_SIZE_COLUMNS = ["name", "type", "deviceCount", "site", "lastEditedBy", "lastEdited"];
+const AUTO_SIZE_COLUMNS = ["type", "deviceCount", "site", "lastEditedBy", "lastEdited"];
 const FILTER_TYPE_META = {
   global: {
     label: "Global",
@@ -93,9 +93,9 @@ const SAMPLE_ROWS = [
 ];
 
 function formatTimestamp(ts) {
-  if (!ts) return "—";
+  if (!ts) return "";
   const date = new Date(ts);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString();
 }
 
@@ -165,6 +165,24 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const autoSizeColumns = useCallback(
+    (api) => {
+      if (!api || loading || !rows.length) return;
+      const doSize = () => {
+        try {
+          api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
+        } catch {
+          /* ignore autosize failures */
+        }
+      };
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(doSize);
+      } else {
+        setTimeout(doSize, 0);
+      }
+    },
+    [loading, rows.length]
+  );
 
   const loadFilters = useCallback(async () => {
     setLoading(true);
@@ -174,7 +192,7 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
       if (resp.status === 404) {
         // Endpoint not available yet; surface sample data without hard failure
         setRows(normalizeFilters(SAMPLE_ROWS));
-        setError("Device filter API not found (404) — showing sample filters.");
+        setError("Device filter API not found (404)  showing sample filters.");
       } else {
         if (!resp.ok) {
           throw new Error(`Failed to load filters (${resp.status})`);
@@ -206,37 +224,20 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
 
   const handleGridReady = useCallback((params) => {
     gridRef.current = params.api;
-    requestAnimationFrame(() => {
-      try {
-        params.api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
-      } catch {
-        /* no-op */
-      }
-    });
-  }, []);
-
-  const autoSize = useCallback(() => {
-    if (!gridRef.current || loading || !rows.length) return;
-    const api = gridRef.current;
-    requestAnimationFrame(() => {
-      try {
-        api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
-      } catch {
-        /* ignore autosize failures */
-      }
-    });
-  }, [loading, rows.length]);
+    autoSizeColumns(params.api);
+  }, [autoSizeColumns]);
 
   useEffect(() => {
-    autoSize();
-  }, [rows, loading, autoSize]);
+    autoSizeColumns(gridRef.current);
+  }, [rows, loading, autoSizeColumns]);
 
   const columnDefs = useMemo(() => {
     return [
       {
         headerName: "Filter Name",
         field: "name",
-        minWidth: 200,
+        minWidth: 700,
+        flex: 1,
         cellRenderer: (params) => {
           const value = params.value || "Unnamed Filter";
           return (
@@ -244,13 +245,21 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
               onClick={() => onEditFilter?.(params.data)}
               variant="text"
               size="small"
+              disableRipple
+              disableFocusRipple
+              disableTouchRipple
               sx={{
                 textTransform: "none",
                 color: "#7dd3fc",
                 fontWeight: 600,
                 px: 0,
                 minWidth: "unset",
-                "&:hover": { color: "#a5e7ff", textDecoration: "underline" },
+                backgroundColor: "transparent",
+                "&:hover": {
+                  color: "#a5e7ff",
+                  textDecoration: "underline",
+                  backgroundColor: "transparent",
+                },
               }}
             >
               {value}
@@ -262,7 +271,7 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
       {
         headerName: "Type",
         field: "type",
-        minWidth: 150,
+        minWidth: 140,
         cellRenderer: (params) => {
           const type = String(params.value || "").toLowerCase() === "site" ? "Site" : "Global";
           return <FilterTypePill type={type} />;
@@ -272,36 +281,35 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
       {
         headerName: "Devices Targeted",
         field: "deviceCount",
-        width: 160,
+        minWidth: 165,
         valueFormatter: (params) => {
           if (typeof params.value === "number" && Number.isFinite(params.value)) {
             return params.value.toLocaleString();
           }
-          return "—";
+          return "";
         },
         cellClass: "auto-col-tight",
       },
       {
-        headerName: "Site",
+        headerName: "Sites Targeted",
         field: "site",
-        minWidth: 140,
+        minWidth: 150,
         cellRenderer: (params) => {
           const value = params.value;
-          return value ? value : "—";
+          return value ? value : "";
         },
         cellClass: "auto-col-tight",
       },
       {
         headerName: "Last Edited By",
         field: "lastEditedBy",
-        minWidth: 160,
+        minWidth: 150,
         cellClass: "auto-col-tight",
       },
       {
         headerName: "Last Edited",
         field: "lastEdited",
         minWidth: 180,
-        flex: 1,
         valueFormatter: (params) => formatTimestamp(params.value),
         cellClass: "auto-col-tight",
       },
@@ -340,7 +348,7 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
         gap: 2,
       }}
     >
-      <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+      <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 1.5 }}>
         <Box
           className={gridTheme.themeName}
           sx={{
