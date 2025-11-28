@@ -808,8 +808,8 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
     <Paper
       elevation={0}
       sx={{
-        minHeight: "100vh",
-        height: "100vh",
+        height: "100%",
+        minHeight: 0,
         flex: 1,
         position: "relative",
         backgroundColor: "transparent",
@@ -1153,7 +1153,6 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
               gap: 1.5,
               flex: 1,
               minHeight: 0,
-              pb: 1,
               overflow: "hidden",
             }}
           >
@@ -1190,7 +1189,6 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
                 display: "flex",
                 flexDirection: "column",
                 overflow: "auto",
-                pb: 1,
               }}
             >
               <Box
