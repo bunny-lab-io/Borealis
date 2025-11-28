@@ -48,12 +48,10 @@ const gradientButtonSx = {
   color: "#0b1220",
   borderRadius: 999,
   textTransform: "none",
-  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
   px: 2.4,
   minWidth: 126,
   "&:hover": {
     backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
   },
 };
 
@@ -331,8 +329,7 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
     <Paper
       elevation={0}
       sx={{
-        height: "100vh",
-        minHeight: "100vh",
+        height: "100vh", // Affects the button vertical position offset
         backgroundColor: "transparent",
         color: AURORA_SHELL.text,
         p: 3,
@@ -340,114 +337,125 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        gap: 2,
       }}
     >
-      <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", mb: 2.5 }}>
-        <Stack direction="row" gap={1}>
-          <Tooltip title="Refresh">
-            <IconButton
-              aria-label="Refresh filters"
-              onClick={loadFilters}
-              sx={{
-                color: "#a5e0ff",
-                border: "1px solid rgba(148,163,184,0.4)",
-                backgroundColor: "rgba(5,7,15,0.6)",
-                "&:hover": { backgroundColor: "rgba(125,183,255,0.16)" },
-              }}
-            >
-              <CachedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Button
-            startIcon={<AddIcon />}
-            variant="contained"
-            onClick={() => onCreateFilter?.()}
-            sx={gradientButtonSx}
-          >
-            New Filter
-          </Button>
-        </Stack>
-      </Box>
+      <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+        <Box
+          className={gridTheme.themeName}
+          sx={{
+            flexGrow: 1,
+            minHeight: 0,
+            width: "100%",
+            fontFamily: gridFontFamily,
+            "& .ag-root-wrapper": { borderRadius: "8px", overflow: "hidden" },
+            "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              textAlign: "left",
+              paddingTop: "8px",
+              paddingBottom: "8px",
+              paddingLeft: "18px",
+              paddingRight: "12px",
+            },
+            "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              padding: 0,
+            },
+            "& .ag-center-cols-container .ag-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell .ag-cell-value": {
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              textAlign: "left",
+            },
+            "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+              paddingLeft: "12px",
+              paddingRight: "9px",
+            },
+            "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper": {
+              justifyContent: "flex-start",
+            },
+            "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-value": {
+              textAlign: "left",
+              justifyContent: "flex-start",
+            },
+          }}
+          style={{
+            "--ag-icon-font-family": iconFontFamily,
+            "--ag-background-color": "#070b1a",
+            "--ag-foreground-color": "#f4f7ff",
+            "--ag-header-background-color": "#0f172a",
+            "--ag-header-foreground-color": "#cfe0ff",
+            "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+            "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+            "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+            "--ag-border-color": "rgba(125,183,255,0.18)",
+            "--ag-row-border-color": "rgba(125,183,255,0.14)",
+            "--ag-border-radius": "8px",
+            "--ag-checkbox-border-radius": "3px",
+            "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
+            "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
+            "--ag-checkbox-checked-color": "#7dd3fc",
+          }}
+        >
+          <AgGridReact
+            rowData={rows}
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
+            animateRows
+            rowHeight={46}
+            headerHeight={44}
+            suppressCellFocus
+            pagination
+            paginationPageSize={20}
+            paginationPageSizeSelector={[20, 50, 100]}
+            overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No device filters found.</span>"
+            onGridReady={handleGridReady}
+            theme={gridTheme}
+            style={{ width: "100%", height: "100%", flex: 1, fontFamily: gridFontFamily }}
+          />
+        </Box>
 
-      <Box
-        className={gridTheme.themeName}
-        sx={{
-          flexGrow: 1,
-          minHeight: 0,
-          pb: 2,
-          width: "100%",
-          fontFamily: gridFontFamily,
-          "& .ag-root-wrapper": { borderRadius: 0 },
-          "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            textAlign: "left",
-            paddingTop: "8px",
-            paddingBottom: "8px",
-            paddingLeft: "18px",
-            paddingRight: "12px",
-          },
-          "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            padding: 0,
-          },
-          "& .ag-center-cols-container .ag-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell .ag-cell-value": {
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            textAlign: "left",
-          },
-          "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
-            paddingLeft: "12px",
-            paddingRight: "9px",
-          },
-          "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper": {
-            justifyContent: "flex-start",
-          },
-          "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-value": {
-            textAlign: "left",
-            justifyContent: "flex-start",
-          },
-        }}
-        style={{
-          "--ag-icon-font-family": iconFontFamily,
-          "--ag-background-color": "#070b1a",
-          "--ag-foreground-color": "#f4f7ff",
-          "--ag-header-background-color": "#0f172a",
-          "--ag-header-foreground-color": "#cfe0ff",
-          "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-          "--ag-row-hover-color": "rgba(125,183,255,0.08)",
-          "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
-          "--ag-border-color": "rgba(125,183,255,0.18)",
-          "--ag-row-border-color": "rgba(125,183,255,0.14)",
-          "--ag-border-radius": "0px",
-          "--ag-checkbox-border-radius": "3px",
-          "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
-          "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
-          "--ag-checkbox-checked-color": "#7dd3fc",
-        }}
-      >
-        <AgGridReact
-          rowData={rows}
-          columnDefs={columnDefs}
-          defaultColDef={defaultColDef}
-          animateRows
-          rowHeight={46}
-          headerHeight={44}
-          suppressCellFocus
-          pagination
-          paginationPageSize={20}
-          paginationPageSizeSelector={[20, 50, 100]}
-          overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No device filters found.</span>"
-          onGridReady={handleGridReady}
-          theme={gridTheme}
-          style={{ width: "100%", height: "100%", fontFamily: gridFontFamily }}
-        />
+        <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 1.5 }}>
+          <Stack direction="row" gap={1.75}>
+            <Tooltip title="Refresh">
+              <span>
+                <Button
+                  startIcon={<CachedIcon fontSize="small" />}
+                  variant="outlined"
+                  aria-label="Refresh filters"
+                  onClick={loadFilters}
+                  sx={{
+                    textTransform: "none",
+                    color: "#a5e0ff",
+                    borderColor: "rgba(148,163,184,0.4)",
+                    backgroundColor: "rgba(5,7,15,0.6)",
+                    borderRadius: 999,
+                    px: 2.4,
+                    minWidth: 126,
+                    height: 38,
+                    "&:hover": { backgroundColor: "rgba(125,183,255,0.16)", borderColor: "rgba(148,163,184,0.6)" },
+                  }}
+                >
+                  Refresh
+                </Button>
+              </span>
+            </Tooltip>
+            <Button
+              startIcon={<AddIcon />}
+              variant="contained"
+              onClick={() => onCreateFilter?.()}
+              sx={gradientButtonSx}
+            >
+              New Filter
+            </Button>
+          </Stack>
+        </Box>
       </Box>
     </Paper>
   );
