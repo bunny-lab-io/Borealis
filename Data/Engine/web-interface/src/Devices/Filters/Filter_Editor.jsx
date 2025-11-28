@@ -23,7 +23,6 @@ import {
   Add as AddIcon,
   Remove as RemoveIcon,
   Cached as CachedIcon,
-  PlayArrow as PlayIcon,
   CheckCircle as CheckCircleIcon,
   HighlightOff as HighlightOffIcon,
 } from "@mui/icons-material";
@@ -141,7 +140,7 @@ const TabPanel = ({ value, active, children }) => {
   );
 };
 
-const AUTO_SIZE_COLUMNS = ["status", "site", "hostname", "description", "type", "os"];
+const AUTO_SIZE_COLUMNS = ["status", "site", "hostname", "description", "type"];
 
 const resolveApplyAll = (filter) => Boolean(filter?.applyToAllSites ?? filter?.apply_to_all_sites);
 
@@ -436,12 +435,23 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
     }
   }, [autoSizeGrid, evaluateCriteria]);
 
+  const applyCriteriaRef = useRef(applyCriteria);
+  useEffect(() => {
+    applyCriteriaRef.current = applyCriteria;
+  }, [applyCriteria]);
+
+  useEffect(() => {
+    if (tab === "results") {
+      applyCriteriaRef.current?.();
+    }
+  }, [tab]);
+
   const previewColumns = useMemo(
     () => [
       {
         field: "status",
         headerName: "Status",
-        minWidth: 120,
+        minWidth: 100,
         cellRenderer: (params) => {
           const status = params.value || "";
           const theme = statusTokenTheme[status] || statusTokenTheme.default;
@@ -465,7 +475,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
         },
         cellClass: "auto-col-tight",
       },
-      { field: "site", headerName: "Site", minWidth: 140, cellClass: "auto-col-tight" },
+      { field: "site", headerName: "Site", minWidth: 180, cellClass: "auto-col-tight" },
       {
         field: "hostname",
         headerName: "Hostname",
@@ -499,12 +509,13 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
           );
         },
       },
-      { field: "description", headerName: "Description", minWidth: 220, cellClass: "auto-col-tight" },
-      { field: "type", headerName: "Device Type", minWidth: 140, cellClass: "auto-col-tight" },
+      { field: "description", headerName: "Description", minWidth: 260, cellClass: "auto-col-tight" },
+      { field: "type", headerName: "Device Type", minWidth: 160, cellClass: "auto-col-tight" },
       {
         field: "os",
         headerName: "OS",
-        minWidth: 170,
+        minWidth: 200,
+        flex: 1,
         cellClass: "auto-col-tight",
         cellRenderer: (params) => {
           const value = params.value || "";
@@ -529,7 +540,6 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
       sortable: true,
       filter: "agTextColumnFilter",
       resizable: true,
-      flex: 1,
       cellClass: "auto-col-tight",
       suppressMenu: true,
     }),
@@ -1160,7 +1170,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
               <Box>
                 <Typography sx={{ fontWeight: 700 }}>Results</Typography>
                 <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
-                  Apply criteria to preview matching devices.
+                  Opening this tab auto-applies the current criteria to preview matching devices.
                 </Typography>
                 {previewAppliedAt && (
                   <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.85rem" }}>
@@ -1171,15 +1181,6 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
                   <Typography sx={{ color: "#ffb4b4", fontSize: "0.9rem", mt: 0.5 }}>{previewError}</Typography>
                 ) : null}
               </Box>
-              <Button
-                variant="contained"
-                startIcon={previewLoading ? <CachedIcon /> : <PlayIcon />}
-                onClick={applyCriteria}
-                disabled={previewLoading}
-                sx={gradientButtonSx}
-              >
-                {previewLoading ? "Applying..." : "Apply Criteria"}
-              </Button>
             </Stack>
 
             <Box
