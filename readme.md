@@ -1,6 +1,9 @@
 ![Borealis Logo](Data/Engine/web-interface/public/Borealis_Logo_Full.png)
 
-Borealis is a remote management platform with a simple, visual automation layer, enabling you to leverage scripts, Ansible playbooks, and advanced nodegraph-based automation workflows.  I originally created Borealis to work towards consolidating the core functionality of several standalone automation platforms in my homelab, such as TacticalRMM, Ansible AWX, SemaphoreUI, and a few others. 
+Borealis is a remote management platform with a simple, visual automation layer, enabling you to leverage scripts and advanced nodegraph-based automation workflows. I originally created Borealis to work towards consolidating the core functionality of several standalone automation platforms in my homelab, such as TacticalRMM, Ansible AWX, SemaphoreUI, and a few others. 
+
+### A Note on Development Pace
+I'm the sole maintainer and still learning as I go, while working a full-time IT job. Progress is sporadic, and parts of the codebase get rebuilt when I discover better or more optimized approaches. Thank you for your patience with the slower cadence.  Ko-Fi donations are always welcome and help keep m,me motivated to continue development of Borealis.
 
 ---
 
@@ -9,8 +12,12 @@ Borealis is a remote management platform with a simple, visual automation layer,
 - **Remote Script Execution**: Run PowerShell in `CURRENT USER` context or as `NT AUTHORITY\SYSTEM`.
 - **Jobs and Scheduling**: Launch "*Quick Jobs*" instantly or create more advanced schedules.
 - **Visual Workflows**: Drag‑and‑drop node canvas for combining steps, analysis, and logic.
-- **Playbooks**: Run scripted procedures; ((*Ansible playbook support is in progress*)).
-- **Windows‑first**. Linux server and agent deployment scripts are planned, as the core of Borealis is Python-based, it is already Linux-friendly; this just involves some housekeeping to bring the Linux experience to parity with Windows.  
+- **Ansible Playbooks**: Ansible playbook support is unfinished/broken in both the Engine and agent runtimes. The goal is to ship server-driven Ansible (SSH/WinRM) alongside agent-driven playbooks.
+- **Windows‑first**. Linux Engine support ships via `Borealis.sh` (Engine is currently the focus); the Linux agent is not yet available; only settings can be staged—and the current Linux agent build would not execute scripts, audits, or likely even enroll reliably.
+
+## Current Status & Limitations
+- Ansible is disabled/unstable: Engine quick-run returns not implemented, scheduled-job and agent paths are incomplete, and server-side SSH/WinRM playbook dispatch is still on the roadmap. Expect failures until the Ansible pipeline is rebuilt.
+- Linux agent is non-functional: script execution, auditing, and enrollment flows are Windows-only right now. Avoid Linux agent deployments until a proper port is delivered.
 
 ## Device Management
 Device List:
@@ -55,11 +62,13 @@ Site List:
 ## Getting Started
 
 ### Installation
-1) Start the Server:
-   - Windows: `./Borealis.ps1 -EngineProduction` *Production Server @ https://localhost:5000*
-   - Windows: `./Borealis.ps1 -EngineDev` *Development Server @ https://localhost:5173*
-2) (*Optional*) Install the Agent (*elevated PowerShell*):
+1) Start the Engine:
+   - Windows: `./Borealis.ps1 -EngineProduction` *Production Engine @ https://localhost:5000*
+   - Windows: `./Borealis.ps1 -EngineDev` *Dev (Vite + Flask) @ https://localhost:5173*
+   - Linux (Engine only): `./Borealis.sh --EngineProduction` *Production Engine @ https://localhost:5000* (use `--EngineDev` for Vite)
+2) (*Optional*) Install the Agent (*Windows, elevated PowerShell*):
    - Windows: `./Borealis.ps1 -Agent`
+   - Linux agent binaries are not available yet; `Borealis.sh --Agent` only stages config settings.
 
 ## Automated Agent Enrollment
 If you plan on deploying the agent via something like a Group Policy or other existing automation platform, you can use the following commandline arguments to install an agent automatically with an enrollment code pre-injected.  *The enrollment code below is simply an example*.
@@ -68,10 +77,7 @@ If you plan on deploying the agent via something like a Group Policy or other ex
 ```powershell
 .\Borealis.ps1 -Agent -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
 ```
-**Linux**:
-```sh
-./Borealis.sh --Agent --EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
-```
+**Linux**: Agent enrollment is not yet available on Linux; `Borealis.sh --Agent` only writes settings placeholders.
 
 ### Reverse Proxy Configuration
 Traefik Dynamic Config: `Replace Service URL with actual IP of Borealis server`
@@ -118,22 +124,22 @@ The process that agents go through when authenticating securely with a Borealis 
 ### Security Overview
 #### Overall
 - Borealis enforces mutual trust: each agent presents a unique Ed25519 identity to the server, the server issues EdDSA-signed (Ed25519) access tokens bound to that fingerprint, and both sides pin the generated Borealis root CA.
-- End-to-end TLS everywhere: the server ships an ECDSA P-384 root + leaf chain and only serves TLS 1.3; agents require TLS 1.2+ and "pin" (store the server certificate for future verification) the delivered bundle for both REST and WebSocket traffic, eliminating Man-in-the-middle avenues.
+- End-to-end TLS everywhere: the Engine auto-provisions an ECDSA P-384 root + leaf chain under `Engine/Certificates` and serves TLS using Python defaults (TLS 1.2+); agents pin the delivered bundle for both REST and WebSocket traffic to eliminate Man-in-the-middle avenues.
 - Device enrollment is gated by enrollment/installer codes (*They have configurable expiration and usage limits*) and an operator approval queue; replay-resistant nonces plus rate limits (40 req/min/IP, 12 req/min/fingerprint) prevent brute force or code reuse.
 - All device APIs now require Authorization: Bearer headers and a service-context (e.g. SYSTEM or CURRENTUSER) marker; missing, expired, mismatched, or revoked credentials are rejected before any business logic runs.  Operator-driven revoking / device quarantining logic is not yet implemented.
-- Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (15 min) with 30-day refresh tokens hashed via SHA-256.
-- Centralized logging under Logs/Server and Agent/Logs captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review.
+- Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (15 min) with 90-day refresh tokens hashed via SHA-256.
+- Centralized logging under Engine/Logs and Agent/Logs captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review.
 - The Engine’s operator-facing API endpoints (device inventory, assemblies, job history, etc.) require an authenticated operator session or bearer token; unauthenticated requests are rejected with 401/403 responses before any inventory or script metadata is returned and the requesting user is logged with each quick-run dispatch.
 #### Server Security
 - Auto-manages PKI: a persistent Borealis root CA (ECDSA SECP384R1) signs leaf certificates that include localhost SANs, tightened filesystem permissions, and a combined bundle for agent identity / cert pinning.
-- Script delivery is code-signed with an Ed25519 key stored under Certificates/Server/Code-Signing; agents refuse any payload whose signature or hash does not match the pinned public key.
+- Script delivery is code-signed with an Ed25519 key stored under Engine/Certificates/Code-Signing; agents refuse any payload whose signature does not match the pinned public key.
 - Device authentication checks GUID normalization, SSL fingerprint matches, token version counters, and quarantine flags before admitting requests; missing rows with valid tokens auto-recover into placeholder records to avoid accidental lockouts.
 - Refresh tokens are never stored in cleartext, only SHA-256 hashes plus DPoP bindings land in SQLite, and reuse after revocation/expiry returns explicit error codes.
 - Enrollment workflow queues approvals, detects hostname/fingerprint conflicts, offers merge/overwrite options, and records auditor identities so trust decisions are traceable.
-- Background jobs prune expired enrollment codes and refresh tokens, keeping the attack surface small without silently deleting active  credentials.
+- Background pruning of expired enrollment codes and refresh tokens is not wired yet; a maintenance task is still needed.
 #### Agent
 - Generates device-wide Ed25519 key pairs on first launch, storing them under Certificates/Agent/Identity/ with DPAPI protection on Windows (chmod 600 elsewhere) and persisting the server-issued GUID alongside.
-- Stores refresh/access tokens encrypted (DPAPI) with companion metadata that pins them to the expected server certificate fingerprint; mismatches or refresh failures trigger a clean re-enrollment.
+- Stores refresh/access tokens encrypted (DPAPI) and re-enrolls on authentication failures; TLS pinning relies on the stored server certificate bundle rather than a separate fingerprint binding for the tokens.
 - Imports the server’s TLS bundle into a dedicated ssl.SSLContext, reuses it for the REST session, and injects it into the Socket.IO engine so WebSockets enjoy the same pinning and hostname checks.
 - Treats every script payload as hostile until verified: only Ed25519 signatures from the server are accepted, missing/invalid signatures are logged and dropped, and the trusted signing key is updated only after successful verification between the agent and the server.
 - Operates outbound-only; there are no listener ports, and every API/WebSocket call flows through AgentHttpClient.ensure_authenticated, forcing token refresh logic before retrying.
