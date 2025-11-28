@@ -134,7 +134,17 @@ const TABS = [
 const TabPanel = ({ value, active, children }) => {
   if (value !== active) return null;
   return (
-    <Box sx={{ mt: 2, display: "flex", flexDirection: "column", gap: 2.75, flex: 1, minHeight: 0 }}>
+    <Box
+      sx={{
+        mt: 2,
+        display: "flex",
+        flexDirection: "column",
+        gap: 2.75,
+        flex: 1,
+        minHeight: 0,
+        overflow: "auto",
+      }}
+    >
       {children}
     </Box>
   );
