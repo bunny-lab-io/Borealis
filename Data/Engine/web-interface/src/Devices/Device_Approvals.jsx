@@ -77,13 +77,6 @@ const formatDateTime = (value) => {
   return date.toLocaleString();
 };
 
-const formatFingerprint = (fp) => {
-  if (!fp) return "—";
-  const normalized = fp.replace(/[^a-f0-9]/gi, "").toLowerCase();
-  if (!normalized) return fp;
-  return normalized.match(/.{1,4}/g)?.join(" ") ?? normalized;
-};
-
 const normalizeStatus = (status) => {
   if (!status) return "pending";
   if (status === "completed") return "completed";
@@ -290,28 +283,23 @@ export default function DeviceApprovals({ onPageMetaChange }) {
     },
     { headerName: "Hostname", field: "hostname_claimed", minWidth: 180 },
     {
-      headerName: "Fingerprint",
-      field: "ssl_key_fingerprint_claimed",
-      valueFormatter: (p) => formatFingerprint(p.value),
-      cellStyle: { fontFamily: "monospace", whiteSpace: "nowrap" },
-      minWidth: 150,
-      Width: 150,
-    },
-    {
-      headerName: "Enrollment Code",
-      field: "enrollment_code_id",
-      cellStyle: { fontFamily: "monospace" },
-      minWidth: 100,
-      Width: 100,
-    },
-    {
       headerName: "Site",
       field: "site_name",
       valueGetter: (p) => p.data?.site_name || (p.data?.site_id ? `Site ${p.data.site_id}` : "—"),
       minWidth: 160,
     },
-    { headerName: "Created", field: "created_at", valueFormatter: (p) => formatDateTime(p.value), minWidth: 160 },
-    { headerName: "Updated", field: "updated_at", valueFormatter: (p) => formatDateTime(p.value), minWidth: 160 },
+    {
+      headerName: "Date of Enrollment Request",
+      field: "created_at",
+      valueFormatter: (p) => formatDateTime(p.value),
+      minWidth: 200,
+    },
+    {
+      headerName: "Date of Approval",
+      field: "updated_at",
+      valueFormatter: (p) => formatDateTime(p.value),
+      minWidth: 180,
+    },
     {
       headerName: "Approved By",
       valueGetter: (p) => p.data?.approved_by_username || p.data?.approved_by_user_id || "—",
@@ -327,48 +315,56 @@ export default function DeviceApprovals({ onPageMetaChange }) {
         const guidValue = params.context.guidInputs[record.id] || "";
         const { startApprove, handleDeny, handleGuidChange, actioningId } = params.context;
         if (!showActions) {
-          return <Typography variant="body2" style={{ color: "#9aa0a6" }}>No actions available</Typography>;
+          return (
+            <Box sx={{ display: "flex", alignItems: "center", height: "100%" }}>
+              <Typography variant="body2" sx={{ color: "#9aa0a6" }}>
+                No actions available
+              </Typography>
+            </Box>
+          );
         }
         const isBusy = actioningId === record.id;
         return (
-          <Stack direction="row" spacing={8} alignItems="center">
-            <TextField
-              size="small"
-              label="Optional GUID"
-              placeholder="Leave empty to auto-generate"
-              value={guidValue}
-              onChange={(e) => handleGuidChange(record.id, e.target.value)}
-              sx={{ minWidth: 220 }}
-            />
-            <Stack direction="row" spacing={1}>
-              <Tooltip title="Approve enrollment">
-                <span>
-                  <Button
-                    color="success"
-                    variant="text"
-                    onClick={() => startApprove(record)}
-                    disabled={isBusy}
-                    startIcon={isBusy ? <CircularProgress size={16} color="success" /> : <ApproveIcon fontSize="small" />}
-                  >
-                    Approve
-                  </Button>
-                </span>
-              </Tooltip>
-              <Tooltip title="Deny enrollment">
-                <span>
-                  <Button
-                    color="error"
-                    variant="text"
-                    onClick={() => handleDeny(record)}
-                    disabled={isBusy}
-                    startIcon={<DenyIcon fontSize="small" />}
-                  >
-                    Deny
-                  </Button>
-                </span>
-              </Tooltip>
+          <Box sx={{ display: "flex", alignItems: "center", height: "100%" }}>
+            <Stack direction="row" spacing={8} alignItems="center">
+              <TextField
+                size="small"
+                label="Optional GUID"
+                placeholder="Leave empty to auto-generate"
+                value={guidValue}
+                onChange={(e) => handleGuidChange(record.id, e.target.value)}
+                sx={{ minWidth: 220 }}
+              />
+              <Stack direction="row" spacing={1}>
+                <Tooltip title="Approve enrollment">
+                  <span>
+                    <Button
+                      color="success"
+                      variant="text"
+                      onClick={() => startApprove(record)}
+                      disabled={isBusy}
+                      startIcon={isBusy ? <CircularProgress size={16} color="success" /> : <ApproveIcon fontSize="small" />}
+                    >
+                      Approve
+                    </Button>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Deny enrollment">
+                  <span>
+                    <Button
+                      color="error"
+                      variant="text"
+                      onClick={() => handleDeny(record)}
+                      disabled={isBusy}
+                      startIcon={<DenyIcon fontSize="small" />}
+                    >
+                      Deny
+                    </Button>
+                  </span>
+                </Tooltip>
+              </Stack>
             </Stack>
-          </Stack>
+          </Box>
         );
       },
       minWidth: 480,
@@ -427,68 +423,61 @@ export default function DeviceApprovals({ onPageMetaChange }) {
         border: "none",
         background: "transparent",
         boxShadow: "none",
-        overflow: "hidden",
-      }}
-      elevation={0}
-    >
+      overflow: "hidden",
+    }}
+    elevation={0}
+  >
+      <Box
+        sx={{
+          position: "fixed",
+          top: { xs: 72, md: 88 },
+          right: { xs: 12, md: 24 },
+          display: "flex",
+          justifyContent: "flex-end",
+          zIndex: 1400,
+          pointerEvents: "none",
+        }}
+      >
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={1.25}
+          alignItems="center"
+          sx={{ pointerEvents: "auto" }}
+        >
+          <FormControl size="small" sx={{ minWidth: 200 }}>
+            <InputLabel id="approval-status-filter-label">Status</InputLabel>
+            <Select
+              labelId="approval-status-filter-label"
+              label="Status"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              {STATUS_OPTIONS.map((option) => (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadApprovals} disabled={loading}>
+            Refresh
+          </Button>
+        </Stack>
+      </Box>
+
       {!useGlobalHeader && (
         <Box sx={{ p: 3 }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between">
-            <Stack direction="row" spacing={1} alignItems="center">
-              <SecurityIcon sx={{ color: MAGIC_UI.accentA }} />
-              <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-                Device Approval Queue
-              </Typography>
-            </Stack>
-            <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ xs: "stretch", sm: "center" }}>
-              <FormControl size="small" sx={{ minWidth: 200 }}>
-                <InputLabel id="approval-status-filter-label">Status</InputLabel>
-                <Select
-                  labelId="approval-status-filter-label"
-                  label="Status"
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                >
-                  {STATUS_OPTIONS.map((option) => (
-                    <MenuItem key={option.value} value={option.value}>
-                      {option.label}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadApprovals} disabled={loading}>
-                Refresh
-              </Button>
-            </Stack>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <SecurityIcon sx={{ color: MAGIC_UI.accentA }} />
+            <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+              Device Approval Queue
+            </Typography>
           </Stack>
         </Box>
       )}
 
       {/* Filters under shared header */}
-      {useGlobalHeader && (
-        <Box sx={{ px: 3, pt: 2, pb: 1 }}>
-          <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ xs: "stretch", sm: "center" }}>
-            <FormControl size="small" sx={{ minWidth: 200 }}>
-              <InputLabel id="approval-status-filter-label">Status</InputLabel>
-              <Select
-                labelId="approval-status-filter-label"
-                label="Status"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-              >
-                {STATUS_OPTIONS.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadApprovals} disabled={loading}>
-              Refresh
-            </Button>
-          </Stack>
-        </Box>
-      )}
+      {useGlobalHeader && null}
 
       {/* Feedback */}
       {feedback && (

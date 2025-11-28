@@ -348,6 +348,55 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
         gap: 2,
       }}
     >
+      <Box
+        sx={{
+          position: "fixed",
+          top: { xs: 72, md: 88 },
+          right: { xs: 12, md: 24 },
+          display: "flex",
+          justifyContent: "flex-end",
+          zIndex: 1400,
+          pointerEvents: "none",
+        }}
+      >
+        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
+          <Tooltip title="Refresh">
+            <span>
+              <Button
+                startIcon={<CachedIcon fontSize="small" />}
+                variant="outlined"
+                aria-label="Refresh filters"
+                onClick={loadFilters}
+                sx={{
+                  textTransform: "none",
+                  color: "#a5e0ff",
+                  borderColor: "rgba(148,163,184,0.4)",
+                  backgroundColor: "rgba(5,7,15,0.6)",
+                  borderRadius: 999,
+                  px: 2.4,
+                  minWidth: 126,
+                  height: 38,
+                  "&:hover": {
+                    backgroundColor: "rgba(125,183,255,0.16)",
+                    borderColor: "rgba(148,163,184,0.6)",
+                  },
+                }}
+              >
+                Refresh
+              </Button>
+            </span>
+          </Tooltip>
+          <Button
+            startIcon={<AddIcon />}
+            variant="contained"
+            onClick={() => onCreateFilter?.()}
+            sx={gradientButtonSx}
+          >
+            New Filter
+          </Button>
+        </Stack>
+      </Box>
+
       <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 1.5 }}>
         <Box
           className={gridTheme.themeName}
@@ -427,42 +476,6 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
             theme={gridTheme}
             style={{ width: "100%", height: "100%", flex: 1, fontFamily: gridFontFamily }}
           />
-        </Box>
-
-        <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 1.5 }}>
-          <Stack direction="row" gap={1.75}>
-            <Tooltip title="Refresh">
-              <span>
-                <Button
-                  startIcon={<CachedIcon fontSize="small" />}
-                  variant="outlined"
-                  aria-label="Refresh filters"
-                  onClick={loadFilters}
-                  sx={{
-                    textTransform: "none",
-                    color: "#a5e0ff",
-                    borderColor: "rgba(148,163,184,0.4)",
-                    backgroundColor: "rgba(5,7,15,0.6)",
-                    borderRadius: 999,
-                    px: 2.4,
-                    minWidth: 126,
-                    height: 38,
-                    "&:hover": { backgroundColor: "rgba(125,183,255,0.16)", borderColor: "rgba(148,163,184,0.6)" },
-                  }}
-                >
-                  Refresh
-                </Button>
-              </span>
-            </Tooltip>
-            <Button
-              startIcon={<AddIcon />}
-              variant="contained"
-              onClick={() => onCreateFilter?.()}
-              sx={gradientButtonSx}
-            >
-              New Filter
-            </Button>
-          </Stack>
         </Box>
       </Box>
     </Paper>

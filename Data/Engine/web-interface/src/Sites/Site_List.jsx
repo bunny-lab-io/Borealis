@@ -34,6 +34,8 @@ const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
+const AUTO_SIZE_COLUMNS = ["__select__", "device_count", "enrollment_code"];
+
 const MAGIC_UI = {
   shellBg:
     "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
@@ -78,6 +80,7 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
   const [renameValue, setRenameValue] = useState("");
   const [rotatingId, setRotatingId] = useState(null);
   const gridRef = useRef(null);
+  const gridApiRef = useRef(null);
   const sendNotification = useCallback(async (message) => {
     if (!message) return;
     try {
@@ -117,6 +120,25 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
   }, []);
 
   useEffect(() => { fetchSites(); }, [fetchSites]);
+
+  const autoSizeColumns = useCallback(() => {
+    const api = gridApiRef.current || gridRef.current?.api;
+    if (!api || !rows.length) return;
+    const doSize = () => {
+      try {
+        api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
+      } catch {}
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(doSize);
+    } else {
+      setTimeout(doSize, 0);
+    }
+  }, [rows.length]);
+
+  useEffect(() => {
+    autoSizeColumns();
+  }, [rows, autoSizeColumns]);
 
   const handleCopy = useCallback(async (code) => {
     const value = (code || "").trim();
@@ -160,13 +182,19 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
       field: "__select__",
       checkboxSelection: true,
       headerCheckboxSelection: true,
+      minWidth: 52,
       width: 52,
+      maxWidth: 52,
       pinned: "left",
+      filter: false,
+      sortable: false,
+      suppressMenu: true,
     },
     {
       headerName: "Name",
       field: "name",
-      minWidth: 180,
+      minWidth: 220,
+      flex: 1,
       cellRenderer: (params) => (
         <span
           style={{ color: "#7dd3fc", cursor: "pointer", fontWeight: 500 }}
@@ -177,10 +205,22 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
       ),
     },
     {
+      headerName: "Description",
+      field: "description",
+      minWidth: 220,
+      flex: 1,
+    },
+    {
+      headerName: "Devices",
+      field: "device_count",
+      minWidth: 140,
+    },
+    {
       headerName: "Agent Enrollment Code",
       field: "enrollment_code",
-      minWidth: 320,
-      flex: 1.2,
+      minWidth: 260,
+      filter: false,
+      suppressMenu: true,
       cellRenderer: (params) => {
         const code = params.value || "—";
         const site = params.data || {};
@@ -218,15 +258,12 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
         );
       },
     },
-    { headerName: "Description", field: "description", minWidth: 220 },
-    { headerName: "Devices", field: "device_count", minWidth: 120 },
   ], [onOpenDevicesForSite, handleRotate, handleCopy, rotatingId]);
 
   const defaultColDef = useMemo(() => ({
     sortable: true,
     filter: "agTextColumnFilter",
     resizable: true,
-    flex: 1,
     minWidth: 160,
   }), []);
 
@@ -254,13 +291,32 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
       }}
       elevation={0}
     >
-      <Box sx={{ p: { xs: 2, md: 3 }, pb: 1, display: "flex", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: 1 }}>
-        {heroStats.selected > 0 ? (
-          <Typography sx={{ color: MAGIC_UI.accentA, fontSize: "0.85rem", fontWeight: 600, mr: 1 }}>
-            {heroStats.selected} selected
-          </Typography>
-        ) : null}
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", justifyContent: "flex-end" }}>
+      <Box
+        sx={{
+          position: "fixed",
+          top: { xs: 72, md: 88 },
+          right: { xs: 12, md: 24 },
+          display: "flex",
+          justifyContent: "flex-end",
+          zIndex: 1400,
+          pointerEvents: "none",
+        }}
+      >
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+            pointerEvents: "auto",
+          }}
+        >
+          {heroStats.selected > 0 ? (
+            <Typography sx={{ color: MAGIC_UI.accentA, fontSize: "0.85rem", fontWeight: 600, mr: 1 }}>
+              {heroStats.selected} selected
+            </Typography>
+          ) : null}
           <Button variant="contained" size="small" startIcon={<AddIcon />} sx={RAINBOW_BUTTON_SX} onClick={() => setCreateOpen(true)}>
             Create Site
           </Button>
@@ -350,8 +406,12 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
             paginationPageSize={20}
             paginationPageSizeSelector={[20, 50, 100]}
             animateRows
+            onGridReady={(params) => {
+              gridApiRef.current = params.api;
+              autoSizeColumns();
+            }}
             onSelectionChanged={() => {
-              const api = gridRef.current?.api;
+              const api = gridApiRef.current || gridRef.current?.api;
               if (!api) return;
               const selected = api.getSelectedNodes().map((n) => n.data?.id).filter(Boolean);
               setSelectedIds(new Set(selected));

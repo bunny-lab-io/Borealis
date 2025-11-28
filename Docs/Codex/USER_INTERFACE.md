@@ -83,12 +83,11 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Interaction rules: tabs should never scroll vertically; rely on horizontal scroll for overflow. Always align the tab rail with the first section header on the page so the aurora indicator lines up with hero metrics.
 - Accessibility: keep `aria-label`/`aria-controls` pairs when the panes hold complex content, and ensure the gradient backgrounds preserve 4.5:1 contrast for the text (the current cyan on dark meets this).
 
-## Page-Level Actions with Tab Rails
-- When a page uses Aurora Tabs, place primary/secondary page actions inline with the tab rail, floating on the top-right of the content layer (under the global nav).
-- Wrap the tab stack and actions in a `position: relative` container so actions can be absolutely positioned without leaving the shell flow.
-- Position the action bar as `position: "absolute", top: 12, right: 24, zIndex: 3` (adjust top/right to match your page padding) and keep it `display: "flex"` with a `Stack` for spacing.
-- Use the same gradient primary pill and outlined secondary styles from the template; preserve the rounded 999 radius and MagicUI colors.
-- Keep the bar above content but separate from the title/subtitle block—do not nest buttons inside the title grid. This matches the Filter Editor pattern and keeps tabs and actions visually aligned.
+## Page-Level Action Buttons
+- Place page-level actions/buttons/hero-badges in a fixed overlay at the top-right, just below the global menu bar. Match the Filter Editor's placement if an example is needed `Data\Engine\web-interface\src\Devices\Filters\Filter_Editor.jsx`: wrapper `position: "fixed"`, `top: { xs: 72, md: 88 }`, `right: { xs: 12, md: 20 }`, `zIndex: 1400`, with `pointerEvents: "none"` on the wrapper and `pointerEvents: "auto"` on the inner `Stack` so underlying content remains clickable.
+- Use gradient primary pills and outlined secondary pills (rounded 999 radius, MagicUI colors). Keep horizontal spacing via a `Stack` (e.g., `spacing={1.25}`); do not nest these buttons inside the title grid or tab rail.
+- Tabs stay in normal document flow beneath the title/subtitle; the floating action bar should not shift layout. When operators request moving page actions (or when building new pages), apply this fixed overlay pattern instead of absolute positioning tied to tab rails.
+- Keep the responsive offsets (xs/md) unless a specific page has a different header height/padding; only adjust the numeric values when explicitly needed to align with a nonstandard shell.
 
 ## AG Grid Column Behavior (All Tables)
 - Auto-size value columns and let the last column absorb remaining width so views span available space.

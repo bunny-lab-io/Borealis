@@ -863,15 +863,16 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
 
       <Box
         sx={{
-          position: "absolute",
-          top: 12,
-          right: 24,
+          position: "fixed",
+          top: { xs: 72, md: 88 }, // align with page title padding beneath the menu bar
+          right: { xs: 12, md: 24 },
           display: "flex",
           justifyContent: "flex-end",
-          zIndex: 3,
+          zIndex: 1400,
+          pointerEvents: "none",
         }}
       >
-        <Stack direction="row" spacing={1.25}>
+        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
           <Tooltip title="Cancel and return">
             <Button
               variant="outlined"
