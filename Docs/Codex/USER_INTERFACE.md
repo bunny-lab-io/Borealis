@@ -27,7 +27,7 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
 
 ## Aurora Tabs (MagicUI Tabbed Interfaces)
-- Placement: sit directly below the hero title/subtitle band (8–16px gap). Tabs span the full width of the content column and anchor secondary hero metrics (see `Scheduling/Create_Job.jsx` and `Devices/Device_Details.jsx`).
+- Placement: sit directly below the hero title/subtitle band (8–16px gap). Tabs span the full width of the content column.
 - Typography: IBM Plex Sans, `fontSize: 15`, mixed case labels (`textTransform: "none"`). Use `fontWeight: 600` for emphasis, but avoid uppercase that crowds the aurora glow.
 - Indicator: 3px tall bar with rounded corners that uses the cyan→violet aurora gradient `linear-gradient(90deg,#7dd3fc,#c084fc)`. Keep it flush with the bottom border so it looks like a light strip under the active tab.
 - Hover/active treatment: tabs float on a translucent aurora panel `linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))` with a 1px inset steel outline. This gradient applies on hover for both selected and non-selected tabs to keep parity.
@@ -82,6 +82,13 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
   ```
 - Interaction rules: tabs should never scroll vertically; rely on horizontal scroll for overflow. Always align the tab rail with the first section header on the page so the aurora indicator lines up with hero metrics.
 - Accessibility: keep `aria-label`/`aria-controls` pairs when the panes hold complex content, and ensure the gradient backgrounds preserve 4.5:1 contrast for the text (the current cyan on dark meets this).
+
+## Page-Level Actions with Tab Rails
+- When a page uses Aurora Tabs, place primary/secondary page actions inline with the tab rail, floating on the top-right of the content layer (under the global nav).
+- Wrap the tab stack and actions in a `position: relative` container so actions can be absolutely positioned without leaving the shell flow.
+- Position the action bar as `position: "absolute", top: 12, right: 24, zIndex: 3` (adjust top/right to match your page padding) and keep it `display: "flex"` with a `Stack` for spacing.
+- Use the same gradient primary pill and outlined secondary styles from the template; preserve the rounded 999 radius and MagicUI colors.
+- Keep the bar above content but separate from the title/subtitle block—do not nest buttons inside the title grid. This matches the Filter Editor pattern and keeps tabs and actions visually aligned.
 
 ## AG Grid Column Behavior (All Tables)
 - Auto-size value columns and let the last column absorb remaining width so views span available space.

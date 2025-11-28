@@ -13,6 +13,8 @@ import {
   Chip,
   Tooltip,
   Autocomplete,
+  Tabs,
+  Tab,
 } from "@mui/material";
 import {
   FilterAlt as HeaderIcon,
@@ -123,6 +125,22 @@ const OS_ICON_MAP = {
 
 const TAB_HOVER_GRADIENT = "linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))";
 
+const TABS = [
+  { value: "name", label: "Name" },
+  { value: "scope", label: "Scope" },
+  { value: "criteria", label: "Criteria" },
+  { value: "results", label: "Results" },
+];
+
+const TabPanel = ({ value, active, children }) => {
+  if (value !== active) return null;
+  return (
+    <Box sx={{ mt: 2, display: "flex", flexDirection: "column", gap: 2.75, flex: 1, minHeight: 0 }}>
+      {children}
+    </Box>
+  );
+};
+
 const AUTO_SIZE_COLUMNS = ["status", "site", "hostname", "description", "type", "os"];
 
 const resolveApplyAll = (filter) => Boolean(filter?.applyToAllSites ?? filter?.apply_to_all_sites);
@@ -199,7 +217,7 @@ const normalizeGroupsForUI = (rawGroups) => {
   });
 };
 
-export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved }) {
+export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, onPageMetaChange }) {
   const [name, setName] = useState(initialFilter?.name || "");
   const initialScope = resolveSiteScope(initialFilter);
   const [scope, setScope] = useState(initialScope === "scoped" ? "site" : "global");
@@ -218,6 +236,8 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState(null);
   const [previewAppliedAt, setPreviewAppliedAt] = useState(null);
+  const [tab, setTab] = useState(TABS[0].value);
+  const isEditing = Boolean(initialFilter);
   const gridRef = useRef(null);
   const sendNotification = useCallback(async (message) => {
     if (!message) return;
@@ -251,6 +271,9 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
   );
   const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
   const iconFontFamily = "'Quartz Regular'";
+  const pageTitle = isEditing ? "Edit Device Filter" : "Create Device Filter";
+  const pageSubtitle =
+    "Combine grouped criteria with AND/OR logic to build reusable device scopes for automation and reporting.";
 
   const applyFilterData = useCallback((filter) => {
     if (!filter) return;
@@ -267,6 +290,15 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
   useEffect(() => {
     applyFilterData(initialFilter);
   }, [applyFilterData, initialFilter]);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: pageTitle,
+      page_subtitle: pageSubtitle,
+      page_icon: HeaderIcon,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageSubtitle, pageTitle]);
 
   const handleGridReady = useCallback((params) => {
     gridRef.current = params.api;
@@ -659,7 +691,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
         key={condition.id}
         sx={{
           display: "grid",
-          gridTemplateColumns: "110px 220px 220px 1fr auto",
+          gridTemplateColumns: "94px 220px 220px 1fr auto",
           gap: 0.5,
           alignItems: "center",
           background: "rgba(12,18,35,0.7)",
@@ -777,6 +809,9 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
       elevation={0}
       sx={{
         minHeight: "100vh",
+        height: "100vh",
+        flex: 1,
+        position: "relative",
         backgroundColor: "transparent",
         color: AURORA_SHELL.text,
         p: 3,
@@ -784,41 +819,39 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
         display: "flex",
         flexDirection: "column",
         gap: 3,
-        pb: 6,
+        pb: 3,
+        overflow: "hidden",
       }}
     >
-      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", mb: 3 }}>
-        <Box sx={{ display: "flex", gap: 1.5, alignItems: "flex-start" }}>
-          <Box
-            sx={{
-              width: 36,
-              height: 36,
-              borderRadius: 2,
-              background: "linear-gradient(135deg, rgba(125,211,252,0.28), rgba(192,132,252,0.32))",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#0f172a",
-            }}
-          >
-            <HeaderIcon fontSize="small" />
-          </Box>
-          <Box>
-            <Typography sx={{ fontSize: "1.35rem", fontWeight: 700, lineHeight: 1.2 }}>
-              {initialFilter ? "Edit Device Filter" : "Create Device Filter"}
-            </Typography>
-            <Typography sx={{ color: AURORA_SHELL.subtext, mt: 0.2 }}>
-              Combine grouped criteria with AND/OR logic to build reusable device scopes for automation and reporting.
-            </Typography>
-            {lastEditedTs && (
-              <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.9rem", mt: 0.4 }}>
-                {formatLastEditedLabel(lastEditedTs, lastEditedBy)}
-              </Typography>
-            )}
-          </Box>
+      {loadingFilter ? (
+        <Box sx={{ mb: 2, color: "#7dd3fc" }}>Loading filter...</Box>
+      ) : null}
+      {loadError ? (
+        <Box
+          sx={{
+            mb: 2,
+            background: "rgba(255,179,179,0.08)",
+            color: "#ffb4b4",
+            border: "1px solid rgba(255,179,179,0.35)",
+            borderRadius: 1.5,
+            p: 1.5,
+          }}
+        >
+          {loadError}
         </Box>
+      ) : null}
 
-        <Stack direction="row" spacing={1}>
+      <Box
+        sx={{
+          position: "absolute",
+          top: 12,
+          right: 24,
+          display: "flex",
+          justifyContent: "flex-end",
+          zIndex: 3,
+        }}
+      >
+        <Stack direction="row" spacing={1.25}>
           <Tooltip title="Cancel and return">
             <Button
               variant="outlined"
@@ -848,305 +881,365 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved })
         </Stack>
       </Box>
 
-      {loadingFilter ? (
-        <Box sx={{ mb: 2, color: "#7dd3fc" }}>Loading filter...</Box>
-      ) : null}
-      {loadError ? (
-        <Box
-          sx={{
-            mb: 2,
-            background: "rgba(255,179,179,0.08)",
-            color: "#ffb4b4",
-            border: "1px solid rgba(255,179,179,0.35)",
-            borderRadius: 1.5,
-            p: 1.5,
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+          flex: 1,
+          minHeight: 0,
+          position: "relative",
+        }}
+      >
+        <Tabs
+          value={tab}
+          onChange={(_, val) => setTab(val)}
+          variant="scrollable"
+          scrollButtons="auto"
+          TabIndicatorProps={{
+            style: {
+              height: 3,
+              borderRadius: 3,
+              background: "linear-gradient(90deg,#7dd3fc,#c084fc)",
+            },
           }}
-        >
-          {loadError}
-        </Box>
-      ) : null}
-
-        <Box
           sx={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 2.75,
-            flex: 1,
-          }}
-        >
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-          <Typography sx={{ fontWeight: 700 }}>Name</Typography>
-          <TextField
-            size="small"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Filter name or convention (e.g., RMM targeting)"
-            sx={{
-              width: { xs: "100%", md: "50%" },
-              maxWidth: 420,
-              "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
-              "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
-            }}
-          />
-        </Box>
-
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25 }}>
-          <Typography sx={{ fontWeight: 700 }}>Scope</Typography>
-          <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
-            Choose whether this filter is global or pinned to a specific site.
-          </Typography>
-          <ToggleButtonGroup
-            exclusive
-            value={scope}
-            onChange={(_, val) => {
-              if (!val) return;
-              setScope(val);
-            }}
-            color="info"
-            sx={{
-              alignSelf: "flex-start",
-              background: "rgba(7,12,26,0.7)",
-              borderRadius: 2,
-              "& .MuiToggleButton-root": {
-                textTransform: "none",
-                color: AURORA_SHELL.text,
-                borderColor: "rgba(148,163,184,0.35)",
-                minHeight: 32,
-                paddingTop: 0.25,
-                paddingBottom: 0.25,
-                paddingLeft: 1.6,
-                paddingRight: 1.6,
-                fontWeight: 700,
-              },
-              "& .Mui-selected": {
-                background: TAB_HOVER_GRADIENT,
-                color: "#0b1220",
-                boxShadow: "0 0 0 1px rgba(148,163,184,0.35) inset",
-              },
-            }}
-          >
-            <ToggleButton value="global">Global</ToggleButton>
-            <ToggleButton value="site">Site</ToggleButton>
-          </ToggleButtonGroup>
-
-          {scope === "site" && (
-            <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25 }}>
-              <Stack direction="row" alignItems="center" spacing={1}>
-                <Switch
-                  checked={applyToAllSites}
-                  onChange={(e) => setApplyToAllSites(e.target.checked)}
-                  color="info"
-                />
-                <Box>
-                  <Typography sx={{ fontWeight: 600 }}>Add filter to all Sites</Typography>
-                  <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.9rem" }}>
-                    Future sites will also inherit this filter when enabled.
-                  </Typography>
-                </Box>
-              </Stack>
-
-              {!applyToAllSites && (
-                <Autocomplete
-                  disablePortal
-                  loading={loadingSites}
-                  options={sites}
-                  value={sites.find((s) => s.value === targetSite) || null}
-                  getOptionLabel={(option) => option?.label || ""}
-                  isOptionEqualToValue={(option, value) => option?.value === value?.value}
-                  onChange={(_, val) => setTargetSite(val?.value || "")}
-                  renderInput={(params) => (
-                    <TextField
-                      {...params}
-                      label="Target Site"
-                      size="small"
-                      placeholder="Search sites"
-                      sx={{
-                        width: { xs: "100%", md: "50%" },
-                        maxWidth: 420,
-                        "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
-                        "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
-                      }}
-                    />
-                  )}
-                />
-              )}
-            </Box>
-          )}
-        </Box>
-
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 2.75 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <Typography sx={{ fontWeight: 700 }}>Criteria</Typography>
-            <Chip label="Grouped AND / OR" size="small" sx={{ backgroundColor: "rgba(125,211,252,0.12)", color: "#7dd3fc" }} />
-          </Box>
-          <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem", mb: 1 }}>
-            Add conditions inside each group, mixing AND/OR as needed. Groups themselves can be chained with AND or OR to
-            mirror complex targeting logic (e.g., (A AND B) OR (C AND D)).
-          </Typography>
-
-          {groups.map((group, idx) => (
-            <Box key={group.id} sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
-              {idx > 0 && (
-                <ToggleButtonGroup
-                  exclusive
-                  size="small"
-                  value={group.joinWith || "OR"}
-                  onChange={(_, val) => {
-                    if (!val) return;
-                    updateGroup(group.id, { ...group, joinWith: val });
-                  }}
-                  color="info"
-                  sx={{
-                    alignSelf: "center",
-                    "& .MuiToggleButton-root": { px: 2, textTransform: "uppercase", fontSize: "0.8rem" },
-                  }}
-                >
-                  <ToggleButton value="AND">AND</ToggleButton>
-                  <ToggleButton value="OR">OR</ToggleButton>
-                </ToggleButtonGroup>
-              )}
-
-              <Box
-                sx={{
-                  border: `1px solid ${AURORA_SHELL.border}`,
-                  borderRadius: 2,
-                  background: "linear-gradient(135deg, rgba(7,10,22,0.85), rgba(9,11,24,0.92))",
-                  p: 1.5,
-                  boxShadow: "0 12px 28px rgba(3,7,18,0.5)",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 1,
-                }}
-              >
-                <Stack direction="row" alignItems="center" justifyContent="space-between">
-                  <Typography sx={{ fontWeight: 600 }}>Criteria Group {idx + 1}</Typography>
-                  <Stack direction="row" spacing={1}>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      startIcon={<AddIcon />}
-                      onClick={() => addCondition(group.id)}
-                      sx={{
-                        textTransform: "none",
-                        color: "#7dd3fc",
-                        borderColor: "rgba(125,211,252,0.5)",
-                        borderRadius: 1.5,
-                      }}
-                    >
-                      Add Condition
-                    </Button>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      startIcon={<RemoveIcon />}
-                      disabled={groups.length === 1}
-                      onClick={() => removeGroup(group.id)}
-                      sx={{
-                        textTransform: "none",
-                        color: "#ffb4b4",
-                        borderColor: "rgba(255,180,180,0.5)",
-                        borderRadius: 1.5,
-                      }}
-                    >
-                      Remove Group
-                    </Button>
-                  </Stack>
-                </Stack>
-
-                <Stack spacing={1}>
-                  {group.conditions.map((condition, cIdx) =>
-                    renderConditionRow(group.id, condition, cIdx === 0)
-                  )}
-                </Stack>
-              </Box>
-            </Box>
-          ))}
-
-          <Button
-            startIcon={<AddIcon />}
-            variant="outlined"
-            onClick={() => addGroup("OR")}
-            sx={{
+            mt: 0,
+            borderBottom: `1px solid ${AURORA_SHELL.border}`,
+            "& .MuiTab-root": {
+              color: AURORA_SHELL.subtext,
+              fontFamily: gridFontFamily,
+              fontSize: 15,
               textTransform: "none",
-              alignSelf: "flex-start",
-              color: "#a5e0ff",
-              borderColor: "rgba(125,183,255,0.5)",
-              borderRadius: 1.5,
-            }}
-          >
-            Add Group
-          </Button>
-        </Box>
-
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between">
-            <Box>
-              <Typography sx={{ fontWeight: 700 }}>Results</Typography>
-              <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
-                Apply criteria to preview matching devices.
-              </Typography>
-              {previewAppliedAt && (
-                <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.85rem" }}>
-                  Last applied: {previewAppliedAt.toLocaleString()}
-                </Typography>
-              )}
-              {previewError ? (
-                <Typography sx={{ color: "#ffb4b4", fontSize: "0.9rem", mt: 0.5 }}>{previewError}</Typography>
-              ) : null}
-            </Box>
-            <Button
-              variant="contained"
-              startIcon={previewLoading ? <CachedIcon /> : <PlayIcon />}
-              onClick={applyCriteria}
-              disabled={previewLoading}
-              sx={gradientButtonSx}
-            >
-              {previewLoading ? "Applying..." : "Apply Criteria"}
-            </Button>
-          </Stack>
-
-          <Box
-          className={gridTheme.themeName}
-          sx={{
-            height: 420,
-            "& .ag-root-wrapper": { borderRadius: 1.5 },
-            "& .ag-cell.auto-col-tight": { paddingLeft: 2, paddingRight: 2 },
+              fontWeight: 600,
+              minHeight: 44,
+              opacity: 1,
+              borderRadius: 1,
+              transition: "background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease",
+              "&:hover": {
+                color: AURORA_SHELL.text,
+                backgroundImage: TAB_HOVER_GRADIENT,
+                boxShadow: "0 0 0 1px rgba(148,163,184,0.25) inset",
+              },
+            },
+            "& .Mui-selected": {
+              color: AURORA_SHELL.text,
+              "&:hover": {
+                backgroundImage: TAB_HOVER_GRADIENT,
+              },
+            },
           }}
-            style={{
-              "--ag-icon-font-family": iconFontFamily,
-              "--ag-background-color": "#070b1a",
-              "--ag-foreground-color": "#f4f7ff",
-              "--ag-header-background-color": "#0f172a",
-              "--ag-header-foreground-color": "#cfe0ff",
-              "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-              "--ag-row-hover-color": "rgba(125,183,255,0.08)",
-              "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
-              "--ag-border-color": "rgba(125,183,255,0.18)",
-              "--ag-row-border-color": "rgba(125,183,255,0.14)",
-              "--ag-border-radius": "8px",
-              "--ag-checkbox-border-radius": "3px",
-              "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
-              "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
-              "--ag-checkbox-checked-color": "#7dd3fc",
-            }}
-          >
-            <AgGridReact
-              rowData={previewRows}
-              columnDefs={previewColumns}
-              defaultColDef={defaultPreviewColDef}
-              animateRows
-              rowHeight={46}
-              headerHeight={44}
-              suppressCellFocus
-              overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>Apply criteria to preview devices.</span>"
-              onGridReady={handleGridReady}
-              theme={gridTheme}
-              pagination
-              paginationPageSize={20}
-              style={{ width: "100%", height: "100%", fontFamily: gridFontFamily }}
+        >
+          {TABS.map((tabDef) => (
+            <Tab key={tabDef.value} label={tabDef.label} value={tabDef.value} />
+          ))}
+        </Tabs>
+
+        <TabPanel value="name" active={tab}>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <Typography sx={{ fontWeight: 700 }}>Name</Typography>
+            <TextField
+              size="small"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Filter name or convention (e.g., RMM targeting)"
+              sx={{
+                width: { xs: "100%", md: "65%" },
+                maxWidth: 546,
+                "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
+                "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
+              }}
             />
           </Box>
-        </Box>
+        </TabPanel>
+
+        <TabPanel value="scope" active={tab}>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25 }}>
+            <Typography sx={{ fontWeight: 700 }}>Scope</Typography>
+            <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
+              Choose whether this filter is global or pinned to a specific site.
+            </Typography>
+            <ToggleButtonGroup
+              exclusive
+              value={scope}
+              onChange={(_, val) => {
+                if (!val) return;
+                setScope(val);
+              }}
+              color="info"
+              sx={{
+                alignSelf: "flex-start",
+                background: "rgba(7,12,26,0.7)",
+                borderRadius: 2,
+                "& .MuiToggleButton-root": {
+                  textTransform: "none",
+                  color: AURORA_SHELL.text,
+                  borderColor: "rgba(148,163,184,0.35)",
+                  minHeight: 32,
+                  paddingTop: 0.25,
+                  paddingBottom: 0.25,
+                  paddingLeft: 1.6,
+                  paddingRight: 1.6,
+                  fontWeight: 700,
+                },
+                "& .Mui-selected": {
+                  background: TAB_HOVER_GRADIENT,
+                  color: "#0b1220",
+                  boxShadow: "0 0 0 1px rgba(148,163,184,0.35) inset",
+                },
+              }}
+            >
+              <ToggleButton value="global">Global</ToggleButton>
+              <ToggleButton value="site">Site</ToggleButton>
+            </ToggleButtonGroup>
+
+            {scope === "site" && (
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25 }}>
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <Switch
+                    checked={applyToAllSites}
+                    onChange={(e) => setApplyToAllSites(e.target.checked)}
+                    color="info"
+                  />
+                  <Box>
+                    <Typography sx={{ fontWeight: 600 }}>Add filter to all Sites</Typography>
+                    <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.9rem" }}>
+                      Future sites will also inherit this filter when enabled.
+                    </Typography>
+                  </Box>
+                </Stack>
+
+                {!applyToAllSites && (
+                  <Autocomplete
+                    disablePortal
+                    loading={loadingSites}
+                    options={sites}
+                    value={sites.find((s) => s.value === targetSite) || null}
+                    getOptionLabel={(option) => option?.label || ""}
+                    isOptionEqualToValue={(option, value) => option?.value === value?.value}
+                    onChange={(_, val) => setTargetSite(val?.value || "")}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Target Site"
+                        size="small"
+                        placeholder="Search sites"
+                        sx={{
+                          width: { xs: "100%", md: "50%" },
+                          maxWidth: 420,
+                          "& .MuiInputBase-root": { backgroundColor: "rgba(4,7,17,0.65)" },
+                          "& .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.border },
+                        }}
+                      />
+                    )}
+                  />
+                )}
+              </Box>
+            )}
+          </Box>
+        </TabPanel>
+
+        <TabPanel value="criteria" active={tab}>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 2.75 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <Typography sx={{ fontWeight: 700 }}>Criteria</Typography>
+              <Chip label="Grouped AND / OR" size="small" sx={{ backgroundColor: "rgba(125,211,252,0.12)", color: "#7dd3fc" }} />
+            </Box>
+            <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem", mb: 1 }}>
+              Add conditions inside each group, mixing AND/OR as needed. Groups themselves can be chained with AND or OR to
+              mirror complex targeting logic (e.g., (A AND B) OR (C AND D)).
+            </Typography>
+
+            {groups.map((group, idx) => (
+              <Box key={group.id} sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+                {idx > 0 && (
+                  <ToggleButtonGroup
+                    exclusive
+                    size="small"
+                    value={group.joinWith || "OR"}
+                    onChange={(_, val) => {
+                      if (!val) return;
+                      updateGroup(group.id, { ...group, joinWith: val });
+                    }}
+                    color="info"
+                    sx={{
+                alignSelf: "flex-start",
+                "& .MuiToggleButton-root": { px: 2, textTransform: "uppercase", fontSize: "0.8rem" },
+              }}
+            >
+              <ToggleButton value="AND">AND</ToggleButton>
+              <ToggleButton value="OR">OR</ToggleButton>
+                  </ToggleButtonGroup>
+                )}
+
+                <Box
+                  sx={{
+                    border: `1px solid ${AURORA_SHELL.border}`,
+                    borderRadius: 2,
+                    background: "linear-gradient(135deg, rgba(7,10,22,0.85), rgba(9,11,24,0.92))",
+                    p: 1.5,
+                    boxShadow: "0 12px 28px rgba(3,7,18,0.5)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 1,
+                  }}
+                >
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ pr: 0.5 }}>
+                    <Typography sx={{ fontWeight: 600 }}>Criteria Group {idx + 1}</Typography>
+                    <Stack direction="row" spacing={1}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<AddIcon />}
+                        onClick={() => addCondition(group.id)}
+                        sx={{
+                          textTransform: "none",
+                          color: "#7dd3fc",
+                          borderColor: "rgba(125,211,252,0.5)",
+                          borderRadius: 1.5,
+                        }}
+                      >
+                        Add Condition
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<RemoveIcon />}
+                        disabled={groups.length === 1}
+                        onClick={() => removeGroup(group.id)}
+                        sx={{
+                          textTransform: "none",
+                          color: "#ffb4b4",
+                          borderColor: "rgba(255,180,180,0.5)",
+                          borderRadius: 1.5,
+                        }}
+                      >
+                        Remove Group
+                      </Button>
+                    </Stack>
+                  </Stack>
+
+                  <Stack spacing={1}>
+                    {group.conditions.map((condition, cIdx) =>
+                      renderConditionRow(group.id, condition, cIdx === 0)
+                    )}
+                  </Stack>
+                </Box>
+              </Box>
+            ))}
+
+            <Button
+              startIcon={<AddIcon />}
+              variant="outlined"
+              onClick={() => addGroup("OR")}
+              sx={{
+                textTransform: "none",
+                alignSelf: "flex-start",
+                color: "#a5e0ff",
+                borderColor: "rgba(125,183,255,0.5)",
+                borderRadius: 1.5,
+              }}
+            >
+              Add Group
+            </Button>
+          </Box>
+        </TabPanel>
+
+        <TabPanel value="results" active={tab}>
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 1.5,
+              flex: 1,
+              minHeight: 0,
+              pb: 1,
+              overflow: "hidden",
+            }}
+          >
+            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ flexShrink: 0 }}>
+              <Box>
+                <Typography sx={{ fontWeight: 700 }}>Results</Typography>
+                <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
+                  Apply criteria to preview matching devices.
+                </Typography>
+                {previewAppliedAt && (
+                  <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.85rem" }}>
+                    Last applied: {previewAppliedAt.toLocaleString()}
+                  </Typography>
+                )}
+                {previewError ? (
+                  <Typography sx={{ color: "#ffb4b4", fontSize: "0.9rem", mt: 0.5 }}>{previewError}</Typography>
+                ) : null}
+              </Box>
+              <Button
+                variant="contained"
+                startIcon={previewLoading ? <CachedIcon /> : <PlayIcon />}
+                onClick={applyCriteria}
+                disabled={previewLoading}
+                sx={gradientButtonSx}
+              >
+                {previewLoading ? "Applying..." : "Apply Criteria"}
+              </Button>
+            </Stack>
+
+            <Box
+              sx={{
+                flex: 1,
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+                overflow: "auto",
+                pb: 1,
+              }}
+            >
+              <Box
+                className={gridTheme.themeName}
+                sx={{
+                  flex: 1,
+                  minHeight: 0,
+                  height: "100%",
+                  overflow: "hidden",
+                  "& .ag-root-wrapper": { borderRadius: 1.5 },
+                  "& .ag-cell.auto-col-tight": { paddingLeft: 2, paddingRight: 2 },
+                }}
+                style={{
+                  "--ag-icon-font-family": iconFontFamily,
+                  "--ag-background-color": "#070b1a",
+                  "--ag-foreground-color": "#f4f7ff",
+                  "--ag-header-background-color": "#0f172a",
+                  "--ag-header-foreground-color": "#cfe0ff",
+                  "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+                  "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+                  "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+                  "--ag-border-color": "rgba(125,183,255,0.18)",
+                  "--ag-row-border-color": "rgba(125,183,255,0.14)",
+                  "--ag-border-radius": "8px",
+                  "--ag-checkbox-border-radius": "3px",
+                  "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
+                  "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
+                  "--ag-checkbox-checked-color": "#7dd3fc",
+                }}
+              >
+                <AgGridReact
+                  rowData={previewRows}
+                  columnDefs={previewColumns}
+                  defaultColDef={defaultPreviewColDef}
+                  animateRows
+                  rowHeight={46}
+                  headerHeight={44}
+                  suppressCellFocus
+                  overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>Apply criteria to preview devices.</span>"
+                  onGridReady={handleGridReady}
+                  theme={gridTheme}
+                  pagination
+                  paginationPageSize={20}
+                  style={{ width: "100%", height: "100%", minHeight: "100%", fontFamily: gridFontFamily }}
+                />
+              </Box>
+            </Box>
+          </Box>
+        </TabPanel>
 
         {saveError ? (
           <Box
