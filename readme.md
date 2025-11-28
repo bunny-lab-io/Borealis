@@ -35,7 +35,7 @@ Assembly Editor:
 Workflow Editor:
 [![Workflow Editor Demonstration](Docs/images/repo_screenshots/Workflow_Editor.png)](https://www.youtube.com/watch?v=6GLolR70CTo)
 
-# Log Management
+## Log Management
 Log Management:
 ![Log Management](Docs/images/repo_screenshots/Log_Management.png)
 
