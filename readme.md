@@ -29,9 +29,6 @@ Device Details:
 Device Approval Queue:
 ![Device Approval Queue](Docs/images/repo_screenshots/Device_Approval_Queue.png)
 
-Device Enrollment Codes:
-![Device Enrollment Codes](Docs/images/repo_screenshots/Device_Enrollment_Codes.png)
-
 Device Filters:
 ![Device Filters](Docs/images/repo_screenshots/Device_Filter_List.png)
 
