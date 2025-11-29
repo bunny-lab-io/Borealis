@@ -49,6 +49,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
     filters: true,
     access: true,
     admin: true,
+    developer: true,
   });
 
   const groupActive = useMemo(
@@ -68,7 +69,8 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         "access_users",
         "access_github_token",
       ].includes(currentPage),
-      admin: ["server_info", "log_management", "page_template"].includes(currentPage),
+      admin: ["server_info", "log_management"].includes(currentPage),
+      developer: ["page_template"].includes(currentPage),
     }),
     [currentPage]
   );
@@ -194,7 +196,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
           />
           <NavItem
             icon={<DevicesIcon fontSize="small" />}
-            label="Devices"
+            label="All Devices"
             pageKey="devices"
           />
           <NavItem
@@ -229,11 +231,14 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             label="Scheduled Jobs"
             pageKey="jobs"
           />
-          <NavItem
+          {/* Community Content 
+            <NavItem
             icon={<CommunityIcon fontSize="small" />}
             label="Community Content"
             pageKey="community"
           />
+          */}
+
         </Section>
 
         {/* Filters & Groups */}
@@ -243,11 +248,13 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             label="Filters"
             pageKey="filters"
           />
-          <NavItem
+          {/* Groups 
+            <NavItem
             icon={<GroupsIcon fontSize="small" />}
             label="Groups"
             pageKey="groups"
           />
+          */}
         </Section>
 
         {/* Access Management */}
@@ -284,6 +291,12 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
               label="Log Management"
               pageKey="log_management"
             />
+          </Section>
+        )}
+
+        {/* Developer Tools */}
+        {isAdmin && (
+          <Section title="Developer Tools" k="developer">
             <NavItem
               icon={<PageTemplateIcon fontSize="small" />}
               label="Page Template"
