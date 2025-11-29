@@ -32,6 +32,12 @@ Device Approval Queue:
 Device Enrollment Codes:
 ![Device Enrollment Codes](Docs/images/repo_screenshots/Device_Enrollment_Codes.png)
 
+Device Filters:
+![Device Filters](Docs/images/repo_screenshots/Device_Filter_List.png)
+
+Device Filter Editor:
+![Device Filter Editor](Docs/images/repo_screenshots/Device_Filter_Editor.png)
+
 ## Assembly Management
 Assembly List:
 ![Assembly List](Docs/images/repo_screenshots/Assembly_List.png)
