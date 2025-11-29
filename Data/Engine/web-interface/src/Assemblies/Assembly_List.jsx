@@ -14,6 +14,7 @@ import {
   TextField,
   CircularProgress,
   Link as MuiLink,
+  Stack,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
@@ -633,6 +634,40 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       }}
       elevation={0}
     >
+      {/* Page-level action button (floating top-right) */}
+      <Box
+        sx={{
+          position: "fixed",
+          top: { xs: 72, md: 88 },
+          right: { xs: 12, md: 20 },
+          zIndex: 1400,
+          pointerEvents: "none",
+        }}
+      >
+        <Stack direction="row" spacing={1.25} alignItems="center" sx={{ pointerEvents: "auto" }}>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<AddIcon />}
+            onClick={(event) => setNewMenuAnchor(event.currentTarget)}
+            sx={{
+              backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+              color: "#0b1220",
+              borderRadius: 999,
+              textTransform: "none",
+              boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
+              "&:hover": {
+                backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+                boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
+                filter: "none",
+              },
+            }}
+          >
+            New Assembly
+          </Button>
+        </Stack>
+      </Box>
+
       <Box sx={{ px: 2, mt: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <IconButton
@@ -653,26 +688,6 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
             </Typography>
           ) : null}
         </Box>
-        <Button
-          variant="contained"
-          size="small"
-          startIcon={<AddIcon />}
-          onClick={(event) => setNewMenuAnchor(event.currentTarget)}
-          sx={{
-            backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
-            color: "#0b1220",
-            borderRadius: 999,
-            textTransform: "none",
-            boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
-            "&:hover": {
-              backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-              boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
-              filter: "none",
-            },
-          }}
-        >
-          New Assembly
-        </Button>
         <Menu
           anchorEl={newMenuAnchor}
           open={Boolean(newMenuAnchor)}

@@ -23,7 +23,8 @@ import {
   FormControl,
   InputLabel,
   Checkbox,
-  Popover
+  Popover,
+  Stack
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import FilterListIcon from "@mui/icons-material/FilterList";
@@ -454,15 +455,26 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
   return (
     <>
       <Paper sx={tablePaperSx} elevation={0}>
-        <Box sx={{ p: 2, pb: 1, display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 1 }}>
-          <Button
-            variant="contained"
-            size="small"
-            onClick={openCreate}
-            sx={gradientButtonSx}
-          >
-            Create User
-          </Button>
+        {/* Page-level action button (floating top-right) */}
+        <Box
+          sx={{
+            position: "fixed",
+            top: { xs: 72, md: 88 },
+            right: { xs: 12, md: 20 },
+            zIndex: 1400,
+            pointerEvents: "none",
+          }}
+        >
+          <Stack direction="row" spacing={1.25} alignItems="center" sx={{ pointerEvents: "auto" }}>
+            <Button
+              variant="contained"
+              size="small"
+              onClick={openCreate}
+              sx={gradientButtonSx}
+            >
+              Create User
+            </Button>
+          </Stack>
         </Box>
 
         <Table size="small" sx={tableSx}>

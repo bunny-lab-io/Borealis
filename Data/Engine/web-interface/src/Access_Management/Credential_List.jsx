@@ -8,6 +8,7 @@ import {
   Paper,
   Typography,
   CircularProgress,
+  Stack,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import AddIcon from "@mui/icons-material/Add";
@@ -310,6 +311,53 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
 
   return (
     <>
+      <Box
+        sx={{
+          position: "fixed",
+          top: { xs: 72, md: 88 },
+          right: { xs: 12, md: 20 },
+          zIndex: 1400,
+          pointerEvents: "none",
+        }}
+      >
+        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<RefreshIcon />}
+            sx={{
+              borderColor: "rgba(148,163,184,0.4)",
+              color: "#e2e8f0",
+              textTransform: "none",
+              borderRadius: 999,
+              px: 1.9,
+              minWidth: 112,
+              backgroundColor: "rgba(12,18,35,0.85)",
+              "&:hover": {
+                borderColor: "rgba(125,211,252,0.85)",
+                backgroundColor: "rgba(16,24,44,0.95)",
+              },
+            }}
+            onClick={fetchCredentials}
+            disabled={loading}
+          >
+            Refresh
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<AddIcon />}
+            sx={{
+              ...gradientButtonSx,
+              minWidth: 150,
+            }}
+            onClick={handleCreate}
+          >
+            New Credential
+          </Button>
+        </Stack>
+      </Box>
+
       <Paper
         sx={{
           m: 0,
@@ -327,46 +375,6 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
         }}
         elevation={0}
       >
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            px: 2,
-            pt: 1,
-            pb: 1,
-          }}
-        >
-          <Box sx={{ display: "flex", gap: 1 }}>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<RefreshIcon />}
-              sx={{
-                borderColor: "rgba(148,163,184,0.35)",
-                color: "#e2e8f0",
-                textTransform: "none",
-                borderRadius: 999,
-                px: 1.7,
-                minWidth: 86,
-                "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
-              }}
-              onClick={fetchCredentials}
-              disabled={loading}
-            >
-              Refresh
-            </Button>
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<AddIcon />}
-              sx={gradientButtonSx}
-              onClick={handleCreate}
-            >
-              New Credential
-            </Button>
-          </Box>
-        </Box>
         {loading && (
           <Box
             sx={{

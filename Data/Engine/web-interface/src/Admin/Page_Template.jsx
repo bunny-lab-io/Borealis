@@ -254,6 +254,46 @@ export default function PageTemplate({ onPageMetaChange }) {
     >
       <Box
         sx={{
+          position: "fixed",
+          top: { xs: 72, md: 88 },
+          right: { xs: 12, md: 20 },
+          zIndex: 1400,
+          pointerEvents: "none",
+        }}
+      >
+        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
+          <Tooltip title="New (example)">
+            <span>
+              <Button size="small" startIcon={<AddIcon />} sx={{ ...gradientButtonSx, minWidth: 120 }}>
+                New Item
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="Settings (example)">
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<TuneIcon />}
+                sx={{
+                  borderColor: "rgba(148,163,184,0.35)",
+                  color: "#e2e8f0",
+                  textTransform: "none",
+                  borderRadius: 999,
+                  px: 1.7,
+                  minWidth: 100,
+                  "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
+                }}
+              >
+                Settings
+              </Button>
+            </span>
+          </Tooltip>
+        </Stack>
+      </Box>
+
+      <Box
+        sx={{
           px: 2,
           display: "flex",
           alignItems: "center",
@@ -280,33 +320,6 @@ export default function PageTemplate({ onPageMetaChange }) {
           </Tooltip>
         </Box>
         <Stack direction="row" spacing={1}>
-          <Tooltip title="New (example)">
-            <span>
-              <Button size="small" startIcon={<AddIcon />} sx={gradientButtonSx}>
-                New Item
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip title="Settings (example)">
-            <span>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<TuneIcon />}
-                sx={{
-                  borderColor: "rgba(148,163,184,0.35)",
-                  color: "#e2e8f0",
-                  textTransform: "none",
-                  borderRadius: 999,
-                  px: 1.7, // ~5% wider than previous
-                  minWidth: 86,
-                  "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
-                }}
-              >
-                Settings
-              </Button>
-            </span>
-          </Tooltip>
         </Stack>
       </Box>
 

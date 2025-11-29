@@ -359,8 +359,32 @@ const defaultColDef = useMemo(
         flexDirection: "column",
       }}
     >
+      <Box
+        sx={{
+          position: "fixed",
+          top: { xs: 72, md: 88 },
+          right: { xs: 12, md: 20 },
+          zIndex: 1400,
+          pointerEvents: "none",
+        }}
+      >
+        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
+          <Button
+            variant="contained"
+            startIcon={<RefreshIcon />}
+            onClick={() => {
+              fetchLogs();
+              if (selectedFile) fetchEntries(selectedFile);
+            }}
+            sx={{ ...gradientButtonSx, minWidth: 112 }}
+          >
+            Refresh
+          </Button>
+        </Stack>
+      </Box>
+
       {!useGlobalHeader && (
-        <Box sx={{ px: 3, pt: 3, pb: 1, borderBottom: `1px solid ${AURORA_SHELL.border}` }}>
+        <Box sx={{ px: 3, pt: 3, pb: 1 }}>
           <Stack direction="row" spacing={1.25} alignItems="center">
             <LogsIcon sx={{ fontSize: 22, color: AURORA_SHELL.accent, mt: 0.25 }} />
             <Typography
@@ -373,39 +397,10 @@ const defaultColDef = useMemo(
             >
               Log Management
             </Typography>
-            <Box sx={{ flexGrow: 1 }} />
-            <Stack direction="row" spacing={1}>
-              <Button
-                variant="contained"
-                startIcon={<RefreshIcon />}
-                onClick={() => {
-                  fetchLogs();
-                  if (selectedFile) fetchEntries(selectedFile);
-                }}
-                sx={gradientButtonSx}
-              >
-                Refresh
-              </Button>
-            </Stack>
           </Stack>
           <Typography variant="body2" sx={{ color: AURORA_SHELL.muted, mt: 0.75, mb: 2.5 }}>
             Analyze engine logs and adjust log retention periods for different engine services.
           </Typography>
-        </Box>
-      )}
-      {useGlobalHeader && (
-        <Box sx={{ px: 3, pt: 2, pb: 1, display: "flex", justifyContent: "flex-end" }}>
-          <Button
-            variant="contained"
-            startIcon={<RefreshIcon />}
-            onClick={() => {
-              fetchLogs();
-              if (selectedFile) fetchEntries(selectedFile);
-            }}
-            sx={gradientButtonSx}
-          >
-            Refresh
-          </Button>
         </Box>
       )}
 
@@ -425,8 +420,8 @@ const defaultColDef = useMemo(
           sx={{
             width: 360,
             p: 3,
-            borderRight: `1px solid ${AURORA_SHELL.border}`,
-            bgcolor: "rgba(3,7,18,0.7)",
+            borderRight: "none",
+            bgcolor: "transparent",
             display: "flex",
             flexDirection: "column",
             gap: 2,
@@ -646,9 +641,32 @@ const defaultColDef = useMemo(
               value={gridMode}
               onChange={(_, val) => val && setGridMode(val)}
               sx={{
-                backgroundColor: "rgba(0,0,0,0.25)",
-                borderRadius: 999,
-                p: 0.2,
+                background: "rgba(9,14,25,0.9)",
+                borderRadius: 1,
+                border: `1px solid ${AURORA_SHELL.border}`,
+                boxShadow: "0 14px 32px rgba(2,6,23,0.55)",
+                overflow: "hidden",
+                "& .MuiToggleButton-root": {
+                  textTransform: "none",
+                  color: "#dce7f5",
+                  border: "none",
+                  px: 2.8,
+                  py: 1,
+                  fontWeight: 700,
+                  fontSize: 13,
+                  letterSpacing: 0.1,
+                  transition: "all 0.18s ease",
+                  backgroundColor: "#0f1627",
+                  "&:hover": { backgroundColor: "rgba(148,163,184,0.14)" },
+                  "&.Mui-selected": {
+                    color: "#0c1224",
+                    backgroundImage: "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)",
+                    boxShadow: "0 10px 24px rgba(124,58,237,0.4)",
+                  },
+                  "&.Mui-selected:hover": {
+                    backgroundImage: "linear-gradient(135deg,#8bd8ff 0%,#c0a8ff 100%)",
+                  },
+                },
               }}
             >
               <ToggleButton value="structured" sx={{ color: AURORA_SHELL.text, textTransform: "none" }}>
@@ -702,8 +720,8 @@ const defaultColDef = useMemo(
                 flexGrow: 1,
                 minHeight: 0,
                 borderRadius: 2,
-                border: `1px solid ${AURORA_SHELL.border}`,
-                bgcolor: "rgba(5,7,15,0.85)",
+                border: "none",
+                bgcolor: "transparent",
                 overflow: "hidden",
               }}
             >

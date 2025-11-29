@@ -22,8 +22,7 @@ import {
 import {
   Schedule as HeaderIcon,
   Cached as CachedIcon,
-  Add as AddIcon,
-  Tune as TuneIcon
+  Add as AddIcon
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
@@ -746,45 +745,36 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       }}
       elevation={0}
     >
-      <Box sx={{ px: 3, pt: 3, pb: 1, display: "flex", justifyContent: "flex-end", gap: 1.5 }}>
-        <Tooltip title="Refresh">
-          <span>
-            <IconButton
-              size="small"
-              onClick={handleRefreshClick}
-              sx={{ color: "#cbd5e1", borderRadius: 1, "&:hover": { color: "#ffffff" } }}
-            >
-              <CachedIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Tooltip title="Create Job">
-          <span>
-            <Button size="small" startIcon={<AddIcon />} sx={gradientButtonSx} onClick={() => onCreateJob && onCreateJob()}>
-              Create Job
-            </Button>
-          </span>
-        </Tooltip>
-        <Tooltip title="Settings">
-          <span>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<TuneIcon />}
-              sx={{
-                borderColor: "rgba(148,163,184,0.35)",
-                color: "#e2e8f0",
-                textTransform: "none",
-                borderRadius: 999,
-                px: 1.7,
-                minWidth: 86,
-                "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
-              }}
-            >
-              Settings
-            </Button>
-          </span>
-        </Tooltip>
+      {/* Page-level action buttons (floating top-right) */}
+      <Box
+        sx={{
+          position: "fixed",
+          top: { xs: 72, md: 88 },
+          right: { xs: 12, md: 20 },
+          zIndex: 1400,
+          pointerEvents: "none",
+        }}
+      >
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ pointerEvents: "auto" }}>
+          <Tooltip title="Refresh">
+            <span>
+              <IconButton
+                size="small"
+                onClick={handleRefreshClick}
+                sx={{ color: "#cbd5e1", borderRadius: 1, "&:hover": { color: "#ffffff" } }}
+              >
+                <CachedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Create Job">
+            <span>
+              <Button size="small" startIcon={<AddIcon />} sx={gradientButtonSx} onClick={() => onCreateJob && onCreateJob()}>
+                Create Job
+              </Button>
+            </span>
+          </Tooltip>
+        </Stack>
       </Box>
 
       <Box sx={{ mt: 2, px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
