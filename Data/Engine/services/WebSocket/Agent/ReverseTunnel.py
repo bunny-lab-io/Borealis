@@ -29,6 +29,8 @@ from typing import Callable, Deque, Dict, Iterable, List, Optional, Tuple
 from collections import deque
 from threading import Thread
 
+from .ReverseTunnel.Powershell import PowershellChannelServer
+
 try:  # websockets is added to engine requirements
     import websockets
     from websockets.server import serve as ws_serve
@@ -447,6 +449,7 @@ class ReverseTunnelService:
         self._bridges: Dict[str, "TunnelBridge"] = {}
         self._port_servers: Dict[int, asyncio.AbstractServer] = {}
         self._agent_sockets: Dict[str, "websockets.WebSocketServerProtocol"] = {}
+        self._ps_servers: Dict[str, PowershellChannelServer] = {}
 
     def _ensure_loop(self) -> None:
         if self._running and self._loop:
@@ -548,6 +551,13 @@ class ReverseTunnelService:
             raise ValueError("unknown_tunnel")
         bridge = self.ensure_bridge(lease)
         bridge.attach_operator(operator_id)
+        if lease.domain.lower() == "ps":
+            try:
+                server = self.ensure_ps_server(tunnel_id)
+                if server:
+                    server.open_channel()
+            except Exception:
+                self.logger.debug("ps server open failed tunnel_id=%s", tunnel_id, exc_info=True)
         return bridge
 
     def _encode_token(self, payload: Dict[str, object]) -> str:
@@ -841,6 +851,15 @@ class ReverseTunnelService:
                 except Exception:
                     pass
 
+    def _dispatch_agent_frame(self, tunnel_id: str, frame: TunnelFrame) -> None:
+        server = self._ps_servers.get(tunnel_id)
+        if not server:
+            return
+        try:
+            server.handle_agent_frame(frame)
+        except Exception:
+            self.logger.debug("ps handler error for tunnel_id=%s", tunnel_id, exc_info=True)
+
     def _start_lease_sweeper(self) -> None:
         async def _sweeper():
             while self._running and self._loop and not self._loop.is_closed():
@@ -928,6 +947,10 @@ class ReverseTunnelService:
                     except Exception:
                         continue
                     self.lease_manager.touch(tunnel_id)
+                    try:
+                        self._dispatch_agent_frame(tunnel_id, recv_frame)
+                    except Exception:
+                        pass
                     bridge.agent_to_operator(recv_frame)
             async def _pump_to_agent():
                 while not websocket.closed:
@@ -969,10 +992,30 @@ class ReverseTunnelService:
             self._bridges[lease.tunnel_id] = bridge
         return bridge
 
+    def ensure_ps_server(self, tunnel_id: str) -> Optional[PowershellChannelServer]:
+        server = self._ps_servers.get(tunnel_id)
+        if server:
+            return server
+        lease = self.lease_manager.get(tunnel_id)
+        if lease is None or (lease.domain or "").lower() != "ps":
+            return None
+        bridge = self.ensure_bridge(lease)
+        server = PowershellChannelServer(bridge=bridge, service=self)
+        self._ps_servers[tunnel_id] = server
+        return server
+
+    def get_ps_server(self, tunnel_id: str) -> Optional[PowershellChannelServer]:
+        return self._ps_servers.get(tunnel_id)
+
     def release_bridge(self, tunnel_id: str, *, reason: str = "bridge_released") -> None:
         bridge = self._bridges.pop(tunnel_id, None)
         if bridge:
             bridge.stop(reason=reason)
+        if tunnel_id in self._ps_servers:
+            try:
+                self._ps_servers.pop(tunnel_id, None)
+            except Exception:
+                pass
 
 
 class TunnelBridge:

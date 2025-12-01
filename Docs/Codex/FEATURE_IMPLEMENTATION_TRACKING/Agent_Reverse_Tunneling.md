@@ -206,17 +206,17 @@ Read `Docs/Codex/FEATURE_IMPLEMENTATION_TRACKING/Agent_Reverse_Tunneling.md` and
   - [x] Implement channel framing, flow control, heartbeats, close semantics.
   - [x] Logging: `Engine/Logs/reverse_tunnel.log`; audit into Device Activity (session start/stop, operator id, agent id, tunnel_id, port).
   - [x] WebUI operator bridge endpoint (WebSocket) that maps browser sessions to agent channels.
-  - [x] Idle/grace sweeper + heartbeat wiring for tunnel sockets.
-  - [x] TLS-aware per-port listener and agent CONNECT_ACK handling.
-- [ ] Agent tunnel role
-  - [ ] Add `Data/Agent/Roles/role_ReverseTunnel.py` (manages tunnel socket, reconnect, heartbeats, channel dispatch).
-  - [ ] Per-protocol submodules under `Data/Agent/Roles/ReverseTunnel/` (first: `tunnel_Powershell.py`).
-  - [ ] Enforce per-domain concurrency (one PowerShell; prevent multiple RDP/VNC/WebRTC; allow extensible policies).
-  - [ ] Logging: `Agent/Logs/reverse_tunnel.log`; include tunnel_id/channel_id.
-  - [ ] Integrate token validation, TLS reuse, idle teardown, and graceful stop_all.
+- [x] Idle/grace sweeper + heartbeat wiring for tunnel sockets.
+- [x] TLS-aware per-port listener and agent CONNECT_ACK handling.
+- [x] Agent tunnel role
+  - [x] Add `Data/Agent/Roles/role_ReverseTunnel.py` (manages tunnel socket, reconnect, heartbeats, channel dispatch).
+  - [x] Per-protocol submodules under `Data/Agent/Roles/ReverseTunnel/` (first: `tunnel_Powershell.py`).
+  - [x] Enforce per-domain concurrency (one PowerShell; prevent multiple RDP/VNC/WebRTC; allow extensible policies).
+  - [x] Logging: `Agent/Logs/reverse_tunnel.log`; include tunnel_id/channel_id.
+  - [x] Integrate token validation, TLS reuse, idle teardown, and graceful stop_all.
 - [ ] PowerShell v1 (feature target)
-  - [ ] Engine side `Data/Engine/services/WebSocket/Agent/ReverseTunnel/Powershell.py` (channel server, resize handling, translate browser events).
-  - [ ] Agent side `Data/Agent/Roles/ReverseTunnel/tunnel_Powershell.py` using ConPTY/pywinpty; map stdin/stdout to frames; handle resize and exit codes.
+  - [x] Engine side `Data/Engine/services/WebSocket/Agent/ReverseTunnel/Powershell.py` (channel server, resize handling, translate browser events).
+  - [x] Agent side `Data/Agent/Roles/ReverseTunnel/tunnel_Powershell.py` using ConPTY/pywinpty; map stdin/stdout to frames; handle resize and exit codes.
   - [ ] WebUI: `Data/Engine/web-interface/src/ReverseTunnel/Powershell.jsx` with terminal UI, syntax highlighting matching `Assemblies/Assembly_Editor.jsx`, copy support, status toasts.
   - [ ] Device Activity entries and UI surface in `Devices/Device_List.jsx` Device Activity tab.
 - [ ] Credits & attribution
@@ -244,6 +244,8 @@ Read `Docs/Codex/FEATURE_IMPLEMENTATION_TRACKING/Agent_Reverse_Tunneling.md` and
 - 2025-11-30: Added WebUI-facing Socket.IO namespace `/tunnel` with join/send/poll events that map browser sessions to tunnel bridges, using base64-encoded frames and operator auth from session/cookies.
 - 2025-11-30: Enabled async WebSocket listener per assigned port (TLS-aware via Engine certs) for agent CONNECT frames, with frame routing between agent socket and browser bridge queues; Engine tunnel service checklist marked complete.
 - 2025-11-30: Added idle/grace sweeper, CONNECT_ACK to agents, heartbeat loop, and token-touched operator sends; per-port listener now runs on dedicated loop/thread. (Original instructions didn’t call out sweeper/heartbeat wiring explicitly.)
+- 2025-12-01: Added Agent reverse tunnel role (`Data/Agent/Roles/role_ReverseTunnel.py`) with TLS-aware WebSocket dialer, token validation against signed leases, domain-limit guard, heartbeat/idle watchdogs, and reverse_tunnel.log status emits; protocol handlers remain stubbed until PowerShell module lands.
+- 2025-12-01: Implemented Agent PowerShell channel (pywinpty ConPTY stdin/stdout piping, resize, exit-close) and Engine PowerShell handler with Socket.IO helpers (`ps_open`/`ps_send`/`ps_resize`/`ps_poll`); added ps channel logging and domain-aware attach. WebUI remains pending.
 
 ## Engine Tunnel Service Architecture
 
@@ -288,7 +290,7 @@ sequenceDiagram
 ```
 
 ## Future Changes in Generation 2
-These items are out of scope for the current milestone but should be considered for a production-ready generation after minimum functionality is achieved in the early stages of development.
+These items are out of scope for the current milestone but should be considered for a production-ready generation after minimum functionality is achieved in the early stages of development.  This section is a place to note things that were not implemented in Generation 1, but should be added in future iterations of the Reverse Tunneling system.
 
 - Harden operator auth/authorization: enforce per-operator session binding, ownership checks, audited attach/detach, and offer a pure WebSocket `/ws/tunnel/<tunnel_id>` bridge.
 - Replace Socket.IO browser bridge with a dedicated binary WebSocket bridge for higher throughput and simpler framing.

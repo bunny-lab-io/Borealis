@@ -401,6 +401,91 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
             frames.append(_encode_frame(frame))
         return {"frames": frames}
 
+    def _require_ps_server():
+        sid = request.sid
+        tunnel_id = _operator_sessions.get(sid)
+        if not tunnel_id:
+            return None, None, {"error": "not_joined"}
+        server = tunnel_service.ensure_ps_server(tunnel_id)
+        if server is None:
+            return None, tunnel_id, {"error": "ps_unsupported"}
+        return server, tunnel_id, None
+
+    @socket_server.on("ps_open", namespace=tunnel_namespace)
+    def _ws_ps_open(data: Any) -> Any:
+        server, tunnel_id, error = _require_ps_server()
+        if server is None:
+            return error
+        cols = 120
+        rows = 32
+        if isinstance(data, dict):
+            try:
+                cols = int(data.get("cols", cols))
+                rows = int(data.get("rows", rows))
+            except Exception:
+                pass
+        cols = max(20, min(cols, 300))
+        rows = max(10, min(rows, 200))
+        try:
+            server.open_channel(cols=cols, rows=rows)
+        except Exception as exc:
+            logger.debug("ps_open failed tunnel_id=%s: %s", tunnel_id, exc, exc_info=True)
+            return {"error": "ps_open_failed"}
+        return {"status": "ok", "tunnel_id": tunnel_id, "cols": cols, "rows": rows}
+
+    @socket_server.on("ps_send", namespace=tunnel_namespace)
+    def _ws_ps_send(data: Any) -> Any:
+        server, tunnel_id, error = _require_ps_server()
+        if server is None:
+            return error
+        if data is None:
+            return {"error": "payload_required"}
+        text = data
+        if isinstance(data, dict):
+            text = data.get("data")
+        if text is None:
+            return {"error": "payload_required"}
+        try:
+            server.send_input(str(text))
+        except Exception as exc:
+            logger.debug("ps_send failed tunnel_id=%s: %s", tunnel_id, exc, exc_info=True)
+            return {"error": "ps_send_failed"}
+        return {"status": "ok"}
+
+    @socket_server.on("ps_resize", namespace=tunnel_namespace)
+    def _ws_ps_resize(data: Any) -> Any:
+        server, tunnel_id, error = _require_ps_server()
+        if server is None:
+            return error
+        cols = None
+        rows = None
+        if isinstance(data, dict):
+            cols = data.get("cols")
+            rows = data.get("rows")
+        try:
+            cols_int = int(cols) if cols is not None else 120
+            rows_int = int(rows) if rows is not None else 32
+            cols_int = max(20, min(cols_int, 300))
+            rows_int = max(10, min(rows_int, 200))
+            server.send_resize(cols_int, rows_int)
+            return {"status": "ok", "cols": cols_int, "rows": rows_int}
+        except Exception as exc:
+            logger.debug("ps_resize failed tunnel_id=%s: %s", tunnel_id, exc, exc_info=True)
+            return {"error": "ps_resize_failed"}
+
+    @socket_server.on("ps_poll", namespace=tunnel_namespace)
+    def _ws_ps_poll() -> Any:
+        server, tunnel_id, error = _require_ps_server()
+        if server is None:
+            return error
+        try:
+            output = server.drain_output()
+            status = server.status()
+            return {"output": output, "status": status}
+        except Exception as exc:
+            logger.debug("ps_poll failed tunnel_id=%s: %s", tunnel_id, exc, exc_info=True)
+            return {"error": "ps_poll_failed"}
+
     @socket_server.on("disconnect", namespace=tunnel_namespace)
     def _ws_tunnel_disconnect():
         sid = request.sid
