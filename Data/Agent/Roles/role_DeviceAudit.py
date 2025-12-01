@@ -976,9 +976,9 @@ class Role:
             try:
                 # Determine audit refresh interval (minutes), default 30
                 try:
-                    refresh_min = int(self.ctx.config.data.get('audit_interval_minutes', 30))
+                    refresh_min = int(self.ctx.config.data.get('audit_interval_minutes', 5))
                 except Exception:
-                    refresh_min = 30
+                    refresh_min = 5
                 refresh_sec = max(300, refresh_min * 60)
 
                 now = time.time()
