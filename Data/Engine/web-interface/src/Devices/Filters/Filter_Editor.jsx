@@ -759,6 +759,9 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
         headerCheckboxSelection: true,
         pinned: "left",
         suppressMenu: true,
+        suppressHeaderMenuButton: true,
+        menuTabs: [],
+        filter: false,
         sortable: false,
         resizable: false,
         lockPosition: true,
@@ -1263,23 +1266,26 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
               }}
             >
               <ToggleButton value="global">Global</ToggleButton>
-              <ToggleButton value="site">Site</ToggleButton>
+              <ToggleButton value="site">Site(s)</ToggleButton>
             </ToggleButtonGroup>
-
+<br></br>
             {scope === "site" && (
-              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25 }}>
-                <Typography sx={{ fontWeight: 600 }}>Select sites to target</Typography>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25, flex: 1, minHeight: 0, pb: 2 }}>
+                <Typography sx={{ fontWeight: 600 }}>Select Sites</Typography>
                 <Typography sx={{ color: AURORA_SHELL.subtext, fontSize: "0.95rem" }}>
-                  Use the grid to pick one or more sites. Filters scoped to sites will only apply to the selected rows.
+                  Use the table below to choose which site(s) you want to search for devices within.
                 </Typography>
                 <Box
                   className={gridTheme.themeName}
                   sx={{
                     ...GRID_STYLE_BASE,
                     flex: 1,
-                    minHeight: 0,
-                    height: { xs: 320, md: 360 },
+                    minHeight: 420,
+                    height: "calc(100vh - 360px)",
+                    maxHeight: "calc(100vh - 240px)",
+                    width: "100%",
                     maxWidth: 760,
+                    "& .ag-root-wrapper": { borderRadius: "8px", overflow: "hidden" },
                   }}
                   style={{
                     "--ag-icon-font-family": iconFontFamily,
