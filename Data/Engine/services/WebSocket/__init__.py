@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from flask_socketio import SocketIO
 from flask import session, request
+from flask_socketio import SocketIO
 
 from ...database import initialise_engine_database
 from ...server import EngineContext
@@ -26,7 +26,6 @@ from .Agent.ReverseTunnel import (
     decode_frame,
     TunnelFrame,
 )
-from ..API import _make_db_conn_factory, _make_service_logger
 
 
 def _now_ts() -> int:
@@ -51,6 +50,8 @@ class EngineRealtimeAdapters:
     service_log: Callable[[str, str, Optional[str]], None] = field(init=False)
 
     def __post_init__(self) -> None:
+        from ..API import _make_db_conn_factory, _make_service_logger  # Local import to avoid circular import at module load
+
         initialise_engine_database(self.context.database_path, logger=self.context.logger)
         self.db_conn_factory = _make_db_conn_factory(self.context.database_path)
 
@@ -68,6 +69,8 @@ class EngineRealtimeAdapters:
 
 def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     """Register Socket.IO event handlers for the Engine runtime."""
+
+    from ..API import _make_db_conn_factory, _make_service_logger  # Local import to avoid circular import at module load
 
     adapters = EngineRealtimeAdapters(context)
     logger = context.logger.getChild("realtime.quick_jobs")
