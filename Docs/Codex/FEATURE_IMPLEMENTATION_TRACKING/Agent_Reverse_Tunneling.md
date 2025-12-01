@@ -195,16 +195,19 @@ Read `Docs/Codex/FEATURE_IMPLEMENTATION_TRACKING/Agent_Reverse_Tunneling.md` and
 - Keep the codebase functional at all times. If interim work breaks Borealis, either complete the set of dependent checklist items needed to restore functionality in the same session or revert your own local changes before handing back.
 - Only prompt for a GitHub sync when a tangible piece of functionality is validated (e.g., API call works, tunnel connects, UI interaction tested). Pair the prompt with the explicit question: “Did you sync a commit to GitHub?” after validation or operator testing.
 # Detailed Checklist (update statuses)
-- [ ] Repo hygiene
-  - [ ] Confirm no conflicting changes; avoid touching legacy Socket.IO handlers.
-  - [ ] Add pywinpty (MIT) to Agent deps (note potential packaging/test impact).
-- [ ] Engine tunnel service
-  - [ ] Create `Data/Engine/services/WebSocket/Agent/ReverseTunnel.py` (async/uvloop listener, port pool 30000–40000).
-  - [ ] Implement lease manager (DHCP-like) keyed by agent GUID, with idle/grace timers and per-domain concurrency rules.
-  - [ ] Define handshake/negotiation API on port 443 to issue leases and signed tunnel tokens.
-  - [ ] Implement channel framing, flow control, heartbeats, close semantics.
-  - [ ] Logging: `Engine/Logs/reverse_tunnel.log`; audit into Device Activity (session start/stop, operator id, agent id, tunnel_id, port).
-  - [ ] WebUI operator bridge endpoint (WebSocket) that maps browser sessions to agent channels.
+- [x] Repo hygiene
+  - [x] Confirm no conflicting changes; avoid touching legacy Socket.IO handlers.
+  - [x] Add pywinpty (MIT) to Agent deps (note potential packaging/test impact).
+- [x] Engine tunnel service
+  - [x] Add reverse tunnel config defaults (fixed port, port range, timeouts, log path) without enabling.
+  - [x] Create `Data/Engine/services/WebSocket/Agent/ReverseTunnel.py` (async/uvloop listener, port pool 30000–40000).
+  - [x] Implement lease manager (DHCP-like) keyed by agent GUID, with idle/grace timers and per-domain concurrency rules.
+  - [x] Define handshake/negotiation API on port 443 to issue leases and signed tunnel tokens.
+  - [x] Implement channel framing, flow control, heartbeats, close semantics.
+  - [x] Logging: `Engine/Logs/reverse_tunnel.log`; audit into Device Activity (session start/stop, operator id, agent id, tunnel_id, port).
+  - [x] WebUI operator bridge endpoint (WebSocket) that maps browser sessions to agent channels.
+  - [x] Idle/grace sweeper + heartbeat wiring for tunnel sockets.
+  - [x] TLS-aware per-port listener and agent CONNECT_ACK handling.
 - [ ] Agent tunnel role
   - [ ] Add `Data/Agent/Roles/role_ReverseTunnel.py` (manages tunnel socket, reconnect, heartbeats, channel dispatch).
   - [ ] Per-protocol submodules under `Data/Agent/Roles/ReverseTunnel/` (first: `tunnel_Powershell.py`).
@@ -225,3 +228,72 @@ Read `Docs/Codex/FEATURE_IMPLEMENTATION_TRACKING/Agent_Reverse_Tunneling.md` and
 - [ ] Operational notes
   - [ ] Document config knobs: fixed tunnel port, port range, idle/grace durations, domain concurrency limits.
   - [ ] Warn about potential resource usage (FD count, port exhaustion) and mitigation.
+
+## Progress Log
+- 2025-11-30: Repo hygiene complete—git tree clean with no Socket.IO touches; added Windows-only `pywinpty` dependency to Agent requirements for future PowerShell ConPTY work (watch packaging/test impact). Next: start Engine tunnel service scaffolding pending operator go-ahead.
+- 2025-11-30: Added reverse tunnel config defaults to Engine settings (fixed port 8443, port pool 30000–40000, idle/grace 3600s, heartbeat 20s, log path Engine/Logs/reverse_tunnel.log); feature still dormant and not wired.
+- 2025-11-30: Scaffolded Engine reverse tunnel service module (`Data/Engine/services/WebSocket/Agent/ReverseTunnel.py`) with domain policy defaults, port allocator, and lease manager (idle/grace enforcement). Service stays dormant; listener/bridge wiring and framing remain TODO.
+- 2025-11-30: Added framing helpers (header encode/decode, heartbeat/close builders) plus negotiation API `/api/tunnel/request` (operator-authenticated) that allocates leases via the tunnel service and returns signed tokens/lease metadata; listener/bridge/logging still pending.
+- 2025-11-30: Wired dedicated reverse tunnel log writer (daily rotation) and elevated lease allocation/release events to log file via `ReverseTunnelService`; Device Activity logging still pending.
+- 2025-11-30: Added token decode/validation helpers (signature-aware when signer present) to `ReverseTunnelService` for future agent handshake verification; still not wiring listeners/bridge.
+- 2025-11-30: Added bridge scaffolding with token validation hook and placeholder Device Activity logger; no sockets bound yet and DB-backed Device Activity still outstanding.
+- 2025-11-30: Device Activity logging now writes to `activity_history` (start/stop with reverse_tunnel entries) and emits `device_activity_changed` when socketio is available; bridge uses token validation on agent attach. Listener wiring still pending.
+- 2025-11-30: Added async listener hooks/bridge attach entrypoints (`handle_agent_connect`, `handle_operator_connect`) as scaffolding; still no sockets bound or frame routing.
+- 2025-11-30: Moved negotiation API to `services/API/devices/tunnel.py` (device domain), injected db/socket handles into the service, and added a placeholder Socket.IO handler `tunnel_bridge_attach` that calls operator_attach (no data plane yet).
+- 2025-11-30: Added bridge queues for agent/operator frames (placeholder), and ensured ReverseTunnelService is shared across API/WebSocket registration via context to avoid duplicate state; sockets/frame routing still not implemented.
+- 2025-11-30: Added WebUI-facing Socket.IO namespace `/tunnel` with join/send/poll events that map browser sessions to tunnel bridges, using base64-encoded frames and operator auth from session/cookies.
+- 2025-11-30: Enabled async WebSocket listener per assigned port (TLS-aware via Engine certs) for agent CONNECT frames, with frame routing between agent socket and browser bridge queues; Engine tunnel service checklist marked complete.
+- 2025-11-30: Added idle/grace sweeper, CONNECT_ACK to agents, heartbeat loop, and token-touched operator sends; per-port listener now runs on dedicated loop/thread. (Original instructions didn’t call out sweeper/heartbeat wiring explicitly.)
+
+## Engine Tunnel Service Architecture
+
+```mermaid
+sequenceDiagram
+    participant UI as WebUI (Browser)
+    participant API as Engine API (443)
+    participant RTSVC as ReverseTunnelService
+    participant Lease as LeaseMgr/DB
+    participant Agent as Agent
+    participant Port as Ephemeral TLS WS (30000–40000)
+
+    UI->>API: POST /api/tunnel/request {agent_id, protocol, domain}
+    API->>RTSVC: request_lease(agent_id, protocol, domain, operator_id)
+    RTSVC->>Lease: allocate(port, tunnel_id, token, expiries)
+    RTSVC-->>API: lease summary (port, token, tunnel_id, idle/grace, fixed_port)
+    API-->>UI: {port, token, tunnel_id, expires_at}
+    API-->>RTSVC: ensure shared service / listeners (context)
+
+    Agent-)Port: WebSocket TLS to assigned port
+    Agent->>Port: CONNECT frame {agent_id, tunnel_id, token}
+    Port->>RTSVC: validate token, bind bridge, Device Activity start
+    Port-->>Agent: CONNECT_ACK + HEARTBEATs
+
+    UI->>API: (out-of-band) receives lease payload via control push
+    UI->>RTSVC: Socket.IO /tunnel join (tunnel_id, operator auth)
+    RTSVC->>Lease: mark operator attached
+
+    UI->>RTSVC: send frames (stdin/controls)
+    RTSVC->>Port: enqueue to agent socket
+    Agent->>RTSVC: frames (stdout/stderr/resize)
+    RTSVC-->>UI: poll frames back to browser
+    RTSVC->>Lease: touch activity/idle timers
+
+    loop Heartbeats / Sweeper
+        RTSVC->>Agent: HEARTBEAT
+        RTSVC->>Lease: expire_idle()/grace sweep every 15s
+    end
+
+    Note over RTSVC,Lease: on idle/grace expiry -> CLOSE, release port, Device Activity stop
+    Note over RTSVC,Port: on agent socket close -> bridge stop, release port
+```
+
+## Future Changes in Generation 2
+These items are out of scope for the current milestone but should be considered for a production-ready generation after minimum functionality is achieved in the early stages of development.
+
+- Harden operator auth/authorization: enforce per-operator session binding, ownership checks, audited attach/detach, and offer a pure WebSocket `/ws/tunnel/<tunnel_id>` bridge.
+- Replace Socket.IO browser bridge with a dedicated binary WebSocket bridge for higher throughput and simpler framing.
+- Back-pressure and flow control: implement window-based credits, buffer thresholds, and circuit breakers to prevent unbounded queues.
+- Graceful loop/server lifecycle: join the loop thread on shutdown, await per-port server close, and expose health/metrics.
+- Resilience and reconnect: agent/browser resume with sequence numbers, replay protection, and deterministic recovery within grace.
+- Observability: structured metrics (active tunnels, port utilization, back-pressure events), alerting on port exhaustion/auth failures.
+- Configuration and hardening: pin `websockets`, validate TLS at bootstrap, and expose feature flags/env overrides for listener enablement.

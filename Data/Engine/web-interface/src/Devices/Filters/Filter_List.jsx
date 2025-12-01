@@ -147,7 +147,13 @@ function normalizeFilters(raw) {
     id: f.id || f.filter_id || `filter-${idx}`,
     name: f.name || f.title || "Unnamed Filter",
     type: (f.site_scope || f.scope || f.type || "global") === "scoped" ? "site" : "global",
-    site: f.site || f.site_scope || f.site_name || f.target_site || null,
+    site: (() => {
+      if (Array.isArray(f.site_scope_values) && f.site_scope_values.length) return f.site_scope_values.join(", ");
+      if (Array.isArray(f.sites) && f.sites.length) return f.sites.join(", ");
+      if (Array.isArray(f.site_ids) && f.site_ids.length) return f.site_ids.join(", ");
+      if (Array.isArray(f.site_names) && f.site_names.length) return f.site_names.join(", ");
+      return f.site || f.site_scope || f.site_name || f.target_site || null;
+    })(),
     lastEditedBy: resolveLastEditor(f),
     lastEdited: f.last_edited || f.updated_at || f.updated || f.created_at || null,
     deviceCount:

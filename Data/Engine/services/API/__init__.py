@@ -32,6 +32,7 @@ from ...integrations import GitHubIntegration
 from ..auth import DevModeManager
 from .enrollment import routes as enrollment_routes
 from .tokens import routes as token_routes
+from .devices.tunnel import register_tunnel
 
 from ...server import EngineContext
 from .access_management.login import register_auth
@@ -285,6 +286,7 @@ def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
     register_management(app, adapters)
     register_admin_endpoints(app, adapters)
     device_routes.register_agents(app, adapters)
+    register_tunnel(app, adapters)
 
 def _register_filters(app: Flask, adapters: EngineServiceAdapters) -> None:
     filters_management.register_filters(app, adapters)

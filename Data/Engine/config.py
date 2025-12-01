@@ -77,6 +77,13 @@ LOG_ROOT = PROJECT_ROOT / "Engine" / "Logs"
 LOG_FILE_PATH = LOG_ROOT / "engine.log"
 ERROR_LOG_FILE_PATH = LOG_ROOT / "error.log"
 API_LOG_FILE_PATH = LOG_ROOT / "api.log"
+REVERSE_TUNNEL_LOG_FILE_PATH = LOG_ROOT / "reverse_tunnel.log"
+
+DEFAULT_TUNNEL_FIXED_PORT = 8443
+DEFAULT_TUNNEL_PORT_RANGE = (30000, 40000)
+DEFAULT_TUNNEL_IDLE_TIMEOUT_SECONDS = 3600
+DEFAULT_TUNNEL_GRACE_TIMEOUT_SECONDS = 3600
+DEFAULT_TUNNEL_HEARTBEAT_INTERVAL_SECONDS = 20
 
 
 def _ensure_parent(path: Path) -> None:
@@ -140,6 +147,71 @@ def _parse_bool(raw: Any, *, default: bool = False) -> bool:
     return default
 
 
+def _parse_int(
+    raw: Any,
+    *,
+    default: int,
+    minimum: Optional[int] = None,
+    maximum: Optional[int] = None,
+) -> int:
+    try:
+        value = int(raw)
+    except Exception:
+        return default
+    if minimum is not None and value < minimum:
+        return default
+    if maximum is not None and value > maximum:
+        return default
+    return value
+
+
+def _parse_port_range(
+    raw: Any,
+    *,
+    default: Tuple[int, int],
+) -> Tuple[int, int]:
+    if raw is None:
+        return default
+
+    start, end = default
+    candidate: Optional[Tuple[int, int]] = None
+
+    def _clamp_pair(values: Tuple[int, int]) -> Tuple[int, int]:
+        low, high = values
+        if low < 1 or high > 65535 or low > high:
+            return default
+        return low, high
+
+    if isinstance(raw, str):
+        separators = ("-", ":", ",")
+        for separator in separators:
+            if separator in raw:
+                parts = [part.strip() for part in raw.split(separator)]
+                break
+        else:
+            parts = [raw.strip()]
+        try:
+            if len(parts) == 2:
+                candidate = (int(parts[0]), int(parts[1]))
+            elif len(parts) == 1 and parts[0]:
+                port = int(parts[0])
+                candidate = (port, port)
+        except Exception:
+            candidate = None
+    elif isinstance(raw, Sequence):
+        try:
+            values = [int(part) for part in raw]
+        except Exception:
+            values = []
+        if len(values) >= 2:
+            candidate = (values[0], values[1])
+
+    if candidate is None:
+        return default
+
+    return _clamp_pair(candidate)
+
+
 def _discover_tls_material(config: Mapping[str, Any]) -> Sequence[Optional[str]]:
     cert_path = config.get("TLS_CERT_PATH") or os.environ.get("BOREALIS_TLS_CERT") or None
     key_path = config.get("TLS_KEY_PATH") or os.environ.get("BOREALIS_TLS_KEY") or None
@@ -183,6 +255,12 @@ class EngineSettings:
     error_log_file: str
     api_log_file: str
     api_groups: Tuple[str, ...]
+    reverse_tunnel_fixed_port: int
+    reverse_tunnel_port_range: Tuple[int, int]
+    reverse_tunnel_idle_timeout_seconds: int
+    reverse_tunnel_grace_timeout_seconds: int
+    reverse_tunnel_heartbeat_seconds: int
+    reverse_tunnel_log_file: str
     raw: MutableMapping[str, Any] = field(default_factory=dict)
 
     def to_flask_config(self) -> MutableMapping[str, Any]:
@@ -279,6 +357,11 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
     api_log_file = str(runtime_config.get("API_LOG_FILE") or API_LOG_FILE_PATH)
     _ensure_parent(Path(api_log_file))
 
+    reverse_tunnel_log_file = str(
+        runtime_config.get("REVERSE_TUNNEL_LOG_FILE") or REVERSE_TUNNEL_LOG_FILE_PATH
+    )
+    _ensure_parent(Path(reverse_tunnel_log_file))
+
     api_groups = _parse_api_groups(
         runtime_config.get("API_GROUPS") or os.environ.get("BOREALIS_API_GROUPS")
     )
@@ -293,6 +376,35 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
             "assemblies",
             "scheduled_jobs",
         )
+
+    tunnel_fixed_port = _parse_int(
+        runtime_config.get("TUNNEL_FIXED_PORT") or os.environ.get("BOREALIS_TUNNEL_FIXED_PORT"),
+        default=DEFAULT_TUNNEL_FIXED_PORT,
+        minimum=1,
+        maximum=65535,
+    )
+    tunnel_port_range = _parse_port_range(
+        runtime_config.get("TUNNEL_PORT_RANGE") or os.environ.get("BOREALIS_TUNNEL_PORT_RANGE"),
+        default=DEFAULT_TUNNEL_PORT_RANGE,
+    )
+    tunnel_idle_timeout_seconds = _parse_int(
+        runtime_config.get("TUNNEL_IDLE_TIMEOUT_SECONDS")
+        or os.environ.get("BOREALIS_TUNNEL_IDLE_TIMEOUT_SECONDS"),
+        default=DEFAULT_TUNNEL_IDLE_TIMEOUT_SECONDS,
+        minimum=60,
+    )
+    tunnel_grace_timeout_seconds = _parse_int(
+        runtime_config.get("TUNNEL_GRACE_TIMEOUT_SECONDS")
+        or os.environ.get("BOREALIS_TUNNEL_GRACE_TIMEOUT_SECONDS"),
+        default=DEFAULT_TUNNEL_GRACE_TIMEOUT_SECONDS,
+        minimum=60,
+    )
+    tunnel_heartbeat_seconds = _parse_int(
+        runtime_config.get("TUNNEL_HEARTBEAT_SECONDS")
+        or os.environ.get("BOREALIS_TUNNEL_HEARTBEAT_SECONDS"),
+        default=DEFAULT_TUNNEL_HEARTBEAT_INTERVAL_SECONDS,
+        minimum=5,
+    )
 
     settings = EngineSettings(
         database_path=database_path,
@@ -309,6 +421,12 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         error_log_file=str(error_log_file),
         api_log_file=str(api_log_file),
         api_groups=api_groups,
+        reverse_tunnel_fixed_port=tunnel_fixed_port,
+        reverse_tunnel_port_range=tunnel_port_range,
+        reverse_tunnel_idle_timeout_seconds=tunnel_idle_timeout_seconds,
+        reverse_tunnel_grace_timeout_seconds=tunnel_grace_timeout_seconds,
+        reverse_tunnel_heartbeat_seconds=tunnel_heartbeat_seconds,
+        reverse_tunnel_log_file=reverse_tunnel_log_file,
         raw=runtime_config,
     )
     return settings

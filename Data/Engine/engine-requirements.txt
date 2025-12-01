@@ -9,3 +9,4 @@ pyotp
 qrcode
 Pillow
 requests
+websockets

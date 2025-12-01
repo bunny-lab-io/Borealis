@@ -917,11 +917,14 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
       id: initialFilter?.id || initialFilter?.filter_id,
       name: name.trim() || "Unnamed Filter",
       site_scope: siteScope,
-      site_scope_value: primarySite,
       site_scope_values: scopedSites,
       sites: scopedSites,
+      site_ids: scopedSites,
       site_names: siteScope === "scoped" ? selectedSiteLabels : [],
-      site: siteScope === "scoped" ? primarySite : null,
+      site_scope_value: primarySite,
+      scope: siteScope,
+      type: siteScope,
+      site: primarySite,
       groups: groups.map((g, gIdx) => ({
         join_with: gIdx === 0 ? null : g.joinWith || "OR",
         conditions: (g.conditions || []).map((c, cIdx) => ({

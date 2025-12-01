@@ -8,6 +8,7 @@
 """WebSocket service registration for the Borealis Engine runtime."""
 from __future__ import annotations
 
+import base64
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -15,9 +16,16 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from flask_socketio import SocketIO
+from flask import session, request
 
 from ...database import initialise_engine_database
 from ...server import EngineContext
+from .Agent.ReverseTunnel import (
+    ReverseTunnelService,
+    TunnelBridge,
+    decode_frame,
+    TunnelFrame,
+)
 from ..API import _make_db_conn_factory, _make_service_logger
 
 
@@ -63,6 +71,16 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
 
     adapters = EngineRealtimeAdapters(context)
     logger = context.logger.getChild("realtime.quick_jobs")
+    tunnel_service = getattr(context, "reverse_tunnel_service", None)
+    if tunnel_service is None:
+        tunnel_service = ReverseTunnelService(
+            context,
+            signer=None,
+            db_conn_factory=adapters.db_conn_factory,
+            socketio=socket_server,
+        )
+        tunnel_service.start()
+        setattr(context, "reverse_tunnel_service", tunnel_service)
 
     @socket_server.on("quick_job_result")
     def _handle_quick_job_result(data: Any) -> None:
@@ -224,3 +242,163 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
                     job_id,
                     exc,
                 )
+
+    @socket_server.on("tunnel_bridge_attach")
+    def _tunnel_bridge_attach(data: Any) -> Any:
+        """Placeholder operator bridge attach handler (no data channel yet)."""
+
+        if not isinstance(data, dict):
+            return {"error": "invalid_payload"}
+
+        tunnel_id = str(data.get("tunnel_id") or "").strip()
+        operator_id = str(data.get("operator_id") or "").strip() or None
+        if not tunnel_id:
+            return {"error": "tunnel_id_required"}
+
+        try:
+            tunnel_service.operator_attach(tunnel_id, operator_id)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("tunnel_bridge_attach failed tunnel_id=%s: %s", tunnel_id, exc, exc_info=True)
+            return {"error": "bridge_attach_failed"}
+
+        return {"status": "ok", "tunnel_id": tunnel_id, "operator_id": operator_id or "-"}
+
+    def _encode_frame(frame: TunnelFrame) -> str:
+        return base64.b64encode(frame.encode()).decode("ascii")
+
+    def _decode_frame_payload(raw: Any) -> TunnelFrame:
+        if isinstance(raw, str):
+            try:
+                raw_bytes = base64.b64decode(raw)
+            except Exception:
+                raise ValueError("invalid_frame")
+        elif isinstance(raw, (bytes, bytearray)):
+            raw_bytes = bytes(raw)
+        else:
+            raise ValueError("invalid_frame")
+        return decode_frame(raw_bytes)
+
+    @socket_server.on("tunnel_operator_send")
+    def _tunnel_operator_send(data: Any) -> Any:
+        """Operator -> agent frame enqueue (placeholder queue)."""
+
+        if not isinstance(data, dict):
+            return {"error": "invalid_payload"}
+        tunnel_id = str(data.get("tunnel_id") or "").strip()
+        frame_raw = data.get("frame")
+        if not tunnel_id or frame_raw is None:
+            return {"error": "tunnel_id_and_frame_required"}
+        try:
+            frame = _decode_frame_payload(frame_raw)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+        bridge: Optional[TunnelBridge] = tunnel_service.get_bridge(tunnel_id)
+        if bridge is None:
+            return {"error": "unknown_tunnel"}
+        bridge.operator_to_agent(frame)
+        return {"status": "ok"}
+
+    @socket_server.on("tunnel_operator_poll")
+    def _tunnel_operator_poll(data: Any) -> Any:
+        """Operator polls queued frames from agent."""
+
+        tunnel_id = ""
+        if isinstance(data, dict):
+            tunnel_id = str(data.get("tunnel_id") or "").strip()
+        if not tunnel_id:
+            return {"error": "tunnel_id_required"}
+        bridge: Optional[TunnelBridge] = tunnel_service.get_bridge(tunnel_id)
+        if bridge is None:
+            return {"error": "unknown_tunnel"}
+
+        frames = []
+        while True:
+            frame = bridge.next_for_operator()
+            if frame is None:
+                break
+            frames.append(_encode_frame(frame))
+        return {"frames": frames}
+
+    # WebUI operator bridge namespace for browser clients
+    tunnel_namespace = "/tunnel"
+    _operator_sessions: Dict[str, str] = {}
+
+    def _current_operator() -> Optional[str]:
+        username = session.get("username")
+        if username:
+            return str(username)
+        auth_header = (request.headers.get("Authorization") or "").strip()
+        token = None
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+        if not token:
+            token = request.cookies.get("borealis_auth")
+        return token or None
+
+    @socket_server.on("join", namespace=tunnel_namespace)
+    def _ws_tunnel_join(data: Any) -> Any:
+        if not isinstance(data, dict):
+            return {"error": "invalid_payload"}
+        operator_id = _current_operator()
+        if not operator_id:
+            return {"error": "unauthorized"}
+        tunnel_id = str(data.get("tunnel_id") or "").strip()
+        if not tunnel_id:
+            return {"error": "tunnel_id_required"}
+        bridge = tunnel_service.get_bridge(tunnel_id)
+        if bridge is None:
+            return {"error": "unknown_tunnel"}
+        try:
+            tunnel_service.operator_attach(tunnel_id, operator_id)
+        except Exception as exc:
+            logger.debug("ws_tunnel_join failed tunnel_id=%s: %s", tunnel_id, exc, exc_info=True)
+            return {"error": "attach_failed"}
+        sid = request.sid
+        _operator_sessions[sid] = tunnel_id
+        return {"status": "ok", "tunnel_id": tunnel_id}
+
+    @socket_server.on("send", namespace=tunnel_namespace)
+    def _ws_tunnel_send(data: Any) -> Any:
+        sid = request.sid
+        tunnel_id = _operator_sessions.get(sid)
+        if not tunnel_id:
+            return {"error": "not_joined"}
+        if not isinstance(data, dict):
+            return {"error": "invalid_payload"}
+        frame_raw = data.get("frame")
+        if frame_raw is None:
+            return {"error": "frame_required"}
+        try:
+            frame = _decode_frame_payload(frame_raw)
+        except Exception:
+            return {"error": "invalid_frame"}
+        bridge = tunnel_service.get_bridge(tunnel_id)
+        if bridge is None:
+            return {"error": "unknown_tunnel"}
+        bridge.operator_to_agent(frame)
+        return {"status": "ok"}
+
+    @socket_server.on("poll", namespace=tunnel_namespace)
+    def _ws_tunnel_poll() -> Any:
+        sid = request.sid
+        tunnel_id = _operator_sessions.get(sid)
+        if not tunnel_id:
+            return {"error": "not_joined"}
+        bridge = tunnel_service.get_bridge(tunnel_id)
+        if bridge is None:
+            return {"error": "unknown_tunnel"}
+        frames = []
+        while True:
+            frame = bridge.next_for_operator()
+            if frame is None:
+                break
+            frames.append(_encode_frame(frame))
+        return {"frames": frames}
+
+    @socket_server.on("disconnect", namespace=tunnel_namespace)
+    def _ws_tunnel_disconnect():
+        sid = request.sid
+        _operator_sessions.pop(sid, None)
