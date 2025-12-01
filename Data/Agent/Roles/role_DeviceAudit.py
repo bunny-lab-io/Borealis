@@ -58,6 +58,7 @@ def detect_agent_os():
                 build_number = _get("CurrentBuildNumber", "") or _get("CurrentBuild", "")
                 ubr = _get("UBR", None)
                 edition_id = _get("EditionID", "")
+                installation_type = _get("InstallationType", "")
 
                 wmi_info = {}
                 try:
@@ -119,16 +120,20 @@ def detect_agent_os():
                 if not isinstance(product_type_val, int):
                     product_type_val = 0
 
+                def _contains_server(text) -> bool:
+                    try:
+                        return isinstance(text, str) and 'server' in text.lower()
+                    except Exception:
+                        return False
+
                 is_server = False
                 if product_type_val not in (0, 1):
                     is_server = True
-                elif product_type_val == 1:
-                    is_server = False
-                else:
-                    if isinstance(product_name, str) and 'server' in product_name.lower():
-                        is_server = True
-                    elif wmi_caption and 'server' in wmi_caption.lower():
-                        is_server = True
+                if not is_server:
+                    for hint in (product_name, wmi_caption, edition_id, installation_type):
+                        if _contains_server(hint):
+                            is_server = True
+                            break
 
                 if is_server:
                     if build_int >= 26100:

@@ -51,6 +51,42 @@
         "panel": "shared"
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Copy Staging Web Interface to Runtime",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "& { $workspace = \"${workspaceFolder}\"; $runtime = Join-Path $workspace 'Engine\\web-interface'; $runtimeSrc = Join-Path $runtime 'src'; $stagingSrc = Join-Path $workspace 'Data\\Engine\\web-interface\\src'; if (Test-Path $runtimeSrc) { Remove-Item $runtimeSrc -Recurse -Force }; if (-not (Test-Path $runtime)) { New-Item -ItemType Directory -Path $runtime | Out-Null }; Copy-Item $stagingSrc -Destination $runtime -Recurse }"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Copy Runtime Web Interface into Staging",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "& { $workspace = \"${workspaceFolder}\"; $runtime = Join-Path $workspace 'Engine\\web-interface'; $runtimeSrc = Join-Path $runtime 'src'; $stagingRoot = Join-Path $workspace 'Data\\Engine\\web-interface'; $stagingSrc = Join-Path $stagingRoot 'src'; if (Test-Path $stagingSrc) { Remove-Item $stagingSrc -Recurse -Force }; if (-not (Test-Path $stagingRoot)) { New-Item -ItemType Directory -Path $stagingRoot | Out-Null }; Copy-Item $runtimeSrc -Destination $stagingRoot -Recurse }"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
     }
   ]
 }
