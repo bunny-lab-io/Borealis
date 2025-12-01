@@ -126,14 +126,24 @@ def detect_agent_os():
                     except Exception:
                         return False
 
-                is_server = False
-                if product_type_val not in (0, 1):
-                    is_server = True
-                if not is_server:
-                    for hint in (product_name, wmi_caption, edition_id, installation_type):
-                        if _contains_server(hint):
-                            is_server = True
-                            break
+                server_hints = []
+                if isinstance(product_type_val, int) and product_type_val not in (0, 1):
+                    server_hints.append("product_type")
+                if isinstance(product_type_val, int) and product_type_val == 1 and _contains_server(product_name):
+                    # Some environments misreport ProductType; prefer explicit product hints
+                    server_hints.append("product_type_mismatch")
+                for hint in (product_name, wmi_caption, edition_id, installation_type):
+                    if _contains_server(hint):
+                        server_hints.append("string_hint")
+                        break
+                if installation_type and str(installation_type).strip().lower() == 'server':
+                    server_hints.append("installation_type")
+                if isinstance(edition_id, str) and edition_id.lower().startswith('server'):
+                    server_hints.append("edition_id")
+                if build_int in (20348, 26100, 17763) and _contains_server(product_name or wmi_caption or edition_id or installation_type):
+                    server_hints.append("build_hint")
+
+                is_server = bool(server_hints)
 
                 if is_server:
                     if build_int >= 26100:
