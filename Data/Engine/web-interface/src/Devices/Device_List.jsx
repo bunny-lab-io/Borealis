@@ -1634,8 +1634,8 @@ export default function DeviceList({
           </Box>
           <Box sx={{ flex: "1 1 320px", minWidth: 0, position: "relative", zIndex: 1 }}>
             <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 1.2 }}>
-              {statTiles.map((tile) => (
-                <StatTile key={tile.key} {...tile} />
+              {statTiles.map(({ key, ...tileProps }) => (
+                <StatTile key={key} {...tileProps} />
               ))}
             </Box>
           </Box>
