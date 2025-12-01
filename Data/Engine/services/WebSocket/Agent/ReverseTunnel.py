@@ -29,7 +29,7 @@ from typing import Callable, Deque, Dict, Iterable, List, Optional, Tuple
 from collections import deque
 from threading import Thread
 
-from .ReverseTunnel.Powershell import PowershellChannelServer
+from .ReverseTunnelProtocols import PowershellChannelServer
 
 try:  # websockets is added to engine requirements
     import websockets
@@ -1000,7 +1000,12 @@ class ReverseTunnelService:
         if lease is None or (lease.domain or "").lower() != "ps":
             return None
         bridge = self.ensure_bridge(lease)
-        server = PowershellChannelServer(bridge=bridge, service=self)
+        server = PowershellChannelServer(
+            bridge=bridge,
+            service=self,
+            frame_cls=TunnelFrame,
+            close_frame_fn=close_frame,
+        )
         self._ps_servers[tunnel_id] = server
         return server
 

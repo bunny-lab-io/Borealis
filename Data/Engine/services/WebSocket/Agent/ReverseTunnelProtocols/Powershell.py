@@ -5,24 +5,21 @@ import json
 from collections import deque
 from typing import Any, Deque, Dict, List, Optional
 
-from ..ReverseTunnel import (
-    CLOSE_AGENT_SHUTDOWN,
-    CLOSE_OK,
-    CLOSE_PROTOCOL_ERROR,
-    MSG_CHANNEL_ACK,
-    MSG_CHANNEL_OPEN,
-    MSG_CLOSE,
-    MSG_CONTROL,
-    MSG_DATA,
-    TunnelFrame,
-    close_frame,
-)
+# Mirror framing constants to avoid circular imports.
+MSG_CHANNEL_OPEN = 0x03
+MSG_CHANNEL_ACK = 0x04
+MSG_DATA = 0x05
+MSG_CONTROL = 0x09
+MSG_CLOSE = 0x08
+CLOSE_OK = 0
+CLOSE_PROTOCOL_ERROR = 3
+CLOSE_AGENT_SHUTDOWN = 6
 
 
 class PowershellChannelServer:
     """Coordinate PowerShell channel frames over a TunnelBridge."""
 
-    def __init__(self, bridge, service, *, channel_id: int = 1):
+    def __init__(self, bridge, service, *, channel_id: int = 1, frame_cls=None, close_frame_fn=None):
         self.bridge = bridge
         self.service = service
         self.channel_id = channel_id
@@ -33,9 +30,11 @@ class PowershellChannelServer:
         self._output: Deque[str] = deque()
         self._close_reason: Optional[str] = None
         self._close_code: Optional[int] = None
+        self._frame_cls = frame_cls
+        self._close_frame_fn = close_frame_fn
 
     # ------------------------------------------------------------------ Agent frame handling
-    def handle_agent_frame(self, frame: TunnelFrame) -> None:
+    def handle_agent_frame(self, frame) -> None:
         if frame.channel_id != self.channel_id:
             return
         if frame.msg_type == MSG_CHANNEL_ACK:
@@ -73,7 +72,7 @@ class PowershellChannelServer:
             {"protocol": "ps", "metadata": {"cols": cols, "rows": rows}},
             separators=(",", ":"),
         ).encode("utf-8")
-        frame = TunnelFrame(msg_type=MSG_CHANNEL_OPEN, channel_id=self.channel_id, payload=payload)
+        frame = self._frame_cls(msg_type=MSG_CHANNEL_OPEN, channel_id=self.channel_id, payload=payload)
         self.bridge.operator_to_agent(frame)
         self._open_sent = True
         self.logger.info(
@@ -88,21 +87,29 @@ class PowershellChannelServer:
         if self._closed:
             return
         payload = data.encode("utf-8", errors="replace")
-        frame = TunnelFrame(msg_type=MSG_DATA, channel_id=self.channel_id, payload=payload)
+        frame = self._frame_cls(msg_type=MSG_DATA, channel_id=self.channel_id, payload=payload)
         self.bridge.operator_to_agent(frame)
 
     def send_resize(self, cols: int, rows: int) -> None:
         if self._closed:
             return
         payload = json.dumps({"cols": cols, "rows": rows}, separators=(",", ":")).encode("utf-8")
-        frame = TunnelFrame(msg_type=MSG_CONTROL, channel_id=self.channel_id, payload=payload)
+        frame = self._frame_cls(msg_type=MSG_CONTROL, channel_id=self.channel_id, payload=payload)
         self.bridge.operator_to_agent(frame)
 
     def close(self, code: int = CLOSE_AGENT_SHUTDOWN, reason: str = "operator_close") -> None:
         if self._closed:
             return
         self._closed = True
-        self.bridge.operator_to_agent(close_frame(self.channel_id, code, reason))
+        if callable(self._close_frame_fn):
+            frame = self._close_frame_fn(self.channel_id, code, reason)
+        else:
+            frame = self._frame_cls(
+                msg_type=MSG_CLOSE,
+                channel_id=self.channel_id,
+                payload=json.dumps({"code": code, "reason": reason}, separators=(",", ":")).encode("utf-8"),
+            )
+        self.bridge.operator_to_agent(frame)
 
     # ------------------------------------------------------------------ Output polling
     def drain_output(self) -> List[str]:
@@ -127,4 +134,3 @@ class PowershellChannelServer:
             "close_reason": self._close_reason,
             "close_code": self._close_code,
         }
-
