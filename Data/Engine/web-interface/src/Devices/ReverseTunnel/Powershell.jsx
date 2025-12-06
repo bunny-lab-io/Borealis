@@ -448,17 +448,18 @@ export default function ReverseTunnelPowershell({ device }) {
   );
 
   const isConnected = sessionState === "connected" || psStatus?.ack;
+  const isClosed = sessionState === "closed" || psStatus?.closed;
   const isBusy =
     sessionState === "requesting" ||
     sessionState === "waiting" ||
     sessionState === "waiting_agent" ||
     sessionState === "lease_issued";
-  const canStart = Boolean(agentId) && !isBusy && !isConnected;
+  const canStart = Boolean(agentId) && !isBusy;
 
   const sessionChips = [
     {
-      label: isConnected ? "Connected" : sessionState === "idle" ? "Idle" : sessionState.replace(/_/g, " "),
-      color: isConnected ? MAGIC_UI.accentC : MAGIC_UI.accentA,
+      label: isConnected ? "Connected" : isClosed ? "Session ended" : sessionState === "idle" ? "Idle" : sessionState.replace(/_/g, " "),
+      color: isConnected ? MAGIC_UI.accentC : isClosed ? MAGIC_UI.accentB : MAGIC_UI.accentA,
       icon: <ActivityIcon sx={{ fontSize: 18 }} />,
     },
     tunnel?.tunnel_id

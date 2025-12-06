@@ -947,6 +947,7 @@ class ReverseTunnelService:
         """Handle agent tunnel socket on assigned port."""
 
         tunnel_id = None
+        tunnel_stop_reason: Optional[str] = None
         sock_log = self.audit_logger.getChild("agent_socket")
         try:
             peer = None
@@ -1021,6 +1022,7 @@ class ReverseTunnelService:
             )
 
             async def _pump_to_operator():
+                nonlocal tunnel_stop_reason
                 sock_log_local = sock_log.getChild("recv")
                 while not websocket.closed:
                     try:
@@ -1040,6 +1042,28 @@ class ReverseTunnelService:
                         recv_frame.channel_id,
                         len(recv_frame.payload or b""),
                     )
+                    if recv_frame.msg_type == MSG_CLOSE and recv_frame.channel_id == 0:
+                        try:
+                            close_info = json.loads(recv_frame.payload.decode("utf-8"))
+                        except Exception:
+                            close_info = {}
+                        close_code = close_info.get("code") if isinstance(close_info, dict) else None
+                        close_reason = close_info.get("reason") if isinstance(close_info, dict) else None
+                        tunnel_stop_reason = (close_reason or "").strip() or (
+                            f"agent_close_code_{close_code}" if close_code is not None else "agent_close"
+                        )
+                        sock_log_local.info(
+                            "agent_close_frame tunnel_id=%s code=%s reason=%s",
+                            tunnel_id,
+                            close_code,
+                            tunnel_stop_reason or "-",
+                        )
+                        try:
+                            self.lease_manager.mark_agent_disconnected(tunnel_id)
+                        except Exception:
+                            pass
+                        bridge.agent_to_operator(recv_frame)
+                        break
                     try:
                         self._dispatch_agent_frame(tunnel_id, recv_frame)
                     except Exception:
@@ -1080,20 +1104,27 @@ class ReverseTunnelService:
         except Exception:
             sock_log.info("agent_socket_handler_failed port=%s tunnel_id=%s", port, tunnel_id, exc_info=True)
         finally:
+            ws_close_reason = getattr(websocket, "close_reason", None)
+            ws_close_code = getattr(websocket, "close_code", None)
+            close_reason = tunnel_stop_reason or (ws_close_reason if ws_close_reason else None)
             try:
                 sock_log.info(
                     "agent_socket_closed port=%s tunnel_id=%s code=%s reason=%s",
                     port,
                     tunnel_id,
-                    getattr(websocket, "close_code", None),
-                    getattr(websocket, "close_reason", None),
+                    ws_close_code,
+                    close_reason,
                 )
             except Exception:
                 pass
             if tunnel_id and tunnel_id in self._agent_sockets:
                 self._agent_sockets.pop(tunnel_id, None)
             if tunnel_id:
-                self.release_bridge(tunnel_id, reason="agent_socket_closed")
+                try:
+                    self.lease_manager.mark_agent_disconnected(tunnel_id)
+                except Exception:
+                    pass
+                self.release_bridge(tunnel_id, reason=close_reason or "agent_socket_closed")
 
     def get_bridge(self, tunnel_id: str) -> Optional["TunnelBridge"]:
         return self._bridges.get(tunnel_id)

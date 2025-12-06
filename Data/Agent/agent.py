@@ -2957,7 +2957,8 @@ async def connect_error(data):
 @sio.event
 async def disconnect():
     print("[WebSocket] Disconnected from Borealis server.")
-    await stop_all_roles()
+    # Do not tear down roles/tunnels on control-plane drop; idle/grace timers inside roles handle cleanup.
+    _log_agent('SocketIO disconnect observed; leaving roles/tunnels running to survive transient drops.', fname='agent.log')
     CONFIG.data['regions'].clear()
     CONFIG._write()
 

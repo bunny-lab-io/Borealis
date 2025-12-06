@@ -180,7 +180,11 @@ class PowershellChannel:
         # Include exit code in the close reason for debugging.
         exit_suffix = f" (exit={self._exit_code})" if self._exit_code is not None else ""
         close_reason = (reason or "powershell_exit") + exit_suffix
-        await self._send_close(code, close_reason)
+        # Always send CLOSE before socket teardown so engine/UI see the reason.
+        try:
+            await self._send_close(code, close_reason)
+        except Exception:
+            self.role._log("reverse_tunnel ps close send failed", error=True)
         self.role._log(
             f"reverse_tunnel ps channel stopped channel={self.channel_id} reason={close_reason}"
         )

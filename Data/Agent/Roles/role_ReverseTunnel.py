@@ -150,6 +150,7 @@ class ActiveTunnel:
     connected: bool = False
     stopping: bool = False
     stop_reason: Optional[str] = None
+    stop_origin: Optional[str] = None
 
 
 class BaseChannel:
@@ -516,7 +517,40 @@ class Role:
             heartbeats = self.loop.create_task(self._heartbeat_loop(tunnel))
             watchdog = self.loop.create_task(self._watchdog(tunnel))
             tunnel.tasks.extend([sender, receiver, heartbeats, watchdog])
-            await asyncio.wait([sender, receiver, heartbeats, watchdog], return_when=asyncio.FIRST_COMPLETED)
+            task_labels = {
+                sender: "sender",
+                receiver: "receiver",
+                heartbeats: "heartbeat",
+                watchdog: "watchdog",
+            }
+            done, pending = await asyncio.wait(task_labels.keys(), return_when=asyncio.FIRST_COMPLETED)
+            for finished in done:
+                label = task_labels.get(finished) or "unknown"
+                exc_text = ""
+                try:
+                    exc_obj = finished.exception()
+                except asyncio.CancelledError:
+                    exc_obj = None
+                    exc_text = " (cancelled)"
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    exc_obj = exc
+                if exc_obj:
+                    exc_text = f" (exc={exc_obj!r})"
+                if not tunnel.stop_reason:
+                    tunnel.stop_reason = f"{label}_stopped{exc_text}"
+                if not tunnel.stop_origin:
+                    tunnel.stop_origin = label
+                self._log(
+                    f"reverse_tunnel task completed tunnel_id={tunnel.tunnel_id} task={label} stop_reason={tunnel.stop_reason}{exc_text}"
+                )
+            if pending:
+                try:
+                    self._log(
+                        "reverse_tunnel pending tasks after first completion tunnel_id=%s pending=%s",
+                        # Represent pending tasks by label for debugging.
+                    )
+                except Exception:
+                    pass
         except Exception as exc:
             self._log(f"reverse_tunnel connection failed tunnel_id={tunnel.tunnel_id}: {exc}", error=True)
             await self._emit_status({"tunnel_id": tunnel.tunnel_id, "agent_id": self.ctx.agent_id, "status": "error", "reason": "connect_failed"})
@@ -543,10 +577,14 @@ class Role:
                         f"msg_type={frame.msg_type} channel={frame.channel_id} len={len(frame.payload or b'')}"
                     )
                 except Exception:
+                    if not tunnel.stop_reason:
+                        tunnel.stop_reason = "sender_error"
                     break
         except asyncio.CancelledError:
             pass
         except Exception:
+            if not tunnel.stop_reason:
+                tunnel.stop_reason = "sender_failed"
             self._log(f"reverse_tunnel sender failed tunnel_id={tunnel.tunnel_id}", error=True)
         finally:
             self._log(f"reverse_tunnel sender stopped tunnel_id={tunnel.tunnel_id}")
@@ -575,9 +613,18 @@ class Role:
         except asyncio.CancelledError:
             pass
         except Exception:
+            if not tunnel.stop_reason:
+                tunnel.stop_reason = "receiver_failed"
             self._log(f"reverse_tunnel receiver failed tunnel_id={tunnel.tunnel_id}", error=True)
         finally:
             self._log(f"reverse_tunnel receiver stopped tunnel_id={tunnel.tunnel_id}")
+            # If no stop_reason was set, emit a CLOSE so engine/UI see a reason.
+            if not tunnel.stop_reason:
+                try:
+                    await self._send_frame(tunnel, close_frame(0, CLOSE_UNEXPECTED_DISCONNECT, "receiver_stop"))
+                    tunnel.stop_reason = "receiver_stop"
+                except Exception:
+                    pass
 
     async def _heartbeat_loop(self, tunnel: ActiveTunnel) -> None:
         try:
@@ -588,6 +635,8 @@ class Role:
         except asyncio.CancelledError:
             pass
         except Exception:
+            if not tunnel.stop_reason:
+                tunnel.stop_reason = "heartbeat_failed"
             self._log(f"reverse_tunnel heartbeat failed tunnel_id={tunnel.tunnel_id}", error=True)
         finally:
             self._log(f"reverse_tunnel heartbeat loop stopped tunnel_id={tunnel.tunnel_id}")
@@ -599,15 +648,19 @@ class Role:
                 now = time.time()
                 if tunnel.idle_seconds and (now - tunnel.last_activity) >= tunnel.idle_seconds:
                     await self._send_frame(tunnel, close_frame(0, CLOSE_IDLE_TIMEOUT, "idle_timeout"))
+                    tunnel.stop_reason = tunnel.stop_reason or "idle_timeout"
                     self._log(f"reverse_tunnel watchdog idle_timeout tunnel_id={tunnel.tunnel_id}")
                     break
                 if tunnel.expires_at and (now - tunnel.expires_at) >= tunnel.grace_seconds:
                     await self._send_frame(tunnel, close_frame(0, CLOSE_GRACE_EXPIRED, "grace_expired"))
+                    tunnel.stop_reason = tunnel.stop_reason or "grace_expired"
                     self._log(f"reverse_tunnel watchdog grace_expired tunnel_id={tunnel.tunnel_id}")
                     break
         except asyncio.CancelledError:
             pass
         except Exception:
+            if not tunnel.stop_reason:
+                tunnel.stop_reason = "watchdog_failed"
             self._log(f"reverse_tunnel watchdog failed tunnel_id={tunnel.tunnel_id}", error=True)
         finally:
             self._log(f"reverse_tunnel watchdog stopped tunnel_id={tunnel.tunnel_id}")
@@ -692,7 +745,7 @@ class Role:
         )
 
     async def _send_frame(self, tunnel: ActiveTunnel, frame: TunnelFrame) -> None:
-        if tunnel.stopping:
+        if tunnel.stopping and getattr(frame, "msg_type", None) != MSG_CLOSE:
             return
         try:
             tunnel.send_queue.put_nowait(frame)
@@ -703,6 +756,11 @@ class Role:
         tunnel = self._active.get(tunnel_id)
         if not tunnel:
             return
+        if not tunnel.stop_origin:
+            tunnel.stop_origin = "stop_tunnel"
+        self._log(f"reverse_tunnel stop_tunnel requested tunnel_id={tunnel_id} code={code} reason={reason}")
+        if not tunnel.stop_reason:
+            tunnel.stop_reason = reason or "requested"
         await self._send_frame(tunnel, close_frame(0, code, reason))
         await self._shutdown_tunnel(tunnel, send_close=False)
 
@@ -710,9 +768,33 @@ class Role:
         if tunnel.stopping:
             return
         tunnel.stopping = True
-        if send_close:
+        reason_text = tunnel.stop_reason or "closed"
+        if not tunnel.stop_reason:
+            tunnel.stop_reason = reason_text
+        if not tunnel.stop_origin:
+            tunnel.stop_origin = "shutdown"
+        self._log(
+            f"reverse_tunnel shutdown start tunnel_id={tunnel.tunnel_id} stop_reason={tunnel.stop_reason} "
+            f"stop_origin={tunnel.stop_origin} ws_closed={getattr(tunnel.websocket, 'closed', None)}"
+        )
+        # Stop all channels first so CLOSE frames (with reasons) are sent upstream.
+        for handler in list(tunnel.channels.values()):
             try:
-                await self._send_frame(tunnel, close_frame(0, CLOSE_AGENT_SHUTDOWN, "agent_shutdown"))
+                await handler.stop(code=CLOSE_UNEXPECTED_DISCONNECT, reason=reason_text or "tunnel_shutdown")
+            except Exception:
+                pass
+        if send_close:
+            close_payload = close_frame(0, CLOSE_AGENT_SHUTDOWN, reason_text or "agent_shutdown")
+            try:
+                await self._send_frame(tunnel, close_payload)
+                # Give the sender loop a brief window to flush the CLOSE upstream.
+                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+            # Fallback: if sender task died, try sending directly on the websocket.
+            try:
+                if tunnel.websocket and not tunnel.websocket.closed:
+                    await tunnel.websocket.send_bytes(close_payload.encode())
             except Exception:
                 pass
         for task in list(tunnel.tasks):
@@ -722,7 +804,8 @@ class Role:
                 pass
         if tunnel.websocket is not None:
             try:
-                await tunnel.websocket.close()
+                message = (reason_text or "agent_shutdown").encode("utf-8", "ignore")[:120]
+                await tunnel.websocket.close(message=message)
             except Exception:
                 pass
         if tunnel.session is not None:
