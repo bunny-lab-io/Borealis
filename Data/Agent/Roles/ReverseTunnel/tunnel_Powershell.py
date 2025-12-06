@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import subprocess
 from typing import Any, Dict, Optional
 
 # Message types mirrored from the tunnel framing (kept local to avoid import cycles).
@@ -30,6 +31,7 @@ class PowershellChannel:
         self._writer_task = None
         self._stdin_queue: asyncio.Queue = asyncio.Queue()
         self._pty = None
+        self._proc: Optional[asyncio.subprocess.Process] = None
         self._exit_code: Optional[int] = None
         self._frame_cls = getattr(role, "_frame_cls", None)
 
@@ -62,12 +64,11 @@ class PowershellChannel:
         )
         await self._send_frame(frame)
 
-    def _powershell_path(self) -> str:
+    def _powershell_argv(self) -> list:
         preferred = self.metadata.get("shell") if isinstance(self.metadata, dict) else None
-        if isinstance(preferred, str) and preferred.strip():
-            return preferred.strip()
-        # Default to Windows PowerShell; fallback to pwsh if provided later.
-        return "powershell.exe"
+        shell = preferred.strip() if isinstance(preferred, str) and preferred.strip() else "powershell.exe"
+        # Keep the process alive and read commands from stdin; -Command - tells PS to consume stdin.
+        return [shell, "-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"]
 
     def _initial_size(self) -> tuple:
         cols = int(self.metadata.get("cols") or self.metadata.get("columns") or 120) if isinstance(self.metadata, dict) else 120
@@ -79,30 +80,46 @@ class PowershellChannel:
     # ------------------------------------------------------------------ Lifecycle
     async def start(self) -> None:
         if sys.platform.lower().startswith("win") is False:
+            self.role._log("reverse_tunnel ps start aborted: non-windows platform", error=True)
             await self._send_close(CLOSE_PROTOCOL_ERROR, "windows_only")
             return
+
+        argv = self._powershell_argv()
+        cols, rows = self._initial_size()
+        self.role._log(f"reverse_tunnel ps start channel={self.channel_id} argv={' '.join(argv)} cols={cols} rows={rows}")
+
+        # Preferred: ConPTY via pywinpty.
         try:
             import pywinpty  # type: ignore
-        except Exception as exc:  # pragma: no cover - dependency guard
-            self.role._log(f"reverse_tunnel ps channel missing pywinpty: {exc}", error=True)
-            await self._send_close(CLOSE_PROTOCOL_ERROR, "pywinpty_missing")
-            return
 
-        shell = self._powershell_path()
-        cols, rows = self._initial_size()
-        try:
             self._pty = pywinpty.Process(
-                spawn_cmd=shell,
+                spawn_cmd=" ".join(argv[:-1]) if argv[-1] == "-" else " ".join(argv),
                 dimensions=(cols, rows),
             )
+            self._reader_task = self.loop.create_task(self._pump_pty_stdout())
+            self._writer_task = self.loop.create_task(self._pump_pty_stdin())
+            self.role._log(f"reverse_tunnel ps channel started (pty) argv={' '.join(argv)} cols={cols} rows={rows}")
+            return
         except Exception as exc:
-            self.role._log(f"reverse_tunnel ps channel failed to spawn {shell}: {exc}", error=True)
+            self.role._log(f"reverse_tunnel ps channel pywinpty unavailable, falling back to pipes: {exc}", error=True)
+
+        # Fallback: subprocess pipes (no PTY).
+        try:
+            self._proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception as exc:
+            self.role._log(f"reverse_tunnel ps channel spawn failed argv={' '.join(argv)}: {exc}", error=True)
             await self._send_close(CLOSE_PROTOCOL_ERROR, "spawn_failed")
             return
 
-        self._reader_task = self.loop.create_task(self._pump_stdout())
-        self._writer_task = self.loop.create_task(self._pump_stdin())
-        self.role._log(f"reverse_tunnel ps channel started shell={shell} cols={cols} rows={rows}")
+        self._reader_task = self.loop.create_task(self._pump_proc_stdout())
+        self._writer_task = self.loop.create_task(self._pump_proc_stdin())
+        self.role._log(f"reverse_tunnel ps channel started (pipes) argv={' '.join(argv)} cols={cols} rows={rows}")
 
     async def on_frame(self, frame) -> None:
         if self._closed:
@@ -140,6 +157,7 @@ class PowershellChannel:
         await self._resize(cols_int, rows_int)
 
     async def _resize(self, cols: Optional[int], rows: Optional[int]) -> None:
+        # Resize only applies to PTY sessions; pipe mode ignores.
         if self._pty is None:
             return
         try:
@@ -155,17 +173,14 @@ class PowershellChannel:
         except Exception:
             self.role._log("reverse_tunnel ps channel resize failed", error=True)
 
-    async def _pump_stdout(self) -> None:
+    async def _pump_pty_stdout(self) -> None:
         loop = asyncio.get_event_loop()
         try:
             while not self._closed and self._pty:
                 chunk = await loop.run_in_executor(None, self._pty.read, 4096)
                 if chunk is None:
                     break
-                if isinstance(chunk, str):
-                    data = chunk.encode("utf-8", errors="replace")
-                else:
-                    data = bytes(chunk)
+                data = chunk.encode("utf-8", errors="replace") if isinstance(chunk, str) else bytes(chunk)
                 if not data:
                     break
                 frame = self._make_frame(MSG_DATA, payload=data)
@@ -173,11 +188,11 @@ class PowershellChannel:
         except asyncio.CancelledError:
             pass
         except Exception:
-            self.role._log("reverse_tunnel ps stdout pump error", error=True)
+            self.role._log("reverse_tunnel ps pty stdout pump error", error=True)
         finally:
             await self.stop(reason="stdout_closed")
 
-    async def _pump_stdin(self) -> None:
+    async def _pump_pty_stdin(self) -> None:
         loop = asyncio.get_event_loop()
         try:
             while not self._closed and self._pty:
@@ -187,10 +202,7 @@ class PowershellChannel:
                     break
                 if data is None:
                     break
-                if isinstance(data, (bytes, bytearray)):
-                    text = data.decode("utf-8", errors="replace")
-                else:
-                    text = str(data)
+                text = data.decode("utf-8", errors="replace") if isinstance(data, (bytes, bytearray)) else str(data)
                 try:
                     await loop.run_in_executor(None, self._pty.write, text)
                 except Exception:
@@ -198,7 +210,47 @@ class PowershellChannel:
         except asyncio.CancelledError:
             pass
         except Exception:
-            self.role._log("reverse_tunnel ps stdin pump error", error=True)
+            self.role._log("reverse_tunnel ps pty stdin pump error", error=True)
+        finally:
+            await self.stop(reason="stdin_closed")
+
+    # -------------------- Pipe fallback pumps --------------------
+    async def _pump_proc_stdout(self) -> None:
+        try:
+            while self._proc and not self._closed:
+                chunk = await self._proc.stdout.read(4096)
+                if not chunk:
+                    break
+                frame = self._make_frame(MSG_DATA, payload=bytes(chunk))
+                await self._send_frame(frame)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            self.role._log("reverse_tunnel ps pipe stdout pump error", error=True)
+        finally:
+            if self._proc and not self._closed:
+                try:
+                    self._exit_code = await self._proc.wait()
+                except Exception:
+                    pass
+            await self.stop(reason="stdout_closed")
+
+    async def _pump_proc_stdin(self) -> None:
+        try:
+            while self._proc and not self._closed:
+                data = await self._stdin_queue.get()
+                if self._closed or not self._proc or not self._proc.stdin:
+                    break
+                try:
+                    self._proc.stdin.write(data if isinstance(data, (bytes, bytearray)) else str(data).encode("utf-8"))
+                    await self._proc.stdin.drain()
+                except Exception:
+                    self.role._log("reverse_tunnel ps pipe stdin pump error", error=True)
+                    break
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            self.role._log("reverse_tunnel ps pipe stdin pump error", error=True)
         finally:
             await self.stop(reason="stdin_closed")
 
@@ -209,6 +261,11 @@ class PowershellChannel:
         if self._pty is not None:
             try:
                 self._pty.terminate()
+            except Exception:
+                pass
+        if self._proc is not None:
+            try:
+                self._proc.terminate()
             except Exception:
                 pass
         current = asyncio.current_task()
@@ -222,5 +279,7 @@ class PowershellChannel:
                 self._writer_task.cancel()
             except Exception:
                 pass
-        await self._send_close(code, reason or "powershell_exit")
+        # Include exit code in the close reason for debugging.
+        exit_suffix = f" (exit={self._exit_code})" if self._exit_code is not None else ""
+        await self._send_close(code, (reason or "powershell_exit") + exit_suffix)
         self.role._log(f"reverse_tunnel ps channel stopped channel={self.channel_id} reason={reason or 'exit'}")

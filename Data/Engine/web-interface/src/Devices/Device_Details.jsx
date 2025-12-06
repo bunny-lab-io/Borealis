@@ -31,6 +31,7 @@ import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+import ReverseTunnelPowershell from "./ReverseTunnel/Powershell.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -63,7 +64,15 @@ const SECTION_HEIGHTS = {
   network: 260,
 };
 
-const TOP_TABS = ["Device Summary", "Storage", "Memory", "Network", "Installed Software", "Activity History"];
+const TOP_TABS = [
+  "Device Summary",
+  "Storage",
+  "Memory",
+  "Network",
+  "Installed Software",
+  "Activity History",
+  "Remote Shell",
+];
 
 const myTheme = themeQuartz.withParams({
   accentColor: "#8b5cf6",
@@ -727,6 +736,17 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   );
 
   const summary = details.summary || {};
+  const tunnelDevice = useMemo(
+    () => ({
+      ...(device || {}),
+      ...(agent || {}),
+      summary,
+      hostname: meta.hostname || summary.hostname || device?.hostname || agent?.hostname,
+      agent_id: meta.agentId || summary.agent_id || agent?.agent_id || agent?.id || device?.agent_id || device?.agent_guid,
+      agent_guid: meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || agent?.agent_guid || agent?.guid,
+    }),
+    [agent, device, meta.agentGuid, meta.agentId, meta.hostname, summary]
+  );
   // Build a best-effort CPU display from summary fields
   const cpuInfo = useMemo(() => {
     const cpu = details.cpu || summary.cpu || {};
@@ -850,16 +870,20 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     []
   );
 
+  const formatScriptType = useCallback((raw) => {
+    const value = String(raw || "").toLowerCase();
+    if (value === "ansible") return "Ansible Playbook";
+    if (value === "reverse_tunnel") return "Reverse Tunnel";
+    return "Script";
+  }, []);
+
   const historyColumnDefs = useMemo(
     () => [
       {
-        headerName: "Assembly",
+        headerName: "Activity",
         field: "script_type",
         minWidth: 180,
-        valueGetter: (params) =>
-          String(params.data?.script_type || "").toLowerCase() === "ansible"
-            ? "Ansible Playbook"
-            : "Script",
+        valueGetter: (params) => formatScriptType(params.data?.script_type),
       },
       {
         headerName: "Task",
@@ -891,7 +915,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         cellRenderer: "HistoryActionsCell",
       },
     ],
-    [formatTimestamp]
+    [formatScriptType, formatTimestamp]
   );
 
   const MetricCard = ({ icon, title, main, sub, compact = false }) => (
@@ -1265,6 +1289,19 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     </Box>
   );
 
+  const renderRemoteShellTab = () => (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minHeight: 0,
+      }}
+    >
+      <ReverseTunnelPowershell device={tunnelDevice} />
+    </Box>
+  );
+
   const memoryRows = useMemo(
     () =>
       (details.memory || []).map((m, idx) => ({
@@ -1523,6 +1560,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     renderNetworkTab,
     renderSoftware,
     renderHistory,
+    renderRemoteShellTab,
   ];
   const tabContent = (topTabRenderers[tab] || renderDeviceSummaryTab)();
 
@@ -1642,7 +1680,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           anchorEl={menuAnchor}
           open={Boolean(menuAnchor)}
           onClose={() => setMenuAnchor(null)}
-          PaperProps={{
+            PaperProps={{
               sx: {
                 bgcolor: "rgba(8,12,24,0.96)",
                 color: "#fff",

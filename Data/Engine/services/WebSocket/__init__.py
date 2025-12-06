@@ -474,7 +474,7 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
             return {"error": "ps_resize_failed"}
 
     @socket_server.on("ps_poll", namespace=tunnel_namespace)
-    def _ws_ps_poll() -> Any:
+    def _ws_ps_poll(data: Any = None) -> Any:  # data is ignored; socketio passes it even when unused
         server, tunnel_id, error = _require_ps_server()
         if server is None:
             return error

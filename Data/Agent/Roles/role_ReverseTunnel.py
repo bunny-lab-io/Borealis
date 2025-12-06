@@ -1,10 +1,12 @@
 import asyncio
 import base64
+import importlib.util
 import json
 import os
 import struct
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -12,10 +14,25 @@ import aiohttp
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+# Capture import errors for the PowerShell handler so we can report why it is missing.
+PS_IMPORT_ERROR: Optional[str] = None
+tunnel_Powershell = None
 try:
-    from .ReverseTunnel import tunnel_Powershell
-except Exception:
-    tunnel_Powershell = None
+    from .ReverseTunnel import tunnel_Powershell  # type: ignore
+except Exception as exc:  # pragma: no cover - best-effort logging only
+    PS_IMPORT_ERROR = repr(exc)
+    # Try manual import from file to survive non-package execution.
+    try:
+        _ps_path = Path(__file__).parent / "ReverseTunnel" / "tunnel_Powershell.py"
+        if _ps_path.exists():
+            spec = importlib.util.spec_from_file_location("tunnel_Powershell", _ps_path)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)  # type: ignore
+                tunnel_Powershell = module
+                PS_IMPORT_ERROR = None
+    except Exception as exc2:  # pragma: no cover - diagnostic only
+        PS_IMPORT_ERROR = f"{PS_IMPORT_ERROR} | fallback_load_failed={exc2!r}"
 
 ROLE_NAME = "reverse_tunnel"
 ROLE_CONTEXTS = ["interactive", "system"]
@@ -178,8 +195,21 @@ class Role:
         self._protocol_handlers: Dict[str, Any] = {}
         self._frame_cls = TunnelFrame
         self.close_frame = close_frame
-        if tunnel_Powershell and hasattr(tunnel_Powershell, "PowershellChannel"):
-            self._protocol_handlers["ps"] = tunnel_Powershell.PowershellChannel
+        try:
+            if tunnel_Powershell and hasattr(tunnel_Powershell, "PowershellChannel"):
+                self._protocol_handlers["ps"] = tunnel_Powershell.PowershellChannel
+                module_path = getattr(tunnel_Powershell, "__file__", None)
+                self._log(f"reverse_tunnel ps handler registered (PowershellChannel) module={module_path}")
+            else:
+                hint = f" import_error={PS_IMPORT_ERROR}" if PS_IMPORT_ERROR else ""
+                module_path = Path(__file__).parent / "ReverseTunnel" / "tunnel_Powershell.py"
+                exists_hint = f" exists={module_path.exists()}"
+                self._log(
+                    f"reverse_tunnel ps handler NOT registered (missing module/class){hint}{exists_hint}",
+                    error=True,
+                )
+        except Exception as exc:
+            self._log(f"reverse_tunnel ps handler registration failed: {exc}", error=True)
 
     # ------------------------------------------------------------------ Logging
     def _log(self, message: str, *, error: bool = False) -> None:
@@ -359,6 +389,11 @@ class Role:
         idle_seconds = int(payload.get("idle_seconds") or 3600)
         grace_seconds = int(payload.get("grace_seconds") or 3600)
         signing_key_hint = _norm_text(payload.get("signing_key"))
+        agent_hint = _norm_text(payload.get("agent_id"))
+
+        # Ignore broadcasts targeting other agents (Socket.IO fanout sends to both contexts).
+        if agent_hint and agent_hint.lower() != _norm_text(self.ctx.agent_id).lower():
+            return
 
         if not token:
             self._log("reverse_tunnel_start rejected: missing token", error=True)
@@ -378,6 +413,9 @@ class Role:
                 signing_key_hint=signing_key_hint,
             )
         except Exception as exc:
+            if str(exc) == "token_agent_mismatch":
+                # Broadcast hit the wrong agent context; ignore quietly.
+                return
             self._log(f"reverse_tunnel_start rejected: token validation failed ({exc})", error=True)
             await self._emit_status({"tunnel_id": tunnel_id, "agent_id": self.ctx.agent_id, "status": "error", "reason": "token_invalid"})
             return
@@ -439,6 +477,10 @@ class Role:
     async def _run_tunnel(self, tunnel: ActiveTunnel, *, host: str) -> None:
         ssl_ctx = self._ssl_context(host)
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=None)
+        self._log(
+            f"reverse_tunnel dialing ws url={tunnel.url} tunnel_id={tunnel.tunnel_id} "
+            f"agent_id={self.ctx.agent_id} ssl={'yes' if ssl_ctx else 'no'}"
+        )
         try:
             tunnel.session = aiohttp.ClientSession(timeout=timeout)
             tunnel.websocket = await tunnel.session.ws_connect(
@@ -449,6 +491,7 @@ class Role:
                 timeout=timeout,
             )
             self._mark_activity(tunnel)
+            self._log(f"reverse_tunnel connected ws tunnel_id={tunnel.tunnel_id} peer={getattr(tunnel.websocket, 'remote', None)}")
             await tunnel.websocket.send_bytes(
                 TunnelFrame(
                     msg_type=MSG_CONNECT,
@@ -466,6 +509,7 @@ class Role:
                     ).encode("utf-8"),
                 ).encode()
             )
+            self._log(f"reverse_tunnel CONNECT sent tunnel_id={tunnel.tunnel_id}")
 
             sender = self.loop.create_task(self._pump_sender(tunnel))
             receiver = self.loop.create_task(self._pump_receiver(tunnel))
@@ -486,12 +530,18 @@ class Role:
                 try:
                     await tunnel.websocket.send_bytes(frame.encode())
                     self._mark_activity(tunnel)
+                    self._log(
+                        f"reverse_tunnel send frame tunnel_id={tunnel.tunnel_id} "
+                        f"msg_type={frame.msg_type} channel={frame.channel_id} len={len(frame.payload or b'')}"
+                    )
                 except Exception:
                     break
         except asyncio.CancelledError:
             pass
         except Exception:
             self._log(f"reverse_tunnel sender failed tunnel_id={tunnel.tunnel_id}", error=True)
+        finally:
+            self._log(f"reverse_tunnel sender stopped tunnel_id={tunnel.tunnel_id}")
 
     async def _pump_receiver(self, tunnel: ActiveTunnel) -> None:
         ws = tunnel.websocket
@@ -508,21 +558,30 @@ class Role:
                     self._mark_activity(tunnel)
                     await self._handle_frame(tunnel, frame)
                 elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):
+                    self._log(
+                        f"reverse_tunnel websocket closed tunnel_id={tunnel.tunnel_id} "
+                        f"code={ws.close_code} reason={ws.close_reason}"
+                    )
                     break
         except asyncio.CancelledError:
             pass
         except Exception:
             self._log(f"reverse_tunnel receiver failed tunnel_id={tunnel.tunnel_id}", error=True)
+        finally:
+            self._log(f"reverse_tunnel receiver stopped tunnel_id={tunnel.tunnel_id}")
 
     async def _heartbeat_loop(self, tunnel: ActiveTunnel) -> None:
         try:
             while tunnel.websocket and not tunnel.websocket.closed:
                 await asyncio.sleep(tunnel.heartbeat_seconds)
                 await self._send_frame(tunnel, heartbeat_frame())
+                self._log(f"reverse_tunnel heartbeat sent tunnel_id={tunnel.tunnel_id}")
         except asyncio.CancelledError:
             pass
         except Exception:
             self._log(f"reverse_tunnel heartbeat failed tunnel_id={tunnel.tunnel_id}", error=True)
+        finally:
+            self._log(f"reverse_tunnel heartbeat loop stopped tunnel_id={tunnel.tunnel_id}")
 
     async def _watchdog(self, tunnel: ActiveTunnel) -> None:
         try:
@@ -531,24 +590,34 @@ class Role:
                 now = time.time()
                 if tunnel.idle_seconds and (now - tunnel.last_activity) >= tunnel.idle_seconds:
                     await self._send_frame(tunnel, close_frame(0, CLOSE_IDLE_TIMEOUT, "idle_timeout"))
+                    self._log(f"reverse_tunnel watchdog idle_timeout tunnel_id={tunnel.tunnel_id}")
                     break
                 if tunnel.expires_at and (now - tunnel.expires_at) >= tunnel.grace_seconds:
                     await self._send_frame(tunnel, close_frame(0, CLOSE_GRACE_EXPIRED, "grace_expired"))
+                    self._log(f"reverse_tunnel watchdog grace_expired tunnel_id={tunnel.tunnel_id}")
                     break
         except asyncio.CancelledError:
             pass
         except Exception:
             self._log(f"reverse_tunnel watchdog failed tunnel_id={tunnel.tunnel_id}", error=True)
+        finally:
+            self._log(f"reverse_tunnel watchdog stopped tunnel_id={tunnel.tunnel_id}")
 
     async def _handle_frame(self, tunnel: ActiveTunnel, frame: TunnelFrame) -> None:
+        self._log(
+            f"reverse_tunnel recv frame tunnel_id={tunnel.tunnel_id} "
+            f"msg_type={frame.msg_type} channel={frame.channel_id} len={len(frame.payload or b'')}"
+        )
         if frame.msg_type == MSG_HEARTBEAT:
             if frame.flags & 0x1:
+                self._log(f"reverse_tunnel heartbeat ack tunnel_id={tunnel.tunnel_id}")
                 return
             await self._send_frame(tunnel, heartbeat_frame(channel_id=frame.channel_id, is_ack=True))
             return
         if frame.msg_type == MSG_CONNECT_ACK:
             tunnel.connected = True
             await self._emit_status({"tunnel_id": tunnel.tunnel_id, "agent_id": self.ctx.agent_id, "status": "connected"})
+            self._log(f"reverse_tunnel CONNECT_ACK tunnel_id={tunnel.tunnel_id}")
             return
         if frame.msg_type == MSG_CHANNEL_OPEN:
             await self._handle_channel_open(tunnel, frame)
@@ -584,6 +653,15 @@ class Role:
             await self._send_frame(tunnel, close_frame(frame.channel_id, CLOSE_PROTOCOL_ERROR, "channel_exists"))
             return
 
+        if protocol.lower() == "ps" and "ps" not in self._protocol_handlers:
+            hint = f" import_error={PS_IMPORT_ERROR}" if PS_IMPORT_ERROR else ""
+            module_path = Path(__file__).parent / "ReverseTunnel" / "tunnel_Powershell.py"
+            exists_hint = f" exists={module_path.exists()}"
+            self._log(
+                f"reverse_tunnel ps handler missing; falling back to BaseChannel{hint}{exists_hint}",
+                error=True,
+            )
+
         handler_cls = self._protocol_handlers.get(protocol.lower()) or BaseChannel
         try:
             handler = handler_cls(self, tunnel, frame.channel_id, metadata)
@@ -598,6 +676,10 @@ class Role:
                 channel_id=frame.channel_id,
                 payload=json.dumps({"status": "ok", "protocol": protocol}, separators=(",", ":")).encode("utf-8"),
             ),
+        )
+        self._log(
+            f"reverse_tunnel channel_opened tunnel_id={tunnel.tunnel_id} channel={frame.channel_id} "
+            f"protocol={protocol} handler={handler.__class__.__name__} metadata={metadata}"
         )
 
     async def _send_frame(self, tunnel: ActiveTunnel, frame: TunnelFrame) -> None:

@@ -995,6 +995,13 @@ function InstallOrUpdate-BorealisAgent {
             )
 
             Copy-Item $coreAgentFiles -Destination $agentDestinationFolder -Recurse -Force
+            
+            # Ensure ReverseTunnel role is refreshed explicitly (covers incremental changes)
+            $rtSource = Join-Path $agentSourceRoot 'Roles\ReverseTunnel'
+            $rtDest = Join-Path $agentDestinationFolder 'Roles'
+            if (Test-Path $rtSource) {
+                Copy-Item $rtSource -Destination $rtDest -Recurse -Force
+            }
         }
         . (Join-Path $venvFolderPath 'Scripts\Activate')
     }
