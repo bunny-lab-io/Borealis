@@ -179,5 +179,8 @@ class PowershellChannel:
                 pass
         # Include exit code in the close reason for debugging.
         exit_suffix = f" (exit={self._exit_code})" if self._exit_code is not None else ""
-        await self._send_close(code, (reason or "powershell_exit") + exit_suffix)
-        self.role._log(f"reverse_tunnel ps channel stopped channel={self.channel_id} reason={reason or 'exit'}")
+        close_reason = (reason or "powershell_exit") + exit_suffix
+        await self._send_close(code, close_reason)
+        self.role._log(
+            f"reverse_tunnel ps channel stopped channel={self.channel_id} reason={close_reason}"
+        )

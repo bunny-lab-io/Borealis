@@ -521,6 +521,14 @@ class Role:
             self._log(f"reverse_tunnel connection failed tunnel_id={tunnel.tunnel_id}: {exc}", error=True)
             await self._emit_status({"tunnel_id": tunnel.tunnel_id, "agent_id": self.ctx.agent_id, "status": "error", "reason": "connect_failed"})
         finally:
+            try:
+                ws = tunnel.websocket
+                self._log(
+                    f"reverse_tunnel ws closing tunnel_id={tunnel.tunnel_id} "
+                    f"code={getattr(ws, 'close_code', None)} reason={getattr(ws, 'close_reason', None)}"
+                )
+            except Exception:
+                pass
             await self._shutdown_tunnel(tunnel)
 
     async def _pump_sender(self, tunnel: ActiveTunnel) -> None:
@@ -562,6 +570,7 @@ class Role:
                         f"reverse_tunnel websocket closed tunnel_id={tunnel.tunnel_id} "
                         f"code={ws.close_code} reason={ws.close_reason}"
                     )
+                    tunnel.stop_reason = ws.close_reason or "ws_closed"
                     break
         except asyncio.CancelledError:
             pass

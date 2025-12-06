@@ -241,8 +241,13 @@ export default function ReverseTunnelPowershell({ device }) {
       setPolling(true);
       pollTimerRef.current = setTimeout(async () => {
         const resp = await emitAsync(socket, "ps_poll", {});
-      if (resp?.error) {
-          // Suppress warming/errors in UI; rely on session chips.
+        if (resp?.error) {
+          stopPolling();
+          disconnectSocket();
+          setPsStatus({});
+          setTunnel(null);
+          setSessionState("error");
+          return;
         }
         if (Array.isArray(resp?.output) && resp.output.length) {
           appendOutput(resp.output.join(""));
@@ -251,8 +256,7 @@ export default function ReverseTunnelPowershell({ device }) {
           setPsStatus(resp.status);
           if (resp.status.closed) {
             setSessionState("closed");
-            setStatusSeverity("warning");
-            setStatusMessage(resp.status.close_reason || "Session closed");
+            setTunnel(null);
             stopPolling();
             return;
           }
@@ -263,7 +267,7 @@ export default function ReverseTunnelPowershell({ device }) {
         pollLoop(socket, tunnelId);
       }, 520);
     },
-    [appendOutput, emitAsync, stopPolling]
+    [appendOutput, emitAsync, stopPolling, disconnectSocket]
   );
 
   const handleDisconnect = useCallback(() => {
@@ -280,9 +284,8 @@ export default function ReverseTunnelPowershell({ device }) {
     }
     stopPolling();
     disconnectSocket();
+    setTunnel(null);
     setSessionState("closed");
-    setStatusSeverity("info");
-    setStatusMessage("Session closed by operator.");
   }, [disconnectSocket, stopPolling, tunnel?.tunnel_id]);
 
   const handleResize = useCallback(() => {
@@ -328,6 +331,8 @@ export default function ReverseTunnelPowershell({ device }) {
       socket.on("connect_error", () => {
         setStatusSeverity("warning");
         setStatusMessage("Tunnel namespace unavailable.");
+        setTunnel(null);
+        setSessionState("error");
       });
 
       socket.on("disconnect", () => {
@@ -336,6 +341,7 @@ export default function ReverseTunnelPowershell({ device }) {
           setSessionState("disconnected");
           setStatusSeverity("warning");
           setStatusMessage("Socket disconnected.");
+          setTunnel(null);
         }
       });
 
