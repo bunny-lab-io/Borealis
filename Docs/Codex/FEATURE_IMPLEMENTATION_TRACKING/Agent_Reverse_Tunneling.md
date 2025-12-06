@@ -17,7 +17,7 @@ Read `Docs/Codex/FEATURE_IMPLEMENTATION_TRACKING/Agent_Reverse_Tunneling.md` and
 - Keep the existing Socket.IO control channel untouched; this tunnel is a new dedicated listener/port.
 - Reuse security: pinned TLS bundle + Ed25519 identity + existing token signing. Agent stays outbound-only; no inbound openings on devices.
 - UI reminders specific to this feature: PowerShell page should mirror `Assemblies/Assembly_Editor.jsx` syntax highlighting and general layout from `Admin/Page_Template.jsx` per UI doc.
-- Licensing: project is AGPL; pywinpty (MIT) is acceptable but must be attributed in Credits dialog.
+- Licensing: project is AGPL; PowerShell runs in pipe mode (no pywinpty/ConPTY dependency).
 - Non-destructive: new code must be gated/dormant until invoked; avoid regressions to existing roles/pages.
 
 # Non-Destructive Expectations
@@ -30,7 +30,7 @@ Read `Docs/Codex/FEATURE_IMPLEMENTATION_TRACKING/Agent_Reverse_Tunneling.md` and
 - Handshake: API on port 443 negotiates an ephemeral tunnel port + token/lease; Agent opens tunnel socket to that port; Engine maps operator channels to agent channels.
 - Framing: Binary frames `version | msg_type | channel_id | flags | length | payload`; supports heartbeat, back-pressure, close codes, and resize events for terminals.
 - Lease/idle: 1h idle timeout; 1h grace if agent drops mid-session before freeing port.
-- PowerShell v1: Agent spawns ConPTY via pywinpty; Engine provides browser terminal bridge with syntax highlighting like `Assembly_Editor.jsx`.
+- PowerShell v1: Agent spawns PowerShell via pipes (no ConPTY), Engine provides browser terminal bridge with syntax highlighting like `Assembly_Editor.jsx`.
 
 # Terminology & IDs
 - agent_id: existing composed ID (hostname + GUID + scope).
@@ -111,8 +111,8 @@ Read `Docs/Codex/FEATURE_IMPLEMENTATION_TRACKING/Agent_Reverse_Tunneling.md` and
   - Heartbeat + idle tracking; stop_all closes active tunnels cleanly.
   - Logging to `Agent/Logs/reverse_tunnel.log`.
 - Submodules under `Data/Agent/Roles/ReverseTunnel/`:
-  - `tunnel_Powershell.py`: ConPTY/pywinpty, map stdin/out, handle resize control frames, exit codes.
-  - Common helpers: channel dispatcher, back-pressure (pause ConPTY reads if outbound buffer high).
+  - `tunnel_Powershell.py`: pipes-only PowerShell subprocess (stdin/stdout piping, control frames are no-ops for resize), exit codes.
+  - Common helpers: channel dispatcher, back-pressure (pause reads if outbound buffer high).
 
 # PowerShell v1 (end-to-end)
 - Engine:
@@ -197,7 +197,7 @@ Read `Docs/Codex/FEATURE_IMPLEMENTATION_TRACKING/Agent_Reverse_Tunneling.md` and
 # Detailed Checklist (update statuses)
 - [x] Repo hygiene
   - [x] Confirm no conflicting changes; avoid touching legacy Socket.IO handlers.
-  - [x] Add pywinpty (MIT) to Agent deps (note potential packaging/test impact).
+  - [x] PowerShell transport: pipe-only (pywinpty/ConPTY removed from Agent deps).
 - [x] Engine tunnel service
   - [x] Add reverse tunnel config defaults (fixed port, port range, timeouts, log path) without enabling.
   - [x] Create `Data/Engine/services/WebSocket/Agent/ReverseTunnel.py` (async/uvloop listener, port pool 30000–40000).
@@ -216,11 +216,11 @@ Read `Docs/Codex/FEATURE_IMPLEMENTATION_TRACKING/Agent_Reverse_Tunneling.md` and
   - [x] Integrate token validation, TLS reuse, idle teardown, and graceful stop_all.
 - [ ] PowerShell v1 (feature target)
   - [x] Engine side `Data/Engine/services/WebSocket/Agent/ReverseTunnel/Powershell.py` (channel server, resize handling, translate browser events).
-  - [x] Agent side `Data/Agent/Roles/ReverseTunnel/tunnel_Powershell.py` using ConPTY/pywinpty; map stdin/stdout to frames; handle resize and exit codes.
+  - [x] Agent side `Data/Agent/Roles/ReverseTunnel/tunnel_Powershell.py` using pipes-only PowerShell subprocess; map stdin/stdout to frames; resize no-op.
   - [ ] WebUI: `Data/Engine/web-interface/src/ReverseTunnel/Powershell.jsx` with terminal UI, syntax highlighting matching `Assemblies/Assembly_Editor.jsx`, copy support, status toasts.
   - [ ] Device Activity entries and UI surface in `Devices/Device_List.jsx` Device Activity tab.
 - [ ] Credits & attribution
-  - [ ] If third-party libs used (e.g., pywinpty), add attribution in `Data/Engine/web-interface/src/Dialogs.jsx` CreditsDialog under “Code Shared in this Project”.
+  - [x] pywinpty removed (no attribution needed); revisit if new third-party deps added.
 - [ ] Testing & validation
   - [ ] Unit/behavioral tests for lease manager, framing, and idle teardown (Engine side).
   - [ ] Agent role lifecycle tests (start/stop, reconnect, single-session enforcement).
@@ -245,7 +245,8 @@ Read `Docs/Codex/FEATURE_IMPLEMENTATION_TRACKING/Agent_Reverse_Tunneling.md` and
 - 2025-11-30: Enabled async WebSocket listener per assigned port (TLS-aware via Engine certs) for agent CONNECT frames, with frame routing between agent socket and browser bridge queues; Engine tunnel service checklist marked complete.
 - 2025-11-30: Added idle/grace sweeper, CONNECT_ACK to agents, heartbeat loop, and token-touched operator sends; per-port listener now runs on dedicated loop/thread. (Original instructions didn’t call out sweeper/heartbeat wiring explicitly.)
 - 2025-12-01: Added Agent reverse tunnel role (`Data/Agent/Roles/role_ReverseTunnel.py`) with TLS-aware WebSocket dialer, token validation against signed leases, domain-limit guard, heartbeat/idle watchdogs, and reverse_tunnel.log status emits; protocol handlers remain stubbed until PowerShell module lands.
-- 2025-12-01: Implemented Agent PowerShell channel (pywinpty ConPTY stdin/stdout piping, resize, exit-close) and Engine PowerShell handler with Socket.IO helpers (`ps_open`/`ps_send`/`ps_resize`/`ps_poll`); added ps channel logging and domain-aware attach. WebUI remains pending.
+- 2025-12-01: Implemented Agent PowerShell channel (initially pywinpty/ConPTY path, later simplified to pipes-only) and Engine PowerShell handler with Socket.IO helpers (`ps_open`/`ps_send`/`ps_resize`/`ps_poll`); added ps channel logging and domain-aware attach. WebUI remains pending.
+- 2025-12-06: Simplified PowerShell handler to pipes-only, removed pywinpty dependency, added robust handler import for non-package agent runtimes, and cleaned UI status messaging.
 
 ## Engine Tunnel Service Architecture
 

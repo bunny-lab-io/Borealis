@@ -27,7 +27,6 @@ pywinauto # Windows-based Macro Automation Library
 sounddevice
 numpy
 pywin32; platform_system == "Windows"
-pywinpty; platform_system == "Windows"  # ConPTY bridge for reverse tunnel PowerShell sessions
 
 # Ansible Libraries
 ansible-core

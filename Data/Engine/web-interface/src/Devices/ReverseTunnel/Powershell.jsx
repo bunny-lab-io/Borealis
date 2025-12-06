@@ -9,7 +9,6 @@ import {
   MenuItem,
   IconButton,
   Tooltip,
-  Alert,
   LinearProgress,
 } from "@mui/material";
 import {
@@ -102,8 +101,8 @@ export default function ReverseTunnelPowershell({ device }) {
   const [connectionType, setConnectionType] = useState("ps");
   const [tunnel, setTunnel] = useState(null);
   const [sessionState, setSessionState] = useState("idle");
-  const [statusMessage, setStatusMessage] = useState("");
-  const [statusSeverity, setStatusSeverity] = useState("info");
+  const [, setStatusMessage] = useState("");
+  const [, setStatusSeverity] = useState("info");
   const [output, setOutput] = useState("");
   const [input, setInput] = useState("");
   const [copyFlash, setCopyFlash] = useState(false);
@@ -242,14 +241,8 @@ export default function ReverseTunnelPowershell({ device }) {
       setPolling(true);
       pollTimerRef.current = setTimeout(async () => {
         const resp = await emitAsync(socket, "ps_poll", {});
-        if (resp?.error) {
-          if (resp.error === "ps_unsupported") {
-            setStatusSeverity("info");
-            setStatusMessage("PowerShell channel warming up...");
-          } else {
-            setStatusSeverity("warning");
-            setStatusMessage(resp.error);
-          }
+      if (resp?.error) {
+          // Suppress warming/errors in UI; rely on session chips.
         }
         if (Array.isArray(resp?.output) && resp.output.length) {
           appendOutput(resp.output.join(""));
@@ -375,11 +368,9 @@ export default function ReverseTunnelPowershell({ device }) {
         const dims = measureTerminal();
         const openResp = await emitAsync(socket, "ps_open", dims);
         if (openResp?.error && openResp.error === "ps_unsupported") {
-          setStatusSeverity("info");
-          setStatusMessage("PowerShell channel warming up...");
+          // Suppress warming message; channel will settle once agent attaches.
         }
         appendOutput("");
-        setStatusMessage("Attached — waiting for agent to acknowledge...");
         setSessionState("waiting_agent");
         pollLoop(socket, lease.tunnel_id);
         handleResize();
@@ -391,7 +382,7 @@ export default function ReverseTunnelPowershell({ device }) {
   const requestTunnel = useCallback(async () => {
     if (tunnel && sessionState !== "closed" && sessionState !== "idle") {
       setStatusSeverity("info");
-      setStatusMessage("Re-attaching to existing tunnel...");
+      setStatusMessage("");
       connectSocket(tunnel);
       return;
     }
@@ -407,8 +398,8 @@ export default function ReverseTunnelPowershell({ device }) {
     }
     resetState();
     setSessionState("requesting");
-    setStatusSeverity("info");
-    setStatusMessage("Requesting tunnel lease...");
+      setStatusSeverity("info");
+      setStatusMessage("");
     try {
       const resp = await fetch("/api/tunnel/request", {
         method: "POST",
@@ -420,21 +411,17 @@ export default function ReverseTunnelPowershell({ device }) {
         const err = data?.error || `HTTP ${resp.status}`;
         setSessionState("error");
         setStatusSeverity(err === "domain_limit" ? "warning" : "error");
-        setStatusMessage(
-          err === "domain_limit"
-            ? "PowerShell session already active for this agent. Try again after it closes."
-            : err
-        );
+        setStatusMessage("");
         return;
       }
       setTunnel(data);
-      setStatusMessage("Lease issued. Waiting for agent to connect...");
+      setStatusMessage("");
       setSessionState("lease_issued");
       connectSocket(data);
     } catch (e) {
       setSessionState("error");
       setStatusSeverity("error");
-      setStatusMessage(e?.message || "Failed to request tunnel");
+      setStatusMessage("");
     }
   }, [agentId, connectSocket, connectionType, resetState]);
 
@@ -448,7 +435,7 @@ export default function ReverseTunnelPowershell({ device }) {
       const resp = await emitAsync(socket, "ps_send", { data: payload });
       if (resp?.error) {
         setStatusSeverity("warning");
-        setStatusMessage(resp.error);
+        setStatusMessage("");
       }
     },
     [appendOutput, emitAsync]
@@ -582,20 +569,6 @@ export default function ReverseTunnelPowershell({ device }) {
           ))}
         </Stack>
       </Box>
-
-      {statusMessage ? (
-        <Alert
-          severity={statusSeverity}
-          sx={{
-            borderRadius: 2,
-            backgroundColor: "rgba(8,12,24,0.9)",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            color: MAGIC_UI.textBright,
-          }}
-        >
-          {statusMessage}
-        </Alert>
-      ) : null}
 
       <Box
         sx={{
