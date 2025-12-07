@@ -567,15 +567,7 @@ export default function ReverseTunnelPowershell({ device }) {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
-      <Box
-        sx={{
-          border: `1px solid ${MAGIC_UI.panelBorder}`,
-          borderRadius: 2,
-          background: "linear-gradient(120deg, rgba(12,18,35,0.9), rgba(8,12,24,0.92))",
-          boxShadow: "0 18px 45px rgba(2,6,23,0.6)",
-          p: { xs: 1.5, md: 2 },
-        }}
-      >
+      <Box>
         <Stack
           direction={{ xs: "column", md: "row" }}
           spacing={1.5}
@@ -628,15 +620,17 @@ export default function ReverseTunnelPowershell({ device }) {
         {/* Workflow pills */}
         <Box sx={{ mt: 1.5, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.75 }}>
           {[
-            { key: "requested", label: "Request Tunnel" },
+            { key: "requested", label: "Establish Tunnel" },
             {
               key: "leaseIssued",
-              label: tunnel?.tunnel_id ? `Tunnel ${tunnel.tunnel_id.slice(0, 8)} @ Port ${tunnel.port || "-"}` : "Lease Issued",
+              label: tunnel?.tunnel_id
+                ? `Tunnel ${tunnel.tunnel_id.slice(0, 8)} Created @ Port ${tunnel.port || "-"}`
+                : "Tunnel Created",
             },
-            { key: "operatorJoined", label: "Operator Joined" },
-            { key: "channelOpened", label: "Open PS Channel" },
-            { key: "ack", label: "Shell ACK" },
-            { key: "active", label: "Session Active" },
+            { key: "operatorJoined", label: "Attach Operator" },
+            { key: "channelOpened", label: "Open Remote Shell" },
+            { key: "ack", label: "Shell Ready Acknowledged" },
+            { key: "active", label: "Remote Shell Session Active" },
           ].map((step, idx, arr) => {
             const firstPendingIdx = arr.findIndex((s) => !milestones[s.key]);
             const status = milestones[step.key]
