@@ -322,6 +322,9 @@ export default function ReverseTunnelPowershell({ device }) {
             stopPolling();
             return;
           }
+          if (resp.status.open_sent) {
+            setMilestones((prev) => ({ ...prev, channelOpened: true }));
+          }
           if (resp.status.ack) {
             setSessionState("connected");
             setMilestones((prev) => ({ ...prev, ack: true, active: true }));
@@ -424,34 +427,39 @@ export default function ReverseTunnelPowershell({ device }) {
         setMilestones((prev) => ({ ...prev, operatorJoined: true }));
         setStatusSeverity("info");
         setStatusMessage("Joining tunnel...");
-        const joinResp = await emitAsync(socket, "join", { tunnel_id: lease.tunnel_id });
+        const joinResp = await emitAsync(socket, "join", { tunnel_id: lease.tunnel_id }, 5000);
         if (joinResp?.error) {
+          const attempt = (joinAttemptsRef.current += 1);
+          const isTimeout = joinResp.error === "timeout";
           if (joinResp.error === "unknown_tunnel") {
             setSessionState("waiting_agent");
             setStatusSeverity("info");
             setStatusMessage("Waiting for agent to establish tunnel...");
-            joinAttemptsRef.current += 1;
-            const attempt = joinAttemptsRef.current;
-            if (attempt <= 15) {
-              joinRetryRef.current = setTimeout(() => connectSocket(lease, { isRetry: true }), 1000);
-            } else {
-              setSessionState("error");
-              setTunnel(null);
-              setStatusSeverity("warning");
-              setStatusMessage("Agent did not attach to tunnel (timeout). Try Connect again.");
-            }
+          } else if (isTimeout || joinResp.error === "attach_failed") {
+            setSessionState("waiting_agent");
+            setStatusSeverity("warning");
+            setStatusMessage("Tunnel join timed out. Retrying...");
           } else {
             debugLog("join error", joinResp);
             setSessionState("error");
             setStatusSeverity("error");
             setStatusMessage(joinResp.error);
+            return;
+          }
+          if (attempt <= 5) {
+            joinRetryRef.current = setTimeout(() => connectSocket(lease, { isRetry: true }), 800);
+          } else {
+            setSessionState("error");
+            setTunnel(null);
+            setStatusSeverity("warning");
+            setStatusMessage("Operator could not attach to tunnel. Try Connect again.");
           }
           return;
         }
         const dims = measureTerminal();
         debugLog("ps_open emit", { tunnelId: lease.tunnel_id, dims });
         setMilestones((prev) => ({ ...prev, channelOpened: true }));
-        const openResp = await emitAsync(socket, "ps_open", dims);
+        const openResp = await emitAsync(socket, "ps_open", dims, 5000);
         if (openResp?.error && openResp.error === "ps_unsupported") {
           // Suppress warming message; channel will settle once agent attaches.
         }
