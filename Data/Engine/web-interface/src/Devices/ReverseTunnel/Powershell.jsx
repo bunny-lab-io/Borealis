@@ -118,6 +118,7 @@ export default function ReverseTunnelPowershell({ device }) {
   const [copyFlash, setCopyFlash] = useState(false);
   const [, setPolling] = useState(false);
   const [psStatus, setPsStatus] = useState({});
+  const [statusLine, setStatusLine] = useState("Idle");
   const [milestones, setMilestones] = useState({
     requested: false,
     leaseIssued: false,
@@ -132,6 +133,7 @@ export default function ReverseTunnelPowershell({ device }) {
   const terminalRef = useRef(null);
   const joinRetryRef = useRef(null);
   const joinAttemptsRef = useRef(0);
+  const tunnelRef = useRef(null);
   const DOMAIN_REMOTE_SHELL = "remote-interactive-shell";
 
   useEffect(() => {
@@ -185,7 +187,12 @@ export default function ReverseTunnelPowershell({ device }) {
       ack: false,
       active: false,
     });
+    setStatusLine("Idle");
   }, []);
+
+  useEffect(() => {
+    tunnelRef.current = tunnel?.tunnel_id || null;
+  }, [tunnel?.tunnel_id]);
 
   const disconnectSocket = useCallback(() => {
     const socket = socketRef.current;
@@ -197,6 +204,7 @@ export default function ReverseTunnelPowershell({ device }) {
   }, []);
 
   const stopPolling = useCallback(() => {
+    setStatusLine("Stopping poll loop…");
     if (pollTimerRef.current) {
       clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
@@ -204,35 +212,34 @@ export default function ReverseTunnelPowershell({ device }) {
     setPolling(false);
   }, []);
 
-  const stopTunnel = useCallback(
-    async (reason = "operator_disconnect") => {
-      const tunnelId = tunnel?.tunnel_id;
-      if (!tunnelId) return;
-      try {
-        await fetch(`/api/tunnel/${tunnelId}`, {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason }),
-        });
-      } catch (err) {
-        // best-effort; socket close frame acts as fallback
-      }
-    },
-    [tunnel?.tunnel_id]
-  );
+  const stopTunnel = useCallback(async (reason = "operator_disconnect", tunnelIdOverride = null) => {
+    const tunnelId = tunnelIdOverride || tunnelRef.current;
+    if (!tunnelId) return;
+    setStatusLine(`Stopping tunnel ${tunnelId} reason=${reason}`);
+    try {
+      await fetch(`/api/tunnel/${tunnelId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+    } catch (err) {
+      // best-effort; socket close frame acts as fallback
+    }
+  }, []);
 
   useEffect(() => {
     return () => {
-      debugLog("cleanup on unmount", { tunnelId: tunnel?.tunnel_id });
+      debugLog("cleanup on unmount", { tunnelId: tunnelRef.current });
       stopPolling();
       disconnectSocket();
       if (joinRetryRef.current) {
         clearTimeout(joinRetryRef.current);
         joinRetryRef.current = null;
       }
-      stopTunnel("component_unmount");
+      stopTunnel("component_unmount", tunnelRef.current);
     };
-  }, [disconnectSocket, stopPolling, stopTunnel]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const appendOutput = useCallback((text) => {
     if (!text) return;
@@ -297,6 +304,7 @@ export default function ReverseTunnelPowershell({ device }) {
   const pollLoop = useCallback(
     (socket, tunnelId) => {
       if (!socket || !tunnelId) return;
+      setStatusLine(`Polling tunnel ${tunnelId}`);
       debugLog("pollLoop tick", { tunnelId });
       setPolling(true);
       pollTimerRef.current = setTimeout(async () => {
@@ -317,6 +325,7 @@ export default function ReverseTunnelPowershell({ device }) {
           setPsStatus(resp.status);
           debugLog("pollLoop status", resp.status);
           if (resp.status.closed) {
+            setStatusLine(`Tunnel ${tunnelId} reported closed`);
             setSessionState("closed");
             setTunnel(null);
             stopPolling();
@@ -324,10 +333,12 @@ export default function ReverseTunnelPowershell({ device }) {
           }
           if (resp.status.open_sent) {
             setMilestones((prev) => ({ ...prev, channelOpened: true }));
+            setStatusLine("Remote shell opening…");
           }
           if (resp.status.ack) {
             setSessionState("connected");
             setMilestones((prev) => ({ ...prev, ack: true, active: true }));
+            setStatusLine("Remote shell active");
           }
         }
         pollLoop(socket, tunnelId);
@@ -339,6 +350,7 @@ export default function ReverseTunnelPowershell({ device }) {
   const handleDisconnect = useCallback(
     async (reason = "operator_disconnect") => {
     debugLog("handleDisconnect begin", { reason, tunnelId: tunnel?.tunnel_id, psStatus, sessionState });
+    setStatusLine(`Disconnect requested (${reason})`);
     const socket = socketRef.current;
     const tunnelId = tunnel?.tunnel_id;
     if (joinRetryRef.current) {
@@ -358,6 +370,7 @@ export default function ReverseTunnelPowershell({ device }) {
     setTunnel(null);
     setSessionState("closed");
     setMilestones((prev) => ({ ...prev, active: false }));
+    setStatusLine("Disconnected");
     debugLog("handleDisconnect finished", { tunnelId });
   },
     [disconnectSocket, stopPolling, stopTunnel, tunnel?.tunnel_id]
@@ -400,10 +413,12 @@ export default function ReverseTunnelPowershell({ device }) {
       disconnectSocket();
       stopPolling();
       setSessionState("waiting");
-      const socket = io(`${window.location.origin}/tunnel`, { transports: ["websocket"] });
+      const socket = io(`${window.location.origin}/tunnel`, { transports: ["websocket", "polling"] });
       socketRef.current = socket;
+      setStatusLine("Connecting to tunnel namespace…");
 
       socket.on("connect_error", () => {
+        setStatusLine("Socket connect error");
         debugLog("socket connect_error");
         setStatusSeverity("warning");
         setStatusMessage("Tunnel namespace unavailable.");
@@ -412,6 +427,7 @@ export default function ReverseTunnelPowershell({ device }) {
       });
 
       socket.on("disconnect", () => {
+        setStatusLine("Socket disconnected");
         debugLog("socket disconnect", { tunnelId: tunnel?.tunnel_id });
         stopPolling();
         if (sessionState !== "closed") {
@@ -425,6 +441,7 @@ export default function ReverseTunnelPowershell({ device }) {
       socket.on("connect", async () => {
         debugLog("socket connect", { tunnelId: lease.tunnel_id });
         setMilestones((prev) => ({ ...prev, operatorJoined: true }));
+        setStatusLine("Operator attached; joining tunnel…");
         setStatusSeverity("info");
         setStatusMessage("Joining tunnel...");
         const joinResp = await emitAsync(socket, "join", { tunnel_id: lease.tunnel_id }, 5000);
@@ -435,15 +452,18 @@ export default function ReverseTunnelPowershell({ device }) {
             setSessionState("waiting_agent");
             setStatusSeverity("info");
             setStatusMessage("Waiting for agent to establish tunnel...");
+            setStatusLine("Waiting for agent to attach to tunnel…");
           } else if (isTimeout || joinResp.error === "attach_failed") {
             setSessionState("waiting_agent");
             setStatusSeverity("warning");
             setStatusMessage("Tunnel join timed out. Retrying...");
+            setStatusLine(`Join timed out (attempt ${attempt}/5); retrying…`);
           } else {
             debugLog("join error", joinResp);
             setSessionState("error");
             setStatusSeverity("error");
             setStatusMessage(joinResp.error);
+            setStatusLine(`Join failed: ${joinResp.error}`);
             return;
           }
           if (attempt <= 5) {
@@ -453,12 +473,14 @@ export default function ReverseTunnelPowershell({ device }) {
             setTunnel(null);
             setStatusSeverity("warning");
             setStatusMessage("Operator could not attach to tunnel. Try Connect again.");
+            setStatusLine("Operator attach failed after retries");
           }
           return;
         }
         const dims = measureTerminal();
         debugLog("ps_open emit", { tunnelId: lease.tunnel_id, dims });
         setMilestones((prev) => ({ ...prev, channelOpened: true }));
+        setStatusLine("Opening remote shell…");
         const openResp = await emitAsync(socket, "ps_open", dims, 5000);
         if (openResp?.error && openResp.error === "ps_unsupported") {
           // Suppress warming message; channel will settle once agent attaches.
@@ -480,6 +502,7 @@ export default function ReverseTunnelPowershell({ device }) {
       return;
     }
     debugLog("requestTunnel", { agentId, connectionType });
+    setStatusLine("Requesting tunnel…");
     if (!agentId) {
       setStatusSeverity("warning");
       setStatusMessage("Agent ID is required to request a tunnel.");
@@ -512,11 +535,13 @@ export default function ReverseTunnelPowershell({ device }) {
       setTunnel(data);
       setStatusMessage("");
       setSessionState("lease_issued");
+      setStatusLine(`Lease issued for tunnel ${data.tunnel_id || "-"}`);
       connectSocket(data);
     } catch (e) {
       setSessionState("error");
       setStatusSeverity("error");
       setStatusMessage("");
+      setStatusLine("Tunnel request failed");
     }
   }, [DOMAIN_REMOTE_SHELL, agentId, connectSocket, connectionType, resetState]);
 
@@ -674,6 +699,19 @@ export default function ReverseTunnelPowershell({ device }) {
             );
           })}
         </Box>
+        <Typography
+          variant="body2"
+          sx={{
+            mt: 0.5,
+            color: MAGIC_UI.textMuted,
+            fontWeight: 600,
+            textOverflow: "ellipsis",
+            overflow: "hidden",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {statusLine}
+        </Typography>
       </Box>
 
       <Box
