@@ -23,6 +23,10 @@ Use this doc for Engine work (successor to the legacy server). For shared guidan
 - Enrollment: operator approvals, conflict detection, auditor recording, pruning of expired codes/refresh tokens.
 - Background jobs and service adapters maintain compatibility with legacy DB schemas while enabling gradual API takeover.
 
+## Reverse Tunnels
+- Full design and lifecycle are in `Docs/Codex/REVERSE_TUNNELS.md` (domains, limits, framing, APIs, stop path, UI hooks).
+- Engine orchestrator is `Data/Engine/services/WebSocket/Agent/reverse_tunnel_orchestrator.py` with domain handlers under `Data/Engine/services/WebSocket/Agent/Reverse_Tunnels/`.
+
 ## WebUI & WebSocket Migration
 - Static/template handling: `Data/Engine/services/WebUI`; deployment copy paths are wired through `Borealis.ps1` with TLS-aware URL generation.
 - Stage 6 tasks: migration switch in the legacy server for WebUI delegation and porting device/admin API endpoints into Engine services.

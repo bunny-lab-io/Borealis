@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional, Tuple
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from ...WebSocket.Agent.ReverseTunnel import ReverseTunnelService
+from ...WebSocket.Agent.reverse_tunnel_orchestrator import ReverseTunnelService
 
 if False:  # pragma: no cover - import cycle hint for type checkers
     from .. import EngineServiceAdapters
@@ -103,6 +103,8 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
         agent_id = _normalize_text(body.get("agent_id"))
         protocol = _normalize_text(body.get("protocol") or "ps").lower() or "ps"
         domain = _normalize_text(body.get("domain") or protocol).lower() or protocol
+        if protocol == "ps" and domain == "ps":
+            domain = "remote-interactive-shell"
 
         if not agent_id:
             return jsonify({"error": "agent_id_required"}), 400
@@ -134,5 +136,34 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
             f"lease created tunnel_id={lease.tunnel_id} agent_id={lease.agent_id} domain={lease.domain} protocol={lease.protocol}",
         )
         return jsonify(summary), 200
+
+    @blueprint.route("/api/tunnel/<tunnel_id>", methods=["DELETE"])
+    def stop_tunnel(tunnel_id: str):
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        tunnel_id_norm = _normalize_text(tunnel_id)
+        if not tunnel_id_norm:
+            return jsonify({"error": "tunnel_id_required"}), 400
+
+        body = request.get_json(silent=True) or {}
+        reason = _normalize_text(body.get("reason") or "operator_stop")
+
+        tunnel_service = _get_tunnel_service(adapters)
+        stopped = False
+        try:
+            stopped = tunnel_service.stop_tunnel(tunnel_id_norm, reason=reason)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("stop_tunnel failed tunnel_id=%s: %s", tunnel_id_norm, exc, exc_info=True)
+        if not stopped:
+            return jsonify({"error": "not_found"}), 404
+
+        service_log(
+            "reverse_tunnel",
+            f"lease stopped tunnel_id={tunnel_id_norm} reason={reason or '-'}",
+        )
+        return jsonify({"status": "stopped", "tunnel_id": tunnel_id_norm}), 200
 
     app.register_blueprint(blueprint)

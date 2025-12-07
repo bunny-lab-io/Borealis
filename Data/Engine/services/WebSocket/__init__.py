@@ -20,7 +20,7 @@ from flask_socketio import SocketIO
 
 from ...database import initialise_engine_database
 from ...server import EngineContext
-from .Agent.ReverseTunnel import (
+from .Agent.reverse_tunnel_orchestrator import (
     ReverseTunnelService,
     TunnelBridge,
     decode_frame,
@@ -406,8 +406,8 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         tunnel_id = _operator_sessions.get(sid)
         if not tunnel_id:
             return None, None, {"error": "not_joined"}
-        server = tunnel_service.ensure_ps_server(tunnel_id)
-        if server is None:
+        server = tunnel_service.ensure_protocol_server(tunnel_id)
+        if server is None or not hasattr(server, "open_channel"):
             return None, tunnel_id, {"error": "ps_unsupported"}
         return server, tunnel_id, None
 
@@ -489,4 +489,9 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     @socket_server.on("disconnect", namespace=tunnel_namespace)
     def _ws_tunnel_disconnect():
         sid = request.sid
-        _operator_sessions.pop(sid, None)
+        tunnel_id = _operator_sessions.pop(sid, None)
+        if tunnel_id and tunnel_id not in _operator_sessions.values():
+            try:
+                tunnel_service.stop_tunnel(tunnel_id, reason="operator_socket_disconnect")
+            except Exception as exc:
+                logger.debug("ws_tunnel_disconnect stop_tunnel failed tunnel_id=%s: %s", tunnel_id, exc, exc_info=True)

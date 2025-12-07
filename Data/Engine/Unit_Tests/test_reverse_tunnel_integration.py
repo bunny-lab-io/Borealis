@@ -56,7 +56,7 @@ def test_reverse_tunnel_powershell_roundtrip() -> None:
     # 1) Request a tunnel lease
     resp = sess.post(
         f"{HOST}/api/tunnel/request",
-        json={"agent_id": AGENT_ID, "protocol": "ps", "domain": "ps"},
+        json={"agent_id": AGENT_ID, "protocol": "ps", "domain": "remote-interactive-shell"},
     )
     assert resp.status_code == 200, f"lease request failed: {resp.status_code} {resp.text}"
     lease = resp.json()

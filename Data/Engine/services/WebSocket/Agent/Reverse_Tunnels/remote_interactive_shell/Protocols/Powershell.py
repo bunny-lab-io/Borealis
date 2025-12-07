@@ -1,4 +1,4 @@
-"""Engine-side PowerShell tunnel channel helper."""
+"""Engine-side PowerShell tunnel channel helper (remote interactive shell domain)."""
 from __future__ import annotations
 
 import json
@@ -134,3 +134,6 @@ class PowershellChannelServer:
             "close_reason": self._close_reason,
             "close_code": self._close_code,
         }
+
+
+__all__ = ["PowershellChannelServer"]

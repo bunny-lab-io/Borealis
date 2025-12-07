@@ -1,5 +1,5 @@
 # ======================================================
-# Data\Engine\services\WebSocket\Agent\ReverseTunnel.py
+# Data\Engine\services\WebSocket\Agent\reverse_tunnel_orchestrator.py
 # Description: Async reverse tunnel scaffolding (Engine side) providing lease management, domain limits, and placeholders for WebSocket listeners.
 #
 # API Endpoints (if applicable): None
@@ -29,7 +29,13 @@ from typing import Callable, Deque, Dict, Iterable, List, Optional, Tuple
 from collections import deque
 from threading import Thread
 
-from .ReverseTunnelProtocols import PowershellChannelServer
+from .Reverse_Tunnels.remote_interactive_shell.Protocols.Powershell import PowershellChannelServer
+from .Reverse_Tunnels.remote_interactive_shell.Protocols.Bash import BashChannelServer
+from .Reverse_Tunnels.remote_management.Protocols.SSH import SSHChannelServer
+from .Reverse_Tunnels.remote_management.Protocols.WinRM import WinRMChannelServer
+from .Reverse_Tunnels.remote_video.Protocols.VNC import VNCChannelServer
+from .Reverse_Tunnels.remote_video.Protocols.RDP import RDPChannelServer
+from .Reverse_Tunnels.remote_video.Protocols.WebRTC import WebRTCChannelServer
 
 try:  # websockets is added to engine requirements
     import websockets
@@ -234,10 +240,15 @@ class DomainPolicy:
     """Enforce per-domain concurrency and defaults."""
 
     DEFAULT_LIMITS = {
-        "ps": 1,
+        # New domain lanes
+        "remote-interactive-shell": 2,
+        "remote-management": 1,
+        "remote-video": 2,
+        # Protocol-specific fallbacks (for backward compatibility / legacy callers)
+        "ps": 2,
         "rdp": 1,
         "vnc": 1,
-        "webrtc": 1,
+        "webrtc": 2,
         "ssh": None,  # Unlimited
         "winrm": None,  # Unlimited
     }
@@ -459,7 +470,17 @@ class ReverseTunnelService:
         self._bridges: Dict[str, "TunnelBridge"] = {}
         self._port_servers: Dict[int, asyncio.AbstractServer] = {}
         self._agent_sockets: Dict[str, "websockets.WebSocketServerProtocol"] = {}
-        self._ps_servers: Dict[str, PowershellChannelServer] = {}
+        self.protocol_registry = {
+            "ps": PowershellChannelServer,
+            "powershell": PowershellChannelServer,
+            "bash": BashChannelServer,
+            "ssh": SSHChannelServer,
+            "winrm": WinRMChannelServer,
+            "vnc": VNCChannelServer,
+            "rdp": RDPChannelServer,
+            "webrtc": WebRTCChannelServer,
+        }
+        self._protocol_servers: Dict[str, object] = {}
 
     def _ensure_loop(self) -> None:
         if self._running and self._loop:
@@ -504,6 +525,12 @@ class ReverseTunnelService:
                 self._loop.call_soon_threadsafe(asyncio.create_task, websocket.close())
             except Exception:
                 pass
+        for tunnel_id in list(self._bridges.keys()):
+            try:
+                self.release_bridge(tunnel_id, reason="service_stop")
+            except Exception:
+                pass
+        self._protocol_servers.clear()
         for lease in list(self.lease_manager.all_leases()):
             self.lease_manager.release(lease.tunnel_id, reason="service_stop")
         if self._sweeper_task:
@@ -561,9 +588,9 @@ class ReverseTunnelService:
             raise ValueError("unknown_tunnel")
         bridge = self.ensure_bridge(lease)
         bridge.attach_operator(operator_id)
-        if lease.domain.lower() == "ps":
+        if (lease.protocol or "").lower() in {"ps", "powershell"}:
             try:
-                server = self.ensure_ps_server(tunnel_id)
+                server = self.ensure_protocol_server(tunnel_id)
                 if server:
                     server.open_channel()
             except Exception:
@@ -629,6 +656,22 @@ class ReverseTunnelService:
         lease.expires_at = expires_at
         return token
 
+    def stop_tunnel(self, tunnel_id: str, *, reason: str = "operator_stop", code: int = CLOSE_AGENT_SHUTDOWN) -> bool:
+        """Request a graceful stop for a tunnel (operator-driven)."""
+
+        lease = self.lease_manager.get(tunnel_id)
+        if lease is None:
+            return False
+        server = self.get_protocol_server(tunnel_id)
+        if server and hasattr(server, "close"):
+            try:
+                server.close(code=code, reason=reason)
+            except Exception:
+                self.logger.debug("protocol server close failed tunnel_id=%s", tunnel_id, exc_info=True)
+        self._push_stop_to_agent(lease, reason=reason)
+        self.release_bridge(tunnel_id, reason=reason)
+        return True
+
     def _push_start_to_agent(self, lease: TunnelLease) -> None:
         """Notify the target agent about the new lease over Socket.IO (best-effort)."""
 
@@ -657,6 +700,26 @@ class ReverseTunnelService:
             )
         except Exception:
             self.logger.debug("Failed to emit reverse_tunnel_start for tunnel_id=%s", lease.tunnel_id, exc_info=True)
+
+    def _push_stop_to_agent(self, lease: TunnelLease, *, reason: str = "operator_stop") -> None:
+        """Notify the agent to tear down a tunnel (best-effort)."""
+
+        if not self._socketio:
+            return
+        try:
+            self._socketio.emit(
+                "reverse_tunnel_stop",
+                {"tunnel_id": lease.tunnel_id, "reason": reason},
+                namespace="/",
+            )
+            self.audit_logger.info(
+                "lease_push_stop tunnel_id=%s agent_id=%s reason=%s",
+                lease.tunnel_id,
+                lease.agent_id,
+                reason or "-",
+            )
+        except Exception:
+            self.logger.debug("Failed to emit reverse_tunnel_stop for tunnel_id=%s", lease.tunnel_id, exc_info=True)
 
     def lease_summary(self, lease: TunnelLease) -> Dict[str, object]:
         return {
@@ -892,7 +955,7 @@ class ReverseTunnelService:
                     pass
 
     def _dispatch_agent_frame(self, tunnel_id: str, frame: TunnelFrame) -> None:
-        server = self._ps_servers.get(tunnel_id)
+        server = self._protocol_servers.get(tunnel_id)
         if not server:
             return
         try:
@@ -1136,33 +1199,39 @@ class ReverseTunnelService:
             self._bridges[lease.tunnel_id] = bridge
         return bridge
 
-    def ensure_ps_server(self, tunnel_id: str) -> Optional[PowershellChannelServer]:
-        server = self._ps_servers.get(tunnel_id)
+    def ensure_protocol_server(self, tunnel_id: str) -> Optional[object]:
+        server = self._protocol_servers.get(tunnel_id)
         if server:
             return server
         lease = self.lease_manager.get(tunnel_id)
         if lease is None:
             return None
+        handler_cls = self.protocol_registry.get((lease.protocol or "").lower())
+        if handler_cls is None:
+            return None
         bridge = self.ensure_bridge(lease)
-        server = PowershellChannelServer(
-            bridge=bridge,
-            service=self,
-            frame_cls=TunnelFrame,
-            close_frame_fn=close_frame,
-        )
-        self._ps_servers[tunnel_id] = server
+        try:
+            server = handler_cls(
+                bridge=bridge,
+                service=self,
+                frame_cls=TunnelFrame,
+                close_frame_fn=close_frame,
+            )
+        except TypeError:
+            server = handler_cls(bridge=bridge, service=self)
+        self._protocol_servers[tunnel_id] = server
         return server
 
-    def get_ps_server(self, tunnel_id: str) -> Optional[PowershellChannelServer]:
-        return self._ps_servers.get(tunnel_id)
+    def get_protocol_server(self, tunnel_id: str) -> Optional[object]:
+        return self._protocol_servers.get(tunnel_id)
 
     def release_bridge(self, tunnel_id: str, *, reason: str = "bridge_released") -> None:
         bridge = self._bridges.pop(tunnel_id, None)
         if bridge:
             bridge.stop(reason=reason)
-        if tunnel_id in self._ps_servers:
+        if tunnel_id in self._protocol_servers:
             try:
-                self._ps_servers.pop(tunnel_id, None)
+                self._protocol_servers.pop(tunnel_id, None)
             except Exception:
                 pass
 

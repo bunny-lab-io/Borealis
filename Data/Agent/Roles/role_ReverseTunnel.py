@@ -14,25 +14,109 @@ import aiohttp
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-# Capture import errors for the PowerShell handler so we can report why it is missing.
+# Capture import errors for protocol handlers so we can report why they are missing.
 PS_IMPORT_ERROR: Optional[str] = None
+BASH_IMPORT_ERROR: Optional[str] = None
+tunnel_SSH = None
+tunnel_WinRM = None
+tunnel_VNC = None
+tunnel_RDP = None
+tunnel_WebRTC = None
 tunnel_Powershell = None
+tunnel_Bash = None
+
+
+def _load_protocol_module(module_name: str, rel_parts: list[str]) -> tuple[Optional[object], Optional[str]]:
+    """Load a protocol handler directly from a file path to survive non-package runtimes."""
+
+    base = Path(__file__).parent
+    path = base
+    for part in rel_parts:
+        path = path / part
+    if not path.exists():
+        return None, f"path_missing:{path}"
+    try:
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if not spec or not spec.loader:
+            return None, "spec_failed"
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)  # type: ignore
+        return module, None
+    except Exception as exc:  # pragma: no cover - defensive
+        return None, repr(exc)
+
+
 try:
-    from .ReverseTunnel import tunnel_Powershell  # type: ignore
+    from .Reverse_Tunnels.remote_interactive_shell.Protocols import Powershell as tunnel_Powershell  # type: ignore
 except Exception as exc:  # pragma: no cover - best-effort logging only
     PS_IMPORT_ERROR = repr(exc)
-    # Try manual import from file to survive non-package execution.
-    try:
-        _ps_path = Path(__file__).parent / "ReverseTunnel" / "tunnel_Powershell.py"
-        if _ps_path.exists():
-            spec = importlib.util.spec_from_file_location("tunnel_Powershell", _ps_path)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)  # type: ignore
-                tunnel_Powershell = module
-                PS_IMPORT_ERROR = None
-    except Exception as exc2:  # pragma: no cover - diagnostic only
-        PS_IMPORT_ERROR = f"{PS_IMPORT_ERROR} | fallback_load_failed={exc2!r}"
+    _module, _err = _load_protocol_module(
+        "tunnel_Powershell",
+        ["Reverse_Tunnels", "remote_interactive_shell", "Protocols", "Powershell.py"],
+    )
+    if _module:
+        tunnel_Powershell = _module
+        PS_IMPORT_ERROR = None
+    else:
+        try:
+            from .ReverseTunnel import tunnel_Powershell  # type: ignore  # legacy fallback
+            PS_IMPORT_ERROR = None
+        except Exception as exc2:  # pragma: no cover - diagnostic only
+            PS_IMPORT_ERROR = f"{PS_IMPORT_ERROR} | legacy_fallback={exc2!r} | file_load_failed={_err}"
+
+try:
+    from .Reverse_Tunnels.remote_interactive_shell.Protocols import Bash as tunnel_Bash  # type: ignore
+except Exception as exc:  # pragma: no cover - best-effort logging only
+    BASH_IMPORT_ERROR = repr(exc)
+    _module, _err = _load_protocol_module(
+        "tunnel_Bash",
+        ["Reverse_Tunnels", "remote_interactive_shell", "Protocols", "Bash.py"],
+    )
+    if _module:
+        tunnel_Bash = _module
+        BASH_IMPORT_ERROR = None
+    else:
+        BASH_IMPORT_ERROR = f"{BASH_IMPORT_ERROR} | file_load_failed={_err}"
+try:
+    from .Reverse_Tunnels.remote_management.Protocols import SSH as tunnel_SSH  # type: ignore
+except Exception:
+    _module, _err = _load_protocol_module(
+        "tunnel_SSH",
+        ["Reverse_Tunnels", "remote_management", "Protocols", "SSH.py"],
+    )
+    tunnel_SSH = _module
+try:
+    from .Reverse_Tunnels.remote_management.Protocols import WinRM as tunnel_WinRM  # type: ignore
+except Exception:
+    _module, _err = _load_protocol_module(
+        "tunnel_WinRM",
+        ["Reverse_Tunnels", "remote_management", "Protocols", "WinRM.py"],
+    )
+    tunnel_WinRM = _module
+try:
+    from .Reverse_Tunnels.remote_video.Protocols import VNC as tunnel_VNC  # type: ignore
+except Exception:
+    _module, _err = _load_protocol_module(
+        "tunnel_VNC",
+        ["Reverse_Tunnels", "remote_video", "Protocols", "VNC.py"],
+    )
+    tunnel_VNC = _module
+try:
+    from .Reverse_Tunnels.remote_video.Protocols import RDP as tunnel_RDP  # type: ignore
+except Exception:
+    _module, _err = _load_protocol_module(
+        "tunnel_RDP",
+        ["Reverse_Tunnels", "remote_video", "Protocols", "RDP.py"],
+    )
+    tunnel_RDP = _module
+try:
+    from .Reverse_Tunnels.remote_video.Protocols import WebRTC as tunnel_WebRTC  # type: ignore
+except Exception:
+    _module, _err = _load_protocol_module(
+        "tunnel_WebRTC",
+        ["Reverse_Tunnels", "remote_video", "Protocols", "WebRTC.py"],
+    )
+    tunnel_WebRTC = _module
 
 ROLE_NAME = "reverse_tunnel"
 ROLE_CONTEXTS = ["interactive", "system"]
@@ -185,10 +269,14 @@ class Role:
         self._active: Dict[str, ActiveTunnel] = {}
         self._domain_claims: Dict[str, str] = {}
         self._domain_limits: Dict[str, Optional[int]] = {
-            "ps": 1,
+            "remote-interactive-shell": 2,
+            "remote-management": 1,
+            "remote-video": 2,
+            # Legacy / protocol fallbacks
+            "ps": 2,
             "rdp": 1,
             "vnc": 1,
-            "webrtc": 1,
+            "webrtc": 2,
             "ssh": None,
             "winrm": None,
         }
@@ -211,6 +299,28 @@ class Role:
                 )
         except Exception as exc:
             self._log(f"reverse_tunnel ps handler registration failed: {exc}", error=True)
+        try:
+            if tunnel_Bash and hasattr(tunnel_Bash, "BashChannel"):
+                self._protocol_handlers["bash"] = tunnel_Bash.BashChannel
+                module_path = getattr(tunnel_Bash, "__file__", None)
+                self._log(f"reverse_tunnel bash handler registered (BashChannel) module={module_path}")
+            elif BASH_IMPORT_ERROR:
+                self._log(f"reverse_tunnel bash handler NOT registered (missing module/class) import_error={BASH_IMPORT_ERROR}", error=True)
+        except Exception as exc:
+            self._log(f"reverse_tunnel bash handler registration failed: {exc}", error=True)
+        try:
+            if tunnel_SSH and hasattr(tunnel_SSH, "SSHChannel"):
+                self._protocol_handlers["ssh"] = tunnel_SSH.SSHChannel
+            if tunnel_WinRM and hasattr(tunnel_WinRM, "WinRMChannel"):
+                self._protocol_handlers["winrm"] = tunnel_WinRM.WinRMChannel
+            if tunnel_VNC and hasattr(tunnel_VNC, "VNCChannel"):
+                self._protocol_handlers["vnc"] = tunnel_VNC.VNCChannel
+            if tunnel_RDP and hasattr(tunnel_RDP, "RDPChannel"):
+                self._protocol_handlers["rdp"] = tunnel_RDP.RDPChannel
+            if tunnel_WebRTC and hasattr(tunnel_WebRTC, "WebRTCChannel"):
+                self._protocol_handlers["webrtc"] = tunnel_WebRTC.WebRTCChannel
+        except Exception as exc:
+            self._log(f"reverse_tunnel protocol handler registration failed: {exc}", error=True)
 
     # ------------------------------------------------------------------ Logging
     def _log(self, message: str, *, error: bool = False) -> None:
@@ -728,6 +838,7 @@ class Role:
         try:
             handler = handler_cls(self, tunnel, frame.channel_id, metadata)
         except Exception:
+            self._log(f"reverse_tunnel channel handler fallback to BaseChannel protocol={protocol}", error=True)
             handler = BaseChannel(self, tunnel, frame.channel_id, metadata)
         tunnel.channels[frame.channel_id] = handler
         await handler.start()

@@ -114,6 +114,7 @@ export default function ReverseTunnelPowershell({ device }) {
   const terminalRef = useRef(null);
   const joinRetryRef = useRef(null);
   const joinAttemptsRef = useRef(0);
+  const DOMAIN_REMOTE_SHELL = "remote-interactive-shell";
 
   const hostname = useMemo(() => {
     return (
@@ -164,6 +165,23 @@ export default function ReverseTunnelPowershell({ device }) {
     setPolling(false);
   }, []);
 
+  const stopTunnel = useCallback(
+    async (reason = "operator_disconnect") => {
+      const tunnelId = tunnel?.tunnel_id;
+      if (!tunnelId) return;
+      try {
+        await fetch(`/api/tunnel/${tunnelId}`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason }),
+        });
+      } catch (err) {
+        // best-effort; socket close frame acts as fallback
+      }
+    },
+    [tunnel?.tunnel_id]
+  );
+
   useEffect(() => {
     return () => {
       stopPolling();
@@ -172,8 +190,9 @@ export default function ReverseTunnelPowershell({ device }) {
         clearTimeout(joinRetryRef.current);
         joinRetryRef.current = null;
       }
+      stopTunnel("component_unmount");
     };
-  }, [disconnectSocket, stopPolling]);
+  }, [disconnectSocket, stopPolling, stopTunnel]);
 
   const appendOutput = useCallback((text) => {
     if (!text) return;
@@ -270,7 +289,8 @@ export default function ReverseTunnelPowershell({ device }) {
     [appendOutput, emitAsync, stopPolling, disconnectSocket]
   );
 
-  const handleDisconnect = useCallback(() => {
+  const handleDisconnect = useCallback(
+    async (reason = "operator_disconnect") => {
     const socket = socketRef.current;
     const tunnelId = tunnel?.tunnel_id;
     if (joinRetryRef.current) {
@@ -282,11 +302,14 @@ export default function ReverseTunnelPowershell({ device }) {
       const frame = buildCloseFrame(1, CLOSE_AGENT_SHUTDOWN, "operator_close");
       socket.emit("send", { frame });
     }
+    await stopTunnel(reason);
     stopPolling();
     disconnectSocket();
     setTunnel(null);
     setSessionState("closed");
-  }, [disconnectSocket, stopPolling, tunnel?.tunnel_id]);
+  },
+    [disconnectSocket, stopPolling, stopTunnel, tunnel?.tunnel_id]
+  );
 
   const handleResize = useCallback(() => {
     if (!socketRef.current || sessionState === "idle") return;
@@ -410,7 +433,7 @@ export default function ReverseTunnelPowershell({ device }) {
       const resp = await fetch("/api/tunnel/request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: agentId, protocol: "ps", domain: "ps" }),
+        body: JSON.stringify({ agent_id: agentId, protocol: "ps", domain: DOMAIN_REMOTE_SHELL }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
@@ -429,7 +452,7 @@ export default function ReverseTunnelPowershell({ device }) {
       setStatusSeverity("error");
       setStatusMessage("");
     }
-  }, [agentId, connectSocket, connectionType, resetState]);
+  }, [DOMAIN_REMOTE_SHELL, agentId, connectSocket, connectionType, resetState]);
 
   const handleSend = useCallback(
     async (text) => {
@@ -455,6 +478,17 @@ export default function ReverseTunnelPowershell({ device }) {
     sessionState === "waiting_agent" ||
     sessionState === "lease_issued";
   const canStart = Boolean(agentId) && !isBusy;
+
+  useEffect(() => {
+    const handleUnload = () => {
+      stopTunnel("window_unload");
+    };
+    if (tunnel?.tunnel_id) {
+      window.addEventListener("beforeunload", handleUnload);
+      return () => window.removeEventListener("beforeunload", handleUnload);
+    }
+    return undefined;
+  }, [stopTunnel, tunnel?.tunnel_id]);
 
   const sessionChips = [
     {
