@@ -27,6 +27,16 @@ import "prismjs/components/prism-powershell";
 import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
 
+// Console diagnostics for troubleshooting the connect/disconnect flow.
+const debugLog = (...args) => {
+  try {
+    // eslint-disable-next-line no-console
+    console.error("[ReverseTunnel][PS]", ...args);
+  } catch {
+    // ignore
+  }
+};
+
 const MAGIC_UI = {
   panelBg: "rgba(7,11,24,0.92)",
   panelBorder: "rgba(148, 163, 184, 0.35)",
@@ -108,6 +118,14 @@ export default function ReverseTunnelPowershell({ device }) {
   const [copyFlash, setCopyFlash] = useState(false);
   const [, setPolling] = useState(false);
   const [psStatus, setPsStatus] = useState({});
+  const [milestones, setMilestones] = useState({
+    requested: false,
+    leaseIssued: false,
+    operatorJoined: false,
+    channelOpened: false,
+    ack: false,
+    active: false,
+  });
   const socketRef = useRef(null);
   const pollTimerRef = useRef(null);
   const resizeTimerRef = useRef(null);
@@ -115,6 +133,18 @@ export default function ReverseTunnelPowershell({ device }) {
   const joinRetryRef = useRef(null);
   const joinAttemptsRef = useRef(0);
   const DOMAIN_REMOTE_SHELL = "remote-interactive-shell";
+
+  useEffect(() => {
+    debugLog("component mount", { hostname: device?.hostname, agentId });
+    return () => debugLog("component unmount");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    debugLog("component mount", { hostname: device?.hostname, agentId });
+    return () => debugLog("component unmount");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const hostname = useMemo(() => {
     return (
@@ -139,6 +169,7 @@ export default function ReverseTunnelPowershell({ device }) {
   }, [device]);
 
   const resetState = useCallback(() => {
+    debugLog("resetState invoked");
     setTunnel(null);
     setSessionState("idle");
     setStatusMessage("");
@@ -146,6 +177,14 @@ export default function ReverseTunnelPowershell({ device }) {
     setOutput("");
     setInput("");
     setPsStatus({});
+    setMilestones({
+      requested: false,
+      leaseIssued: false,
+      operatorJoined: false,
+      channelOpened: false,
+      ack: false,
+      active: false,
+    });
   }, []);
 
   const disconnectSocket = useCallback(() => {
@@ -184,6 +223,7 @@ export default function ReverseTunnelPowershell({ device }) {
 
   useEffect(() => {
     return () => {
+      debugLog("cleanup on unmount", { tunnelId: tunnel?.tunnel_id });
       stopPolling();
       disconnectSocket();
       if (joinRetryRef.current) {
@@ -257,10 +297,12 @@ export default function ReverseTunnelPowershell({ device }) {
   const pollLoop = useCallback(
     (socket, tunnelId) => {
       if (!socket || !tunnelId) return;
+      debugLog("pollLoop tick", { tunnelId });
       setPolling(true);
       pollTimerRef.current = setTimeout(async () => {
         const resp = await emitAsync(socket, "ps_poll", {});
         if (resp?.error) {
+          debugLog("pollLoop error", resp);
           stopPolling();
           disconnectSocket();
           setPsStatus({});
@@ -273,6 +315,7 @@ export default function ReverseTunnelPowershell({ device }) {
         }
         if (resp?.status) {
           setPsStatus(resp.status);
+          debugLog("pollLoop status", resp.status);
           if (resp.status.closed) {
             setSessionState("closed");
             setTunnel(null);
@@ -281,6 +324,7 @@ export default function ReverseTunnelPowershell({ device }) {
           }
           if (resp.status.ack) {
             setSessionState("connected");
+            setMilestones((prev) => ({ ...prev, ack: true, active: true }));
           }
         }
         pollLoop(socket, tunnelId);
@@ -291,6 +335,7 @@ export default function ReverseTunnelPowershell({ device }) {
 
   const handleDisconnect = useCallback(
     async (reason = "operator_disconnect") => {
+    debugLog("handleDisconnect begin", { reason, tunnelId: tunnel?.tunnel_id, psStatus, sessionState });
     const socket = socketRef.current;
     const tunnelId = tunnel?.tunnel_id;
     if (joinRetryRef.current) {
@@ -300,13 +345,17 @@ export default function ReverseTunnelPowershell({ device }) {
     joinAttemptsRef.current = 0;
     if (socket && tunnelId) {
       const frame = buildCloseFrame(1, CLOSE_AGENT_SHUTDOWN, "operator_close");
+      debugLog("emit CLOSE", { tunnelId });
       socket.emit("send", { frame });
     }
     await stopTunnel(reason);
+    debugLog("stopTunnel issued", { tunnelId });
     stopPolling();
     disconnectSocket();
     setTunnel(null);
     setSessionState("closed");
+    setMilestones((prev) => ({ ...prev, active: false }));
+    debugLog("handleDisconnect finished", { tunnelId });
   },
     [disconnectSocket, stopPolling, stopTunnel, tunnel?.tunnel_id]
   );
@@ -352,6 +401,7 @@ export default function ReverseTunnelPowershell({ device }) {
       socketRef.current = socket;
 
       socket.on("connect_error", () => {
+        debugLog("socket connect_error");
         setStatusSeverity("warning");
         setStatusMessage("Tunnel namespace unavailable.");
         setTunnel(null);
@@ -359,6 +409,7 @@ export default function ReverseTunnelPowershell({ device }) {
       });
 
       socket.on("disconnect", () => {
+        debugLog("socket disconnect", { tunnelId: tunnel?.tunnel_id });
         stopPolling();
         if (sessionState !== "closed") {
           setSessionState("disconnected");
@@ -369,6 +420,8 @@ export default function ReverseTunnelPowershell({ device }) {
       });
 
       socket.on("connect", async () => {
+        debugLog("socket connect", { tunnelId: lease.tunnel_id });
+        setMilestones((prev) => ({ ...prev, operatorJoined: true }));
         setStatusSeverity("info");
         setStatusMessage("Joining tunnel...");
         const joinResp = await emitAsync(socket, "join", { tunnel_id: lease.tunnel_id });
@@ -388,6 +441,7 @@ export default function ReverseTunnelPowershell({ device }) {
               setStatusMessage("Agent did not attach to tunnel (timeout). Try Connect again.");
             }
           } else {
+            debugLog("join error", joinResp);
             setSessionState("error");
             setStatusSeverity("error");
             setStatusMessage(joinResp.error);
@@ -395,6 +449,8 @@ export default function ReverseTunnelPowershell({ device }) {
           return;
         }
         const dims = measureTerminal();
+        debugLog("ps_open emit", { tunnelId: lease.tunnel_id, dims });
+        setMilestones((prev) => ({ ...prev, channelOpened: true }));
         const openResp = await emitAsync(socket, "ps_open", dims);
         if (openResp?.error && openResp.error === "ps_unsupported") {
           // Suppress warming message; channel will settle once agent attaches.
@@ -415,6 +471,7 @@ export default function ReverseTunnelPowershell({ device }) {
       connectSocket(tunnel);
       return;
     }
+    debugLog("requestTunnel", { agentId, connectionType });
     if (!agentId) {
       setStatusSeverity("warning");
       setStatusMessage("Agent ID is required to request a tunnel.");
@@ -443,6 +500,7 @@ export default function ReverseTunnelPowershell({ device }) {
         setStatusMessage("");
         return;
       }
+      setMilestones((prev) => ({ ...prev, requested: true, leaseIssued: true }));
       setTunnel(data);
       setStatusMessage("");
       setSessionState("lease_issued");
@@ -491,11 +549,6 @@ export default function ReverseTunnelPowershell({ device }) {
   }, [stopTunnel, tunnel?.tunnel_id]);
 
   const sessionChips = [
-    {
-      label: isConnected ? "Connected" : isClosed ? "Session ended" : sessionState === "idle" ? "Idle" : sessionState.replace(/_/g, " "),
-      color: isConnected ? MAGIC_UI.accentC : isClosed ? MAGIC_UI.accentB : MAGIC_UI.accentA,
-      icon: <ActivityIcon sx={{ fontSize: 18 }} />,
-    },
     tunnel?.tunnel_id
       ? {
           label: `Tunnel ${tunnel.tunnel_id.slice(0, 8)}`,
@@ -534,28 +587,6 @@ export default function ReverseTunnelPowershell({ device }) {
             <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 0.3 }}>
               Remote Shell
             </Typography>
-            {hostname ? (
-              <Chip
-                size="small"
-                label={hostname}
-                sx={{
-                  background: "rgba(12,18,35,0.8)",
-                  color: MAGIC_UI.textBright,
-                  border: `1px solid ${MAGIC_UI.panelBorder}`,
-                }}
-              />
-            ) : null}
-            {agentId ? (
-              <Chip
-                size="small"
-                label={`Agent ${agentId}`}
-                sx={{
-                  background: "rgba(12,18,35,0.8)",
-                  color: MAGIC_UI.textMuted,
-                  border: `1px solid ${MAGIC_UI.panelBorder}`,
-                }}
-              />
-            ) : null}
           </Stack>
 
           <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="center">
@@ -594,21 +625,53 @@ export default function ReverseTunnelPowershell({ device }) {
           </Stack>
         </Stack>
 
-        <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ mt: 1, flexWrap: "wrap" }}>
-          {sessionChips.map((chip) => (
-            <Chip
-              key={chip.label}
-              icon={chip.icon}
-              label={chip.label}
-              sx={{
-                background: "rgba(12,18,35,0.85)",
-                color: chip.color,
-                border: `1px solid ${chip.color}44`,
-                fontWeight: 600,
-              }}
-            />
-          ))}
-        </Stack>
+        {/* Workflow pills */}
+        <Box sx={{ mt: 1.5, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.75 }}>
+          {[
+            { key: "requested", label: "Request Tunnel" },
+            {
+              key: "leaseIssued",
+              label: tunnel?.tunnel_id ? `Tunnel ${tunnel.tunnel_id.slice(0, 8)} @ Port ${tunnel.port || "-"}` : "Lease Issued",
+            },
+            { key: "operatorJoined", label: "Operator Joined" },
+            { key: "channelOpened", label: "Open PS Channel" },
+            { key: "ack", label: "Shell ACK" },
+            { key: "active", label: "Session Active" },
+          ].map((step, idx, arr) => {
+            const firstPendingIdx = arr.findIndex((s) => !milestones[s.key]);
+            const status = milestones[step.key]
+              ? "done"
+              : idx === firstPendingIdx && sessionState !== "idle"
+              ? "active"
+              : "idle";
+            const palette =
+              status === "done"
+                ? { bg: "rgba(52,211,153,0.15)", border: "#34d399", color: "#34d399" }
+                : status === "active"
+                ? { bg: "rgba(125,211,252,0.18)", border: MAGIC_UI.accentA, color: MAGIC_UI.accentA }
+                : { bg: "rgba(148,163,184,0.12)", border: `${MAGIC_UI.panelBorder}`, color: MAGIC_UI.textMuted };
+            return (
+              <React.Fragment key={step.key}>
+                <Chip
+                  label={step.label}
+                  icon={status === "done" ? <ActivityIcon sx={{ fontSize: 16 }} /> : <PlayIcon sx={{ fontSize: 16 }} />}
+                  sx={{
+                    backgroundColor: palette.bg,
+                    color: palette.color,
+                    border: `1px solid ${palette.border}`,
+                    fontWeight: 600,
+                    ".MuiChip-icon": { color: palette.color },
+                  }}
+                />
+                {idx < arr.length - 1 ? (
+                  <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, px: 0.25, fontWeight: 700 }}>
+                    →
+                  </Typography>
+                ) : null}
+              </React.Fragment>
+            );
+          })}
+        </Box>
       </Box>
 
       <Box
