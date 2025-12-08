@@ -35,6 +35,9 @@ Device Filters:
 Device Filter Editor:
 ![Device Filter Editor](Docs/images/repo_screenshots/Device_Filter_Editor.png)
 
+Device Remote Shell:
+![Device Remote Shell](Docs/images/repo_screenshots/Device_Remote_Shell.png)
+
 ## Assembly Management
 Assembly List:
 ![Assembly List](Docs/images/repo_screenshots/Assembly_List.png)
