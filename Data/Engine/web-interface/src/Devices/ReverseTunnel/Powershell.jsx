@@ -656,9 +656,11 @@ export default function ReverseTunnelPowershell({ device }) {
             { key: "active", label: "Remote Shell Session Active" },
           ].map((step, idx, arr) => {
             const firstPendingIdx = arr.findIndex((s) => !milestones[s.key]);
+            const flowActiveStates = ["requesting", "waiting", "waiting_agent", "lease_issued", "connected"];
+            const allowActive = flowActiveStates.includes(sessionState);
             const status = milestones[step.key]
               ? "done"
-              : idx === firstPendingIdx && sessionState !== "idle"
+              : idx === firstPendingIdx && allowActive
               ? "active"
               : "idle";
             const palette =
