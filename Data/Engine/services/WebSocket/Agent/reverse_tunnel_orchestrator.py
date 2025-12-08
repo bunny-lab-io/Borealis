@@ -668,7 +668,23 @@ class ReverseTunnelService:
                 server.close(code=code, reason=reason)
             except Exception:
                 self.logger.debug("protocol server close failed tunnel_id=%s", tunnel_id, exc_info=True)
+        if tunnel_id in self._protocol_servers:
+            try:
+                self._protocol_servers.pop(tunnel_id, None)
+            except Exception:
+                pass
         self._push_stop_to_agent(lease, reason=reason)
+        websocket = self._agent_sockets.pop(tunnel_id, None)
+        if websocket is not None:
+            try:
+                self.lease_manager.mark_agent_disconnected(tunnel_id)
+            except Exception:
+                pass
+            try:
+                if self._loop:
+                    self._loop.call_soon_threadsafe(asyncio.create_task, websocket.close())
+            except Exception:
+                self.logger.debug("agent websocket close failed tunnel_id=%s", tunnel_id, exc_info=True)
         self.release_bridge(tunnel_id, reason=reason)
         return True
 

@@ -107,6 +107,15 @@ function highlightPs(code) {
   }
 }
 
+const INITIAL_MILESTONES = {
+  requested: false,
+  leaseIssued: false,
+  operatorJoined: false,
+  channelOpened: false,
+  ack: false,
+  active: false,
+};
+
 export default function ReverseTunnelPowershell({ device }) {
   const [connectionType, setConnectionType] = useState("ps");
   const [tunnel, setTunnel] = useState(null);
@@ -119,14 +128,7 @@ export default function ReverseTunnelPowershell({ device }) {
   const [, setPolling] = useState(false);
   const [psStatus, setPsStatus] = useState({});
   const [statusLine, setStatusLine] = useState("Idle");
-  const [milestones, setMilestones] = useState({
-    requested: false,
-    leaseIssued: false,
-    operatorJoined: false,
-    channelOpened: false,
-    ack: false,
-    active: false,
-  });
+  const [milestones, setMilestones] = useState(() => ({ ...INITIAL_MILESTONES }));
   const socketRef = useRef(null);
   const pollTimerRef = useRef(null);
   const resizeTimerRef = useRef(null);
@@ -135,12 +137,6 @@ export default function ReverseTunnelPowershell({ device }) {
   const joinAttemptsRef = useRef(0);
   const tunnelRef = useRef(null);
   const DOMAIN_REMOTE_SHELL = "remote-interactive-shell";
-
-  useEffect(() => {
-    debugLog("component mount", { hostname: device?.hostname, agentId });
-    return () => debugLog("component unmount");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     debugLog("component mount", { hostname: device?.hostname, agentId });
@@ -179,14 +175,7 @@ export default function ReverseTunnelPowershell({ device }) {
     setOutput("");
     setInput("");
     setPsStatus({});
-    setMilestones({
-      requested: false,
-      leaseIssued: false,
-      operatorJoined: false,
-      channelOpened: false,
-      ack: false,
-      active: false,
-    });
+    setMilestones({ ...INITIAL_MILESTONES });
     setStatusLine("Idle");
   }, []);
 
@@ -204,7 +193,6 @@ export default function ReverseTunnelPowershell({ device }) {
   }, []);
 
   const stopPolling = useCallback(() => {
-    setStatusLine("Stopping poll loop…");
     if (pollTimerRef.current) {
       clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
@@ -328,6 +316,7 @@ export default function ReverseTunnelPowershell({ device }) {
             setStatusLine(`Tunnel ${tunnelId} reported closed`);
             setSessionState("closed");
             setTunnel(null);
+            setMilestones({ ...INITIAL_MILESTONES });
             stopPolling();
             return;
           }
@@ -351,6 +340,7 @@ export default function ReverseTunnelPowershell({ device }) {
     async (reason = "operator_disconnect") => {
     debugLog("handleDisconnect begin", { reason, tunnelId: tunnel?.tunnel_id, psStatus, sessionState });
     setStatusLine(`Disconnect requested (${reason})`);
+    setPsStatus({});
     const socket = socketRef.current;
     const tunnelId = tunnel?.tunnel_id;
     if (joinRetryRef.current) {
@@ -369,7 +359,7 @@ export default function ReverseTunnelPowershell({ device }) {
     disconnectSocket();
     setTunnel(null);
     setSessionState("closed");
-    setMilestones((prev) => ({ ...prev, active: false }));
+    setMilestones({ ...INITIAL_MILESTONES });
     setStatusLine("Disconnected");
     debugLog("handleDisconnect finished", { tunnelId });
   },
@@ -561,7 +551,7 @@ export default function ReverseTunnelPowershell({ device }) {
     [appendOutput, emitAsync]
   );
 
-  const isConnected = sessionState === "connected" || psStatus?.ack;
+  const isConnected = sessionState === "connected" || (psStatus?.ack && !psStatus?.closed);
   const isClosed = sessionState === "closed" || psStatus?.closed;
   const isBusy =
     sessionState === "requesting" ||
