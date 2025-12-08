@@ -618,7 +618,7 @@ export default function ReverseTunnelPowershell({ device }) {
         >
           <TextField
             select
-            label="Connection Type"
+            label="Connection Protocol"
             size="small"
             value={connectionType}
             onChange={(e) => setConnectionType(e.target.value)}
