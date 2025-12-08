@@ -3,11 +3,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Box,
+  Stack,
   Tabs,
   Tab,
   Typography,
   Button,
-  IconButton,
   Menu,
   MenuItem,
   TextField,
@@ -16,8 +16,13 @@ import {
   DialogContent,
   DialogActions
 } from "@mui/material";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import StorageRoundedIcon from "@mui/icons-material/StorageRounded";
 import MemoryRoundedIcon from "@mui/icons-material/MemoryRounded";
+import LanRoundedIcon from "@mui/icons-material/LanRounded";
+import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
+import ListAltRoundedIcon from "@mui/icons-material/ListAltRounded";
+import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
@@ -65,13 +70,13 @@ const SECTION_HEIGHTS = {
 };
 
 const TOP_TABS = [
-  "Device Summary",
-  "Storage",
-  "Memory",
-  "Network",
-  "Installed Software",
-  "Activity History",
-  "Remote Shell",
+  { label: "Device Summary", icon: InfoOutlinedIcon },
+  { label: "Storage", icon: StorageRoundedIcon },
+  { label: "Memory", icon: MemoryRoundedIcon },
+  { label: "Network", icon: LanRoundedIcon },
+  { label: "Installed Software", icon: AppsRoundedIcon },
+  { label: "Activity History", icon: ListAltRoundedIcon },
+  { label: "Remote Shell", icon: TerminalRoundedIcon },
 ];
 
 const myTheme = themeQuartz.withParams({
@@ -376,8 +381,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     const now = Date.now() / 1000;
     return now - tsSec <= offlineAfter ? "Online" : "Offline";
   };
-
-  const statusColor = (s) => (s === "Online" ? "#00d18c" : "#ff4f4f");
 
   const resolveAssemblyName = useCallback((scriptName, scriptPath) => {
     const normalized = String(scriptPath || "").replace(/\\/g, "/").trim();
@@ -771,6 +774,8 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         label: "Hostname",
         value: meta.hostname || summary.hostname || agent.hostname || device?.hostname || "unknown",
       },
+      { label: "Agent ID", value: meta.agentId || summary.agent_id || "unknown" },
+      { label: "Agent GUID", value: meta.agentGuid || summary.agent_guid || "unknown" },
       {
         label: "Last User",
         value: meta.lastUser || summary.last_user || "unknown",
@@ -801,8 +806,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         value:
           meta.operatingSystem || summary.operating_system || agent.agent_operating_system || "unknown",
       },
-      { label: "Agent ID", value: meta.agentId || summary.agent_id || "unknown" },
-      { label: "Agent GUID", value: meta.agentGuid || summary.agent_guid || "unknown" },
       { label: "Agent Hash", value: meta.agentHash || summary.agent_hash || "unknown" },
     ],
     [meta, summary, agent, device, formatDateTime, formatLastSeen]
@@ -940,7 +943,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
             width: 36,
             height: 36,
             borderRadius: 2,
-            background: "rgba(4,7,17,0.4)",
+            background: "transparent",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -1084,9 +1087,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         <Box
           sx={{
             borderRadius: 3,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            background: 'transparent',
-            boxShadow: MAGIC_UI.glow,
+            background: "transparent",
             p: { xs: 2, md: 3 },
             display: "flex",
             flexDirection: "column",
@@ -1094,35 +1095,24 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
             minHeight: 0,
           }}
         >
-          <TextField
-            size="small"
-            label="Description"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            onBlur={saveDescription}
-            placeholder="Add a friendly label"
+          <Box
             sx={{
-              maxWidth: 420,
-              input: { color: "#fff" },
-              "& .MuiOutlinedInput-root": {
-                backgroundColor: "rgba(4,7,17,0.65)",
-                "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
-                "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-              },
-              label: { color: MAGIC_UI.textMuted },
+              display: "grid",
+              gridTemplateColumns: { xs: "1fr", xl: "1fr auto" },
+              alignItems: "flex-start",
+              gap: { xs: 2, md: 3 },
             }}
-          />
-          {connectionType === "ssh" && (
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, alignItems: "center" }}>
+          >
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, minWidth: 0 }}>
               <TextField
                 size="small"
-                label="SSH Endpoint"
-                value={connectionDraft}
-                onChange={(e) => setConnectionDraft(e.target.value)}
-                placeholder="user@host or host"
+                label="Description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                onBlur={saveDescription}
+                placeholder="Add a friendly label"
                 sx={{
-                  minWidth: 260,
-                  maxWidth: 360,
+                  maxWidth: 420,
                   input: { color: "#fff" },
                   "& .MuiOutlinedInput-root": {
                     backgroundColor: "rgba(4,7,17,0.65)",
@@ -1132,36 +1122,112 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
                   label: { color: MAGIC_UI.textMuted },
                 }}
               />
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={saveConnectionEndpoint}
-                disabled={connectionSaving || connectionDraft.trim() === connectionEndpoint.trim()}
-                sx={{
-                  textTransform: "none",
-                  borderColor: MAGIC_UI.accentA,
-                  color: MAGIC_UI.accentA,
-                  borderRadius: 999,
-                  px: 2,
-                }}
-              >
-                {connectionSaving ? "Saving..." : "Save"}
-              </Button>
-              <Box sx={{ display: "flex", flexDirection: "column" }}>
-                {connectionMessage && (
-                  <Typography variant="caption" sx={{ color: MAGIC_UI.accentA }}>
-                    {connectionMessage}
-                  </Typography>
-                )}
-                {connectionError && (
-                  <Typography variant="caption" sx={{ color: "#ff7b89" }}>
-                    {connectionError}
-                  </Typography>
-                )}
-              </Box>
+              {connectionType === "ssh" && (
+                <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, alignItems: "center" }}>
+                  <TextField
+                    size="small"
+                    label="SSH Endpoint"
+                    value={connectionDraft}
+                    onChange={(e) => setConnectionDraft(e.target.value)}
+                    placeholder="user@host or host"
+                    sx={{
+                      minWidth: 260,
+                      maxWidth: 360,
+                      input: { color: "#fff" },
+                      "& .MuiOutlinedInput-root": {
+                        backgroundColor: "rgba(4,7,17,0.65)",
+                        "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
+                        "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+                      },
+                      label: { color: MAGIC_UI.textMuted },
+                    }}
+                  />
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={saveConnectionEndpoint}
+                    disabled={connectionSaving || connectionDraft.trim() === connectionEndpoint.trim()}
+                    sx={{
+                      textTransform: "none",
+                      borderColor: MAGIC_UI.accentA,
+                      color: MAGIC_UI.accentA,
+                      borderRadius: 999,
+                      px: 2,
+                    }}
+                  >
+                    {connectionSaving ? "Saving..." : "Save"}
+                  </Button>
+                  <Box sx={{ display: "flex", flexDirection: "column" }}>
+                    {connectionMessage && (
+                      <Typography variant="caption" sx={{ color: MAGIC_UI.accentA }}>
+                        {connectionMessage}
+                      </Typography>
+                    )}
+                    {connectionError && (
+                      <Typography variant="caption" sx={{ color: "#ff7b89" }}>
+                        {connectionError}
+                      </Typography>
+                    )}
+                  </Box>
+                </Box>
+              )}
             </Box>
-          )}
-          <GridShell sx={{ flexGrow: 1, minHeight: 0, height: SECTION_HEIGHTS.summary }}>
+            <Box
+              sx={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 1.2,
+                justifyContent: { xs: "flex-start", xl: "flex-end" },
+                alignSelf: "flex-start",
+                mt: { xs: 0, md: -0.5 },
+                "& > *": {
+                  background: "transparent !important",
+                  border: "none !important",
+                  boxShadow: "none !important",
+                  borderRadius: 0,
+                },
+              }}
+            >
+              <MetricCard
+                compact
+                icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 24 }} />}
+                title="Processor"
+                main={deviceMetricData.cpuMain}
+                sub={deviceMetricData.cpuSub}
+              />
+              <MetricCard
+                compact
+                icon={<MemoryRoundedIcon sx={{ fontSize: 24 }} />}
+                title="RAM"
+                main={deviceMetricData.memVal}
+                sub={deviceMetricData.memSpeed || " "}
+              />
+              <MetricCard
+                compact
+                icon={<StorageRoundedIcon sx={{ fontSize: 24 }} />}
+                title="Storage"
+                main={deviceMetricData.storageMain}
+                sub={deviceMetricData.storageSub || " "}
+              />
+              <MetricCard
+                compact
+                icon={<SpeedRoundedIcon sx={{ fontSize: 24 }} />}
+                title="Network"
+                main={deviceMetricData.netVal}
+                sub={deviceMetricData.nicLabel}
+              />
+            </Box>
+          </Box>
+          <GridShell
+            sx={{
+              flexGrow: 1,
+              minHeight: 0,
+              height: SECTION_HEIGHTS.summary,
+              border: "none",
+              boxShadow: "none",
+              background: "transparent",
+            }}
+          >
             <AgGridReact
               rowData={summaryGridRows}
               columnDefs={summaryGridColumns}
@@ -1534,15 +1600,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
 
   const displayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "Device Details";
-  const guidForSubtitle =
-    meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || device?.agentGuid || "";
-  const osLabel =
-    meta.operatingSystem || summary.operating_system || agent.agent_operating_system || agent.operating_system || "";
-  const subtitleParts = [];
-  if (status) subtitleParts.push(`Status: ${status}`);
-  if (osLabel) subtitleParts.push(osLabel);
-  if (guidForSubtitle) subtitleParts.push(`GUID ${guidForSubtitle}`);
-  const pageSubtitle = subtitleParts.join(" | ");
+  const pageSubtitle = status ? `Status: ${status}` : "";
 
   useEffect(() => {
     onPageMetaChange?.({
@@ -1571,7 +1629,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         p: { xs: 2, md: 3 },
         borderRadius: 0,
         background: "transparent",
-        border: `1px solid ${MAGIC_UI.panelBorder}`,
         boxShadow: "none",
         display: "flex",
         flexDirection: "column",
@@ -1582,133 +1639,68 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     >
       <Box
         sx={{
-          mb: 3,
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", lg: "1.5fr auto auto" },
-          alignItems: "center",
-          gap: 2,
+          position: "fixed",
+          top: { xs: 72, md: 88 },
+          right: { xs: 12, md: 20 },
+          zIndex: 1400,
+          pointerEvents: "none",
         }}
       >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap", minWidth: 0 }}>
-          {onBack && (
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={onBack}
-              sx={{
-                textTransform: "none",
-                borderColor: "rgba(148,163,184,0.45)",
-                color: MAGIC_UI.textBright,
-                borderRadius: 999,
-                px: 2,
-              }}
-            >
-              Back
-            </Button>
-          )}
-          <Box
-            component="span"
-            sx={{
-              width: 10,
-              height: 10,
-              borderRadius: 10,
-              backgroundColor: statusColor(status),
-              boxShadow: `0 0 12px ${statusColor(status)}`,
-            }}
-          />
-          <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-            GUID: {meta.agentGuid || summary.agent_guid || "unknown"}
-          </Typography>
-        </Box>
-
-        <Box
-          sx={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 1.2,
-            justifyContent: { xs: "flex-start", lg: "center" },
-            "& > *": { background: "transparent !important", border: "none !important", boxShadow: "none !important", borderRadius: 0 },
-          }}
-        >
-          <MetricCard
-            compact
-            icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 24 }} />}
-            title="Processor"
-            main={deviceMetricData.cpuMain}
-            sub={deviceMetricData.cpuSub}
-          />
-          <MetricCard
-            compact
-            icon={<MemoryRoundedIcon sx={{ fontSize: 24 }} />}
-            title="RAM"
-            main={deviceMetricData.memVal}
-            sub={deviceMetricData.memSpeed || " "}
-          />
-          <MetricCard
-            compact
-            icon={<StorageRoundedIcon sx={{ fontSize: 24 }} />}
-            title="Storage"
-            main={deviceMetricData.storageMain}
-            sub={deviceMetricData.storageSub || " "}
-          />
-          <MetricCard
-            compact
-            icon={<SpeedRoundedIcon sx={{ fontSize: 24 }} />}
-            title="Network"
-            main={deviceMetricData.netVal}
-            sub={deviceMetricData.nicLabel}
-          />
-        </Box>
-
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, justifyContent: "flex-end" }}>
-          <IconButton
+        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
+          <Button
             size="small"
+            startIcon={<MoreHorizIcon />}
             disabled={!(agent?.hostname || device?.hostname)}
             onClick={(e) => setMenuAnchor(e.currentTarget)}
             sx={{
-              color: !(agent?.hostname || device?.hostname) ? MAGIC_UI.textMuted : MAGIC_UI.textBright,
-              border: "1px solid rgba(148,163,184,0.45)",
-              borderRadius: 2,
-              width: 38,
-              height: 38,
-              backgroundColor: "transparent",
-            }}
-          >
-            <MoreHorizIcon fontSize="small" />
-          </IconButton>
-        <Menu
-          anchorEl={menuAnchor}
-          open={Boolean(menuAnchor)}
-          onClose={() => setMenuAnchor(null)}
-            PaperProps={{
-              sx: {
-                bgcolor: "rgba(8,12,24,0.96)",
-                color: "#fff",
-                border: `1px solid ${MAGIC_UI.panelBorder}`,
+              backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+              color: "#0b1220",
+              borderRadius: 999,
+              textTransform: "none",
+              px: 2.2,
+              minWidth: 120,
+              boxShadow: "none",
+              "&:hover": {
+                backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+                boxShadow: "none",
               },
             }}
           >
-            <MenuItem
-              disabled={!canLaunchQuickJob}
-              onClick={() => {
-                setMenuAnchor(null);
-                if (!canLaunchQuickJob) return;
-                onQuickJobLaunch && onQuickJobLaunch(quickJobTargets);
-              }}
-            >
-              Quick Job
-            </MenuItem>
-            <MenuItem
-              onClick={() => {
-                setMenuAnchor(null);
-                setClearDialogOpen(true);
-              }}
-            >
-              Clear Device Activity
-            </MenuItem>
-          </Menu>
-        </Box>
+            Actions
+          </Button>
+        </Stack>
       </Box>
+      <Menu
+        anchorEl={menuAnchor}
+        open={Boolean(menuAnchor)}
+        onClose={() => setMenuAnchor(null)}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.96)",
+            color: "#fff",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+          },
+        }}
+      >
+        <MenuItem
+          disabled={!canLaunchQuickJob}
+          onClick={() => {
+            setMenuAnchor(null);
+            if (!canLaunchQuickJob) return;
+            onQuickJobLaunch && onQuickJobLaunch(quickJobTargets);
+          }}
+        >
+          Quick Job
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            setMenuAnchor(null);
+            setClearDialogOpen(true);
+          }}
+        >
+          Clear Device Activity
+        </MenuItem>
+      </Menu>
       <Tabs
         value={tab}
         onChange={(e, v) => setTab(v)}
@@ -1748,8 +1740,13 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           },
         }}
       >
-        {TOP_TABS.map((label) => (
-          <Tab key={label} label={label} />
+        {TOP_TABS.map((tabDef) => (
+          <Tab
+            key={tabDef.label}
+            label={tabDef.label}
+            icon={<tabDef.icon sx={{ fontSize: 18 }} />}
+            iconPosition="start"
+          />
         ))}
       </Tabs>
       <Box sx={{ mt: 1, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>

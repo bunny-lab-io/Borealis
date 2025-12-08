@@ -11,7 +11,6 @@ import {
   LinearProgress,
 } from "@mui/material";
 import {
-  TerminalRounded as TerminalIcon,
   PlayArrowRounded as PlayIcon,
   StopRounded as StopIcon,
   ContentCopy as CopyIcon,
@@ -50,12 +49,10 @@ const gradientButtonSx = {
   color: "#0b1220",
   borderRadius: 999,
   textTransform: "none",
-  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
   px: 2.2,
   minWidth: 120,
   "&:hover": {
     backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
   },
 };
 
@@ -614,91 +611,43 @@ export default function ReverseTunnelPowershell({ device }) {
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
       <Box>
         <Stack
-          direction={{ xs: "column", md: "row" }}
+          direction={{ xs: "column", sm: "row" }}
           spacing={1.5}
-          alignItems={{ xs: "flex-start", md: "center" }}
-          justifyContent="space-between"
+          alignItems={{ xs: "flex-start", sm: "center" }}
+          justifyContent={{ xs: "flex-start", sm: "flex-end" }}
         >
-          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-            <TerminalIcon sx={{ fontSize: 22, color: MAGIC_UI.accentA }} />
-            <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: 0.3 }}>
-              Remote Shell
-            </Typography>
-          </Stack>
-
-          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="center">
-            <TextField
-              select
-              label="Connection Type"
-              size="small"
-              value={connectionType}
-              onChange={(e) => setConnectionType(e.target.value)}
-              sx={{
-                minWidth: 180,
-                "& .MuiInputBase-root": {
-                  backgroundColor: "rgba(12,18,35,0.85)",
-                  color: MAGIC_UI.textBright,
-                  borderRadius: 1.5,
-                },
-                "& fieldset": { borderColor: MAGIC_UI.panelBorder },
-                "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-              }}
-            >
-              <MenuItem value="ps">PowerShell</MenuItem>
-            </TextField>
-            <Tooltip title={isConnected ? "Disconnect session" : "Connect to agent"}>
-              <span>
-                <Button
-                  size="small"
-                  startIcon={isConnected ? <StopIcon /> : <PlayIcon />}
-                  sx={gradientButtonSx}
-                  disabled={!isConnected && !canStart}
-                  onClick={isConnected ? handleDisconnect : requestTunnel}
-                >
-                  {isConnected ? "Disconnect" : "Connect"}
-                </Button>
-              </span>
-            </Tooltip>
-          </Stack>
-        </Stack>
-
-        <Stack spacing={0.3} sx={{ mt: 1.25 }}>
-          <Typography
-            variant="body2"
+          <TextField
+            select
+            label="Connection Type"
+            size="small"
+            value={connectionType}
+            onChange={(e) => setConnectionType(e.target.value)}
             sx={{
-              color: milestones.tunnelReady ? MAGIC_UI.accentC : MAGIC_UI.textMuted,
-              fontWeight: 700,
+              minWidth: 180,
+              "& .MuiInputBase-root": {
+                backgroundColor: "rgba(12,18,35,0.85)",
+                color: MAGIC_UI.textBright,
+                borderRadius: 1.5,
+              },
+              "& fieldset": { borderColor: MAGIC_UI.panelBorder },
+              "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
             }}
           >
-            Tunnel:{" "}
-            <Typography component="span" variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 500 }}>
-              {tunnelSteps.join(" > ")}
-            </Typography>
-          </Typography>
-          <Typography
-            variant="body2"
-            sx={{
-              color: milestones.operatorAttached ? MAGIC_UI.accentC : MAGIC_UI.textMuted,
-              fontWeight: 700,
-            }}
-          >
-            Websocket:{" "}
-            <Typography component="span" variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 500 }}>
-              {websocketSteps.join(" > ")}
-            </Typography>
-          </Typography>
-          <Typography
-            variant="body2"
-            sx={{
-              color: milestones.shellEstablished ? MAGIC_UI.accentC : MAGIC_UI.textMuted,
-              fontWeight: 700,
-            }}
-          >
-            Remote Shell:{" "}
-            <Typography component="span" variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 500 }}>
-              {shellSteps.join(" > ")}
-            </Typography>
-          </Typography>
+            <MenuItem value="ps">PowerShell</MenuItem>
+          </TextField>
+          <Tooltip title={isConnected ? "Disconnect session" : "Connect to agent"}>
+            <span>
+              <Button
+                size="small"
+                startIcon={isConnected ? <StopIcon /> : <PlayIcon />}
+                sx={gradientButtonSx}
+                disabled={!isConnected && !canStart}
+                onClick={isConnected ? handleDisconnect : requestTunnel}
+              >
+                {isConnected ? "Disconnect" : "Connect"}
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
       </Box>
 
@@ -804,6 +753,44 @@ export default function ReverseTunnelPowershell({ device }) {
           />
         </Box>
       </Box>
+      <Stack spacing={0.3} sx={{ mt: 1.25 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: milestones.tunnelReady ? MAGIC_UI.accentC : MAGIC_UI.textMuted,
+            fontWeight: 700,
+          }}
+        >
+          Tunnel:{" "}
+          <Typography component="span" variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 500 }}>
+            {tunnelSteps.join(" > ")}
+          </Typography>
+        </Typography>
+        <Typography
+          variant="body2"
+          sx={{
+            color: milestones.operatorAttached ? MAGIC_UI.accentC : MAGIC_UI.textMuted,
+            fontWeight: 700,
+          }}
+        >
+          Websocket:{" "}
+          <Typography component="span" variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 500 }}>
+            {websocketSteps.join(" > ")}
+          </Typography>
+        </Typography>
+        <Typography
+          variant="body2"
+          sx={{
+            color: milestones.shellEstablished ? MAGIC_UI.accentC : MAGIC_UI.textMuted,
+            fontWeight: 700,
+          }}
+        >
+          Remote Shell:{" "}
+          <Typography component="span" variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 500 }}>
+            {shellSteps.join(" > ")}
+          </Typography>
+        </Typography>
+      </Stack>
     </Box>
   );
 }
