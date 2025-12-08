@@ -134,6 +134,7 @@ export default function ReverseTunnelPowershell({ device }) {
   const joinRetryRef = useRef(null);
   const joinAttemptsRef = useRef(0);
   const tunnelRef = useRef(null);
+  const shellFlagsRef = useRef({ openSent: false, ack: false });
   const DOMAIN_REMOTE_SHELL = "remote-interactive-shell";
 
   useEffect(() => {
@@ -186,6 +187,7 @@ export default function ReverseTunnelPowershell({ device }) {
     setTunnelSteps([...INITIAL_STATUS_CHAIN]);
     setWebsocketSteps([...INITIAL_STATUS_CHAIN]);
     setShellSteps([...INITIAL_STATUS_CHAIN]);
+    shellFlagsRef.current = { openSent: false, ack: false };
   }, []);
 
   useEffect(() => {
@@ -326,16 +328,19 @@ export default function ReverseTunnelPowershell({ device }) {
             appendStatus(setShellSteps, "Shell closed");
             appendStatus(setTunnelSteps, "Stopped");
             appendStatus(setWebsocketSteps, "Relay stopped");
+            shellFlagsRef.current = { openSent: false, ack: false };
             stopPolling();
             return;
           }
-          if (resp.status.open_sent) {
+          if (resp.status.open_sent && !shellFlagsRef.current.openSent) {
             appendStatus(setShellSteps, "Opening remote shell");
+            shellFlagsRef.current.openSent = true;
           }
-          if (resp.status.ack) {
+          if (resp.status.ack && !shellFlagsRef.current.ack) {
             setSessionState("connected");
             setMilestones((prev) => ({ ...prev, shellEstablished: true }));
             appendStatus(setShellSteps, "Remote shell established");
+            shellFlagsRef.current.ack = true;
           }
         }
         pollLoop(socket, tunnelId);
@@ -370,6 +375,7 @@ export default function ReverseTunnelPowershell({ device }) {
     appendStatus(setTunnelSteps, "Stopped");
     appendStatus(setWebsocketSteps, "Relay closed");
     appendStatus(setShellSteps, "Shell closed");
+    shellFlagsRef.current = { openSent: false, ack: false };
     debugLog("handleDisconnect finished", { tunnelId });
   },
     [appendStatus, disconnectSocket, stopPolling, stopTunnel, tunnel?.tunnel_id]
@@ -482,7 +488,10 @@ export default function ReverseTunnelPowershell({ device }) {
         if (openResp?.error && openResp.error === "ps_unsupported") {
           // Suppress warming message; channel will settle once agent attaches.
         }
-        appendStatus(setShellSteps, "Opening remote shell");
+        if (!shellFlagsRef.current.openSent) {
+          appendStatus(setShellSteps, "Opening remote shell");
+          shellFlagsRef.current.openSent = true;
+        }
         appendOutput("");
         setSessionState("waiting_agent");
         pollLoop(socket, lease.tunnel_id);
