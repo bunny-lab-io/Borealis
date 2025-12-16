@@ -84,6 +84,11 @@ DEFAULT_TUNNEL_PORT_RANGE = (30000, 40000)
 DEFAULT_TUNNEL_IDLE_TIMEOUT_SECONDS = 3600
 DEFAULT_TUNNEL_GRACE_TIMEOUT_SECONDS = 3600
 DEFAULT_TUNNEL_HEARTBEAT_INTERVAL_SECONDS = 20
+DEFAULT_WIREGUARD_PORT = 30000
+DEFAULT_WIREGUARD_ENGINE_VIRTUAL_IP = "10.255.0.1/32"
+DEFAULT_WIREGUARD_PEER_NETWORK = "10.255.0.0/24"
+DEFAULT_WIREGUARD_ACL_WINDOWS = (3389, 5985, 5986, 5900, 3478)
+VPN_SERVER_CERT_ROOT = PROJECT_ROOT / "Engine" / "Certificates" / "VPN_Server"
 
 
 def _ensure_parent(path: Path) -> None:
@@ -212,6 +217,28 @@ def _parse_port_range(
     return _clamp_pair(candidate)
 
 
+def _parse_port_list(raw: Any, *, default: Tuple[int, ...]) -> Tuple[int, ...]:
+    if raw is None:
+        return default
+    ports: List[int] = []
+    if isinstance(raw, str):
+        parts = [part.strip() for part in raw.split(",") if part.strip()]
+    elif isinstance(raw, Sequence):
+        parts = [str(part).strip() for part in raw if str(part).strip()]
+    else:
+        parts = []
+    for part in parts:
+        try:
+            value = int(part)
+        except Exception:
+            continue
+        if 1 <= value <= 65535:
+            ports.append(value)
+    if not ports:
+        return default
+    return tuple(dict.fromkeys(ports))
+
+
 def _discover_tls_material(config: Mapping[str, Any]) -> Sequence[Optional[str]]:
     cert_path = config.get("TLS_CERT_PATH") or os.environ.get("BOREALIS_TLS_CERT") or None
     key_path = config.get("TLS_KEY_PATH") or os.environ.get("BOREALIS_TLS_KEY") or None
@@ -261,6 +288,12 @@ class EngineSettings:
     reverse_tunnel_grace_timeout_seconds: int
     reverse_tunnel_heartbeat_seconds: int
     reverse_tunnel_log_file: str
+    wireguard_port: int
+    wireguard_engine_virtual_ip: str
+    wireguard_peer_network: str
+    wireguard_server_private_key_path: str
+    wireguard_server_public_key_path: str
+    wireguard_acl_allowlist_windows: Tuple[int, ...]
     raw: MutableMapping[str, Any] = field(default_factory=dict)
 
     def to_flask_config(self) -> MutableMapping[str, Any]:
@@ -362,6 +395,36 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
     )
     _ensure_parent(Path(reverse_tunnel_log_file))
 
+    wireguard_port = _parse_int(
+        runtime_config.get("WIREGUARD_PORT") or os.environ.get("BOREALIS_WIREGUARD_PORT"),
+        default=DEFAULT_WIREGUARD_PORT,
+        minimum=1,
+        maximum=65535,
+    )
+    wireguard_engine_virtual_ip = str(
+        runtime_config.get("WIREGUARD_ENGINE_VIRTUAL_IP")
+        or os.environ.get("BOREALIS_WIREGUARD_ENGINE_VIRTUAL_IP")
+        or DEFAULT_WIREGUARD_ENGINE_VIRTUAL_IP
+    )
+    wireguard_peer_network = str(
+        runtime_config.get("WIREGUARD_PEER_NETWORK")
+        or os.environ.get("BOREALIS_WIREGUARD_PEER_NETWORK")
+        or DEFAULT_WIREGUARD_PEER_NETWORK
+    )
+    wireguard_acl_allowlist_windows = _parse_port_list(
+        runtime_config.get("WIREGUARD_WINDOWS_ALLOWLIST")
+        or os.environ.get("BOREALIS_WIREGUARD_WINDOWS_ALLOWLIST"),
+        default=DEFAULT_WIREGUARD_ACL_WINDOWS,
+    )
+    wireguard_key_root = Path(
+        runtime_config.get("WIREGUARD_KEY_ROOT")
+        or os.environ.get("BOREALIS_WIREGUARD_KEY_ROOT")
+        or VPN_SERVER_CERT_ROOT
+    ).expanduser()
+    _ensure_parent(wireguard_key_root / "placeholder")
+    wireguard_server_private_key_path = str(wireguard_key_root / "server_private.key")
+    wireguard_server_public_key_path = str(wireguard_key_root / "server_public.key")
+
     api_groups = _parse_api_groups(
         runtime_config.get("API_GROUPS") or os.environ.get("BOREALIS_API_GROUPS")
     )
@@ -427,6 +490,12 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         reverse_tunnel_grace_timeout_seconds=tunnel_grace_timeout_seconds,
         reverse_tunnel_heartbeat_seconds=tunnel_heartbeat_seconds,
         reverse_tunnel_log_file=reverse_tunnel_log_file,
+        wireguard_port=wireguard_port,
+        wireguard_engine_virtual_ip=wireguard_engine_virtual_ip,
+        wireguard_peer_network=wireguard_peer_network,
+        wireguard_server_private_key_path=wireguard_server_private_key_path,
+        wireguard_server_public_key_path=wireguard_server_public_key_path,
+        wireguard_acl_allowlist_windows=wireguard_acl_allowlist_windows,
         raw=runtime_config,
     )
     return settings

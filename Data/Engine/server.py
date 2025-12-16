@@ -23,6 +23,7 @@ import time
 import ssl
 from dataclasses import dataclass
 from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
 
@@ -102,6 +103,7 @@ _ASSEMBLY_SHUTDOWN_REGISTERED = False
 
 from .config import EngineSettings, initialise_engine_logger, load_runtime_config
 from .assembly_management import initialise_assembly_runtime
+from .services.VPN import WireGuardServerConfig, WireGuardServerManager
 
 
 @dataclass
@@ -124,6 +126,13 @@ class EngineContext:
     reverse_tunnel_grace_timeout_seconds: int
     reverse_tunnel_heartbeat_seconds: int
     reverse_tunnel_log_path: str
+    wireguard_port: int
+    wireguard_engine_virtual_ip: str
+    wireguard_peer_network: str
+    wireguard_server_private_key_path: str
+    wireguard_server_public_key_path: str
+    wireguard_acl_allowlist_windows: Tuple[int, ...]
+    wireguard_server_manager: Optional[Any] = None
     assembly_cache: Optional[Any] = None
 
 
@@ -148,6 +157,12 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         reverse_tunnel_grace_timeout_seconds=settings.reverse_tunnel_grace_timeout_seconds,
         reverse_tunnel_heartbeat_seconds=settings.reverse_tunnel_heartbeat_seconds,
         reverse_tunnel_log_path=settings.reverse_tunnel_log_file,
+        wireguard_port=settings.wireguard_port,
+        wireguard_engine_virtual_ip=settings.wireguard_engine_virtual_ip,
+        wireguard_peer_network=settings.wireguard_peer_network,
+        wireguard_server_private_key_path=settings.wireguard_server_private_key_path,
+        wireguard_server_public_key_path=settings.wireguard_server_public_key_path,
+        wireguard_acl_allowlist_windows=settings.wireguard_acl_allowlist_windows,
         assembly_cache=None,
     )
 
@@ -226,6 +241,20 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
     context = _build_engine_context(settings, logger)
     context.socketio = socketio
 
+    try:
+        wg_config = WireGuardServerConfig(
+            port=context.wireguard_port,
+            engine_virtual_ip=context.wireguard_engine_virtual_ip,
+            peer_network=context.wireguard_peer_network,
+            private_key_path=Path(context.wireguard_server_private_key_path),
+            public_key_path=Path(context.wireguard_server_public_key_path),
+            acl_allowlist_windows=tuple(context.wireguard_acl_allowlist_windows),
+            log_path=Path(context.reverse_tunnel_log_path),
+        )
+        context.wireguard_server_manager = WireGuardServerManager(wg_config)
+    except Exception:
+        logger.error("Failed to initialise WireGuard server manager", exc_info=True)
+
     assembly_cache = initialise_assembly_runtime(logger=logger, config=settings.as_dict())
     assembly_cache.reload()
     context.assembly_cache = assembly_cache
@@ -287,6 +316,20 @@ def register_engine_api(app: Flask, *, config: Optional[Mapping[str, Any]] = Non
     settings: EngineSettings = load_runtime_config(config)
     logger = initialise_engine_logger(settings)
     context = _build_engine_context(settings, logger)
+
+    try:
+        wg_config = WireGuardServerConfig(
+            port=context.wireguard_port,
+            engine_virtual_ip=context.wireguard_engine_virtual_ip,
+            peer_network=context.wireguard_peer_network,
+            private_key_path=Path(context.wireguard_server_private_key_path),
+            public_key_path=Path(context.wireguard_server_public_key_path),
+            acl_allowlist_windows=tuple(context.wireguard_acl_allowlist_windows),
+            log_path=Path(context.reverse_tunnel_log_path),
+        )
+        context.wireguard_server_manager = WireGuardServerManager(wg_config)
+    except Exception:
+        logger.error("Failed to initialise WireGuard server manager", exc_info=True)
 
     assembly_cache = initialise_assembly_runtime(logger=logger, config=settings.as_dict())
     assembly_cache.reload()

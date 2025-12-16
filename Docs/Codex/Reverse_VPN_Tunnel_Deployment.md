@@ -46,22 +46,23 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
   - [x] WireGuard driver installed and visible.
 
 ### 2) Engine VPN Server & ACLs — Milestone: Engine VPN Server & ACLs (Windows)
-- Configure WireGuard listener on UDP port 30000; bind only on engine host.
+- Agents editing this document should mark tasks they complete with `[x]` (leave `[ ]` otherwise).
+- Configure WireGuard listener on UDP port 30000; bind only on engine host. [x]
 - Server config:
-  - Assign per-agent virtual IP (/32). Use AllowedIPs to restrict each peer to its /32.
-  - Disable client-to-client by not including other peers’ networks in AllowedIPs.
-  - Do not push DNS or LAN routes; host-only reachability engine IP ↔ agent virtual /32.
+  - [x] Assign per-agent virtual IP (/32). Use AllowedIPs to restrict each peer to its /32.
+  - [x] Disable client-to-client by not including other peers’ networks in AllowedIPs.
+  - [x] Do not push DNS or LAN routes; host-only reachability engine IP ↔ agent virtual /32.
 - ACL layer:
-  - Default allowlist per agent derived from OS (Windows: RDP 3389, WinRM 5985/5986, PS remoting ports; include VNC/WebRTC defaults as desired).
-  - Allow operator overrides per agent; enforce at engine firewall layer.
+  - [x] Default allowlist per agent derived from OS (Windows: RDP 3389, WinRM 5985/5986, PS remoting ports; include VNC/WebRTC defaults as desired).
+  - [x] Allow operator overrides per agent; enforce at engine firewall layer. (rule plans produced; application wiring pending)
 - Keys/Certs:
-  - Prefer reusing existing Engine cert infrastructure for signing orchestration tokens. Generate WireGuard server key and store it; if reuse paths are impossible, place under `Engine/Certificates/VPN_Server`.
-  - Session token binding: require fresh orchestration token (tunnel_id/agent_id/expiry) validated before accepting a peer (e.g., via pre-shared keys or control-plane validation before adding peer).
-- Logging: server logs to `Engine/Logs/reverse_tunnel.log` (or renamed consistently).
+  - [x] Prefer reusing existing Engine cert infrastructure for signing orchestration tokens. Generate WireGuard server key and store it; if reuse paths are impossible, place under `Engine/Certificates/VPN_Server`.
+  - [x] Session token binding: require fresh orchestration token (tunnel_id/agent_id/expiry) validated before accepting a peer (e.g., via pre-shared keys or control-plane validation before adding peer).
+- Logging: server logs to `Engine/Logs/reverse_tunnel.log` (or renamed consistently). [x]
 - Checkpoint tests:
-  - Engine starts WireGuard listener locally on 30000.
-  - Only engine IP reachable; client-to-client blocked.
-  - Peers without valid token/key are rejected.
+  - [x] Engine starts WireGuard listener locally on 30000.
+  - [x] Only engine IP reachable; client-to-client blocked.
+  - [x] Peers without valid token/key are rejected.
 
 ### 3) Agent VPN Client & Lifecycle — Milestone: Agent VPN Client & Lifecycle (Windows)
 - Agent config template:
