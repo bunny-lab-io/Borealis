@@ -32,17 +32,18 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
 ## Detailed Steps — Windows Implementation
 
 ### 1) Dependencies & Bootstrap — Milestone: Dependencies & Bootstrap (Windows)
+- Agents editing this document should mark tasks they complete with `[x]` (leave `[ ]` otherwise).
 - WireGuard packaging:
-  - Bundle official WireGuard for Windows (driver + client).
-  - Download installers into `Dependencies/VPN_Tunnel_Adapter/` and keep them there (no deletion) for ad-hoc reinstalls.
+  - [x] Bundle official WireGuard for Windows (driver + client).
+  - [x] Download installers into `Dependencies/VPN_Tunnel_Adapter/` and keep them there (no deletion) for ad-hoc reinstalls.
 - Update `Borealis.ps1`:
-  - Install/verify WireGuard driver/client idempotently with admin rights.
-  - Log to `Agent/Logs/install.log`.
-  - Do not start any tunnel yet.
+  - [x] Install/verify WireGuard driver/client idempotently with admin rights.
+  - [x] Log to `Agent/Logs/install.log`.
+  - [x] Do not start any tunnel yet.
 - Linux: do nothing yet (see later section).
 - Checkpoint tests:
-  - WireGuard binaries available in agent runtime.
-  - WireGuard driver installed and visible.
+  - [x] WireGuard binaries available in agent runtime.
+  - [x] WireGuard driver installed and visible.
 
 ### 2) Engine VPN Server & ACLs — Milestone: Engine VPN Server & ACLs (Windows)
 - Configure WireGuard listener on UDP port 30000; bind only on engine host.

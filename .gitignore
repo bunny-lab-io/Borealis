@@ -19,6 +19,9 @@ database.db
 /Dependencies/Python/
 /Dependencies/AutoHotKey/
 /Dependencies/git/
+/Dependencies/VPN_Tunnel_Adapter/*
+!/Dependencies/VPN_Tunnel_Adapter/README.md
+!/Dependencies/VPN_Tunnel_Adapter/.gitkeep
 /Data/Engine/Python_API_Endpoints/
 
 # Misc Files/Folders

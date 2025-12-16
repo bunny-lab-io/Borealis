@@ -437,6 +437,21 @@ $gitZipUrl      = "https://github.com/git-for-windows/git/releases/download/$git
 $gitZipPath     = Join-Path $depsRoot $gitPackageName
 $gitInstallDir  = Join-Path $depsRoot 'git'
 $gitExePath     = Join-Path $gitInstallDir 'cmd\git.exe'
+$wireGuardDownloadRoot     = "https://download.wireguard.com/windows-client/"
+$wireGuardInstallerDir     = Join-Path $depsRoot 'VPN_Tunnel_Adapter'
+$wireGuardBootstrapperName = 'wireguard-installer.exe'
+$wireGuardBootstrapperPath = Join-Path $wireGuardInstallerDir $wireGuardBootstrapperName
+$wireGuardMsiVersion       = '0.5.3'
+$wireGuardMsiFiles = @{
+    'X64'   = "wireguard-amd64-$wireGuardMsiVersion.msi"
+    'AMD64' = "wireguard-amd64-$wireGuardMsiVersion.msi"
+    'ARM64' = "wireguard-arm64-$wireGuardMsiVersion.msi"
+    'X86'   = "wireguard-x86-$wireGuardMsiVersion.msi"
+}
+$wintunVersion        = '0.14.1'
+$wintunZipName        = "wintun-$wintunVersion.zip"
+$wintunDownloadUrl    = "https://www.wintun.net/builds/$wintunZipName"
+$wintunZipPath        = Join-Path $wireGuardInstallerDir $wintunZipName
 
 # ---------------------- Dependency Installation Functions ----------------------
 function Install_Shared_Dependencies {
@@ -561,6 +576,384 @@ function Install_Server_Dependencies {
 }
 
 function Install_Agent_Dependencies {
+    function Get-WireGuardMsiName {
+        param([string]$ArchitectureTag)
+
+        if (-not $ArchitectureTag) { return $wireGuardMsiFiles['X64'] }
+        $normalized = $ArchitectureTag.ToUpperInvariant()
+        if ($wireGuardMsiFiles.ContainsKey($normalized)) {
+            return $wireGuardMsiFiles[$normalized]
+        }
+        return $wireGuardMsiFiles['X64']
+    }
+
+    function Ensure-WireGuardInstallerFile {
+        param(
+            [string]$Url,
+            [string]$DestinationPath,
+            [string]$LogName = 'Install.log'
+        )
+
+        if (-not $Url -or -not $DestinationPath) { return }
+        $destDir = Split-Path $DestinationPath -Parent
+        if (-not (Test-Path $destDir)) {
+            try {
+                New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+                Write-AgentLog -FileName $LogName -Message ("[WireGuard] Created installer cache at {0}" -f $destDir)
+            } catch {}
+        }
+
+        if (Test-Path $DestinationPath -PathType Leaf) {
+            Write-AgentLog -FileName $LogName -Message ("[WireGuard] Installer already cached at {0}" -f $DestinationPath)
+            return
+        }
+
+        Write-AgentLog -FileName $LogName -Message ("[WireGuard] Downloading installer from {0}" -f $Url)
+        Invoke-WebRequest -Uri $Url -OutFile $DestinationPath
+        Write-AgentLog -FileName $LogName -Message ("[WireGuard] Cached installer at {0}" -f $DestinationPath)
+    }
+
+    function Get-WireGuardInstallState {
+        $state = [ordered]@{
+            Installed      = $false
+            Version        = $null
+            ExePath        = $null
+            ServicePresent = $false
+            DriverPresent  = $false
+            DriverPaths    = @()
+        }
+
+        $exeCandidates = @(
+            (Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'),
+            (Join-Path $env:ProgramFiles 'WireGuard\wg.exe'),
+            (Join-Path ${env:ProgramFiles(x86)} 'WireGuard\wireguard.exe'),
+            (Join-Path ${env:ProgramFiles(x86)} 'WireGuard\wg.exe')
+        ) | Where-Object { $_ }
+
+        foreach ($candidate in $exeCandidates) {
+            if (Test-Path $candidate -PathType Leaf) {
+                $state.Installed = $true
+                if (-not $state.ExePath) { $state.ExePath = $candidate }
+            }
+        }
+
+        try {
+            $svc = Get-Service -Name 'WireGuardManager' -ErrorAction Stop
+            if ($svc) { $state.ServicePresent = $true; $state.Installed = $true }
+        } catch {}
+
+        $driverCandidates = @()
+        if ($env:WINDIR) {
+            $driverCandidates += (Join-Path $env:WINDIR 'System32\drivers\wintun.sys')
+            $driverCandidates += (Join-Path $env:WINDIR 'System32\drivers\*wintun*.sys')
+            $driverCandidates += (Join-Path $env:WINDIR 'Sysnative\drivers\wintun.sys')
+            $driverCandidates += (Join-Path $env:WINDIR 'Sysnative\drivers\*wintun*.sys')
+        }
+        $driverCandidates = $driverCandidates | Where-Object { $_ }
+        $driverHits = @()
+        foreach ($driver in $driverCandidates) {
+            try {
+                $items = Get-ChildItem -Path $driver -ErrorAction SilentlyContinue -Force
+                foreach ($item in $items) {
+                    if ($item -and $item.PSIsContainer -eq $false) {
+                        $driverHits += $item.FullName
+                    }
+                }
+            } catch {}
+        }
+        if ($driverHits.Count -gt 0) {
+            $state.DriverPresent = $true
+            $state.Installed = $true
+            $state.DriverPaths = $driverHits | Select-Object -Unique
+        }
+
+        $uninstallRoots = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+        )
+        foreach ($root in $uninstallRoots) {
+            try {
+                $items = Get-ChildItem -Path $root -ErrorAction Stop
+                foreach ($item in $items) {
+                    try {
+                        $props = Get-ItemProperty -Path $item.PSPath -ErrorAction Stop
+                        $name = $props.DisplayName
+                        if ($name -and $name -like 'WireGuard*') {
+                            $state.Installed = $true
+                            if ($props.DisplayVersion) {
+                                $state.Version = $props.DisplayVersion
+                            }
+                            break
+                        }
+                    } catch {}
+                }
+            } catch {}
+            if ($state.Version) { break }
+        }
+
+        return [pscustomobject]$state
+    }
+
+    function Install-WireGuardMsi {
+        param(
+            [string]$InstallerPath,
+            [string]$BootstrapperPath,
+            [string]$LogName = 'Install.log'
+        )
+
+        $logPrefix = '[WireGuard]'
+        if (-not (Test-IsAdmin)) {
+            $msg = "$logPrefix Admin rights are required to install WireGuard."
+            Write-AgentLog -FileName $LogName -Message $msg
+            throw $msg
+        }
+
+        if (-not (Test-Path $InstallerPath -PathType Leaf)) {
+            $msg = "$logPrefix Installer not found at $InstallerPath"
+            Write-AgentLog -FileName $LogName -Message $msg
+            throw $msg
+        }
+
+        Write-AgentLog -FileName $LogName -Message ("$logPrefix Installing WireGuard from {0}" -f $InstallerPath)
+        $args = "/i `"$InstallerPath`" /qn /norestart"
+        try {
+            $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList $args -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+            $exitCode = $proc.ExitCode
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix msiexec exit code: {0}" -f $exitCode)
+            if ($exitCode -eq 0) { return }
+
+            $fallbackReason = "WireGuard MSI install returned exit code $exitCode"
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix $fallbackReason")
+
+            if ($BootstrapperPath -and (Test-Path $BootstrapperPath -PathType Leaf)) {
+                Write-AgentLog -FileName $LogName -Message ("$logPrefix Falling back to bootstrapper at {0}" -f $BootstrapperPath)
+                try {
+                    $bp = Start-Process -FilePath $BootstrapperPath -ArgumentList '/install','/quiet' -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                    $bpExit = $bp.ExitCode
+                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Bootstrapper exit code: {0}" -f $bpExit)
+                    if ($bpExit -eq 0) { return }
+                    throw "$logPrefix Bootstrapper returned exit code $bpExit"
+                } catch {
+                    $err = $_.Exception.Message
+                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Bootstrapper install failed: {0}" -f $err)
+                    throw
+                }
+            }
+
+            throw $fallbackReason
+        } catch {
+            $err = $_.Exception.Message
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Installation failed: {0}" -f $err)
+            throw
+        }
+    }
+
+    function New-WireGuardKeyPair {
+        param(
+            [string]$WireGuardExe,
+            [string]$WgExe
+        )
+
+        $pair = @{ PrivateKey = $null; PublicKey = $null; Source = $null }
+        $cliCandidates = @()
+        if ($WgExe) { $cliCandidates += $WgExe }
+        if ($WireGuardExe) { $cliCandidates += $WireGuardExe }
+
+        foreach ($cli in $cliCandidates) {
+            if (-not $cli -or -not (Test-Path $cli -PathType Leaf)) { continue }
+            try {
+                # Only wg.exe supports genkey; wireguard.exe likely won't, but attempt anyway
+                $priv = (& $cli genkey)
+                if ($priv) {
+                    $priv = $priv.Trim()
+                    $pair.PrivateKey = $priv
+                    $pair.Source = $cli
+                    try {
+                        $padLen = 4 - ($priv.Length % 4)
+                        $privForPub = $priv
+                        if ($padLen -lt 4) {
+                            $privForPub = $priv + ('=' * $padLen)
+                        }
+                        $pub = ($privForPub | & $cli pubkey)
+                        if ($pub) { $pair.PublicKey = $pub.Trim() }
+                    } catch {}
+                    break
+                }
+            } catch {}
+        }
+
+        if (-not $pair.PrivateKey) {
+            try {
+                $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+                $bytes = New-Object byte[] 32
+                $rng.GetBytes($bytes)
+                $priv = [System.Convert]::ToBase64String($bytes)
+                $pair.PrivateKey = $priv
+                $pair.PublicKey = $null
+                $pair.Source = 'rng'
+            } catch {}
+        }
+
+        return $pair
+    }
+
+    function Ensure-WireGuardDriver {
+        param(
+            [Parameter(Mandatory = $true)][string]$WireGuardExe,
+            [Parameter()][string]$LogName = 'Install.log'
+        )
+
+        $logPrefix = '[WireGuard]'
+        $state = Get-WireGuardInstallState
+        if ($state.DriverPresent) {
+            Write-AgentLog -FileName $LogName -Message "$logPrefix Driver already present."
+            return
+        }
+
+        if (-not (Test-Path $WireGuardExe -PathType Leaf)) {
+            $msg = "$logPrefix Cannot install driver: wireguard.exe not found at $WireGuardExe"
+            Write-AgentLog -FileName $LogName -Message $msg
+            throw $msg
+        }
+
+        # Try installing/refreshing the manager service (also stages the driver)
+        try {
+            Write-AgentLog -FileName $LogName -Message "$logPrefix Invoking wireguard.exe /installmanagerservice to seed driver."
+            & $WireGuardExe /installmanagerservice | Out-Null
+            $wgExit = $LASTEXITCODE
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix /installmanagerservice exit code: {0}" -f $wgExit)
+        } catch {
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix /installmanagerservice failed: {0}" -f $_.Exception.Message)
+        }
+
+        $stateAfterManager = Get-WireGuardInstallState
+        if ($stateAfterManager.DriverPresent) {
+            Write-AgentLog -FileName $LogName -Message "$logPrefix Driver present after /installmanagerservice."
+            return
+        }
+        $state = $stateAfterManager
+
+        $wgCliExe = $null
+        try {
+            $wgCliCandidate = Join-Path (Split-Path $WireGuardExe -Parent) 'wg.exe'
+            if (Test-Path $wgCliCandidate -PathType Leaf) { $wgCliExe = $wgCliCandidate }
+        } catch {}
+
+        $bootstrapName = 'BorealisBootstrap'
+        $bootstrapDir = Join-Path $env:TEMP 'Borealis-WireGuard-Bootstrap'
+        $bootstrapConf = Join-Path $bootstrapDir "$bootstrapName.conf"
+        try {
+            if (-not (Test-Path $bootstrapDir)) {
+                New-Item -ItemType Directory -Path $bootstrapDir -Force | Out-Null
+            }
+        } catch {}
+
+        $keyPair = New-WireGuardKeyPair -WireGuardExe $WireGuardExe -WgExe $wgCliExe
+        if (-not $keyPair.PrivateKey) {
+            $msg = "$logPrefix Failed to generate WireGuard keypair for driver bootstrap."
+            Write-AgentLog -FileName $LogName -Message $msg
+            throw $msg
+        }
+
+        $peerKey = if ($keyPair.PublicKey) { $keyPair.PublicKey } else { $keyPair.PrivateKey }
+        $conf = @"
+[Interface]
+PrivateKey = $($keyPair.PrivateKey)
+Address = 10.255.255.2/32
+ListenPort = 0
+"@
+        if ($keyPair.PublicKey) {
+            $conf += @"
+
+[Peer]
+PublicKey = $peerKey
+AllowedIPs = 10.255.255.1/32
+"@
+        }
+        try {
+            Set-Content -Path $bootstrapConf -Value $conf -Encoding ASCII -Force
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Created driver bootstrap config at {0}" -f $bootstrapConf)
+        } catch {
+            $msg = "$logPrefix Failed to write bootstrap config: $($_.Exception.Message)"
+            Write-AgentLog -FileName $LogName -Message $msg
+            throw $msg
+        }
+
+        $serviceName = "WireGuardTunnel$bootstrapName"
+        try {
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Installing bootstrap tunnel service to seed driver ({0})" -f $serviceName)
+            & $WireGuardExe /installtunnelservice $bootstrapConf | Out-Null
+            $installExit = $LASTEXITCODE
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix /installtunnelservice exit code: {0}" -f $installExit)
+            if ($installExit -ne 0) {
+                throw "wireguard.exe /installtunnelservice failed with exit code $installExit"
+            }
+        } catch {
+            $msg = "$logPrefix Failed to install bootstrap tunnel service: $($_.Exception.Message)"
+            Write-AgentLog -FileName $LogName -Message $msg
+            throw $msg
+        }
+
+        Start-Sleep -Seconds 2
+        try {
+            & $WireGuardExe /uninstalltunnelservice $bootstrapName | Out-Null
+            $uninstallExit = $LASTEXITCODE
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix /uninstalltunnelservice exit code: {0}" -f $uninstallExit)
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Removed bootstrap tunnel service {0}" -f $serviceName)
+        } catch {
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Cleanup of bootstrap tunnel service failed: {0}" -f $_.Exception.Message)
+        }
+
+        try { Remove-Item -Path $bootstrapConf -Force -ErrorAction SilentlyContinue } catch {}
+        try { Remove-Item -Path $bootstrapDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+
+        $post = Get-WireGuardInstallState
+        $postDriver = $post.DriverPresent
+        $postMsg = "[WireGuard] Driver presence after bootstrap: $postDriver (Exe: $WireGuardExe)"
+        Write-AgentLog -FileName $LogName -Message $postMsg
+        if ($postDriver) { return }
+
+        # Fallback: install Wintun driver directly via pnputil using the official Wintun package
+        try {
+            Ensure-WireGuardInstallerFile -Url $wintunDownloadUrl -DestinationPath $wintunZipPath -LogName $LogName
+        } catch {
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Failed to cache Wintun zip: {0}" -f $_.Exception.Message)
+        }
+
+        if (Test-Path $wintunZipPath -PathType Leaf) {
+            $extractRoot = Join-Path $env:TEMP 'Borealis-Wintun'
+            try { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $extractRoot } catch {}
+            try { New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null } catch {}
+            try {
+                Expand-Archive -Path $wintunZipPath -DestinationPath $extractRoot -Force
+                Write-AgentLog -FileName $LogName -Message ("$logPrefix Expanded Wintun zip to {0}" -f $extractRoot)
+            } catch {
+                Write-AgentLog -FileName $LogName -Message ("$logPrefix Failed to expand Wintun zip: {0}" -f $_.Exception.Message)
+            }
+
+            $infPath = Get-ChildItem -Path $extractRoot -Recurse -Filter '*.inf' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($infPath -and (Test-Path $infPath.FullName -PathType Leaf)) {
+                try {
+                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Installing Wintun driver via pnputil: {0}" -f $infPath.FullName)
+                    pnputil.exe /add-driver "`"$($infPath.FullName)`"" /install | Out-Null
+                    $postPnP = Get-WireGuardInstallState
+                    $postPnPDriver = $postPnP.DriverPresent
+                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Driver presence after pnputil install: $postPnPDriver")
+                    if (-not $postPnPDriver) {
+                        throw "$logPrefix pnputil install completed but driver still missing."
+                    }
+                    return
+                } catch {
+                    Write-AgentLog -FileName $LogName -Message ("$logPrefix pnputil driver install failed: {0}" -f $_.Exception.Message)
+                }
+            } else {
+                Write-AgentLog -FileName $LogName -Message "$logPrefix No Wintun INF found in extracted package."
+            }
+        }
+
+        throw "$logPrefix Driver still missing after bootstrap and pnputil fallback."
+    }
+
     # AutoHotKey portable
     Run-Step "Dependency: AutoHotKey" {
         $ahkVersion    = "2.0.19"
@@ -617,6 +1010,103 @@ function Install_Agent_Dependencies {
             if (-not (Test-Path $gitExePath)) {
                 throw "Git executable not found after extraction."
             }
+        }
+    }
+
+    Run-Step "Dependency: WireGuard VPN Adapter" {
+        $logName = 'Install.log'
+        $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+        $archKey = $null
+        try { $archKey = $arch.ToString().ToUpperInvariant() } catch { $archKey = 'X64' }
+        $msiName = Get-WireGuardMsiName -ArchitectureTag $archKey
+        $msiPath = $null
+        if ($msiName) {
+            $msiPath = Join-Path $wireGuardInstallerDir $msiName
+            Ensure-WireGuardInstallerFile -Url ("$wireGuardDownloadRoot$msiName") -DestinationPath $msiPath -LogName $logName
+        } else {
+            Write-AgentLog -FileName $logName -Message ("[WireGuard] Unable to resolve MSI name for architecture '{0}'. Defaulting to cached bootstrapper only." -f $archKey)
+        }
+
+        Ensure-WireGuardInstallerFile -Url ("$wireGuardDownloadRoot$wireGuardBootstrapperName") -DestinationPath $wireGuardBootstrapperPath -LogName $logName
+
+        $state = Get-WireGuardInstallState
+        $stateVersion = if ($state.Version) { $state.Version } else { 'unknown' }
+        $stateExe = if ($state.ExePath) { $state.ExePath } else { 'n/a' }
+        $stateSummary = "[WireGuard] Detected install state: Installed={0}; Version={1}; Service={2}; Driver={3}; Exe={4}" -f `
+            $state.Installed, $stateVersion, $state.ServicePresent, $state.DriverPresent, $stateExe
+        Write-AgentLog -FileName $logName -Message $stateSummary
+        if ($state.DriverPaths -and $state.DriverPaths.Count -gt 0) {
+            Write-AgentLog -FileName $logName -Message ("[WireGuard] Driver paths: {0}" -f ($state.DriverPaths -join '; '))
+        }
+
+        if (-not ($state.Installed -and $state.DriverPresent -and $state.ServicePresent)) {
+            $installerCandidate = $null
+            if ($msiPath -and (Test-Path $msiPath -PathType Leaf)) {
+                $installerCandidate = $msiPath
+            } elseif (Test-Path $wireGuardBootstrapperPath -PathType Leaf) {
+                $installerCandidate = $wireGuardBootstrapperPath
+            }
+
+            if (-not $installerCandidate) {
+                throw "WireGuard installer cache missing; expected $msiPath or $wireGuardBootstrapperPath"
+            }
+
+            if ($installerCandidate.ToLowerInvariant().EndsWith('.msi')) {
+                Install-WireGuardMsi -InstallerPath $installerCandidate -BootstrapperPath $wireGuardBootstrapperPath -LogName $logName
+            } else {
+                $logPrefix = '[WireGuard]'
+                Write-AgentLog -FileName $logName -Message ("$logPrefix Installing via bootstrapper at {0}" -f $installerCandidate)
+                $bootstrapArgs = '/install /quiet'
+                try {
+                    $proc = Start-Process -FilePath $installerCandidate -ArgumentList $bootstrapArgs -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                    Write-AgentLog -FileName $logName -Message ("$logPrefix Bootstrapper exit code: {0}" -f $proc.ExitCode)
+                    if ($proc.ExitCode -ne 0) {
+                        throw "WireGuard bootstrapper returned exit code $($proc.ExitCode)"
+                    }
+                } catch {
+                    $err = $_.Exception.Message
+                    Write-AgentLog -FileName $logName -Message ("$logPrefix Bootstrapper install failed: {0}" -f $err)
+                    throw
+                }
+            }
+
+            $state = Get-WireGuardInstallState
+            $postVersion = if ($state.Version) { $state.Version } else { 'unknown' }
+            $postExe = if ($state.ExePath) { $state.ExePath } else { 'n/a' }
+            $postSummary = "[WireGuard] Post-install state: Installed={0}; Version={1}; Service={2}; Driver={3}; Exe={4}" -f `
+                $state.Installed, $postVersion, $state.ServicePresent, $state.DriverPresent, $postExe
+            Write-AgentLog -FileName $logName -Message $postSummary
+            if ($state.Installed -and $state.DriverPresent) {
+                Write-Host "WireGuard installed and verified (version: $($state.Version))." -ForegroundColor Green
+            } else {
+                Write-Host "WireGuard installed (driver pending bootstrap)." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "WireGuard already installed (version: $($state.Version))." -ForegroundColor Green
+        }
+
+        # Ensure wintun driver is seeded even before first tunnel is created
+        $wgExe = $state.ExePath
+        if (-not $wgExe -or -not (Test-Path $wgExe -PathType Leaf)) {
+            # try default install path
+            $wgExe = Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'
+        }
+        if ($wgExe -and (Test-Path $wgExe -PathType Leaf)) {
+            try {
+                Ensure-WireGuardDriver -WireGuardExe $wgExe -LogName $logName
+                $finalState = Get-WireGuardInstallState
+                if (-not ($finalState.Installed -and $finalState.DriverPresent)) {
+                    throw "WireGuard driver still missing after bootstrap attempts."
+                }
+                Write-Host "WireGuard driver verified." -ForegroundColor Green
+            } catch {
+                Write-AgentLog -FileName $logName -Message ("[WireGuard] Driver bootstrap failed: {0}" -f $_.Exception.Message)
+                throw
+            }
+        } else {
+            $msg = "[WireGuard] Unable to locate wireguard.exe after installation."
+            Write-AgentLog -FileName $logName -Message $msg
+            throw $msg
         }
     }
 }
