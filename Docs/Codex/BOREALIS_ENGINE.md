@@ -23,9 +23,10 @@ Use this doc for Engine work (successor to the legacy server). For shared guidan
 - Enrollment: operator approvals, conflict detection, auditor recording, pruning of expired codes/refresh tokens.
 - Background jobs and service adapters maintain compatibility with legacy DB schemas while enabling gradual API takeover.
 
-## Reverse Tunnels
-- Full design and lifecycle are in `Docs/Codex/REVERSE_TUNNELS.md` (domains, limits, framing, APIs, stop path, UI hooks).
-- Engine orchestrator is `Data/Engine/services/WebSocket/Agent/reverse_tunnel_orchestrator.py` with domain handlers under `Data/Engine/services/WebSocket/Agent/Reverse_Tunnels/`.
+## Reverse VPN Tunnels
+- WireGuard reverse VPN design and lifecycle live in `Docs/Codex/REVERSE_TUNNELS.md` and `Docs/Codex/Reverse_VPN_Tunnel_Deployment.md`.
+- Engine orchestrator: `Data/Engine/services/VPN/vpn_tunnel_service.py` with WireGuard manager `Data/Engine/services/VPN/wireguard_server.py`.
+- UI shell bridge: `Data/Engine/services/WebSocket/vpn_shell.py`.
 
 ## WebUI & WebSocket Migration
 - Static/template handling: `Data/Engine/services/WebUI`; deployment copy paths are wired through `Borealis.ps1` with TLS-aware URL generation.

@@ -1,92 +1,61 @@
-# Borealis Reverse Tunnels – Operator & Developer Guide
+# Borealis Reverse VPN Tunnels (WireGuard) – Operator & Developer Guide
 
-This document is the single reference for how Borealis reverse tunnels are organized, secured, and orchestrated. It is written for Codex agents extending the feature (new protocols, UI, or policy changes).
+This document is the reference for Borealis reverse VPN tunnels built on WireGuard. The legacy WebSocket framing and domain-lane tunnel stack has been retired; the system now uses a single outbound WireGuard tunnel per agent with host-only routing and per-device ACLs.
 
 ## 1) High-Level Model
-- Outbound-only: Agents initiate all tunnel sockets to the Engine. No inbound openings on devices.
-- Transport: WebSocket-over-TLS carrying a binary frame header (version | msg_type | flags | reserved | channel_id | length) plus payload.
-- Leases: Engine issues short-lived leases per agent/domain/protocol. Each lease binds a tunnel_id to an ephemeral Engine port and a signed token.
-- Domains: Concurrency “lanes” keep protocols isolated: `remote-interactive-shell` (2), `remote-management` (1), `remote-video` (2). Legacy aliases (`ps`, etc.) normalize into these lanes.
-- Channels: Logical streams inside a tunnel (channel_id u32). PS uses channel 1; future protocols can open more channels per tunnel as needed.
-- Tear-down: Idle/grace timeouts plus explicit operator stop. Closing a tunnel must close its protocol channel(s) and kill the agent process for interactive shells.
+- Outbound-only: agents establish WireGuard tunnels to the Engine; no inbound access on devices.
+- Transport: WireGuard/UDP on port 30000.
+- Sessions: one live VPN tunnel per agent; multiple operators share it.
+- Routing: host-only /32 per agent; AllowedIPs restricted to the agent /32 and engine /32; no client-to-client.
+- Idle timeout: 15 minutes of no operator activity; no grace period.
+- Keys: WireGuard server keys under `Engine/Certificates/VPN_Server`; client keys under `Agent/Borealis/Certificates/VPN_Client`.
 
 ## 2) Engine Components
-- Orchestrator: `Data/Engine/services/WebSocket/Agent/reverse_tunnel_orchestrator.py`
-  - Lease manager: Port pool allocator, domain limit enforcement, idle/grace sweeper.
-  - Token issuer/validator: Binds agent_id, tunnel_id, domain, protocol, port, expires_at.
-  - Bridge: Maps agent sockets ↔ operator sockets; stores per-tunnel protocol server instances.
-  - Logging: `Engine/Logs/reverse_tunnel.log` plus Device Activity start/stop entries.
-  - Stop path: `stop_tunnel` closes protocol servers, emits `reverse_tunnel_stop` to agents, releases lease/bridge.
-- Protocol registry: Domain/protocol handlers under `Data/Engine/services/WebSocket/Agent/Reverse_Tunnels/`:
-  - `remote_interactive_shell/Protocols/Powershell.py` (live), `Bash.py` (placeholder).
-  - `remote_management/Protocols/SSH.py`, `WinRM.py` (placeholders).
-  - `remote_video/Protocols/VNC.py`, `RDP.py`, `WebRTC.py` (placeholders).
-- API Endpoints:
-  - `POST /api/tunnel/request` → allocates lease, returns {tunnel_id, port, token, idle_seconds, grace_seconds, domain, protocol}.
-  - `DELETE /api/tunnel/<tunnel_id>` → operator-driven stop; pushes stop to agent and releases the lease.
-  - Domain default for PowerShell requests is `remote-interactive-shell` (legacy `ps` still accepted).
-- Operator Socket.IO namespace `/tunnel`:
-  - `join`, `send`, `poll`, `ps_open`, `ps_send`, `ps_resize`, `ps_poll`.
-  - Operator socket disconnect triggers `stop_tunnel` if no other operators remain attached.
-- WebUI (current): `Data/Engine/web-interface/src/Devices/ReverseTunnel/Powershell.jsx` requests PS leases in `remote-interactive-shell`, sends CLOSE frames, and calls DELETE on disconnect/unload.
+- Orchestrator: `Data/Engine/services/VPN/vpn_tunnel_service.py`
+  - Allocates per-agent /32, issues short-lived orchestration tokens, enforces single-session.
+  - Starts/stops WireGuard listener, applies firewall rules, idles out on inactivity.
+  - Emits Socket.IO events: `vpn_tunnel_start`, `vpn_tunnel_stop`, `vpn_tunnel_activity`.
+- WireGuard manager: `Data/Engine/services/VPN/wireguard_server.py`
+  - Generates server keys, renders config, manages `wireguard.exe` tunnel service, applies ACL rules.
+- PowerShell bridge: `Data/Engine/services/WebSocket/vpn_shell.py`
+  - Proxies UI shell input/output to the agent’s TCP shell server over WireGuard.
+- Logging: `Engine/Logs/reverse_tunnel.log` plus Device Activity entries.
 
-## 3) Agent Components
-- Role: `Data/Agent/Roles/role_ReverseTunnel.py`
-  - Validates signed lease tokens; enforces domain limits (2/1/2 with legacy fallbacks).
-  - Outbound TLS WS connect to assigned port; heartbeats + idle/grace watchdog; stop_all closes channels and sends CLOSE.
-  - Protocol registry: loads handlers from `Data/Agent/Roles/Reverse_Tunnels/*/Protocols/*` (PowerShell live; others stubbed to close unsupported channels cleanly).
-- PowerShell channel: `Data/Agent/Roles/ReverseTunnel/tunnel_Powershell.py` (pipes-only, no PTY); re-exported under `Reverse_Tunnels/remote_interactive_shell/Protocols/Powershell.py`.
-- Logging: `Agent/Logs/reverse_tunnel.log` with channel/tunnel lifecycle.
+## 3) API Endpoints
+- `POST /api/tunnel/connect` → issues session material (tunnel_id, token, virtual_ip, endpoint, allowed_ports, idle_seconds).
+- `GET /api/tunnel/status` → returns up/down status for an agent.
+- `GET /api/tunnel/connect/status` → alias for status (used by UI before shell open).
+- `DELETE /api/tunnel/disconnect` → immediate teardown (agent + engine cleanup).
+- `GET /api/device/vpn_config/<agent_id>` → read per-agent allowed ports.
+- `PUT /api/device/vpn_config/<agent_id>` → update allowed ports.
 
-## 4) Framing, Heartbeats, Close
-- Header: version(1) | msg_type(1) | flags(1) | reserved(1) | channel_id(u32 LE) | length(u32 LE).
-- Messages: CONNECT/ACK, CHANNEL_OPEN/ACK, DATA, CONTROL (resize), WINDOW_UPDATE (reserved), HEARTBEAT (ping/pong), CLOSE.
-- Close codes: ok, idle_timeout, grace_expired, protocol_error, auth_failed, server_shutdown, agent_shutdown, domain_limit, unexpected_disconnect.
-- Heartbeats: Engine → Agent loop; idle/grace sweeper ~15s on Engine; Agent watchdog closes on idle/grace.
+## 4) Agent Components
+- Tunnel lifecycle: `Data/Agent/Roles/role_WireGuardTunnel.py`
+  - Validates orchestration tokens, starts/stops WireGuard client service, enforces idle.
+- Shell server: `Data/Agent/Roles/role_VpnShell.py`
+  - TCP PowerShell server bound to `0.0.0.0:47001`, restricted to VPN subnet (10.255.x.x).
+- Logging: `Agent/Logs/reverse_tunnel.log`.
 
-## 5) Lifecycle (PowerShell example)
-1. UI calls `POST /api/tunnel/request` with agent_id, protocol=ps, domain=remote-interactive-shell.
-2. Engine allocates port/tunnel_id, signs token, starts listener, pushes `reverse_tunnel_start` to agent.
-3. Agent dials WS to assigned port, sends CONNECT with token. Engine validates, binds bridge, sends CONNECT_ACK + heartbeat.
-4. Operator Socket.IO `/tunnel` joins; Engine attaches operator, instantiates PS server, issues CHANNEL_OPEN.
-5. Agent launches PowerShell (pipes), streams stdout/stderr as DATA; operator input via `ps_send`; optional resize via `ps_resize` (no-op on agent pipes).
-6. On operator Disconnect/tab close, UI sends CLOSE frame and calls DELETE; Engine stop path notifies agent (`reverse_tunnel_stop`), closes channel, releases lease/domain slot.
-7. Idle/grace expiry or agent disconnect also triggers close/release; domain slots free immediately.
+## 5) Security & Auth
+- TLS pinned for Engine API/Socket.IO.
+- Orchestration tokens signed via Engine Ed25519 key; agent verifies signatures and stores the signing key.
+- WireGuard AllowedIPs /32; no LAN routes; client-to-client blocked.
+- Engine firewall rules enforce per-device allowed ports.
 
-## 6) Security & Auth
-- TLS: Reuse existing pinned bundle; outbound-only agent sockets.
-- Token: short-lived, binds agent_id/tunnel_id/domain/protocol/port/expires_at; optional signature verification (Ed25519 signer when configured).
-- Operator auth: uses existing Engine session/cookie/bearer for `/tunnel` namespace and API endpoints.
+## 6) UI
+- Device details now include an “Advanced Config” tab for per-device allowed ports.
+- PowerShell MVP reuses `Data/Engine/web-interface/src/Devices/ReverseTunnel/Powershell.jsx` with WireGuard APIs + VPN shell events.
 
-## 7) Configuration Knobs (defaults)
-- Port pool: 30000–40000; fixed port optional (context settings).
-- Idle timeout: 3600s; Grace timeout: 3600s.
-- Heartbeat interval: 20s (Engine → Agent).
-- Domain limits: remote-interactive-shell=2, remote-management=1, remote-video=2; legacy aliases preserved.
-- Log path: `Engine/Logs/reverse_tunnel.log`; `Agent/Logs/reverse_tunnel.log`.
+## 7) Extending to New Protocols
+- Add protocol ports to the device allowlist and UI toggles.
+- Reuse the existing VPN tunnel; no new transport/domain lanes required.
 
-## 8) Logs & Telemetry
-- Engine: lease events, socket events, close reasons in `reverse_tunnel.log`; Device Activity start/stop with tunnel_id/operator_id when available.
-- Agent: role lifecycle, channel start/stop, errors in `reverse_tunnel.log`.
+## 8) Legacy Removal
+- WebSocket tunnel domains, protocol handlers, and domain limits are removed.
+- No `/tunnel` Socket.IO namespace or framed protocol messages remain.
 
-## 9) Extending to New Protocols
-- Add Engine handler under the appropriate domain folder and register in the orchestrator’s protocol registry.
-- Add Agent handler under matching domain folder; update role registry to load it.
-- Define channel open semantics (metadata), DATA/CONTROL usage, and close behavior.
-- Update API/UI to allow selecting the protocol/domain and to send protocol-specific controls.
-
-## 10) Outstanding Work
-- Implement real handlers for Bash/SSH/WinRM/RDP/VNC/WebRTC and surface in UI.
-- Add tests for DELETE stop path, per-domain limits, and browser disconnect cleanup.
-- Consider a binary WebSocket browser bridge to replace Socket.IO for high-throughput protocols.
-
-## 11) Risks & Watchpoints
-- Eventlet/asyncio coexistence: tunnel loop runs on its own thread/loop; avoid blocking Socket.IO handlers.
-- Port exhaustion: handle allocation failures cleanly; always release on stop/idle/grace.
-- Buffer growth: add back-pressure before enabling high-throughput protocols.
-- Security: strict token binding (agent_id/tunnel_id/domain/protocol/port/expiry) and TLS; reject framing errors.
-
-## 12) Change Log (not exhaustive)
-- 2025-11-30: Initial scaffold (lease manager, framing, tokens, API, Agent role, PS handlers).
-- 2025-12-06: Simplified PS to pipes-only; improved handler imports; UI status tweaks.
-- 2025-12-18: Domain lanes introduced (`remote-interactive-shell`, `remote-management`, `remote-video`) with limits 2/1/2; protocol handlers reorganized under `Reverse_Tunnels/*/Protocols/*`; orchestrator renamed to `reverse_tunnel_orchestrator.py`; explicit stop API/Socket.IO cleanup; WebUI Disconnect/unload calls DELETE + CLOSE for immediate teardown.
+## 9) Change Log (not exhaustive)
+- 2025-11-30: Legacy WebSocket tunnel scaffold introduced (lease manager, framing, tokens).
+- 2025-12-06: Legacy PowerShell handler simplified to pipes-only; UI status tweaks.
+- 2025-12-18: Legacy domain lanes added (`remote-interactive-shell`, `remote-management`, `remote-video`) with limits.
+- 2025-12-20: WireGuard reverse VPN migration complete; legacy WebSocket tunnels retired; VPN shell bridge + new APIs.

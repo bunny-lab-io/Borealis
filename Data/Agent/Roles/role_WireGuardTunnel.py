@@ -9,13 +9,15 @@
 
 This role prepares the WireGuard client config, manages a single active
 session, enforces idle teardown, and logs lifecycle events to
-Agent/Logs/reverse_tunnel.log. It does not yet bind to engine signals; higher
-layers should call start_session/stop_session with the issued config/token.
+Agent/Logs/reverse_tunnel.log. It binds to Engine Socket.IO events
+(`vpn_tunnel_start`, `vpn_tunnel_stop`, `vpn_tunnel_activity`) to start/stop
+the client session with the issued config/token.
 """
 
 from __future__ import annotations
 
 import base64
+import json
 import os
 import subprocess
 import threading
@@ -26,6 +28,7 @@ from typing import Any, Dict, Optional
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
+from signature_utils import verify_and_store_script_signature
 
 ROLE_NAME = "WireGuardTunnel"
 ROLE_CONTEXTS = ["system"]
@@ -95,6 +98,8 @@ class SessionConfig:
     allowed_ports: str
     idle_seconds: int = 900
     preshared_key: Optional[str] = None
+    client_private_key: Optional[str] = None
+    client_public_key: Optional[str] = None
 
 
 class WireGuardClient:
@@ -122,17 +127,35 @@ class WireGuardClient:
                 return candidate
         return "wireguard.exe"
 
-    def _validate_token(self, token: Dict[str, Any]) -> None:
-        required = ("agent_id", "tunnel_id", "expires_at")
+    def _validate_token(self, token: Dict[str, Any], *, signing_client: Optional[Any] = None) -> None:
+        payload = dict(token or {})
+        signature = payload.pop("signature", None)
+        signing_key = payload.pop("signing_key", None)
+        sig_alg = payload.pop("sig_alg", None)
+
+        required = ("agent_id", "tunnel_id", "expires_at", "port")
         missing = [field for field in required if field not in token or token[field] in ("", None)]
         if missing:
             raise ValueError(f"Missing token fields: {', '.join(missing)}")
         try:
-            exp = float(token["expires_at"])
+            exp = float(payload["expires_at"])
         except Exception:
             raise ValueError("Invalid token expiry")
         if exp <= time.time():
             raise ValueError("Token expired")
+        try:
+            port = int(payload["port"])
+        except Exception:
+            raise ValueError("Invalid token port")
+        if port < 1 or port > 65535:
+            raise ValueError("Invalid token port")
+
+        if signature:
+            if sig_alg and str(sig_alg).lower() not in ("ed25519", "eddsa"):
+                raise ValueError("Unsupported token signature algorithm")
+            payload_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            if not verify_and_store_script_signature(signing_client, payload_bytes, str(signature), signing_key):
+                raise ValueError("Token signature invalid")
 
     def _run(self, args: list[str]) -> tuple[int, str, str]:
         try:
@@ -142,9 +165,10 @@ class WireGuardClient:
             return 1, "", str(exc)
 
     def _render_config(self, session: SessionConfig) -> str:
+        private_key = session.client_private_key or self._client_keys["private"]
         lines = [
             "[Interface]",
-            f"PrivateKey = {self._client_keys['private']}",
+            f"PrivateKey = {private_key}",
             f"Address = {session.virtual_ip}",
             "",
             "[Peer]",
@@ -172,13 +196,13 @@ class WireGuardClient:
         t.start()
         self._idle_thread = t
 
-    def start_session(self, session: SessionConfig) -> None:
+    def start_session(self, session: SessionConfig, *, signing_client: Optional[Any] = None) -> None:
         if self.session:
             _write_log("Rejecting start_session: existing session already active.")
             return
 
         try:
-            self._validate_token(session.token)
+            self._validate_token(session.token, signing_client=signing_client)
         except Exception as exc:
             _write_log(f"Refusing to start WireGuard session: {exc}")
             return
@@ -243,6 +267,7 @@ class Role:
         self.client = client
         hooks = getattr(ctx, "hooks", {}) or {}
         self._log_hook = hooks.get("log_agent")
+        self._http_client_factory = hooks.get("http_client")
 
     def _log(self, message: str, *, error: bool = False) -> None:
         if callable(self._log_hook):
@@ -253,6 +278,14 @@ class Role:
             except Exception:
                 pass
         _write_log(message)
+
+    def _http_client(self) -> Optional[Any]:
+        try:
+            if callable(self._http_client_factory):
+                return self._http_client_factory()
+        except Exception:
+            return None
+        return None
 
     def _build_session(self, payload: Any) -> Optional[SessionConfig]:
         if not isinstance(payload, dict):
@@ -299,6 +332,8 @@ class Role:
             allowed_ports=allowed_ports,
             idle_seconds=idle_seconds,
             preshared_key=payload.get("preshared_key"),
+            client_private_key=payload.get("client_private_key"),
+            client_public_key=payload.get("client_public_key"),
         )
 
     def register_events(self) -> None:
@@ -310,7 +345,7 @@ class Role:
             if not session:
                 return
             self._log("WireGuard start request received.")
-            self.client.start_session(session)
+            self.client.start_session(session, signing_client=self._http_client())
 
         @sio.on("vpn_tunnel_stop")
         async def _vpn_tunnel_stop(payload):

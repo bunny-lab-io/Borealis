@@ -77,17 +77,12 @@ LOG_ROOT = PROJECT_ROOT / "Engine" / "Logs"
 LOG_FILE_PATH = LOG_ROOT / "engine.log"
 ERROR_LOG_FILE_PATH = LOG_ROOT / "error.log"
 API_LOG_FILE_PATH = LOG_ROOT / "api.log"
-REVERSE_TUNNEL_LOG_FILE_PATH = LOG_ROOT / "reverse_tunnel.log"
-
-DEFAULT_TUNNEL_FIXED_PORT = 8443
-DEFAULT_TUNNEL_PORT_RANGE = (30000, 40000)
-DEFAULT_TUNNEL_IDLE_TIMEOUT_SECONDS = 3600
-DEFAULT_TUNNEL_GRACE_TIMEOUT_SECONDS = 3600
-DEFAULT_TUNNEL_HEARTBEAT_INTERVAL_SECONDS = 20
+VPN_TUNNEL_LOG_FILE_PATH = LOG_ROOT / "reverse_tunnel.log"
 DEFAULT_WIREGUARD_PORT = 30000
 DEFAULT_WIREGUARD_ENGINE_VIRTUAL_IP = "10.255.0.1/32"
 DEFAULT_WIREGUARD_PEER_NETWORK = "10.255.0.0/24"
-DEFAULT_WIREGUARD_ACL_WINDOWS = (3389, 5985, 5986, 5900, 3478)
+DEFAULT_WIREGUARD_SHELL_PORT = 47001
+DEFAULT_WIREGUARD_ACL_WINDOWS = (3389, 5985, 5986, 5900, 3478, DEFAULT_WIREGUARD_SHELL_PORT)
 VPN_SERVER_CERT_ROOT = PROJECT_ROOT / "Engine" / "Certificates" / "VPN_Server"
 
 
@@ -282,18 +277,14 @@ class EngineSettings:
     error_log_file: str
     api_log_file: str
     api_groups: Tuple[str, ...]
-    reverse_tunnel_fixed_port: int
-    reverse_tunnel_port_range: Tuple[int, int]
-    reverse_tunnel_idle_timeout_seconds: int
-    reverse_tunnel_grace_timeout_seconds: int
-    reverse_tunnel_heartbeat_seconds: int
-    reverse_tunnel_log_file: str
+    vpn_tunnel_log_file: str
     wireguard_port: int
     wireguard_engine_virtual_ip: str
     wireguard_peer_network: str
     wireguard_server_private_key_path: str
     wireguard_server_public_key_path: str
     wireguard_acl_allowlist_windows: Tuple[int, ...]
+    wireguard_shell_port: int
     raw: MutableMapping[str, Any] = field(default_factory=dict)
 
     def to_flask_config(self) -> MutableMapping[str, Any]:
@@ -390,10 +381,14 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
     api_log_file = str(runtime_config.get("API_LOG_FILE") or API_LOG_FILE_PATH)
     _ensure_parent(Path(api_log_file))
 
-    reverse_tunnel_log_file = str(
-        runtime_config.get("REVERSE_TUNNEL_LOG_FILE") or REVERSE_TUNNEL_LOG_FILE_PATH
+    vpn_tunnel_log_file = str(
+        runtime_config.get("VPN_TUNNEL_LOG_FILE")
+        or runtime_config.get("WIREGUARD_LOG_FILE")
+        or os.environ.get("BOREALIS_VPN_TUNNEL_LOG_FILE")
+        or os.environ.get("BOREALIS_WIREGUARD_LOG_FILE")
+        or VPN_TUNNEL_LOG_FILE_PATH
     )
-    _ensure_parent(Path(reverse_tunnel_log_file))
+    _ensure_parent(Path(vpn_tunnel_log_file))
 
     wireguard_port = _parse_int(
         runtime_config.get("WIREGUARD_PORT") or os.environ.get("BOREALIS_WIREGUARD_PORT"),
@@ -415,6 +410,13 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         runtime_config.get("WIREGUARD_WINDOWS_ALLOWLIST")
         or os.environ.get("BOREALIS_WIREGUARD_WINDOWS_ALLOWLIST"),
         default=DEFAULT_WIREGUARD_ACL_WINDOWS,
+    )
+    wireguard_shell_port = _parse_int(
+        runtime_config.get("WIREGUARD_SHELL_PORT")
+        or os.environ.get("BOREALIS_WIREGUARD_SHELL_PORT"),
+        default=DEFAULT_WIREGUARD_SHELL_PORT,
+        minimum=1,
+        maximum=65535,
     )
     wireguard_key_root = Path(
         runtime_config.get("WIREGUARD_KEY_ROOT")
@@ -440,35 +442,6 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
             "scheduled_jobs",
         )
 
-    tunnel_fixed_port = _parse_int(
-        runtime_config.get("TUNNEL_FIXED_PORT") or os.environ.get("BOREALIS_TUNNEL_FIXED_PORT"),
-        default=DEFAULT_TUNNEL_FIXED_PORT,
-        minimum=1,
-        maximum=65535,
-    )
-    tunnel_port_range = _parse_port_range(
-        runtime_config.get("TUNNEL_PORT_RANGE") or os.environ.get("BOREALIS_TUNNEL_PORT_RANGE"),
-        default=DEFAULT_TUNNEL_PORT_RANGE,
-    )
-    tunnel_idle_timeout_seconds = _parse_int(
-        runtime_config.get("TUNNEL_IDLE_TIMEOUT_SECONDS")
-        or os.environ.get("BOREALIS_TUNNEL_IDLE_TIMEOUT_SECONDS"),
-        default=DEFAULT_TUNNEL_IDLE_TIMEOUT_SECONDS,
-        minimum=60,
-    )
-    tunnel_grace_timeout_seconds = _parse_int(
-        runtime_config.get("TUNNEL_GRACE_TIMEOUT_SECONDS")
-        or os.environ.get("BOREALIS_TUNNEL_GRACE_TIMEOUT_SECONDS"),
-        default=DEFAULT_TUNNEL_GRACE_TIMEOUT_SECONDS,
-        minimum=60,
-    )
-    tunnel_heartbeat_seconds = _parse_int(
-        runtime_config.get("TUNNEL_HEARTBEAT_SECONDS")
-        or os.environ.get("BOREALIS_TUNNEL_HEARTBEAT_SECONDS"),
-        default=DEFAULT_TUNNEL_HEARTBEAT_INTERVAL_SECONDS,
-        minimum=5,
-    )
-
     settings = EngineSettings(
         database_path=database_path,
         static_folder=static_folder,
@@ -484,18 +457,14 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         error_log_file=str(error_log_file),
         api_log_file=str(api_log_file),
         api_groups=api_groups,
-        reverse_tunnel_fixed_port=tunnel_fixed_port,
-        reverse_tunnel_port_range=tunnel_port_range,
-        reverse_tunnel_idle_timeout_seconds=tunnel_idle_timeout_seconds,
-        reverse_tunnel_grace_timeout_seconds=tunnel_grace_timeout_seconds,
-        reverse_tunnel_heartbeat_seconds=tunnel_heartbeat_seconds,
-        reverse_tunnel_log_file=reverse_tunnel_log_file,
+        vpn_tunnel_log_file=vpn_tunnel_log_file,
         wireguard_port=wireguard_port,
         wireguard_engine_virtual_ip=wireguard_engine_virtual_ip,
         wireguard_peer_network=wireguard_peer_network,
         wireguard_server_private_key_path=wireguard_server_private_key_path,
         wireguard_server_public_key_path=wireguard_server_public_key_path,
         wireguard_acl_allowlist_windows=wireguard_acl_allowlist_windows,
+        wireguard_shell_port=wireguard_shell_port,
         raw=runtime_config,
     )
     return settings

@@ -8,13 +8,17 @@ import {
   Tab,
   Typography,
   Button,
+  Switch,
+  Chip,
+  Divider,
   Menu,
   MenuItem,
   TextField,
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions
+  DialogActions,
+  LinearProgress
 } from "@mui/material";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import StorageRoundedIcon from "@mui/icons-material/StorageRounded";
@@ -23,6 +27,7 @@ import LanRoundedIcon from "@mui/icons-material/LanRounded";
 import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
 import ListAltRoundedIcon from "@mui/icons-material/ListAltRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
+import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
 import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
@@ -69,14 +74,51 @@ const SECTION_HEIGHTS = {
   network: 260,
 };
 
+const buildVpnGroups = (shellPort) => {
+  const normalizedShell = Number(shellPort) || 47001;
+  return [
+    {
+      key: "shell",
+      label: "Borealis PowerShell",
+      description: "Web terminal access over the VPN tunnel.",
+      ports: [normalizedShell],
+    },
+    {
+      key: "rdp",
+      label: "RDP",
+      description: "Remote Desktop (TCP 3389).",
+      ports: [3389],
+    },
+    {
+      key: "winrm",
+      label: "WinRM",
+      description: "PowerShell/WinRM management (TCP 5985/5986).",
+      ports: [5985, 5986],
+    },
+    {
+      key: "vnc",
+      label: "VNC",
+      description: "Remote desktop streaming (TCP 5900).",
+      ports: [5900],
+    },
+    {
+      key: "webrtc",
+      label: "WebRTC",
+      description: "Real-time comms (UDP 3478).",
+      ports: [3478],
+    },
+  ];
+};
+
 const TOP_TABS = [
-  { label: "Device Summary", icon: InfoOutlinedIcon },
-  { label: "Storage", icon: StorageRoundedIcon },
-  { label: "Memory", icon: MemoryRoundedIcon },
-  { label: "Network", icon: LanRoundedIcon },
-  { label: "Installed Software", icon: AppsRoundedIcon },
-  { label: "Activity History", icon: ListAltRoundedIcon },
-  { label: "Remote Shell", icon: TerminalRoundedIcon },
+  { key: "summary", label: "Device Summary", icon: InfoOutlinedIcon },
+  { key: "storage", label: "Storage", icon: StorageRoundedIcon },
+  { key: "memory", label: "Memory", icon: MemoryRoundedIcon },
+  { key: "network", label: "Network", icon: LanRoundedIcon },
+  { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
+  { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
+  { key: "advanced", label: "Advanced Config", icon: TuneRoundedIcon },
+  { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
 ];
 
 const myTheme = themeQuartz.withParams({
@@ -286,6 +328,15 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [assemblyNameMap, setAssemblyNameMap] = useState({});
+  const [vpnLoading, setVpnLoading] = useState(false);
+  const [vpnSaving, setVpnSaving] = useState(false);
+  const [vpnError, setVpnError] = useState("");
+  const [vpnSource, setVpnSource] = useState("default");
+  const [vpnToggles, setVpnToggles] = useState({});
+  const [vpnCustomPorts, setVpnCustomPorts] = useState([]);
+  const [vpnDefaultPorts, setVpnDefaultPorts] = useState([]);
+  const [vpnShellPort, setVpnShellPort] = useState(47001);
+  const [vpnLoadedFor, setVpnLoadedFor] = useState("");
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
     // Prefer status provided by the device list row if available
@@ -655,6 +706,104 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     };
   }, [activityHostname, loadHistory]);
 
+  const applyVpnPorts = useCallback((ports, defaults, shellPort, source) => {
+    const normalized = Array.isArray(ports) ? ports : [];
+    const normalizedDefaults = Array.isArray(defaults) ? defaults : [];
+    const numericPorts = normalized
+      .map((p) => Number(p))
+      .filter((p) => Number.isFinite(p) && p > 0);
+    const numericDefaults = normalizedDefaults
+      .map((p) => Number(p))
+      .filter((p) => Number.isFinite(p) && p > 0);
+    const effectiveShell = Number(shellPort) || 47001;
+    const groups = buildVpnGroups(effectiveShell);
+    const knownPorts = new Set(groups.flatMap((group) => group.ports));
+    const allowedSet = new Set(numericPorts);
+    const nextToggles = {};
+    groups.forEach((group) => {
+      nextToggles[group.key] = group.ports.every((port) => allowedSet.has(port));
+    });
+    const customPorts = numericPorts.filter((port) => !knownPorts.has(port));
+    setVpnShellPort(effectiveShell);
+    setVpnDefaultPorts(numericDefaults);
+    setVpnCustomPorts(customPorts);
+    setVpnToggles(nextToggles);
+    setVpnSource(source || "default");
+  }, []);
+
+  const loadVpnConfig = useCallback(async () => {
+    if (!vpnAgentId) return;
+    setVpnLoading(true);
+    setVpnError("");
+    setVpnLoadedFor(vpnAgentId);
+    try {
+      const resp = await fetch(`/api/device/vpn_config/${encodeURIComponent(vpnAgentId)}`);
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      const allowedPorts = Array.isArray(data?.allowed_ports) ? data.allowed_ports : [];
+      const defaultPorts = Array.isArray(data?.default_ports) ? data.default_ports : [];
+      const shellPort = data?.shell_port;
+      applyVpnPorts(allowedPorts.length ? allowedPorts : defaultPorts, defaultPorts, shellPort, data?.source);
+      setVpnLoadedFor(vpnAgentId);
+    } catch (err) {
+      setVpnError(String(err.message || err));
+    } finally {
+      setVpnLoading(false);
+    }
+  }, [applyVpnPorts, vpnAgentId]);
+
+  const saveVpnConfig = useCallback(async () => {
+    if (!vpnAgentId) return;
+    const ports = [];
+    vpnPortGroups.forEach((group) => {
+      if (vpnToggles[group.key]) {
+        ports.push(...group.ports);
+      }
+    });
+    vpnCustomPorts.forEach((port) => ports.push(port));
+    const uniquePorts = Array.from(new Set(ports)).filter((p) => p > 0);
+    if (!uniquePorts.length) {
+      setVpnError("Enable at least one port before saving.");
+      return;
+    }
+    setVpnSaving(true);
+    setVpnError("");
+    try {
+      const resp = await fetch(`/api/device/vpn_config/${encodeURIComponent(vpnAgentId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allowed_ports: uniquePorts }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      const allowedPorts = Array.isArray(data?.allowed_ports) ? data.allowed_ports : uniquePorts;
+      const defaultPorts = Array.isArray(data?.default_ports) ? data.default_ports : vpnDefaultPorts;
+      applyVpnPorts(allowedPorts, defaultPorts, data?.shell_port || vpnShellPort, data?.source || "custom");
+    } catch (err) {
+      setVpnError(String(err.message || err));
+    } finally {
+      setVpnSaving(false);
+    }
+  }, [applyVpnPorts, vpnAgentId, vpnCustomPorts, vpnDefaultPorts, vpnPortGroups, vpnShellPort, vpnToggles]);
+
+  const resetVpnConfig = useCallback(() => {
+    if (!vpnDefaultPorts.length) {
+      setVpnError("No default ports available to reset.");
+      return;
+    }
+    setVpnError("");
+    applyVpnPorts(vpnDefaultPorts, vpnDefaultPorts, vpnShellPort, "default");
+  }, [applyVpnPorts, vpnDefaultPorts, vpnShellPort]);
+
+  useEffect(() => {
+    const advancedIndex = TOP_TABS.findIndex((item) => item.key === "advanced");
+    if (advancedIndex < 0) return;
+    if (tab !== advancedIndex) return;
+    if (!vpnAgentId) return;
+    if (vpnLoadedFor === vpnAgentId) return;
+    loadVpnConfig();
+  }, [loadVpnConfig, tab, vpnAgentId, vpnLoadedFor]);
+
   // No explicit live recap tab; recaps are recorded into Activity History
 
   const clearHistory = async () => {
@@ -739,6 +888,19 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   );
 
   const summary = details.summary || {};
+  const vpnAgentId = useMemo(() => {
+    return (
+      meta.agentId ||
+      summary.agent_id ||
+      agent?.agent_id ||
+      agent?.id ||
+      device?.agent_id ||
+      device?.agent_guid ||
+      device?.id ||
+      ""
+    );
+  }, [agent?.agent_id, agent?.id, device?.agent_guid, device?.agent_id, device?.id, meta.agentId, summary.agent_id]);
+  const vpnPortGroups = useMemo(() => buildVpnGroups(vpnShellPort), [vpnShellPort]);
   const tunnelDevice = useMemo(
     () => ({
       ...(device || {}),
@@ -876,7 +1038,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const formatScriptType = useCallback((raw) => {
     const value = String(raw || "").toLowerCase();
     if (value === "ansible") return "Ansible Playbook";
-    if (value === "reverse_tunnel") return "Reverse Tunnel";
+    if (value === "reverse_tunnel" || value === "vpn_tunnel") return "Reverse VPN Tunnel";
     return "Script";
   }, []);
 
@@ -1368,6 +1530,150 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     </Box>
   );
 
+  const handleVpnToggle = useCallback((key, checked) => {
+    setVpnToggles((prev) => ({ ...(prev || {}), [key]: checked }));
+    setVpnSource("custom");
+  }, []);
+
+  const renderAdvancedConfigTab = () => {
+    const sourceLabel = vpnSource === "custom" ? "Custom overrides" : "Defaults";
+    const showProgress = vpnLoading || vpnSaving;
+    return (
+      <Box sx={{ display: "flex", flexDirection: "column", gap: 2, flexGrow: 1, minHeight: 0 }}>
+        <Box
+          sx={{
+            borderRadius: 3,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            background:
+              "linear-gradient(160deg, rgba(8,12,24,0.94), rgba(10,16,30,0.9)), radial-gradient(circle at 20% 10%, rgba(125,211,252,0.08), transparent 40%)",
+            boxShadow: "0 25px 80px rgba(2,6,23,0.65)",
+            p: { xs: 2, md: 3 },
+          }}
+        >
+          {showProgress ? <LinearProgress color="info" sx={{ height: 3, mb: 2 }} /> : null}
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "flex-start", md: "center" }}>
+            <Box sx={{ flexGrow: 1 }}>
+              <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+                Reverse VPN Tunnel - Allowed Ports
+              </Typography>
+              <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mt: 0.5 }}>
+                Toggle which services the Engine can reach over the WireGuard tunnel for this device.
+              </Typography>
+            </Box>
+            <Chip
+              label={sourceLabel}
+              sx={{
+                borderRadius: 999,
+                fontWeight: 600,
+                letterSpacing: 0.2,
+                color: vpnSource === "custom" ? MAGIC_UI.accentA : MAGIC_UI.textMuted,
+                border: `1px solid ${MAGIC_UI.panelBorder}`,
+                backgroundColor: "rgba(8,12,24,0.75)",
+              }}
+            />
+          </Stack>
+          <Divider sx={{ my: 2, borderColor: "rgba(148,163,184,0.2)" }} />
+          <Stack spacing={1.5}>
+            {vpnPortGroups.map((group) => (
+              <Box
+                key={group.key}
+                sx={{
+                  display: "flex",
+                  alignItems: { xs: "flex-start", md: "center" },
+                  justifyContent: "space-between",
+                  gap: 2,
+                  p: 2,
+                  borderRadius: 2,
+                  border: `1px solid ${MAGIC_UI.panelBorder}`,
+                  background: "rgba(6,10,20,0.7)",
+                }}
+              >
+                <Box sx={{ flexGrow: 1 }}>
+                  <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 600 }}>
+                    {group.label}
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mt: 0.35 }}>
+                    {group.description}
+                  </Typography>
+                  <Stack direction="row" spacing={0.75} sx={{ mt: 0.8, flexWrap: "wrap" }}>
+                    {group.ports.map((port) => (
+                      <Chip
+                        key={`${group.key}-${port}`}
+                        label={`TCP ${port}`}
+                        size="small"
+                        sx={{
+                          borderRadius: 999,
+                          backgroundColor: "rgba(15,23,42,0.65)",
+                          color: MAGIC_UI.textMuted,
+                          border: `1px solid rgba(148,163,184,0.25)`,
+                        }}
+                      />
+                    ))}
+                  </Stack>
+                </Box>
+                <Switch
+                  checked={Boolean(vpnToggles[group.key])}
+                  onChange={(event) => handleVpnToggle(group.key, event.target.checked)}
+                  color="info"
+                  disabled={vpnLoading || vpnSaving}
+                />
+              </Box>
+            ))}
+          </Stack>
+          {vpnCustomPorts.length ? (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
+                Custom ports preserved: {vpnCustomPorts.join(", ")}
+              </Typography>
+            </Box>
+          ) : null}
+          {vpnError ? (
+            <Typography variant="body2" sx={{ color: "#ff7b89", mt: 1 }}>
+              {vpnError}
+            </Typography>
+          ) : null}
+          <Stack direction="row" spacing={1.25} sx={{ mt: 2 }}>
+            <Button
+              size="small"
+              disabled={!vpnAgentId || vpnSaving || vpnLoading}
+              onClick={saveVpnConfig}
+              sx={{
+                backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
+                color: "#0b1220",
+                borderRadius: 999,
+                textTransform: "none",
+                px: 2.4,
+                "&:hover": {
+                  backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+                },
+              }}
+            >
+              Save Config
+            </Button>
+            <Button
+              size="small"
+              disabled={!vpnDefaultPorts.length || vpnSaving || vpnLoading}
+              onClick={resetVpnConfig}
+              sx={{
+                borderRadius: 999,
+                textTransform: "none",
+                px: 2.4,
+                color: MAGIC_UI.textBright,
+                border: `1px solid ${MAGIC_UI.panelBorder}`,
+                backgroundColor: "rgba(8,12,24,0.6)",
+                "&:hover": {
+                  backgroundColor: "rgba(12,18,35,0.8)",
+                },
+              }}
+            >
+              Reset Defaults
+            </Button>
+          </Stack>
+        </Box>
+      </Box>
+    );
+  };
+
   const memoryRows = useMemo(
     () =>
       (details.memory || []).map((m, idx) => ({
@@ -1618,6 +1924,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     renderNetworkTab,
     renderSoftware,
     renderHistory,
+    renderAdvancedConfigTab,
     renderRemoteShellTab,
   ];
   const tabContent = (topTabRenderers[tab] || renderDeviceSummaryTab)();
@@ -1742,7 +2049,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
       >
         {TOP_TABS.map((tabDef) => (
           <Tab
-            key={tabDef.label}
+            key={tabDef.key || tabDef.label}
             label={tabDef.label}
             icon={<tabDef.icon sx={{ fontSize: 18 }} />}
             iconPosition="start"

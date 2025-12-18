@@ -70,7 +70,7 @@ class WireGuardServerManager:
         self.logger = _build_logger(config.log_path)
         self._ensure_cert_dir()
         self.server_private_key, self.server_public_key = self._ensure_server_keys()
-        self._service_name = "BorealisWireGuard"
+        self._service_name = "borealis-wg"
         self._temp_dir = Path(tempfile.gettempdir()) / "borealis-wg-engine"
 
     def _ensure_cert_dir(self) -> None:
@@ -157,7 +157,7 @@ class WireGuardServerManager:
         if not token:
             raise ValueError("Missing orchestration token for WireGuard peer")
 
-        required_fields = ("agent_id", "tunnel_id", "expires_at")
+        required_fields = ("agent_id", "tunnel_id", "expires_at", "port")
         missing = [field for field in required_fields if field not in token or token[field] in (None, "")]
         if missing:
             raise ValueError(f"Invalid orchestration token; missing {', '.join(missing)}")
@@ -166,6 +166,13 @@ class WireGuardServerManager:
             expires_at = float(token["expires_at"])
         except Exception:
             raise ValueError("Invalid orchestration token expiry")
+
+        try:
+            port = int(token["port"])
+        except Exception:
+            raise ValueError("Invalid orchestration token port")
+        if port != int(self.config.port):
+            raise ValueError("Orchestration token port mismatch")
 
         now = time.time()
         if expires_at <= now:
@@ -253,12 +260,14 @@ class WireGuardServerManager:
             "host_only": True,
         }
 
-    def apply_firewall_rules(self, peer: Mapping[str, object]) -> None:
+    def apply_firewall_rules(self, peer: Mapping[str, object]) -> List[str]:
         """Apply outbound firewall allow rules for the agent's virtual IP/ports (Windows netsh)."""
 
         rules = self.build_firewall_rules(peer)
+        rule_names: List[str] = []
         for idx, rule in enumerate(rules):
             name = f"Borealis-WG-Agent-{peer.get('agent_id','')}-{idx}"
+            protocol = str(rule.get("protocol") or "TCP").upper()
             args = [
                 "netsh",
                 "advfirewall",
@@ -269,7 +278,7 @@ class WireGuardServerManager:
                 "dir=out",
                 "action=allow",
                 f"remoteip={rule.get('remote_address','')}",
-                f"protocol=TCP",
+                f"protocol={protocol}",
                 f"localport={rule.get('local_port','')}",
             ]
             code, out, err = self._run_command(args)
@@ -277,6 +286,19 @@ class WireGuardServerManager:
                 self.logger.warning("Failed to apply firewall rule %s code=%s err=%s", name, code, err)
             else:
                 self.logger.info("Applied firewall rule %s", name)
+                rule_names.append(name)
+        return rule_names
+
+    def remove_firewall_rules(self, rule_names: Sequence[str]) -> None:
+        for name in rule_names:
+            if not name:
+                continue
+            args = ["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"]
+            code, out, err = self._run_command(args)
+            if code != 0:
+                self.logger.warning("Failed to remove firewall rule %s code=%s err=%s", name, code, err)
+            else:
+                self.logger.info("Removed firewall rule %s", name)
 
     def start_listener(self, peers: Sequence[Mapping[str, object]]) -> None:
         """Render a temporary WireGuard config and start the service."""
@@ -291,6 +313,9 @@ class WireGuardServerManager:
         config_path.write_text(rendered, encoding="utf-8")
         self.logger.info("Rendered WireGuard config to %s", config_path)
 
+        # Ensure old service is removed before re-installing.
+        self.stop_listener()
+
         args = ["wireguard.exe", "/installtunnelservice", str(config_path)]
         code, out, err = self._run_command(args)
         if code != 0:
@@ -301,7 +326,7 @@ class WireGuardServerManager:
     def stop_listener(self) -> None:
         """Stop and remove the WireGuard tunnel service."""
 
-        args = ["wireguard.exe", "/uninstalltunnelservice", "borealis-wg"]
+        args = ["wireguard.exe", "/uninstalltunnelservice", self._service_name]
         code, out, err = self._run_command(args)
         if code != 0:
             self.logger.warning("Failed to uninstall WireGuard tunnel service code=%s err=%s", code, err)
@@ -323,15 +348,17 @@ class WireGuardServerManager:
             port_list = []
 
         for port in port_list:
-            rules.append(
-                {
-                    "direction": "outbound",
-                    "remote_address": ip,
-                    "local_port": port,
-                    "action": "allow",
-                    "description": f"WireGuard engine->agent allow port {port}",
-                }
-            )
+            for protocol in ("TCP", "UDP"):
+                rules.append(
+                    {
+                        "direction": "outbound",
+                        "remote_address": ip,
+                        "local_port": port,
+                        "protocol": protocol,
+                        "action": "allow",
+                        "description": f"WireGuard engine->agent allow port {port}/{protocol}",
+                    }
+                )
 
         self.logger.info(
             "Prepared firewall rule plan for agent=%s rules=%s",

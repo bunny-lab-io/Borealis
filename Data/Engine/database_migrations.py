@@ -2,6 +2,8 @@
 # Data\Engine\database_migrations.py
 # Description: Provides schema evolution helpers for the Engine sqlite
 #              database without importing the legacy ``Modules`` package.
+#
+# API Endpoints (if applicable): None
 # ======================================================
 
 """Engine database schema migration helpers."""
@@ -24,6 +26,7 @@ def apply_all(conn: sqlite3.Connection) -> None:
 
     _ensure_devices_table(conn)
     _ensure_device_aux_tables(conn)
+    _ensure_device_vpn_config_table(conn)
     _ensure_refresh_token_table(conn)
     _ensure_install_code_table(conn)
     _ensure_install_code_persistence_table(conn)
@@ -108,6 +111,20 @@ def _ensure_device_aux_tables(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_device_keys_guid
             ON device_keys(guid)
+        """
+    )
+
+
+def _ensure_device_vpn_config_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_vpn_config (
+            agent_id TEXT PRIMARY KEY,
+            allowed_ports TEXT,
+            updated_at TEXT,
+            updated_by TEXT
+        )
         """
     )
 

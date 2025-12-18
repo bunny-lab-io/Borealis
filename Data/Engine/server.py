@@ -120,18 +120,14 @@ class EngineContext:
     config: Mapping[str, Any]
     api_groups: Sequence[str]
     api_log_path: str
-    reverse_tunnel_fixed_port: int
-    reverse_tunnel_port_range: Tuple[int, int]
-    reverse_tunnel_idle_timeout_seconds: int
-    reverse_tunnel_grace_timeout_seconds: int
-    reverse_tunnel_heartbeat_seconds: int
-    reverse_tunnel_log_path: str
+    vpn_tunnel_log_path: str
     wireguard_port: int
     wireguard_engine_virtual_ip: str
     wireguard_peer_network: str
     wireguard_server_private_key_path: str
     wireguard_server_public_key_path: str
     wireguard_acl_allowlist_windows: Tuple[int, ...]
+    wireguard_shell_port: int
     wireguard_server_manager: Optional[Any] = None
     assembly_cache: Optional[Any] = None
 
@@ -151,18 +147,14 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         config=settings.as_dict(),
         api_groups=settings.api_groups,
         api_log_path=settings.api_log_file,
-        reverse_tunnel_fixed_port=settings.reverse_tunnel_fixed_port,
-        reverse_tunnel_port_range=settings.reverse_tunnel_port_range,
-        reverse_tunnel_idle_timeout_seconds=settings.reverse_tunnel_idle_timeout_seconds,
-        reverse_tunnel_grace_timeout_seconds=settings.reverse_tunnel_grace_timeout_seconds,
-        reverse_tunnel_heartbeat_seconds=settings.reverse_tunnel_heartbeat_seconds,
-        reverse_tunnel_log_path=settings.reverse_tunnel_log_file,
+        vpn_tunnel_log_path=settings.vpn_tunnel_log_file,
         wireguard_port=settings.wireguard_port,
         wireguard_engine_virtual_ip=settings.wireguard_engine_virtual_ip,
         wireguard_peer_network=settings.wireguard_peer_network,
         wireguard_server_private_key_path=settings.wireguard_server_private_key_path,
         wireguard_server_public_key_path=settings.wireguard_server_public_key_path,
         wireguard_acl_allowlist_windows=settings.wireguard_acl_allowlist_windows,
+        wireguard_shell_port=settings.wireguard_shell_port,
         assembly_cache=None,
     )
 
@@ -249,7 +241,7 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
             private_key_path=Path(context.wireguard_server_private_key_path),
             public_key_path=Path(context.wireguard_server_public_key_path),
             acl_allowlist_windows=tuple(context.wireguard_acl_allowlist_windows),
-            log_path=Path(context.reverse_tunnel_log_path),
+            log_path=Path(context.vpn_tunnel_log_path),
         )
         context.wireguard_server_manager = WireGuardServerManager(wg_config)
     except Exception:
@@ -325,7 +317,7 @@ def register_engine_api(app: Flask, *, config: Optional[Mapping[str, Any]] = Non
             private_key_path=Path(context.wireguard_server_private_key_path),
             public_key_path=Path(context.wireguard_server_public_key_path),
             acl_allowlist_windows=tuple(context.wireguard_acl_allowlist_windows),
-            log_path=Path(context.reverse_tunnel_log_path),
+            log_path=Path(context.vpn_tunnel_log_path),
         )
         context.wireguard_server_manager = WireGuardServerManager(wg_config)
     except Exception:

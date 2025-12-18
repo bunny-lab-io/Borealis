@@ -20,8 +20,9 @@ Use this doc for agent-only work (Borealis agent runtime under `Data/Agent` → 
 - Validates script payloads with backend-issued Ed25519 signatures before execution.
 - Outbound-only; API/WebSocket calls flow through `AgentHttpClient.ensure_authenticated` for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events in `Agent/Logs/`.
 
-## Reverse Tunnels
-- Design, orchestration, domains, limits, and lifecycle are documented in `Docs/Codex/REVERSE_TUNNELS.md`. Agent role implementation lives in `Data/Agent/Roles/role_ReverseTunnel.py` with per-domain protocol handlers under `Data/Agent/Roles/Reverse_Tunnels/`.
+## Reverse VPN Tunnels
+- WireGuard reverse VPN design and lifecycle live in `Docs/Codex/REVERSE_TUNNELS.md` and `Docs/Codex/Reverse_VPN_Tunnel_Deployment.md`.
+- Agent roles: `Data/Agent/Roles/role_WireGuardTunnel.py` (tunnel lifecycle) and `Data/Agent/Roles/role_VpnShell.py` (VPN PowerShell TCP server).
 
 ## Execution Contexts & Roles
 - Auto-discovers roles from `Data/Agent/Roles/`; no loader changes needed.
