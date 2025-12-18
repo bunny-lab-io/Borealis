@@ -65,21 +65,22 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
   - [x] Peers without valid token/key are rejected.
 
 ### 3) Agent VPN Client & Lifecycle — Milestone: Agent VPN Client & Lifecycle (Windows)
+- Agents editing this document should mark tasks they complete with `[x]` (leave `[ ]` otherwise).
 - Agent config template:
-  - Outbound UDP to engine:30000.
-  - No DNS/routing changes beyond the /32 to engine.
-  - Adapter persists; sessions start/stop on demand.
+  - [x] Outbound UDP to engine:30000.
+  - [x] No DNS/routing changes beyond the /32 to engine.
+  - [x] Adapter persists; sessions start/stop on demand.
 - Lifecycle in agent role (replace legacy reverse tunnel role):
-  - Receive connect request, fetch session token + WG peer config (keys, endpoint, allowed IPs), start WireGuard.
-  - Enforce single session per agent; reject/dismiss concurrent starts.
-  - Idle timeout: 15 minutes of no operator activity triggers disconnect. No grace period; operator disconnect triggers immediate stop.
-  - Stop path: remove peer/bring interface down cleanly; adapter remains installed.
+  - [x] Receive connect request, fetch session token + WG peer config (keys, endpoint, allowed IPs), start WireGuard.
+  - [x] Enforce single session per agent; reject/dismiss concurrent starts.
+  - [x] Idle timeout: 15 minutes of no operator activity triggers disconnect. No grace period; operator disconnect triggers immediate stop.
+  - [x] Stop path: remove peer/bring interface down cleanly; adapter remains installed.
 - Keys/Certs:
-  - Prefer reusing existing Agent cert infrastructure for token validation; generate WG client key per agent. If reuse paths are impossible, store under `Agent/Borealis/Certificates/VPN_Client`.
-- Logging: `Agent/Logs/reverse_tunnel.log` captures connect/disconnect/errors/idle timeouts.
+  - [x] Prefer reusing existing Agent cert infrastructure for token validation; generate WG client key per agent. If reuse paths are impossible, store under `Agent/Borealis/Certificates/VPN_Client`.
+- Logging: `Agent/Logs/reverse_tunnel.log` captures connect/disconnect/errors/idle timeouts. [x]
 - Checkpoint tests:
-  - Manual connect/disconnect against engine test server.
-  - Idle timeout fires at ~15 minutes of inactivity.
+  - [ ] Manual connect/disconnect against engine test server.
+  - [ ] Idle timeout fires at ~15 minutes of inactivity.
 
 ### 4) API & Service Orchestration — Milestone: API & Service Orchestration (Windows)
 - Replace legacy tunnel APIs with:
