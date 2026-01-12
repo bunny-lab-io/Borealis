@@ -157,6 +157,7 @@ export default function ReverseTunnelPowershell({ device }) {
     setStatusMessage("Agent Onboarding Underway.");
     setSessionState("idle");
     setShellState("idle");
+    setTunnel(null);
   }, [notifyAgentOnboarding]);
 
   const appendOutput = useCallback((text) => {
@@ -266,7 +267,7 @@ export default function ReverseTunnelPowershell({ device }) {
           `/api/tunnel/status?agent_id=${encodeURIComponent(agentId)}`
         );
         const readinessData = await readinessResp.json().catch(() => ({}));
-        if (readinessResp.ok && readinessData?.agent_socket === false) {
+        if (readinessResp.ok && readinessData?.agent_socket !== true) {
           await handleAgentOnboarding();
           return;
         }
@@ -286,6 +287,7 @@ export default function ReverseTunnelPowershell({ device }) {
         const detail = data?.detail ? `: ${data.detail}` : "";
         throw new Error(`${data?.error || `HTTP ${resp.status}`}${detail}`);
       }
+      tunnelIdRef.current = data?.tunnel_id || "";
       const waitForTunnelReady = async () => {
         const deadline = Date.now() + 60000;
         let lastError = "";
@@ -294,6 +296,11 @@ export default function ReverseTunnelPowershell({ device }) {
             `/api/tunnel/connect/status?agent_id=${encodeURIComponent(agentId)}&bump=1`
           );
           const statusData = await statusResp.json().catch(() => ({}));
+          if (statusData?.error === "agent_socket_missing" || (statusResp.ok && statusData?.agent_socket === false)) {
+            await handleAgentOnboarding();
+            await stopTunnel("agent_onboarding_pending");
+            return null;
+          }
           if (statusResp.ok && statusData?.status === "up") {
             const agentSocket = statusData?.agent_socket;
             const agentReady = agentSocket === undefined ? true : Boolean(agentSocket);
@@ -310,6 +317,9 @@ export default function ReverseTunnelPowershell({ device }) {
       };
 
       const statusData = await waitForTunnelReady();
+      if (!statusData) {
+        return;
+      }
       setTunnel({ ...data, ...statusData });
 
       const socket = ensureSocket();
@@ -325,6 +335,7 @@ export default function ReverseTunnelPowershell({ device }) {
           }
           if (openResp.error === "agent_socket_missing") {
             await handleAgentOnboarding();
+            await stopTunnel("agent_onboarding_pending");
             return null;
           }
           lastError = openResp.error;
@@ -348,7 +359,7 @@ export default function ReverseTunnelPowershell({ device }) {
     } finally {
       setLoading(false);
     }
-  }, [agentId, ensureSocket, handleAgentOnboarding]);
+  }, [agentId, ensureSocket, handleAgentOnboarding, stopTunnel]);
 
   const handleSend = useCallback(
     async (text) => {
