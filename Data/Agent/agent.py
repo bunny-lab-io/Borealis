@@ -540,6 +540,9 @@ def _log_agent(message: str, fname: str = 'agent.log', *, scope: Optional[str] =
         os.makedirs(log_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         path = os.path.join(log_dir, fname)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         _rotate_daily(path)
         line = _format_agent_log_message(message, fname, scope)
         with open(path, 'a', encoding='utf-8') as fh:

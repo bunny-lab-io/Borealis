@@ -9,7 +9,7 @@
 
 This role prepares the WireGuard client config, manages a single active
 session, enforces idle teardown, and logs lifecycle events to
-Agent/Logs/reverse_tunnel.log. It binds to Engine Socket.IO events
+Agent/Logs/VPN_Tunnel/tunnel.log. It binds to Engine Socket.IO events
 (`vpn_tunnel_start`, `vpn_tunnel_stop`, `vpn_tunnel_activity`) to start/stop
 the client session with the issued config/token.
 """
@@ -44,9 +44,9 @@ ROLE_CONTEXTS = ["system"]
 
 
 def _log_path() -> Path:
-    root = Path(__file__).resolve().parents[2] / "Logs"
+    root = Path(__file__).resolve().parents[2] / "Logs" / "VPN_Tunnel"
     root.mkdir(parents=True, exist_ok=True)
-    return root / "reverse_tunnel.log"
+    return root / "tunnel.log"
 
 
 def _write_log(message: str) -> None:
@@ -303,11 +303,15 @@ class Role:
         hooks = getattr(ctx, "hooks", {}) or {}
         self._log_hook = hooks.get("log_agent")
         self._http_client_factory = hooks.get("http_client")
+        try:
+            self.client.stop_session(reason="agent_startup", ignore_missing=True)
+        except Exception:
+            self._log("Failed to preflight WireGuard session cleanup.", error=True)
 
     def _log(self, message: str, *, error: bool = False) -> None:
         if callable(self._log_hook):
             try:
-                self._log_hook(message, fname="reverse_tunnel.log")
+                self._log_hook(message, fname="VPN_Tunnel/tunnel.log")
                 if error:
                     self._log_hook(message, fname="agent.error.log")
             except Exception:

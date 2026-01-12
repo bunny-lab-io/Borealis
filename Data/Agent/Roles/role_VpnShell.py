@@ -24,9 +24,9 @@ ROLE_CONTEXTS = ["system"]
 
 
 def _log_path() -> Path:
-    root = Path(__file__).resolve().parents[2] / "Logs"
+    root = Path(__file__).resolve().parents[2] / "Logs" / "VPN_Tunnel"
     root.mkdir(parents=True, exist_ok=True)
-    return root / "reverse_tunnel.log"
+    return root / "remote_shell.log"
 
 
 def _write_log(message: str) -> None:
@@ -61,8 +61,13 @@ class ShellSession:
         self.address = address
         self.proc: Optional[subprocess.Popen] = None
         self._stop = threading.Event()
+        self.input_messages = 0
+        self.input_bytes = 0
+        self.output_lines = 0
+        self.output_bytes = 0
 
     def start(self) -> None:
+        _write_log(f"Shell session starting for {self.address[0]}:{self.address[1]}")
         self.proc = subprocess.Popen(
             ["powershell.exe", "-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"],
             stdin=subprocess.PIPE,
@@ -82,16 +87,27 @@ class ShellSession:
                 chunk = self.proc.stdout.readline()
                 if not chunk:
                     break
+                self.output_lines += 1
+                self.output_bytes += len(chunk)
                 payload = json.dumps({"type": "stdout", "data": _b64encode(chunk)})
-                self.conn.sendall(payload.encode("utf-8") + b"\n")
-        except Exception:
-            pass
+                try:
+                    self.conn.sendall(payload.encode("utf-8") + b"\n")
+                except Exception as exc:
+                    _write_log(f"Shell stdout send failed: {exc}")
+                    break
+                _write_log(f"Shell stdout forwarded bytes={len(chunk)}")
+        except Exception as exc:
+            _write_log(f"Shell stdout error: {exc}")
 
     def _writer_loop(self) -> None:
         buffer = b""
         try:
             while not self._stop.is_set():
-                data = self.conn.recv(4096)
+                try:
+                    data = self.conn.recv(4096)
+                except Exception as exc:
+                    _write_log(f"Shell stdin recv error: {exc}")
+                    break
                 if not data:
                     break
                 buffer += data
@@ -107,12 +123,17 @@ class ShellSession:
                         payload = msg.get("data") or ""
                         if self.proc and self.proc.stdin:
                             try:
-                                self.proc.stdin.write(_b64decode(str(payload)))
+                                decoded = _b64decode(str(payload))
+                                self.proc.stdin.write(decoded)
                                 self.proc.stdin.flush()
+                                self.input_messages += 1
+                                self.input_bytes += len(decoded)
+                                _write_log(f"Shell stdin received bytes={len(decoded)}")
                             except Exception:
-                                pass
+                                _write_log("Shell stdin write failed.")
                     if msg.get("type") == "close":
                         self._stop.set()
+                        _write_log("Shell close requested by engine.")
                         break
         finally:
             self.close()
@@ -128,6 +149,14 @@ class ShellSession:
                 self.proc.terminate()
             except Exception:
                 pass
+        _write_log(
+            "Shell session closed inputs={0} input_bytes={1} output_lines={2} output_bytes={3}".format(
+                self.input_messages,
+                self.input_bytes,
+                self.output_lines,
+                self.output_bytes,
+            )
+        )
 
 
 class ShellServer:

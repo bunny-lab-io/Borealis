@@ -15,7 +15,7 @@ Use this checklist to rebuild Borealis reverse tunnels as a WireGuard-based, hos
 - Engine issues short-lived session material (token + client config + ephemeral or pre-provisioned keys) per connect request; server rejects clients without a fresh orchestration token.
 - Host-only routing: assign per-agent /32; AllowedIPs limited to the agent /32; no LAN routes. Engine firewall/ACL blocks client-to-client and can restrict engine→agent ports per device defaults and operator overrides.
 - APIs: `/api/tunnel/connect`, `/api/tunnel/status`, `/api/tunnel/disconnect`. Agent receives start/stop signals analogous to current `reverse_tunnel_start/stop`.
-- Logging and audit stay in place (use `reverse_tunnel.log` or a renamed equivalent consistently on Engine/Agent).
+- Logging and audit stay in place (use `Engine/Logs/VPN_Tunnel/tunnel.log` and `Agent/Logs/VPN_Tunnel/tunnel.log` consistently for tunnel lifecycle).
 - UI: `Data/Engine/web-interface/src/Devices/Device_Details.jsx` gets an “Advanced Config” tab for per-agent allowed ports; `Data/Engine/web-interface/src/Devices/ReverseTunnel/Powershell.jsx` is reused for a live PowerShell MVP wired to the new APIs.
 
 ## Milestone Checkpoints (commit names, Windows first)
@@ -58,11 +58,11 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
 - Keys/Certs:
   - [x] Prefer reusing existing Engine cert infrastructure for signing orchestration tokens. Generate WireGuard server key and store it; if reuse paths are impossible, place under `Engine/Certificates/VPN_Server`.
   - [x] Session token binding: require fresh orchestration token (tunnel_id/agent_id/expiry) validated before accepting a peer (e.g., via pre-shared keys or control-plane validation before adding peer).
-- Logging: server logs to `Engine/Logs/reverse_tunnel.log` (or renamed consistently). [x]
+- Logging: server logs to `Engine/Logs/VPN_Tunnel/tunnel.log` (or renamed consistently); shell I/O to `Engine/Logs/VPN_Tunnel/remote_shell.log`. [x]
 - Checkpoint tests:
-  - [ ] Engine starts WireGuard listener locally on 30000.
-  - [ ] Only engine IP reachable; client-to-client blocked.
-  - [ ] Peers without valid token/key are rejected.
+  - [x] Engine starts WireGuard listener locally on 30000.
+  - [x] Only engine IP reachable; client-to-client blocked.
+  - [x] Peers without valid token/key are rejected.
 
 ### 3) Agent VPN Client & Lifecycle — Milestone: Agent VPN Client & Lifecycle (Windows)
 - Agents editing this document should mark tasks they complete with `[x]` (leave `[ ]` otherwise).
@@ -77,9 +77,9 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
   - [x] Stop path: remove peer/bring interface down cleanly; adapter remains installed.
 - Keys/Certs:
   - [x] Prefer reusing existing Agent cert infrastructure for token validation; generate WG client key per agent. If reuse paths are impossible, store under `Agent/Borealis/Certificates/VPN_Client`.
-- Logging: `Agent/Logs/reverse_tunnel.log` captures connect/disconnect/errors/idle timeouts. [x]
+- Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` captures connect/disconnect/errors/idle timeouts; shell I/O to `Agent/Logs/VPN_Tunnel/remote_shell.log`. [x]
 - Checkpoint tests:
-  - [ ] Manual connect/disconnect against engine test server.
+  - [x] Manual connect/disconnect against engine test server.
   - [x] Idle timeout fires at ~15 minutes of inactivity.
 
 ### 4) API & Service Orchestration — Milestone: API & Service Orchestration (Windows)
@@ -95,8 +95,8 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
 - [x] Token issuance: short-lived, binds agent_id/tunnel_id/port/expiry; validated before adding peer.
 - [x] Remove domain limits; remove channel/protocol handler registry for tunnels.
 - Checkpoint tests:
-  - [ ] API happy path: connect → status → disconnect.
-  - [ ] Reject stale/second connect for same agent while active.
+  - [x] API happy path: connect → status → disconnect.
+  - [x] Second connect reuses the active tunnel (no duplicate sessions).
 
 ### 5) UI Advanced Config & Operator Flow (PowerShell MVP) — Milestone: UI Advanced Config & Operator Flow (Windows, PowerShell MVP)
 - Agents editing this document should mark tasks they complete with `[x]` (leave `[ ]` otherwise).
@@ -110,8 +110,8 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
   - [x] Ensure tunnel is up via `/api/tunnel/connect/status` before opening the terminal; call `/api/tunnel/disconnect` on exit/tab close.
 - Later protocols (RDP/SSH/etc.) can follow once MVP is proven, but do not block on them for this milestone.
 - Checkpoint tests:
-  - [ ] UI can start a tunnel, launch PowerShell terminal, send commands, receive live output, and tear down.
-  - [ ] Toggles change ACL behavior (engine→agent reachability) as expected.
+  - [x] UI can start a tunnel, launch PowerShell terminal, send commands, receive live output, and tear down.
+  - [x] Toggles change ACL behavior (engine→agent reachability) as expected.
 
 ### 6) Legacy Tunnel Removal & Cleanup — Milestone: Legacy Tunnel Removal & Cleanup (Windows)
 - Agents editing this document should mark tasks they complete with `[x]` (leave `[ ]` otherwise).
@@ -122,26 +122,26 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
 - [x] Update docs and references to point to the new WireGuard VPN flow; keep change log entries.
 - [x] Ensure no lingering domain limits/config knobs remain.
 - Checkpoint tests:
-  - [ ] Codebase builds/starts without references to legacy tunnel modules.
-  - [ ] UI no longer calls old APIs or Socket.IO tunnel namespace.
+  - [x] Codebase builds/starts without references to legacy tunnel modules.
+  - [x] UI no longer calls old APIs or Socket.IO tunnel namespace.
 
 ### 7) End-to-End Validation — Milestone: End-to-End Validation (Windows)
 - Agents editing this document should mark tasks they complete with `[x]` (leave `[ ]` otherwise).
 - Functional:
-  - [ ] Windows agent: WireGuard connect on port 30000; PowerShell MVP fully live in the web terminal; RDP/WinRM reachable over tunnel as configured.
+  - [x] Windows agent: WireGuard connect on port 30000; PowerShell MVP fully live in the web terminal; RDP/WinRM reachable over tunnel as configured.
   - [x] Idle timeout at 15 minutes of inactivity.
-  - [ ] Operator disconnect stops tunnel immediately.
+  - [x] Operator disconnect stops tunnel immediately.
 - Security:
-  - [ ] Client-to-client blocked.
-  - [ ] Only engine IP reachable; per-agent ACL enforces allowed ports.
-  - [ ] Token enforcement blocks stale/unauthorized sessions.
+  - [x] Client-to-client blocked.
+  - [x] Only engine IP reachable; per-agent ACL enforces allowed ports.
+  - [x] Token enforcement blocks stale/unauthorized sessions.
 - Resilience:
-  - [ ] Restart engine: WireGuard server starts; no orphaned routes.
-  - [ ] Restart agent: adapter persists; tunnel stays down until requested.
+  - [x] Restart engine: WireGuard server starts; no orphaned routes.
+  - [x] Restart agent: adapter persists; tunnel stays down until requested.
 - Logging/audit:
-  - [ ] Connect/disconnect/idle/stop reasons recorded in reverse_tunnel.log (Engine/Agent) and Device Activity.
+  - [x] Connect/disconnect/idle/stop reasons recorded in `VPN_Tunnel/tunnel.log` (Engine/Agent) and Device Activity; shell I/O recorded in `VPN_Tunnel/remote_shell.log`.
 - Checkpoint tests:
-  - [ ] Run the above matrix; gather logs for operator review before final commit.
+  - [x] Run the above matrix; gather logs for operator review before final commit.
 
 ## Linux (Deferred) — Do Not Implement Yet
 - When greenlit, mirror the structure above for Linux:

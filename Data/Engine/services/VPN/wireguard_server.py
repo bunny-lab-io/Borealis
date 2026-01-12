@@ -336,12 +336,16 @@ class WireGuardServerManager:
             raise RuntimeError(f"WireGuard installtunnelservice failed: {err}")
         self.logger.info("WireGuard listener installed (service=%s)", config_path.stem)
 
-    def stop_listener(self) -> None:
+    def stop_listener(self, *, ignore_missing: bool = False) -> None:
         """Stop and remove the WireGuard tunnel service."""
 
         args = [self._wireguard_exe, "/uninstalltunnelservice", self._service_name]
         code, out, err = self._run_command(args)
         if code != 0:
+            err_text = " ".join([out or "", err or ""]).strip().lower()
+            if ignore_missing and ("does not exist" in err_text or "not exist" in err_text):
+                self.logger.info("WireGuard tunnel service already absent")
+                return
             self.logger.warning("Failed to uninstall WireGuard tunnel service code=%s err=%s", code, err)
         else:
             self.logger.info("WireGuard tunnel service removed")

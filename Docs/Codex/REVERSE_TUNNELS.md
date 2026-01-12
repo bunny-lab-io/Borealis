@@ -19,12 +19,13 @@ This document is the reference for Borealis reverse VPN tunnels built on WireGua
   - Generates server keys, renders config, manages `wireguard.exe` tunnel service, applies ACL rules.
 - PowerShell bridge: `Data/Engine/services/WebSocket/vpn_shell.py`
   - Proxies UI shell input/output to the agent’s TCP shell server over WireGuard.
-- Logging: `Engine/Logs/reverse_tunnel.log` plus Device Activity entries.
+- Logging: `Engine/Logs/VPN_Tunnel/tunnel.log` plus Device Activity entries; shell I/O is in `Engine/Logs/VPN_Tunnel/remote_shell.log`.
 
 ## 3) API Endpoints
 - `POST /api/tunnel/connect` → issues session material (tunnel_id, token, virtual_ip, endpoint, allowed_ports, idle_seconds).
 - `GET /api/tunnel/status` → returns up/down status for an agent.
 - `GET /api/tunnel/connect/status` → alias for status (used by UI before shell open).
+- `GET /api/tunnel/active` → lists active VPN tunnel sessions (tunnel_id, agent_id, virtual_ip, last_activity, etc.).
 - `DELETE /api/tunnel/disconnect` → immediate teardown (agent + engine cleanup).
 - `GET /api/device/vpn_config/<agent_id>` → read per-agent allowed ports.
 - `PUT /api/device/vpn_config/<agent_id>` → update allowed ports.
@@ -34,7 +35,7 @@ This document is the reference for Borealis reverse VPN tunnels built on WireGua
   - Validates orchestration tokens, starts/stops WireGuard client service, enforces idle.
 - Shell server: `Data/Agent/Roles/role_VpnShell.py`
 - TCP PowerShell server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
-- Logging: `Agent/Logs/reverse_tunnel.log`.
+- Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
 
 ## 5) Security & Auth
 - TLS pinned for Engine API/Socket.IO.

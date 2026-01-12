@@ -50,8 +50,8 @@ Do not implement Linux yet.
 
 ## Logs to Know
 
-- Agent: `Agent/Logs/reverse_tunnel.log` is the primary signal for VPN tunnel and shell.
-- Engine: `Engine/Logs/reverse_tunnel.log`, `Engine/Logs/engine.log`.
+- Agent: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
+- Engine: `Engine/Logs/VPN_Tunnel/tunnel.log`, `Engine/Logs/VPN_Tunnel/remote_shell.log`, `Engine/Logs/engine.log`.
 
 ## What Likely Remains
 

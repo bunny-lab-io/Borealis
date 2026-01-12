@@ -129,6 +129,10 @@ def _make_service_logger(base: Path, logger: logging.Logger) -> Callable[[str, s
         try:
             base.mkdir(parents=True, exist_ok=True)
             path = base / f"{service}.log"
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
             _rotate_daily(path)
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             resolved_scope = _infer_server_scope(msg, scope)

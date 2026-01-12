@@ -5,6 +5,7 @@
 # API Endpoints (if applicable):
 # - POST /api/tunnel/connect (Token Authenticated) - Issues VPN session material for an agent.
 # - GET /api/tunnel/status (Token Authenticated) - Returns VPN status for an agent.
+# - GET /api/tunnel/active (Token Authenticated) - Lists active VPN tunnel sessions.
 # - DELETE /api/tunnel/disconnect (Token Authenticated) - Tears down VPN session for an agent.
 # ======================================================
 
@@ -120,6 +121,21 @@ def _infer_endpoint_host(req) -> str:
 def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
     blueprint = Blueprint("vpn_tunnel", __name__)
     logger = adapters.context.logger.getChild("vpn_tunnel.api")
+    service_log = adapters.service_log
+
+    def _service_log_event(message: str, *, level: str = "INFO") -> None:
+        if not callable(service_log):
+            return
+        try:
+            service_log("VPN_Tunnel/tunnel", message, level=level)
+        except Exception:
+            logger.debug("vpn_tunnel service log write failed", exc_info=True)
+
+    def _request_remote() -> str:
+        forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return (request.remote_addr or "").strip()
 
     @blueprint.route("/api/tunnel/connect", methods=["POST"])
     def connect_tunnel():
@@ -139,15 +155,37 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
         try:
             tunnel_service = _get_tunnel_service(adapters)
             endpoint_host = _infer_endpoint_host(request)
+            _service_log_event(
+                "vpn_api_connect_request agent_id={0} operator={1} endpoint_host={2} remote={3}".format(
+                    agent_id,
+                    operator_id or "-",
+                    endpoint_host or "-",
+                    _request_remote() or "-",
+                )
+            )
             payload = tunnel_service.connect(
                 agent_id=agent_id,
                 operator_id=operator_id,
                 endpoint_host=endpoint_host,
             )
         except Exception as exc:
+            _service_log_event(
+                "vpn_api_connect_failed agent_id={0} operator={1} error={2}".format(
+                    agent_id,
+                    operator_id or "-",
+                    str(exc),
+                ),
+                level="ERROR",
+            )
             logger.warning("vpn connect failed for agent_id=%s: %s", agent_id, exc)
             return jsonify({"error": "connect_failed", "detail": str(exc)}), 500
 
+        _service_log_event(
+            "vpn_api_connect_response agent_id={0} tunnel_id={1} status=ok".format(
+                payload.get("agent_id", agent_id),
+                payload.get("tunnel_id", "-"),
+            )
+        )
         return jsonify(payload), 200
 
     @blueprint.route("/api/tunnel/status", methods=["GET"])
@@ -163,17 +201,50 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
 
         tunnel_service = _get_tunnel_service(adapters)
         payload = tunnel_service.status(agent_id)
+        bump = _normalize_text(request.args.get("bump") or "")
+        _service_log_event(
+            "vpn_api_status_request agent_id={0} bump={1} remote={2}".format(
+                agent_id,
+                "true" if bump else "false",
+                _request_remote() or "-",
+            )
+        )
         if not payload:
+            _service_log_event(
+                "vpn_api_status_response agent_id={0} status=down".format(agent_id)
+            )
             return jsonify({"status": "down", "agent_id": agent_id}), 200
         payload["status"] = "up"
-        bump = _normalize_text(request.args.get("bump") or "")
         if bump:
             tunnel_service.bump_activity(agent_id)
+        _service_log_event(
+            "vpn_api_status_response agent_id={0} status=up tunnel_id={1}".format(
+                agent_id,
+                payload.get("tunnel_id", "-"),
+            )
+        )
         return jsonify(payload), 200
 
     @blueprint.route("/api/tunnel/connect/status", methods=["GET"])
     def tunnel_connect_status():
         return tunnel_status()
+
+    @blueprint.route("/api/tunnel/active", methods=["GET"])
+    def tunnel_active():
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        tunnel_service = _get_tunnel_service(adapters)
+        sessions = list(tunnel_service.list_sessions())
+        _service_log_event(
+            "vpn_api_active_response count={0} remote={1}".format(
+                len(sessions),
+                _request_remote() or "-",
+            )
+        )
+        return jsonify({"count": len(sessions), "tunnels": sessions}), 200
 
     @blueprint.route("/api/tunnel/disconnect", methods=["DELETE"])
     def disconnect_tunnel():
@@ -188,6 +259,15 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
         reason = _normalize_text(body.get("reason") or "operator_stop")
 
         tunnel_service = _get_tunnel_service(adapters)
+        _service_log_event(
+            "vpn_api_disconnect_request agent_id={0} tunnel_id={1} reason={2} operator={3} remote={4}".format(
+                agent_id or "-",
+                tunnel_id or "-",
+                reason or "-",
+                (_current_user(app) or {}).get("username") or "-",
+                _request_remote() or "-",
+            )
+        )
         stopped = False
         if tunnel_id:
             stopped = tunnel_service.disconnect_by_tunnel(tunnel_id, reason=reason)
@@ -197,8 +277,21 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "agent_id_required"}), 400
 
         if not stopped:
+            _service_log_event(
+                "vpn_api_disconnect_not_found agent_id={0} tunnel_id={1}".format(
+                    agent_id or "-",
+                    tunnel_id or "-",
+                ),
+                level="WARNING",
+            )
             return jsonify({"error": "not_found"}), 404
 
+        _service_log_event(
+            "vpn_api_disconnect_response agent_id={0} tunnel_id={1} status=stopped".format(
+                agent_id or "-",
+                tunnel_id or "-",
+            )
+        )
         return jsonify({"status": "stopped", "reason": reason}), 200
 
     app.register_blueprint(blueprint)

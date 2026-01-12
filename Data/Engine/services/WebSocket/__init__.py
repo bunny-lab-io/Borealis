@@ -103,7 +103,7 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     adapters = EngineRealtimeAdapters(context)
     logger = context.logger.getChild("realtime.quick_jobs")
     agent_logger = context.logger.getChild("realtime.agents")
-    shell_bridge = VpnShellBridge(socket_server, context)
+    shell_bridge = VpnShellBridge(socket_server, context, adapters.service_log)
     agent_registry = AgentSocketRegistry(socket_server, agent_logger)
 
     def _emit_agent_event(agent_id: str, event: str, payload: Any) -> bool:
@@ -147,6 +147,24 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         )
         setattr(context, "vpn_tunnel_service", service)
         return service
+
+    def _tunnel_log(message: str, *, level: str = "INFO") -> None:
+        try:
+            adapters.service_log("VPN_Tunnel/tunnel", message, level=level)
+        except Exception:
+            agent_logger.debug("vpn_tunnel service log write failed", exc_info=True)
+
+    def _shell_log(message: str, *, level: str = "INFO") -> None:
+        try:
+            adapters.service_log("VPN_Tunnel/remote_shell", message, level=level)
+        except Exception:
+            agent_logger.debug("vpn_shell service log write failed", exc_info=True)
+
+    def _remote_addr() -> str:
+        forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return (request.remote_addr or "").strip()
 
     @socket_server.on("quick_job_result")
     def _handle_quick_job_result(data: Any) -> None:
@@ -317,18 +335,59 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         elif isinstance(data, str):
             agent_id = data.strip()
         if not agent_id:
+            _shell_log(
+                "vpn_shell_open_missing sid={0} remote={1}".format(
+                    request.sid,
+                    _remote_addr() or "-",
+                ),
+                level="WARNING",
+            )
             return {"error": "agent_id_required"}
 
+        _shell_log(
+            "vpn_shell_open_request agent_id={0} sid={1} remote={2}".format(
+                agent_id,
+                request.sid,
+                _remote_addr() or "-",
+            )
+        )
         service = _get_tunnel_service()
         if service is None:
+            _shell_log(
+                "vpn_shell_open_failed agent_id={0} sid={1} reason=vpn_service_unavailable".format(
+                    agent_id,
+                    request.sid,
+                ),
+                level="WARNING",
+            )
             return {"error": "vpn_service_unavailable"}
         if not service.status(agent_id):
+            _shell_log(
+                "vpn_shell_open_failed agent_id={0} sid={1} reason=tunnel_down".format(
+                    agent_id,
+                    request.sid,
+                ),
+                level="WARNING",
+            )
             return {"error": "tunnel_down"}
 
         session = shell_bridge.open_session(request.sid, agent_id)
         if session is None:
+            _shell_log(
+                "vpn_shell_open_failed agent_id={0} sid={1} reason=shell_connect_failed".format(
+                    agent_id,
+                    request.sid,
+                ),
+                level="WARNING",
+            )
             return {"error": "shell_connect_failed"}
         service.bump_activity(agent_id)
+        _shell_log(
+            "vpn_shell_open_success agent_id={0} sid={1}".format(
+                agent_id,
+                request.sid,
+            )
+        )
         return {"status": "ok"}
 
     @socket_server.on("connect_agent")
@@ -341,16 +400,38 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         elif isinstance(data, str):
             agent_id = data.strip()
         if not agent_id:
+            _tunnel_log(
+                "vpn_agent_socket_missing sid={0} remote={1}".format(
+                    request.sid,
+                    _remote_addr() or "-",
+                ),
+                level="WARNING",
+            )
             return {"error": "agent_id_required"}
 
         agent_registry.register(agent_id, request.sid)
         agent_logger.info("Agent socket registered agent_id=%s service_mode=%s sid=%s", agent_id, service_mode, request.sid)
+        _tunnel_log(
+            "vpn_agent_socket_register agent_id={0} service_mode={1} sid={2} remote={3}".format(
+                agent_id,
+                service_mode or "-",
+                request.sid,
+                _remote_addr() or "-",
+            )
+        )
 
         service = _get_tunnel_service()
         if service:
             payload = service.session_payload(agent_id, include_token=True)
             if payload:
-                agent_registry.emit(agent_id, "vpn_tunnel_start", payload)
+                if agent_registry.emit(agent_id, "vpn_tunnel_start", payload):
+                    _tunnel_log(
+                        "vpn_agent_socket_emit_start agent_id={0} tunnel_id={1} sid={2}".format(
+                            agent_id,
+                            payload.get("tunnel_id", "-"),
+                            request.sid,
+                        )
+                    )
 
         return {"status": "ok"}
 
@@ -363,11 +444,28 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
             payload = data
         if payload is None:
             return {"error": "payload_required"}
+        try:
+            payload_len = len(str(payload))
+        except Exception:
+            payload_len = 0
+        _shell_log(
+            "vpn_shell_send_request sid={0} bytes={1} remote={2}".format(
+                request.sid,
+                payload_len,
+                _remote_addr() or "-",
+            )
+        )
         shell_bridge.send(request.sid, str(payload))
         return {"status": "ok"}
 
     @socket_server.on("vpn_shell_close")
     def _vpn_shell_close(data: Any = None) -> Dict[str, Any]:
+        _shell_log(
+            "vpn_shell_close_request sid={0} remote={1}".format(
+                request.sid,
+                _remote_addr() or "-",
+            )
+        )
         shell_bridge.close(request.sid)
         return {"status": "ok"}
 
@@ -376,4 +474,18 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         agent_id = agent_registry.unregister(request.sid)
         if agent_id:
             agent_logger.info("Agent socket disconnected agent_id=%s sid=%s", agent_id, request.sid)
+            _tunnel_log(
+                "vpn_agent_socket_disconnect agent_id={0} sid={1}".format(
+                    agent_id,
+                    request.sid,
+                )
+            )
+        else:
+            _shell_log(
+                "vpn_shell_client_disconnect sid={0} remote={1}".format(
+                    request.sid,
+                    _remote_addr() or "-",
+                ),
+                level="WARNING",
+            )
         shell_bridge.close(request.sid)
