@@ -85,6 +85,9 @@ class AgentSocketRegistry:
             self._sid_by_agent.pop(agent_id, None)
         return agent_id
 
+    def is_registered(self, agent_id: str) -> bool:
+        return bool(self._sid_by_agent.get(agent_id))
+
     def emit(self, agent_id: str, event: str, payload: Any) -> bool:
         sid = self._sid_by_agent.get(agent_id)
         if not sid:
@@ -105,6 +108,7 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     agent_logger = context.logger.getChild("realtime.agents")
     shell_bridge = VpnShellBridge(socket_server, context, adapters.service_log)
     agent_registry = AgentSocketRegistry(socket_server, agent_logger)
+    setattr(context, "agent_socket_registry", agent_registry)
 
     def _emit_agent_event(agent_id: str, event: str, payload: Any) -> bool:
         return agent_registry.emit(agent_id, event, payload)
@@ -370,6 +374,20 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
                 level="WARNING",
             )
             return {"error": "tunnel_down"}
+        registry = getattr(context, "agent_socket_registry", None)
+        if registry and hasattr(registry, "is_registered"):
+            try:
+                if not registry.is_registered(agent_id):
+                    _shell_log(
+                        "vpn_shell_open_failed agent_id={0} sid={1} reason=agent_socket_missing".format(
+                            agent_id,
+                            request.sid,
+                        ),
+                        level="WARNING",
+                    )
+                    return {"error": "agent_socket_missing"}
+            except Exception:
+                agent_logger.debug("agent_socket_registry lookup failed for agent_id=%s", agent_id, exc_info=True)
 
         session = shell_bridge.open_session(request.sid, agent_id)
         if session is None:

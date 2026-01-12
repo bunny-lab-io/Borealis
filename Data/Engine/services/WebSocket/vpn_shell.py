@@ -40,9 +40,13 @@ class ShellSession:
     _reader: Optional[threading.Thread] = None
 
     def start_reader(self) -> None:
-        t = threading.Thread(target=self._read_loop, daemon=True)
-        t.start()
-        self._reader = t
+        starter = getattr(self.socketio, "start_background_task", None)
+        if callable(starter):
+            self._reader = starter(self._read_loop)
+        else:
+            t = threading.Thread(target=self._read_loop, daemon=True)
+            t.start()
+            self._reader = t
 
     def _service_log_event(self, message: str, *, level: str = "INFO") -> None:
         if not callable(self.service_log):
@@ -171,6 +175,16 @@ class VpnShellBridge:
         service = getattr(self.context, "vpn_tunnel_service", None)
         if service is None:
             return None
+        existing = self._sessions.pop(sid, None)
+        if existing:
+            self._service_log_event(
+                "vpn_shell_replace_session agent_id={0} sid={1}".format(
+                    existing.agent_id,
+                    sid,
+                ),
+                level="WARNING",
+            )
+            existing.close()
         status = service.status(agent_id)
         if not status:
             return None
@@ -178,7 +192,8 @@ class VpnShellBridge:
         port = int(self.context.wireguard_shell_port)
         tcp = None
         last_error: Optional[Exception] = None
-        for attempt in range(3):
+        connect_timeout = 2.0
+        for attempt in range(2):
             self._service_log_event(
                 "vpn_shell_connect_attempt agent_id={0} sid={1} host={2} port={3} attempt={4}".format(
                     agent_id,
@@ -189,7 +204,7 @@ class VpnShellBridge:
                 )
             )
             try:
-                tcp = socket.create_connection((host, port), timeout=5)
+                tcp = socket.create_connection((host, port), timeout=connect_timeout)
                 break
             except Exception as exc:
                 last_error = exc
@@ -205,7 +220,7 @@ class VpnShellBridge:
                             "vpn_shell_agent_start_failed agent_id={0} sid={1}".format(agent_id, sid),
                             level="WARNING",
                         )
-                time.sleep(1)
+                time.sleep(0.5)
         if tcp is None:
             self._service_log_event(
                 "vpn_shell_connect_failed agent_id={0} sid={1} host={2} port={3} error={4}".format(

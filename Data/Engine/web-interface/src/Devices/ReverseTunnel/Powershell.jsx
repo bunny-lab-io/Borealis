@@ -64,6 +64,8 @@ const emitAsync = (socket, event, payload, timeoutMs = 4000) =>
     });
   });
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function normalizeText(value) {
   if (value == null) return "";
   try {
@@ -245,20 +247,52 @@ export default function ReverseTunnelPowershell({ device }) {
         const detail = data?.detail ? `: ${data.detail}` : "";
         throw new Error(`${data?.error || `HTTP ${resp.status}`}${detail}`);
       }
-      const statusResp = await fetch(
-        `/api/tunnel/connect/status?agent_id=${encodeURIComponent(agentId)}&bump=1`
-      );
-      const statusData = await statusResp.json().catch(() => ({}));
-      if (!statusResp.ok || statusData?.status !== "up") {
-        throw new Error(statusData?.error || "Tunnel not ready");
-      }
+      const waitForTunnelReady = async () => {
+        const deadline = Date.now() + 60000;
+        let lastError = "";
+        while (Date.now() < deadline) {
+          const statusResp = await fetch(
+            `/api/tunnel/connect/status?agent_id=${encodeURIComponent(agentId)}&bump=1`
+          );
+          const statusData = await statusResp.json().catch(() => ({}));
+          if (statusResp.ok && statusData?.status === "up") {
+            const agentSocket = statusData?.agent_socket;
+            const agentReady = agentSocket === undefined ? true : Boolean(agentSocket);
+            if (agentReady) {
+              return statusData;
+            }
+            setStatusMessage("Waiting for agent VPN socket to register...");
+          } else if (statusData?.error) {
+            lastError = statusData.error;
+          }
+          await sleep(2000);
+        }
+        throw new Error(lastError || "Tunnel not ready");
+      };
+
+      const statusData = await waitForTunnelReady();
       setTunnel({ ...data, ...statusData });
 
       const socket = ensureSocket();
-      const openResp = await emitAsync(socket, "vpn_shell_open", { agent_id: agentId }, 6000);
-      if (openResp?.error) {
-        throw new Error(openResp.error);
-      }
+      const openShellWithRetry = async () => {
+        const deadline = Date.now() + 30000;
+        let lastError = "";
+        let attempt = 0;
+        while (Date.now() < deadline) {
+          attempt += 1;
+          const openResp = await emitAsync(socket, "vpn_shell_open", { agent_id: agentId }, 6000);
+          if (!openResp?.error) {
+            return openResp;
+          }
+          lastError = openResp.error;
+          setStatusMessage(`Waiting for PowerShell shell (${attempt})...`);
+          await sleep(2000);
+        }
+        throw new Error(lastError || "shell_connect_failed");
+      };
+
+      await openShellWithRetry();
+      setStatusMessage("");
       setSessionState("connected");
       setShellState("connected");
     } catch (err) {

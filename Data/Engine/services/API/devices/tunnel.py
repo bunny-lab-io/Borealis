@@ -201,6 +201,13 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
 
         tunnel_service = _get_tunnel_service(adapters)
         payload = tunnel_service.status(agent_id)
+        agent_socket = False
+        registry = getattr(adapters.context, "agent_socket_registry", None)
+        if registry and hasattr(registry, "is_registered"):
+            try:
+                agent_socket = bool(registry.is_registered(agent_id))
+            except Exception:
+                agent_socket = False
         bump = _normalize_text(request.args.get("bump") or "")
         _service_log_event(
             "vpn_api_status_request agent_id={0} bump={1} remote={2}".format(
@@ -213,8 +220,9 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
             _service_log_event(
                 "vpn_api_status_response agent_id={0} status=down".format(agent_id)
             )
-            return jsonify({"status": "down", "agent_id": agent_id}), 200
+            return jsonify({"status": "down", "agent_id": agent_id, "agent_socket": agent_socket}), 200
         payload["status"] = "up"
+        payload["agent_socket"] = agent_socket
         if bump:
             tunnel_service.bump_activity(agent_id)
         _service_log_event(
