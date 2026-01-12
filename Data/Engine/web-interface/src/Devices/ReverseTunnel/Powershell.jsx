@@ -133,6 +133,32 @@ export default function ReverseTunnelPowershell({ device }) {
     return socket;
   }, []);
 
+  const notifyAgentOnboarding = useCallback(async () => {
+    try {
+      await fetch("/api/notifications/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title: "Agent Onboarding Underway",
+          message:
+            "Please wait for the agent to finish onboarding into Borealis. It takes about 1 minute to finish the process.",
+          icon: "info",
+          variant: "info",
+        }),
+      });
+    } catch {
+      /* ignore notification transport errors */
+    }
+  }, []);
+
+  const handleAgentOnboarding = useCallback(async () => {
+    await notifyAgentOnboarding();
+    setStatusMessage("Agent Onboarding Underway.");
+    setSessionState("idle");
+    setShellState("idle");
+  }, [notifyAgentOnboarding]);
+
   const appendOutput = useCallback((text) => {
     if (!text) return;
     setOutput((prev) => {
@@ -234,9 +260,22 @@ export default function ReverseTunnelPowershell({ device }) {
     }
     setLoading(true);
     setStatusMessage("");
-    setSessionState("connecting");
-    setShellState("opening");
     try {
+      try {
+        const readinessResp = await fetch(
+          `/api/tunnel/status?agent_id=${encodeURIComponent(agentId)}`
+        );
+        const readinessData = await readinessResp.json().catch(() => ({}));
+        if (readinessResp.ok && readinessData?.agent_socket === false) {
+          await handleAgentOnboarding();
+          return;
+        }
+      } catch {
+        // best-effort readiness check
+      }
+
+      setSessionState("connecting");
+      setShellState("opening");
       const resp = await fetch("/api/tunnel/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -284,6 +323,10 @@ export default function ReverseTunnelPowershell({ device }) {
           if (!openResp?.error) {
             return openResp;
           }
+          if (openResp.error === "agent_socket_missing") {
+            await handleAgentOnboarding();
+            return null;
+          }
           lastError = openResp.error;
           setStatusMessage(`Waiting for PowerShell shell (${attempt})...`);
           await sleep(2000);
@@ -291,7 +334,10 @@ export default function ReverseTunnelPowershell({ device }) {
         throw new Error(lastError || "shell_connect_failed");
       };
 
-      await openShellWithRetry();
+      const opened = await openShellWithRetry();
+      if (!opened) {
+        return;
+      }
       setStatusMessage("");
       setSessionState("connected");
       setShellState("connected");
@@ -302,7 +348,7 @@ export default function ReverseTunnelPowershell({ device }) {
     } finally {
       setLoading(false);
     }
-  }, [agentId, ensureSocket]);
+  }, [agentId, ensureSocket, handleAgentOnboarding]);
 
   const handleSend = useCallback(
     async (text) => {
