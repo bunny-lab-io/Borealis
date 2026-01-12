@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import ipaddress
 import logging
+import os
 import subprocess
 import tempfile
 import time
@@ -72,6 +73,18 @@ class WireGuardServerManager:
         self.server_private_key, self.server_public_key = self._ensure_server_keys()
         self._service_name = "borealis-wg"
         self._temp_dir = Path(tempfile.gettempdir()) / "borealis-wg-engine"
+        self._wireguard_exe = self._resolve_wireguard_exe()
+
+    def _resolve_wireguard_exe(self) -> str:
+        candidates = [
+            str(Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "WireGuard" / "wireguard.exe"),
+            str(Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")) / "WireGuard" / "wireguard.exe"),
+            "wireguard.exe",
+        ]
+        for candidate in candidates:
+            if Path(candidate).is_file():
+                return candidate
+        return "wireguard.exe"
 
     def _ensure_cert_dir(self) -> None:
         try:
@@ -316,7 +329,7 @@ class WireGuardServerManager:
         # Ensure old service is removed before re-installing.
         self.stop_listener()
 
-        args = ["wireguard.exe", "/installtunnelservice", str(config_path)]
+        args = [self._wireguard_exe, "/installtunnelservice", str(config_path)]
         code, out, err = self._run_command(args)
         if code != 0:
             self.logger.error("Failed to install WireGuard tunnel service code=%s err=%s", code, err)
@@ -326,7 +339,7 @@ class WireGuardServerManager:
     def stop_listener(self) -> None:
         """Stop and remove the WireGuard tunnel service."""
 
-        args = ["wireguard.exe", "/uninstalltunnelservice", self._service_name]
+        args = [self._wireguard_exe, "/uninstalltunnelservice", self._service_name]
         code, out, err = self._run_command(args)
         if code != 0:
             self.logger.warning("Failed to uninstall WireGuard tunnel service code=%s err=%s", code, err)

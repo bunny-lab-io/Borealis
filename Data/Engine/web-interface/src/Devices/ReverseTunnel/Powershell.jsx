@@ -93,6 +93,8 @@ export default function ReverseTunnelPowershell({ device }) {
   const socketRef = useRef(null);
   const localSocketRef = useRef(false);
   const terminalRef = useRef(null);
+  const agentIdRef = useRef("");
+  const tunnelIdRef = useRef("");
 
   const agentId = useMemo(() => {
     return (
@@ -106,6 +108,14 @@ export default function ReverseTunnelPowershell({ device }) {
       ""
     );
   }, [device]);
+
+  useEffect(() => {
+    agentIdRef.current = agentId;
+  }, [agentId]);
+
+  useEffect(() => {
+    tunnelIdRef.current = tunnel?.tunnel_id || "";
+  }, [tunnel?.tunnel_id]);
 
   const ensureSocket = useCallback(() => {
     if (socketRef.current) return socketRef.current;
@@ -142,21 +152,20 @@ export default function ReverseTunnelPowershell({ device }) {
     scrollToBottom();
   }, [output, scrollToBottom]);
 
-  const stopTunnel = useCallback(
-    async (reason = "operator_disconnect") => {
-      if (!agentId) return;
-      try {
-        await fetch("/api/tunnel/disconnect", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent_id: agentId, tunnel_id: tunnel?.tunnel_id, reason }),
-        });
-      } catch {
-        // best-effort
-      }
-    },
-    [agentId, tunnel?.tunnel_id]
-  );
+  const stopTunnel = useCallback(async (reason = "operator_disconnect") => {
+    const currentAgentId = agentIdRef.current;
+    if (!currentAgentId) return;
+    const currentTunnelId = tunnelIdRef.current;
+    try {
+      await fetch("/api/tunnel/disconnect", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: currentAgentId, tunnel_id: currentTunnelId, reason }),
+      });
+    } catch {
+      // best-effort
+    }
+  }, []);
 
   const closeShell = useCallback(async () => {
     const socket = ensureSocket();
@@ -232,7 +241,10 @@ export default function ReverseTunnelPowershell({ device }) {
         body: JSON.stringify({ agent_id: agentId }),
       });
       const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      if (!resp.ok) {
+        const detail = data?.detail ? `: ${data.detail}` : "";
+        throw new Error(`${data?.error || `HTTP ${resp.status}`}${detail}`);
+      }
       const statusResp = await fetch(
         `/api/tunnel/connect/status?agent_id=${encodeURIComponent(agentId)}&bump=1`
       );

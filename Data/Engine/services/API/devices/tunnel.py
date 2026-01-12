@@ -12,12 +12,14 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from ...VPN import VpnTunnelService
+from ...VPN import WireGuardServerConfig, WireGuardServerManager, VpnTunnelService
 
 if False:  # pragma: no cover - import cycle hint for type checkers
     from .. import EngineServiceAdapters
@@ -63,7 +65,22 @@ def _get_tunnel_service(adapters: "EngineServiceAdapters") -> VpnTunnelService:
     if service is None:
         manager = getattr(adapters.context, "wireguard_server_manager", None)
         if manager is None:
-            raise RuntimeError("wireguard_manager_unavailable")
+            try:
+                manager = WireGuardServerManager(
+                    WireGuardServerConfig(
+                        port=adapters.context.wireguard_port,
+                        engine_virtual_ip=adapters.context.wireguard_engine_virtual_ip,
+                        peer_network=adapters.context.wireguard_peer_network,
+                        private_key_path=Path(adapters.context.wireguard_server_private_key_path),
+                        public_key_path=Path(adapters.context.wireguard_server_public_key_path),
+                        acl_allowlist_windows=tuple(adapters.context.wireguard_acl_allowlist_windows),
+                        log_path=Path(adapters.context.vpn_tunnel_log_path),
+                    )
+                )
+                adapters.context.wireguard_server_manager = manager
+            except Exception as exc:
+                adapters.context.logger.error("Failed to initialize WireGuard server manager on demand.", exc_info=True)
+                raise RuntimeError("wireguard_manager_unavailable") from exc
         service = VpnTunnelService(
             context=adapters.context,
             wireguard_manager=manager,
@@ -84,6 +101,20 @@ def _normalize_text(value: Any) -> str:
         return str(value).strip()
     except Exception:
         return ""
+
+
+def _infer_endpoint_host(req) -> str:
+    forwarded = (req.headers.get("X-Forwarded-Host") or req.headers.get("X-Original-Host") or "").strip()
+    host = forwarded.split(",")[0].strip() if forwarded else (req.host or "").strip()
+    if not host:
+        return ""
+    try:
+        parsed = urlsplit(f"//{host}")
+        if parsed.hostname:
+            return parsed.hostname
+    except Exception:
+        return host
+    return host
 
 
 def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
@@ -107,10 +138,15 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
 
         try:
             tunnel_service = _get_tunnel_service(adapters)
-            payload = tunnel_service.connect(agent_id=agent_id, operator_id=operator_id)
-        except RuntimeError as exc:
+            endpoint_host = _infer_endpoint_host(request)
+            payload = tunnel_service.connect(
+                agent_id=agent_id,
+                operator_id=operator_id,
+                endpoint_host=endpoint_host,
+            )
+        except Exception as exc:
             logger.warning("vpn connect failed for agent_id=%s: %s", agent_id, exc)
-            return jsonify({"error": "connect_failed"}), 500
+            return jsonify({"error": "connect_failed", "detail": str(exc)}), 500
 
         return jsonify(payload), 200
 

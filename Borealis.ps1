@@ -13,10 +13,78 @@ param(
     [string]$EnrollmentCode = ''
 )
 
+# Admin/Elevation helpers for Borealis runtime
+function Test-IsAdmin {
+    try {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $p  = New-Object Security.Principal.WindowsPrincipal($id)
+        return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { return $false }
+}
+
+function Request-BorealisElevation {
+    param(
+        [string]$ScriptPath,
+        [hashtable]$BoundParameters,
+        [string[]]$ExtraArgs
+    )
+    if (Test-IsAdmin) { return $true }
+
+    Write-Host ""  # spacer
+    Write-Host "Borealis requires Administrator permissions for Engine and Agent tasks." -ForegroundColor Yellow -BackgroundColor Black
+    Write-Host "Grant elevated permissions now? (Y/N)" -ForegroundColor Yellow -BackgroundColor Black
+    $resp = Read-Host
+    if ($resp -notin @('y','Y','yes','YES')) { return $false }
+
+    $argTokens = @('-NoProfile','-ExecutionPolicy','Bypass','-File', $ScriptPath)
+    if ($BoundParameters) {
+        foreach ($entry in $BoundParameters.GetEnumerator()) {
+            $key = $entry.Key
+            $value = $entry.Value
+            if ($value -is [System.Management.Automation.SwitchParameter]) {
+                if ($value.IsPresent) { $argTokens += "-$key" }
+                continue
+            }
+            if ($value -is [bool]) {
+                if ($value) { $argTokens += "-$key" }
+                continue
+            }
+            if ($null -ne $value -and "$value" -ne "") {
+                $argTokens += "-$key"
+                $argTokens += "$value"
+            }
+        }
+    }
+    if ($ExtraArgs) { $argTokens += $ExtraArgs }
+
+    $argLine = ($argTokens | ForEach-Object {
+        $text = [string]$_
+        if ($text -match '\s') {
+            '"' + ($text -replace '"','`"') + '"'
+        } else {
+            $text
+        }
+    }) -join ' '
+
+    try {
+        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argLine -WindowStyle Normal | Out-Null
+        return $false  # stop current non-elevated instance
+    } catch {
+        Write-Host "Elevation was denied or failed." -ForegroundColor Red
+        return $false
+    }
+}
+
 # Preselect menu choices from CLI args (optional)
 $choice = $null
 $modeChoice = $null
 $engineModeChoice = $null
+
+$scriptPath = $PSCommandPath
+if (-not $scriptPath -or $scriptPath -eq '') { $scriptPath = $MyInvocation.MyCommand.Definition }
+if (-not (Request-BorealisElevation -ScriptPath $scriptPath -BoundParameters $PSBoundParameters -ExtraArgs $MyInvocation.UnboundArguments)) {
+    exit 0
+}
 
 $scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
 
@@ -115,38 +183,51 @@ function Set-FileUtf8Content {
     }
 }
 
-# Admin/Elevation helpers for Agent deployment
-function Test-IsAdmin {
+function Get-LatestWriteTime {
+    param(
+        [string]$Path
+    )
     try {
-        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-        $p  = New-Object Security.Principal.WindowsPrincipal($id)
-        return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    } catch { return $false }
+        $item = Get-ChildItem -Path $Path -Recurse -Force -ErrorAction Stop |
+            Sort-Object -Property LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($item) { return $item.LastWriteTime }
+    } catch {
+        return [datetime]::MinValue
+    }
+    return [datetime]::MinValue
 }
 
-function Request-AgentElevation {
+function Sync-EngineRuntime {
     param(
-        [string]$ScriptPath,
-        [switch]$Auto
+        [string]$SourceRoot,
+        [string]$DestinationRoot
     )
-    if (Test-IsAdmin) { return $true }
+    if (-not (Test-Path $SourceRoot)) { return $false }
 
-    if (-not $Auto) {
-        Write-Host ""  # spacer
-        Write-Host "Agent requires Administrator permissions to register scheduled tasks and run reliably." -ForegroundColor Yellow -BackgroundColor Black
-        Write-Host "Grant elevated permissions now? (Y/N)" -ForegroundColor Yellow -BackgroundColor Black
-        $resp = Read-Host
-        if ($resp -notin @('y','Y','yes','YES')) { return $false }
+    $needsSync = $false
+    if (-not (Test-Path $DestinationRoot)) {
+        $needsSync = $true
+    } else {
+        $sourceTime = Get-LatestWriteTime -Path $SourceRoot
+        $destTime = Get-LatestWriteTime -Path $DestinationRoot
+        if ($sourceTime -gt $destTime) { $needsSync = $true }
     }
 
-    $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File', '"' + $ScriptPath + '"', '-Agent')
-    try {
-        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args -WindowStyle Normal | Out-Null
-        return $false  # stop current non-elevated instance
-    } catch {
-        Write-Host "Elevation was denied or failed." -ForegroundColor Red
-        return $false
+    if (-not $needsSync) { return $false }
+
+    if (Test-Path $DestinationRoot) {
+        Remove-Item $DestinationRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
+    New-Item -Path $DestinationRoot -ItemType Directory -Force | Out-Null
+
+    Get-ChildItem -Path $SourceRoot -Force | ForEach-Object {
+        if ($_.Name -ieq 'Assemblies') {
+            return
+        }
+        Copy-Item -Path $_.FullName -Destination $DestinationRoot -Recurse -Force
+    }
+    return $true
 }
 
 # Ensure log directories
@@ -1486,12 +1567,6 @@ function InstallOrUpdate-BorealisAgent {
 
             Copy-Item $coreAgentFiles -Destination $agentDestinationFolder -Recurse -Force
             
-            # Ensure ReverseTunnel role is refreshed explicitly (covers incremental changes)
-            $rtSource = Join-Path $agentSourceRoot 'Roles\ReverseTunnel'
-            $rtDest = Join-Path $agentDestinationFolder 'Roles'
-            if (Test-Path $rtSource) {
-                Copy-Item $rtSource -Destination $rtDest -Recurse -Force
-            }
         }
         . (Join-Path $venvFolderPath 'Scripts\Activate')
     }
@@ -1647,6 +1722,7 @@ function InstallOrUpdate-BorealisAgent {
 }
 
 # ---------------------- Main -----------------------
+$Host.UI.RawUI.BackgroundColor = 'Black'
 Clear-Host
 @'
 :::::::::   ::::::::  :::::::::  ::::::::::     :::     :::        ::::::::::: :::::::: 
@@ -1731,6 +1807,11 @@ switch ($choice) {
         }
 
         if ($engineImmediateLaunch) {
+            $engineSourceAbsolute = Join-Path $scriptDir 'Data\Engine'
+            $engineDataAbsolute = Join-Path $scriptDir 'Engine\Data\Engine'
+            if (Sync-EngineRuntime -SourceRoot $engineSourceAbsolute -DestinationRoot $engineDataAbsolute) {
+                Write-Host "Synced Engine runtime code from Data\\Engine." -ForegroundColor DarkCyan
+            }
             Run-Step "Borealis Engine: Launch Flask Server" {
                 Push-Location (Join-Path $scriptDir "Engine")
                 $py = Join-Path $scriptDir "Engine\Scripts\python.exe"
@@ -2047,15 +2128,11 @@ switch ($choice) {
     "2" {
         $host.UI.RawUI.WindowTitle = "Borealis Agent"
         Write-Host " "
-        # Ensure elevation before performing Agent deployment
-        $scriptPath = $PSCommandPath
-        if (-not $scriptPath -or $scriptPath -eq '') { $scriptPath = $MyInvocation.MyCommand.Definition }
-        # If already elevated, skip prompt; otherwise prompt, then relaunch directly to the Agent deploy flow via -Agent
-        $cont = Request-AgentElevation -ScriptPath $scriptPath
-        if (-not $cont -and -not (Test-IsAdmin)) { return }
-        if (Test-IsAdmin) {
-            Write-Host "Escalated Permissions Granted > Agent is Eligible for Deployment." -ForegroundColor Green
+        if (-not (Test-IsAdmin)) {
+            Write-Host "Administrator permissions are required to deploy the Borealis Agent." -ForegroundColor Red
+            return
         }
+        Write-Host "Escalated Permissions Granted > Agent is Eligible for Deployment." -ForegroundColor Green
         Write-Host "Deploying Borealis Agent (fresh install/update path)..." -ForegroundColor Cyan
         InstallOrUpdate-BorealisAgent
         break

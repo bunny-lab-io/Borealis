@@ -75,7 +75,7 @@ const SECTION_HEIGHTS = {
 };
 
 const buildVpnGroups = (shellPort) => {
-  const normalizedShell = Number(shellPort) || 47001;
+  const normalizedShell = Number(shellPort) || 47002;
   return [
     {
       key: "shell",
@@ -335,7 +335,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const [vpnToggles, setVpnToggles] = useState({});
   const [vpnCustomPorts, setVpnCustomPorts] = useState([]);
   const [vpnDefaultPorts, setVpnDefaultPorts] = useState([]);
-  const [vpnShellPort, setVpnShellPort] = useState(47001);
+  const [vpnShellPort, setVpnShellPort] = useState(47002);
   const [vpnLoadedFor, setVpnLoadedFor] = useState("");
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
@@ -347,6 +347,31 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     const now = Date.now() / 1000;
     return now - tsSec <= 300 ? "Online" : "Offline";
   });
+  const summary = details.summary || {};
+  const vpnAgentId = useMemo(() => {
+    return (
+      meta.agentId ||
+      summary.agent_id ||
+      agent?.agent_id ||
+      agent?.id ||
+      device?.agent_id ||
+      device?.agent_guid ||
+      device?.id ||
+      ""
+    );
+  }, [agent?.agent_id, agent?.id, device?.agent_guid, device?.agent_id, device?.id, meta.agentId, summary.agent_id]);
+  const vpnPortGroups = useMemo(() => buildVpnGroups(vpnShellPort), [vpnShellPort]);
+  const tunnelDevice = useMemo(
+    () => ({
+      ...(device || {}),
+      ...(agent || {}),
+      summary,
+      hostname: meta.hostname || summary.hostname || device?.hostname || agent?.hostname,
+      agent_id: meta.agentId || summary.agent_id || agent?.agent_id || agent?.id || device?.agent_id || device?.agent_guid,
+      agent_guid: meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || agent?.agent_guid || agent?.guid,
+    }),
+    [agent, device, meta.agentGuid, meta.agentId, meta.hostname, summary]
+  );
   const quickJobTargets = useMemo(() => {
     const values = [];
     const push = (value) => {
@@ -715,7 +740,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     const numericDefaults = normalizedDefaults
       .map((p) => Number(p))
       .filter((p) => Number.isFinite(p) && p > 0);
-    const effectiveShell = Number(shellPort) || 47001;
+    const effectiveShell = Number(shellPort) || 47002;
     const groups = buildVpnGroups(effectiveShell);
     const knownPorts = new Set(groups.flatMap((group) => group.ports));
     const allowedSet = new Set(numericPorts);
@@ -887,31 +912,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     []
   );
 
-  const summary = details.summary || {};
-  const vpnAgentId = useMemo(() => {
-    return (
-      meta.agentId ||
-      summary.agent_id ||
-      agent?.agent_id ||
-      agent?.id ||
-      device?.agent_id ||
-      device?.agent_guid ||
-      device?.id ||
-      ""
-    );
-  }, [agent?.agent_id, agent?.id, device?.agent_guid, device?.agent_id, device?.id, meta.agentId, summary.agent_id]);
-  const vpnPortGroups = useMemo(() => buildVpnGroups(vpnShellPort), [vpnShellPort]);
-  const tunnelDevice = useMemo(
-    () => ({
-      ...(device || {}),
-      ...(agent || {}),
-      summary,
-      hostname: meta.hostname || summary.hostname || device?.hostname || agent?.hostname,
-      agent_id: meta.agentId || summary.agent_id || agent?.agent_id || agent?.id || device?.agent_id || device?.agent_guid,
-      agent_guid: meta.agentGuid || summary.agent_guid || device?.agent_guid || device?.guid || agent?.agent_guid || agent?.guid,
-    }),
-    [agent, device, meta.agentGuid, meta.agentId, meta.hostname, summary]
-  );
   // Build a best-effort CPU display from summary fields
   const cpuInfo = useMemo(() => {
     const cpu = details.cpu || summary.cpu || {};

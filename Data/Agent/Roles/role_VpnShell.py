@@ -47,11 +47,11 @@ def _b64decode(value: str) -> bytes:
 def _resolve_shell_port() -> int:
     raw = os.environ.get("BOREALIS_WIREGUARD_SHELL_PORT")
     try:
-        value = int(raw) if raw is not None else 47001
+        value = int(raw) if raw is not None else 47002
     except Exception:
-        value = 47001
+        value = 47002
     if value < 1 or value > 65535:
-        return 47001
+        return 47002
     return value
 
 

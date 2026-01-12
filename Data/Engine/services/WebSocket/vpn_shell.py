@@ -13,6 +13,7 @@ import base64
 import json
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -42,7 +43,10 @@ class ShellSession:
         buffer = b""
         try:
             while True:
-                data = self.tcp.recv(4096)
+                try:
+                    data = self.tcp.recv(4096)
+                except (socket.timeout, TimeoutError):
+                    break
                 if not data:
                     break
                 buffer += data
@@ -100,12 +104,28 @@ class VpnShellBridge:
             return None
         host = str(status.get("virtual_ip") or "").split("/")[0]
         port = int(self.context.wireguard_shell_port)
-        try:
-            tcp = socket.create_connection((host, port), timeout=5)
-        except Exception:
-            self.logger.debug("Failed to connect vpn shell to %s:%s", host, port, exc_info=True)
+        tcp = None
+        last_error: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                tcp = socket.create_connection((host, port), timeout=5)
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt == 0:
+                    try:
+                        service.request_agent_start(agent_id)
+                    except Exception:
+                        self.logger.debug("Failed to re-emit vpn_tunnel_start for agent=%s", agent_id, exc_info=True)
+                time.sleep(1)
+        if tcp is None:
+            self.logger.warning("Failed to connect vpn shell to %s:%s", host, port, exc_info=last_error)
             return None
         session = ShellSession(sid=sid, agent_id=agent_id, socketio=self.socketio, tcp=tcp)
+        try:
+            session.tcp.settimeout(15)
+        except Exception:
+            pass
         self._sessions[sid] = session
         session.start_reader()
         return session
@@ -124,4 +144,3 @@ class VpnShellBridge:
         if not session:
             return
         session.close()
-

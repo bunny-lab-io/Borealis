@@ -22,13 +22,22 @@ import os
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
-from signature_utils import verify_and_store_script_signature
+
+try:
+    from signature_utils import verify_and_store_script_signature
+except Exception:  # pragma: no cover - fallback for runtime path issues
+    import sys
+    from pathlib import Path as _Path
+
+    base_dir = _Path(__file__).resolve().parents[1]
+    if str(base_dir) not in sys.path:
+        sys.path.insert(0, str(base_dir))
+    from signature_utils import verify_and_store_script_signature
 
 ROLE_NAME = "WireGuardTunnel"
 ROLE_CONTEXTS = ["system"]
@@ -88,18 +97,31 @@ def _generate_client_keys(root: Path) -> Dict[str, str]:
     return {"private": priv, "public": pub}
 
 
-@dataclass
 class SessionConfig:
-    token: Dict[str, Any]
-    virtual_ip: str
-    allowed_ips: str
-    endpoint: str
-    server_public_key: str
-    allowed_ports: str
-    idle_seconds: int = 900
-    preshared_key: Optional[str] = None
-    client_private_key: Optional[str] = None
-    client_public_key: Optional[str] = None
+    def __init__(
+        self,
+        *,
+        token: Dict[str, Any],
+        virtual_ip: str,
+        allowed_ips: str,
+        endpoint: str,
+        server_public_key: str,
+        allowed_ports: str,
+        idle_seconds: int = 900,
+        preshared_key: Optional[str] = None,
+        client_private_key: Optional[str] = None,
+        client_public_key: Optional[str] = None,
+    ) -> None:
+        self.token = token
+        self.virtual_ip = virtual_ip
+        self.allowed_ips = allowed_ips
+        self.endpoint = endpoint
+        self.server_public_key = server_public_key
+        self.allowed_ports = allowed_ports
+        self.idle_seconds = idle_seconds
+        self.preshared_key = preshared_key
+        self.client_private_key = client_private_key
+        self.client_public_key = client_public_key
 
 
 class WireGuardClient:
@@ -149,6 +171,19 @@ class WireGuardClient:
             raise ValueError("Invalid token port")
         if port < 1 or port > 65535:
             raise ValueError("Invalid token port")
+
+        if not signature:
+            if sig_alg or signing_key:
+                raise ValueError("Token signature missing")
+            stored_key = None
+            if signing_client is not None and hasattr(signing_client, "load_server_signing_key"):
+                try:
+                    stored_key = signing_client.load_server_signing_key()
+                except Exception:
+                    stored_key = None
+            if isinstance(stored_key, str) and stored_key.strip():
+                raise ValueError("Token signature missing")
+            return
 
         if signature:
             if sig_alg and str(sig_alg).lower() not in ("ed25519", "eddsa"):
@@ -292,6 +327,11 @@ class Role:
             self._log("WireGuard start payload missing/invalid.", error=True)
             return None
 
+        payload_agent_id = payload.get("agent_id") or payload.get("agent_guid")
+        if payload_agent_id:
+            if str(payload_agent_id).strip() != str(self.ctx.agent_id).strip():
+                return None
+
         token = payload.get("token") or payload.get("orchestration_token")
         if not isinstance(token, dict):
             self._log("WireGuard start missing token payload.", error=True)
@@ -351,6 +391,9 @@ class Role:
         async def _vpn_tunnel_stop(payload):
             reason = "server_stop"
             if isinstance(payload, dict):
+                target_agent = payload.get("agent_id")
+                if target_agent and str(target_agent).strip() != str(self.ctx.agent_id).strip():
+                    return
                 reason = payload.get("reason") or reason
             self._log(f"WireGuard stop requested (reason={reason}).")
             self.client.stop_session(reason=str(reason))

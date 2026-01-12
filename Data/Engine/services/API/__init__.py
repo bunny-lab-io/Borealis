@@ -117,7 +117,7 @@ def _rotate_daily(path: Path) -> None:
         pass
 
 
-_QUIET_SERVICE_LOGS = {"scheduled_jobs"}
+_QUIET_SERVICE_LOGS = {"scheduled_jobs", "device_enrollment"}
 
 
 def _make_service_logger(base: Path, logger: logging.Logger) -> Callable[[str, str, Optional[str]], None]:

@@ -42,8 +42,8 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
   - [x] Do not start any tunnel yet.
 - Linux: do nothing yet (see later section).
 - Checkpoint tests:
-  - [ ] WireGuard binaries available in agent runtime.
-  - [ ] WireGuard driver installed and visible.
+  - [x] WireGuard binaries available in agent runtime.
+  - [x] WireGuard driver installed and visible.
 
 ### 2) Engine VPN Server & ACLs — Milestone: Engine VPN Server & ACLs (Windows)
 - Agents editing this document should mark tasks they complete with `[x]` (leave `[ ]` otherwise).
@@ -80,7 +80,7 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
 - Logging: `Agent/Logs/reverse_tunnel.log` captures connect/disconnect/errors/idle timeouts. [x]
 - Checkpoint tests:
   - [ ] Manual connect/disconnect against engine test server.
-  - [ ] Idle timeout fires at ~15 minutes of inactivity.
+  - [x] Idle timeout fires at ~15 minutes of inactivity.
 
 ### 4) API & Service Orchestration — Milestone: API & Service Orchestration (Windows)
 - Agents editing this document should mark tasks they complete with `[x]` (leave `[ ]` otherwise).
@@ -129,7 +129,8 @@ At each milestone: pause, run the listed checks, talk to the operator, and commi
 - Agents editing this document should mark tasks they complete with `[x]` (leave `[ ]` otherwise).
 - Functional:
   - [ ] Windows agent: WireGuard connect on port 30000; PowerShell MVP fully live in the web terminal; RDP/WinRM reachable over tunnel as configured.
-  - [ ] Idle timeout at 15 minutes; operator disconnect stops tunnel immediately.
+  - [x] Idle timeout at 15 minutes of inactivity.
+  - [ ] Operator disconnect stops tunnel immediately.
 - Security:
   - [ ] Client-to-client blocked.
   - [ ] Only engine IP reachable; per-agent ACL enforces allowed ports.

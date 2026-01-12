@@ -1,5 +1,7 @@
 import os
 import importlib.util
+import sys
+from pathlib import Path
 from typing import Dict, List, Optional
 
 
@@ -37,7 +39,26 @@ class RoleManager:
         self.config = config
         self.loop = loop
         self.hooks = hooks or {}
+        self._log_hook = self.hooks.get('log_agent')
         self.roles: Dict[str, object] = {}
+
+        # Ensure role helpers alongside Roles/ are importable (e.g., signature_utils.py).
+        try:
+            base_path = Path(self.base_dir).resolve()
+            parent_path = base_path.parent
+            for candidate in (base_path, parent_path):
+                if candidate and str(candidate) not in sys.path:
+                    sys.path.insert(0, str(candidate))
+        except Exception:
+            pass
+
+    def _log(self, message: str, *, error: bool = False) -> None:
+        if callable(self._log_hook):
+            try:
+                target = "agent.error.log" if error else "agent.log"
+                self._log_hook(message, fname=target)
+            except Exception:
+                pass
 
     def _iter_role_files(self) -> List[str]:
         roles_dir = os.path.join(self.base_dir, 'Roles')
@@ -56,7 +77,8 @@ class RoleManager:
                 mod = importlib.util.module_from_spec(spec)
                 assert spec and spec.loader
                 spec.loader.exec_module(mod)
-            except Exception:
+            except Exception as exc:
+                self._log(f"Role load failed during import path={path} error={exc}", error=True)
                 continue
 
             role_name = getattr(mod, 'ROLE_NAME', None)
@@ -75,10 +97,12 @@ class RoleManager:
                 if hasattr(role_obj, 'register_events'):
                     try:
                         role_obj.register_events()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        self._log(f"Role register_events failed name={role_name} error={exc}", error=True)
                 self.roles[role_name] = role_obj
-            except Exception:
+                self._log(f"Role loaded name={role_name} context={self.context}")
+            except Exception as exc:
+                self._log(f"Role init failed name={role_name} path={path} error={exc}", error=True)
                 continue
 
     def on_config(self, roles_cfg: List[dict]):
@@ -96,4 +120,3 @@ class RoleManager:
                     role.stop_all()
             except Exception:
                 pass
-
