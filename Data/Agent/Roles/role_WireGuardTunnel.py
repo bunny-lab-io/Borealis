@@ -462,7 +462,17 @@ class WireGuardClient:
             _write_log("WireGuard client activity bump; idle timer reset.")
 
 
-client = WireGuardClient()
+_client: Optional[WireGuardClient] = None
+_client_lock = threading.Lock()
+
+
+def _get_client() -> WireGuardClient:
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                _client = WireGuardClient()
+    return _client
 
 
 def _parse_allowed_ips(value: Any, fallback: Optional[str]) -> Optional[str]:
@@ -485,7 +495,7 @@ def _coerce_int(value: Any, default: int) -> int:
 class Role:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
-        self.client = client
+        self.client = _get_client()
         hooks = getattr(ctx, "hooks", {}) or {}
         self._log_hook = hooks.get("log_agent")
         self._http_client_factory = hooks.get("http_client")

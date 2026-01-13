@@ -1080,7 +1080,7 @@ function Install_Agent_Dependencies {
 
         if (-not $TunnelName) { return }
         $logPrefix = '[WireGuard]'
-        $serviceName = "WireGuardTunnel$TunnelName"
+        $serviceName = 'WireGuardTunnel$' + $TunnelName
         Write-AgentLog -FileName $LogName -Message ("$logPrefix Cleaning tunnel service {0}" -f $serviceName)
         $serviceExists = $false
         try {
@@ -1221,7 +1221,7 @@ function Install_Agent_Dependencies {
         $logPrefix = '[WireGuard]'
         $friendlyName = $wireGuardTunnelNameFriendly
         $internalName = $wireGuardTunnelNameInternal
-        $serviceName = "WireGuardTunnel$internalName"
+        $serviceName = 'WireGuardTunnel$' + $internalName
 
         Write-AgentLog -FileName $LogName -Message ("$logPrefix Ensuring tunnel adapter: {0}" -f $friendlyName)
         $existing = Get-WireGuardAdapterByName -AdapterName $friendlyName
