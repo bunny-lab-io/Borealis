@@ -523,6 +523,10 @@ $wireGuardInstallerDir     = Join-Path $depsRoot 'VPN_Tunnel_Adapter'
 $wireGuardBootstrapperName = 'wireguard-installer.exe'
 $wireGuardBootstrapperPath = Join-Path $wireGuardInstallerDir $wireGuardBootstrapperName
 $wireGuardMsiVersion       = '0.5.3'
+$wireGuardTunnelLegacyName   = 'BorealisWireGuardTunnel'
+$wireGuardTunnelNameInternal = 'Borealis'
+$wireGuardTunnelNameFriendly = 'Borealis'
+$wireGuardTunnelBootstrapAddress = '169.254.255.254/32'
 $wireGuardMsiFiles = @{
     'X64'   = "wireguard-amd64-$wireGuardMsiVersion.msi"
     'AMD64' = "wireguard-amd64-$wireGuardMsiVersion.msi"
@@ -702,6 +706,10 @@ function Install_Agent_Dependencies {
             ServicePresent = $false
             DriverPresent  = $false
             DriverPaths    = @()
+            AdapterPresent = $false
+            AdapterNames   = @()
+            DedicatedAdapterPresent = $false
+            DedicatedAdapterNames   = @()
         }
 
         $exeCandidates = @(
@@ -747,6 +755,29 @@ function Install_Agent_Dependencies {
             $state.Installed = $true
             $state.DriverPaths = $driverHits | Select-Object -Unique
         }
+
+        try {
+            $adapters = Get-WireGuardAdapters
+            if ($adapters) {
+                $state.AdapterPresent = $true
+                $state.AdapterNames = $adapters | Select-Object -ExpandProperty Name -Unique
+                $state.DriverPresent = $true
+                $state.Installed = $true
+            }
+
+            $dedicated = @()
+            foreach ($adapter in ($adapters | Where-Object { $_ })) {
+                if (Test-WireGuardAdapterName -Adapter $adapter -ExpectedName $wireGuardTunnelNameFriendly) {
+                    $dedicated += $adapter
+                }
+            }
+            if ($dedicated.Count -gt 0) {
+                $state.DedicatedAdapterPresent = $true
+                $state.DedicatedAdapterNames = $dedicated | Select-Object -ExpandProperty Name -Unique
+                $state.DriverPresent = $true
+                $state.Installed = $true
+            }
+        } catch {}
 
         $uninstallRoots = @(
             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
@@ -836,29 +867,51 @@ function Install_Agent_Dependencies {
         )
 
         $pair = @{ PrivateKey = $null; PublicKey = $null; Source = $null }
-        $cliCandidates = @()
-        if ($WgExe) { $cliCandidates += $WgExe }
-        if ($WireGuardExe) { $cliCandidates += $WireGuardExe }
+        $wgCli = $null
+        if ($WgExe -and (Test-Path $WgExe -PathType Leaf)) { $wgCli = $WgExe }
 
-        foreach ($cli in $cliCandidates) {
-            if (-not $cli -or -not (Test-Path $cli -PathType Leaf)) { continue }
+        $priv = $null
+        if ($wgCli) {
+            try { $priv = (& $wgCli genkey) } catch {}
+            if ($priv) {
+                $priv = $priv.Trim()
+                $pair.PrivateKey = $priv
+                $pair.Source = $wgCli
+                try {
+                    $psi = New-Object System.Diagnostics.ProcessStartInfo
+                    $psi.FileName = $wgCli
+                    $psi.Arguments = 'pubkey'
+                    $psi.RedirectStandardInput = $true
+                    $psi.RedirectStandardOutput = $true
+                    $psi.RedirectStandardError = $true
+                    $psi.UseShellExecute = $false
+                    $psi.CreateNoWindow = $true
+                    if ($psi.PSObject.Properties.Name -contains 'StandardInputEncoding') {
+                        $psi.StandardInputEncoding = [System.Text.Encoding]::ASCII
+                    }
+                    if ($psi.PSObject.Properties.Name -contains 'StandardOutputEncoding') {
+                        $psi.StandardOutputEncoding = [System.Text.Encoding]::ASCII
+                    }
+                    $proc = New-Object System.Diagnostics.Process
+                    $proc.StartInfo = $psi
+                    $proc.Start() | Out-Null
+                    $proc.StandardInput.WriteLine($priv)
+                    $proc.StandardInput.Close()
+                    $pub = $proc.StandardOutput.ReadToEnd()
+                    $proc.WaitForExit()
+                    if ($proc.ExitCode -eq 0 -and $pub) {
+                        $pair.PublicKey = $pub.Trim()
+                    }
+                } catch {}
+            }
+        }
+
+        if (-not $pair.PrivateKey -and $WireGuardExe -and (Test-Path $WireGuardExe -PathType Leaf)) {
             try {
-                # Only wg.exe supports genkey; wireguard.exe likely won't, but attempt anyway
-                $priv = (& $cli genkey)
+                $priv = (& $WireGuardExe genkey)
                 if ($priv) {
-                    $priv = $priv.Trim()
-                    $pair.PrivateKey = $priv
-                    $pair.Source = $cli
-                    try {
-                        $padLen = 4 - ($priv.Length % 4)
-                        $privForPub = $priv
-                        if ($padLen -lt 4) {
-                            $privForPub = $priv + ('=' * $padLen)
-                        }
-                        $pub = ($privForPub | & $cli pubkey)
-                        if ($pub) { $pair.PublicKey = $pub.Trim() }
-                    } catch {}
-                    break
+                    $pair.PrivateKey = $priv.Trim()
+                    $pair.Source = $WireGuardExe
                 }
             } catch {}
         }
@@ -876,6 +929,504 @@ function Install_Agent_Dependencies {
         }
 
         return $pair
+    }
+
+    function Find-WireGuardDriverInf {
+        param(
+            [Parameter()][string]$LogName = 'Install.log'
+        )
+
+        $logPrefix = '[WireGuard]'
+        $output = $null
+        try {
+            $output = & pnputil.exe /enum-drivers
+        } catch {
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix pnputil /enum-drivers failed: {0}" -f $_.Exception.Message)
+            return $null
+        }
+
+        if (-not $output) { return $null }
+        $published = $null
+        $original = $null
+        $provider = $null
+        foreach ($line in ($output -split "`r?`n")) {
+            if (-not $line.Trim()) {
+                if ($published -and ($original -match '^(wireguard|wintun)\.inf$' -or $provider -like '*WireGuard*')) {
+                    return $published
+                }
+                $published = $null
+                $original = $null
+                $provider = $null
+                continue
+            }
+            if ($line -match 'Published Name\s*:\s*(\S+)') {
+                $published = $Matches[1].Trim()
+                continue
+            }
+            if ($line -match 'Original Name\s*:\s*(\S+)') {
+                $original = $Matches[1].Trim()
+                continue
+            }
+            if ($line -match 'Provider Name\s*:\s*(.+)') {
+                $provider = $Matches[1].Trim()
+                continue
+            }
+        }
+
+        if ($published -and ($original -match '^(wireguard|wintun)\.inf$' -or $provider -like '*WireGuard*')) {
+            return $published
+        }
+        return $null
+    }
+
+    function Get-WireGuardAdapters {
+        param([string]$NameFilter)
+
+        $args = @{
+            Namespace   = 'root/StandardCimv2'
+            ClassName   = 'MSFT_NetAdapter'
+            ErrorAction = 'SilentlyContinue'
+        }
+        if ($NameFilter) {
+            $args.Filter = "Name='$NameFilter'"
+        } else {
+            $args.Filter = "InterfaceDescription LIKE '%WireGuard%'"
+        }
+        try {
+            $opTimeout = (Get-Command Get-CimInstance).Parameters.ContainsKey('OperationTimeoutSec')
+            if ($opTimeout) { $args.OperationTimeoutSec = 10 }
+        } catch {}
+
+        try {
+            return Get-CimInstance @args
+        } catch {
+            return $null
+        }
+    }
+
+    function Test-WireGuardAdapterName {
+        param(
+            [Parameter()][object]$Adapter,
+            [Parameter(Mandatory = $true)][string]$ExpectedName
+        )
+
+        if (-not $Adapter -or -not $ExpectedName) { return $false }
+        $adapterName = $Adapter.Name
+        if (-not $adapterName) { return $false }
+        if ($adapterName.ToString().Trim().ToLowerInvariant() -ne $ExpectedName.ToLowerInvariant()) {
+            return $false
+        }
+        $desc = $Adapter.InterfaceDescription
+        if (-not $desc) {
+            return $false
+        }
+        if ($desc.ToString() -notlike '*WireGuard*') {
+            return $false
+        }
+        return $true
+    }
+
+    function Get-WireGuardAdapterByName {
+        param([string]$AdapterName)
+
+        if (-not $AdapterName) { return $null }
+        try {
+            $adapters = Get-WireGuardAdapters -NameFilter $AdapterName
+            if ($adapters) {
+                foreach ($adapter in @($adapters)) {
+                    if (Test-WireGuardAdapterName -Adapter $adapter -ExpectedName $AdapterName) {
+                        return $adapter
+                    }
+                }
+            }
+        } catch {}
+        return $null
+    }
+
+    function Rename-WireGuardAdapterName {
+        param(
+            [Parameter(Mandatory = $true)][string]$OldName,
+            [Parameter(Mandatory = $true)][string]$NewName,
+            [Parameter()][string]$LogName = 'Install.log'
+        )
+
+        $logPrefix = '[WireGuard]'
+        if ($OldName -eq $NewName) { return $true }
+        $args = "interface set interface name=`"$OldName`" newname=`"$NewName`""
+        $proc = Start-Process -FilePath 'netsh.exe' -ArgumentList $args -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+        if (-not $proc) {
+            Write-AgentLog -FileName $LogName -Message "$logPrefix netsh rename failed to start."
+            return $false
+        }
+        if (-not $proc.WaitForExit(10000)) {
+            try { $proc.Kill() } catch {}
+            Write-AgentLog -FileName $LogName -Message "$logPrefix netsh rename timed out."
+            return $false
+        }
+        if ($proc.ExitCode -ne 0) {
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix netsh rename failed with exit code {0}." -f $proc.ExitCode)
+            return $false
+        }
+        Write-AgentLog -FileName $LogName -Message ("$logPrefix Renamed adapter {0} -> {1}" -f $OldName, $NewName)
+        return $true
+    }
+
+    function Remove-WireGuardTunnelService {
+        param(
+            [Parameter(Mandatory = $true)][string]$TunnelName,
+            [Parameter(Mandatory = $true)][string]$WireGuardExe,
+            [Parameter()][string]$LogName = 'Install.log'
+        )
+
+        if (-not $TunnelName) { return }
+        $logPrefix = '[WireGuard]'
+        $serviceName = "WireGuardTunnel$TunnelName"
+        Write-AgentLog -FileName $LogName -Message ("$logPrefix Cleaning tunnel service {0}" -f $serviceName)
+        $serviceExists = $false
+        try {
+            $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            if ($svc) { $serviceExists = $true }
+        } catch {}
+
+        if ($serviceExists) {
+            try {
+                $proc = Start-Process -FilePath 'sc.exe' -ArgumentList 'stop', $serviceName -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+                if ($proc) {
+                    if (-not $proc.WaitForExit(10000)) {
+                        try { $proc.Kill() } catch {}
+                    }
+                }
+            } catch {}
+        } else {
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Tunnel service {0} not present; skipping stop/uninstall." -f $serviceName)
+        }
+
+        if ($serviceExists -and $WireGuardExe -and (Test-Path $WireGuardExe -PathType Leaf)) {
+            try {
+                $proc = Start-Process -FilePath $WireGuardExe -ArgumentList @('/uninstalltunnelservice', $TunnelName) -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+                if ($proc) {
+                    if (-not $proc.WaitForExit(15000)) {
+                        try { $proc.Kill() } catch {}
+                        Write-AgentLog -FileName $LogName -Message ("$logPrefix /uninstalltunnelservice timed out for {0}" -f $TunnelName)
+                    } else {
+                        Write-AgentLog -FileName $LogName -Message ("$logPrefix /uninstalltunnelservice exit code for {0}: {1}" -f $TunnelName, $proc.ExitCode)
+                    }
+                }
+            } catch {}
+        }
+
+        if ($serviceExists) {
+            try {
+                $proc = Start-Process -FilePath 'sc.exe' -ArgumentList 'delete', $serviceName -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+                if ($proc) {
+                    if (-not $proc.WaitForExit(10000)) {
+                        try { $proc.Kill() } catch {}
+                    } else {
+                        Write-AgentLog -FileName $LogName -Message ("$logPrefix sc delete exit code for {0}: {1}" -f $serviceName, $proc.ExitCode)
+                    }
+                }
+            } catch {}
+        }
+
+        try {
+            $confPaths = Get-WireGuardConfigPaths -TunnelName $TunnelName
+            foreach ($confPath in $confPaths) {
+                if ($confPath -and (Test-Path $confPath -PathType Leaf)) {
+                    Remove-Item -Path $confPath -Force -ErrorAction SilentlyContinue
+                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Removed tunnel config {0}" -f $confPath)
+                }
+            }
+        } catch {}
+    }
+
+    function Get-WireGuardConfigPaths {
+        param([string]$TunnelName)
+
+        if (-not $TunnelName) { return @() }
+        $paths = @()
+        $borealisConfigDir = $null
+        try {
+            if ($scriptDir) {
+                $borealisConfigDir = Join-Path $scriptDir 'Agent\Borealis\Settings\WireGuard'
+            }
+        } catch {}
+        if ($borealisConfigDir) {
+            $paths += $borealisConfigDir
+        }
+        if ($env:ProgramFiles) {
+            $paths += (Join-Path $env:ProgramFiles 'WireGuard\Data\Configurations')
+        }
+        $programDataRoot = if ($env:ProgramData) { $env:ProgramData } else { 'C:\ProgramData' }
+        if ($programDataRoot) {
+            $paths += (Join-Path $programDataRoot 'Borealis\WireGuard\Configurations')
+        }
+        if ($wireGuardInstallerDir) {
+            $paths += $wireGuardInstallerDir
+        }
+        $paths = $paths | Where-Object { $_ }
+        $confPaths = @()
+        foreach ($dir in $paths) {
+            $confPaths += (Join-Path $dir "$TunnelName.conf")
+        }
+        return $confPaths | Select-Object -Unique
+    }
+
+    function Get-WireGuardConfigPath {
+        param([string]$TunnelName)
+
+        if (-not $TunnelName) { return $null }
+        $confPaths = Get-WireGuardConfigPaths -TunnelName $TunnelName
+        foreach ($confPath in $confPaths) {
+            if (-not $confPath) { continue }
+            $dir = Split-Path $confPath -Parent
+            try {
+                if ($dir -and -not (Test-Path $dir)) {
+                    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+                }
+            } catch {}
+            if ($dir -and (Test-Path $dir)) {
+                return $confPath
+            }
+        }
+        return $confPaths | Select-Object -First 1
+    }
+
+    function Get-WireGuardTunnelServiceConfigPath {
+        param([string]$ServiceName)
+
+        if (-not $ServiceName) { return $null }
+        $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+        try {
+            $imagePath = (Get-ItemProperty -Path $regPath -Name ImagePath -ErrorAction Stop).ImagePath
+        } catch {
+            return $null
+        }
+        if (-not $imagePath) { return $null }
+        $text = $imagePath.ToString()
+        if ($text -match '(?i)/tunnelservice\s+"([^"]+)"') {
+            return $Matches[1]
+        }
+        if ($text -match '(?i)/tunnelservice\s+(\S+)') {
+            return $Matches[1]
+        }
+        return $null
+    }
+
+    function Ensure-WireGuardTunnelAdapter {
+        param(
+            [Parameter(Mandatory = $true)][string]$WireGuardExe,
+            [Parameter()][string]$LogName = 'Install.log'
+        )
+
+        $logPrefix = '[WireGuard]'
+        $friendlyName = $wireGuardTunnelNameFriendly
+        $internalName = $wireGuardTunnelNameInternal
+        $serviceName = "WireGuardTunnel$internalName"
+
+        Write-AgentLog -FileName $LogName -Message ("$logPrefix Ensuring tunnel adapter: {0}" -f $friendlyName)
+        $existing = Get-WireGuardAdapterByName -AdapterName $friendlyName
+        if ($existing) {
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Adapter already present: {0}" -f $friendlyName)
+            return $true
+        }
+
+        $internalAdapter = Get-WireGuardAdapterByName -AdapterName $internalName
+        if ($internalAdapter) {
+            if ($friendlyName -and $friendlyName -ne $internalName) {
+                $renamed = Rename-WireGuardAdapterName -OldName $internalName -NewName $friendlyName -LogName $LogName
+                if ($renamed) { return $true }
+                return $false
+            }
+            return $true
+        }
+
+        try {
+            $wgCliExe = $null
+            try {
+                $wgCliCandidate = Join-Path (Split-Path $WireGuardExe -Parent) 'wg.exe'
+                if (Test-Path $wgCliCandidate -PathType Leaf) { $wgCliExe = $wgCliCandidate }
+            } catch {}
+
+            $serviceConfigPath = Get-WireGuardTunnelServiceConfigPath -ServiceName $serviceName
+            $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            $servicePresent = $false
+            if ($existingService -or $serviceConfigPath) { $servicePresent = $true }
+            if ($servicePresent) {
+                $serviceConfigPath = Get-WireGuardTunnelServiceConfigPath -ServiceName $serviceName
+                if ($serviceConfigPath -and -not (Test-Path $serviceConfigPath -PathType Leaf)) {
+                    $keyPair = New-WireGuardKeyPair -WireGuardExe $WireGuardExe -WgExe $wgCliExe
+                    if ($keyPair.PrivateKey) {
+                        $conf = @"
+[Interface]
+PrivateKey = $($keyPair.PrivateKey.Trim())
+Address = $wireGuardTunnelBootstrapAddress
+ListenPort = 0
+"@
+                        try {
+                            $dir = Split-Path $serviceConfigPath -Parent
+                            if ($dir -and -not (Test-Path $dir)) {
+                                New-Item -ItemType Directory -Path $dir -Force | Out-Null
+                            }
+                            Set-Content -Path $serviceConfigPath -Value $conf -Encoding ASCII -Force
+                            if (Test-Path $serviceConfigPath -PathType Leaf) {
+                                Write-AgentLog -FileName $LogName -Message ("$logPrefix Created adapter config at {0}" -f $serviceConfigPath)
+                            }
+                        } catch {
+                            Write-AgentLog -FileName $LogName -Message ("$logPrefix Failed to write adapter config at {0}: {1}" -f $serviceConfigPath, $_.Exception.Message)
+                        }
+                    }
+                }
+
+                Write-AgentLog -FileName $LogName -Message "$logPrefix Tunnel service already present; restarting to provision adapter."
+                try { Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue } catch {}
+                try { Start-Service -Name $serviceName -ErrorAction SilentlyContinue } catch {}
+                for ($i = 0; $i -lt 10; $i++) {
+                    Start-Sleep -Milliseconds 500
+                    if (Get-WireGuardAdapterByName -AdapterName $friendlyName) { return $true }
+                }
+                Write-AgentLog -FileName $LogName -Message "$logPrefix Tunnel service present but adapter missing; uninstalling before reinstall."
+            }
+
+            Remove-WireGuardTunnelService -TunnelName $internalName -WireGuardExe $WireGuardExe -LogName $LogName
+            if ($wireGuardTunnelLegacyName -and $wireGuardTunnelLegacyName -ne $internalName) {
+                Remove-WireGuardTunnelService -TunnelName $wireGuardTunnelLegacyName -WireGuardExe $WireGuardExe -LogName $LogName
+            }
+            for ($i = 0; $i -lt 10; $i++) {
+                Start-Sleep -Milliseconds 500
+                $stillPresent = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                $stillConfig = Get-WireGuardTunnelServiceConfigPath -ServiceName $serviceName
+                if (-not $stillPresent -and -not $stillConfig) { break }
+            }
+            $serviceStillPresent = $false
+            if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) { $serviceStillPresent = $true }
+            if (Get-WireGuardTunnelServiceConfigPath -ServiceName $serviceName) { $serviceStillPresent = $true }
+            if ($serviceStillPresent) {
+                Write-AgentLog -FileName $LogName -Message "$logPrefix Tunnel service still present after uninstall; skipping reinstall to avoid WireGuard dialog."
+                return $false
+            }
+
+            try {
+                if (-not (Test-Path $wireGuardInstallerDir)) {
+                    New-Item -ItemType Directory -Path $wireGuardInstallerDir -Force | Out-Null
+                }
+            } catch {}
+
+            $keyPair = New-WireGuardKeyPair -WireGuardExe $WireGuardExe -WgExe $wgCliExe
+            if (-not $keyPair.PrivateKey) {
+                Write-AgentLog -FileName $LogName -Message "$logPrefix Failed to generate WireGuard keypair for adapter provision."
+                return $false
+            }
+
+            $conf = @"
+[Interface]
+PrivateKey = $($keyPair.PrivateKey.Trim())
+Address = $wireGuardTunnelBootstrapAddress
+ListenPort = 0
+"@
+            $confPath = $null
+            $confPaths = Get-WireGuardConfigPaths -TunnelName $internalName
+            if ($serviceConfigPath) {
+                $confPaths = @($serviceConfigPath) + ($confPaths | Where-Object { $_ -ne $serviceConfigPath })
+            }
+            foreach ($candidate in $confPaths) {
+                if (-not $candidate) { continue }
+                $dir = Split-Path $candidate -Parent
+                try {
+                    if ($dir -and -not (Test-Path $dir)) {
+                        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+                    }
+                } catch {}
+                try {
+                    Set-Content -Path $candidate -Value $conf -Encoding ASCII -Force
+                    if (Test-Path $candidate -PathType Leaf) {
+                        $confPath = $candidate
+                        Write-AgentLog -FileName $LogName -Message ("$logPrefix Created adapter config at {0}" -f $confPath)
+                        $borealisConfigDir = $null
+                        try {
+                            if ($scriptDir) {
+                                $borealisConfigDir = Join-Path $scriptDir 'Agent\Borealis\Settings\WireGuard'
+                            }
+                        } catch {}
+                        if ($borealisConfigDir) {
+                            try {
+                                $confFull = [System.IO.Path]::GetFullPath($confPath)
+                                $borealisFull = [System.IO.Path]::GetFullPath($borealisConfigDir)
+                                if ($confFull.ToLowerInvariant().StartsWith($borealisFull.ToLowerInvariant()) -eq $false) {
+                                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Adapter config stored outside Borealis settings: {0}" -f $confPath)
+                                }
+                            } catch {}
+                        }
+                        break
+                    }
+                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Adapter config not found after write: {0}" -f $candidate)
+                } catch {
+                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Failed to write adapter config at {0}: {1}" -f $candidate, $_.Exception.Message)
+                }
+            }
+
+            if (-not $confPath) {
+                Write-AgentLog -FileName $LogName -Message "$logPrefix Failed to write adapter config to any candidate path."
+                return $false
+            }
+
+            $svcPreInstall = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            $svcConfig = Get-WireGuardTunnelServiceConfigPath -ServiceName $serviceName
+            if (-not $svcPreInstall -and -not $svcConfig) {
+                Write-AgentLog -FileName $LogName -Message ("$logPrefix Installing tunnel service {0} for adapter provisioning with config {1}." -f $serviceName, $confPath)
+                $installArgs = "/installtunnelservice `"$confPath`""
+                $proc = Start-Process -FilePath $WireGuardExe -ArgumentList $installArgs -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+                if (-not $proc) {
+                    Write-AgentLog -FileName $LogName -Message "$logPrefix /installtunnelservice failed to start."
+                    return $false
+                }
+                $installTimeoutMs = 60000
+                if (-not $proc.WaitForExit($installTimeoutMs)) {
+                    try { $proc.Kill() } catch {}
+                    Write-AgentLog -FileName $LogName -Message "$logPrefix /installtunnelservice timed out."
+                    $svcAfterTimeout = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                    if (-not $svcAfterTimeout) {
+                        return $false
+                    }
+                    Write-AgentLog -FileName $LogName -Message "$logPrefix Tunnel service present after /installtunnelservice timeout."
+                } else {
+                    $installExit = $proc.ExitCode
+                    Write-AgentLog -FileName $LogName -Message ("$logPrefix /installtunnelservice exit code: {0}" -f $installExit)
+                    if ($installExit -ne 0) {
+                        $svcAfterExit = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                        if (-not $svcAfterExit) {
+                            return $false
+                        }
+                        Write-AgentLog -FileName $LogName -Message "$logPrefix Tunnel service present despite non-zero /installtunnelservice exit code."
+                    }
+                }
+            } else {
+                Write-AgentLog -FileName $LogName -Message "$logPrefix Tunnel service already present; skipping /installtunnelservice."
+            }
+            try { Start-Service -Name $serviceName -ErrorAction SilentlyContinue } catch {}
+        } catch {
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Adapter provisioning failed: {0}" -f $_.Exception.Message)
+            return $false
+        }
+
+        $finalAdapter = $null
+        $internalAdapter = $null
+        $attempts = 60
+        for ($i = 0; $i -lt $attempts; $i++) {
+            Start-Sleep -Milliseconds 500
+            $finalAdapter = Get-WireGuardAdapterByName -AdapterName $friendlyName
+            if ($finalAdapter) { return $true }
+            $internalAdapter = Get-WireGuardAdapterByName -AdapterName $internalName
+            if ($internalAdapter -and $friendlyName -and $friendlyName -ne $internalName) {
+                Rename-WireGuardAdapterName -OldName $internalName -NewName $friendlyName -LogName $LogName | Out-Null
+                $finalAdapter = Get-WireGuardAdapterByName -AdapterName $friendlyName
+                if ($finalAdapter) { return $true }
+            }
+        }
+
+        if ($internalAdapter -and -not $finalAdapter) {
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Tunnel adapter present as {0}, but rename to {1} did not complete." -f $internalName, $friendlyName)
+        }
+        return $false
     }
 
     function Ensure-WireGuardDriver {
@@ -914,125 +1465,40 @@ function Install_Agent_Dependencies {
         }
         $state = $stateAfterManager
 
-        $wgCliExe = $null
         try {
-            $wgCliCandidate = Join-Path (Split-Path $WireGuardExe -Parent) 'wg.exe'
-            if (Test-Path $wgCliCandidate -PathType Leaf) { $wgCliExe = $wgCliCandidate }
-        } catch {}
-
-        $bootstrapName = 'BorealisBootstrap'
-        $bootstrapDir = Join-Path $env:TEMP 'Borealis-WireGuard-Bootstrap'
-        $bootstrapConf = Join-Path $bootstrapDir "$bootstrapName.conf"
-        try {
-            if (-not (Test-Path $bootstrapDir)) {
-                New-Item -ItemType Directory -Path $bootstrapDir -Force | Out-Null
-            }
-        } catch {}
-
-        $keyPair = New-WireGuardKeyPair -WireGuardExe $WireGuardExe -WgExe $wgCliExe
-        if (-not $keyPair.PrivateKey) {
-            $msg = "$logPrefix Failed to generate WireGuard keypair for driver bootstrap."
-            Write-AgentLog -FileName $LogName -Message $msg
-            throw $msg
-        }
-
-        $peerKey = if ($keyPair.PublicKey) { $keyPair.PublicKey } else { $keyPair.PrivateKey }
-        $conf = @"
-[Interface]
-PrivateKey = $($keyPair.PrivateKey)
-Address = 10.255.255.2/32
-ListenPort = 0
-"@
-        if ($keyPair.PublicKey) {
-            $conf += @"
-
-[Peer]
-PublicKey = $peerKey
-AllowedIPs = 10.255.255.1/32
-"@
-        }
-        try {
-            Set-Content -Path $bootstrapConf -Value $conf -Encoding ASCII -Force
-            Write-AgentLog -FileName $LogName -Message ("$logPrefix Created driver bootstrap config at {0}" -f $bootstrapConf)
-        } catch {
-            $msg = "$logPrefix Failed to write bootstrap config: $($_.Exception.Message)"
-            Write-AgentLog -FileName $LogName -Message $msg
-            throw $msg
-        }
-
-        $serviceName = "WireGuardTunnel$bootstrapName"
-        try {
-            Write-AgentLog -FileName $LogName -Message ("$logPrefix Installing bootstrap tunnel service to seed driver ({0})" -f $serviceName)
-            & $WireGuardExe /installtunnelservice $bootstrapConf | Out-Null
-            $installExit = $LASTEXITCODE
-            Write-AgentLog -FileName $LogName -Message ("$logPrefix /installtunnelservice exit code: {0}" -f $installExit)
-            if ($installExit -ne 0) {
-                throw "wireguard.exe /installtunnelservice failed with exit code $installExit"
+            $adapterProvisioned = Ensure-WireGuardTunnelAdapter -WireGuardExe $WireGuardExe -LogName $LogName
+            if (-not $adapterProvisioned) {
+                Write-AgentLog -FileName $LogName -Message "$logPrefix Adapter provisioning did not complete."
             }
         } catch {
-            $msg = "$logPrefix Failed to install bootstrap tunnel service: $($_.Exception.Message)"
-            Write-AgentLog -FileName $LogName -Message $msg
-            throw $msg
+            Write-AgentLog -FileName $LogName -Message ("$logPrefix Adapter provisioning failed: {0}" -f $_.Exception.Message)
         }
-
-        Start-Sleep -Seconds 2
-        try {
-            & $WireGuardExe /uninstalltunnelservice $bootstrapName | Out-Null
-            $uninstallExit = $LASTEXITCODE
-            Write-AgentLog -FileName $LogName -Message ("$logPrefix /uninstalltunnelservice exit code: {0}" -f $uninstallExit)
-            Write-AgentLog -FileName $LogName -Message ("$logPrefix Removed bootstrap tunnel service {0}" -f $serviceName)
-        } catch {
-            Write-AgentLog -FileName $LogName -Message ("$logPrefix Cleanup of bootstrap tunnel service failed: {0}" -f $_.Exception.Message)
-        }
-
-        try { Remove-Item -Path $bootstrapConf -Force -ErrorAction SilentlyContinue } catch {}
-        try { Remove-Item -Path $bootstrapDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
 
         $post = Get-WireGuardInstallState
         $postDriver = $post.DriverPresent
-        $postMsg = "[WireGuard] Driver presence after bootstrap: $postDriver (Exe: $WireGuardExe)"
+        $postMsg = "[WireGuard] Driver presence after adapter provisioning: $postDriver (Exe: $WireGuardExe)"
         Write-AgentLog -FileName $LogName -Message $postMsg
         if ($postDriver) { return }
 
-        # Fallback: install Wintun driver directly via pnputil using the official Wintun package
-        try {
-            Ensure-WireGuardInstallerFile -Url $wintunDownloadUrl -DestinationPath $wintunZipPath -LogName $LogName
-        } catch {
-            Write-AgentLog -FileName $LogName -Message ("$logPrefix Failed to cache Wintun zip: {0}" -f $_.Exception.Message)
-        }
-
-        if (Test-Path $wintunZipPath -PathType Leaf) {
-            $extractRoot = Join-Path $env:TEMP 'Borealis-Wintun'
-            try { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $extractRoot } catch {}
-            try { New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null } catch {}
-            try {
-                Expand-Archive -Path $wintunZipPath -DestinationPath $extractRoot -Force
-                Write-AgentLog -FileName $LogName -Message ("$logPrefix Expanded Wintun zip to {0}" -f $extractRoot)
-            } catch {
-                Write-AgentLog -FileName $LogName -Message ("$logPrefix Failed to expand Wintun zip: {0}" -f $_.Exception.Message)
-            }
-
-            $infPath = Get-ChildItem -Path $extractRoot -Recurse -Filter '*.inf' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($infPath -and (Test-Path $infPath.FullName -PathType Leaf)) {
+        $publishedInf = Find-WireGuardDriverInf -LogName $LogName
+        if ($publishedInf) {
+            $infPath = Join-Path $env:WINDIR "INF\$publishedInf"
+            if (Test-Path $infPath -PathType Leaf) {
                 try {
-                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Installing Wintun driver via pnputil: {0}" -f $infPath.FullName)
-                    pnputil.exe /add-driver "`"$($infPath.FullName)`"" /install | Out-Null
-                    $postPnP = Get-WireGuardInstallState
-                    $postPnPDriver = $postPnP.DriverPresent
-                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Driver presence after pnputil install: $postPnPDriver")
-                    if (-not $postPnPDriver) {
-                        throw "$logPrefix pnputil install completed but driver still missing."
-                    }
-                    return
+                    Write-AgentLog -FileName $LogName -Message ("$logPrefix Installing WireGuard driver via pnputil: {0}" -f $infPath)
+                    pnputil.exe /add-driver "`"$infPath`"" /install | Out-Null
                 } catch {
                     Write-AgentLog -FileName $LogName -Message ("$logPrefix pnputil driver install failed: {0}" -f $_.Exception.Message)
                 }
-            } else {
-                Write-AgentLog -FileName $LogName -Message "$logPrefix No Wintun INF found in extracted package."
             }
         }
 
-        throw "$logPrefix Driver still missing after bootstrap and pnputil fallback."
+        $postPnP = Get-WireGuardInstallState
+        $postPnPDriver = $postPnP.DriverPresent
+        Write-AgentLog -FileName $LogName -Message ("$logPrefix Driver presence after pnputil install: {0}" -f $postPnPDriver)
+        if ($postPnPDriver) { return }
+
+        throw "$logPrefix Driver still missing after adapter provisioning and pnputil fallback."
     }
 
     # AutoHotKey portable
@@ -1113,11 +1579,17 @@ AllowedIPs = 10.255.255.1/32
         $state = Get-WireGuardInstallState
         $stateVersion = if ($state.Version) { $state.Version } else { 'unknown' }
         $stateExe = if ($state.ExePath) { $state.ExePath } else { 'n/a' }
-        $stateSummary = "[WireGuard] Detected install state: Installed={0}; Version={1}; Service={2}; Driver={3}; Exe={4}" -f `
-            $state.Installed, $stateVersion, $state.ServicePresent, $state.DriverPresent, $stateExe
+        $stateSummary = "[WireGuard] Detected install state: Installed={0}; Version={1}; Service={2}; Driver={3}; Adapter={4}; BorealisAdapter={5}; Exe={6}" -f `
+            $state.Installed, $stateVersion, $state.ServicePresent, $state.DriverPresent, $state.AdapterPresent, $state.DedicatedAdapterPresent, $stateExe
         Write-AgentLog -FileName $logName -Message $stateSummary
         if ($state.DriverPaths -and $state.DriverPaths.Count -gt 0) {
             Write-AgentLog -FileName $logName -Message ("[WireGuard] Driver paths: {0}" -f ($state.DriverPaths -join '; '))
+        }
+        if ($state.AdapterNames -and $state.AdapterNames.Count -gt 0) {
+            Write-AgentLog -FileName $logName -Message ("[WireGuard] Adapter names: {0}" -f ($state.AdapterNames -join '; '))
+        }
+        if ($state.DedicatedAdapterNames -and $state.DedicatedAdapterNames.Count -gt 0) {
+            Write-AgentLog -FileName $logName -Message ("[WireGuard] Borealis adapter names: {0}" -f ($state.DedicatedAdapterNames -join '; '))
         }
 
         if (-not ($state.Installed -and $state.DriverPresent -and $state.ServicePresent)) {
@@ -1154,8 +1626,8 @@ AllowedIPs = 10.255.255.1/32
             $state = Get-WireGuardInstallState
             $postVersion = if ($state.Version) { $state.Version } else { 'unknown' }
             $postExe = if ($state.ExePath) { $state.ExePath } else { 'n/a' }
-            $postSummary = "[WireGuard] Post-install state: Installed={0}; Version={1}; Service={2}; Driver={3}; Exe={4}" -f `
-                $state.Installed, $postVersion, $state.ServicePresent, $state.DriverPresent, $postExe
+            $postSummary = "[WireGuard] Post-install state: Installed={0}; Version={1}; Service={2}; Driver={3}; Adapter={4}; BorealisAdapter={5}; Exe={6}" -f `
+                $state.Installed, $postVersion, $state.ServicePresent, $state.DriverPresent, $state.AdapterPresent, $state.DedicatedAdapterPresent, $postExe
             Write-AgentLog -FileName $logName -Message $postSummary
             if ($state.Installed -and $state.DriverPresent) {
                 Write-Host "WireGuard installed and verified (version: $($state.Version))." -ForegroundColor Green
@@ -1163,10 +1635,14 @@ AllowedIPs = 10.255.255.1/32
                 Write-Host "WireGuard installed (driver pending bootstrap)." -ForegroundColor Yellow
             }
         } else {
-            Write-Host "WireGuard already installed (version: $($state.Version))." -ForegroundColor Green
+            if ($state.DedicatedAdapterPresent) {
+                Write-Host "WireGuard already installed (version: $($state.Version))." -ForegroundColor Green
+            } else {
+                Write-Host "WireGuard installed (version: $($state.Version)); provisioning Borealis adapter." -ForegroundColor Yellow
+            }
         }
 
-        # Ensure wintun driver is seeded even before first tunnel is created
+        # Ensure WireGuard driver and Borealis tunnel adapter are provisioned
         $wgExe = $state.ExePath
         if (-not $wgExe -or -not (Test-Path $wgExe -PathType Leaf)) {
             # try default install path
@@ -1175,9 +1651,16 @@ AllowedIPs = 10.255.255.1/32
         if ($wgExe -and (Test-Path $wgExe -PathType Leaf)) {
             try {
                 Ensure-WireGuardDriver -WireGuardExe $wgExe -LogName $logName
+                $adapterOk = Ensure-WireGuardTunnelAdapter -WireGuardExe $wgExe -LogName $logName
                 $finalState = Get-WireGuardInstallState
                 if (-not ($finalState.Installed -and $finalState.DriverPresent)) {
-                    throw "WireGuard driver still missing after bootstrap attempts."
+                    throw "WireGuard driver still missing after provisioning attempts."
+                }
+                if (-not $finalState.DedicatedAdapterPresent) {
+                    throw "Borealis tunnel adapter still missing after provisioning attempts."
+                }
+                if (-not $adapterOk) {
+                    Write-AgentLog -FileName $logName -Message "[WireGuard] Borealis tunnel adapter provisioning returned false."
                 }
                 Write-Host "WireGuard driver verified." -ForegroundColor Green
             } catch {
