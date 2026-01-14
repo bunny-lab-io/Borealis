@@ -9,64 +9,64 @@ Copy/paste the prompt below into a new Codex chat:
 """
 You are a new Codex agent working in d:\Github\Borealis. Please do the following:
 
-1) Read AGENTS.md, Docs/Codex/BOREALIS_AGENT.md, Docs/Codex/BOREALIS_ENGINE.md, Docs/Codex/REVERSE_TUNNELS.md, then Docs/Codex/WireGuard_Troubleshooting.md.
-2) Investigate why the WireGuard tunnel does not come up (remote shell timeouts) even though the Engine emits vpn_tunnel_start.
-3) Focus on the WireGuard client lifecycle in Data/Agent/Roles/role_WireGuardTunnel.py and the bootstrap logic in Borealis.ps1 (WireGuard adapter provisioning).
-4) Use Data/Agent for edits (runtime under Agent/ is ephemeral). Keep the adapter name "Borealis" and ensure idempotent behavior. Do not rely on the PIA adapter.
-5) Provide concrete fixes + verification steps. Be careful with Windows services and avoid GUI popup dialogs when possible.
+1) Read AGENTS.md, Docs/Codex/BOREALIS_AGENT.md, Docs/Codex/BOREALIS_ENGINE.md, Docs/Codex/REVERSE_TUNNELS.md, then Docs/Codex/WireGuard_Troubleshooting.md (this file).
+2) Note environment mapping:
+   - D:\Github\Borealis = Engine (this device).
+   - Z:\ = Agent (remote device) read-only share for logs/configs.
+   - Use Z:\ to read agent logs/configs instead of asking the user to paste them.
+3) Confirm the WireGuard listener on the Engine starts and stays running, then confirm the tunnel handshake from the remote agent.
+4) Keep all config files inside the project root only:
+   - Agent config path: Agent\Borealis\Settings\WireGuard\Borealis.conf
+   - Engine config path: Engine\WireGuard\borealis-wg.conf
+5) Make edits only in Data/Agent or Data/Engine. The user handles redeploying the Agent runtime on the remote device when needed.
+6) If any doc in Docs\Codex is outdated, update it to reflect the current state and blockers.
 """
 
 ## Environment / Scope
 
-- Workspace: d:\Github\Borealis
-- Host OS: Windows 10/11 (build 26200). Current tests run on the Windows 11 machine that also runs Engine + Agent.
+- Workspace: D:\Github\Borealis (local project root for the Engine)
+- Host OS: Windows 10/11 (build 26200). Engine runs on this machine.
+- Remote Agent: mounted read-only at Z:\ (maps to C:\Borealis on the remote device; logs/configs under Z:\Agent\...).
 - Agent/Engine launch: via Borealis.ps1, always elevated as admin.
-- Network: Engine + Agent run on the same host during testing (Engine endpoint is "localhost:30000").
+- Network: Engine on 10.0.0.54; remote agent uses server_url.txt to derive endpoint host.
 - WireGuard version: wireguard.exe 0.5.3, wg.exe 1.0.20210914.
 - PIA (Private Internet Access) is installed and supplies a wintun driver (pia-wintun.sys). Do NOT treat the PIA adapter as the Borealis adapter.
 
 ## Desired Behavior
 
-- Agent has a dedicated WireGuard adapter named "Borealis" (Description shows "WireGuard Tunnel").
+- Agent has a dedicated WireGuard adapter named "Borealis".
 - Adapter provisioning is idempotent: if "Borealis" exists, do not recreate it.
-- WireGuard config should be stored under Agent\Borealis\Settings\WireGuard\Borealis.conf (preferred) and not only in Program Files.
-- Agent should bring up the WireGuard tunnel on vpn_tunnel_start, then remote shell / RDP / VNC / SSH should flow through it.
-- On stop/idle, the tunnel should be torn down and firewall rules removed.
+- Configs must live inside the project root:
+  - Agent: Agent\Borealis\Settings\WireGuard\Borealis.conf
+  - Engine: Engine\WireGuard\borealis-wg.conf
+- Agent brings up the WireGuard tunnel on vpn_tunnel_start, then remote shell/RDP/VNC/SSH flow through it.
+- On stop/idle, the tunnel is torn down and firewall rules removed.
 
 ## Recent Changes (Current Repo State)
 
 - Data/Agent/Roles/role_WireGuardTunnel.py
+  - Lazy client init (avoid side effects on import).
   - Service name fix: WireGuard tunnel service is "WireGuardTunnel$Borealis".
+  - Endpoint override: if Engine sends localhost, use host from server_url.txt and port from the token.
   - Config path preference: Agent\Borealis\Settings\WireGuard.
-  - Uses registry ImagePath to locate the actual service config when needed.
-  - Adds a session lock to prevent concurrent start/stop.
+  - Service display name set to "Borealis - WireGuard - Agent".
+- Data/Engine/services/VPN/wireguard_server.py
+  - Engine config path: Engine\WireGuard\borealis-wg.conf (project root only).
+  - Removed invalid "SaveConfig = false" line (WireGuard rejected it).
+  - Service display name set to "Borealis - WireGuard - Engine".
+  - Ensures the listener service is running after install, and raises if it fails.
 - Borealis.ps1
-  - WireGuard config search order includes Agent\Borealis\Settings\WireGuard.
-  - Adapter provisioning reads the service ImagePath to write config when service exists.
-  - Avoids /installtunnelservice if service still present to prevent GUI error dialogs.
-  - Adapter name is "Borealis".
+  - Service name interpolation fixed to include the literal "$" in "WireGuardTunnel$Borealis".
 
-Note: Data/Agent changes only apply to runtime after Borealis.ps1 re-stages the agent under Agent/.
+Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under Agent\.
 
-## Symptoms from Fresh Logs (2026-01-12 19:29)
+## Current Symptoms (2026-01-13 21:22)
 
-Agent (Agent/Logs/VPN_Tunnel/tunnel.log):
-- "WireGuard tunnel service already installed; skipping install."
-- "WireGuard tunnel service still missing after install attempt."
-
-Engine (Engine/Logs/VPN_Tunnel/tunnel.log):
-- vpn_tunnel_session_create for agent LAB-OPERATOR-01_..._SYSTEM
-- WireGuard listener installed (service=borealis-wg)
-- vpn_api_status_response status=up
-
-Engine (Engine/Logs/VPN_Tunnel/remote_shell.log):
-- repeated vpn_shell_connect_attempt to 10.255.0.2:47002
-- timeouts
-
-Agent (Agent/Logs/VPN_Tunnel/remote_shell.log):
-- VPN shell server listening on 0.0.0.0:47002
-
-Net effect: engine believes tunnel is "up", but remote shell cannot reach 10.255.0.2. This implies the WireGuard client tunnel is not actually up on the agent.
+- Engine installs WireGuard listener service, but it immediately stops.
+- Engine log error: connect_failed: WireGuard tunnel service WireGuardTunnel$borealis-wg failed to start (state=STOPPED).
+- WireGuard log shows: "Invalid key for [Interface] section: saveconfig" (fixed by removing SaveConfig).
+- Agent config shows endpoint set to 10.0.0.54:30000 and sends keepalives, but wg.exe show reports 0 B received (no handshake) because the Engine listener is down.
+- Local Engine + local Agent (same device) works; remote Engine -> remote Agent shell is the failing case.
 
 ## Key Paths
 
@@ -74,33 +74,37 @@ Net effect: engine believes tunnel is "up", but remote shell cannot reach 10.255
 - Agent VPN shell role: Data/Agent/Roles/role_VpnShell.py
 - Engine WireGuard manager: Data/Engine/services/VPN/wireguard_server.py
 - Engine tunnel service: Data/Engine/services/VPN/vpn_tunnel_service.py
-- Agent tunnel logs: Agent/Logs/VPN_Tunnel/tunnel.log
-- Agent shell logs: Agent/Logs/VPN_Tunnel/remote_shell.log
-- Engine tunnel logs: Engine/Logs/VPN_Tunnel/tunnel.log
-- Engine shell logs: Engine/Logs/VPN_Tunnel/remote_shell.log
-- Agent WireGuard config: Agent/Borealis/Settings/WireGuard/Borealis.conf
+- Agent tunnel logs: Z:\Agent\Logs\VPN_Tunnel\tunnel.log
+- Agent shell logs: Z:\Agent\Logs\VPN_Tunnel\remote_shell.log
+- Engine tunnel logs: Engine\Logs\VPN_Tunnel\tunnel.log
+- Engine shell logs: Engine\Logs\VPN_Tunnel\remote_shell.log
+- Agent WireGuard config: Z:\Agent\Borealis\Settings\WireGuard\Borealis.conf
+- Engine WireGuard config: Engine\WireGuard\borealis-wg.conf
 
 ## Known WireGuard Services / Names
 
-- Engine listener service name: "borealis-wg"
+- Engine listener service name: "WireGuardTunnel$borealis-wg"
 - Agent tunnel service name: "WireGuardTunnel$Borealis"
 - Adapter name in Control Panel: "Borealis"
+- Service display names:
+  - "Borealis - WireGuard - Engine"
+  - "Borealis - WireGuard - Agent"
 
 ## Suggested Verification Commands
 
-- Check agent service:
-  - Get-Service -Name "WireGuardTunnel$Borealis"
-  - Get-ItemProperty "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\WireGuardTunnel$Borealis" | Select-Object ImagePath
-- Confirm adapter exists:
-  - Get-NetAdapter -IncludeHidden | Where-Object { $_.InterfaceDescription -like "*WireGuard*" } | Select-Object Name, Status, InterfaceDescription, ifIndex
-- Check WireGuard state:
-  - "C:\\Program Files\\WireGuard\\wg.exe" show
+- Engine service status:
+  - Get-Service -Name "WireGuardTunnel$borealis-wg"
+  - sc.exe query "WireGuardTunnel$borealis-wg"
+  - netstat -ano -p udp | findstr :30000
+- Engine WireGuard log tail:
+  - "C:\\Program Files\\WireGuard\\wireguard.exe" /dumplog /tail
+- Agent tunnel state (remote, via Z:\ logs):
+  - Z:\Agent\Logs\VPN_Tunnel\tunnel.log
+  - Z:\Agent\Logs\VPN_Tunnel\remote_shell.log
+  - Z:\Agent\Borealis\Settings\WireGuard\Borealis.conf
 
-## Troubleshooting Focus Areas
+## Current Blockers / Next Steps
 
-- Ensure runtime is up-to-date (Borealis.ps1 re-staging Data/Agent -> Agent/).
-- Validate service detection vs. WireGuard install output (sc.exe vs registry).
-- Confirm the config file used by the service matches Agent/Borealis/Settings/WireGuard/Borealis.conf.
-- Confirm /installtunnelservice is not invoked when service already exists (avoid WireGuard GUI errors).
-- Confirm the WireGuard tunnel actually connects (wg.exe show handshake) before attempting remote shell.
-
+1) Re-test after the SaveConfig removal to confirm the Engine listener stays running and UDP/30000 binds.
+2) If the service still stops, use wireguard.exe /dumplog /tail to capture the exact failure.
+3) Once the Engine listener stays up, confirm that wg.exe show shows received bytes/handshake on both Engine and Agent, then retry remote shell.
