@@ -19,8 +19,8 @@ import base64
 import ipaddress
 import logging
 import os
+import re
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass
 from logging.handlers import TimedRotatingFileHandler
@@ -30,6 +30,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Uni
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
+from ... import config as engine_config
 
 def _build_logger(log_path: Path) -> logging.Logger:
     logger = logging.getLogger("borealis.engine.wireguard")
@@ -72,8 +73,17 @@ class WireGuardServerManager:
         self._ensure_cert_dir()
         self.server_private_key, self.server_public_key = self._ensure_server_keys()
         self._service_name = "borealis-wg"
-        self._temp_dir = Path(tempfile.gettempdir()) / "borealis-wg-engine"
+        self._service_display_name = "Borealis - WireGuard - Engine"
+        self._config_dir = self._resolve_config_dir()
         self._wireguard_exe = self._resolve_wireguard_exe()
+
+    def _resolve_config_dir(self) -> Path:
+        config_dir = engine_config.PROJECT_ROOT / "Engine" / "WireGuard"
+        try:
+            config_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self.logger.error("Failed to ensure WireGuard config dir at %s", config_dir, exc_info=True)
+        return config_dir
 
     def _resolve_wireguard_exe(self) -> str:
         candidates = [
@@ -137,6 +147,45 @@ class WireGuardServerManager:
             return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
         except Exception as exc:
             return 1, "", str(exc)
+
+    def _service_id(self) -> str:
+        return f"WireGuardTunnel${self._service_name}"
+
+    def _query_service_state(self) -> Optional[str]:
+        code, out, err = self._run_command(["sc.exe", "query", self._service_id()])
+        if code != 0:
+            return None
+        text = out or err
+        for line in text.splitlines():
+            if "STATE" not in line:
+                continue
+            match = re.search(r"STATE\s*:\s*\d+\s+(\w+)", line)
+            if match:
+                return match.group(1).upper()
+        return None
+
+    def _ensure_service_display_name(self) -> None:
+        if not self._service_display_name:
+            return
+        args = ["sc.exe", "config", self._service_id(), "DisplayName=", self._service_display_name]
+        code, out, err = self._run_command(args)
+        if code != 0 and err:
+            self.logger.warning("Failed to set WireGuard service display name: %s", err)
+
+    def _ensure_service_running(self) -> None:
+        service_id = self._service_id()
+        for _ in range(6):
+            state = self._query_service_state()
+            if state == "RUNNING":
+                return
+            if state == "STOPPED":
+                code, out, err = self._run_command(["sc.exe", "start", service_id])
+                if code != 0:
+                    self.logger.error("Failed to start WireGuard tunnel service %s err=%s", service_id, err)
+                    break
+            time.sleep(1)
+        state = self._query_service_state()
+        raise RuntimeError(f"WireGuard tunnel service {service_id} failed to start (state={state})")
 
     def _normalise_allowed_ports(
         self,
@@ -242,7 +291,6 @@ class WireGuardServerManager:
             f"PrivateKey = {self.server_private_key}",
             f"ListenPort = {self.config.port}",
             f"Address = {iface}",
-            "SaveConfig = false",
             "",
         ]
 
@@ -317,11 +365,11 @@ class WireGuardServerManager:
         """Render a temporary WireGuard config and start the service."""
 
         try:
-            self._temp_dir.mkdir(parents=True, exist_ok=True)
+            self._config_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
             self.logger.warning("Failed to create temp dir for WireGuard config", exc_info=True)
 
-        config_path = self._temp_dir / "borealis-wg.conf"
+        config_path = self._config_dir / f"{self._service_name}.conf"
         rendered = self.render_server_config(peers)
         config_path.write_text(rendered, encoding="utf-8")
         self.logger.info("Rendered WireGuard config to %s", config_path)
@@ -335,6 +383,8 @@ class WireGuardServerManager:
             self.logger.error("Failed to install WireGuard tunnel service code=%s err=%s", code, err)
             raise RuntimeError(f"WireGuard installtunnelservice failed: {err}")
         self.logger.info("WireGuard listener installed (service=%s)", config_path.stem)
+        self._ensure_service_display_name()
+        self._ensure_service_running()
 
     def stop_listener(self, *, ignore_missing: bool = False) -> None:
         """Stop and remove the WireGuard tunnel service."""
