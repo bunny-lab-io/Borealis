@@ -17,7 +17,7 @@ I'm the sole maintainer and still learning as I go, while working a full-time IT
 
 ## Current Status & Limitations
 - Ansible is disabled/unstable: Engine quick-run returns not implemented, scheduled-job and agent paths are incomplete, and server-side SSH/WinRM playbook dispatch is still on the roadmap. Expect failures until the Ansible pipeline is rebuilt.
-- Linux agent is non-functional: script execution, auditing, and enrollment flows are Windows-only right now. Avoid Linux agent deployments until a proper port is delivered.
+- Linux agent is non-functional: script execution, auditing, and enrollment flows are Windows-only right now. Avoid Linux agent deployments until a proper port is delivered.  The core of Borealis is Python and Java, so it's already inherantly compatible with Linux, and you will find that the Engine runs fine in Linux, but the Agent needs a huge amount of work to account for various Linux distributions.
 
 ## Device Management
 Device List:
@@ -150,6 +150,18 @@ The process that agents go through when authenticating securely with a Borealis 
 - Treats every script payload as hostile until verified: only Ed25519 signatures from the server are accepted, missing/invalid signatures are logged and dropped, and the trusted signing key is updated only after successful verification between the agent and the server.
 - Operates outbound-only; there are no listener ports, and every API/WebSocket call flows through AgentHttpClient.ensure_authenticated, forcing token refresh logic before retrying.
 - Logs bootstrap, enrollment, token refresh, and signature events to daily-rotated files under Agent/Logs, giving operators visibility without leaking secrets outside the project root.
+#### WireGuard Agent to Engine Tunnels
+- Borealis started with a bespoke reverse tunnel stack (WebSocket framing + domain lanes); its handshake/security model did not scale, so the project made a major move to WireGuard as the Engine <-> Agent data pipeline for secure remote protocols and future remote desktop control.
+- On-demand, outbound-only: operators trigger a tunnel start, the agent dials the Engine (no inbound listeners), and the tunnel tears down on stop or idle.
+- Shared sessions: one live VPN tunnel per agent, reused across operators to avoid redundant connections.
+- Fast and robust transport: WireGuard provides encrypted UDP transport with lightweight handshakes that keep latency low and reconnects are resilient.
+- Orchestration security: the Engine issues short-lived, Ed25519-signed tunnel tokens that the agent verifies before bringing the tunnel up.
+- Pinned trust: tunnel orchestration uses the same pinned TLS channel as REST/Socket.IO to prevent MITM during setup and control.
+- Isolation by default: each agent gets a host-only /32; AllowedIPs are restricted to the agent /32 and the Engine /32; no LAN routes and no client-to-client traffic.
+- Port-level controls: per-device allowlists plus Engine-applied firewall rules limit which protocols can traverse the tunnel.
+- Live PowerShell today: a VPN-only shell endpoint enables remote command execution with SYSTEM-level (`NT AUTHORITY\SYSTEM`) access for deep diagnostics and remediation.
+- Session lifecycle: 15-minute idle timeout with no grace period; session material includes a virtual IP plus allowed ports; teardown removes the tunnel and firewall rules.
+- Future protocols: extend the same tunnel for SSH, WinRM, RDP, VNC, WebRTC streaming, and other remote management workflows by enabling ports per device.
 
 ### Agent/Server Enrollment
 ```mermaid
