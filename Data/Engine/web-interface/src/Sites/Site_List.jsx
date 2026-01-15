@@ -53,6 +53,7 @@ const MAGIC_UI = {
 const PAGE_TITLE = "Sites";
 const PAGE_SUBTITLE = "Manage site enrollment codes, rotate secrets, and open device inventories by site.";
 const PAGE_ICON = LocationCityIcon;
+const SHOW_ROTATE_ENROLLMENT_BUTTON = false;
 
 const RAINBOW_BUTTON_SX = {
   borderRadius: 999,
@@ -227,18 +228,20 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
         const busy = rotatingId === site.id;
         return (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <Tooltip title="Rotate Code">
-              <span>
-                <IconButton
-                  size="small"
-                  onClick={() => handleRotate(site)}
-                  disabled={busy}
-                  sx={{ color: MAGIC_UI.accentA, border: "1px solid rgba(148,163,184,0.35)" }}
-                >
-                  {busy ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon fontSize="small" />}
-                </IconButton>
-              </span>
-            </Tooltip>
+            {SHOW_ROTATE_ENROLLMENT_BUTTON ? (
+              <Tooltip title="Rotate Code">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => handleRotate(site)}
+                    disabled={busy}
+                    sx={{ color: MAGIC_UI.accentA, border: "1px solid rgba(148,163,184,0.35)" }}
+                  >
+                    {busy ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon fontSize="small" />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            ) : null}
             <Typography variant="body2" sx={{ fontFamily: "monospace", color: MAGIC_UI.textBright }}>
               {code}
             </Typography>
