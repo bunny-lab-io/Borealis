@@ -60,13 +60,14 @@ You are a new Codex agent working in d:\Github\Borealis. Please do the following
 
 Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under Agent\.
 
-## Current Symptoms (2026-01-13 21:22)
+## Current Symptoms (2026-01-13 23:40)
 
-- Engine installs WireGuard listener service, but it immediately stops.
-- Engine log error: connect_failed: WireGuard tunnel service WireGuardTunnel$borealis-wg failed to start (state=STOPPED).
-- WireGuard log shows: "Invalid key for [Interface] section: saveconfig" (fixed by removing SaveConfig).
-- Agent config shows endpoint set to 10.0.0.54:30000 and sends keepalives, but wg.exe show reports 0 B received (no handshake) because the Engine listener is down.
-- Local Engine + local Agent (same device) works; remote Engine -> remote Agent shell is the failing case.
+- `wg.exe show` confirms the tunnel is up with a recent handshake and RX/TX bytes on both Engine and Agent.
+- Engine sees the remote agent peer at 10.0.0.55:59733; agent sees the engine endpoint at 10.0.0.54:30000.
+- ICMP over the tunnel works: `Test-NetConnection -ComputerName 10.255.0.2 -Port 47002` reports `PingSucceeded=True` but `TcpTestSucceeded=False`.
+- Remote shell connects to 10.255.0.2:47002 still time out; agent logs show the shell server listening but no accepted connections.
+- Agent session idles out; the on-disk `Borealis.conf` reverts to idle-only [Interface] after stop (no [Peer]).
+- `wireguard.exe /dumplog /tail` fails with "Stdout must be set" when run from PowerShell.
 
 ## Key Paths
 
@@ -97,7 +98,8 @@ Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under
   - sc.exe query "WireGuardTunnel$borealis-wg"
   - netstat -ano -p udp | findstr :30000
 - Engine WireGuard log tail:
-  - "C:\\Program Files\\WireGuard\\wireguard.exe" /dumplog /tail
+  - cmd /c ""C:\\Program Files\\WireGuard\\wireguard.exe" /dumplog /tail > %TEMP%\\wg-tail.log"
+  - powershell -NoProfile -Command "& 'C:\\Program Files\\WireGuard\\wireguard.exe' /dumplog /tail 2>&1 | Out-File $env:TEMP\\wg-tail.log"
 - Agent tunnel state (remote, via Z:\ logs):
   - Z:\Agent\Logs\VPN_Tunnel\tunnel.log
   - Z:\Agent\Logs\VPN_Tunnel\remote_shell.log
@@ -105,6 +107,8 @@ Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under
 
 ## Current Blockers / Next Steps
 
-1) Re-test after the SaveConfig removal to confirm the Engine listener stays running and UDP/30000 binds.
-2) If the service still stops, use wireguard.exe /dumplog /tail to capture the exact failure.
-3) Once the Engine listener stays up, confirm that wg.exe show shows received bytes/handshake on both Engine and Agent, then retry remote shell.
+1) During an active session, run `Test-NetConnection -ComputerName 10.255.0.2 -Port 47002` on the Engine and confirm it reaches the agent.
+2) If the TCP test times out, inspect agent-side firewall rules; the shell server listens but may be blocked on the WireGuard adapter.
+   - Added a candidate fix in `Data/Agent/Roles/role_VpnShell.py` to add an inbound firewall rule for TCP/47002 from 10.255.0.1/32.
+3) While the session is active, confirm `Agent\Borealis\Settings\WireGuard\Borealis.conf` includes a [Peer] with endpoint/AllowedIPs (it reverts to idle config after stop).
+4) Capture engine + agent tunnel/shell logs around a failed shell open attempt and re-check WireGuard service state.

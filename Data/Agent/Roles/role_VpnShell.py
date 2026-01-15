@@ -21,6 +21,8 @@ import os
 
 ROLE_NAME = "VpnShell"
 ROLE_CONTEXTS = ["system"]
+FIREWALL_RULE_NAME = "Borealis - WireGuard - Shell"
+FIREWALL_REMOTE_ADDRESS = "10.255.0.1/32"
 
 
 def _log_path() -> Path:
@@ -53,6 +55,30 @@ def _resolve_shell_port() -> int:
     if value < 1 or value > 65535:
         return 47002
     return value
+
+
+def _ensure_firewall_rule(port: int) -> None:
+    if os.name != "nt":
+        return
+    rule_name = FIREWALL_RULE_NAME.replace("'", "''")
+    command = (
+        "Remove-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue; "
+        "New-NetFirewallRule -DisplayName '{name}' -Direction Inbound -Action Allow "
+        "-Protocol TCP -LocalPort {port} -RemoteAddress {remote} -Profile Any"
+    ).format(name=rule_name, port=port, remote=FIREWALL_REMOTE_ADDRESS)
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            _write_log(f"Failed to ensure firewall rule for VPN shell: {result.stderr.strip()}")
+        else:
+            _write_log(f"Ensured firewall rule for VPN shell on port {port}.")
+    except Exception as exc:
+        _write_log(f"Failed to ensure firewall rule for VPN shell: {exc}")
 
 
 class ShellSession:
@@ -163,6 +189,7 @@ class ShellServer:
     def __init__(self, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
         self.host = host
         self.port = port or _resolve_shell_port()
+        _ensure_firewall_rule(self.port)
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
         _write_log(f"VPN shell server listening on {self.host}:{self.port}")
