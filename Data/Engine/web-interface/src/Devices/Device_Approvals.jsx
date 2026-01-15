@@ -85,7 +85,7 @@ const normalizeStatus = (status) => {
 
 export default function DeviceApprovals({ onPageMetaChange }) {
   const [approvals, setApprovals] = useState([]);
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("pending");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState(null);
