@@ -1,5 +1,5 @@
 # ======================================================
-# Data\Agent\Roles\role_VpnShell.py
+# Data\Agent\Roles\role_RemotePowershell.py
 # Description: PowerShell TCP server for VPN shell access (Engine connects over WireGuard /32).
 #
 # API Endpoints (if applicable): None
@@ -19,19 +19,19 @@ from pathlib import Path
 from typing import Any, Optional
 import os
 
-ROLE_NAME = "VpnShell"
+ROLE_NAME = "RemotePowershell"
 ROLE_CONTEXTS = ["system"]
-FIREWALL_RULE_NAME = "Borealis - WireGuard - Shell"
-FIREWALL_REMOTE_ADDRESS = "10.255.0.1/32"
 
 
 def _log_path() -> Path:
+    # Keep shell logs alongside other VPN tunnel artifacts.
     root = Path(__file__).resolve().parents[2] / "Logs" / "VPN_Tunnel"
     root.mkdir(parents=True, exist_ok=True)
     return root / "remote_shell.log"
 
 
 def _write_log(message: str) -> None:
+    # Lightweight file logger for the shell bridge; avoid raising on failures.
     ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
     try:
         _log_path().open("a", encoding="utf-8").write(f"[{ts}] [vpn-shell] {message}\n")
@@ -40,13 +40,16 @@ def _write_log(message: str) -> None:
 
 
 def _b64encode(data: bytes) -> str:
+    # Wire payloads are JSON lines; encode binary stdout safely.
     return base64.b64encode(data).decode("ascii").strip()
 
 
 def _b64decode(value: str) -> bytes:
+    # Decode base64-encoded stdin payloads from the engine.
     return base64.b64decode(value.encode("ascii"))
 
 def _resolve_shell_port() -> int:
+    # Use the configured port when present, otherwise default to 47002.
     raw = os.environ.get("BOREALIS_WIREGUARD_SHELL_PORT")
     try:
         value = int(raw) if raw is not None else 47002
@@ -55,30 +58,6 @@ def _resolve_shell_port() -> int:
     if value < 1 or value > 65535:
         return 47002
     return value
-
-
-def _ensure_firewall_rule(port: int) -> None:
-    if os.name != "nt":
-        return
-    rule_name = FIREWALL_RULE_NAME.replace("'", "''")
-    command = (
-        "Remove-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue; "
-        "New-NetFirewallRule -DisplayName '{name}' -Direction Inbound -Action Allow "
-        "-Protocol TCP -LocalPort {port} -RemoteAddress {remote} -Profile Any"
-    ).format(name=rule_name, port=port, remote=FIREWALL_REMOTE_ADDRESS)
-    try:
-        result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command", command],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            _write_log(f"Failed to ensure firewall rule for VPN shell: {result.stderr.strip()}")
-        else:
-            _write_log(f"Ensured firewall rule for VPN shell on port {port}.")
-    except Exception as exc:
-        _write_log(f"Failed to ensure firewall rule for VPN shell: {exc}")
 
 
 class ShellSession:
@@ -93,6 +72,7 @@ class ShellSession:
         self.output_bytes = 0
 
     def start(self) -> None:
+        # Spawn an interactive PowerShell process and bridge stdin/stdout.
         _write_log(f"Shell session starting for {self.address[0]}:{self.address[1]}")
         self.proc = subprocess.Popen(
             ["powershell.exe", "-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"],
@@ -106,6 +86,7 @@ class ShellSession:
         self._writer_loop()
 
     def _reader_loop(self) -> None:
+        # Forward PowerShell stdout to the engine as JSONL payloads.
         if not self.proc or not self.proc.stdout:
             return
         try:
@@ -126,6 +107,7 @@ class ShellSession:
             _write_log(f"Shell stdout error: {exc}")
 
     def _writer_loop(self) -> None:
+        # Read JSONL stdin from the engine and feed it into PowerShell.
         buffer = b""
         try:
             while not self._stop.is_set():
@@ -165,6 +147,7 @@ class ShellSession:
             self.close()
 
     def close(self) -> None:
+        # Ensure the TCP connection and PowerShell child are cleaned up.
         self._stop.set()
         try:
             self.conn.close()
@@ -189,12 +172,12 @@ class ShellServer:
     def __init__(self, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
         self.host = host
         self.port = port or _resolve_shell_port()
-        _ensure_firewall_rule(self.port)
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
         _write_log(f"VPN shell server listening on {self.host}:{self.port}")
 
     def _serve(self) -> None:
+        # Accept TCP shell connections; restrict to the WireGuard subnet.
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server.bind((self.host, self.port))
@@ -213,6 +196,7 @@ class ShellServer:
 
 class Role:
     def __init__(self, ctx) -> None:
+        # Start the shell server immediately when the role loads.
         self.ctx = ctx
         self.server = ShellServer()
 

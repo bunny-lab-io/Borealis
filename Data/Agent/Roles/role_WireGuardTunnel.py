@@ -52,6 +52,7 @@ TUNNEL_NAME = "Borealis"
 TUNNEL_DISPLAY_NAME = "Borealis"
 SERVICE_DISPLAY_NAME = "Borealis - WireGuard - Agent"
 TUNNEL_IDLE_ADDRESS = "169.254.255.254/32"
+FIREWALL_RULE_NAME = "Borealis - WireGuard - Shell"
 
 
 def _log_path() -> Path:
@@ -106,6 +107,17 @@ def _generate_client_keys(root: Path) -> Dict[str, str]:
     except Exception:
         _write_log("Failed to persist WireGuard client keys.")
     return {"private": priv, "public": pub}
+
+
+def _resolve_shell_port() -> int:
+    raw = os.environ.get("BOREALIS_WIREGUARD_SHELL_PORT")
+    try:
+        value = int(raw) if raw is not None else 47002
+    except Exception:
+        value = 47002
+    if value < 1 or value > 65535:
+        return 47002
+    return value
 
 
 class SessionConfig:
@@ -253,6 +265,63 @@ class WireGuardClient:
                 "ListenPort = 0",
             ]
         )
+
+    def _normalize_firewall_remote(self, allowed_ips: Optional[str]) -> Optional[str]:
+        if not allowed_ips:
+            return None
+        try:
+            network = ipaddress.ip_network(str(allowed_ips).strip(), strict=False)
+        except Exception:
+            _write_log(f"Refusing to apply shell firewall rule; invalid allowed_ips={allowed_ips}.")
+            return None
+        if network.prefixlen != 32:
+            _write_log(f"Refusing to apply shell firewall rule; allowed_ips not /32: {network}.")
+            return None
+        return str(network)
+
+    def _ensure_shell_firewall(self, allowed_ips: Optional[str]) -> None:
+        if os.name != "nt":
+            return
+        remote = self._normalize_firewall_remote(allowed_ips)
+        if not remote:
+            return
+        rule_name = FIREWALL_RULE_NAME.replace("'", "''")
+        port = _resolve_shell_port()
+        command = (
+            "Remove-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue; "
+            "New-NetFirewallRule -DisplayName '{name}' -Direction Inbound -Action Allow "
+            "-Protocol TCP -LocalPort {port} -RemoteAddress {remote} -Profile Any"
+        ).format(name=rule_name, port=port, remote=remote)
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                _write_log(f"Failed to ensure shell firewall rule: {result.stderr.strip()}")
+            else:
+                _write_log(f"Ensured shell firewall rule for {remote} on port {port}.")
+        except Exception as exc:
+            _write_log(f"Failed to ensure shell firewall rule: {exc}")
+
+    def _remove_shell_firewall(self) -> None:
+        if os.name != "nt":
+            return
+        rule_name = FIREWALL_RULE_NAME.replace("'", "''")
+        command = "Remove-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue".format(
+            name=rule_name
+        )
+        try:
+            subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception:
+            pass
 
     def _service_exists(self) -> bool:
         code, _, _ = self._run(["sc.exe", "query", self._service_id()])
@@ -447,6 +516,7 @@ class WireGuardClient:
             self._restart_service()
             self._ensure_adapter_name()
             self._ensure_service_display_name()
+            self._ensure_shell_firewall(session.allowed_ips)
 
             self.session = session
             self.idle_deadline = time.time() + max(60, session.idle_seconds)
@@ -455,6 +525,7 @@ class WireGuardClient:
 
     def stop_session(self, reason: str = "stop", ignore_missing: bool = False) -> None:
         with self._session_lock:
+            self._remove_shell_firewall()
             if not self._service_exists():
                 if not ignore_missing:
                     _write_log("WireGuard tunnel service not found when stopping session.")

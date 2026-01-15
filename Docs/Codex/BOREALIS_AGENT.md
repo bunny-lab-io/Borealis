@@ -22,7 +22,7 @@ Use this doc for agent-only work (Borealis agent runtime under `Data/Agent` → 
 
 ## Reverse VPN Tunnels
 - WireGuard reverse VPN design and lifecycle live in `Docs/Codex/REVERSE_TUNNELS.md` and `Docs/Codex/Reverse_VPN_Tunnel_Deployment.md`.
-- Agent roles: `Data/Agent/Roles/role_WireGuardTunnel.py` (tunnel lifecycle) and `Data/Agent/Roles/role_VpnShell.py` (VPN PowerShell TCP server).
+- Agent roles: `Data/Agent/Roles/role_WireGuardTunnel.py` (tunnel lifecycle) and `Data/Agent/Roles/role_RemotePowershell.py` (VPN PowerShell TCP server).
 
 ## Execution Contexts & Roles
 - Auto-discovers roles from `Data/Agent/Roles/`; no loader changes needed.

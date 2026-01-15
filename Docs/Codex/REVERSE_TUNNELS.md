@@ -33,7 +33,7 @@ This document is the reference for Borealis reverse VPN tunnels built on WireGua
 ## 4) Agent Components
 - Tunnel lifecycle: `Data/Agent/Roles/role_WireGuardTunnel.py`
   - Validates orchestration tokens, starts/stops WireGuard client service, enforces idle.
-- Shell server: `Data/Agent/Roles/role_VpnShell.py`
+- Shell server: `Data/Agent/Roles/role_RemotePowershell.py`
 - TCP PowerShell server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
 - Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
 

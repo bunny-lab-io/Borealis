@@ -50,6 +50,7 @@ You are a new Codex agent working in d:\Github\Borealis. Please do the following
   - Endpoint override: if Engine sends localhost, use host from server_url.txt and port from the token.
   - Config path preference: Agent\Borealis\Settings\WireGuard.
   - Service display name set to "Borealis - WireGuard - Agent".
+  - Applies/removes the VPN shell firewall rule using the engine /32 from allowed_ips.
 - Data/Engine/services/VPN/wireguard_server.py
   - Engine config path: Engine\WireGuard\borealis-wg.conf (project root only).
   - Removed invalid "SaveConfig = false" line (WireGuard rejected it).
@@ -60,19 +61,16 @@ You are a new Codex agent working in d:\Github\Borealis. Please do the following
 
 Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under Agent\.
 
-## Current Symptoms (2026-01-13 23:40)
+## Current Symptoms (2026-01-14 00:05)
 
-- `wg.exe show` confirms the tunnel is up with a recent handshake and RX/TX bytes on both Engine and Agent.
-- Engine sees the remote agent peer at 10.0.0.55:59733; agent sees the engine endpoint at 10.0.0.54:30000.
-- ICMP over the tunnel works: `Test-NetConnection -ComputerName 10.255.0.2 -Port 47002` reports `PingSucceeded=True` but `TcpTestSucceeded=False`.
-- Remote shell connects to 10.255.0.2:47002 still time out; agent logs show the shell server listening but no accepted connections.
-- Agent session idles out; the on-disk `Borealis.conf` reverts to idle-only [Interface] after stop (no [Peer]).
-- `wireguard.exe /dumplog /tail` fails with "Stdout must be set" when run from PowerShell.
+- Tunnel handshakes are healthy; TCP shell connectivity succeeds after adding a firewall rule for TCP/47002 from the engine /32.
+- The firewall rule is now applied/removed by `role_WireGuardTunnel.py` using the engine /32 in the `allowed_ips` payload.
+- `wireguard.exe /dumplog /tail` still fails with "Stdout must be set" when run from PowerShell (use file redirection).
 
 ## Key Paths
 
 - Agent WireGuard role: Data/Agent/Roles/role_WireGuardTunnel.py
-- Agent VPN shell role: Data/Agent/Roles/role_VpnShell.py
+- Agent VPN shell role: Data/Agent/Roles/role_RemotePowershell.py
 - Engine WireGuard manager: Data/Engine/services/VPN/wireguard_server.py
 - Engine tunnel service: Data/Engine/services/VPN/vpn_tunnel_service.py
 - Agent tunnel logs: Z:\Agent\Logs\VPN_Tunnel\tunnel.log
@@ -107,8 +105,7 @@ Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under
 
 ## Current Blockers / Next Steps
 
-1) During an active session, run `Test-NetConnection -ComputerName 10.255.0.2 -Port 47002` on the Engine and confirm it reaches the agent.
-2) If the TCP test times out, inspect agent-side firewall rules; the shell server listens but may be blocked on the WireGuard adapter.
-   - Added a candidate fix in `Data/Agent/Roles/role_VpnShell.py` to add an inbound firewall rule for TCP/47002 from 10.255.0.1/32.
+1) Ensure the agent runtime is re-staged so `role_WireGuardTunnel.py` applies the shell firewall rule on tunnel start.
+2) During an active session, run `Test-NetConnection -ComputerName 10.255.0.2 -Port 47002` on the Engine and confirm it reaches the agent.
 3) While the session is active, confirm `Agent\Borealis\Settings\WireGuard\Borealis.conf` includes a [Peer] with endpoint/AllowedIPs (it reverts to idle config after stop).
-4) Capture engine + agent tunnel/shell logs around a failed shell open attempt and re-check WireGuard service state.
+4) Capture engine + agent tunnel/shell logs around a failed shell open attempt and re-check WireGuard service state if issues persist.
