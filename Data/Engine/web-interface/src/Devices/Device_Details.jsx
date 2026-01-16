@@ -27,6 +27,7 @@ import LanRoundedIcon from "@mui/icons-material/LanRounded";
 import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
 import ListAltRoundedIcon from "@mui/icons-material/ListAltRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
+import DesktopWindowsRoundedIcon from "@mui/icons-material/DesktopWindowsRounded";
 import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
 import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
@@ -42,6 +43,7 @@ import Editor from "react-simple-code-editor";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import ReverseTunnelPowershell from "./ReverseTunnel/Powershell.jsx";
+import ReverseTunnelRdp from "./ReverseTunnel/RDP.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -119,6 +121,7 @@ const TOP_TABS = [
   { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
   { key: "advanced", label: "Advanced Config", icon: TuneRoundedIcon },
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
+  { key: "rdp", label: "Remote Desktop", icon: DesktopWindowsRoundedIcon },
 ];
 
 const myTheme = themeQuartz.withParams({
@@ -1530,6 +1533,19 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     </Box>
   );
 
+  const renderRemoteDesktopTab = () => (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minHeight: 0,
+      }}
+    >
+      <ReverseTunnelRdp device={tunnelDevice} />
+    </Box>
+  );
+
   const handleVpnToggle = useCallback((key, checked) => {
     setVpnToggles((prev) => ({ ...(prev || {}), [key]: checked }));
     setVpnSource("custom");
@@ -1926,6 +1942,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     renderHistory,
     renderAdvancedConfigTab,
     renderRemoteShellTab,
+    renderRemoteDesktopTab,
   ];
   const tabContent = (topTabRenderers[tab] || renderDeviceSummaryTab)();
 
