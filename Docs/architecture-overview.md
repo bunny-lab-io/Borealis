@@ -1,0 +1,82 @@
+# Architecture Overview
+[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+
+## Purpose
+Explain how Borealis is structured and how the core components interact end to end.
+
+## Core Components
+- Engine: Flask + Socket.IO runtime that hosts APIs, scheduled jobs, VPN orchestration, and WebUI assets.
+- WebUI: React single page app served by the Engine (Vite in dev, static build in prod).
+- Agent: Python runtime that enrolls, reports inventory, executes scripts, and opens VPN tunnels.
+- SQLite database: stores devices, approvals, schedules, activity history, tokens, and configuration records.
+- Assemblies: script definitions stored in SQLite domains with payload artifacts on disk.
+- Remote access: WireGuard reverse VPN, remote PowerShell, and Guacamole-backed RDP proxy.
+
+## How the Pieces Talk
+- Enrollment: agent calls `/api/agent/enroll/request` and `/api/agent/enroll/poll`, operator approves, Engine issues tokens and cert bundle.
+- Inventory: agent posts `/api/agent/heartbeat` and `/api/agent/details`, Engine updates device records.
+- Quick jobs: operator calls `/api/scripts/quick_run`, Engine emits `quick_job_run` over Socket.IO, agent executes and returns `quick_job_result`.
+- Scheduled jobs: scheduler reads jobs from DB, resolves targets (including filters), then emits quick jobs.
+- VPN tunnels: operator calls `/api/tunnel/connect`, Engine emits `vpn_tunnel_start`, agent starts WireGuard client.
+- Remote shell: UI uses Socket.IO `vpn_shell_*` events, Engine bridges to agent TCP shell over WireGuard.
+- RDP: operator calls `/api/rdp/session`, Engine creates a one-time token and proxies Guacamole WebSocket to guacd.
+- Notifications: operator or services call `/api/notifications/notify`, WebUI receives `borealis_notification` events.
+
+## Directory Map (High Level)
+- `Data/Engine/` - Engine source (authoritative).
+- `Data/Agent/` - Agent source (authoritative).
+- `Engine/` - Engine runtime copy (regenerated each launch).
+- `Agent/` - Agent runtime copy (regenerated each launch).
+- `Data/Engine/web-interface/src/` - WebUI source.
+- `Engine/Logs/` and `Agent/Logs/` - runtime logs.
+- `Data/Engine/Assemblies/` and `Engine/Assemblies/` - assemblies (staging and runtime).
+
+## API Endpoints
+None on this page. See [API Reference](api-reference.md).
+
+## Related Documentation
+- [Engine Runtime](engine-runtime.md)
+- [Agent Runtime](agent-runtime.md)
+- [Security and Trust](security-and-trust.md)
+- [Device Management](device-management.md)
+- [Assemblies and Quick Jobs](assemblies.md)
+- [Scheduled Jobs](scheduled-jobs.md)
+- [VPN and Remote Access](vpn-and-remote-access.md)
+- [UI and Notifications](ui-and-notifications.md)
+
+## Codex Agent (Detailed)
+### Service map by folder
+- Engine APIs: `Data/Engine/services/API/` (grouped by domain, registered in `Data/Engine/services/API/__init__.py`).
+- Engine realtime: `Data/Engine/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
+- WebUI hosting: `Data/Engine/services/WebUI/` (SPA static assets and 404 fallback).
+- VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server and tunnel lifecycle).
+- Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (Guacamole WebSocket proxy).
+- Filters and targeting: `Data/Engine/services/filters/matcher.py` (used by scheduled jobs and filter counts).
+- Agent roles: `Data/Agent/Roles/` (script exec, screenshot, WireGuard tunnel, remote PowerShell, etc).
+
+### End-to-end flow examples (use these to debug)
+- Quick job:
+  1) UI calls `/api/scripts/quick_run` with script path + hostnames.
+  2) Engine signs script and emits `quick_job_run`.
+  3) Agent role executes and posts `quick_job_result` over Socket.IO.
+  4) Engine updates `activity_history` and emits `device_activity_changed`.
+- VPN shell:
+  1) UI calls `/api/tunnel/connect` to request tunnel material.
+  2) Engine emits `vpn_tunnel_start` to agent socket.
+  3) Agent WireGuard role starts tunnel; agent shell role listens on TCP 47002.
+  4) UI opens `vpn_shell_open` Socket.IO event; Engine bridges to TCP shell.
+  5) UI sends/receives `vpn_shell_send` and `vpn_shell_output` events.
+
+### Runtime boundaries
+- Do not edit `Engine/` or `Agent/` directly. They are recreated on each launch.
+- Always edit `Data/Engine/` and `Data/Agent/` then re-run the bootstrap script.
+
+### What to read first when debugging
+- Start with logs: `Engine/Logs/engine.log` and `Agent/Logs/agent.log`.
+- Check domain-specific logs (example: `Engine/Logs/VPN_Tunnel/tunnel.log`).
+- Inspect active DB state in `Engine/database.db` for device/job metadata.
+
+### Interaction points to remember
+- REST for inventory, enrollment, and admin actions.
+- Socket.IO for realtime job results, VPN shell, and notifications.
+- WireGuard for remote protocol transport (shell, RDP, future protocols).
