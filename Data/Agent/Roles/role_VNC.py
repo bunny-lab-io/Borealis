@@ -61,12 +61,44 @@ def _find_project_root() -> Optional[Path]:
 
 
 def _resolve_vnc_root() -> Optional[Path]:
+    override = os.environ.get("BOREALIS_VNC_ROOT") or os.environ.get("BOREALIS_ULTRAVNC_ROOT")
+    if override:
+        try:
+            override_path = Path(override).expanduser().resolve()
+            if override_path.is_dir():
+                return override_path
+        except Exception:
+            pass
     root = _find_project_root()
-    if not root:
-        return None
-    candidate = root / "Dependencies" / "UltraVNC_Server"
-    if candidate.is_dir():
-        return candidate
+    candidates: list[Path] = []
+    if root:
+        candidates.append(root / "Dependencies" / "UltraVNC_Server")
+        candidates.append(root / "UltraVNC_Server")
+    try:
+        current = Path(__file__).resolve()
+        for parent in (current, *current.parents):
+            candidates.append(parent / "Dependencies" / "UltraVNC_Server")
+            candidates.append(parent / "UltraVNC_Server")
+    except Exception:
+        pass
+    try:
+        cwd = Path.cwd().resolve()
+        for parent in (cwd, *cwd.parents):
+            candidates.append(parent / "Dependencies" / "UltraVNC_Server")
+            candidates.append(parent / "UltraVNC_Server")
+    except Exception:
+        pass
+    seen = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if candidate.is_dir():
+            return candidate
     return None
 
 
@@ -137,17 +169,43 @@ def _resolve_vnc_password_tool(root: Optional[Path]) -> Optional[str]:
                 vnc_root / "tools" / "createpassword.exe",
                 vnc_root / "createpassword64.exe",
                 vnc_root / "tools" / "createpassword64.exe",
+                vnc_root / "payload" / "x64" / "createpassword.exe",
+                vnc_root / "payload" / "x64" / "createpassword64.exe",
             ]
         )
     for candidate in candidates:
         if candidate.is_file():
             return str(candidate)
     try:
-        for candidate in root.rglob("createpassword.exe"):
-            if candidate.is_file():
-                return str(candidate)
+        if root:
+            for candidate in root.rglob("createpassword.exe"):
+                if candidate.is_file():
+                    return str(candidate)
     except Exception:
         pass
+    return None
+
+
+def _discover_ultravnc_service_name() -> Optional[str]:
+    if os.name != "nt":
+        return None
+    command = (
+        "Get-Service -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.Name -like '*uvnc*' -or $_.DisplayName -like '*UltraVNC*' } | "
+        "Select-Object -First 1 -ExpandProperty Name"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        output = (result.stdout or "").strip()
+        if output:
+            return output.splitlines()[0].strip()
+    except Exception:
+        return None
     return None
 
 
@@ -195,13 +253,14 @@ class VncManager:
         self._last_password: Optional[str] = None
         self._vnc_exe = _resolve_vnc_exe()
         self._password_tool: Optional[str] = None
+        self._service_name: Optional[str] = None
 
-    def _service_state(self) -> Optional[str]:
+    def _service_state_by_name(self, service_name: str) -> Optional[str]:
         if os.name != "nt":
             return None
         try:
             result = subprocess.run(
-                ["sc.exe", "query", ULTRAVNC_SERVICE_NAME],
+                ["sc.exe", "query", service_name],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -217,25 +276,62 @@ class VncManager:
             return None
         return None
 
+    def _resolve_service_name(self, *, refresh: bool = False) -> Optional[str]:
+        if self._service_name and not refresh:
+            return self._service_name
+        candidate = ULTRAVNC_SERVICE_NAME
+        if candidate:
+            state = self._service_state_by_name(candidate)
+            if state is not None:
+                self._service_name = candidate
+                return candidate
+        discovered = _discover_ultravnc_service_name()
+        if discovered:
+            self._service_name = discovered
+            return discovered
+        if candidate:
+            self._service_name = candidate
+            return candidate
+        return None
+
+    def _wait_for_service(self, service_name: str, timeout: float = 5.0) -> bool:
+        deadline = time.time() + max(1.0, timeout)
+        while time.time() < deadline:
+            state = self._service_state_by_name(service_name)
+            if state == "RUNNING":
+                return True
+            if state is None:
+                return False
+            time.sleep(0.5)
+        return False
+
     def _restart_service(self) -> None:
         if os.name != "nt":
             return
-        state = self._service_state()
+        service_name = self._resolve_service_name()
+        if not service_name:
+            return
+        state = self._service_state_by_name(service_name)
         if state != "RUNNING":
             return
         try:
-            subprocess.run(["sc.exe", "stop", ULTRAVNC_SERVICE_NAME], capture_output=True, text=True, check=False)
+            subprocess.run(["sc.exe", "stop", service_name], capture_output=True, text=True, check=False)
             time.sleep(1)
-            subprocess.run(["sc.exe", "start", ULTRAVNC_SERVICE_NAME], capture_output=True, text=True, check=False)
+            subprocess.run(["sc.exe", "start", service_name], capture_output=True, text=True, check=False)
+            if not self._wait_for_service(service_name, timeout=8.0):
+                _write_log(f"UltraVNC service restart timed out (service={service_name}).")
         except Exception as exc:
             _write_log(f"Failed to restart UltraVNC service: {exc}")
 
     def _ensure_service_running(self) -> bool:
         if os.name != "nt":
             return False
-        state = self._service_state()
+        service_name = self._resolve_service_name()
+        state = self._service_state_by_name(service_name) if service_name else None
         if state == "RUNNING":
             return True
+        if state == "START_PENDING" and service_name:
+            return self._wait_for_service(service_name, timeout=10.0)
         if not self._vnc_exe:
             self._vnc_exe = _resolve_vnc_exe()
         if not self._vnc_exe:
@@ -243,17 +339,28 @@ class VncManager:
         try:
             if state is None:
                 subprocess.run([self._vnc_exe, "-install"], capture_output=True, text=True, check=False)
+                service_name = self._resolve_service_name(refresh=True)
+            if not service_name:
+                service_name = ULTRAVNC_SERVICE_NAME
             subprocess.run(
-                ["sc.exe", "config", ULTRAVNC_SERVICE_NAME, "start=", "auto"],
+                ["sc.exe", "config", service_name, "start=", "auto"],
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            subprocess.run(["sc.exe", "start", ULTRAVNC_SERVICE_NAME], capture_output=True, text=True, check=False)
+            start_result = subprocess.run(
+                ["sc.exe", "start", service_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            start_output = (start_result.stdout or "") + (start_result.stderr or "")
+            if "SERVICE_ALREADY_RUNNING" in start_output:
+                return True
         except Exception as exc:
             _write_log(f"Failed to ensure UltraVNC service running: {exc}")
             return False
-        return self._service_state() == "RUNNING"
+        return self._wait_for_service(service_name, timeout=10.0)
 
     def _normalize_firewall_remote(self, allowed_ips: Optional[str]) -> Optional[str]:
         if not allowed_ips:
@@ -321,7 +428,10 @@ class VncManager:
         if not self._password_tool:
             self._password_tool = _resolve_vnc_password_tool(config_dir)
         if not self._password_tool:
-            _write_log("VNC password tool not found; expected createpassword.exe under Dependencies/UltraVNC_Server.")
+            _write_log(
+                "VNC password tool not found; expected createpassword.exe under "
+                "Dependencies/UltraVNC_Server/tools or payload."
+            )
             return None
         try:
             result = subprocess.run(
@@ -354,7 +464,10 @@ class VncManager:
             if not self._vnc_exe:
                 self._vnc_exe = _resolve_vnc_exe()
             if not self._vnc_exe:
-                _write_log("UltraVNC server binary not found; expected under Dependencies/UltraVNC_Server.")
+                _write_log(
+                    "UltraVNC server binary not found; expected under "
+                    "Dependencies/UltraVNC_Server/payload (or set BOREALIS_VNC_SERVER_BIN)."
+                )
                 return
 
             exe_path = Path(self._vnc_exe)

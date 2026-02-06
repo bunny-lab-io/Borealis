@@ -152,15 +152,19 @@ class VncProxyServer:
         self._ready.set()
         await server.wait_closed()
 
-    async def _handle_client(self, websocket, path: str) -> None:
-        parsed = urlsplit(path)
+    async def _handle_client(self, websocket, path: Optional[str] = None) -> None:
+        raw_path = path or getattr(websocket, "path", "") or ""
+        parsed = urlsplit(raw_path)
         if parsed.path != VNC_WS_PATH:
+            self.logger.warning("VNC proxy rejected request with invalid path: %s", raw_path)
             await websocket.close(code=1008, reason="invalid_path")
             return
         query = parse_qs(parsed.query or "")
         token = (query.get("token") or [""])[0]
         session = self.registry.consume(token)
         if not session:
+            token_hint = token[:8] if token else "-"
+            self.logger.warning("VNC proxy rejected session (token=%s)", token_hint)
             await websocket.close(code=1008, reason="invalid_session")
             return
 

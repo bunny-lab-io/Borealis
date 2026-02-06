@@ -13,6 +13,9 @@ import {
   StopRounded as StopIcon,
   LinkRounded as LinkIcon,
   LanRounded as IpIcon,
+  SecurityRounded as SecurityIcon,
+  OpenInNewRounded as OpenIcon,
+  DownloadRounded as DownloadIcon,
 } from "@mui/icons-material";
 import RFB from "@novnc/novnc/lib/rfb";
 
@@ -46,15 +49,36 @@ function normalizeText(value) {
   }
 }
 
+function buildCertHelp(wsUrl) {
+  if (!wsUrl) return null;
+  try {
+    const parsed = new URL(wsUrl);
+    const isSecure = parsed.protocol === "wss:";
+    const trustScheme = isSecure ? "https:" : "http:";
+    return {
+      wsUrl,
+      isSecure,
+      host: parsed.host,
+      trustUrl: `${trustScheme}//${parsed.host}/`,
+      trustCheck: "unknown",
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function ReverseTunnelVnc({ device }) {
   const [sessionState, setSessionState] = useState("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [tunnel, setTunnel] = useState(null);
+  const [certHelp, setCertHelp] = useState(null);
   const containerRef = useRef(null);
   const displayRef = useRef(null);
   const rfbRef = useRef(null);
   const agentIdRef = useRef("");
+  const certProbeRef = useRef("");
+  const certDownloadUrl = "/api/server/certificates/root";
 
   const agentId = useMemo(() => {
     return (
@@ -73,6 +97,17 @@ export default function ReverseTunnelVnc({ device }) {
     agentIdRef.current = agentId;
   }, [agentId]);
 
+  const probeCertificateTrust = useCallback(async (info) => {
+    if (!info || !info.isSecure || !info.trustUrl) return;
+    if (certProbeRef.current === info.trustUrl) return;
+    certProbeRef.current = info.trustUrl;
+    try {
+      await fetch(info.trustUrl, { mode: "no-cors", cache: "no-store" });
+      setCertHelp((prev) => (prev ? { ...prev, trustCheck: "ok" } : prev));
+    } catch {
+      setCertHelp((prev) => (prev ? { ...prev, trustCheck: "blocked" } : prev));
+    }
+  }, []);
 
   const notifyAgentOnboarding = useCallback(async () => {
     try {
@@ -138,6 +173,7 @@ export default function ReverseTunnelVnc({ device }) {
       await disconnectVnc("operator_disconnect");
     } finally {
       setTunnel(null);
+      setCertHelp(null);
       setSessionState("idle");
       setLoading(false);
     }
@@ -194,6 +230,9 @@ export default function ReverseTunnelVnc({ device }) {
     if (!token || !wsUrl) {
       throw new Error("VNC session unavailable.");
     }
+    const help = buildCertHelp(wsUrl);
+    setCertHelp(help);
+    probeCertificateTrust(help);
     const tunnelUrl = `${wsUrl}?token=${encodeURIComponent(token)}`;
     const displayHost = displayRef.current;
     if (!displayHost) {
@@ -231,12 +270,13 @@ export default function ReverseTunnelVnc({ device }) {
 
     rfbRef.current = rfb;
     setStatusMessage("Establishing VNC...");
-  }, []);
+  }, [probeCertificateTrust]);
 
   const handleConnect = useCallback(async () => {
     if (sessionState === "connected") return;
     setStatusMessage("");
     setSessionState("connecting");
+    certProbeRef.current = "";
     try {
       const sessionData = await requestTunnel();
       if (!sessionData) {
@@ -250,6 +290,8 @@ export default function ReverseTunnelVnc({ device }) {
   }, [openVncSession, requestTunnel, sessionState]);
 
   const isConnected = sessionState === "connected";
+  const showCertHelp =
+    certHelp?.isSecure && (certHelp.trustCheck === "blocked" || sessionState === "error");
   const sessionChips = [
     tunnel?.tunnel_id
       ? {
@@ -335,6 +377,62 @@ export default function ReverseTunnelVnc({ device }) {
           ) : null}
         </Box>
       </Box>
+
+      {showCertHelp ? (
+        <Box
+          sx={{
+            borderRadius: 2,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            backgroundColor: "rgba(10,16,30,0.75)",
+            p: 2,
+          }}
+        >
+          <Stack spacing={1}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <SecurityIcon sx={{ color: MAGIC_UI.accentC, fontSize: 20 }} />
+              <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, fontWeight: 600 }}>
+                VNC proxy certificate not trusted
+              </Typography>
+            </Stack>
+            <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
+              Your browser blocked the secure VNC WebSocket. Trust the Borealis root CA (or use a
+              publicly trusted certificate) so the VNC proxy can connect.
+            </Typography>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+              <Button
+                size="small"
+                startIcon={<OpenIcon />}
+                sx={gradientButtonSx}
+                onClick={() => {
+                  if (certHelp?.trustUrl) {
+                    window.open(certHelp.trustUrl, "_blank", "noreferrer");
+                  }
+                }}
+              >
+                Open VNC Proxy
+              </Button>
+              <Button
+                size="small"
+                startIcon={<DownloadIcon />}
+                sx={{
+                  ...gradientButtonSx,
+                  backgroundImage: "linear-gradient(135deg,#34d399,#7dd3fc)",
+                }}
+                component="a"
+                href={certDownloadUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Download Root CA
+              </Button>
+            </Stack>
+            <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
+              After downloading, install the root CA into the OS trusted root store and refresh the
+              page. If you are behind a corporate CA, install that CA instead.
+            </Typography>
+          </Stack>
+        </Box>
+      ) : null}
 
       <Stack spacing={0.3} sx={{ mt: 1 }}>
         <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>

@@ -15,6 +15,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 ### Overall
 - Borealis enforces mutual trust: each agent presents a unique Ed25519 identity to the server, the server issues EdDSA-signed (Ed25519) access tokens bound to that fingerprint, and both sides pin the generated Borealis root CA.
 - End-to-end TLS everywhere: the Engine auto-provisions an ECDSA P-384 root + leaf chain under `Engine/Certificates` and serves TLS using Python defaults (TLS 1.2+); agents pin the delivered bundle for both REST and WebSocket traffic to eliminate man-in-the-middle avenues.
+- Operators can download the Borealis root CA via `GET /api/server/certificates/root` to trust the WebUI and VNC proxy in browsers.
 - Device enrollment is gated by enrollment and installer codes (configurable expiration and usage limits) and an operator approval queue; replay-resistant nonces plus rate limits (40 req/min/IP, 12 req/min/fingerprint) prevent brute force or code reuse.
 - All device APIs require Authorization: Bearer headers and a service-context marker (SYSTEM or CURRENTUSER); missing, expired, mismatched, or revoked credentials are rejected before any business logic runs. Operator-driven revoking and device quarantining are not yet implemented.
 - Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (about 15 minutes) with 90-day refresh tokens hashed via SHA-256.
