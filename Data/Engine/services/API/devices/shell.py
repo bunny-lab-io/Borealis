@@ -1,12 +1,13 @@
 # ======================================================
-# Data\Engine\services\API\devices\rdp.py
-# Description: RDP session bootstrap for Guacamole WebSocket tunnels.
+# Data\Engine\services\API\devices\shell.py
+# Description: Remote PowerShell session endpoints for persistent WireGuard tunnels.
 #
 # API Endpoints (if applicable):
-# - POST /api/rdp/session (Token Authenticated) - Issues a one-time Guacamole tunnel token for RDP.
+# - POST /api/shell/establish (Token Authenticated) - Ensure shell readiness over WireGuard.
+# - POST /api/shell/disconnect (Token Authenticated) - Disconnect the operator shell session.
 # ======================================================
 
-"""RDP session bootstrap endpoints for the Borealis Engine."""
+"""Remote PowerShell session endpoints for the Borealis Engine."""
 from __future__ import annotations
 
 import os
@@ -16,7 +17,6 @@ from urllib.parse import urlsplit
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from ...RemoteDesktop.guacamole_proxy import GUAC_WS_PATH, ensure_guacamole_proxy
 from .tunnel import _get_tunnel_service
 
 if False:  # pragma: no cover - hint for type checkers
@@ -81,25 +81,18 @@ def _infer_endpoint_host(req) -> str:
     return host
 
 
-def _is_secure(req) -> bool:
-    if req.is_secure:
-        return True
-    forwarded = (req.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
-    return forwarded == "https"
-
-
-def register_rdp(app, adapters: "EngineServiceAdapters") -> None:
-    blueprint = Blueprint("rdp", __name__)
-    logger = adapters.context.logger.getChild("rdp.api")
+def register_shell(app, adapters: "EngineServiceAdapters") -> None:
+    blueprint = Blueprint("vpn_shell", __name__)
+    logger = adapters.context.logger.getChild("vpn_shell.api")
     service_log = adapters.service_log
 
     def _service_log_event(message: str, *, level: str = "INFO") -> None:
         if not callable(service_log):
             return
         try:
-            service_log("RDP", message, level=level)
+            service_log("VPN_Tunnel/remote_shell", message, level=level)
         except Exception:
-            logger.debug("rdp service log write failed", exc_info=True)
+            logger.debug("vpn_shell service log write failed", exc_info=True)
 
     def _request_remote() -> str:
         forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
@@ -107,8 +100,8 @@ def register_rdp(app, adapters: "EngineServiceAdapters") -> None:
             return forwarded.split(",")[0].strip()
         return (request.remote_addr or "").strip()
 
-    @blueprint.route("/api/rdp/session", methods=["POST"])
-    def rdp_session():
+    @blueprint.route("/api/shell/establish", methods=["POST"])
+    def shell_establish():
         requirement = _require_login(app)
         if requirement:
             payload, status = requirement
@@ -119,77 +112,82 @@ def register_rdp(app, adapters: "EngineServiceAdapters") -> None:
 
         body = request.get_json(silent=True) or {}
         agent_id = _normalize_text(body.get("agent_id"))
-        protocol = _normalize_text(body.get("protocol") or "rdp").lower()
-        username = _normalize_text(body.get("username"))
-        password = str(body.get("password") or "")
+        if not agent_id:
+            return jsonify({"error": "agent_id_required"}), 400
+
+        try:
+            tunnel_service = _get_tunnel_service(adapters)
+            endpoint_host = _infer_endpoint_host(request)
+            _service_log_event(
+                "vpn_shell_establish_request agent_id={0} operator={1} endpoint_host={2} remote={3}".format(
+                    agent_id,
+                    operator_id or "-",
+                    endpoint_host or "-",
+                    _request_remote() or "-",
+                )
+            )
+            payload = tunnel_service.connect(
+                agent_id=agent_id,
+                operator_id=operator_id,
+                endpoint_host=endpoint_host,
+            )
+        except Exception as exc:
+            _service_log_event(
+                "vpn_shell_establish_failed agent_id={0} operator={1} error={2}".format(
+                    agent_id,
+                    operator_id or "-",
+                    str(exc),
+                ),
+                level="ERROR",
+            )
+            return jsonify({"error": "establish_failed", "detail": str(exc)}), 500
+
+        agent_socket = False
+        registry = getattr(adapters.context, "agent_socket_registry", None)
+        if registry and hasattr(registry, "is_registered"):
+            try:
+                agent_socket = bool(registry.is_registered(agent_id))
+            except Exception:
+                agent_socket = False
+
+        response = dict(payload)
+        response["status"] = "ok"
+        response["agent_socket"] = agent_socket
+        _service_log_event(
+            "vpn_shell_establish_response agent_id={0} tunnel_id={1} agent_socket={2}".format(
+                agent_id,
+                response.get("tunnel_id", "-"),
+                str(agent_socket).lower(),
+            )
+        )
+        return jsonify(response), 200
+
+    @blueprint.route("/api/shell/disconnect", methods=["POST"])
+    def shell_disconnect():
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        body = request.get_json(silent=True) or {}
+        agent_id = _normalize_text(body.get("agent_id"))
+        reason = _normalize_text(body.get("reason") or "operator_disconnect")
+        operator_id = (_current_user(app) or {}).get("username") or None
 
         if not agent_id:
             return jsonify({"error": "agent_id_required"}), 400
-        if protocol != "rdp":
-            return jsonify({"error": "unsupported_protocol"}), 400
-
-        tunnel_service = _get_tunnel_service(adapters)
-        session_payload = tunnel_service.session_payload(agent_id, include_token=False)
-        if not session_payload:
-            return jsonify({"error": "tunnel_down"}), 409
-
-        allowed_ports = session_payload.get("allowed_ports") or []
-        if 3389 not in allowed_ports:
-            return jsonify({"error": "rdp_not_allowed"}), 403
-
-        virtual_ip = _normalize_text(session_payload.get("virtual_ip"))
-        host = virtual_ip.split("/")[0] if virtual_ip else ""
-        if not host:
-            return jsonify({"error": "virtual_ip_missing"}), 500
-
-        registry = ensure_guacamole_proxy(adapters.context, logger=logger)
-        if registry is None:
-            return jsonify({"error": "rdp_proxy_unavailable"}), 503
 
         _service_log_event(
-            "rdp_session_request agent_id={0} operator={1} protocol={2} remote={3}".format(
+            "vpn_shell_disconnect_request agent_id={0} operator={1} reason={2} remote={3}".format(
                 agent_id,
                 operator_id or "-",
-                protocol,
+                reason or "-",
                 _request_remote() or "-",
             )
         )
-
-        rdp_session = registry.create(
-            agent_id=agent_id,
-            host=host,
-            port=3389,
-            username=username,
-            password=password,
-            protocol=protocol,
-            operator_id=operator_id,
-            ignore_cert=True,
-        )
-
-        ws_scheme = "wss" if _is_secure(request) else "ws"
-        ws_host = _infer_endpoint_host(request)
-        ws_port = int(getattr(adapters.context, "rdp_ws_port", 4823))
-        ws_url = f"{ws_scheme}://{ws_host}:{ws_port}{GUAC_WS_PATH}"
-
-        _service_log_event(
-            "rdp_session_ready agent_id={0} token={1} expires_at={2}".format(
-                agent_id,
-                rdp_session.token[:8],
-                int(rdp_session.expires_at),
-            )
-        )
-
-        return (
-            jsonify(
-                {
-                    "token": rdp_session.token,
-                    "ws_url": ws_url,
-                    "expires_at": int(rdp_session.expires_at),
-                    "virtual_ip": host,
-                    "tunnel_id": session_payload.get("tunnel_id"),
-                }
-            ),
-            200,
-        )
+        return jsonify({"status": "disconnected", "reason": reason}), 200
 
     app.register_blueprint(blueprint)
+
+
+__all__ = ["register_shell"]

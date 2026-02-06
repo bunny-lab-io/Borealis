@@ -270,7 +270,7 @@ This section captures the UI behavior requirements and troubleshooting context f
 #### Important references
 - Toast API and payload rules are documented above.
 - UI file: `Data/Engine/web-interface/src/Devices/ReverseTunnel/Powershell.jsx`.
-- API status endpoint: `/api/tunnel/status` returns `agent_socket` when available.
+- API establish endpoint: `/api/shell/establish` returns `agent_socket` when available.
 - Socket error path: `agent_socket_missing`.
 
 #### Troubleshooting context

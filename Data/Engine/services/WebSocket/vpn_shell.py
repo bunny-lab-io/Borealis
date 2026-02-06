@@ -187,7 +187,10 @@ class VpnShellBridge:
             existing.close()
         status = service.status(agent_id)
         if not status:
-            return None
+            try:
+                status = service.connect(agent_id=agent_id, operator_id=None, endpoint_host=None)
+            except Exception:
+                return None
         host = str(status.get("virtual_ip") or "").split("/")[0]
         port = int(self.context.wireguard_shell_port)
         tcp = None

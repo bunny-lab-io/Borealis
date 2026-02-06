@@ -43,7 +43,7 @@ import Editor from "react-simple-code-editor";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import ReverseTunnelPowershell from "./ReverseTunnel/Powershell.jsx";
-import ReverseTunnelRdp from "./ReverseTunnel/RDP.jsx";
+import ReverseTunnelVnc from "./ReverseTunnel/VNC.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -86,12 +86,6 @@ const buildVpnGroups = (shellPort) => {
       ports: [normalizedShell],
     },
     {
-      key: "rdp",
-      label: "RDP",
-      description: "Remote Desktop (TCP 3389).",
-      ports: [3389],
-    },
-    {
       key: "winrm",
       label: "WinRM",
       description: "PowerShell/WinRM management (TCP 5985/5986).",
@@ -121,7 +115,7 @@ const TOP_TABS = [
   { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
   { key: "advanced", label: "Advanced Config", icon: TuneRoundedIcon },
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
-  { key: "rdp", label: "Remote Desktop", icon: DesktopWindowsRoundedIcon },
+  { key: "vnc", label: "Remote Desktop (VNC)", icon: DesktopWindowsRoundedIcon },
 ];
 
 const myTheme = themeQuartz.withParams({
@@ -1542,7 +1536,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         minHeight: 0,
       }}
     >
-      <ReverseTunnelRdp device={tunnelDevice} />
+      <ReverseTunnelVnc device={tunnelDevice} />
     </Box>
   );
 

@@ -42,6 +42,14 @@ const httpsOptions = certPath && keyPath
 
 export default defineConfig({
   plugins: [react()],
+  esbuild: {
+    target: "es2022",
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      target: "es2022",
+    },
+  },
   server: {
     open: true,
     host: true,
@@ -69,6 +77,7 @@ export default defineConfig({
     outDir: 'build',
     emptyOutDir: true,
     chunkSizeWarningLimit: 1000,
+    target: 'es2022',
     rollupOptions: {
       output: {
         // split each npm package into its own chunk

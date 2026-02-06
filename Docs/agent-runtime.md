@@ -15,7 +15,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `role_DeviceAudit.py` (ROLE_NAME: `device_audit`) - inventory and audit data capture.
 - `role_Macro.py` (ROLE_NAME: `macro`) - macro automation.
 - `role_PlaybookExec_SYSTEM.py` (ROLE_NAME: `playbook_exec_system`) - Ansible playbook runner (unfinished).
-- `role_RDP.py` (ROLE_NAME: `RDP`) - RDP readiness hooks.
+- `role_VNC.py` (ROLE_NAME: `VNC`) - on-demand UltraVNC server lifecycle.
 - `role_RemotePowershell.py` (ROLE_NAME: `RemotePowershell`) - TCP PowerShell server over WireGuard.
 - `role_Screenshot.py` (ROLE_NAME: `screenshot`) - screenshot capture.
 - `role_ScriptExec_CURRENTUSER.py` (ROLE_NAME: `script_exec_currentuser`) - interactive PowerShell execution.
@@ -34,6 +34,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
 - `POST /api/agent/details` (Device Authenticated) - hardware/inventory payloads.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
+- `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
 
 ## Related Documentation
 - [Security and Trust](security-and-trust.md)
@@ -66,8 +67,10 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `AgentHttpClient.ensure_authenticated()` handles enrollment and refresh.
 - Socket.IO is used for:
   - `quick_job_run` dispatch (script execution payloads).
-  - `vpn_tunnel_start` and `vpn_tunnel_stop` (WireGuard lifecycle).
+  - `vpn_tunnel_start` (WireGuard lifecycle; tunnels are persistent and ignore stop events).
   - `connect_agent` registration (agent socket registry).
+- WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
+- The ensure loop re-establishes the tunnel automatically after network hiccups.
 
 ### Token storage
 - Refresh tokens are stored encrypted (DPAPI on Windows) in `refresh.token`.
@@ -89,7 +92,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - Confirm `quick_job_run` events and the correct role context.
   - Verify signatures with `signature_utils` logs.
 - If VPN fails:
-  - Check agent WireGuard role logs and ensure the Engine emitted `vpn_tunnel_start`.
+  - Check agent WireGuard role logs and confirm `/api/agent/vpn/ensure` succeeds.
+  - Ensure the Engine has an active tunnel session and the WireGuard service is running.
 
 ### Borealis Agent Codex (Full)
 Use this section for agent-only work (Borealis agent runtime under `Data/Agent` -> `/Agent`). Shared guidance is consolidated in `ui-and-notifications.md` and the Engine runtime notes.

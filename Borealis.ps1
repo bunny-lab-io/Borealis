@@ -1501,7 +1501,151 @@ ListenPort = 0
         throw "$logPrefix Driver still missing after adapter provisioning and pnputil fallback."
     }
 
-    # AutoHotKey portable
+    # UltraVNC Server (on-demand VNC backend for noVNC)
+    Run-Step "Dependency: UltraVNC Server" {
+        $uvncZipUrl = $env:BOREALIS_ULTRAVNC_ZIP_URL
+        if (-not $uvncZipUrl) {
+            $uvncZipUrl = "https://uvnc.eu/download/1640/UltraVNC_1640.zip"
+        }
+        $uvncMsiUrl = $env:BOREALIS_ULTRAVNC_MSI_URL
+        if (-not $uvncMsiUrl) {
+            $uvncMsiUrl = "https://uvnc.eu/download/1640/UltraVNC_1640_x64_Setup.msi"
+        }
+        $uvncInstallerUrl = $env:BOREALIS_ULTRAVNC_URL
+        if (-not $uvncInstallerUrl) {
+            $uvncInstallerUrl = "https://uvnc.eu/download/1640/UltraVNC_1640_x64_Setup.exe"
+        }
+        $uvncRoot = Join-Path $depsRoot "UltraVNC_Server"
+        $uvncPayloadRoot = Join-Path $uvncRoot "payload"
+        $uvncZipPath = Join-Path $uvncRoot "UltraVNC_1640.zip"
+        $uvncMsiPath = Join-Path $uvncRoot "UltraVNC_1640_x64_Setup.msi"
+        $uvncInstallerPath = Join-Path $uvncRoot "UltraVNC_1640_x64_Setup.exe"
+
+        if (-not (Test-Path $uvncRoot)) {
+            New-Item -ItemType Directory -Path $uvncRoot -Force | Out-Null
+        }
+
+        $uvncExe = Get-ChildItem -Path $uvncRoot -Recurse -Filter "winvnc*.exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+        if (-not $uvncExe) {
+            if (-not (Test-Path $sevenZipExe)) {
+                throw "7-Zip CLI not found at: $sevenZipExe"
+            }
+            try {
+                if (-not (Test-Path $uvncZipPath)) {
+                    Invoke-WebRequest -Uri $uvncZipUrl -OutFile $uvncZipPath
+                }
+                if (Test-Path $uvncPayloadRoot) {
+                    Remove-Item $uvncPayloadRoot -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                New-Item -ItemType Directory -Path $uvncPayloadRoot -Force | Out-Null
+                & $sevenZipExe x $uvncZipPath "-o$uvncPayloadRoot" -y | Out-Null
+            } catch {
+                Write-Host "UltraVNC zip download/extract failed. Trying MSI fallback." -ForegroundColor Yellow
+            }
+            $uvncExe = Get-ChildItem -Path $uvncPayloadRoot -Recurse -Filter "winvnc*.exe" -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+        }
+
+        if (-not $uvncExe) {
+            try {
+                if (-not (Test-Path $uvncMsiPath)) {
+                    Invoke-WebRequest -Uri $uvncMsiUrl -OutFile $uvncMsiPath
+                }
+                $msiExtractRoot = Join-Path $uvncPayloadRoot "msi_extract"
+                if (Test-Path $msiExtractRoot) {
+                    Remove-Item $msiExtractRoot -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                New-Item -ItemType Directory -Path $msiExtractRoot -Force | Out-Null
+                $msiArgs = @(
+                    "/a",
+                    "`"$uvncMsiPath`"",
+                    "/qn",
+                    "TARGETDIR=`"$msiExtractRoot`""
+                )
+                $msiProc = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -NoNewWindow -PassThru
+                if ($msiProc.ExitCode -ne 0) {
+                    Write-Host "UltraVNC MSI extraction failed with code $($msiProc.ExitCode). Trying installer fallback." -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "UltraVNC MSI extraction failed. Trying installer fallback." -ForegroundColor Yellow
+            }
+            $uvncExe = Get-ChildItem -Path $uvncPayloadRoot -Recurse -Filter "winvnc*.exe" -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+        }
+
+        if (-not $uvncExe) {
+            if (-not (Test-Path $uvncInstallerPath)) {
+                Invoke-WebRequest -Uri $uvncInstallerUrl -OutFile $uvncInstallerPath
+            }
+            if (-not (Test-Path $sevenZipExe)) {
+                throw "7-Zip CLI not found at: $sevenZipExe"
+            }
+            try {
+                if (-not (Test-Path $uvncPayloadRoot)) {
+                    New-Item -ItemType Directory -Path $uvncPayloadRoot -Force | Out-Null
+                }
+                & $sevenZipExe x $uvncInstallerPath "-o$uvncPayloadRoot" -y | Out-Null
+            } catch {
+                Write-Host "UltraVNC installer extraction failed." -ForegroundColor Yellow
+            }
+            $uvncExe = Get-ChildItem -Path $uvncPayloadRoot -Recurse -Filter "winvnc*.exe" -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+        }
+
+        $passwordTool = Get-ChildItem -Path $uvncRoot -Recurse -Filter "createpassword.exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $passwordTool) {
+            $passwordToolUrl = $env:BOREALIS_VNC_PASSWORD_TOOL_URL
+            if (-not $passwordToolUrl) {
+                $passwordToolUrl = "https://uvnc.eu/download/133/createpassword.zip"
+            }
+            $passwordToolZip = Join-Path $uvncRoot "createpassword.zip"
+            try {
+                if (-not (Test-Path $passwordToolZip)) {
+                    Invoke-WebRequest -Uri $passwordToolUrl -OutFile $passwordToolZip
+                }
+                if (Test-Path $sevenZipExe) {
+                    $toolDir = Join-Path $uvncRoot "tools"
+                    if (Test-Path $toolDir) {
+                        Remove-Item $toolDir -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                    New-Item -ItemType Directory -Path $toolDir | Out-Null
+                    & $sevenZipExe x $passwordToolZip "-o$toolDir" -y | Out-Null
+                }
+            } catch {
+                Write-Host "UltraVNC createpassword tool download failed. Set BOREALIS_VNC_PASSWORD_TOOL_URL to override." -ForegroundColor Yellow
+            }
+        }
+
+        if (-not $uvncExe) {
+            Write-Host "UltraVNC server binary not found. Ensure winvnc.exe exists under Dependencies\\UltraVNC_Server." -ForegroundColor Yellow
+        } else {
+            $uvncServiceName = $env:BOREALIS_ULTRAVNC_SERVICE
+            if (-not $uvncServiceName) {
+                $uvncServiceName = "uvnc_service"
+            }
+            try {
+                & $uvncExe.FullName -install | Out-Null
+                $uvncService = Get-Service -Name $uvncServiceName -ErrorAction SilentlyContinue
+                if (-not $uvncService) {
+                    $uvncService = Get-Service -ErrorAction SilentlyContinue | Where-Object {
+                        $_.Name -like "*uvnc*" -or $_.DisplayName -like "*UltraVNC*"
+                    } | Select-Object -First 1
+                }
+                if ($uvncService) {
+                    sc.exe config $uvncService.Name start= auto | Out-Null
+                    sc.exe start $uvncService.Name | Out-Null
+                } else {
+                    Write-Host "UltraVNC service not found after install. Set BOREALIS_ULTRAVNC_SERVICE to override." -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "UltraVNC service setup failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
     Run-Step "Dependency: AutoHotKey" {
         $ahkVersion    = "2.0.19"
         $ahkVersionTag = "v$ahkVersion"

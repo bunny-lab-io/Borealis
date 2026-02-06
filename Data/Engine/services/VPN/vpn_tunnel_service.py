@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import ipaddress
 import json
+import os
 import threading
 import time
 import uuid
@@ -20,6 +21,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .wireguard_server import WireGuardServerManager
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() not in ("0", "false", "no", "off")
 
 
 @dataclass
@@ -62,14 +70,17 @@ class VpnTunnelService:
         self.logger = context.logger.getChild("vpn_tunnel")
         self.activity_logger = self.wg.logger.getChild("device_activity")
         self.idle_seconds = max(60, int(idle_seconds))
+        self.persistent = _env_flag("BOREALIS_WIREGUARD_PERSISTENT", default=True)
         self._lock = threading.Lock()
         self._sessions_by_agent: Dict[str, VpnSession] = {}
         self._sessions_by_tunnel: Dict[str, VpnSession] = {}
         self._engine_ip = ipaddress.ip_interface(context.wireguard_engine_virtual_ip)
         self._peer_network = ipaddress.ip_network(context.wireguard_peer_network, strict=False)
         self._cleanup_listener()
-        self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True)
-        self._idle_thread.start()
+        self._idle_thread: Optional[threading.Thread] = None
+        if not self.persistent:
+            self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True)
+            self._idle_thread.start()
 
     def _idle_loop(self) -> None:
         while True:
@@ -90,7 +101,7 @@ class VpnTunnelService:
                         self.idle_seconds,
                     )
                 )
-                self.disconnect(session.agent_id, reason="idle_timeout")
+                self.disconnect(session.agent_id, reason="idle_timeout", force=True)
 
     def _allocate_virtual_ip(self, agent_id: str) -> str:
         existing = self._sessions_by_agent.get(agent_id)
@@ -226,12 +237,12 @@ class VpnTunnelService:
             self.logger.debug("Failed to write vpn_tunnel service log entry", exc_info=True)
 
     def _cleanup_listener(self) -> None:
-        try:
-            self.wg.stop_listener(ignore_missing=True)
-            self._service_log_event("vpn_listener_cleanup reason=startup")
-        except Exception:
-            self.logger.debug("Failed to clean up WireGuard listener on startup.", exc_info=True)
-            self._service_log_event("vpn_listener_cleanup_failed reason=startup", level="WARNING")
+        self._service_log_event("vpn_listener_cleanup_skipped reason=startup")
+
+    def _is_soft_disconnect(self, reason: Optional[str]) -> bool:
+        if not reason:
+            return False
+        return str(reason).lower() in ("operator_disconnect", "component_unmount")
 
     def _refresh_listener(self) -> None:
         peers: List[Mapping[str, object]] = []
@@ -432,15 +443,60 @@ class VpnTunnelService:
         except Exception:
             self.logger.debug("vpn_tunnel_activity emit failed for agent_id=%s", agent_id, exc_info=True)
 
-    def disconnect(self, agent_id: str, reason: str = "operator_stop") -> bool:
+    def disconnect(
+        self,
+        agent_id: str,
+        reason: str = "operator_stop",
+        *,
+        operator_id: Optional[str] = None,
+        force: bool = False,
+    ) -> bool:
         with self._lock:
-            session = self._sessions_by_agent.pop(agent_id, None)
+            session = self._sessions_by_agent.get(agent_id)
             if not session:
                 self._service_log_event(
                     "vpn_tunnel_disconnect_missing agent_id={0} reason={1}".format(agent_id or "-", reason or "-")
                 )
                 return False
-            self._sessions_by_tunnel.pop(session.tunnel_id, None)
+            if self.persistent and not force:
+                if operator_id:
+                    try:
+                        session.operator_ids.discard(operator_id)
+                    except Exception:
+                        pass
+                session.last_activity = time.time()
+                operator_text = ",".join(sorted(filter(None, session.operator_ids))) or "-"
+                self._service_log_event(
+                    "vpn_tunnel_keepalive agent_id={0} tunnel_id={1} reason={2} operators={3}".format(
+                        session.agent_id,
+                        session.tunnel_id,
+                        reason or "-",
+                        operator_text,
+                    )
+                )
+                return True
+            if not force and self._is_soft_disconnect(reason):
+                if operator_id:
+                    try:
+                        session.operator_ids.discard(operator_id)
+                    except Exception:
+                        pass
+                session.last_activity = time.time()
+                operator_text = ",".join(sorted(filter(None, session.operator_ids))) or "-"
+                self._service_log_event(
+                    "vpn_tunnel_keepalive agent_id={0} tunnel_id={1} reason={2} operators={3}".format(
+                        session.agent_id,
+                        session.tunnel_id,
+                        reason or "-",
+                        operator_text,
+                    )
+                )
+                return True
+            session = self._sessions_by_agent.pop(agent_id, None)
+            if session:
+                self._sessions_by_tunnel.pop(session.tunnel_id, None)
+            else:
+                return False
 
         try:
             self.wg.remove_firewall_rules(session.firewall_rules)
@@ -461,7 +517,14 @@ class VpnTunnelService:
         self._log_device_activity(session, event="stop", reason=reason)
         return True
 
-    def disconnect_by_tunnel(self, tunnel_id: str, reason: str = "operator_stop") -> bool:
+    def disconnect_by_tunnel(
+        self,
+        tunnel_id: str,
+        reason: str = "operator_stop",
+        *,
+        operator_id: Optional[str] = None,
+        force: bool = False,
+    ) -> bool:
         with self._lock:
             session = self._sessions_by_tunnel.get(tunnel_id)
         if not session:
@@ -469,7 +532,7 @@ class VpnTunnelService:
                 "vpn_tunnel_disconnect_missing tunnel_id={0} reason={1}".format(tunnel_id or "-", reason or "-")
             )
             return False
-        return self.disconnect(session.agent_id, reason=reason)
+        return self.disconnect(session.agent_id, reason=reason, operator_id=operator_id, force=force)
 
     def _emit_start(self, payload: Mapping[str, Any]) -> None:
         if not self.socketio:
@@ -704,7 +767,7 @@ class VpnTunnelService:
             "server_public_key": self.wg.server_public_key,
             "client_public_key": session.client_public_key,
             "client_private_key": session.client_private_key,
-            "idle_seconds": self.idle_seconds,
+            "idle_seconds": 0 if self.persistent else self.idle_seconds,
             "allowed_ports": list(session.allowed_ports),
             "connected_operators": len([o for o in session.operator_ids if o]),
         }
@@ -729,6 +792,6 @@ class VpnTunnelService:
             "last_activity_iso": self._ts_to_iso(session.last_activity),
             "expires_at": int(session.expires_at),
             "expires_at_iso": self._ts_to_iso(session.expires_at),
-            "idle_seconds": self.idle_seconds,
+            "idle_seconds": 0 if self.persistent else self.idle_seconds,
             "status": "up",
         }

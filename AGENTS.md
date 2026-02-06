@@ -1,13 +1,13 @@
 # Borealis Codex Engagement Index
 
-Use this file as the entrypoint for Codex instructions. The full knowledgebase now lives under `Docs/` and includes both human-facing guidance and **Codex Agent** sections with deep, agent-ready details. There is no separate Codex folder anymore.
+Use this file as the entrypoint for Codex instructions. The full knowledgebase now lives under `Docs/` and includes both human-facing guidance and **Codex Agent** sections with deep, agent-ready details.
 
 ## Where to Read
 - Start here: `Docs/index.md` (table of contents and documentation rules).
 - Agent runtime: `Docs/agent-runtime.md` (runtime paths, logging, security, roles, platform parity, Ansible status).
 - Engine runtime: `Docs/engine-runtime.md` (architecture, logging, security/API parity, platform parity, migration notes).
 - UI and notifications: `Docs/ui-and-notifications.md` (MagicUI styling, AG Grid rules, toast notifications, UI handoffs).
-- VPN and remote access: `Docs/vpn-and-remote-access.md` (WireGuard tunnels, remote shell, RDP, troubleshooting context).
+- VPN and remote access: `Docs/vpn-and-remote-access.md` (WireGuard tunnels, remote shell, VNC, troubleshooting context).
 - Security and trust: `Docs/security-and-trust.md` (enrollment, tokens, code signing, sequence diagrams).
 
 Precedence: follow domain docs first; where overlap exists, the domain page wins. The Codex Agent sections inside each page are the authoritative agent guidance.

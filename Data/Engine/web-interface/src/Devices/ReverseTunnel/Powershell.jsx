@@ -96,7 +96,6 @@ export default function ReverseTunnelPowershell({ device }) {
   const localSocketRef = useRef(false);
   const terminalRef = useRef(null);
   const agentIdRef = useRef("");
-  const tunnelIdRef = useRef("");
 
   const agentId = useMemo(() => {
     return (
@@ -115,9 +114,6 @@ export default function ReverseTunnelPowershell({ device }) {
     agentIdRef.current = agentId;
   }, [agentId]);
 
-  useEffect(() => {
-    tunnelIdRef.current = tunnel?.tunnel_id || "";
-  }, [tunnel?.tunnel_id]);
 
   const ensureSocket = useCallback(() => {
     if (socketRef.current) return socketRef.current;
@@ -181,15 +177,14 @@ export default function ReverseTunnelPowershell({ device }) {
     scrollToBottom();
   }, [output, scrollToBottom]);
 
-  const stopTunnel = useCallback(async (reason = "operator_disconnect") => {
+  const disconnectShell = useCallback(async (reason = "operator_disconnect") => {
     const currentAgentId = agentIdRef.current;
     if (!currentAgentId) return;
-    const currentTunnelId = tunnelIdRef.current;
     try {
-      await fetch("/api/tunnel/disconnect", {
-        method: "DELETE",
+      await fetch("/api/shell/disconnect", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: currentAgentId, tunnel_id: currentTunnelId, reason }),
+        body: JSON.stringify({ agent_id: currentAgentId, reason }),
       });
     } catch {
       // best-effort
@@ -206,14 +201,14 @@ export default function ReverseTunnelPowershell({ device }) {
     setStatusMessage("");
     try {
       await closeShell();
-      await stopTunnel("operator_disconnect");
+      await disconnectShell("operator_disconnect");
     } finally {
       setTunnel(null);
       setShellState("closed");
       setSessionState("idle");
       setLoading(false);
     }
-  }, [closeShell, stopTunnel]);
+  }, [closeShell, disconnectShell]);
 
   useEffect(() => {
     const socket = ensureSocket();
@@ -250,77 +245,39 @@ export default function ReverseTunnelPowershell({ device }) {
   useEffect(() => {
     return () => {
       closeShell();
-      stopTunnel("component_unmount");
+      disconnectShell("component_unmount");
     };
-  }, [closeShell, stopTunnel]);
+  }, [closeShell, disconnectShell]);
 
   const requestTunnel = useCallback(async () => {
     if (!agentId) {
-      setStatusMessage("Agent ID is required to connect.");
+      setStatusMessage("Agent ID is required to establish.");
       return;
     }
     setLoading(true);
     setStatusMessage("");
     try {
-      try {
-        const readinessResp = await fetch(
-          `/api/tunnel/status?agent_id=${encodeURIComponent(agentId)}`
-        );
-        const readinessData = await readinessResp.json().catch(() => ({}));
-        if (readinessResp.ok && readinessData?.agent_socket !== true) {
-          await handleAgentOnboarding();
-          return;
-        }
-      } catch {
-        // best-effort readiness check
-      }
-
       setSessionState("connecting");
       setShellState("opening");
-      const resp = await fetch("/api/tunnel/connect", {
+      const resp = await fetch("/api/shell/establish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent_id: agentId }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
+        if (data?.error === "agent_socket_missing") {
+          await handleAgentOnboarding();
+          return;
+        }
         const detail = data?.detail ? `: ${data.detail}` : "";
         throw new Error(`${data?.error || `HTTP ${resp.status}`}${detail}`);
       }
-      tunnelIdRef.current = data?.tunnel_id || "";
-      const waitForTunnelReady = async () => {
-        const deadline = Date.now() + 60000;
-        let lastError = "";
-        while (Date.now() < deadline) {
-          const statusResp = await fetch(
-            `/api/tunnel/connect/status?agent_id=${encodeURIComponent(agentId)}&bump=1`
-          );
-          const statusData = await statusResp.json().catch(() => ({}));
-          if (statusData?.error === "agent_socket_missing" || (statusResp.ok && statusData?.agent_socket === false)) {
-            await handleAgentOnboarding();
-            await stopTunnel("agent_onboarding_pending");
-            return null;
-          }
-          if (statusResp.ok && statusData?.status === "up") {
-            const agentSocket = statusData?.agent_socket;
-            const agentReady = agentSocket === undefined ? true : Boolean(agentSocket);
-            if (agentReady) {
-              return statusData;
-            }
-            setStatusMessage("Waiting for agent VPN socket to register...");
-          } else if (statusData?.error) {
-            lastError = statusData.error;
-          }
-          await sleep(2000);
-        }
-        throw new Error(lastError || "Tunnel not ready");
-      };
-
-      const statusData = await waitForTunnelReady();
-      if (!statusData) {
+      if (data?.agent_socket === false) {
+        await handleAgentOnboarding();
         return;
       }
-      setTunnel({ ...data, ...statusData });
+      setTunnel(data);
 
       const socket = ensureSocket();
       const openShellWithRetry = async () => {
@@ -335,7 +292,6 @@ export default function ReverseTunnelPowershell({ device }) {
           }
           if (openResp.error === "agent_socket_missing") {
             await handleAgentOnboarding();
-            await stopTunnel("agent_onboarding_pending");
             return null;
           }
           lastError = openResp.error;
@@ -359,7 +315,7 @@ export default function ReverseTunnelPowershell({ device }) {
     } finally {
       setLoading(false);
     }
-  }, [agentId, ensureSocket, handleAgentOnboarding, stopTunnel]);
+  }, [agentId, ensureSocket, handleAgentOnboarding]);
 
   const handleSend = useCallback(
     async (text) => {
@@ -414,7 +370,7 @@ export default function ReverseTunnelPowershell({ device }) {
           disabled={loading || (!isConnected && !agentId)}
           onClick={isConnected ? handleDisconnect : requestTunnel}
         >
-          {isConnected ? "Disconnect" : "Connect"}
+          {isConnected ? "Disconnect" : "Establish"}
         </Button>
         <Stack direction="row" spacing={1}>
           {sessionChips.map((chip) => (
@@ -510,7 +466,7 @@ export default function ReverseTunnelPowershell({ device }) {
             size="small"
             value={input}
             disabled={!isConnected}
-            placeholder={isConnected ? "Enter PowerShell command and press Enter" : "Connect to start sending commands"}
+            placeholder={isConnected ? "Enter PowerShell command and press Enter" : "Establish to start sending commands"}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {

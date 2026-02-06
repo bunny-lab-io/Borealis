@@ -10,16 +10,16 @@ Explain how Borealis is structured and how the core components interact end to e
 - Agent: Python runtime that enrolls, reports inventory, executes scripts, and opens VPN tunnels.
 - SQLite database: stores devices, approvals, schedules, activity history, tokens, and configuration records.
 - Assemblies: script definitions stored in SQLite domains with payload artifacts on disk.
-- Remote access: WireGuard reverse VPN, remote PowerShell, and Guacamole-backed RDP proxy.
+- Remote access: WireGuard reverse VPN, remote PowerShell, and VNC via noVNC.
 
 ## How the Pieces Talk
 - Enrollment: agent calls `/api/agent/enroll/request` and `/api/agent/enroll/poll`, operator approves, Engine issues tokens and cert bundle.
 - Inventory: agent posts `/api/agent/heartbeat` and `/api/agent/details`, Engine updates device records.
 - Quick jobs: operator calls `/api/scripts/quick_run`, Engine emits `quick_job_run` over Socket.IO, agent executes and returns `quick_job_result`.
 - Scheduled jobs: scheduler reads jobs from DB, resolves targets (including filters), then emits quick jobs.
-- VPN tunnels: operator calls `/api/tunnel/connect`, Engine emits `vpn_tunnel_start`, agent starts WireGuard client.
+- VPN tunnels: agent calls `/api/agent/vpn/ensure`, Engine emits `vpn_tunnel_start`, agent keeps WireGuard client online.
 - Remote shell: UI uses Socket.IO `vpn_shell_*` events, Engine bridges to agent TCP shell over WireGuard.
-- RDP: operator calls `/api/rdp/session`, Engine creates a one-time token and proxies Guacamole WebSocket to guacd.
+- VNC: operator calls `/api/vnc/establish`, Engine creates a one-time token and proxies noVNC WebSocket to the agent VNC server.
 - Notifications: operator or services call `/api/notifications/notify`, WebUI receives `borealis_notification` events.
 
 ## Directory Map (High Level)
@@ -50,7 +50,7 @@ None on this page. See [API Reference](api-reference.md).
 - Engine realtime: `Data/Engine/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
 - WebUI hosting: `Data/Engine/services/WebUI/` (SPA static assets and 404 fallback).
 - VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server and tunnel lifecycle).
-- Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (Guacamole WebSocket proxy).
+- Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (VNC WebSocket proxy).
 - Filters and targeting: `Data/Engine/services/filters/matcher.py` (used by scheduled jobs and filter counts).
 - Agent roles: `Data/Agent/Roles/` (script exec, screenshot, WireGuard tunnel, remote PowerShell, etc).
 
@@ -61,11 +61,10 @@ None on this page. See [API Reference](api-reference.md).
   3) Agent role executes and posts `quick_job_result` over Socket.IO.
   4) Engine updates `activity_history` and emits `device_activity_changed`.
 - VPN shell:
-  1) UI calls `/api/tunnel/connect` to request tunnel material.
-  2) Engine emits `vpn_tunnel_start` to agent socket.
-  3) Agent WireGuard role starts tunnel; agent shell role listens on TCP 47002.
-  4) UI opens `vpn_shell_open` Socket.IO event; Engine bridges to TCP shell.
-  5) UI sends/receives `vpn_shell_send` and `vpn_shell_output` events.
+  1) UI calls `/api/shell/establish` to ensure shell readiness.
+  2) Agent WireGuard role keeps the tunnel online; agent shell role listens on TCP 47002.
+  3) UI opens `vpn_shell_open` Socket.IO event; Engine bridges to TCP shell.
+  4) UI sends/receives `vpn_shell_send` and `vpn_shell_output` events.
 
 ### Runtime boundaries
 - Do not edit `Engine/` or `Agent/` directly. They are recreated on each launch.
@@ -79,4 +78,4 @@ None on this page. See [API Reference](api-reference.md).
 ### Interaction points to remember
 - REST for inventory, enrollment, and admin actions.
 - Socket.IO for realtime job results, VPN shell, and notifications.
-- WireGuard for remote protocol transport (shell, RDP, future protocols).
+- WireGuard for remote protocol transport (shell, VNC, future protocols).

@@ -11,7 +11,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - WebUI serving: `Data/Engine/services/WebUI/` (SPA static assets and 404 fallback).
 - Realtime events: `Data/Engine/services/WebSocket/` (quick job results, VPN shell bridge).
 - VPN orchestration: `Data/Engine/services/VPN/` (WireGuard server manager + tunnel service).
-- Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (Guacamole WebSocket bridge).
+- Remote desktop proxy: `Data/Engine/services/RemoteDesktop/` (VNC WebSocket bridge).
 - Assemblies: `Data/Engine/assembly_management/` and `Data/Engine/services/assemblies/`.
 
 ## Runtime Paths
@@ -41,7 +41,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ### EngineContext and lifecycle
 - `Data/Engine/server.py` builds an `EngineContext` that includes:
   - TLS paths, WireGuard settings, scheduler, Socket.IO instance.
-  - RDP proxy settings (guacd host/port, ws host/port, session TTL).
+  - VNC proxy settings (VNC port, ws host/port, session TTL).
 - The app factory wires in:
   - API registration: `API.register_api(app, context)`
   - WebUI static hosting: `WebUI.register_web_ui(app, context)`
@@ -72,11 +72,12 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Dev UI uses Vite and still relies on Engine APIs for data.
 - The SPA fallback in `Data/Engine/services/WebUI/__init__.py` prevents 404s on client routes.
 
-### WireGuard and RDP wiring
+### WireGuard and VNC wiring
 - WireGuard server manager: `Data/Engine/services/VPN/wireguard_server.py`.
 - Tunnel orchestration: `Data/Engine/services/VPN/vpn_tunnel_service.py`.
-- RDP proxy: `Data/Engine/services/RemoteDesktop/guacamole_proxy.py`.
-- API entrypoints: `/api/tunnel/*` and `/api/rdp/session`.
+- VNC proxy: `Data/Engine/services/RemoteDesktop/vnc_proxy.py`.
+- API entrypoints: `/api/vnc/establish`, `/api/vnc/disconnect`, `/api/shell/establish`, `/api/shell/disconnect`.
+- Persistent tunnels are established by agents via `POST /api/agent/vpn/ensure` and kept online.
 
 ### Assembly runtime
 - Assembly cache is initialized in `Data/Engine/assembly_management` and attached to `context.assembly_cache`.

@@ -128,15 +128,14 @@ class EngineContext:
     wireguard_server_public_key_path: str
     wireguard_acl_allowlist_windows: Tuple[int, ...]
     wireguard_shell_port: int
-    guacd_host: str
-    guacd_port: int
-    rdp_ws_host: str
-    rdp_ws_port: int
-    rdp_session_ttl_seconds: int
+    vnc_port: int
+    vnc_ws_host: str
+    vnc_ws_port: int
+    vnc_session_ttl_seconds: int
     wireguard_server_manager: Optional[Any] = None
     assembly_cache: Optional[Any] = None
-    rdp_proxy: Optional[Any] = None
-    rdp_registry: Optional[Any] = None
+    vnc_proxy: Optional[Any] = None
+    vnc_registry: Optional[Any] = None
 
 
 __all__ = ["EngineContext", "create_app", "register_engine_api"]
@@ -162,11 +161,10 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         wireguard_server_public_key_path=settings.wireguard_server_public_key_path,
         wireguard_acl_allowlist_windows=settings.wireguard_acl_allowlist_windows,
         wireguard_shell_port=settings.wireguard_shell_port,
-        guacd_host=settings.guacd_host,
-        guacd_port=settings.guacd_port,
-        rdp_ws_host=settings.rdp_ws_host,
-        rdp_ws_port=settings.rdp_ws_port,
-        rdp_session_ttl_seconds=settings.rdp_session_ttl_seconds,
+        vnc_port=settings.vnc_port,
+        vnc_ws_host=settings.vnc_ws_host,
+        vnc_ws_port=settings.vnc_ws_port,
+        vnc_session_ttl_seconds=settings.vnc_session_ttl_seconds,
         assembly_cache=None,
     )
 

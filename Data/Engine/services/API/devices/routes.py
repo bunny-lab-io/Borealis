@@ -5,6 +5,7 @@
 # API Endpoints (if applicable):
 # - POST /api/agent/heartbeat (Device Authenticated) - Updates device last-seen metadata and inventory snapshots.
 # - POST /api/agent/script/request (Device Authenticated) - Provides script execution payloads or idle signals to agents.
+# - POST /api/agent/vpn/ensure (Device Authenticated) - Ensures persistent WireGuard tunnel material.
 # ======================================================
 
 """Device-affiliated agent endpoints for the Borealis Engine runtime."""
@@ -13,12 +14,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request, g
 
 from ....auth.device_auth import AGENT_CONTEXT_HEADER, require_device_auth
 from ....auth.guid_utils import normalize_guid
+from .tunnel import _get_tunnel_service
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
@@ -40,6 +43,20 @@ def _json_or_none(value: Any) -> Optional[str]:
         return json.dumps(value)
     except Exception:
         return None
+
+
+def _infer_endpoint_host(req) -> str:
+    forwarded = (req.headers.get("X-Forwarded-Host") or req.headers.get("X-Original-Host") or "").strip()
+    host = forwarded.split(",")[0].strip() if forwarded else (req.host or "").strip()
+    if not host:
+        return ""
+    try:
+        parsed = urlsplit(f"//{host}")
+        if parsed.hostname:
+            return parsed.hostname
+    except Exception:
+        return host
+    return host
 
 
 def register_agents(app, adapters: "EngineServiceAdapters") -> None:
@@ -217,5 +234,77 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 "signing_key": signing_key,
             }
         )
+
+    @blueprint.route("/api/agent/vpn/ensure", methods=["POST"])
+    @require_device_auth(auth_manager)
+    def vpn_ensure():
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
+
+        body = request.get_json(silent=True) or {}
+        requested_agent = (body.get("agent_id") or "").strip()
+        guid = normalize_guid(ctx.guid)
+
+        conn = db_conn_factory()
+        resolved_agent = ""
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT agent_id FROM devices WHERE UPPER(guid) = ? ORDER BY last_seen DESC LIMIT 1",
+                (guid,),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                resolved_agent = str(row[0]).strip()
+        finally:
+            conn.close()
+
+        if not resolved_agent:
+            log("VPN_Tunnel/tunnel", f"vpn_agent_ensure_missing_agent guid={guid}", _context_hint(ctx), level="ERROR")
+            return jsonify({"error": "agent_id_missing"}), 404
+
+        if requested_agent and requested_agent != resolved_agent:
+            log(
+                "VPN_Tunnel/tunnel",
+                "vpn_agent_ensure_agent_mismatch requested={0} resolved={1}".format(
+                    requested_agent, resolved_agent
+                ),
+                _context_hint(ctx),
+                level="WARNING",
+            )
+
+        try:
+            tunnel_service = _get_tunnel_service(adapters)
+            endpoint_host = _infer_endpoint_host(request)
+            log(
+                "VPN_Tunnel/tunnel",
+                "vpn_agent_ensure_request agent_id={0} endpoint_host={1}".format(
+                    resolved_agent, endpoint_host or "-"
+                ),
+                _context_hint(ctx),
+            )
+            payload = tunnel_service.connect(
+                agent_id=resolved_agent,
+                operator_id=None,
+                endpoint_host=endpoint_host,
+            )
+        except Exception as exc:
+            log(
+                "VPN_Tunnel/tunnel",
+                "vpn_agent_ensure_failed agent_id={0} error={1}".format(resolved_agent, str(exc)),
+                _context_hint(ctx),
+                level="ERROR",
+            )
+            return jsonify({"error": "tunnel_start_failed", "detail": str(exc)}), 500
+
+        log(
+            "VPN_Tunnel/tunnel",
+            "vpn_agent_ensure_response agent_id={0} tunnel_id={1}".format(
+                payload.get("agent_id", resolved_agent), payload.get("tunnel_id", "-")
+            ),
+            _context_hint(ctx),
+        )
+        return jsonify(payload), 200
 
     app.register_blueprint(blueprint)

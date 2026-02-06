@@ -49,7 +49,7 @@ None. This index only links to other pages.
 - Read `getting-started.md` and `architecture-overview.md` to build the global model.
 - Use `engine-runtime.md` and `agent-runtime.md` for implementation-level details.
 - Use `ui-and-notifications.md` for MagicUI, AG Grid, and toast notification rules.
-- Use `vpn-and-remote-access.md` for WireGuard and remote shell/RDP details.
+- Use `vpn-and-remote-access.md` for WireGuard and remote shell/VNC details.
 - Use `security-and-trust.md` for enrollment, tokens, and code-signing behavior.
 
 ### Where the truth lives in code

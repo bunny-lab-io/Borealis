@@ -81,14 +81,19 @@ VPN_TUNNEL_LOG_FILE_PATH = LOG_ROOT / "VPN_Tunnel" / "tunnel.log"
 DEFAULT_WIREGUARD_PORT = 30000
 DEFAULT_WIREGUARD_ENGINE_VIRTUAL_IP = "10.255.0.1/32"
 DEFAULT_WIREGUARD_PEER_NETWORK = "10.255.0.0/16"
-DEFAULT_WIREGUARD_SHELL_PORT = 47002
-DEFAULT_WIREGUARD_ACL_WINDOWS = (3389, 5985, 5986, 5900, 3478, DEFAULT_WIREGUARD_SHELL_PORT)
 VPN_SERVER_CERT_ROOT = PROJECT_ROOT / "Engine" / "Certificates" / "VPN_Server"
-DEFAULT_GUACD_HOST = "127.0.0.1"
-DEFAULT_GUACD_PORT = 4822
-DEFAULT_RDP_WS_HOST = "0.0.0.0"
-DEFAULT_RDP_WS_PORT = 4823
-DEFAULT_RDP_SESSION_TTL_SECONDS = 120
+DEFAULT_VNC_PORT = 5900
+DEFAULT_WIREGUARD_SHELL_PORT = 47002
+DEFAULT_WIREGUARD_ACL_WINDOWS = (
+    5985,
+    5986,
+    5900,
+    3478,
+    DEFAULT_WIREGUARD_SHELL_PORT,
+)
+DEFAULT_VNC_WS_HOST = "0.0.0.0"
+DEFAULT_VNC_WS_PORT = 4823
+DEFAULT_VNC_SESSION_TTL_SECONDS = 120
 
 
 def _ensure_parent(path: Path) -> None:
@@ -290,11 +295,10 @@ class EngineSettings:
     wireguard_server_public_key_path: str
     wireguard_acl_allowlist_windows: Tuple[int, ...]
     wireguard_shell_port: int
-    guacd_host: str
-    guacd_port: int
-    rdp_ws_host: str
-    rdp_ws_port: int
-    rdp_session_ttl_seconds: int
+    vnc_port: int
+    vnc_ws_host: str
+    vnc_ws_port: int
+    vnc_session_ttl_seconds: int
     raw: MutableMapping[str, Any] = field(default_factory=dict)
 
     def to_flask_config(self) -> MutableMapping[str, Any]:
@@ -437,32 +441,27 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
     wireguard_server_private_key_path = str(wireguard_key_root / "server_private.key")
     wireguard_server_public_key_path = str(wireguard_key_root / "server_public.key")
 
-    guacd_host = str(
-        runtime_config.get("GUACD_HOST")
-        or os.environ.get("BOREALIS_GUACD_HOST")
-        or DEFAULT_GUACD_HOST
-    )
-    guacd_port = _parse_int(
-        runtime_config.get("GUACD_PORT") or os.environ.get("BOREALIS_GUACD_PORT"),
-        default=DEFAULT_GUACD_PORT,
+    vnc_port = _parse_int(
+        runtime_config.get("VNC_PORT") or os.environ.get("BOREALIS_VNC_PORT"),
+        default=DEFAULT_VNC_PORT,
         minimum=1,
         maximum=65535,
     )
-    rdp_ws_host = str(
-        runtime_config.get("RDP_WS_HOST")
-        or os.environ.get("BOREALIS_RDP_WS_HOST")
-        or DEFAULT_RDP_WS_HOST
+    vnc_ws_host = str(
+        runtime_config.get("VNC_WS_HOST")
+        or os.environ.get("BOREALIS_VNC_WS_HOST")
+        or DEFAULT_VNC_WS_HOST
     )
-    rdp_ws_port = _parse_int(
-        runtime_config.get("RDP_WS_PORT") or os.environ.get("BOREALIS_RDP_WS_PORT"),
-        default=DEFAULT_RDP_WS_PORT,
+    vnc_ws_port = _parse_int(
+        runtime_config.get("VNC_WS_PORT") or os.environ.get("BOREALIS_VNC_WS_PORT"),
+        default=DEFAULT_VNC_WS_PORT,
         minimum=1,
         maximum=65535,
     )
-    rdp_session_ttl_seconds = _parse_int(
-        runtime_config.get("RDP_SESSION_TTL_SECONDS")
-        or os.environ.get("BOREALIS_RDP_SESSION_TTL_SECONDS"),
-        default=DEFAULT_RDP_SESSION_TTL_SECONDS,
+    vnc_session_ttl_seconds = _parse_int(
+        runtime_config.get("VNC_SESSION_TTL_SECONDS")
+        or os.environ.get("BOREALIS_VNC_SESSION_TTL_SECONDS"),
+        default=DEFAULT_VNC_SESSION_TTL_SECONDS,
         minimum=30,
         maximum=3600,
     )
@@ -505,11 +504,10 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         wireguard_server_public_key_path=wireguard_server_public_key_path,
         wireguard_acl_allowlist_windows=wireguard_acl_allowlist_windows,
         wireguard_shell_port=wireguard_shell_port,
-        guacd_host=guacd_host,
-        guacd_port=guacd_port,
-        rdp_ws_host=rdp_ws_host,
-        rdp_ws_port=rdp_ws_port,
-        rdp_session_ttl_seconds=rdp_session_ttl_seconds,
+        vnc_port=vnc_port,
+        vnc_ws_host=vnc_ws_host,
+        vnc_ws_port=vnc_ws_port,
+        vnc_session_ttl_seconds=vnc_session_ttl_seconds,
         raw=runtime_config,
     )
     return settings

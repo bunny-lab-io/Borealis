@@ -2,25 +2,28 @@
 [Back to Docs Index](index.md) | [Index (HTML)](index.html)
 
 ## Purpose
-Document Borealis remote access features: WireGuard reverse VPN tunnels, remote PowerShell, and RDP via Guacamole.
+Document Borealis remote access features: WireGuard reverse VPN tunnels, remote PowerShell, and VNC via noVNC.
 
 ## WireGuard Reverse VPN (High Level)
 - Outbound-only: agents initiate tunnels to the Engine; no inbound listeners on devices.
 - Transport: WireGuard UDP 30000.
-- One active tunnel per agent, shared across operators.
+- One persistent tunnel per agent, established at agent boot and shared across operators.
 - Host-only routing: each agent gets a /32; no client-to-client routes.
-- Idle timeout: 15 minutes without activity.
+- Keepalive: `PersistentKeepalive = 30` seconds on the agent.
+- No idle teardown while the agent service is running.
 - Per-device allowlist: ports are restricted per device and enforced by Engine firewall rules.
 
 ## Remote PowerShell
 - Uses the WireGuard tunnel and a TCP shell server on the agent.
+- UI establishes sessions via `/api/shell/establish` and disconnects via `/api/shell/disconnect`.
 - Engine bridges UI Socket.IO events to the agent TCP shell.
 - Shell port default: 47002 (configurable).
 
-## RDP via Guacamole
-- Engine issues one-time RDP session tokens via `/api/rdp/session`.
-- WebUI connects to `ws(s)://<engine_host>:4823/guacamole`.
-- RDP allowed only if the device allowlist includes 3389.
+## VNC via noVNC
+- Engine issues one-time VNC session tokens via `/api/vnc/establish`.
+- WebUI connects to `ws(s)://<engine_host>:4823/vnc`.
+- VNC allowed only if the device allowlist includes 5900.
+- Agent runs UltraVNC as a Windows service; Borealis opens the VNC firewall rule on demand and closes it via `/api/vnc/disconnect`.
 
 ## Reverse Proxy Configuration
 Traefik dynamic config (replace service URL with the actual Borealis Engine URL):
@@ -62,14 +65,16 @@ http:
 ```
 
 ## API Endpoints
-- `POST /api/tunnel/connect` (Token Authenticated) - start WireGuard tunnel.
+- `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an agent.
 - `GET /api/tunnel/status` (Token Authenticated) - tunnel status by agent.
-- `GET /api/tunnel/connect/status` (Token Authenticated) - alias for status.
 - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels.
-- `DELETE /api/tunnel/disconnect` (Token Authenticated) - stop tunnel.
+- `POST /api/agent/vpn/ensure` (Device Authenticated) - agent-side persistent tunnel bootstrap.
 - `GET /api/device/vpn_config/<agent_id>` (Token Authenticated) - read allowed ports.
 - `PUT /api/device/vpn_config/<agent_id>` (Token Authenticated) - update allowed ports.
-- `POST /api/rdp/session` (Token Authenticated) - issue RDP session token.
+- `POST /api/vnc/establish` (Token Authenticated) - establish VNC session token.
+- `POST /api/vnc/disconnect` (Token Authenticated) - disconnect VNC session (closes firewall).
+- `POST /api/shell/establish` (Token Authenticated) - establish remote shell session.
+- `POST /api/shell/disconnect` (Token Authenticated) - disconnect remote shell session.
 
 ## Related Documentation
 - [Device Management](device-management.md)
@@ -83,12 +88,13 @@ http:
 - WireGuard server manager: `Data/Engine/services/VPN/wireguard_server.py`.
 - Tunnel API: `Data/Engine/services/API/devices/tunnel.py`.
 - Shell bridge: `Data/Engine/services/WebSocket/vpn_shell.py`.
-- RDP session API: `Data/Engine/services/API/devices/rdp.py`.
-- Guacamole proxy: `Data/Engine/services/RemoteDesktop/guacamole_proxy.py`.
+- VNC session API: `Data/Engine/services/API/devices/vnc.py`.
+- VNC proxy: `Data/Engine/services/RemoteDesktop/vnc_proxy.py`.
 
 ### Core Agent files
 - WireGuard client role: `Data/Agent/Roles/role_WireGuardTunnel.py`.
 - Remote PowerShell role: `Data/Agent/Roles/role_RemotePowershell.py`.
+- VNC role: `Data/Agent/Roles/role_VNC.py`.
 
 ### Config paths
 - Engine WireGuard config: `Engine/WireGuard/borealis-wg.conf`.
@@ -105,11 +111,11 @@ http:
   - `Borealis - WireGuard - Agent`
 
 ### Event flow (WireGuard tunnel)
-1) UI calls `/api/tunnel/connect`.
-2) Engine creates a tunnel session and emits `vpn_tunnel_start`.
-3) Agent verifies token signature and starts WireGuard client.
+1) Agent calls `/api/agent/vpn/ensure` at boot (and periodically) to establish the persistent tunnel.
+2) Engine creates or reuses the tunnel session and emits `vpn_tunnel_start`.
+3) Agent verifies the token signature and starts the WireGuard client with `PersistentKeepalive = 30`.
 4) Engine applies firewall allowlist rules for the agent /32.
-5) Activity is recorded in `activity_history` as a VPN event.
+5) UI sessions (shell/VNC) reuse the existing tunnel without teardown.
 
 ### Event flow (Remote PowerShell)
 1) UI opens a shell and emits `vpn_shell_open`.
@@ -119,13 +125,16 @@ http:
 5) Agent returns stdout frames; Engine emits `vpn_shell_output`.
 
 ### Allowed ports and ACL rules
-- Default allowlist (Windows): 3389, 5985, 5986, 5900, 3478, 47002.
+- Default allowlist (Windows): 5985, 5986, 5900, 3478, 47002.
 - Per-device overrides are stored in `device_vpn_config`.
 - Engine creates outbound firewall rules for each allowed port and protocol.
 
-### Idle timeout behavior
-- The tunnel idle timer resets when activity is detected or when `bump_activity` is called.
-- Idle sessions are torn down and firewall rules are removed.
+### Persistent tunnel behavior
+- WireGuard sessions stay online while the agent service is running.
+- There are no tunnel-disconnect endpoints; only role-level disconnects (shell/VNC) exist.
+- The tunnel and per-device firewall rules remain in place while the agent runs.
+- Keepalive is handled by WireGuard (`PersistentKeepalive = 30` seconds).
+- The agent periodically calls `/api/agent/vpn/ensure` to heal the tunnel if it drops.
 
 ### Logs to inspect
 - Engine tunnel log: `Engine/Logs/VPN_Tunnel/tunnel.log`.
@@ -135,27 +144,28 @@ http:
 
 ### Troubleshooting checklist
 - Confirm WireGuard service is running (Engine and Agent).
+- Confirm the agent successfully calls `/api/agent/vpn/ensure` after boot.
 - Confirm `/api/tunnel/status` returns `status=up` and `agent_socket=true`.
 - Verify `Agent/Borealis/Settings/WireGuard/Borealis.conf` during an active session.
 - Test TCP shell reachability: `Test-NetConnection <agent_vpn_ip> -Port 47002`.
 
 ### Known limitations
 - Legacy WebSocket tunnels are retired; only WireGuard is supported.
-- RDP requires guacd running and port 3389 allowed in VPN config.
+- VNC requires UltraVNC running on the agent and port 5900 allowed in VPN config.
 
 ### Reverse VPN Tunnels (WireGuard) - Full Reference
 #### 1) High-level model
 - Outbound-only: agents establish WireGuard tunnels to the Engine; no inbound access on devices.
 - Transport: WireGuard/UDP on port 30000.
-- Sessions: one live VPN tunnel per agent; multiple operators share it.
+- Sessions: one persistent VPN tunnel per agent; multiple operators share it.
 - Routing: host-only /32 per agent; AllowedIPs restricted to the agent /32 and engine /32; no client-to-client.
-- Idle timeout: 15 minutes of no operator activity; no grace period.
+- Keepalive: `PersistentKeepalive = 30` seconds; tunnels stay up while agents run.
 - Keys: WireGuard server keys under `Engine/Certificates/VPN_Server`; client keys under `Agent/Borealis/Certificates/VPN_Client`.
 
 #### 2) Engine components
 - Orchestrator: `Data/Engine/services/VPN/vpn_tunnel_service.py`
   - Allocates per-agent /32, issues short-lived orchestration tokens, enforces single-session.
-  - Starts/stops WireGuard listener, applies firewall rules, idles out on inactivity.
+  - Keeps the WireGuard listener online, applies firewall rules, and avoids idle teardown in persistent mode.
   - Emits Socket.IO events: `vpn_tunnel_start`, `vpn_tunnel_stop`, `vpn_tunnel_activity`.
 - WireGuard manager: `Data/Engine/services/VPN/wireguard_server.py`
   - Generates server keys, renders config, manages `wireguard.exe` tunnel service, applies ACL rules.
@@ -164,17 +174,20 @@ http:
 - Logging: `Engine/Logs/VPN_Tunnel/tunnel.log` plus Device Activity entries; shell I/O is in `Engine/Logs/VPN_Tunnel/remote_shell.log`.
 
 #### 3) API endpoints
-- `POST /api/tunnel/connect` -> issues session material (tunnel_id, token, virtual_ip, endpoint, allowed_ports, idle_seconds).
+- `POST /api/tunnel/connect` -> issues or reuses session material (tunnel_id, token, virtual_ip, endpoint, allowed_ports).
 - `GET /api/tunnel/status` -> returns up/down status for an agent.
-- `GET /api/tunnel/connect/status` -> alias for status (used by UI before shell open).
 - `GET /api/tunnel/active` -> lists active VPN tunnel sessions (tunnel_id, agent_id, virtual_ip, last_activity, etc.).
-- `DELETE /api/tunnel/disconnect` -> immediate teardown (agent and engine cleanup).
+- `POST /api/agent/vpn/ensure` -> device-authenticated tunnel bootstrap for persistent mode.
+- `POST /api/shell/establish` -> establish remote shell session.
+- `POST /api/shell/disconnect` -> disconnect remote shell session.
+- `POST /api/vnc/establish` -> establish VNC session token.
+- `POST /api/vnc/disconnect` -> disconnect VNC session (closes firewall).
 - `GET /api/device/vpn_config/<agent_id>` -> read per-agent allowed ports.
 - `PUT /api/device/vpn_config/<agent_id>` -> update allowed ports.
 
 #### 4) Agent components
 - Tunnel lifecycle: `Data/Agent/Roles/role_WireGuardTunnel.py`
-  - Validates orchestration tokens, starts/stops WireGuard client service, enforces idle.
+  - Validates orchestration tokens, starts WireGuard client service, keeps the tunnel persistent.
 - Shell server: `Data/Agent/Roles/role_RemotePowershell.py`
 - TCP PowerShell server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
 - Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
@@ -221,8 +234,8 @@ This section consolidates the troubleshooting context and environment notes for 
 - Configs must live inside the project root:
   - Agent: Agent\Borealis\Settings\WireGuard\Borealis.conf
   - Engine: Engine\WireGuard\borealis-wg.conf
-- Agent brings up the WireGuard tunnel on vpn_tunnel_start, then remote shell/RDP/VNC/SSH flow through it.
-- On stop/idle, the tunnel is torn down and firewall rules removed.
+- Agent ensures the WireGuard tunnel on boot via `/api/agent/vpn/ensure`, then remote shell/VNC/SSH flow through it.
+- No idle teardown; tunnels and firewall rules stay in place while the agent is running.
 
 #### Recent changes (current repo state)
 - Data/Agent/Roles/role_WireGuardTunnel.py
@@ -231,7 +244,8 @@ This section consolidates the troubleshooting context and environment notes for 
   - Endpoint override: if Engine sends localhost, use host from server_url.txt and port from the token.
   - Config path preference: Agent\Borealis\Settings\WireGuard.
   - Service display name set to "Borealis - WireGuard - Agent".
-  - Applies/removes the VPN shell firewall rule using the engine /32 from allowed_ips.
+  - Persistent tunnels with `PersistentKeepalive = 30`.
+  - Applies the VPN shell firewall rule using the engine /32 from allowed_ips.
 - Data/Engine/services/VPN/wireguard_server.py
   - Engine config path: Engine\WireGuard\borealis-wg.conf (project root only).
   - Removed invalid "SaveConfig = false" line (WireGuard rejected it).
@@ -283,5 +297,5 @@ Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under
 #### Current blockers and next steps
 1) Ensure the agent runtime is re-staged so `role_WireGuardTunnel.py` applies the shell firewall rule on tunnel start.
 2) During an active session, run `Test-NetConnection -ComputerName 10.255.0.2 -Port 47002` on the Engine and confirm it reaches the agent.
-3) While the session is active, confirm `Agent\Borealis\Settings\WireGuard\Borealis.conf` includes a [Peer] with endpoint/AllowedIPs (it reverts to idle config after stop).
+3) Confirm `Agent\Borealis\Settings\WireGuard\Borealis.conf` includes a [Peer] with endpoint/AllowedIPs while the agent is running.
 4) Capture engine and agent tunnel/shell logs around a failed shell open attempt and re-check WireGuard service state if issues persist.

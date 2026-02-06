@@ -164,6 +164,25 @@ class WireGuardServerManager:
                 return match.group(1).upper()
         return None
 
+    def _service_exists(self) -> bool:
+        code, _, _ = self._run_command(["sc.exe", "query", self._service_id()])
+        return code == 0
+
+    def _stop_service(self, *, timeout: int = 20) -> bool:
+        service_id = self._service_id()
+        state = self._query_service_state()
+        if not state:
+            return False
+        if state == "STOPPED":
+            return True
+        self._run_command(["sc.exe", "stop", service_id])
+        for _ in range(max(1, timeout)):
+            time.sleep(1)
+            state = self._query_service_state()
+            if state == "STOPPED":
+                return True
+        return False
+
     def _ensure_service_display_name(self) -> None:
         if not self._service_display_name:
             return
@@ -172,9 +191,9 @@ class WireGuardServerManager:
         if code != 0 and err:
             self.logger.warning("Failed to set WireGuard service display name: %s", err)
 
-    def _ensure_service_running(self) -> None:
+    def _ensure_service_running(self, *, timeout: int = 20) -> None:
         service_id = self._service_id()
-        for _ in range(6):
+        for _ in range(max(1, timeout)):
             state = self._query_service_state()
             if state == "RUNNING":
                 return
@@ -183,8 +202,20 @@ class WireGuardServerManager:
                 if code != 0:
                     self.logger.error("Failed to start WireGuard tunnel service %s err=%s", service_id, err)
                     break
+            if state in ("START_PENDING", "STOP_PENDING"):
+                time.sleep(1)
+                continue
             time.sleep(1)
         state = self._query_service_state()
+        if state == "START_PENDING":
+            self.logger.warning("WireGuard tunnel service still START_PENDING; attempting restart.")
+            self._stop_service(timeout=10)
+            self._run_command(["sc.exe", "start", service_id])
+            for _ in range(10):
+                time.sleep(1)
+                if self._query_service_state() == "RUNNING":
+                    return
+            state = self._query_service_state()
         raise RuntimeError(f"WireGuard tunnel service {service_id} failed to start (state={state})")
 
     def _normalise_allowed_ports(
@@ -329,6 +360,7 @@ class WireGuardServerManager:
         for idx, rule in enumerate(rules):
             name = f"Borealis-WG-Agent-{peer.get('agent_id','')}-{idx}"
             protocol = str(rule.get("protocol") or "TCP").upper()
+            self._run_command(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"])
             args = [
                 "netsh",
                 "advfirewall",
@@ -374,8 +406,12 @@ class WireGuardServerManager:
         config_path.write_text(rendered, encoding="utf-8")
         self.logger.info("Rendered WireGuard config to %s", config_path)
 
-        # Ensure old service is removed before re-installing.
-        self.stop_listener()
+        if self._service_exists():
+            if not self._stop_service(timeout=20):
+                self.logger.warning("WireGuard tunnel service did not stop cleanly before restart.")
+            self._ensure_service_display_name()
+            self._ensure_service_running(timeout=25)
+            return
 
         args = [self._wireguard_exe, "/installtunnelservice", str(config_path)]
         code, out, err = self._run_command(args)
@@ -384,21 +420,22 @@ class WireGuardServerManager:
             raise RuntimeError(f"WireGuard installtunnelservice failed: {err}")
         self.logger.info("WireGuard listener installed (service=%s)", config_path.stem)
         self._ensure_service_display_name()
-        self._ensure_service_running()
+        self._ensure_service_running(timeout=25)
 
     def stop_listener(self, *, ignore_missing: bool = False) -> None:
-        """Stop and remove the WireGuard tunnel service."""
+        """Stop the WireGuard tunnel service (leave installed for reuse)."""
 
-        args = [self._wireguard_exe, "/uninstalltunnelservice", self._service_name]
-        code, out, err = self._run_command(args)
-        if code != 0:
-            err_text = " ".join([out or "", err or ""]).strip().lower()
-            if ignore_missing and ("does not exist" in err_text or "not exist" in err_text):
+        if not self._service_exists():
+            if ignore_missing:
                 self.logger.info("WireGuard tunnel service already absent")
                 return
-            self.logger.warning("Failed to uninstall WireGuard tunnel service code=%s err=%s", code, err)
-        else:
-            self.logger.info("WireGuard tunnel service removed")
+            self.logger.warning("WireGuard tunnel service not found during stop.")
+            return
+
+        if not self._stop_service(timeout=20):
+            self.logger.warning("WireGuard tunnel service did not stop cleanly.")
+            return
+        self.logger.info("WireGuard tunnel service stopped")
 
     def build_firewall_rules(
         self,

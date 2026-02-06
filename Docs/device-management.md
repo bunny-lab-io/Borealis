@@ -73,7 +73,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## Codex Agent (Detailed)
 ### Key files and services
-- Device APIs: `Data/Engine/services/API/devices/` (management, approval, tunnel, rdp, routes).
+- Device APIs: `Data/Engine/services/API/devices/` (management, approval, tunnel, vnc, routes).
 - Filters: `Data/Engine/services/filters/matcher.py` and `Data/Engine/services/API/filters/management.py`.
 - Enrollment approvals: `Data/Engine/services/API/devices/approval.py`.
 

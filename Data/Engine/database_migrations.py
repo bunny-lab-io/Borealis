@@ -70,6 +70,7 @@ def _ensure_devices_table(conn: sqlite3.Connection) -> None:
         "ansible_ee_ver": "TEXT",
         "connection_type": "TEXT",
         "connection_endpoint": "TEXT",
+        "agent_vnc_password": "TEXT",
         "ssl_key_fingerprint": "TEXT",
         "token_version": "INTEGER",
         "status": "TEXT",
@@ -388,6 +389,7 @@ def _create_devices_table(cur: sqlite3.Cursor) -> None:
             ansible_ee_ver TEXT,
             connection_type TEXT,
             connection_endpoint TEXT,
+            agent_vnc_password TEXT,
             ssl_key_fingerprint TEXT,
             token_version INTEGER DEFAULT 1,
             status TEXT DEFAULT 'active',
@@ -455,9 +457,9 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             network, software, storage, cpu, device_type, domain, external_ip,
             internal_ip, last_reboot, last_seen, last_user, operating_system,
             uptime, agent_id, ansible_ee_ver, connection_type, connection_endpoint,
-            ssl_key_fingerprint, token_version, status, key_added_at
+            agent_vnc_password, ssl_key_fingerprint, token_version, status, key_added_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
     )
 
@@ -496,6 +498,7 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             record.get("ansible_ee_ver"),
             record.get("connection_type"),
             record.get("connection_endpoint"),
+            record.get("agent_vnc_password"),
             record.get("ssl_key_fingerprint"),
             record.get("token_version") or 1,
             record.get("status") or "active",

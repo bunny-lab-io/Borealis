@@ -8,10 +8,10 @@
 """WireGuard client role (Windows) for reverse VPN tunnels.
 
 This role prepares the WireGuard client config, manages a single active
-session, enforces idle teardown, and logs lifecycle events to
-Agent/Logs/VPN_Tunnel/tunnel.log. It binds to Engine Socket.IO events
-(`vpn_tunnel_start`, `vpn_tunnel_stop`, `vpn_tunnel_activity`) to start/stop
-the client session with the issued config/token.
+session, and keeps the tunnel online while the agent service runs. It logs
+lifecycle events to Agent/Logs/VPN_Tunnel/tunnel.log. It responds to Engine
+Socket.IO events (`vpn_tunnel_start`, `vpn_tunnel_activity`) and periodically
+ensures the persistent session via `/api/agent/vpn/ensure`.
 """
 
 from __future__ import annotations
@@ -55,6 +55,24 @@ TUNNEL_IDLE_ADDRESS = "169.254.255.254/32"
 FIREWALL_RULE_NAME = "Borealis - WireGuard - Shell"
 
 
+def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 3600) -> int:
+    raw = os.environ.get(name)
+    try:
+        value = int(raw) if raw is not None else default
+    except Exception:
+        value = default
+    if value < min_value:
+        return min_value
+    if value > max_value:
+        return max_value
+    return value
+
+
+KEEPALIVE_SECONDS = _env_int("BOREALIS_WIREGUARD_KEEPALIVE_SECONDS", 30, min_value=10, max_value=600)
+ENSURE_INITIAL_DELAY_SECONDS = _env_int("BOREALIS_WIREGUARD_ENSURE_DELAY", 10, min_value=0, max_value=300)
+ENSURE_INTERVAL_SECONDS = _env_int("BOREALIS_WIREGUARD_ENSURE_INTERVAL", 60, min_value=15, max_value=3600)
+
+
 def _log_path() -> Path:
     root = Path(__file__).resolve().parents[2] / "Logs" / "VPN_Tunnel"
     root.mkdir(parents=True, exist_ok=True)
@@ -67,6 +85,8 @@ def _write_log(message: str) -> None:
         _log_path().open("a", encoding="utf-8").write(f"[{ts}] [wg-client] {message}\n")
     except Exception:
         pass
+
+
 
 
 def _encode_key(raw: bytes) -> str:
@@ -125,6 +145,7 @@ class SessionConfig:
         self,
         *,
         token: Dict[str, Any],
+        tunnel_id: str,
         virtual_ip: str,
         allowed_ips: str,
         endpoint: str,
@@ -136,6 +157,7 @@ class SessionConfig:
         client_public_key: Optional[str] = None,
     ) -> None:
         self.token = token
+        self.tunnel_id = tunnel_id
         self.virtual_ip = virtual_ip
         self.allowed_ips = allowed_ips
         self.endpoint = endpoint
@@ -199,7 +221,7 @@ class WireGuardClient:
             return True
         except Exception as exc:
             _write_log(f"WireGuard service registry check failed: {exc}")
-            return False
+        return False
 
     def _service_image_path(self) -> Optional[str]:
         if winreg is None:
@@ -221,6 +243,19 @@ class WireGuardClient:
         match = re.search(r"(?i)/tunnelservice\s+(\S+)", image_path)
         if match:
             return Path(match.group(1))
+        return None
+
+    def _service_state(self) -> Optional[str]:
+        code, out, err = self._run(["sc.exe", "query", self._service_id()])
+        if code != 0:
+            return None
+        text = out or err or ""
+        for line in text.splitlines():
+            if "STATE" not in line:
+                continue
+            match = re.search(r"STATE\s*:\s*\d+\s+(\w+)", line)
+            if match:
+                return match.group(1).upper()
         return None
 
     def _wireguard_config_path(self) -> Path:
@@ -457,7 +492,7 @@ class WireGuardClient:
             f"PublicKey = {session.server_public_key}",
             f"AllowedIPs = {session.allowed_ips}",
             f"Endpoint = {session.endpoint}",
-            "PersistentKeepalive = 20",
+            f"PersistentKeepalive = {KEEPALIVE_SECONDS}",
         ]
         if session.preshared_key:
             lines.append(f"PresharedKey = {session.preshared_key}")
@@ -478,11 +513,45 @@ class WireGuardClient:
         t.start()
         self._idle_thread = t
 
+    def _stop_session_locked(self, reason: str = "stop", ignore_missing: bool = False) -> None:
+        self._remove_shell_firewall()
+        if not self._service_exists():
+            if not ignore_missing:
+                _write_log("WireGuard tunnel service not found when stopping session.")
+            self.session = None
+            self.idle_deadline = None
+            self._stop_event.set()
+            return
+
+        idle_config = self._render_idle_config()
+        wrote_idle = self._write_config(idle_config)
+        service_config_path = self._service_config_path()
+        if service_config_path and service_config_path != self.conf_path:
+            wrote_idle = self._write_config_to(service_config_path, idle_config) or wrote_idle
+        if wrote_idle:
+            self._restart_service()
+            self._ensure_adapter_name()
+            self._ensure_service_display_name()
+            _write_log(f"WireGuard client session stopped (reason={reason}).")
+        elif not ignore_missing:
+            _write_log("Failed to write idle WireGuard config.")
+        self.session = None
+        self.idle_deadline = None
+        self._stop_event.set()
+
     def start_session(self, session: SessionConfig, *, signing_client: Optional[Any] = None) -> None:
         with self._session_lock:
             if self.session:
-                _write_log("Rejecting start_session: existing session already active.")
-                return
+                if self.session.tunnel_id == session.tunnel_id:
+                    _write_log("WireGuard session already active; reusing existing session.")
+                    self.bump_activity()
+                    return
+                _write_log(
+                    "WireGuard session replace: existing_tunnel_id={0} new_tunnel_id={1}".format(
+                        self.session.tunnel_id, session.tunnel_id
+                    )
+                )
+                self._stop_session_locked(reason="session_replace", ignore_missing=True)
 
             try:
                 self._validate_token(session.token, signing_client=signing_client)
@@ -519,41 +588,15 @@ class WireGuardClient:
             self._ensure_shell_firewall(session.allowed_ips)
 
             self.session = session
-            self.idle_deadline = time.time() + max(60, session.idle_seconds)
-            _write_log("WireGuard client session started; idle timer armed.")
-            self._start_idle_monitor()
+            self.idle_deadline = None
+            _write_log("WireGuard client session started (persistent mode).")
 
     def stop_session(self, reason: str = "stop", ignore_missing: bool = False) -> None:
         with self._session_lock:
-            self._remove_shell_firewall()
-            if not self._service_exists():
-                if not ignore_missing:
-                    _write_log("WireGuard tunnel service not found when stopping session.")
-                self.session = None
-                self.idle_deadline = None
-                self._stop_event.set()
-                return
-
-            idle_config = self._render_idle_config()
-            wrote_idle = self._write_config(idle_config)
-            service_config_path = self._service_config_path()
-            if service_config_path and service_config_path != self.conf_path:
-                wrote_idle = self._write_config_to(service_config_path, idle_config) or wrote_idle
-            if wrote_idle:
-                self._restart_service()
-                self._ensure_adapter_name()
-                self._ensure_service_display_name()
-                _write_log(f"WireGuard client session stopped (reason={reason}).")
-            elif not ignore_missing:
-                _write_log("Failed to write idle WireGuard config.")
-            self.session = None
-            self.idle_deadline = None
-            self._stop_event.set()
+            self._stop_session_locked(reason=reason, ignore_missing=ignore_missing)
 
     def bump_activity(self) -> None:
-        if self.session and self.idle_deadline:
-            self.idle_deadline = time.time() + max(60, self.session.idle_seconds)
-            _write_log("WireGuard client activity bump; idle timer reset.")
+        return
 
 
 _client: Optional[WireGuardClient] = None
@@ -686,10 +729,9 @@ class Role:
         self._log_hook = hooks.get("log_agent")
         self._http_client_factory = hooks.get("http_client")
         self._get_server_url = hooks.get("get_server_url")
-        try:
-            self.client.stop_session(reason="agent_startup", ignore_missing=True)
-        except Exception:
-            self._log("Failed to preflight WireGuard session cleanup.", error=True)
+        self._ensure_stop = threading.Event()
+        self._ensure_thread = threading.Thread(target=self._ensure_loop, daemon=True)
+        self._ensure_thread.start()
 
     def _log(self, message: str, *, error: bool = False) -> None:
         if callable(self._log_hook):
@@ -751,6 +793,11 @@ class Role:
             self._log("WireGuard start missing token payload.", error=True)
             return None
 
+        tunnel_id = payload.get("tunnel_id") or token.get("tunnel_id")
+        if not tunnel_id:
+            self._log("WireGuard start missing tunnel_id.", error=True)
+            return None
+
         virtual_ip = payload.get("virtual_ip") or payload.get("client_virtual_ip")
         endpoint = payload.get("endpoint") or payload.get("server_endpoint")
         endpoint = self._resolve_endpoint(endpoint, token)
@@ -780,6 +827,7 @@ class Role:
 
         return SessionConfig(
             token=token,
+            tunnel_id=str(tunnel_id),
             virtual_ip=str(virtual_ip),
             allowed_ips=str(allowed_ips),
             endpoint=str(endpoint),
@@ -790,6 +838,51 @@ class Role:
             client_private_key=payload.get("client_private_key"),
             client_public_key=payload.get("client_public_key"),
         )
+
+    def _request_persistent_session(self) -> Optional[Dict[str, Any]]:
+        client = self._http_client()
+        if client is None:
+            return None
+        try:
+            payload = client.post_json(
+                "/api/agent/vpn/ensure",
+                {"agent_id": self.ctx.agent_id, "reason": "agent_boot"},
+                require_auth=True,
+            )
+        except Exception as exc:
+            self._log(f"WireGuard ensure request failed: {exc}", error=True)
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
+
+    def _ensure_loop(self) -> None:
+        if ENSURE_INITIAL_DELAY_SECONDS:
+            time.sleep(ENSURE_INITIAL_DELAY_SECONDS)
+        while not self._ensure_stop.is_set():
+            payload = self._request_persistent_session()
+            if payload:
+                incoming_tunnel = str(payload.get("tunnel_id") or "")
+                current_tunnel = ""
+                if self.client.session is not None:
+                    try:
+                        current_tunnel = str(self.client.session.tunnel_id)
+                    except Exception:
+                        current_tunnel = ""
+                state = None
+                try:
+                    state = self.client._service_state()
+                except Exception:
+                    state = None
+                service_ready = state in ("RUNNING", "START_PENDING")
+                if incoming_tunnel and incoming_tunnel == current_tunnel and service_ready:
+                    self._ensure_stop.wait(ENSURE_INTERVAL_SECONDS)
+                    continue
+                session = self._build_session(payload)
+                if session:
+                    self._log("WireGuard persistent session ensure received.")
+                    self.client.start_session(session, signing_client=self._http_client())
+            self._ensure_stop.wait(ENSURE_INTERVAL_SECONDS)
 
     def register_events(self) -> None:
         sio = self.ctx.sio
@@ -810,14 +903,18 @@ class Role:
                 if target_agent and str(target_agent).strip() != str(self.ctx.agent_id).strip():
                     return
                 reason = payload.get("reason") or reason
-            self._log(f"WireGuard stop requested (reason={reason}).")
-            self.client.stop_session(reason=str(reason))
+            self._log(f"WireGuard stop requested (reason={reason}); persistent tunnels ignore stop.")
+
 
         @sio.on("vpn_tunnel_activity")
         async def _vpn_tunnel_activity(payload):
             self.client.bump_activity()
 
     def stop_all(self) -> None:
+        try:
+            self._ensure_stop.set()
+        except Exception:
+            pass
         try:
             self.client.stop_session(reason="agent_shutdown")
         except Exception:

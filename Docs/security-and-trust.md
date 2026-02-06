@@ -39,7 +39,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 
 ### WireGuard Agent to Engine Tunnels
 - Borealis started with a bespoke reverse tunnel stack (WebSocket framing + domain lanes); its handshake and security model did not scale, so the project moved to WireGuard as the Engine <-> Agent data pipeline for secure remote protocols and future remote desktop control.
-- On-demand, outbound-only: operators trigger a tunnel start, the agent dials the Engine (no inbound listeners), and the tunnel tears down on stop or idle.
+- Persistent, outbound-only: agents ensure the tunnel at boot (no inbound listeners), and it remains online while the agent runs.
 - Shared sessions: one live VPN tunnel per agent, reused across operators to avoid redundant connections.
 - Fast and robust transport: WireGuard provides encrypted UDP transport with lightweight handshakes that keep latency low and reconnects resilient.
 - Orchestration security: the Engine issues short-lived, Ed25519-signed tunnel tokens that the agent verifies before bringing the tunnel up.
@@ -47,8 +47,8 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Isolation by default: each agent gets a host-only /32; AllowedIPs are restricted to the agent /32 and the Engine /32; no LAN routes and no client-to-client traffic.
 - Port-level controls: per-device allowlists plus Engine-applied firewall rules limit which protocols can traverse the tunnel.
 - Live PowerShell today: a VPN-only shell endpoint enables remote command execution with SYSTEM-level (`NT AUTHORITY\\SYSTEM`) access for deep diagnostics and remediation.
-- Session lifecycle: 15-minute idle timeout with no grace period; session material includes a virtual IP plus allowed ports; teardown removes the tunnel and firewall rules.
-- Future protocols: extend the same tunnel for SSH, WinRM, RDP, VNC, WebRTC streaming, and other remote management workflows by enabling ports per device.
+- Session lifecycle: tunnels stay online with `PersistentKeepalive = 30`; session material includes a virtual IP plus allowed ports; role-level disconnects (shell/VNC) leave the tunnel intact.
+- Future protocols: extend the same tunnel for SSH, WinRM, VNC, WebRTC streaming, and other remote management workflows by enabling ports per device.
 
 ## Enrollment and Identity
 - Enrollment uses install codes and operator approval.

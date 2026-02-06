@@ -32,6 +32,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
 - `POST /api/agent/details` (Device Authenticated) - full hardware/inventory payload.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
+- `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
 - `GET /api/agents` (Token Authenticated) - list online collectors by hostname/context.
 - `GET /api/devices` (Token Authenticated) - device summary list.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
@@ -102,14 +103,18 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/notifications/notify` (Token Authenticated) - broadcast toast notification.
 
 ### VPN and Remote Access
-- `POST /api/tunnel/connect` (Token Authenticated) - start WireGuard tunnel.
+- `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an agent.
 - `GET /api/tunnel/status` (Token Authenticated) - tunnel status by agent.
-- `GET /api/tunnel/connect/status` (Token Authenticated) - alias for status.
 - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels.
-- `DELETE /api/tunnel/disconnect` (Token Authenticated) - stop tunnel.
 
-### RDP
-- `POST /api/rdp/session` (Token Authenticated) - issue Guacamole RDP session token.
+### VNC
+- `POST /api/vnc/establish` (Token Authenticated) - establish VNC session token.
+- `POST /api/vnc/disconnect` (Token Authenticated) - disconnect VNC session.
+- `POST /api/vnc/session` (Token Authenticated) - legacy alias for establish.
+
+### Remote Shell
+- `POST /api/shell/establish` (Token Authenticated) - establish remote shell session.
+- `POST /api/shell/disconnect` (Token Authenticated) - disconnect remote shell session.
 
 ### Server Info and Logs
 - `GET /api/server/time` (Operator Session) - server clock.

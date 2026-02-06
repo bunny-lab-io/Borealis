@@ -1,12 +1,11 @@
 # ======================================================
 # Data\Engine\services\API\devices\tunnel.py
-# Description: WireGuard VPN tunnel API (connect/status/disconnect).
+# Description: WireGuard VPN tunnel API (connect/status).
 #
 # API Endpoints (if applicable):
 # - POST /api/tunnel/connect (Token Authenticated) - Issues VPN session material for an agent.
 # - GET /api/tunnel/status (Token Authenticated) - Returns VPN status for an agent.
 # - GET /api/tunnel/active (Token Authenticated) - Lists active VPN tunnel sessions.
-# - DELETE /api/tunnel/disconnect (Token Authenticated) - Tears down VPN session for an agent.
 # ======================================================
 
 """WireGuard VPN tunnel API (Engine side)."""
@@ -253,53 +252,5 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
             )
         )
         return jsonify({"count": len(sessions), "tunnels": sessions}), 200
-
-    @blueprint.route("/api/tunnel/disconnect", methods=["DELETE"])
-    def disconnect_tunnel():
-        requirement = _require_login(app)
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-
-        body = request.get_json(silent=True) or {}
-        agent_id = _normalize_text(body.get("agent_id"))
-        tunnel_id = _normalize_text(body.get("tunnel_id"))
-        reason = _normalize_text(body.get("reason") or "operator_stop")
-
-        tunnel_service = _get_tunnel_service(adapters)
-        _service_log_event(
-            "vpn_api_disconnect_request agent_id={0} tunnel_id={1} reason={2} operator={3} remote={4}".format(
-                agent_id or "-",
-                tunnel_id or "-",
-                reason or "-",
-                (_current_user(app) or {}).get("username") or "-",
-                _request_remote() or "-",
-            )
-        )
-        stopped = False
-        if tunnel_id:
-            stopped = tunnel_service.disconnect_by_tunnel(tunnel_id, reason=reason)
-        elif agent_id:
-            stopped = tunnel_service.disconnect(agent_id, reason=reason)
-        else:
-            return jsonify({"error": "agent_id_required"}), 400
-
-        if not stopped:
-            _service_log_event(
-                "vpn_api_disconnect_not_found agent_id={0} tunnel_id={1}".format(
-                    agent_id or "-",
-                    tunnel_id or "-",
-                ),
-                level="WARNING",
-            )
-            return jsonify({"error": "not_found"}), 404
-
-        _service_log_event(
-            "vpn_api_disconnect_response agent_id={0} tunnel_id={1} status=stopped".format(
-                agent_id or "-",
-                tunnel_id or "-",
-            )
-        )
-        return jsonify({"status": "stopped", "reason": reason}), 200
 
     app.register_blueprint(blueprint)
