@@ -10,7 +10,8 @@ param(
     [switch]$EngineTests,
     [switch]$EngineProduction,
     [switch]$EngineDev,
-    [string]$EnrollmentCode = ''
+    [string]$EnrollmentCode = '',
+    [string]$ServerUrl = ''
 )
 
 # Admin/Elevation helpers for Borealis runtime
@@ -2193,6 +2194,76 @@ function InstallOrUpdate-BorealisAgent {
             )
 
             Copy-Item $coreAgentFiles -Destination $agentDestinationFolder -Recurse -Force
+
+            # Stage UltraVNC payload + password tool into agent runtime so we don't write under Dependencies at runtime.
+            $uvncServiceName = $env:BOREALIS_ULTRAVNC_SERVICE
+            if (-not $uvncServiceName) { $uvncServiceName = "uvnc_service" }
+            $uvncWasRunning = $false
+            try {
+                $svc = Get-Service -Name $uvncServiceName -ErrorAction SilentlyContinue
+                if ($svc -and $svc.Status -eq "Running") {
+                    $uvncWasRunning = $true
+                }
+            } catch {
+                $uvncWasRunning = $false
+            }
+
+            if ($uvncWasRunning) {
+                try { & sc.exe stop $uvncServiceName | Out-Null } catch {}
+                $stopDeadline = (Get-Date).AddSeconds(10)
+                while ((Get-Date) -lt $stopDeadline) {
+                    $svc = Get-Service -Name $uvncServiceName -ErrorAction SilentlyContinue
+                    if (-not $svc -or $svc.Status -eq "Stopped") { break }
+                    Start-Sleep -Milliseconds 500
+                }
+                $svc = Get-Service -Name $uvncServiceName -ErrorAction SilentlyContinue
+                if ($svc -and $svc.Status -ne "Stopped") {
+                    Write-AgentLog -FileName 'Install.log' -Message "[VNC] Forcing winvnc shutdown for staging."
+                    try { & taskkill.exe /IM winvnc.exe /F | Out-Null } catch {}
+                    Start-Sleep -Seconds 1
+                }
+            }
+
+            try {
+                $uvncPayloadRoot = Join-Path $scriptDir 'Dependencies\UltraVNC_Server\payload\x64'
+                if (Test-Path $uvncPayloadRoot) {
+                    $uvncServerDestDir = Join-Path $agentDestinationFolder 'Tools\UltraVNC\Server'
+                    if (-not (Test-Path $uvncServerDestDir)) {
+                        New-Item -Path $uvncServerDestDir -ItemType Directory -Force | Out-Null
+                    }
+                    Copy-Item -Path (Join-Path $uvncPayloadRoot '*') -Destination $uvncServerDestDir -Recurse -Force
+                    Write-AgentLog -FileName 'Install.log' -Message "[VNC] Staged UltraVNC server payload to Agent\\Borealis\\Tools\\UltraVNC\\Server."
+                } else {
+                    Write-AgentLog -FileName 'Install.log' -Message "[VNC] UltraVNC payload not found under Dependencies\\UltraVNC_Server\\payload\\x64."
+                }
+            } catch {
+                Write-AgentLog -FileName 'Install.log' -Message ("[VNC] Failed to stage UltraVNC server payload: {0}" -f $_.Exception.Message)
+            }
+
+            try {
+                $uvncToolSource = Get-ChildItem -Path (Join-Path $scriptDir 'Dependencies\UltraVNC_Server') `
+                    -Recurse -Filter "createpassword.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($uvncToolSource) {
+                    $uvncToolDestDir = Join-Path $agentDestinationFolder 'Tools\UltraVNC'
+                    if (-not (Test-Path $uvncToolDestDir)) {
+                        New-Item -Path $uvncToolDestDir -ItemType Directory -Force | Out-Null
+                    }
+                    Copy-Item -Path $uvncToolSource.FullName -Destination (Join-Path $uvncToolDestDir 'createpassword.exe') -Force
+                    Write-AgentLog -FileName 'Install.log' -Message "[VNC] Staged UltraVNC password tool to Agent\\Borealis\\Tools\\UltraVNC."
+                } else {
+                    Write-AgentLog -FileName 'Install.log' -Message "[VNC] createpassword.exe not found under Dependencies\\UltraVNC_Server."
+                }
+            } catch {
+                Write-AgentLog -FileName 'Install.log' -Message ("[VNC] Failed to stage UltraVNC password tool: {0}" -f $_.Exception.Message)
+            }
+
+            if ($uvncWasRunning) {
+                try {
+                    Start-Service -Name $uvncServiceName -ErrorAction SilentlyContinue
+                } catch {
+                    # ignore restart failures here; agent startup will ensure service later
+                }
+            }
             
         }
         . (Join-Path $venvFolderPath 'Scripts\Activate')
@@ -2253,12 +2324,22 @@ function InstallOrUpdate-BorealisAgent {
             try { $txt = (Get-Content -Path $serverUrlPath -ErrorAction SilentlyContinue | Select-Object -First 1) } catch { $txt = '' }
             if ($txt -and $txt.Trim()) { $currentUrl = $txt.Trim() }
         }
-        Write-Host ""; Write-Host "Set Borealis Server URL" -ForegroundColor DarkYellow
-        $prompt = "Server URL [$currentUrl]"
-        $inputUrl = Read-Host $prompt
-        if (-not $inputUrl) { $inputUrl = $currentUrl }
-        $inputUrl = $inputUrl.Trim()
-        if (-not $inputUrl) { $inputUrl = $defaultUrl }
+        $providedServerUrl = ''
+        if ($ServerUrl -and $ServerUrl.Trim()) {
+            $providedServerUrl = $ServerUrl.Trim()
+        } elseif ($env:BOREALIS_SERVER_URL -and $env:BOREALIS_SERVER_URL.Trim()) {
+            $providedServerUrl = $env:BOREALIS_SERVER_URL.Trim()
+        }
+        if ($providedServerUrl) {
+            $inputUrl = $providedServerUrl
+        } else {
+            Write-Host ""; Write-Host "Set Borealis Server URL" -ForegroundColor DarkYellow
+            $prompt = "Server URL [$currentUrl]"
+            $inputUrl = Read-Host $prompt
+            if (-not $inputUrl) { $inputUrl = $currentUrl }
+            $inputUrl = $inputUrl.Trim()
+            if (-not $inputUrl) { $inputUrl = $defaultUrl }
+        }
         
         # Write UTF-8 without BOM to avoid BOM being read into the URL
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

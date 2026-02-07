@@ -44,7 +44,9 @@
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",
         "-File", "${workspaceFolder}\\Borealis.ps1",
-        "-Agent"
+        "-Agent",
+        "-EnrollmentCode", "E925-448B-626D-D595-5A0F-FB24-B4D6-6983",
+        "-ServerUrl", "https://localhost:5000"
       ],
       "presentation": {
         "reveal": "always",

@@ -154,8 +154,14 @@ class VncProxyServer:
 
     async def _handle_client(self, websocket, path: Optional[str] = None) -> None:
         raw_path = path or getattr(websocket, "path", "") or ""
+        if not raw_path:
+            request = getattr(websocket, "request", None)
+            raw_path = getattr(request, "path", "") or raw_path
         parsed = urlsplit(raw_path)
-        if parsed.path != VNC_WS_PATH:
+        normalized_path = parsed.path or ""
+        if normalized_path and not normalized_path.startswith("/"):
+            normalized_path = f"/{normalized_path}"
+        if normalized_path != VNC_WS_PATH:
             self.logger.warning("VNC proxy rejected request with invalid path: %s", raw_path)
             await websocket.close(code=1008, reason="invalid_path")
             return

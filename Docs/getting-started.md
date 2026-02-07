@@ -14,6 +14,8 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Run in elevated PowerShell: `./Borealis.ps1 -Agent`.
 - Automated enrollment example:
   `./Borealis.ps1 -Agent -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+- Non-interactive server URL + enrollment example:
+  `./Borealis.ps1 -Agent -ServerUrl "https://localhost:5000" -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Linux agent binaries are not available; `Borealis.sh --Agent` only stages settings.
 
 ## First Run Checklist

@@ -60,6 +60,23 @@ def _find_project_root() -> Optional[Path]:
         return None
 
 
+def _looks_like_vnc_root(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    try:
+        if (path / "winvnc.exe").is_file() or (path / "winvnc64.exe").is_file():
+            return True
+        if (path / "payload" / "x64" / "winvnc.exe").is_file():
+            return True
+        if (path / "payload" / "x64" / "winvnc64.exe").is_file():
+            return True
+        if (path / "payload" / "x86" / "winvnc.exe").is_file():
+            return True
+    except Exception:
+        return False
+    return False
+
+
 def _resolve_vnc_root() -> Optional[Path]:
     override = os.environ.get("BOREALIS_VNC_ROOT") or os.environ.get("BOREALIS_ULTRAVNC_ROOT")
     if override:
@@ -72,6 +89,8 @@ def _resolve_vnc_root() -> Optional[Path]:
     root = _find_project_root()
     candidates: list[Path] = []
     if root:
+        candidates.append(root / "Agent" / "Borealis" / "Tools" / "UltraVNC" / "Server")
+        candidates.append(root / "Agent" / "Borealis" / "Tools" / "UltraVNC")
         candidates.append(root / "Dependencies" / "UltraVNC_Server")
         candidates.append(root / "UltraVNC_Server")
     try:
@@ -97,9 +116,36 @@ def _resolve_vnc_root() -> Optional[Path]:
         if resolved in seen:
             continue
         seen.add(resolved)
-        if candidate.is_dir():
+        if _looks_like_vnc_root(candidate):
             return candidate
     return None
+
+
+def _resolve_vnc_config_dir() -> Optional[Path]:
+    override = os.environ.get("BOREALIS_VNC_CONFIG_DIR") or os.environ.get(
+        "BOREALIS_ULTRAVNC_CONFIG_DIR"
+    )
+    if override:
+        try:
+            override_path = Path(override).expanduser().resolve()
+            if override_path.is_dir():
+                return override_path
+        except Exception:
+            pass
+    root = _find_project_root()
+    if root:
+        tools_config = root / "Agent" / "Borealis" / "Tools" / "UltraVNC" / "Server"
+        if tools_config.is_dir():
+            return tools_config
+        return root / "Agent" / "Borealis" / "Settings" / "UltraVNC"
+    try:
+        base = Path(__file__).resolve().parents[2]
+        tools_config = base / "Borealis" / "Tools" / "UltraVNC" / "Server"
+        if tools_config.is_dir():
+            return tools_config
+        return base / "Borealis" / "Settings" / "UltraVNC"
+    except Exception:
+        return None
 
 
 def _resolve_vnc_exe() -> Optional[str]:
@@ -131,6 +177,82 @@ def _resolve_vnc_exe() -> Optional[str]:
     return None
 
 
+def _read_ultravnc_config(path: Path) -> tuple[dict[str, str], list[str]]:
+    data: dict[str, str] = {}
+    order: list[str] = []
+    if not path.is_file():
+        return data, order
+    try:
+        raw_bytes = path.read_bytes()
+    except Exception:
+        return data, order
+    if not raw_bytes:
+        return data, order
+    text: str = ""
+    try:
+        if raw_bytes.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in raw_bytes:
+            text = raw_bytes.decode("utf-16", errors="ignore")
+        else:
+            text = raw_bytes.decode("utf-8-sig", errors="ignore")
+    except Exception:
+        try:
+            text = raw_bytes.decode("utf-8", errors="ignore")
+        except Exception:
+            return data, order
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("#", ";")):
+            continue
+        if "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip().replace("\x00", "")
+        if not key:
+            continue
+        if key not in order:
+            order.append(key)
+        data[key] = value.strip().replace("\x00", "")
+    return data, order
+
+
+def _find_password_hash_in_paths(paths: list[Path]) -> tuple[Optional[str], Optional[str]]:
+    secure_value: Optional[str] = None
+    for path in paths:
+        data, _ = _read_ultravnc_config(path)
+        hash_value: Optional[str] = None
+        for key, value in data.items():
+            key_lower = key.strip().lower()
+            if key_lower == "secure" and value.strip():
+                secure_value = value.strip()
+            if key_lower == "passwd":
+                candidate = value.strip()
+                if candidate:
+                    hash_value = candidate
+        if hash_value:
+            return hash_value, secure_value
+    return None, secure_value
+
+
+def _write_ultravnc_config(path: Path, updates: dict[str, str]) -> bool:
+    data, order = _read_ultravnc_config(path)
+    for key, value in updates.items():
+        if key not in order:
+            order.append(key)
+        data[key] = value
+    if not order:
+        order = list(updates.keys())
+    lines = [f"{key}={data.get(key, '')}" for key in order]
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="ascii")
+        return True
+    except Exception as exc:
+        _write_log(f"Failed to write UltraVNC config at {path}: {exc}")
+        return False
+
+
 def _resolve_vnc_port(value: Any = None) -> int:
     raw = value if value is not None else os.environ.get("BOREALIS_VNC_PORT")
     try:
@@ -159,6 +281,35 @@ def _resolve_vnc_password_tool(root: Optional[Path]) -> Optional[str]:
                 root / "createpassword64.exe",
                 root / "tools" / "createpassword64.exe",
                 root / "CreatePassword.exe",
+            ]
+        )
+    project_root = _find_project_root()
+    if project_root:
+        tools_root = project_root / "Agent" / "Borealis" / "Tools" / "UltraVNC"
+        candidates.extend(
+            [
+                tools_root / "createpassword.exe",
+                tools_root / "createpassword64.exe",
+            ]
+        )
+        deps_root = project_root / "Dependencies" / "UltraVNC_Server"
+        candidates.extend(
+            [
+                deps_root / "createpassword.exe",
+                deps_root / "tools" / "createpassword.exe",
+                deps_root / "createpassword64.exe",
+                deps_root / "tools" / "createpassword64.exe",
+                deps_root / "payload" / "x64" / "createpassword.exe",
+                deps_root / "payload" / "x64" / "createpassword64.exe",
+            ]
+        )
+    config_root = _resolve_vnc_config_dir()
+    if config_root and config_root.name.lower() == "server" and config_root.parent.name.lower() == "ultravnc":
+        tools_root = config_root.parent
+        candidates.extend(
+            [
+                tools_root / "createpassword.exe",
+                tools_root / "createpassword64.exe",
             ]
         )
     vnc_root = _resolve_vnc_root()
@@ -209,31 +360,154 @@ def _discover_ultravnc_service_name() -> Optional[str]:
     return None
 
 
-def _ensure_ultravnc_ini(config_dir: Path, port: int) -> Optional[Path]:
-    try:
-        config_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    ini_path = config_dir / "ultravnc.ini"
-    try:
-        lines = [
-            "UseRegistry=0",
-            "AuthRequired=1",
-            "MSLogonRequired=0",
-            "NewMSLogon=0",
-            f"PortNumber={port}",
-            "AutoPortSelect=0",
-            "SocketConnect=1",
-            "HTTPConnect=0",
-            "AllowShutdown=0",
-            "DisableTrayIcon=1",
-            "EnableFileTransfer=0",
-        ]
-        ini_path.write_text("\n".join(lines), encoding="utf-8")
-        return ini_path
-    except Exception as exc:
-        _write_log(f"Failed to write ultravnc.ini: {exc}")
+def _ensure_ultravnc_ini(config_path: Path, port: int) -> Optional[Path]:
+    base_settings = {
+        "UseRegistry": "0",
+        "AuthRequired": "1",
+        "MSLogonRequired": "0",
+        "NewMSLogon": "0",
+        "PortNumber": str(port),
+        "AutoPortSelect": "0",
+        "SocketConnect": "1",
+        "HTTPConnect": "0",
+        "AllowShutdown": "0",
+        "DisableTrayIcon": "1",
+        "EnableFileTransfer": "0",
+    }
+    if not _write_ultravnc_config(config_path, base_settings):
         return None
+    return config_path
+
+
+def _read_ultravnc_password_hash(
+    password_tool: str, password: str, config_dir: Path
+) -> tuple[Optional[str], Optional[str]]:
+    tool_path = Path(password_tool)
+    tool_dir = tool_path.parent
+    ini_path = tool_dir / "UltraVNC.ini"
+    try:
+        if not ini_path.is_file():
+            ini_path.write_text("[UltraVNC]\npasswd=\n", encoding="utf-8")
+    except Exception as exc:
+        _write_log(f"Failed to prepare UltraVNC.ini for password tool: {exc}")
+        return None, None
+    try:
+        result = subprocess.run(
+            [password_tool, "-secure", password],
+            cwd=str(tool_dir),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            _write_log(f"Failed to generate VNC password hash: {detail or 'exit ' + str(result.returncode)}")
+            return None, None
+    except Exception as exc:
+        _write_log(f"Failed to generate VNC password hash: {exc}")
+        return None, None
+    candidates = [
+        ini_path,
+        tool_dir / "ultravnc.ini",
+        config_dir / "UltraVNC.ini",
+    ]
+    hash_value, secure_value = _find_password_hash_in_paths(candidates)
+    if not hash_value:
+        _write_log(
+            "VNC password hash missing after password tool run (tool={0}, ini={1}).".format(
+                tool_path, ini_path
+            )
+        )
+        return None, secure_value
+    return hash_value, secure_value
+
+
+def _apply_ultravnc_password_hash(config_path: Path, password_hash: str) -> bool:
+    try:
+        if not _write_ultravnc_config(config_path, {"passwd": password_hash}):
+            return False
+        try:
+            raw = config_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return True
+        lines = raw.splitlines()
+        out_lines: list[str] = []
+        in_section = False
+        section_found = False
+        passwd_written = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                if in_section and not passwd_written:
+                    out_lines.append(f"passwd={password_hash}")
+                    passwd_written = True
+                section_name = stripped[1:-1].strip()
+                in_section = section_name.lower() == "ultravnc"
+                if in_section:
+                    section_found = True
+                out_lines.append(line)
+                continue
+            if in_section and stripped.lower().startswith("passwd="):
+                out_lines.append(f"passwd={password_hash}")
+                passwd_written = True
+            else:
+                out_lines.append(line)
+        if section_found:
+            if in_section and not passwd_written:
+                out_lines.append(f"passwd={password_hash}")
+        else:
+            if out_lines and out_lines[-1].strip():
+                out_lines.append("")
+            out_lines.append("[UltraVNC]")
+            out_lines.append(f"passwd={password_hash}")
+        config_path.write_text("\n".join(out_lines) + "\n", encoding="ascii")
+        return True
+    except Exception as exc:
+        _write_log(f"Failed to apply VNC password hash to config: {exc}")
+        return False
+
+
+def _apply_ultravnc_secure_flag(config_path: Path, secure_value: Optional[str]) -> None:
+    if secure_value is None:
+        return
+    try:
+        raw = config_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return
+    lines = raw.splitlines()
+    out_lines: list[str] = []
+    in_section = False
+    section_found = False
+    secure_written = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if in_section and not secure_written:
+                out_lines.append(f"Secure={secure_value}")
+                secure_written = True
+            section_name = stripped[1:-1].strip().lower()
+            in_section = section_name == "admin"
+            if in_section:
+                section_found = True
+            out_lines.append(line)
+            continue
+        if in_section and stripped.lower().startswith("secure="):
+            out_lines.append(f"Secure={secure_value}")
+            secure_written = True
+        else:
+            out_lines.append(line)
+    if section_found:
+        if in_section and not secure_written:
+            out_lines.append(f"Secure={secure_value}")
+    else:
+        if out_lines and out_lines[-1].strip():
+            out_lines.append("")
+        out_lines.append("[admin]")
+        out_lines.append(f"Secure={secure_value}")
+    try:
+        config_path.write_text("\n".join(out_lines) + "\n", encoding="ascii")
+    except Exception:
+        return
 
 
 def _parse_allowed_ips(value: Any) -> Optional[str]:
@@ -252,7 +526,9 @@ class VncManager:
         self._last_port: Optional[int] = None
         self._last_password: Optional[str] = None
         self._vnc_exe = _resolve_vnc_exe()
+        self._vnc_root = _resolve_vnc_root()
         self._password_tool: Optional[str] = None
+        self._password_tool_logged = False
         self._service_name: Optional[str] = None
 
     def _service_state_by_name(self, service_name: str) -> Optional[str]:
@@ -294,6 +570,63 @@ class VncManager:
             return candidate
         return None
 
+    def _service_binpath(self, service_name: str) -> Optional[str]:
+        if os.name != "nt":
+            return None
+        try:
+            result = subprocess.run(
+                ["sc.exe", "qc", service_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return None
+            for line in (result.stdout or "").splitlines():
+                if "BINARY_PATH_NAME" in line:
+                    parts = line.split(":", 1)
+                    if len(parts) == 2:
+                        return parts[1].strip()
+        except Exception:
+            return None
+        return None
+
+    def _ensure_service_binpath(self, service_name: str, config_path: Optional[Path]) -> bool:
+        if os.name != "nt":
+            return False
+        if not config_path:
+            return False
+        if not self._vnc_exe:
+            return False
+        desired = f"\"{self._vnc_exe}\" -service -config \"{config_path}\""
+        current = self._service_binpath(service_name)
+        if current and "-config" in current:
+            normalized = current.replace("'", "").replace('"', "").lower()
+            desired_norm = desired.replace("'", "").replace('"', "").lower()
+            if normalized == desired_norm:
+                return False
+        try:
+            command = f"sc.exe config \"{service_name}\" binPath= '{desired}'"
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                _write_log(
+                    "UltraVNC service binPath update failed: {0}".format(
+                        detail or f"exit {result.returncode}"
+                    )
+                )
+                return False
+            _write_log(f"UltraVNC service binPath updated for config {config_path}.")
+            return True
+        except Exception as exc:
+            _write_log(f"UltraVNC service binPath update failed: {exc}")
+            return False
+
     def _wait_for_service(self, service_name: str, timeout: float = 5.0) -> bool:
         deadline = time.time() + max(1.0, timeout)
         while time.time() < deadline:
@@ -304,6 +637,47 @@ class VncManager:
                 return False
             time.sleep(0.5)
         return False
+
+    def _wait_for_service_stopped(self, service_name: str, timeout: float = 8.0) -> bool:
+        deadline = time.time() + max(1.0, timeout)
+        while time.time() < deadline:
+            state = self._service_state_by_name(service_name)
+            if state in ("STOPPED", None):
+                return True
+            time.sleep(0.5)
+        return False
+
+    def _kill_winvnc_processes(self) -> None:
+        if os.name != "nt":
+            return
+        command = (
+            "Get-CimInstance Win32_Process -Filter \"Name='winvnc.exe'\" | "
+            "Select-Object -ExpandProperty ProcessId"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            pids = [
+                pid.strip()
+                for pid in (result.stdout or "").splitlines()
+                if pid.strip().isdigit()
+            ]
+        except Exception:
+            return
+        for pid in pids:
+            try:
+                subprocess.run(
+                    ["taskkill.exe", "/PID", pid, "/F"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except Exception:
+                pass
 
     def _restart_service(self) -> None:
         if os.name != "nt":
@@ -316,19 +690,41 @@ class VncManager:
             return
         try:
             subprocess.run(["sc.exe", "stop", service_name], capture_output=True, text=True, check=False)
+            if not self._wait_for_service_stopped(service_name, timeout=6.0):
+                _write_log(f"UltraVNC service stop timed out (service={service_name}); forcing stop.")
+                self._kill_winvnc_processes()
             time.sleep(1)
-            subprocess.run(["sc.exe", "start", service_name], capture_output=True, text=True, check=False)
-            if not self._wait_for_service(service_name, timeout=8.0):
+            start_result = subprocess.run(
+                ["sc.exe", "start", service_name], capture_output=True, text=True, check=False
+            )
+            if start_result.returncode != 0:
+                detail = (start_result.stderr or start_result.stdout or "").strip()
+                _write_log(
+                    "UltraVNC service restart failed: {0}".format(detail or f"exit {start_result.returncode}")
+                )
+            if not self._wait_for_service(service_name, timeout=12.0):
                 _write_log(f"UltraVNC service restart timed out (service={service_name}).")
         except Exception as exc:
             _write_log(f"Failed to restart UltraVNC service: {exc}")
 
-    def _ensure_service_running(self) -> bool:
+    def _ensure_service_running(self, config_path: Optional[Path] = None) -> bool:
         if os.name != "nt":
             return False
         service_name = self._resolve_service_name()
         state = self._service_state_by_name(service_name) if service_name else None
+        if state == "STOP_PENDING" and service_name:
+            if not self._wait_for_service_stopped(service_name, timeout=8.0):
+                _write_log(
+                    f"UltraVNC service stop pending too long (service={service_name}); forcing stop."
+                )
+                self._kill_winvnc_processes()
+            state = self._service_state_by_name(service_name)
+        updated_binpath = False
+        if service_name:
+            updated_binpath = self._ensure_service_binpath(service_name, config_path)
         if state == "RUNNING":
+            if updated_binpath:
+                self._restart_service()
             return True
         if state == "START_PENDING" and service_name:
             return self._wait_for_service(service_name, timeout=10.0)
@@ -336,18 +732,41 @@ class VncManager:
             self._vnc_exe = _resolve_vnc_exe()
         if not self._vnc_exe:
             return False
+        if not self._vnc_root:
+            self._vnc_root = _resolve_vnc_root()
         try:
             if state is None:
-                subprocess.run([self._vnc_exe, "-install"], capture_output=True, text=True, check=False)
+                install_result = subprocess.run(
+                    [self._vnc_exe, "-install"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if install_result.returncode != 0:
+                    detail = (install_result.stderr or install_result.stdout or "").strip()
+                    _write_log(
+                        "UltraVNC service install failed: {0}".format(
+                            detail or f"exit {install_result.returncode}"
+                        )
+                    )
                 service_name = self._resolve_service_name(refresh=True)
+                if service_name:
+                    updated_binpath = self._ensure_service_binpath(service_name, config_path)
             if not service_name:
                 service_name = ULTRAVNC_SERVICE_NAME
-            subprocess.run(
+            config_result = subprocess.run(
                 ["sc.exe", "config", service_name, "start=", "auto"],
                 capture_output=True,
                 text=True,
                 check=False,
             )
+            if config_result.returncode != 0:
+                detail = (config_result.stderr or config_result.stdout or "").strip()
+                _write_log(
+                    "UltraVNC service config failed: {0}".format(
+                        detail or f"exit {config_result.returncode}"
+                    )
+                )
             start_result = subprocess.run(
                 ["sc.exe", "start", service_name],
                 capture_output=True,
@@ -355,12 +774,29 @@ class VncManager:
                 check=False,
             )
             start_output = (start_result.stdout or "") + (start_result.stderr or "")
-            if "SERVICE_ALREADY_RUNNING" in start_output:
+            if (
+                "SERVICE_ALREADY_RUNNING" in start_output
+                or "already running" in start_output.lower()
+                or "1056" in start_output
+            ):
+                if updated_binpath:
+                    self._restart_service()
                 return True
+            if start_result.returncode != 0:
+                detail = start_output.strip()
+                _write_log(
+                    "UltraVNC service start failed: {0}".format(
+                        detail or f"exit {start_result.returncode}"
+                    )
+                )
         except Exception as exc:
             _write_log(f"Failed to ensure UltraVNC service running: {exc}")
             return False
-        return self._wait_for_service(service_name, timeout=10.0)
+        if self._wait_for_service(service_name, timeout=10.0):
+            if updated_binpath:
+                self._restart_service()
+            return True
+        return False
 
     def _normalize_firewall_remote(self, allowed_ips: Optional[str]) -> Optional[str]:
         if not allowed_ips:
@@ -418,7 +854,7 @@ class VncManager:
         except Exception:
             pass
 
-    def _apply_password(self, config_dir: Path, password: str) -> Optional[str]:
+    def _apply_password(self, config_dir: Path, config_path: Path, password: str) -> Optional[str]:
         if not password:
             _write_log("VNC password missing; refusing to start without auth.")
             return None
@@ -427,27 +863,24 @@ class VncManager:
             _write_log("VNC password trimmed to 8 characters for UltraVNC compatibility.")
         if not self._password_tool:
             self._password_tool = _resolve_vnc_password_tool(config_dir)
+            if self._password_tool and not self._password_tool_logged:
+                self._password_tool_logged = True
+                _write_log(f"Using VNC password tool: {self._password_tool}")
         if not self._password_tool:
             _write_log(
                 "VNC password tool not found; expected createpassword.exe under "
-                "Dependencies/UltraVNC_Server/tools or payload."
+                "Agent/Borealis/Tools/UltraVNC or Dependencies/UltraVNC_Server/tools."
             )
             return None
-        try:
-            result = subprocess.run(
-                [self._password_tool, "-secure", trimmed],
-                cwd=str(config_dir),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode != 0:
-                _write_log(f"Failed to apply VNC password: {result.stderr.strip()}")
-                return None
-            return trimmed
-        except Exception as exc:
-            _write_log(f"Failed to apply VNC password: {exc}")
+        password_hash, secure_value = _read_ultravnc_password_hash(
+            self._password_tool, trimmed, config_dir
+        )
+        if not password_hash:
             return None
+        if not _apply_ultravnc_password_hash(config_path, password_hash):
+            return None
+        _apply_ultravnc_secure_flag(config_path, secure_value)
+        return trimmed
 
     def start(
         self,
@@ -470,16 +903,19 @@ class VncManager:
                 )
                 return
 
-            exe_path = Path(self._vnc_exe)
-            config_dir = exe_path.parent
-            ini_path = _ensure_ultravnc_ini(config_dir, port_value)
+            config_dir = _resolve_vnc_config_dir()
+            if not config_dir:
+                _write_log("Unable to resolve UltraVNC config directory.")
+                return
+            config_path = config_dir / "ultravnc.ini"
+            ini_path = _ensure_ultravnc_ini(config_path, port_value)
             if not ini_path:
                 return
-            applied_password = self._apply_password(config_dir, password or "")
+            applied_password = self._apply_password(config_dir, config_path, password or "")
             if not applied_password:
                 return
 
-            if not self._ensure_service_running():
+            if not self._ensure_service_running(config_path=config_path):
                 _write_log("Failed to start UltraVNC service.")
                 return
 
@@ -508,7 +944,11 @@ class Role:
         except Exception:
             self._log("Failed to preflight VNC cleanup.", error=True)
         try:
-            self.vnc._ensure_service_running()
+            config_dir = _resolve_vnc_config_dir()
+            config_path = None
+            if config_dir:
+                config_path = _ensure_ultravnc_ini(config_dir / "ultravnc.ini", DEFAULT_VNC_PORT)
+            self.vnc._ensure_service_running(config_path=config_path)
         except Exception:
             self._log("Failed to ensure UltraVNC service running.", error=True)
 
