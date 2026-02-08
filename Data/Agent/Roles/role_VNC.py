@@ -510,6 +510,32 @@ def _apply_ultravnc_secure_flag(config_path: Path, secure_value: Optional[str]) 
         return
 
 
+def _same_path(a: Path, b: Path) -> bool:
+    try:
+        return os.path.normcase(str(a.resolve())) == os.path.normcase(str(b.resolve()))
+    except Exception:
+        return os.path.normcase(str(a)) == os.path.normcase(str(b))
+
+
+def _write_ultravnc_password_file(
+    target_dir: Path,
+    password_hash: str,
+    secure_value: Optional[str],
+    *,
+    config_dir: Optional[Path] = None,
+) -> None:
+    if config_dir and _same_path(target_dir, config_dir):
+        return
+    ini_path = target_dir / "UltraVNC.ini"
+    lines = ["[UltraVNC]", f"passwd={password_hash}"]
+    if secure_value is not None:
+        lines.extend(["", "[admin]", f"Secure={secure_value}"])
+    try:
+        ini_path.write_text("\n".join(lines) + "\n", encoding="ascii")
+    except Exception:
+        return
+
+
 def _parse_allowed_ips(value: Any) -> Optional[str]:
     if isinstance(value, list):
         if not value:
@@ -880,6 +906,14 @@ class VncManager:
         if not _apply_ultravnc_password_hash(config_path, password_hash):
             return None
         _apply_ultravnc_secure_flag(config_path, secure_value)
+        if self._password_tool:
+            tool_dir = Path(self._password_tool).parent
+            _write_ultravnc_password_file(
+                tool_dir,
+                password_hash,
+                secure_value,
+                config_dir=config_dir,
+            )
         return trimmed
 
     def start(
