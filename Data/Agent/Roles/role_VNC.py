@@ -386,14 +386,13 @@ def _read_ultravnc_password_hash(
     tool_dir = tool_path.parent
     ini_path = tool_dir / "UltraVNC.ini"
     try:
-        if not ini_path.is_file():
-            ini_path.write_text("[UltraVNC]\npasswd=\n", encoding="utf-8")
+        ini_path.write_text("[UltraVNC]\npasswd=\n", encoding="utf-8")
     except Exception as exc:
         _write_log(f"Failed to prepare UltraVNC.ini for password tool: {exc}")
         return None, None
     try:
         result = subprocess.run(
-            [password_tool, "-secure", password],
+            [password_tool, password],
             cwd=str(tool_dir),
             capture_output=True,
             text=True,
@@ -504,6 +503,45 @@ def _apply_ultravnc_secure_flag(config_path: Path, secure_value: Optional[str]) 
             out_lines.append("")
         out_lines.append("[admin]")
         out_lines.append(f"Secure={secure_value}")
+    try:
+        config_path.write_text("\n".join(out_lines) + "\n", encoding="ascii")
+    except Exception:
+        return
+
+
+def _clear_ultravnc_secure_flag(config_path: Path) -> None:
+    try:
+        raw = config_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return
+    lines = raw.splitlines()
+    out_lines: list[str] = []
+    in_admin = False
+    admin_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if in_admin:
+                # emit admin section if anything besides Secure= remains
+                if admin_lines:
+                    out_lines.append("[admin]")
+                    out_lines.extend(admin_lines)
+                admin_lines = []
+            section_name = stripped[1:-1].strip().lower()
+            in_admin = section_name == "admin"
+            if not in_admin:
+                out_lines.append(line)
+            continue
+        if in_admin:
+            if stripped.lower().startswith("secure="):
+                continue
+            if stripped:
+                admin_lines.append(line)
+            continue
+        out_lines.append(line)
+    if in_admin and admin_lines:
+        out_lines.append("[admin]")
+        out_lines.extend(admin_lines)
     try:
         config_path.write_text("\n".join(out_lines) + "\n", encoding="ascii")
     except Exception:
@@ -905,7 +943,10 @@ class VncManager:
             return None
         if not _apply_ultravnc_password_hash(config_path, password_hash):
             return None
-        _apply_ultravnc_secure_flag(config_path, secure_value)
+        if secure_value is not None:
+            _apply_ultravnc_secure_flag(config_path, secure_value)
+        else:
+            _clear_ultravnc_secure_flag(config_path)
         if self._password_tool:
             tool_dir = Path(self._password_tool).parent
             _write_ultravnc_password_file(
