@@ -31,6 +31,9 @@ Device List:
 Device Details:
 ![Device Details](Docs/images/repo_screenshots/Device_Details.png)
 
+Device Remote Desktop:
+![Device List](Docs/images/repo_screenshots/Device_VNC.png)
+
 Device Approval Queue:
 ![Device Approval Queue](Docs/images/repo_screenshots/Device_Approval_Queue.png)
 
