@@ -800,26 +800,40 @@ class VncManager:
             self._vnc_root = _resolve_vnc_root()
         try:
             if state is None:
-                install_result = subprocess.run(
-                    [self._vnc_exe, "-install"],
+                service_name = ULTRAVNC_SERVICE_NAME or "uvnc_service"
+                desired = f"\"{self._vnc_exe}\" -service -config \"{config_path}\""
+                create_args = [
+                    "sc.exe",
+                    "create",
+                    service_name,
+                    "binPath=",
+                    desired,
+                    "start=",
+                    "demand",
+                    "type=",
+                    "own",
+                    "DisplayName=",
+                    service_name,
+                ]
+                create_result = subprocess.run(
+                    create_args,
                     capture_output=True,
                     text=True,
                     check=False,
                 )
-                if install_result.returncode != 0:
-                    detail = (install_result.stderr or install_result.stdout or "").strip()
+                if create_result.returncode != 0:
+                    detail = (create_result.stderr or create_result.stdout or "").strip()
                     _write_log(
-                        "UltraVNC service install failed: {0}".format(
-                            detail or f"exit {install_result.returncode}"
+                        "UltraVNC service create failed: {0}".format(
+                            detail or f"exit {create_result.returncode}"
                         )
                     )
-                service_name = self._resolve_service_name(refresh=True)
-                if service_name:
-                    updated_binpath = self._ensure_service_binpath(service_name, config_path)
+                service_name = self._resolve_service_name(refresh=True) or service_name
+                updated_binpath = self._ensure_service_binpath(service_name, config_path)
             if not service_name:
                 service_name = ULTRAVNC_SERVICE_NAME
             config_result = subprocess.run(
-                ["sc.exe", "config", service_name, "start=", "auto"],
+                ["sc.exe", "config", service_name, "start=", "demand"],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -990,11 +1004,18 @@ class VncManager:
             if not applied_password:
                 return
 
+            service_name = self._resolve_service_name()
+            service_was_running = False
+            if service_name:
+                state = self._service_state_by_name(service_name)
+                service_was_running = state == "RUNNING"
             if not self._ensure_service_running(config_path=config_path):
                 _write_log("Failed to start UltraVNC service.")
                 return
 
-            if self._last_port != port_value or self._last_password != applied_password:
+            if service_was_running and (
+                self._last_port != port_value or self._last_password != applied_password
+            ):
                 self._restart_service()
             self._last_port = port_value
             self._last_password = applied_password
@@ -1003,7 +1024,6 @@ class VncManager:
     def stop(self, *, reason: str = "stop") -> None:
         with self._lock:
             self._remove_firewall()
-            self._last_port = None
             _write_log(f"VNC firewall closed reason={reason}.")
 
 
@@ -1020,12 +1040,10 @@ class Role:
             self._log("Failed to preflight VNC cleanup.", error=True)
         try:
             config_dir = _resolve_vnc_config_dir()
-            config_path = None
             if config_dir:
-                config_path = _ensure_ultravnc_ini(config_dir / "ultravnc.ini", DEFAULT_VNC_PORT)
-            self.vnc._ensure_service_running(config_path=config_path)
+                _ensure_ultravnc_ini(config_dir / "ultravnc.ini", DEFAULT_VNC_PORT)
         except Exception:
-            self._log("Failed to ensure UltraVNC service running.", error=True)
+            self._log("Failed to ensure UltraVNC config present.", error=True)
 
     def _log(self, message: str, *, error: bool = False) -> None:
         if callable(self._log_hook):

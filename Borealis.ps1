@@ -1628,7 +1628,6 @@ ListenPort = 0
                 $uvncServiceName = "uvnc_service"
             }
             try {
-                & $uvncExe.FullName -install | Out-Null
                 $uvncService = Get-Service -Name $uvncServiceName -ErrorAction SilentlyContinue
                 if (-not $uvncService) {
                     $uvncService = Get-Service -ErrorAction SilentlyContinue | Where-Object {
@@ -1636,10 +1635,12 @@ ListenPort = 0
                     } | Select-Object -First 1
                 }
                 if ($uvncService) {
-                    sc.exe config $uvncService.Name start= auto | Out-Null
-                    sc.exe start $uvncService.Name | Out-Null
+                    sc.exe config $uvncService.Name start= demand | Out-Null
+                    if ($uvncService.Status -ne "Stopped") {
+                        sc.exe stop $uvncService.Name | Out-Null
+                    }
                 } else {
-                    Write-Host "UltraVNC service not found after install. Set BOREALIS_ULTRAVNC_SERVICE to override." -ForegroundColor Yellow
+                    Write-Host "UltraVNC service will be created on-demand by the agent." -ForegroundColor Yellow
                 }
             } catch {
                 Write-Host "UltraVNC service setup failed: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -2223,6 +2224,14 @@ function InstallOrUpdate-BorealisAgent {
                     Start-Sleep -Seconds 1
                 }
             }
+            try {
+                $svc = Get-Service -Name $uvncServiceName -ErrorAction SilentlyContinue
+                if ($svc) {
+                    & sc.exe config $uvncServiceName start= demand | Out-Null
+                }
+            } catch {
+                # ignore start-mode updates here
+            }
 
             try {
                 $uvncPayloadRoot = Join-Path $scriptDir 'Dependencies\UltraVNC_Server\payload\x64'
@@ -2257,13 +2266,7 @@ function InstallOrUpdate-BorealisAgent {
                 Write-AgentLog -FileName 'Install.log' -Message ("[VNC] Failed to stage UltraVNC password tool: {0}" -f $_.Exception.Message)
             }
 
-            if ($uvncWasRunning) {
-                try {
-                    Start-Service -Name $uvncServiceName -ErrorAction SilentlyContinue
-                } catch {
-                    # ignore restart failures here; agent startup will ensure service later
-                }
-            }
+            # Do not restart UltraVNC during deployment; the agent will start it on-demand.
             
         }
         . (Join-Path $venvFolderPath 'Scripts\Activate')

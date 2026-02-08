@@ -224,7 +224,7 @@ class VncProxyServer:
             self._notify_agent_session_end(session, reason="vnc_session_end")
 
     async def _connect_vnc(self, host: str, port: int) -> Tuple[Any, Any]:
-        attempts = 5
+        attempts = 20
         delay = 0.5
         last_exc: Optional[Exception] = None
         for attempt in range(attempts):
