@@ -5,8 +5,6 @@ Borealis is a remote management platform with a simple, visual automation layer,
 ### A Note on Development Pace
 I'm the sole maintainer and still learning as I go, while working a full-time IT job. Progress is sporadic, and parts of the codebase get rebuilt when I discover better or more optimized approaches. Thank you for your patience with the slower cadence.  Ko-Fi donations are always welcome and help keep me motivated to actively continue development of Borealis.
 
----
-
 ## Documentation
 - Human-friendly docs live in `Docs/` with a top-level index at `Docs/index.md`.
 - The same files also contain **Codex Agent** sections with deep, agent-focused implementation details.
