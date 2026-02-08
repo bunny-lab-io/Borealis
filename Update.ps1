@@ -51,6 +51,16 @@ function Write-UpdateLog {
     }
 }
 
+function Test-IsAdmin {
+    try {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($id)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
 $repositoryUrl = 'https://github.com/bunny-lab-io/Borealis.git'
 
 function Write-ProgressStep {
@@ -366,6 +376,49 @@ function Resolve-BorealisServerUrl {
     }
 
     return $builder.Uri.AbsoluteUri.TrimEnd('/')
+}
+
+function Get-AgentServerUrlFromSettings {
+    param(
+        [string]$AgentRoot
+    )
+
+    if (-not $AgentRoot) { $AgentRoot = $scriptDir }
+    $settingsDir = Join-Path $AgentRoot 'Settings'
+    $serverUrlFile = Join-Path $settingsDir 'server_url.txt'
+    if (-not (Test-Path $serverUrlFile -PathType Leaf)) {
+        return [pscustomobject]@{
+            Url    = ''
+            Source = $serverUrlFile
+        }
+    }
+
+    $raw = ''
+    try {
+        $raw = Get-Content -Path $serverUrlFile -Raw -ErrorAction Stop
+    } catch {
+        Write-UpdateLog ("Failed to read server_url.txt: {0}" -f $_.Exception.Message) 'WARN'
+        return [pscustomobject]@{
+            Url    = ''
+            Source = $serverUrlFile
+        }
+    }
+
+    $candidate = if ($raw) { $raw.Trim() } else { '' }
+    if (-not $candidate) {
+        return [pscustomobject]@{
+            Url    = ''
+            Source = $serverUrlFile
+        }
+    }
+
+    $resolved = Resolve-BorealisServerUrl -Url $candidate
+    if (-not $resolved) { $resolved = $candidate.TrimEnd('/') }
+
+    return [pscustomobject]@{
+        Url    = $resolved
+        Source = $serverUrlFile
+    }
 }
 
 function Get-AgentCertificateCachePath {
@@ -996,6 +1049,124 @@ function Get-AgentServiceId {
     }
 
     return ''
+}
+
+function Get-AgentEnrollmentCode {
+    param(
+        [string]$AgentRoot
+    )
+
+    if (-not $AgentRoot) { $AgentRoot = $scriptDir }
+    $settingsDir = Join-Path $AgentRoot 'Settings'
+    $candidates = @(
+        (Join-Path $settingsDir 'agent_settings_SYSTEM.json')
+        (Join-Path $settingsDir 'agent_settings.json')
+        (Join-Path $settingsDir 'agent_settings_CURRENTUSER.json')
+        (Join-Path $settingsDir 'agent_settings_svc.json')
+        (Join-Path $settingsDir 'agent_settings_user.json')
+    )
+
+    foreach ($path in $candidates) {
+        try {
+            if (-not (Test-Path $path -PathType Leaf)) { continue }
+            $raw = Get-Content -Path $path -Raw -ErrorAction Stop
+            if (-not $raw) { continue }
+            $cfg = $raw | ConvertFrom-Json -ErrorAction Stop
+            $value = ''
+            $field = ''
+            if ($cfg -and $cfg.PSObject.Properties.Name -contains 'enrollment_code' -and $cfg.enrollment_code) {
+                $value = [string]$cfg.enrollment_code
+                $field = 'enrollment_code'
+            } elseif ($cfg -and $cfg.PSObject.Properties.Name -contains 'installer_code' -and $cfg.installer_code) {
+                $value = [string]$cfg.installer_code
+                $field = 'installer_code'
+            }
+            if ($value -and $value.Trim()) {
+                return [pscustomobject]@{
+                    Code   = $value.Trim()
+                    Source = $path
+                    Field  = $field
+                }
+            }
+        } catch {}
+    }
+
+    return [pscustomobject]@{
+        Code   = ''
+        Source = ''
+        Field  = ''
+    }
+}
+
+function Invoke-BorealisAgentRedeploy {
+    param(
+        [string]$ProjectRoot,
+        [string]$ServerUrl,
+        [string]$EnrollmentCode
+    )
+
+    if (-not $ProjectRoot) { $ProjectRoot = $scriptDir }
+    $scriptPath = Join-Path $ProjectRoot 'Borealis.ps1'
+    if (-not (Test-Path $scriptPath -PathType Leaf)) {
+        Write-UpdateLog ("Borealis.ps1 not found at '{0}'." -f $scriptPath) 'ERROR'
+        return $false
+    }
+
+    if (-not (Test-IsAdmin)) {
+        Write-UpdateLog "Updater is not running elevated; skipping agent redeploy to avoid interactive prompts." 'WARN'
+        return $false
+    }
+
+    $normalizedUrl = if ($ServerUrl) { $ServerUrl.Trim() } else { '' }
+    $normalizedCode = if ($EnrollmentCode) { $EnrollmentCode.Trim() } else { '' }
+
+    if (-not $normalizedUrl) {
+        Write-UpdateLog "Server URL missing; cannot re-deploy Borealis agent." 'ERROR'
+        return $false
+    }
+    if (-not $normalizedCode) {
+        Write-UpdateLog "Enrollment code missing; cannot re-deploy Borealis agent." 'ERROR'
+        return $false
+    }
+
+    $argTokens = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $scriptPath,
+        '-Agent',
+        '-ServerUrl', $normalizedUrl,
+        '-EnrollmentCode', $normalizedCode
+    )
+
+    $argLine = ($argTokens | ForEach-Object {
+        $text = [string]$_
+        if ($text -match '\s') {
+            '"' + ($text -replace '"','`"') + '"'
+        } else {
+            $text
+        }
+    }) -join ' '
+
+    Write-UpdateLog ("Launching Borealis agent redeploy via {0}." -f $scriptPath) 'STEP'
+    try {
+        $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $argLine -WorkingDirectory $ProjectRoot -NoNewWindow -Wait -PassThru
+    } catch {
+        Write-UpdateLog ("Failed to start Borealis agent redeploy: {0}" -f $_.Exception.Message) 'ERROR'
+        return $false
+    }
+
+    if (-not $process) {
+        Write-UpdateLog "Borealis agent redeploy process did not start." 'ERROR'
+        return $false
+    }
+
+    if ($process.ExitCode -ne 0) {
+        Write-UpdateLog ("Borealis agent redeploy exited with code {0}." -f $process.ExitCode) 'ERROR'
+        return $false
+    }
+
+    Write-UpdateLog "Borealis agent redeploy completed successfully." 'SUCCESS'
+    return $true
 }
 
 function Get-AgentGuid {
@@ -1788,6 +1959,76 @@ function Invoke-BorealisAgentUpdate {
             Invoke-BorealisUpdate -GitExe $gitExe -RepositoryUrl $repositoryUrl -TargetHash $serverHash -BranchName $serverBranch -Silent
             $updateSucceeded = $true
             Write-UpdateLog "Repository sync completed successfully." 'SUCCESS'
+
+            $refreshedContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
+            if ($refreshedContext -and $refreshedContext.AccessToken) {
+                $authToken = $refreshedContext.AccessToken
+            }
+            $postUpdateInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken -AgentRoot $agentRoot
+            if ($postUpdateInfo) {
+                try {
+                    $refreshedSha = (($postUpdateInfo.sha) -as [string]).Trim()
+                    if ($refreshedSha) { $serverHash = $refreshedSha }
+                } catch {}
+                try {
+                    $branchCandidate = (($postUpdateInfo.branch) -as [string]).Trim()
+                    if ($branchCandidate) { $serverBranch = $branchCandidate }
+                } catch {}
+            }
+
+            $newHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot -GitExe $gitExe
+
+            $normalizedNewHash = if ($newHash) { $newHash.Trim().ToLowerInvariant() } else { '' }
+            $normalizedServerHash = if ($serverHash) { $serverHash.Trim().ToLowerInvariant() } else { '' }
+
+            if ($normalizedServerHash -and (-not $normalizedNewHash -or $normalizedNewHash -ne $normalizedServerHash)) {
+                $newHash = $serverHash
+                $normalizedNewHash = $normalizedServerHash
+            } elseif (-not $newHash -and $serverHash) {
+                $newHash = $serverHash
+            }
+
+            if ($newHash) {
+                Write-UpdateLog ("Final agent hash determined: {0}" -f $newHash) 'INFO'
+                Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
+            } else {
+                Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
+                Write-UpdateLog "Unable to determine final agent hash; skipping submission." 'WARN'
+            }
+
+            Run-Step "Updating: Re-deploy Borealis Agent" {
+                $serverInfo = Get-AgentServerUrlFromSettings -AgentRoot $agentRoot
+                if (-not $serverInfo -or -not $serverInfo.Url) {
+                    $missingPath = if ($serverInfo -and $serverInfo.Source) { $serverInfo.Source } else { Join-Path (Join-Path $agentRoot 'Settings') 'server_url.txt' }
+                    throw "Server URL not found in $missingPath."
+                }
+
+                $enrollmentInfo = Get-AgentEnrollmentCode -AgentRoot $agentRoot
+                if (-not $enrollmentInfo -or -not $enrollmentInfo.Code) {
+                    $settingsDir = Join-Path $agentRoot 'Settings'
+                    $hintPath = Join-Path $settingsDir 'agent_settings_SYSTEM.json'
+                    if ($enrollmentInfo -and $enrollmentInfo.Source) { $hintPath = $enrollmentInfo.Source }
+                    throw "Enrollment code not found in $hintPath."
+                }
+
+                $sourceName = ''
+                if ($enrollmentInfo.Source) { $sourceName = Split-Path -Path $enrollmentInfo.Source -Leaf }
+                if ($sourceName -and $sourceName -ne 'agent_settings_SYSTEM.json') {
+                    Write-UpdateLog ("Enrollment code loaded from fallback settings file: {0}" -f $enrollmentInfo.Source) 'WARN'
+                }
+                if ($enrollmentInfo.Field -and $enrollmentInfo.Field -ne 'enrollment_code') {
+                    Write-UpdateLog ("Enrollment code loaded from legacy field '{0}' in {1}." -f $enrollmentInfo.Field, $enrollmentInfo.Source) 'WARN'
+                }
+
+                Write-UpdateLog ("Re-deploying agent with server URL '{0}'." -f $serverInfo.Url) 'INFO'
+                $redeployOk = Invoke-BorealisAgentRedeploy -ProjectRoot $scriptDir -ServerUrl $serverInfo.Url -EnrollmentCode $enrollmentInfo.Code
+                if (-not $redeployOk) {
+                    throw 'Borealis agent re-deployment failed.'
+                }
+            }
+
+            Write-Host "✅ Borealis - Automation Platform Successfully Updated"
+            Write-UpdateLog "Update workflow completed successfully." 'SUCCESS'
         } finally {
             if ($managedTasks.Count -gt 0) {
                 Start-AgentScheduledTasks -TaskNames $managedTasks
@@ -1800,44 +2041,6 @@ function Invoke-BorealisAgentUpdate {
             throw 'Borealis update failed.'
         }
 
-        $refreshedContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
-        if ($refreshedContext -and $refreshedContext.AccessToken) {
-            $authToken = $refreshedContext.AccessToken
-        }
-        $postUpdateInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken -AgentRoot $agentRoot
-        if ($postUpdateInfo) {
-            try {
-                $refreshedSha = (($postUpdateInfo.sha) -as [string]).Trim()
-                if ($refreshedSha) { $serverHash = $refreshedSha }
-            } catch {}
-            try {
-                $branchCandidate = (($postUpdateInfo.branch) -as [string]).Trim()
-                if ($branchCandidate) { $serverBranch = $branchCandidate }
-            } catch {}
-        }
-
-        $newHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot -GitExe $gitExe
-
-        $normalizedNewHash = if ($newHash) { $newHash.Trim().ToLowerInvariant() } else { '' }
-        $normalizedServerHash = if ($serverHash) { $serverHash.Trim().ToLowerInvariant() } else { '' }
-
-        if ($normalizedServerHash -and (-not $normalizedNewHash -or $normalizedNewHash -ne $normalizedServerHash)) {
-            $newHash = $serverHash
-            $normalizedNewHash = $normalizedServerHash
-        } elseif (-not $newHash -and $serverHash) {
-            $newHash = $serverHash
-        }
-
-        if ($newHash) {
-            Write-UpdateLog ("Final agent hash determined: {0}" -f $newHash) 'INFO'
-            Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
-        } else {
-            Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
-            Write-UpdateLog "Unable to determine final agent hash; skipping submission." 'WARN'
-        }
-
-        Write-Host "✅ Borealis - Automation Platform Successfully Updated"
-        Write-UpdateLog "Update workflow completed successfully." 'SUCCESS'
     } finally {
         if ($mutex -and $gotMutex) { $mutex.ReleaseMutex() | Out-Null }
         if ($mutex) { $mutex.Dispose() }
