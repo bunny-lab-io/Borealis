@@ -360,7 +360,12 @@ def _discover_ultravnc_service_name() -> Optional[str]:
     return None
 
 
-def _ensure_ultravnc_ini(config_path: Path, port: int) -> Optional[Path]:
+def _ensure_ultravnc_ini(
+    config_path: Path,
+    port: int,
+    *,
+    remove_wallpaper: bool = True,
+) -> Optional[Path]:
     base_settings = {
         "UseRegistry": "0",
         "AuthRequired": "1",
@@ -370,9 +375,10 @@ def _ensure_ultravnc_ini(config_path: Path, port: int) -> Optional[Path]:
         "AutoPortSelect": "0",
         "SocketConnect": "1",
         "HTTPConnect": "0",
-        "AllowShutdown": "0",
+        "AllowShutdown": "1",
         "DisableTrayIcon": "1",
         "EnableFileTransfer": "0",
+        "RemoveWallpaper": "1" if remove_wallpaper else "0",
     }
     if not _write_ultravnc_config(config_path, base_settings):
         return None
@@ -977,6 +983,7 @@ class VncManager:
         port: Optional[int],
         allowed_ips: Optional[str],
         password: Optional[str],
+        remove_wallpaper: Optional[bool] = None,
         reason: str = "start",
     ) -> None:
         with self._lock:
@@ -997,7 +1004,12 @@ class VncManager:
                 _write_log("Unable to resolve UltraVNC config directory.")
                 return
             config_path = config_dir / "ultravnc.ini"
-            ini_path = _ensure_ultravnc_ini(config_path, port_value)
+            remove_wallpaper_value = True if remove_wallpaper is None else bool(remove_wallpaper)
+            ini_path = _ensure_ultravnc_ini(
+                config_path,
+                port_value,
+                remove_wallpaper=remove_wallpaper_value,
+            )
             if not ini_path:
                 return
             applied_password = self._apply_password(config_dir, config_path, password or "")
@@ -1041,7 +1053,7 @@ class Role:
         try:
             config_dir = _resolve_vnc_config_dir()
             if config_dir:
-                _ensure_ultravnc_ini(config_dir / "ultravnc.ini", DEFAULT_VNC_PORT)
+                _ensure_ultravnc_ini(config_dir / "ultravnc.ini", DEFAULT_VNC_PORT, remove_wallpaper=True)
         except Exception:
             self._log("Failed to ensure UltraVNC config present.", error=True)
 
@@ -1087,14 +1099,22 @@ class Role:
                 port = payload.get("port")
                 allowed_ips = payload.get("allowed_ips") or self._last_allowed_ips
                 password = payload.get("password") or ""
+                remove_wallpaper = payload.get("remove_wallpaper")
                 reason = payload.get("reason") or "vnc_session_start"
             else:
                 port = None
                 allowed_ips = self._last_allowed_ips
                 password = ""
+                remove_wallpaper = None
                 reason = "vnc_session_start"
             self._log(f"VNC start request received (reason={reason}).")
-            self.vnc.start(port=port, allowed_ips=allowed_ips, password=password, reason=str(reason))
+            self.vnc.start(
+                port=port,
+                allowed_ips=allowed_ips,
+                password=password,
+                remove_wallpaper=remove_wallpaper,
+                reason=str(reason),
+            )
 
         @sio.on("vnc_stop")
         async def _vnc_stop(payload):

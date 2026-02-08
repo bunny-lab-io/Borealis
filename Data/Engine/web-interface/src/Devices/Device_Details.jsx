@@ -305,7 +305,20 @@ const GRID_COMPONENTS = {
 };
 
 export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPageMetaChange }) {
-  const [tab, setTab] = useState(0);
+  const initialTabIndex = useMemo(() => {
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      const tabKey = (params.get("tab") || "").toLowerCase();
+      if (!tabKey) return 0;
+      const matchIndex = TOP_TABS.findIndex(
+        (tabDef) => String(tabDef.key || tabDef.label || "").toLowerCase() === tabKey
+      );
+      return matchIndex >= 0 ? matchIndex : 0;
+    } catch {
+      return 0;
+    }
+  }, []);
+  const [tab, setTab] = useState(initialTabIndex);
   const [agent, setAgent] = useState(device || {});
   const [details, setDetails] = useState({});
   const [meta, setMeta] = useState({});

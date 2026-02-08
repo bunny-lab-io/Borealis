@@ -70,6 +70,20 @@ def _normalize_text(value: Any) -> str:
         return ""
 
 
+def _normalize_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"1", "true", "yes", "y", "on"}:
+            return True
+        if cleaned in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
+
+
 def _infer_endpoint_host(req) -> str:
     forwarded = (req.headers.get("X-Forwarded-Host") or req.headers.get("X-Original-Host") or "").strip()
     host = forwarded.split(",")[0].strip() if forwarded else (req.host or "").strip()
@@ -154,7 +168,12 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             return forwarded.split(",")[0].strip()
         return (request.remote_addr or "").strip()
 
-    def _issue_session(agent_id: str, operator_id: Optional[str]) -> Tuple[Dict[str, Any], int]:
+    def _issue_session(
+        agent_id: str,
+        operator_id: Optional[str],
+        *,
+        remove_wallpaper: bool,
+    ) -> Tuple[Dict[str, Any], int]:
         tunnel_service = _get_tunnel_service(adapters)
         session_payload = tunnel_service.session_payload(agent_id, include_token=False)
         if not session_payload:
@@ -217,6 +236,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             "allowed_ips": session_payload.get("allowed_ips"),
             "virtual_ip": host,
             "password": vnc_password,
+            "remove_wallpaper": remove_wallpaper,
             "reason": "vnc_session_start",
         }
         agent_socket_ready = True
@@ -285,7 +305,13 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         if not agent_id:
             return jsonify({"error": "agent_id_required"}), 400
 
-        payload, status = _issue_session(agent_id, operator_id)
+        remove_wallpaper = _normalize_bool(body.get("remove_wallpaper"), default=True)
+
+        payload, status = _issue_session(
+            agent_id,
+            operator_id,
+            remove_wallpaper=remove_wallpaper,
+        )
         return jsonify(payload), status
 
     @blueprint.route("/api/vnc/session", methods=["POST"])
