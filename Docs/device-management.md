@@ -23,10 +23,6 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Operators can save custom table views for the device list UI.
 - Views are stored per operator and exposed via `/api/device_list_views`.
 
-## Per-Device VPN Configuration
-- Each device can have a per-agent allowlist of VPN ports.
-- These settings are used by the WireGuard service to build firewall rules.
-
 ## Enrollment Approvals
 - Enrollment requests are queued for admin approval.
 - Approvals enforce hostname conflict checks and device identity tracking.
@@ -39,8 +35,6 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
-- `GET /api/device/vpn_config/<agent_id>` (Token Authenticated) - VPN allowed ports.
-- `PUT /api/device/vpn_config/<agent_id>` (Token Authenticated) - update VPN allowed ports.
 - `GET /api/device_list_views` (Token Authenticated) - list saved views.
 - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.
 - `POST /api/device_list_views` (Token Authenticated) - create saved view.
@@ -100,10 +94,6 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `DeviceFilterMatcher.fetch_devices()` loads a snapshot from `devices` and joins `sites`.
 - `count_filter_devices` computes match counts for UI summaries.
 
-### Per-device VPN configuration
-- Allowed ports are stored in `device_vpn_config.allowed_ports` (JSON list).
-- WireGuard uses this list to build firewall rules and allowlist transport ports.
-
 ### Approval flow detail
 - Enrollment requests create approval records (pending).
 - Admin approval handles hostname conflicts (merge or rename).
@@ -113,4 +103,3 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Device missing from list: check `Engine/database.db` tables `devices` and `device_keys`.
 - Online status wrong: check `last_seen` timestamps in `devices` table.
 - Filter counts zero: validate `device_filters.criteria_json` and matcher logic.
-- VPN config not applying: confirm `device_vpn_config` row and tunnel logs.

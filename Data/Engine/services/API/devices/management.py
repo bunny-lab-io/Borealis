@@ -9,8 +9,6 @@
 # - GET /api/devices/<guid> (Token Authenticated) - Retrieves a single device record by GUID, including summary fields.
 # - GET /api/device/details/<hostname> (Token Authenticated) - Returns full device details keyed by hostname.
 # - POST /api/device/description/<hostname> (Token Authenticated) - Updates the human-readable description for a device.
-# - GET /api/device/vpn_config/<agent_id> (Token Authenticated) - Returns per-device VPN allowed port settings.
-# - PUT /api/device/vpn_config/<agent_id> (Token Authenticated) - Updates per-device VPN allowed port settings.
 # - GET /api/device_list_views (Token Authenticated) - Lists saved device table view definitions.
 # - GET /api/device_list_views/<int:view_id> (Token Authenticated) - Retrieves a specific saved device table view definition.
 # - POST /api/device_list_views (Token Authenticated) - Creates a custom device list view for the signed-in operator.
@@ -428,130 +426,6 @@ class DeviceManagementService:
             return None
         return None
 
-    def _parse_ports(self, raw: Any) -> List[int]:
-        ports: List[int] = []
-        if isinstance(raw, str):
-            parts = [part.strip() for part in raw.split(",") if part.strip()]
-        elif isinstance(raw, list):
-            parts = raw
-        else:
-            parts = []
-        for part in parts:
-            try:
-                value = int(part)
-            except Exception:
-                continue
-            if 1 <= value <= 65535:
-                ports.append(value)
-        return list(dict.fromkeys(ports))
-
-    def _default_vpn_ports(self, os_name: Optional[str]) -> List[int]:
-        ports = list(self.adapters.context.wireguard_acl_allowlist_windows or [])
-        os_text = (os_name or "").strip().lower()
-        if os_text and "windows" not in os_text:
-            baseline = {5900, 3478}
-            filtered = [p for p in ports if p in baseline]
-            return filtered or ports
-        return ports
-
-    def get_vpn_config(self, agent_id: str) -> Tuple[Dict[str, Any], int]:
-        agent_id = (agent_id or "").strip()
-        if not agent_id:
-            return {"error": "agent_id_required"}, 400
-        default_ports: List[int] = []
-        shell_port = int(self.adapters.context.wireguard_shell_port)
-        try:
-            conn = self._db_conn()
-            cur = conn.cursor()
-            os_name = ""
-            try:
-                cur.execute(
-                    "SELECT operating_system FROM devices WHERE agent_id=? ORDER BY last_seen DESC LIMIT 1",
-                    (agent_id,),
-                )
-                row = cur.fetchone()
-                if row and row[0]:
-                    os_name = str(row[0])
-            except Exception:
-                os_name = ""
-            default_ports = self._default_vpn_ports(os_name)
-            cur.execute(
-                "SELECT allowed_ports, updated_at, updated_by FROM device_vpn_config WHERE agent_id=?",
-                (agent_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return {
-                    "agent_id": agent_id,
-                    "allowed_ports": default_ports,
-                    "default_ports": default_ports,
-                    "shell_port": shell_port,
-                    "source": "default",
-                }, 200
-            raw_ports = row[0] or ""
-            ports = []
-            try:
-                ports = json.loads(raw_ports) if raw_ports else []
-            except Exception:
-                ports = []
-            return {
-                "agent_id": agent_id,
-                "allowed_ports": ports or default_ports,
-                "default_ports": default_ports,
-                "shell_port": shell_port,
-                "updated_at": row[1],
-                "updated_by": row[2],
-                "source": "custom" if ports else "default",
-            }, 200
-        except Exception as exc:
-            self.logger.debug("Failed to load vpn config", exc_info=True)
-            return {"error": "internal_error"}, 500
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    def set_vpn_config(self, agent_id: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
-        agent_id = (agent_id or "").strip()
-        if not agent_id:
-            return {"error": "agent_id_required"}, 400
-        ports = self._parse_ports(payload.get("allowed_ports"))
-        if not ports:
-            return {"error": "allowed_ports_required"}, 400
-        user = self._current_user() or {}
-        updated_by = user.get("username") or ""
-        updated_at = datetime.now(timezone.utc).isoformat()
-        try:
-            conn = self._db_conn()
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO device_vpn_config(agent_id, allowed_ports, updated_at, updated_by)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(agent_id) DO UPDATE SET
-                    allowed_ports=excluded.allowed_ports,
-                    updated_at=excluded.updated_at,
-                    updated_by=excluded.updated_by
-                """,
-                (agent_id, json.dumps(ports), updated_at, updated_by),
-            )
-            conn.commit()
-            return {
-                "agent_id": agent_id,
-                "allowed_ports": ports,
-                "updated_at": updated_at,
-                "updated_by": updated_by,
-                "source": "custom",
-            }, 200
-        except Exception:
-            self.logger.debug("Failed to save vpn config", exc_info=True)
-            return {"error": "internal_error"}, 500
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
 
     def _require_login(self) -> Optional[Tuple[Dict[str, Any], int]]:
         if not self._current_user():
@@ -1918,19 +1792,6 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
         body = request.get_json(silent=True) or {}
         description = (body.get("description") or "").strip()
         payload, status = service.set_device_description(hostname, description)
-        return jsonify(payload), status
-
-    @blueprint.route("/api/device/vpn_config/<agent_id>", methods=["GET", "PUT"])
-    def _vpn_config(agent_id: str):
-        requirement = service._require_login()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        if request.method == "GET":
-            payload, status = service.get_vpn_config(agent_id)
-        else:
-            body = request.get_json(silent=True) or {}
-            payload, status = service.set_vpn_config(agent_id, body)
         return jsonify(payload), status
 
     @blueprint.route("/api/device_list_views", methods=["GET"])

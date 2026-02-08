@@ -129,7 +129,7 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
                         peer_network=context.wireguard_peer_network,
                         private_key_path=Path(context.wireguard_server_private_key_path),
                         public_key_path=Path(context.wireguard_server_public_key_path),
-                        acl_allowlist_windows=tuple(context.wireguard_acl_allowlist_windows),
+                        acl_allowlist_ports=tuple(context.wireguard_port_allowlist),
                         log_path=Path(context.vpn_tunnel_log_path),
                     )
                 )

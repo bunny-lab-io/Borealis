@@ -38,8 +38,6 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
-- `GET /api/device/vpn_config/<agent_id>` (Token Authenticated) - VPN allowed ports.
-- `PUT /api/device/vpn_config/<agent_id>` (Token Authenticated) - update VPN allowed ports.
 - `GET /api/device_list_views` (Token Authenticated) - list saved device views.
 - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.
 - `POST /api/device_list_views` (Token Authenticated) - create saved view.
@@ -108,7 +106,8 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels.
 
 ### VNC
-- `POST /api/vnc/establish` (Token Authenticated) - establish VNC session token.
+- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC credentials for the agent.
+- `POST /api/vnc/establish` (Token Authenticated) - establish VNC session.
 - `POST /api/vnc/disconnect` (Token Authenticated) - disconnect VNC session.
 - `POST /api/vnc/session` (Token Authenticated) - legacy alias for establish.
 

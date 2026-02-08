@@ -54,7 +54,7 @@ class WireGuardServerConfig:
     peer_network: str
     private_key_path: Path
     public_key_path: Path
-    acl_allowlist_windows: Tuple[int, ...]
+    acl_allowlist_ports: Tuple[int, ...]
     log_path: Path
 
     def engine_interface(self) -> ipaddress.IPv4Interface:
@@ -223,26 +223,36 @@ class WireGuardServerManager:
         candidate: Optional[Iterable[int]],
         overrides: Optional[Iterable[int]] = None,
     ) -> Tuple[int, ...]:
-        ports: List[int] = []
-        sources: List[Iterable[int]] = []
-        if overrides:
-            sources.append(overrides)
-        if candidate:
-            sources.append(candidate)
-        if not sources:
-            sources.append(self.config.acl_allowlist_windows)
-
-        for source in sources:
-            for port in source:
+        def _to_ports(value: Optional[Iterable[int]]) -> List[int]:
+            if value is None:
+                return []
+            if isinstance(value, str):
+                items = [part.strip() for part in value.split(",") if part.strip()]
+            else:
+                items = list(value)
+            ports: List[int] = []
+            for item in items:
                 try:
-                    value = int(port)
+                    port = int(item)
                 except Exception:
                     continue
-                if 1 <= value <= 65535:
-                    ports.append(value)
-        if not ports:
-            ports = list(self.config.acl_allowlist_windows)
-        return tuple(sorted(dict.fromkeys(ports)))
+                if 1 <= port <= 65535:
+                    ports.append(port)
+            return ports
+
+        source: Optional[Iterable[int]]
+        if overrides is not None:
+            source = overrides
+        elif candidate is not None:
+            source = candidate
+        else:
+            source = self.config.acl_allowlist_ports
+
+        ports = _to_ports(source)
+        if not ports and source is not self.config.acl_allowlist_ports:
+            ports = _to_ports(self.config.acl_allowlist_ports)
+
+        return tuple(dict.fromkeys(ports))
 
     def require_orchestration_token(self, token: Optional[Mapping[str, object]]) -> Mapping[str, object]:
         """Validate orchestration token shape and expiry (best-effort)."""
@@ -302,11 +312,12 @@ class WireGuardServerManager:
             "engine_interface": str(iface),
             "allowed_ports": allowed,
         }
+        allowed_text = ",".join(str(p) for p in allowed) if allowed else "all"
         self.logger.info(
             "Prepared WireGuard peer profile for agent=%s ip=%s allowed_ports=%s",
             agent_id,
             ip,
-            ",".join(str(p) for p in allowed),
+            allowed_text,
         )
         return profile
 
@@ -347,7 +358,7 @@ class WireGuardServerManager:
 
     def describe_acl_defaults(self) -> Mapping[str, object]:
         return {
-            "windows": list(self.config.acl_allowlist_windows),
+            "windows": list(self._normalise_allowed_ports(self.config.acl_allowlist_ports)),
             "client_to_client": False,
             "host_only": True,
         }
@@ -360,6 +371,8 @@ class WireGuardServerManager:
         for idx, rule in enumerate(rules):
             name = f"Borealis-WG-Agent-{peer.get('agent_id','')}-{idx}"
             protocol = str(rule.get("protocol") or "TCP").upper()
+            local_port = rule.get("local_port")
+            remote_port = rule.get("remote_port")
             self._run_command(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"])
             args = [
                 "netsh",
@@ -372,8 +385,11 @@ class WireGuardServerManager:
                 "action=allow",
                 f"remoteip={rule.get('remote_address','')}",
                 f"protocol={protocol}",
-                f"localport={rule.get('local_port','')}",
             ]
+            if remote_port:
+                args.append(f"remoteport={remote_port}")
+            elif local_port:
+                args.append(f"localport={local_port}")
             code, out, err = self._run_command(args)
             if code != 0:
                 self.logger.warning("Failed to apply firewall rule %s code=%s err=%s", name, code, err)
@@ -445,28 +461,29 @@ class WireGuardServerManager:
 
         rules: List[Mapping[str, Union[str, int]]] = []
         ip = str(peer.get("virtual_ip", "")).split("/")[0]
-        ports = peer.get("allowed_ports") or []
-        try:
-            port_list = [int(p) for p in ports]
-        except Exception:
-            port_list = []
-
-        for port in port_list:
-            for protocol in ("TCP", "UDP"):
-                rules.append(
-                    {
-                        "direction": "outbound",
-                        "remote_address": ip,
-                        "local_port": port,
-                        "protocol": protocol,
-                        "action": "allow",
-                        "description": f"WireGuard engine->agent allow port {port}/{protocol}",
-                    }
-                )
+        allowed_ports = self._normalise_allowed_ports(peer.get("allowed_ports"))
+        if not allowed_ports:
+            self.logger.warning(
+                "No allowed ports configured for agent=%s; firewall rules skipped.",
+                peer.get("agent_id", ""),
+            )
+            return rules
+        port_text = ",".join(str(p) for p in allowed_ports)
+        for protocol in ("TCP", "UDP"):
+            rules.append(
+                {
+                    "direction": "outbound",
+                    "remote_address": ip,
+                    "remote_port": port_text,
+                    "protocol": protocol,
+                    "action": "allow",
+                    "description": f"WireGuard engine->agent allow {port_text}/{protocol}",
+                }
+            )
 
         self.logger.info(
             "Prepared firewall rule plan for agent=%s rules=%s",
             peer.get("agent_id", ""),
-            ",".join(str(rule.get("local_port")) for rule in rules),
+            port_text,
         )
         return rules

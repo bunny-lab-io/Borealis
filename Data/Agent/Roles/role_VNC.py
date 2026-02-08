@@ -1,14 +1,15 @@
 # ======================================================
 # Data/Agent/Roles/role_VNC.py
-# Description: On-demand UltraVNC server lifecycle over WireGuard.
+# Description: Always-on UltraVNC server lifecycle over WireGuard.
 #
 # API Endpoints (if applicable): None
 # ======================================================
 
-"""UltraVNC role (Windows) for on-demand VNC sessions over WireGuard."""
+"""UltraVNC role (Windows) for always-on VNC sessions over WireGuard."""
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import subprocess
 import threading
@@ -22,6 +23,7 @@ ROLE_CONTEXTS = ["system"]
 VNC_FIREWALL_RULE_NAME = "Borealis - VNC - UltraVNC"
 DEFAULT_VNC_PORT = 5900
 ULTRAVNC_SERVICE_NAME = os.environ.get("BOREALIS_ULTRAVNC_SERVICE") or "uvnc_service"
+VNC_ALWAYS_ON_INTERVAL_SECONDS = 30
 
 
 def _log_path() -> Path:
@@ -36,6 +38,52 @@ def _write_log(message: str) -> None:
         _log_path().open("a", encoding="utf-8").write(f"[{ts}] [vnc] {message}\n")
     except Exception:
         pass
+
+
+def _coerce_int(value: Any, default: int, *, min_value: int = 1, max_value: Optional[int] = None) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        return default
+    if parsed < min_value:
+        return min_value
+    if max_value is not None and parsed > max_value:
+        return max_value
+    return parsed
+
+
+def _vnc_state_path() -> Path:
+    root = Path(__file__).resolve().parents[2] / "Borealis" / "Settings" / "UltraVNC"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "vnc_state.json"
+
+
+def _load_vnc_state() -> dict[str, Any]:
+    path = _vnc_state_path()
+    if not path.is_file():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return {}
+    if not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def _save_vnc_state(state: dict[str, Any]) -> None:
+    path = _vnc_state_path()
+    try:
+        payload = json.dumps(state, ensure_ascii=True, sort_keys=True, indent=2)
+        path.write_text(payload + "\n", encoding="ascii")
+    except Exception:
+        return
 
 
 def _find_project_root() -> Optional[Path]:
@@ -622,6 +670,15 @@ class VncManager:
             return None
         return None
 
+    def is_running(self) -> bool:
+        service_name = self._resolve_service_name()
+        if not service_name:
+            return False
+        return self._service_state_by_name(service_name) == "RUNNING"
+
+    def ensure_firewall(self, allowed_ips: Optional[str], port: int) -> None:
+        self._ensure_firewall(allowed_ips, port)
+
     def _resolve_service_name(self, *, refresh: bool = False) -> Optional[str]:
         if self._service_name and not refresh:
             return self._service_name
@@ -804,6 +861,7 @@ class VncManager:
             return False
         if not self._vnc_root:
             self._vnc_root = _resolve_vnc_root()
+        desired_start = "auto"
         try:
             if state is None:
                 service_name = ULTRAVNC_SERVICE_NAME or "uvnc_service"
@@ -815,7 +873,7 @@ class VncManager:
                     "binPath=",
                     desired,
                     "start=",
-                    "demand",
+                    desired_start,
                     "type=",
                     "own",
                     "DisplayName=",
@@ -839,7 +897,7 @@ class VncManager:
             if not service_name:
                 service_name = ULTRAVNC_SERVICE_NAME
             config_result = subprocess.run(
-                ["sc.exe", "config", service_name, "start=", "demand"],
+                ["sc.exe", "config", service_name, "start=", desired_start],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -903,9 +961,14 @@ class VncManager:
             return
         rule_name = VNC_FIREWALL_RULE_NAME.replace("'", "''")
         command = (
-            "Remove-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue; "
+            "$rule = Get-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue; "
+            "if (-not $rule) {{ "
             "New-NetFirewallRule -DisplayName '{name}' -Direction Inbound -Action Allow "
-            "-Protocol TCP -LocalPort {port} -RemoteAddress {remote} -Profile Any"
+            "-Protocol TCP -LocalPort {port} -RemoteAddress {remote} -Profile Any | Out-Null; "
+            "}} else {{ "
+            "Set-NetFirewallRule -DisplayName '{name}' -Direction Inbound -Action Allow "
+            "-Protocol TCP -LocalPort {port} -RemoteAddress {remote} -Profile Any -Enabled True | Out-Null; "
+            "}}"
         ).format(name=rule_name, port=port, remote=remote)
         try:
             result = subprocess.run(
@@ -1035,27 +1098,30 @@ class VncManager:
 
     def stop(self, *, reason: str = "stop") -> None:
         with self._lock:
-            self._remove_firewall()
-            _write_log(f"VNC firewall closed reason={reason}.")
+            _write_log(f"VNC stop ignored (always_on) reason={reason}.")
 
 
 class Role:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
-        self.vnc = VncManager()
-        self._last_allowed_ips: Optional[str] = None
         hooks = getattr(ctx, "hooks", {}) or {}
         self._log_hook = hooks.get("log_agent")
-        try:
-            self.vnc.stop(reason="agent_startup")
-        except Exception:
-            self._log("Failed to preflight VNC cleanup.", error=True)
+        self._http_client_factory = hooks.get("http_client")
+        self._always_on_stop = threading.Event()
+        self._always_on_thread: Optional[threading.Thread] = None
+        self._missing_password_logged = False
+        self._state = _load_vnc_state()
+        self._last_allowed_ips = _parse_allowed_ips(self._state.get("allowed_ips"))
+        self.vnc = VncManager()
         try:
             config_dir = _resolve_vnc_config_dir()
             if config_dir:
                 _ensure_ultravnc_ini(config_dir / "ultravnc.ini", DEFAULT_VNC_PORT, remove_wallpaper=True)
         except Exception:
             self._log("Failed to ensure UltraVNC config present.", error=True)
+        self._ensure_always_on(reason="agent_startup")
+        self._always_on_thread = threading.Thread(target=self._always_on_loop, daemon=True)
+        self._always_on_thread.start()
 
     def _log(self, message: str, *, error: bool = False) -> None:
         if callable(self._log_hook):
@@ -1067,6 +1133,112 @@ class Role:
                 pass
         _write_log(message)
 
+    def _http_client(self) -> Optional[Any]:
+        if callable(self._http_client_factory):
+            try:
+                return self._http_client_factory()
+            except Exception:
+                return None
+        return None
+
+    def _state_password(self) -> Optional[str]:
+        value = self._state.get("password")
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:8]
+        return None
+
+    def _state_port(self) -> int:
+        return _resolve_vnc_port(self._state.get("port"))
+
+    def _update_state(
+        self,
+        *,
+        password: Optional[str] = None,
+        allowed_ips: Optional[str] = None,
+        port: Optional[int] = None,
+    ) -> None:
+        updated = False
+        if password:
+            trimmed = str(password).strip()[:8]
+            if trimmed:
+                self._state["password"] = trimmed
+                updated = True
+        if allowed_ips:
+            normalized = _parse_allowed_ips(allowed_ips)
+            if normalized:
+                self._state["allowed_ips"] = normalized
+                self._last_allowed_ips = normalized
+                updated = True
+        if port is not None:
+            port_value = _resolve_vnc_port(port)
+            self._state["port"] = port_value
+            updated = True
+        if updated:
+            _save_vnc_state(self._state)
+
+    def _apply_bootstrap_payload(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        password = payload.get("vnc_password") or payload.get("password")
+        port = payload.get("vnc_port") or payload.get("port")
+        allowed_ips = payload.get("allowed_ips") or payload.get("engine_virtual_ip")
+        self._update_state(
+            password=str(password) if password else None,
+            allowed_ips=allowed_ips if allowed_ips else None,
+            port=port if port is not None else None,
+        )
+
+    def _request_vnc_bootstrap(self, reason: str) -> Optional[dict]:
+        client = self._http_client()
+        if client is None:
+            return None
+        try:
+            payload = client.post_json(
+                "/api/agent/vnc/ensure",
+                {"agent_id": self.ctx.agent_id, "reason": reason},
+                require_auth=True,
+            )
+        except Exception as exc:
+            self._log(f"VNC ensure request failed: {exc}", error=True)
+            return None
+        if isinstance(payload, dict):
+            return payload
+        return None
+
+    def _ensure_always_on(self, *, reason: str) -> None:
+        password = self._state_password()
+        if not password:
+            if not self._missing_password_logged:
+                self._missing_password_logged = True
+                self._log("VNC always-on pending: password not set yet.")
+            return
+        self._missing_password_logged = False
+        port_value = self._state_port()
+        allowed_ips = self._last_allowed_ips or _parse_allowed_ips(self._state.get("allowed_ips"))
+        if self.vnc.is_running():
+            self.vnc.ensure_firewall(allowed_ips, port_value)
+            return
+        self.vnc.start(
+            port=port_value,
+            allowed_ips=allowed_ips,
+            password=password,
+            remove_wallpaper=True,
+            reason=reason,
+        )
+
+    def _always_on_loop(self) -> None:
+        interval = _coerce_int(VNC_ALWAYS_ON_INTERVAL_SECONDS, 30, min_value=5)
+        while not self._always_on_stop.is_set():
+            try:
+                if not self._state_password() or not self._last_allowed_ips:
+                    payload = self._request_vnc_bootstrap(reason="agent_boot")
+                    if payload:
+                        self._apply_bootstrap_payload(payload)
+                self._ensure_always_on(reason="always_on_check")
+            except Exception as exc:
+                self._log(f"VNC always-on loop error: {exc}", error=True)
+            self._always_on_stop.wait(interval)
+
     def register_events(self) -> None:
         sio = self.ctx.sio
 
@@ -1076,8 +1248,9 @@ class Role:
                 target_agent = payload.get("agent_id")
                 if target_agent and str(target_agent).strip() != str(self.ctx.agent_id).strip():
                     return
-                allowed_ips = payload.get("allowed_ips")
-                self._last_allowed_ips = _parse_allowed_ips(allowed_ips)
+                allowed_ips = payload.get("allowed_ips") or payload.get("engine_virtual_ip")
+                self._update_state(allowed_ips=allowed_ips if allowed_ips else None)
+                self._ensure_always_on(reason="vpn_tunnel_start")
 
         @sio.on("vpn_tunnel_stop")
         async def _vpn_tunnel_stop(payload):
@@ -1108,13 +1281,12 @@ class Role:
                 remove_wallpaper = None
                 reason = "vnc_session_start"
             self._log(f"VNC start request received (reason={reason}).")
-            self.vnc.start(
-                port=port,
-                allowed_ips=allowed_ips,
-                password=password,
-                remove_wallpaper=remove_wallpaper,
-                reason=str(reason),
+            self._update_state(
+                password=password or None,
+                allowed_ips=allowed_ips if allowed_ips else None,
+                port=port if port is not None else None,
             )
+            self._ensure_always_on(reason=str(reason))
 
         @sio.on("vnc_stop")
         async def _vnc_stop(payload):
@@ -1129,6 +1301,6 @@ class Role:
 
     def stop_all(self) -> None:
         try:
-            self.vnc.stop(reason="agent_shutdown")
+            self._always_on_stop.set()
         except Exception:
-            self._log("Failed to stop VNC during shutdown.", error=True)
+            pass

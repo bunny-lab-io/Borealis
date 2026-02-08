@@ -1502,7 +1502,7 @@ ListenPort = 0
         throw "$logPrefix Driver still missing after adapter provisioning and pnputil fallback."
     }
 
-    # UltraVNC Server (on-demand VNC backend for noVNC)
+    # UltraVNC Server (always-on VNC backend for noVNC)
     Run-Step "Dependency: UltraVNC Server" {
         $uvncZipUrl = $env:BOREALIS_ULTRAVNC_ZIP_URL
         if (-not $uvncZipUrl) {
@@ -1635,12 +1635,12 @@ ListenPort = 0
                     } | Select-Object -First 1
                 }
                 if ($uvncService) {
-                    sc.exe config $uvncService.Name start= demand | Out-Null
+                    sc.exe config $uvncService.Name start= auto | Out-Null
                     if ($uvncService.Status -ne "Stopped") {
                         sc.exe stop $uvncService.Name | Out-Null
                     }
                 } else {
-                    Write-Host "UltraVNC service will be created on-demand by the agent." -ForegroundColor Yellow
+                    Write-Host "UltraVNC service will be created and kept running by the agent." -ForegroundColor Yellow
                 }
             } catch {
                 Write-Host "UltraVNC service setup failed: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -2227,7 +2227,7 @@ function InstallOrUpdate-BorealisAgent {
             try {
                 $svc = Get-Service -Name $uvncServiceName -ErrorAction SilentlyContinue
                 if ($svc) {
-                    & sc.exe config $uvncServiceName start= demand | Out-Null
+                    & sc.exe config $uvncServiceName start= auto | Out-Null
                 }
             } catch {
                 # ignore start-mode updates here
@@ -2266,7 +2266,7 @@ function InstallOrUpdate-BorealisAgent {
                 Write-AgentLog -FileName 'Install.log' -Message ("[VNC] Failed to stage UltraVNC password tool: {0}" -f $_.Exception.Message)
             }
 
-            # Do not restart UltraVNC during deployment; the agent will start it on-demand.
+            # Do not restart UltraVNC during deployment; the agent keeps it running.
             
         }
         . (Join-Path $venvFolderPath 'Scripts\Activate')

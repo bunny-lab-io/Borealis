@@ -30,6 +30,13 @@ def _env_flag(name: str, *, default: bool) -> bool:
     return str(value).strip().lower() not in ("0", "false", "no", "off")
 
 
+def _format_ports(ports: Iterable[int]) -> str:
+    items = [str(p) for p in ports]
+    if not items:
+        return "all"
+    return ",".join(items)
+
+
 @dataclass
 class VpnSession:
     tunnel_id: str
@@ -118,43 +125,7 @@ class VpnTunnelService:
         raise RuntimeError("vpn_ip_pool_exhausted")
 
     def _load_allowed_ports(self, agent_id: str) -> Tuple[int, ...]:
-        default = tuple(self.context.wireguard_acl_allowlist_windows or ())
-        try:
-            conn = self.db_conn_factory()
-            cur = conn.cursor()
-            try:
-                cur.execute(
-                    "SELECT operating_system FROM devices WHERE agent_id=? ORDER BY last_seen DESC LIMIT 1",
-                    (agent_id,),
-                )
-                row = cur.fetchone()
-                os_name = str(row[0]).lower() if row and row[0] else ""
-            except Exception:
-                os_name = ""
-            if os_name and "windows" not in os_name:
-                baseline = {5900, 3478}
-                filtered = [p for p in default if p in baseline]
-                if filtered:
-                    default = tuple(filtered)
-            cur.execute(
-                "SELECT allowed_ports FROM device_vpn_config WHERE agent_id=?",
-                (agent_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return default
-            raw = row[0] or ""
-            ports = json.loads(raw) if raw else []
-            ports = [int(p) for p in ports if isinstance(p, (int, float, str))]
-            ports = [p for p in ports if 1 <= p <= 65535]
-            return tuple(dict.fromkeys(ports)) or default
-        except Exception:
-            return default
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        return tuple(self.context.wireguard_port_allowlist or ())
 
     def _generate_client_keys(self) -> Tuple[str, str]:
         from cryptography.hazmat.primitives import serialization
@@ -334,7 +305,7 @@ class VpnTunnelService:
                     session.agent_id,
                     session.tunnel_id,
                     session.virtual_ip,
-                    ",".join(str(p) for p in allowed_ports),
+                    _format_ports(allowed_ports),
                     str(bool(token_signed)).lower(),
                     int(session.expires_at),
                 )
@@ -377,7 +348,7 @@ class VpnTunnelService:
                 session.tunnel_id,
                 session.virtual_ip,
                 payload.get("endpoint", ""),
-                ",".join(str(p) for p in session.allowed_ports),
+                _format_ports(session.allowed_ports),
                 operator_text,
             )
         )

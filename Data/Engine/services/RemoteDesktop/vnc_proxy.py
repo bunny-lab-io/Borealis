@@ -103,6 +103,7 @@ class VncProxyServer:
         registry: VncSessionRegistry,
         logger: logging.Logger,
         emit_agent_event: Optional[Callable[[str, str, Any], bool]] = None,
+        resolver: Optional[Callable[[str], Optional[Tuple[str, int]]]] = None,
         ssl_context: Optional[ssl.SSLContext] = None,
     ) -> None:
         self.host = host
@@ -110,6 +111,7 @@ class VncProxyServer:
         self.registry = registry
         self.logger = logger
         self._emit_agent_event = emit_agent_event
+        self._resolver = resolver
         self.ssl_context = ssl_context
         self._thread: Optional[threading.Thread] = None
         self._ready = threading.Event()
@@ -167,19 +169,34 @@ class VncProxyServer:
             return
         query = parse_qs(parsed.query or "")
         token = (query.get("token") or [""])[0]
-        session = self.registry.consume(token)
-        if not session:
+        agent_id = (query.get("agent_id") or [""])[0]
+        session = None
+        host = ""
+        port = 0
+        if token:
+            session = self.registry.consume(token)
+            if session:
+                host = session.host
+                port = session.port
+                agent_id = session.agent_id
+        if not host and agent_id and self._resolver:
+            resolved = self._resolver(agent_id)
+            if resolved:
+                host, port = resolved
+        if not host or not port or not agent_id:
             token_hint = token[:8] if token else "-"
-            self.logger.warning("VNC proxy rejected session (token=%s)", token_hint)
+            self.logger.warning(
+                "VNC proxy rejected session (token=%s agent_id=%s)", token_hint, agent_id or "-"
+            )
             await websocket.close(code=1008, reason="invalid_session")
             return
 
         logger = self.logger.getChild("session")
-        logger.info("VNC session start agent_id=%s", session.agent_id)
+        logger.info("VNC session start agent_id=%s", agent_id)
 
         try:
             try:
-                reader, writer = await self._connect_vnc(session.host, session.port)
+                reader, writer = await self._connect_vnc(host, port)
             except Exception as exc:
                 logger.warning("VNC connect failed: %s", exc)
                 await websocket.close(code=1011, reason="vnc_unavailable")
@@ -220,8 +237,7 @@ class VncProxyServer:
                 return_when=asyncio.FIRST_COMPLETED,
             )
         finally:
-            logger.info("VNC session ended agent_id=%s", session.agent_id)
-            self._notify_agent_session_end(session, reason="vnc_session_end")
+            logger.info("VNC session ended agent_id=%s", agent_id)
 
     async def _connect_vnc(self, host: str, port: int) -> Tuple[Any, Any]:
         attempts = 20
@@ -259,7 +275,12 @@ def _build_ssl_context(cert_path: Optional[str], key_path: Optional[str]) -> Opt
         return None
 
 
-def ensure_vnc_proxy(context: Any, *, logger: Optional[logging.Logger] = None) -> Optional[VncSessionRegistry]:
+def ensure_vnc_proxy(
+    context: Any,
+    *,
+    logger: Optional[logging.Logger] = None,
+    resolver: Optional[Callable[[str], Optional[Tuple[str, int]]]] = None,
+) -> Optional[VncSessionRegistry]:
     if logger is None:
         logger = context.logger if hasattr(context, "logger") else logging.getLogger("borealis.engine.vnc")
 
@@ -282,9 +303,15 @@ def ensure_vnc_proxy(context: Any, *, logger: Optional[logging.Logger] = None) -
             registry=registry,
             logger=logger.getChild("vnc_proxy"),
             emit_agent_event=getattr(context, "emit_agent_event", None),
+            resolver=resolver,
             ssl_context=ssl_context,
         )
         setattr(context, "vnc_proxy", proxy)
+    elif resolver is not None:
+        try:
+            proxy._resolver = resolver  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
     if not proxy.ensure_started():
         logger.error("VNC proxy failed to start; VNC sessions unavailable.")

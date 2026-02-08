@@ -6,12 +6,14 @@
 # - POST /api/agent/heartbeat (Device Authenticated) - Updates device last-seen metadata and inventory snapshots.
 # - POST /api/agent/script/request (Device Authenticated) - Provides script execution payloads or idle signals to agents.
 # - POST /api/agent/vpn/ensure (Device Authenticated) - Ensures persistent WireGuard tunnel material.
+# - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures VNC credentials for always-on agent VNC.
 # ======================================================
 
 """Device-affiliated agent endpoints for the Borealis Engine runtime."""
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 import time
 from urllib.parse import urlsplit
@@ -78,6 +80,72 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         if ctx is None:
             log("agents", f"device auth context missing for {request.path}", _context_hint())
         return ctx
+
+    def _resolve_agent_id_for_guid(guid: str) -> str:
+        normalized = normalize_guid(guid)
+        if not normalized:
+            return ""
+        conn = db_conn_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT agent_id FROM devices WHERE UPPER(guid) = ? ORDER BY last_seen DESC LIMIT 1",
+                (normalized,),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                return str(row[0]).strip()
+        except Exception:
+            log(
+                "VNC",
+                f"vnc_agent_id_lookup_failed guid={normalized}",
+                _context_hint(),
+                level="ERROR",
+            )
+        finally:
+            conn.close()
+        return ""
+
+    def _load_vnc_password(agent_id: str) -> Optional[str]:
+        conn = db_conn_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT agent_vnc_password FROM devices WHERE agent_id=? ORDER BY last_seen DESC LIMIT 1",
+                (agent_id,),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                return str(row[0]).strip()
+        except Exception:
+            log("VNC", f"vnc_agent_password_load_failed agent_id={agent_id}", _context_hint())
+        finally:
+            conn.close()
+        return None
+
+    def _store_vnc_password(agent_id: str, password: str) -> None:
+        conn = db_conn_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE devices SET agent_vnc_password=? WHERE agent_id=?",
+                (password, agent_id),
+            )
+            conn.commit()
+        except Exception:
+            log("VNC", f"vnc_agent_password_store_failed agent_id={agent_id}", _context_hint())
+        finally:
+            conn.close()
+
+    def _ensure_vnc_password(agent_id: str) -> str:
+        vnc_password = _load_vnc_password(agent_id)
+        if not vnc_password:
+            vnc_password = secrets.token_hex(4)
+            _store_vnc_password(agent_id, vnc_password)
+        if len(vnc_password) > 8:
+            vnc_password = vnc_password[:8]
+            _store_vnc_password(agent_id, vnc_password)
+        return vnc_password
 
     @blueprint.route("/api/agent/heartbeat", methods=["POST"])
     @require_device_auth(auth_manager)
@@ -306,5 +374,79 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             _context_hint(ctx),
         )
         return jsonify(payload), 200
+
+    @blueprint.route("/api/agent/vnc/ensure", methods=["POST"])
+    @require_device_auth(auth_manager)
+    def vnc_ensure():
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
+
+        body = request.get_json(silent=True) or {}
+        requested_agent = (body.get("agent_id") or "").strip()
+        guid = normalize_guid(ctx.guid)
+
+        resolved_agent = _resolve_agent_id_for_guid(guid)
+        if not resolved_agent:
+            log("VNC", f"vnc_agent_ensure_missing_agent guid={guid}", _context_hint(ctx), level="ERROR")
+            return jsonify({"error": "agent_id_missing"}), 404
+
+        if requested_agent and requested_agent != resolved_agent:
+            log(
+                "VNC",
+                "vnc_agent_ensure_agent_mismatch requested={0} resolved={1}".format(
+                    requested_agent, resolved_agent
+                ),
+                _context_hint(ctx),
+                level="WARNING",
+            )
+
+        try:
+            tunnel_service = _get_tunnel_service(adapters)
+            session_payload = tunnel_service.session_payload(resolved_agent, include_token=False)
+            if not session_payload:
+                session_payload = tunnel_service.connect(
+                    agent_id=resolved_agent,
+                    operator_id=None,
+                    endpoint_host=_infer_endpoint_host(request),
+                )
+        except Exception as exc:
+            log(
+                "VNC",
+                "vnc_agent_ensure_tunnel_failed agent_id={0} error={1}".format(resolved_agent, str(exc)),
+                _context_hint(ctx),
+                level="ERROR",
+            )
+            return jsonify({"error": "tunnel_down", "detail": str(exc)}), 409
+
+        vnc_port = int(getattr(adapters.context, "vnc_port", 5900))
+
+        allowed_ips = session_payload.get("allowed_ips") or session_payload.get("engine_virtual_ip")
+        if isinstance(allowed_ips, list):
+            allowed_ips = allowed_ips[0] if allowed_ips else ""
+        allowed_ips = str(allowed_ips or "").strip()
+
+        vnc_password = _ensure_vnc_password(resolved_agent)
+
+        log(
+            "VNC",
+            "vnc_agent_ensure_response agent_id={0} port={1}".format(resolved_agent, vnc_port),
+            _context_hint(ctx),
+        )
+
+        return (
+            jsonify(
+                {
+                    "status": "ok",
+                    "agent_id": resolved_agent,
+                    "vnc_password": vnc_password,
+                    "vnc_port": vnc_port,
+                    "allowed_ips": allowed_ips,
+                    "tunnel_id": session_payload.get("tunnel_id"),
+                    "engine_virtual_ip": session_payload.get("engine_virtual_ip"),
+                }
+            ),
+            200,
+        )
 
     app.register_blueprint(blueprint)

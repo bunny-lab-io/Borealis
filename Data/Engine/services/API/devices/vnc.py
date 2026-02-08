@@ -174,6 +174,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         *,
         remove_wallpaper: bool,
     ) -> Tuple[Dict[str, Any], int]:
+        _ = remove_wallpaper
         tunnel_service = _get_tunnel_service(adapters)
         session_payload = tunnel_service.session_payload(agent_id, include_token=False)
         if not session_payload:
@@ -187,15 +188,6 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 return {"error": "tunnel_down"}, 409
 
         vnc_port = int(getattr(adapters.context, "vnc_port", 5900))
-        raw_ports = session_payload.get("allowed_ports") or []
-        allowed_ports = []
-        for value in raw_ports:
-            try:
-                allowed_ports.append(int(value))
-            except Exception:
-                continue
-        if vnc_port not in allowed_ports:
-            return {"error": "vnc_not_allowed", "vnc_port": vnc_port}, 403
 
         virtual_ip = _normalize_text(session_payload.get("virtual_ip"))
         host = virtual_ip.split("/")[0] if virtual_ip else ""
@@ -210,7 +202,17 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             vnc_password = vnc_password[:8]
             _store_vnc_password(adapters, agent_id, vnc_password)
 
-        registry = ensure_vnc_proxy(adapters.context, logger=logger)
+        def _resolve_agent_target(target_agent_id: str) -> Optional[Tuple[str, int]]:
+            if not target_agent_id:
+                return None
+            payload = tunnel_service.session_payload(target_agent_id, include_token=False) or {}
+            virtual = _normalize_text(payload.get("virtual_ip"))
+            resolved_host = virtual.split("/")[0] if virtual else ""
+            if not resolved_host:
+                return None
+            return resolved_host, vnc_port
+
+        registry = ensure_vnc_proxy(adapters.context, logger=logger, resolver=_resolve_agent_target)
         if registry is None:
             return {"error": "vnc_proxy_unavailable"}, 503
 
@@ -222,67 +224,19 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             )
         )
 
-        vnc_session = registry.create(
-            agent_id=agent_id,
-            host=host,
-            port=vnc_port,
-            operator_id=operator_id,
-        )
-
-        emit_agent = getattr(adapters.context, "emit_agent_event", None)
-        payload = {
-            "agent_id": agent_id,
-            "port": vnc_port,
-            "allowed_ips": session_payload.get("allowed_ips"),
-            "virtual_ip": host,
-            "password": vnc_password,
-            "remove_wallpaper": remove_wallpaper,
-            "reason": "vnc_session_start",
-        }
-        agent_socket_ready = True
-        if callable(emit_agent):
-            agent_socket_ready = bool(emit_agent(agent_id, "vnc_start", payload))
-            if agent_socket_ready:
-                _service_log_event(
-                    "vnc_start_emit agent_id={0} port={1} virtual_ip={2}".format(
-                        agent_id,
-                        vnc_port,
-                        host or "-",
-                    )
-                )
-            else:
-                _service_log_event(
-                    "vnc_start_emit_failed agent_id={0} port={1}".format(
-                        agent_id,
-                        vnc_port,
-                    ),
-                    level="WARNING",
-                )
-        if not agent_socket_ready:
-            return {"error": "agent_socket_missing"}, 409
-
         ws_scheme = "wss" if _is_secure(request) else "ws"
         ws_host = _infer_endpoint_host(request)
         ws_port = int(getattr(adapters.context, "vnc_ws_port", 4823))
-        ws_url = f"{ws_scheme}://{ws_host}:{ws_port}{VNC_WS_PATH}"
+        ws_url = f"{ws_scheme}://{ws_host}:{ws_port}{VNC_WS_PATH}?agent_id={agent_id}"
 
-        _service_log_event(
-            "vnc_session_ready agent_id={0} token={1} expires_at={2}".format(
-                agent_id,
-                vnc_session.token[:8],
-                int(vnc_session.expires_at),
-            )
-        )
+        _service_log_event("vnc_session_ready agent_id={0}".format(agent_id))
 
         return (
             {
-                "token": vnc_session.token,
                 "ws_url": ws_url,
-                "expires_at": int(vnc_session.expires_at),
                 "virtual_ip": host,
                 "tunnel_id": session_payload.get("tunnel_id"),
                 "engine_virtual_ip": session_payload.get("engine_virtual_ip"),
-                "allowed_ports": session_payload.get("allowed_ports"),
                 "vnc_password": vnc_password,
                 "vnc_port": vnc_port,
             },
@@ -335,30 +289,14 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         if not agent_id:
             return jsonify({"error": "agent_id_required"}), 400
 
-        registry = ensure_vnc_proxy(adapters.context, logger=logger)
-        revoked = 0
-        if registry is not None:
-            try:
-                revoked = registry.revoke_agent(agent_id)
-            except Exception:
-                revoked = 0
-
-        emit_agent = getattr(adapters.context, "emit_agent_event", None)
-        if callable(emit_agent):
-            try:
-                emit_agent(agent_id, "vnc_stop", {"agent_id": agent_id, "reason": reason})
-            except Exception:
-                pass
-
         _service_log_event(
-            "vnc_disconnect agent_id={0} operator={1} reason={2} revoked={3}".format(
+            "vnc_disconnect agent_id={0} operator={1} reason={2}".format(
                 agent_id,
                 operator_id or "-",
                 reason or "-",
-                revoked,
             )
         )
 
-        return jsonify({"status": "disconnected", "revoked": revoked, "reason": reason}), 200
+        return jsonify({"status": "disconnected", "reason": reason}), 200
 
     app.register_blueprint(blueprint)

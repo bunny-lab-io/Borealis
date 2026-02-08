@@ -46,10 +46,10 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Orchestration security: the Engine issues short-lived, Ed25519-signed tunnel tokens that the agent verifies before bringing the tunnel up.
 - Pinned trust: tunnel orchestration uses the same pinned TLS channel as REST and Socket.IO to prevent MITM during setup and control.
 - Isolation by default: each agent gets a host-only /32; AllowedIPs are restricted to the agent /32 and the Engine /32; no LAN routes and no client-to-client traffic.
-- Port-level controls: per-device allowlists plus Engine-applied firewall rules limit which protocols can traverse the tunnel.
+- Port-level controls: the tunnel is trusted end-to-end, and the Engine/Agent firewall rules allow a global port allowlist between the Engine /32 and Agent /32 (defaults to 47002 and 5900, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`).
 - Live PowerShell today: a VPN-only shell endpoint enables remote command execution with SYSTEM-level (`NT AUTHORITY\\SYSTEM`) access for deep diagnostics and remediation.
-- Session lifecycle: tunnels stay online with `PersistentKeepalive = 30`; session material includes a virtual IP plus allowed ports; role-level disconnects (shell/VNC) leave the tunnel intact.
-- Future protocols: extend the same tunnel for SSH, WinRM, VNC, WebRTC streaming, and other remote management workflows by enabling ports per device.
+- Session lifecycle: tunnels stay online with `PersistentKeepalive = 30`; session material includes a virtual IP; role-level disconnects (shell/VNC) leave the tunnel intact.
+- Future protocols: reuse the same trusted tunnel for SSH, WinRM, VNC, WebRTC streaming, and other remote management workflows without per-device port toggles.
 
 ## Enrollment and Identity
 - Enrollment uses install codes and operator approval.

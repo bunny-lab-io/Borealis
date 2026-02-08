@@ -126,7 +126,7 @@ class EngineContext:
     wireguard_peer_network: str
     wireguard_server_private_key_path: str
     wireguard_server_public_key_path: str
-    wireguard_acl_allowlist_windows: Tuple[int, ...]
+    wireguard_port_allowlist: Tuple[int, ...]
     wireguard_shell_port: int
     vnc_port: int
     vnc_ws_host: str
@@ -159,7 +159,7 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         wireguard_peer_network=settings.wireguard_peer_network,
         wireguard_server_private_key_path=settings.wireguard_server_private_key_path,
         wireguard_server_public_key_path=settings.wireguard_server_public_key_path,
-        wireguard_acl_allowlist_windows=settings.wireguard_acl_allowlist_windows,
+        wireguard_port_allowlist=settings.wireguard_port_allowlist,
         wireguard_shell_port=settings.wireguard_shell_port,
         vnc_port=settings.vnc_port,
         vnc_ws_host=settings.vnc_ws_host,
@@ -250,7 +250,7 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
             peer_network=context.wireguard_peer_network,
             private_key_path=Path(context.wireguard_server_private_key_path),
             public_key_path=Path(context.wireguard_server_public_key_path),
-            acl_allowlist_windows=tuple(context.wireguard_acl_allowlist_windows),
+            acl_allowlist_ports=tuple(context.wireguard_port_allowlist),
             log_path=Path(context.vpn_tunnel_log_path),
         )
         context.wireguard_server_manager = WireGuardServerManager(wg_config)
@@ -326,7 +326,7 @@ def register_engine_api(app: Flask, *, config: Optional[Mapping[str, Any]] = Non
             peer_network=context.wireguard_peer_network,
             private_key_path=Path(context.wireguard_server_private_key_path),
             public_key_path=Path(context.wireguard_server_public_key_path),
-            acl_allowlist_windows=tuple(context.wireguard_acl_allowlist_windows),
+            acl_allowlist_ports=tuple(context.wireguard_port_allowlist),
             log_path=Path(context.vpn_tunnel_log_path),
         )
         context.wireguard_server_manager = WireGuardServerManager(wg_config)

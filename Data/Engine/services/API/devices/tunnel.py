@@ -73,7 +73,7 @@ def _get_tunnel_service(adapters: "EngineServiceAdapters") -> VpnTunnelService:
                         peer_network=adapters.context.wireguard_peer_network,
                         private_key_path=Path(adapters.context.wireguard_server_private_key_path),
                         public_key_path=Path(adapters.context.wireguard_server_public_key_path),
-                        acl_allowlist_windows=tuple(adapters.context.wireguard_acl_allowlist_windows),
+                        acl_allowlist_ports=tuple(adapters.context.wireguard_port_allowlist),
                         log_path=Path(adapters.context.vpn_tunnel_log_path),
                     )
                 )

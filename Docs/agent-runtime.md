@@ -15,7 +15,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `role_DeviceAudit.py` (ROLE_NAME: `device_audit`) - inventory and audit data capture.
 - `role_Macro.py` (ROLE_NAME: `macro`) - macro automation.
 - `role_PlaybookExec_SYSTEM.py` (ROLE_NAME: `playbook_exec_system`) - Ansible playbook runner (unfinished).
-- `role_VNC.py` (ROLE_NAME: `VNC`) - on-demand UltraVNC server lifecycle.
+- `role_VNC.py` (ROLE_NAME: `VNC`) - always-on UltraVNC server lifecycle.
 - `role_RemotePowershell.py` (ROLE_NAME: `RemotePowershell`) - TCP PowerShell server over WireGuard.
 - `role_Screenshot.py` (ROLE_NAME: `screenshot`) - screenshot capture.
 - `role_ScriptExec_CURRENTUSER.py` (ROLE_NAME: `script_exec_currentuser`) - interactive PowerShell execution.
@@ -35,6 +35,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `POST /api/agent/details` (Device Authenticated) - hardware/inventory payloads.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
+- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC credentials for the agent.
 
 ## Related Documentation
 - [Security and Trust](security-and-trust.md)

@@ -52,7 +52,8 @@ TUNNEL_NAME = "Borealis"
 TUNNEL_DISPLAY_NAME = "Borealis"
 SERVICE_DISPLAY_NAME = "Borealis - WireGuard - Agent"
 TUNNEL_IDLE_ADDRESS = "169.254.255.254/32"
-FIREWALL_RULE_NAME = "Borealis - WireGuard - Shell"
+FIREWALL_RULE_NAME = "Borealis - WireGuard - Agent"
+DEFAULT_VNC_PORT = 5900
 
 
 def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 3600) -> int:
@@ -138,6 +139,38 @@ def _resolve_shell_port() -> int:
     if value < 1 or value > 65535:
         return 47002
     return value
+
+
+def _resolve_vnc_port() -> int:
+    raw = os.environ.get("BOREALIS_VNC_PORT")
+    try:
+        value = int(raw) if raw is not None else DEFAULT_VNC_PORT
+    except Exception:
+        value = DEFAULT_VNC_PORT
+    if value < 1 or value > 65535:
+        return DEFAULT_VNC_PORT
+    return value
+
+
+def _parse_allowed_ports(raw: Any) -> list[int]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        text = str(raw).strip()
+        if not text:
+            return []
+        items = [part.strip() for part in text.split(",") if part.strip()]
+    ports: list[int] = []
+    for item in items:
+        try:
+            port = int(item)
+        except Exception:
+            continue
+        if 1 <= port <= 65535:
+            ports.append(port)
+    return list(dict.fromkeys(ports))
 
 
 class SessionConfig:
@@ -307,56 +340,68 @@ class WireGuardClient:
         try:
             network = ipaddress.ip_network(str(allowed_ips).strip(), strict=False)
         except Exception:
-            _write_log(f"Refusing to apply shell firewall rule; invalid allowed_ips={allowed_ips}.")
+            _write_log(f"Refusing to apply tunnel firewall rule; invalid allowed_ips={allowed_ips}.")
             return None
         if network.prefixlen != 32:
-            _write_log(f"Refusing to apply shell firewall rule; allowed_ips not /32: {network}.")
+            _write_log(f"Refusing to apply tunnel firewall rule; allowed_ips not /32: {network}.")
             return None
         return str(network)
 
-    def _ensure_shell_firewall(self, allowed_ips: Optional[str]) -> None:
+    def _ensure_shell_firewall(self, allowed_ips: Optional[str], allowed_ports: Optional[str]) -> None:
         if os.name != "nt":
             return
         remote = self._normalize_firewall_remote(allowed_ips)
         if not remote:
             return
-        rule_name = FIREWALL_RULE_NAME.replace("'", "''")
-        port = _resolve_shell_port()
-        command = (
-            "Remove-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue; "
-            "New-NetFirewallRule -DisplayName '{name}' -Direction Inbound -Action Allow "
-            "-Protocol TCP -LocalPort {port} -RemoteAddress {remote} -Profile Any"
-        ).format(name=rule_name, port=port, remote=remote)
-        try:
-            result = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-Command", command],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode != 0:
-                _write_log(f"Failed to ensure shell firewall rule: {result.stderr.strip()}")
-            else:
-                _write_log(f"Ensured shell firewall rule for {remote} on port {port}.")
-        except Exception as exc:
-            _write_log(f"Failed to ensure shell firewall rule: {exc}")
+        ports = _parse_allowed_ports(allowed_ports)
+        if not ports:
+            fallback_ports = [_resolve_shell_port(), _resolve_vnc_port()]
+            ports = [p for p in fallback_ports if 1 <= p <= 65535]
+            ports = list(dict.fromkeys(ports))
+            if ports:
+                _write_log(
+                    "WireGuard allowed_ports missing; defaulting to {0}.".format(
+                        ",".join(str(p) for p in ports)
+                    )
+                )
+        if not ports:
+            _write_log("WireGuard allowed_ports empty; firewall rule not updated.")
+            return
+        port_text = ",".join(str(p) for p in ports)
+        base_name = FIREWALL_RULE_NAME.replace("'", "''")
+        for protocol in ("TCP", "UDP"):
+            rule_name = f"{base_name} ({protocol})"
+            command = (
+                "$rule = Get-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue; "
+                "if (-not $rule) {{ "
+                "New-NetFirewallRule -DisplayName '{name}' -Direction Inbound -Action Allow "
+                "-Protocol {protocol} -LocalPort {ports} -RemoteAddress {remote} -Profile Any | Out-Null; "
+                "}} else {{ "
+                "$rule | Set-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -Profile Any | Out-Null; "
+                "$rule | Set-NetFirewallPortFilter -Protocol {protocol} -LocalPort {ports} | Out-Null; "
+                "$rule | Set-NetFirewallAddressFilter -RemoteAddress {remote} | Out-Null; "
+                "}}"
+            ).format(name=rule_name, remote=remote, ports=port_text, protocol=protocol)
+            try:
+                result = subprocess.run(
+                    ["powershell.exe", "-NoProfile", "-Command", command],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    _write_log(
+                        f"Failed to ensure tunnel firewall rule ({protocol}): {result.stderr.strip()}"
+                    )
+                else:
+                    _write_log(
+                        f"Ensured tunnel firewall rule for {remote} ports={port_text} protocol={protocol}."
+                    )
+            except Exception as exc:
+                _write_log(f"Failed to ensure tunnel firewall rule ({protocol}): {exc}")
 
     def _remove_shell_firewall(self) -> None:
-        if os.name != "nt":
-            return
-        rule_name = FIREWALL_RULE_NAME.replace("'", "''")
-        command = "Remove-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue".format(
-            name=rule_name
-        )
-        try:
-            subprocess.run(
-                ["powershell.exe", "-NoProfile", "-Command", command],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except Exception:
-            pass
+        _write_log("WireGuard firewall teardown skipped (always-on).")
 
     def _service_exists(self) -> bool:
         code, _, _ = self._run(["sc.exe", "query", self._service_id()])
@@ -585,7 +630,7 @@ class WireGuardClient:
             self._restart_service()
             self._ensure_adapter_name()
             self._ensure_service_display_name()
-            self._ensure_shell_firewall(session.allowed_ips)
+            self._ensure_shell_firewall(session.allowed_ips, session.allowed_ports)
 
             self.session = session
             self.idle_deadline = None

@@ -72,28 +72,33 @@ def _discover_project_root() -> Path:
 
 
 PROJECT_ROOT = _discover_project_root()
-DEFAULT_DATABASE_PATH = PROJECT_ROOT / "Engine" / "database.db"
+ENGINE_DATABASE_PATH = PROJECT_ROOT / "Engine" / "database.db"
 LOG_ROOT = PROJECT_ROOT / "Engine" / "Logs"
 LOG_FILE_PATH = LOG_ROOT / "engine.log"
 ERROR_LOG_FILE_PATH = LOG_ROOT / "error.log"
 API_LOG_FILE_PATH = LOG_ROOT / "api.log"
 VPN_TUNNEL_LOG_FILE_PATH = LOG_ROOT / "VPN_Tunnel" / "tunnel.log"
-DEFAULT_WIREGUARD_PORT = 30000
-DEFAULT_WIREGUARD_ENGINE_VIRTUAL_IP = "10.255.0.1/32"
-DEFAULT_WIREGUARD_PEER_NETWORK = "10.255.0.0/16"
+
+# WireGuard (VPN)
+WIREGUARD_PORT = 30000
+WIREGUARD_ENGINE_VIRTUAL_IP = "10.255.0.1/32"
+WIREGUARD_PEER_NETWORK = "10.255.0.0/16"
 VPN_SERVER_CERT_ROOT = PROJECT_ROOT / "Engine" / "Certificates" / "VPN_Server"
-DEFAULT_VNC_PORT = 5900
-DEFAULT_WIREGUARD_SHELL_PORT = 47002
-DEFAULT_WIREGUARD_ACL_WINDOWS = (
-    5985,
-    5986,
-    5900,
-    3478,
-    DEFAULT_WIREGUARD_SHELL_PORT,
+
+# Remote PowerShell (over WireGuard)
+POWERSHELL_PORT = 47002
+
+# VNC (UltraVNC over WireGuard)
+VNC_PORT = 5900
+VNC_WS_HOST = "0.0.0.0"
+VNC_WS_PORT = 4823
+VNC_SESSION_TTL_SECONDS = 120
+
+# WireGuard port allowlist (Engine -> Agent /32)
+WIREGUARD_PORT_ALLOWLIST = (
+    POWERSHELL_PORT,
+    VNC_PORT,
 )
-DEFAULT_VNC_WS_HOST = "0.0.0.0"
-DEFAULT_VNC_WS_PORT = 4823
-DEFAULT_VNC_SESSION_TTL_SECONDS = 120
 
 
 def _ensure_parent(path: Path) -> None:
@@ -293,7 +298,7 @@ class EngineSettings:
     wireguard_peer_network: str
     wireguard_server_private_key_path: str
     wireguard_server_public_key_path: str
-    wireguard_acl_allowlist_windows: Tuple[int, ...]
+    wireguard_port_allowlist: Tuple[int, ...]
     wireguard_shell_port: int
     vnc_port: int
     vnc_ws_host: str
@@ -357,7 +362,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
     database_path = str(
         runtime_config.get("DATABASE_PATH")
         or os.environ.get("BOREALIS_DATABASE_PATH")
-        or DEFAULT_DATABASE_PATH
+        or ENGINE_DATABASE_PATH
     )
     database_path = os.path.abspath(database_path)
     _ensure_parent(Path(database_path))
@@ -406,29 +411,29 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
 
     wireguard_port = _parse_int(
         runtime_config.get("WIREGUARD_PORT") or os.environ.get("BOREALIS_WIREGUARD_PORT"),
-        default=DEFAULT_WIREGUARD_PORT,
+        default=WIREGUARD_PORT,
         minimum=1,
         maximum=65535,
     )
     wireguard_engine_virtual_ip = str(
         runtime_config.get("WIREGUARD_ENGINE_VIRTUAL_IP")
         or os.environ.get("BOREALIS_WIREGUARD_ENGINE_VIRTUAL_IP")
-        or DEFAULT_WIREGUARD_ENGINE_VIRTUAL_IP
+        or WIREGUARD_ENGINE_VIRTUAL_IP
     )
     wireguard_peer_network = str(
         runtime_config.get("WIREGUARD_PEER_NETWORK")
         or os.environ.get("BOREALIS_WIREGUARD_PEER_NETWORK")
-        or DEFAULT_WIREGUARD_PEER_NETWORK
+        or WIREGUARD_PEER_NETWORK
     )
-    wireguard_acl_allowlist_windows = _parse_port_list(
-        runtime_config.get("WIREGUARD_WINDOWS_ALLOWLIST")
-        or os.environ.get("BOREALIS_WIREGUARD_WINDOWS_ALLOWLIST"),
-        default=DEFAULT_WIREGUARD_ACL_WINDOWS,
+    wireguard_port_allowlist = _parse_port_list(
+        runtime_config.get("WIREGUARD_PORT_ALLOWLIST")
+        or os.environ.get("BOREALIS_WIREGUARD_PORT_ALLOWLIST"),
+        default=WIREGUARD_PORT_ALLOWLIST,
     )
     wireguard_shell_port = _parse_int(
         runtime_config.get("WIREGUARD_SHELL_PORT")
         or os.environ.get("BOREALIS_WIREGUARD_SHELL_PORT"),
-        default=DEFAULT_WIREGUARD_SHELL_PORT,
+        default=POWERSHELL_PORT,
         minimum=1,
         maximum=65535,
     )
@@ -443,25 +448,25 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
 
     vnc_port = _parse_int(
         runtime_config.get("VNC_PORT") or os.environ.get("BOREALIS_VNC_PORT"),
-        default=DEFAULT_VNC_PORT,
+        default=VNC_PORT,
         minimum=1,
         maximum=65535,
     )
     vnc_ws_host = str(
         runtime_config.get("VNC_WS_HOST")
         or os.environ.get("BOREALIS_VNC_WS_HOST")
-        or DEFAULT_VNC_WS_HOST
+        or VNC_WS_HOST
     )
     vnc_ws_port = _parse_int(
         runtime_config.get("VNC_WS_PORT") or os.environ.get("BOREALIS_VNC_WS_PORT"),
-        default=DEFAULT_VNC_WS_PORT,
+        default=VNC_WS_PORT,
         minimum=1,
         maximum=65535,
     )
     vnc_session_ttl_seconds = _parse_int(
         runtime_config.get("VNC_SESSION_TTL_SECONDS")
         or os.environ.get("BOREALIS_VNC_SESSION_TTL_SECONDS"),
-        default=DEFAULT_VNC_SESSION_TTL_SECONDS,
+        default=VNC_SESSION_TTL_SECONDS,
         minimum=30,
         maximum=3600,
     )
@@ -502,7 +507,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         wireguard_peer_network=wireguard_peer_network,
         wireguard_server_private_key_path=wireguard_server_private_key_path,
         wireguard_server_public_key_path=wireguard_server_public_key_path,
-        wireguard_acl_allowlist_windows=wireguard_acl_allowlist_windows,
+        wireguard_port_allowlist=wireguard_port_allowlist,
         wireguard_shell_port=wireguard_shell_port,
         vnc_port=vnc_port,
         vnc_ws_host=vnc_ws_host,

@@ -425,16 +425,15 @@ export default function ReverseTunnelVnc({ device }) {
 
   const openVncSession = useCallback(
     async (data) => {
-      const token = data?.token;
       const wsUrl = data?.ws_url;
       const vncPassword = data?.vnc_password || "";
-      if (!token || !wsUrl) {
+      if (!wsUrl) {
         throw new Error("VNC session unavailable.");
       }
       const help = buildCertHelp(wsUrl);
       setCertHelp(help);
       probeCertificateTrust(help);
-      const tunnelUrl = `${wsUrl}?token=${encodeURIComponent(token)}`;
+      const tunnelUrl = wsUrl;
       const displayHost = displayRef.current;
       if (!displayHost) {
         throw new Error("VNC display container missing.");
