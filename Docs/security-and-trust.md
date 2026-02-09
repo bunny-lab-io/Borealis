@@ -31,7 +31,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Background pruning of expired enrollment codes and refresh tokens is not wired yet; a maintenance task is still needed.
 
 ### Agent
-- Generates device-wide Ed25519 key pairs on first launch, storing them under `Certificates/Agent/Identity/` with DPAPI protection on Windows (chmod 600 elsewhere) and persisting the server-issued GUID alongside.
+- Generates device-wide Ed25519 key pairs on first launch, storing them under `Agent/Borealis/Certificates/Identity/` with DPAPI protection on Windows (chmod 600 elsewhere) and persisting the server-issued GUID alongside.
 - Stores refresh/access tokens encrypted (DPAPI) and re-enrolls on authentication failures; TLS pinning relies on the stored server certificate bundle rather than a separate fingerprint binding for the tokens.
 - Imports the server TLS bundle into a dedicated `ssl.SSLContext`, reuses it for the REST session, and injects it into the Socket.IO engine so WebSockets enjoy the same pinning and hostname checks.
 - Treats every script payload as hostile until verified: only Ed25519 signatures from the server are accepted, missing or invalid signatures are logged and dropped, and the trusted signing key is updated only after successful verification between the agent and the server.
@@ -211,8 +211,8 @@ sequenceDiagram
 - Script signing keys: `Engine/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
 
 ### Key material locations (Agent)
-- Identity keys: `Certificates/Agent/Identity/agent_identity_private.ed25519` and `agent_identity_public.ed25519`.
-- Trusted server bundle: `Certificates/Agent/Trusted_Server_Cert/` (scope-specific).
+- Identity keys: `Agent/Borealis/Certificates/Identity/agent_identity_private.ed25519` and `agent_identity_public.ed25519`.
+- Trusted server bundle: `Agent/Borealis/Certificates/Trusted_Server_Cert/` (scope-specific).
 - Tokens and GUID: `Agent/Borealis/Settings/` (refresh.token, access.jwt, Agent_GUID.txt).
 
 ### Enrollment sequence (step-by-step)

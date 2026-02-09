@@ -85,7 +85,7 @@ def _resolve_agent_certificate_dir(settings_dir: str, scope: str) -> str:
             project_root = settings_path.parents[2]
         except Exception:
             project_root = settings_path.parent
-        base = project_root / "Certificates" / "Agent"
+        base = project_root / "Agent" / "Borealis" / "Certificates"
 
     target = base / "Trusted_Server_Cert"
     if scope_name not in {"SYSTEM", "CURRENTUSER"}:
@@ -128,7 +128,7 @@ def _resolve_agent_identity_dir(settings_dir: str, scope: str) -> str:
             project_root = settings_path.parents[2]
         except Exception:
             project_root = settings_path.parent
-        base = project_root / "Certificates" / "Agent"
+        base = project_root / "Agent" / "Borealis" / "Certificates"
 
     meta_fp: Optional[str] = None
     try:

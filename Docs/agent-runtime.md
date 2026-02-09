@@ -111,7 +111,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Troubleshooting: prefix lines with `<timestamp>-<service-name>-<log-data>`; ask operators whether verbose logging should stay after resolution.
 
 #### Security
-- Generates device-wide Ed25519 keys on first launch (`Certificates/Agent/Identity/`; DPAPI on Windows, `chmod 600` elsewhere).
+- Generates device-wide Ed25519 keys on first launch (`Agent/Borealis/Certificates/Identity/`; DPAPI on Windows, `chmod 600` elsewhere).
 - Refresh/access tokens are encrypted and pinned to the Engine certificate fingerprint; mismatches force re-enrollment.
 - Uses dedicated `ssl.SSLContext` seeded with the Engine TLS bundle for REST and Socket.IO traffic.
 - Validates script payloads with backend-issued Ed25519 signatures before execution.
