@@ -369,6 +369,7 @@ export default function ReverseTunnelVnc({ device }) {
   useEffect(() => {
     const rfb = rfbRef.current;
     if (!rfb) return;
+    rfb.showDotCursor = true;
     rfb.viewOnly = viewOnly;
     rfb.clipViewport = clipViewport;
     rfb.dragViewport = dragViewport;
@@ -443,6 +444,8 @@ export default function ReverseTunnelVnc({ device }) {
       const rfb = new RFB(displayHost, tunnelUrl, {
         credentials: { password: vncPassword },
       });
+      // Always show a local dot cursor so we never lose pointer visibility.
+      rfb.showDotCursor = true;
       rfb.scaleViewport = scaleViewport;
       rfb.resizeSession = resizeSession;
       rfb.clipViewport = clipViewport;

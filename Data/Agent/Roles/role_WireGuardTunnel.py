@@ -88,6 +88,40 @@ def _write_log(message: str) -> None:
         pass
 
 
+def _firewall_state_path() -> Path:
+    root = Path(__file__).resolve().parents[2] / "Borealis" / "Settings" / "WireGuard"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "firewall_state.json"
+
+
+def _load_firewall_state() -> Dict[str, Any]:
+    path = _firewall_state_path()
+    if not path.is_file():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8", errors="ignore").strip()
+    except Exception:
+        return {}
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def _save_firewall_state(state: Dict[str, Any]) -> None:
+    path = _firewall_state_path()
+    try:
+        payload = json.dumps(state, ensure_ascii=True, sort_keys=True, indent=2)
+        path.write_text(payload + "\n", encoding="ascii")
+    except Exception:
+        return
+
+
 
 
 def _encode_key(raw: bytes) -> str:
@@ -368,19 +402,39 @@ class WireGuardClient:
             _write_log("WireGuard allowed_ports empty; firewall rule not updated.")
             return
         port_text = ",".join(str(p) for p in ports)
+        state = _load_firewall_state()
+        configured = bool(state.get("configured"))
+        state_remote = str(state.get("remote") or "")
+        state_ports = state.get("ports") or []
+        if isinstance(state_ports, str):
+            state_ports = _parse_allowed_ports(state_ports)
+        if configured and state_remote == remote and list(state_ports) == list(ports):
+            _write_log("WireGuard firewall already configured; skipping updates.")
+            return
+
         base_name = FIREWALL_RULE_NAME.replace("'", "''")
-        for protocol in ("TCP", "UDP"):
+        protocols = ("TCP", "UDP")
+        for protocol in protocols:
+            rule_name = f"{base_name} ({protocol})"
+            remove_command = (
+                "Get-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue | "
+                "Remove-NetFirewallRule -ErrorAction SilentlyContinue"
+            ).format(name=rule_name)
+            try:
+                subprocess.run(
+                    ["powershell.exe", "-NoProfile", "-Command", remove_command],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except Exception:
+                pass
+
+        for protocol in protocols:
             rule_name = f"{base_name} ({protocol})"
             command = (
-                "$rule = Get-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue; "
-                "if (-not $rule) {{ "
                 "New-NetFirewallRule -DisplayName '{name}' -Direction Inbound -Action Allow "
-                "-Protocol {protocol} -LocalPort {ports} -RemoteAddress {remote} -Profile Any | Out-Null; "
-                "}} else {{ "
-                "$rule | Set-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -Profile Any | Out-Null; "
-                "$rule | Set-NetFirewallPortFilter -Protocol {protocol} -LocalPort {ports} | Out-Null; "
-                "$rule | Set-NetFirewallAddressFilter -RemoteAddress {remote} | Out-Null; "
-                "}}"
+                "-Protocol {protocol} -LocalPort {ports} -RemoteAddress {remote} -Profile Any | Out-Null"
             ).format(name=rule_name, remote=remote, ports=port_text, protocol=protocol)
             try:
                 result = subprocess.run(
@@ -390,15 +444,17 @@ class WireGuardClient:
                     check=False,
                 )
                 if result.returncode != 0:
+                    detail = (result.stderr or result.stdout or "").strip()
                     _write_log(
-                        f"Failed to ensure tunnel firewall rule ({protocol}): {result.stderr.strip()}"
+                        f"Failed to create tunnel firewall rule ({protocol}): {detail}"
                     )
                 else:
                     _write_log(
-                        f"Ensured tunnel firewall rule for {remote} ports={port_text} protocol={protocol}."
+                        f"Created tunnel firewall rule for {remote} ports={port_text} protocol={protocol}."
                     )
             except Exception as exc:
-                _write_log(f"Failed to ensure tunnel firewall rule ({protocol}): {exc}")
+                _write_log(f"Failed to create tunnel firewall rule ({protocol}): {exc}")
+        _save_firewall_state({"configured": True, "remote": remote, "ports": ports})
 
     def _remove_shell_firewall(self) -> None:
         _write_log("WireGuard firewall teardown skipped (always-on).")

@@ -421,6 +421,35 @@ function Ensure-SystemUtf8CodePage {
     }
 }
 
+function Ensure-SoftwareSASGeneration {
+    param([string]$LogName = 'Install.log')
+
+    $policyPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    $valueName = 'SoftwareSASGeneration'
+    $current = $null
+    try {
+        $props = Get-ItemProperty -Path $policyPath -Name $valueName -ErrorAction SilentlyContinue
+        if ($props -and ($props.PSObject.Properties.Name -contains $valueName)) {
+            $current = [int]$props.$valueName
+        }
+    } catch {
+        $current = $null
+    }
+
+    if ($null -ne $current -and $current -ge 1) {
+        Write-AgentLog -FileName $LogName -Message ("[SAS] {0} already set to {1}." -f $valueName, $current)
+        return
+    }
+
+    try {
+        if (-not (Test-Path $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
+        New-ItemProperty -Path $policyPath -Name $valueName -PropertyType DWord -Value 1 -Force | Out-Null
+        Write-AgentLog -FileName $LogName -Message ("[SAS] Set {0}=1 to allow software SAS/CAD." -f $valueName)
+    } catch {
+        Write-AgentLog -FileName $LogName -Message ("[SAS] Failed to set {0}: {1}" -f $valueName, $_.Exception.Message)
+    }
+}
+
 # Forcefully remove legacy and current Borealis services and tasks
 function Remove-BorealisServicesAndTasks {
     param([string]$LogName)
@@ -2073,6 +2102,7 @@ function InstallOrUpdate-BorealisAgent {
     Write-Host "Cleaning previous agent tasks/processes..." -ForegroundColor Yellow
     Remove-BorealisServicesAndTasks -LogName 'Install.log'
     Ensure-SystemUtf8CodePage -LogName 'Install.log'
+    Ensure-SoftwareSASGeneration -LogName 'Install.log'
     Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
 
     # Resolve all paths relative to the script directory to avoid CWD issues
