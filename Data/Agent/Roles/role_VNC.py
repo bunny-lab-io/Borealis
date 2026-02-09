@@ -1194,6 +1194,18 @@ class Role:
             return None
         try:
             payload = client.post_json(
+                "/api/agent/vpn/ensure",
+                {"agent_id": self.ctx.agent_id, "reason": reason},
+                require_auth=True,
+            )
+            if isinstance(payload, dict):
+                if payload.get("vnc_password") or payload.get("vnc_port"):
+                    return payload
+        except Exception as exc:
+            self._log(f"VNC bootstrap via vpn/ensure failed: {exc}", error=True)
+
+        try:
+            payload = client.post_json(
                 "/api/agent/vnc/ensure",
                 {"agent_id": self.ctx.agent_id, "reason": reason},
                 require_auth=True,

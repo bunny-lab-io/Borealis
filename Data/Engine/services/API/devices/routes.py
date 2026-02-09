@@ -366,14 +366,21 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             )
             return jsonify({"error": "tunnel_start_failed", "detail": str(exc)}), 500
 
+        vnc_port = int(getattr(adapters.context, "vnc_port", 5900))
+        vnc_password = _ensure_vnc_password(resolved_agent)
+        response_payload = dict(payload)
+        response_payload["vnc_password"] = vnc_password
+        response_payload["vnc_port"] = vnc_port
+
         log(
             "VPN_Tunnel/tunnel",
             "vpn_agent_ensure_response agent_id={0} tunnel_id={1}".format(
-                payload.get("agent_id", resolved_agent), payload.get("tunnel_id", "-")
+                response_payload.get("agent_id", resolved_agent),
+                response_payload.get("tunnel_id", "-"),
             ),
             _context_hint(ctx),
         )
-        return jsonify(payload), 200
+        return jsonify(response_payload), 200
 
     @blueprint.route("/api/agent/vnc/ensure", methods=["POST"])
     @require_device_auth(auth_manager)
