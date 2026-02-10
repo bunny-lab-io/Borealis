@@ -199,7 +199,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             label="All Devices"
             pageKey="devices"
           />
-          <NavItem
+          {/* <NavItem
             icon={<DevicesIcon fontSize="small" />}
             label="Agent Devices"
             pageKey="agent_devices"
@@ -217,6 +217,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             pageKey="winrm_devices"
             indent
           />
+          */}
         </Section>
 
         {/* Automation */}
