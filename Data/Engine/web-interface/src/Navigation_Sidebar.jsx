@@ -295,8 +295,8 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
           </Section>
         )}
 
-        {/* Developer Tools */}
-        {isAdmin && (
+        {/* Developer Tools (navigation hidden) */}
+        {/* {isAdmin && (
           <Section title="Developer Tools" k="developer">
             <NavItem
               icon={<PageTemplateIcon fontSize="small" />}
@@ -304,7 +304,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
               pageKey="page_template"
             />
           </Section>
-        )}
+        )} */}
       </Box>
 
       <Divider sx={{ borderColor: COLORS.line }} />
