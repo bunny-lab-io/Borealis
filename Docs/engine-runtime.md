@@ -32,6 +32,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - [API Reference](api-reference.md)
 - [Logging and Operations](logging-and-operations.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
+- [Technical Debt](technical-debt.md)
 
 ## Codex Agent (Detailed)
 ### Source vs runtime

@@ -25,6 +25,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)
 - [API Reference](api-reference.md)
+- [Technical Debt](technical-debt.md)
 - [Logging and Operations](logging-and-operations.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 

@@ -29,6 +29,7 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 ### UI and API
 - [UI and Notifications](ui-and-notifications.md)
 - [API Reference](api-reference.md)
+- [Technical Debt](technical-debt.md)
 
 ### Integrations
 - [Integrations](integrations.md)
