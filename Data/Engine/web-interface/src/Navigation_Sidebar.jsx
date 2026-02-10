@@ -13,6 +13,8 @@ import {
 } from "@mui/material";
 import {
   ExpandMore as ExpandMoreIcon,
+  ChevronLeft as ChevronLeftIcon,
+  ChevronRight as ChevronRightIcon,
   Devices as DevicesIcon,
   FilterAlt as FilterIcon,
   Groups as GroupsIcon,
@@ -49,6 +51,7 @@ const NAV_ITEM_ALIASES = {
 };
 
 function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
+  const [collapsed, setCollapsed] = useState(false);
   const [expandedNav, setExpandedNav] = useState({
     sites: true,
     devices: true,
@@ -93,8 +96,11 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
 
   const Section = ({ title, k, children }) => (
     <Accordion
-      expanded={expandedNav[k]}
-      onChange={(_, e) => setExpandedNav((s) => ({ ...s, [k]: e }))}
+      expanded={collapsed ? true : expandedNav[k]}
+      onChange={(_, e) => {
+        if (collapsed) return;
+        setExpandedNav((s) => ({ ...s, [k]: e }));
+      }}
       square
       disableGutters
       sx={{
@@ -108,23 +114,31 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         expandIcon={<ExpandMoreIcon sx={{ color: COLORS.cyan }} />}
         sx={{
           minHeight: 38,
-          "& .MuiAccordionSummary-content": { m: 0, py: 0.5 },
+          "& .MuiAccordionSummary-content": {
+            m: 0,
+            py: 0.5,
+            display: collapsed ? "none" : "flex",
+          },
+          display: collapsed ? "none" : "flex",
           backgroundColor: "rgba(255,255,255,0.02)",
           borderTopRightRadius: 8,
           borderBottomRightRadius: 8,
-          px: 1.5,
+          px: collapsed ? 1 : 1.5,
         }}
+        title={collapsed ? title : undefined}
       >
-        <Typography
-          sx={{
-            fontSize: "0.85rem",
-            color: COLORS.cyan,
-            fontWeight: 700,
-            letterSpacing: 0.3,
-          }}
-        >
-          {title}
-        </Typography>
+        {collapsed ? null : (
+          <Typography
+            sx={{
+              fontSize: "0.85rem",
+              color: COLORS.cyan,
+              fontWeight: 700,
+              letterSpacing: 0.3,
+            }}
+          >
+            {title}
+          </Typography>
+        )}
       </AccordionSummary>
       <AccordionDetails sx={{ p: 0 }}>{children}</AccordionDetails>
     </Accordion>
@@ -136,13 +150,15 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
       <ListItemButton
         onClick={() => onNavigate(pageKey)}
         sx={{
-          pl: indent ? 4 : 2,
+          pl: collapsed ? 1.5 : indent ? 4 : 2,
+          pr: collapsed ? 1.5 : 2,
           py: 1,
           color: active ? COLORS.textActive : COLORS.text,
           position: "relative",
           background: active ? COLORS.itemActiveBg : "transparent",
-          borderTopRightRadius: 10,
-          borderBottomRightRadius: 10,
+          borderTopRightRadius: 0,
+          borderBottomRightRadius: 0,
+          justifyContent: collapsed ? "center" : "flex-start",
           transition:
             "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
           "&:hover": {
@@ -151,11 +167,12 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
           "&:active": { transform: "translateY(0.5px)" },
         }}
         selected={active}
+        title={collapsed ? label : undefined}
       >
         {icon && (
           <Box
             sx={{
-              mr: 1,
+              mr: collapsed ? 0 : 1,
               display: "flex",
               alignItems: "center",
               color: active ? COLORS.cyan : "#8fbfff",
@@ -167,6 +184,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         )}
         <ListItemText
           primary={label}
+          sx={{ display: collapsed ? "none" : "block" }}
           primaryTypographyProps={{
             fontSize: "0.8rem",
             fontWeight: active ? 600 : 400,
@@ -180,7 +198,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
   return (
     <Box
       sx={{
-        width: 260,
+        width: collapsed ? 45 : 260,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -321,6 +339,36 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             />
           </Section>
         )} */}
+      </Box>
+
+      <Box sx={{ px: 1, pb: 1 }}>
+        <Box
+          component="button"
+          type="button"
+          onClick={() => setCollapsed((prev) => !prev)}
+          aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+          sx={{
+            width: "100%",
+            height: 28,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(255,255,255,0.04)",
+            border: `1px solid ${COLORS.line}`,
+            borderRadius: 6,
+            color: COLORS.cyan,
+            cursor: "pointer",
+            transition: "background 160ms ease, transform 120ms ease",
+            "&:hover": {
+              background: "rgba(255,255,255,0.08)",
+            },
+            "&:active": {
+              transform: "translateY(1px)",
+            },
+          }}
+        >
+          {collapsed ? <ChevronRightIcon fontSize="small" /> : <ChevronLeftIcon fontSize="small" />}
+        </Box>
       </Box>
 
       <Divider sx={{ borderColor: COLORS.line }} />
