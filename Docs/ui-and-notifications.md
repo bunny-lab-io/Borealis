@@ -74,16 +74,27 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Default grid cell padding: keep roughly 18px on the left edge and 12px on the right for standard cells (12px/9px for `auto-col-tight`) so text never hugs a column edge. Target the center + pinned containers so both regions stay aligned.
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
 
-#### Aurora Tabs (MagicUI Tabbed Interfaces)
+#### Page-Level Tabs
 - Placement: sit directly below the hero title/subtitle band (8-16px gap). Tabs span the full width of the content column.
-- Typography: IBM Plex Sans, `fontSize: 15`, mixed case labels (`textTransform: "none"`). Use `fontWeight: 600` for emphasis, but avoid uppercase that crowds the aurora glow.
-- Indicator: 3px tall bar with rounded corners that uses the cyan to violet aurora gradient `linear-gradient(90deg,#7dd3fc,#c084fc)`. Keep it flush with the bottom border so it looks like a light strip under the active tab.
-- Hover/active treatment: tabs float on a translucent aurora panel `linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))` with a 1px inset steel outline. This gradient applies on hover for both selected and non-selected tabs to keep parity.
-- Colors: base text `MAGIC_UI.textMuted` (`#94a3b8`). Hovering switches to `MAGIC_UI.textBright` (`#e2e8f0`). Always force `opacity: 1` to avoid MUI's default faded text on unfocused tabs.
-- Shape/spacing: tabs are pill-like with `borderRadius: 4` (MUI unit `1`). Maintain `minHeight: 44px` so targets are touchable. Provide `borderBottom: 1px solid MAGIC_UI.panelBorder` to anchor the rail.
+- Typography: match Navigation Sidebar typography. Inherit the font family (IBM Plex Sans via theme), use `fontSize: "0.8rem"`, mixed case labels (`textTransform: "none"`). Default `fontWeight: 400`; active tabs are `fontWeight: 600`. Standard rail height is `32px` (compact stacks use `28px`).
+- Indicator: 3px tall bar with rounded corners that uses the Navigation Sidebar cyan (`#7db7ff`). Keep it flush with the bottom border so it reads as a light strip under the active tab.
+- Hover/active treatment: hover background uses the Navigation Sidebar hover fill `rgba(255,255,255,0.05)`. Selected tabs use the same active highlight gradient as the sidebar: `linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)`. Keep the highlight on hover for selected tabs.
+- Colors: base text `#cbd5e1` (Navigation Sidebar unselected). Selected text `#e6f2ff`. Always force `opacity: 1` to avoid MUI's default faded text on unfocused tabs.
+- Icons: when tabs include glyphs, color the icon wrapper `#8fbfff` when idle and `#7db7ff` when selected (match Navigation Sidebar glyphs). Do not hardcode icon colors on the icon component; rely on the wrapper style so selected states update automatically.
+- Shape/spacing: tabs are pill-like with `borderRadius: 4` (MUI unit `1`). Maintain `minHeight: 44px` so targets are touchable. Provide `borderBottom: 1px solid MAGIC_UI.panelBorder` (or the local shell border) to anchor the rail.
 - CSS/SX snippet to copy into new tab stacks:
 ```jsx
-const TAB_HOVER_GRADIENT = "linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))";
+const NAV_TAB_HEIGHT = 32;
+const NAV_TAB_HEIGHT_COMPACT = 28;
+const NAV_TAB_COLORS = {
+  text: "#cbd5e1",
+  textActive: "#e6f2ff",
+  icon: "#8fbfff",
+  iconActive: "#7db7ff",
+  hover: "rgba(255,255,255,0.05)",
+  activeBg:
+    "linear-gradient(to top, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+};
 
 <Tabs
   value={tab}
@@ -94,37 +105,55 @@ const TAB_HOVER_GRADIENT = "linear-gradient(120deg, rgba(125,211,252,0.18), rgba
     style: {
       height: 3,
       borderRadius: 3,
-      background: "linear-gradient(90deg,#7dd3fc,#c084fc)",
+      background: NAV_TAB_COLORS.iconActive,
     },
   }}
   sx={{
     borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+    minHeight: NAV_TAB_HEIGHT,
+    height: NAV_TAB_HEIGHT,
+    "& .MuiTabs-flexContainer": {
+      minHeight: NAV_TAB_HEIGHT,
+      height: NAV_TAB_HEIGHT,
+      alignItems: "stretch",
+    },
     "& .MuiTab-root": {
-      color: MAGIC_UI.textMuted,
-      fontFamily: "\"IBM Plex Sans\", \"Helvetica Neue\", Arial, sans-serif",
-      fontSize: 15,
+      color: NAV_TAB_COLORS.text,
+      fontFamily: "inherit",
+      fontSize: "0.8rem",
       textTransform: "none",
-      fontWeight: 600,
-      minHeight: 44,
+      fontWeight: 400,
+      minHeight: NAV_TAB_HEIGHT,
+      height: NAV_TAB_HEIGHT,
       opacity: 1,
       borderRadius: 1,
-      transition: "background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease",
+      py: 0.35,
+      transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
+      "& .MuiTab-iconWrapper": {
+        color: NAV_TAB_COLORS.icon,
+      },
       "&:hover": {
-        color: MAGIC_UI.textBright,
-        backgroundImage: TAB_HOVER_GRADIENT,
-        boxShadow: "0 0 0 1px rgba(148,163,184,0.25) inset",
+        background: NAV_TAB_COLORS.hover,
+      },
+      "&:active": {
+        transform: "translateY(0.5px)",
       },
     },
-    "& .Mui-selected": {
-      color: MAGIC_UI.textBright,
+    "& .MuiTab-root.Mui-selected": {
+      color: NAV_TAB_COLORS.textActive,
+      fontWeight: 600,
+      background: NAV_TAB_COLORS.activeBg,
+      "& .MuiTab-iconWrapper": {
+        color: NAV_TAB_COLORS.iconActive,
+      },
       "&:hover": {
-        backgroundImage: TAB_HOVER_GRADIENT,
+        background: NAV_TAB_COLORS.activeBg,
       },
     },
   }}
 >
   {TABS.map((t) => (
-    <Tab key={t} label={t} />
+    <Tab key={t} label={t} icon={t.icon} iconPosition="start" />
   ))}
 </Tabs>
 ```

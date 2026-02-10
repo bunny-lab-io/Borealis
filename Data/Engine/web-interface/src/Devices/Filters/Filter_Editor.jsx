@@ -121,6 +121,16 @@ const OS_ICON_MAP = {
   mac: "fab fa-apple",
 };
 
+const NAV_TAB_HEIGHT = 32;
+const NAV_TAB_COLORS = {
+  text: "#cbd5e1",
+  textActive: "#e6f2ff",
+  icon: "#8fbfff",
+  iconActive: "#7db7ff",
+  hover: "rgba(255,255,255,0.05)",
+  activeBg:
+    "linear-gradient(to top, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+};
 const TAB_HOVER_GRADIENT = "linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))";
 
 const TABS = [
@@ -1179,32 +1189,51 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
             style: {
               height: 3,
               borderRadius: 3,
-              background: "linear-gradient(90deg,#7dd3fc,#c084fc)",
+              background: NAV_TAB_COLORS.iconActive,
             },
           }}
           sx={{
             mt: 0,
             borderBottom: `1px solid ${AURORA_SHELL.border}`,
+            minHeight: NAV_TAB_HEIGHT,
+            height: NAV_TAB_HEIGHT,
+            "& .MuiTabs-flexContainer": {
+              minHeight: NAV_TAB_HEIGHT,
+              height: NAV_TAB_HEIGHT,
+              alignItems: "stretch",
+            },
             "& .MuiTab-root": {
-              color: AURORA_SHELL.subtext,
-              fontFamily: gridFontFamily,
-              fontSize: 15,
+              color: NAV_TAB_COLORS.text,
+              fontFamily: "inherit",
+              fontSize: "0.8rem",
               textTransform: "none",
-              fontWeight: 600,
-              minHeight: 44,
+              fontWeight: 400,
+              minHeight: NAV_TAB_HEIGHT,
+              height: NAV_TAB_HEIGHT,
               opacity: 1,
               borderRadius: 1,
-              transition: "background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease",
+              py: 0.35,
+              transition:
+                "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
+              "& .MuiTab-iconWrapper": {
+                color: NAV_TAB_COLORS.icon,
+              },
               "&:hover": {
-                color: AURORA_SHELL.text,
-                backgroundImage: TAB_HOVER_GRADIENT,
-                boxShadow: "0 0 0 1px rgba(148,163,184,0.25) inset",
+                background: NAV_TAB_COLORS.hover,
+              },
+              "&:active": {
+                transform: "translateY(0.5px)",
               },
             },
-            "& .Mui-selected": {
-              color: AURORA_SHELL.text,
+            "& .MuiTab-root.Mui-selected": {
+              color: NAV_TAB_COLORS.textActive,
+              fontWeight: 600,
+              background: NAV_TAB_COLORS.activeBg,
+              "& .MuiTab-iconWrapper": {
+                color: NAV_TAB_COLORS.iconActive,
+              },
               "&:hover": {
-                backgroundImage: TAB_HOVER_GRADIENT,
+                background: NAV_TAB_COLORS.activeBg,
               },
             },
           }}

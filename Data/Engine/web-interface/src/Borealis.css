@@ -159,11 +159,11 @@ label {
 /* ======================================= */
 
 /* Multi-Tab Bar Adjustments */
-.MuiTabs-root {
+.flow-editor-shell .MuiTabs-root {
     min-height: 32px !important;
 }
 
-.MuiTab-root {
+.flow-editor-shell .MuiTab-root {
     min-height: 32px !important;
     padding: 6px 12px !important;
     color: #58a6ff !important;
@@ -171,7 +171,7 @@ label {
 }
 
 /* Highlight tab on hover if it's not active */
-.MuiTab-root:hover:not(.Mui-selected) {
+.flow-editor-shell .MuiTab-root:hover:not(.Mui-selected) {
     background-color: #2C2C2C !important;
 }
 

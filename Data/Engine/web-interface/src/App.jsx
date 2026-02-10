@@ -1298,7 +1298,10 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
       case "workflow-editor":
         return (
-          <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
+          <Box
+            className="flow-editor-shell"
+            sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}
+          >
             <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
               <NodeSidebar
                 categorizedNodes={categorizedNodes}
