@@ -9,9 +9,13 @@ Use this file as the entrypoint for Codex instructions. The full knowledgebase n
 - UI and notifications: `Docs/ui-and-notifications.md` (MagicUI styling, AG Grid rules, toast notifications, UI handoffs).
 - VPN and remote access: `Docs/vpn-and-remote-access.md` (WireGuard tunnels, remote shell, VNC, troubleshooting context).
 - Security and trust: `Docs/security-and-trust.md` (enrollment, tokens, code signing, sequence diagrams).
+- Technical debt: `Docs/technical-debt.md` (patches, workarounds, dev/prod mismatches).
 
 Precedence: follow domain docs first; where overlap exists, the domain page wins. The Codex Agent sections inside each page are the authoritative agent guidance.
 
 ## UI / AG Grid
 - MagicUI styling language and AG Grid rules are consolidated in `Docs/ui-and-notifications.md`.
 - Visual example: `Data/Engine/web-interface/src/Admin/Page_Template.jsx` (reference only - no business logic). Use it to mirror layout, spacing, and selection column behavior.
+
+## Technical Debt Logging
+- If you add a patchy workaround, non-standard build step, or dev/prod behavior divergence, log it in `Docs/technical-debt.md` using the template there.
