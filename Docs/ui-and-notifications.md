@@ -48,6 +48,17 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Selection column (for bulk actions): pinned left, square checkboxes, header checkbox enabled, about 52px fixed width, no menu/sort/resize; rely on AG Grid built-ins.
 - Typography/buttons: IBM Plex Sans, gradient primary buttons, rounded corners (about 8px), themed Quartz grid wrapper.
 
+#### Navigation Sidebar Active Page Mapping
+- File: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.
+- Goal: keep the parent nav item highlighted when operators navigate to nested detail or editor pages.
+- Source of truth: update the `NAV_ITEM_ALIASES` mapping so nested `currentPage` values resolve to the parent nav item.
+- Add new nested pages explicitly; do not rely on URL prefixes or path parsing in the sidebar.
+- Examples (keep these in the mapping unless the UI changes):
+- `device_details` -> `devices`
+- `filter_editor` -> `filters`
+- `create_job` -> `jobs`
+- `scripts`, `ansible_editor`, `workflow-editor` -> `assemblies`
+
 #### MagicUI Styling Language (Visual System)
 - Full-bleed canvas: hero shells run edge-to-edge; inset padding lives inside cards so gradients feel immersive.
 - Glass panels: glassmorphic layers (`rgba(15,23,42,0.7)`), rounded 16-24px corners, blurred backdrops, micro borders, optional radial flares for motion.

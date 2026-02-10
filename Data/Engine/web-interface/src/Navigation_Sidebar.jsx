@@ -41,6 +41,13 @@ const COLORS = {
     "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
 };
 
+const NAV_ITEM_ALIASES = {
+  devices: ["device_details"],
+  assemblies: ["scripts", "ansible_editor", "workflow-editor", "workflows"],
+  jobs: ["create_job"],
+  filters: ["filter_editor"],
+};
+
 function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
   const [expandedNav, setExpandedNav] = useState({
     sites: true,
@@ -51,6 +58,15 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
     admin: true,
     developer: true,
   });
+
+  const effectivePage = useMemo(() => {
+    for (const [rootKey, aliases] of Object.entries(NAV_ITEM_ALIASES)) {
+      if (aliases.includes(currentPage)) {
+        return rootKey;
+      }
+    }
+    return currentPage;
+  }, [currentPage]);
 
   const groupActive = useMemo(
     () => ({
@@ -115,7 +131,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
   );
 
   const NavItem = ({ icon, label, pageKey, indent = 0 }) => {
-    const active = currentPage === pageKey;
+    const active = effectivePage === pageKey;
     return (
       <ListItemButton
         onClick={() => onNavigate(pageKey)}
