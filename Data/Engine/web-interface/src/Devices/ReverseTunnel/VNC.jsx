@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Box,
   Button,
-  Chip,
   Stack,
   Typography,
   LinearProgress,
@@ -17,7 +16,6 @@ import {
   PlayArrowRounded as PlayIcon,
   StopRounded as StopIcon,
   LinkRounded as LinkIcon,
-  LanRounded as IpIcon,
   SecurityRounded as SecurityIcon,
   OpenInNewRounded as OpenIcon,
   DownloadRounded as DownloadIcon,
@@ -154,6 +152,14 @@ function normalizeText(value) {
   }
 }
 
+function summarizeStatus(message, limit = 120) {
+  if (!message) return "";
+  const text = String(message).trim();
+  if (text.length <= limit) return text;
+  const sliceLimit = Math.max(0, limit - 3);
+  return `${text.slice(0, sliceLimit)}...`;
+}
+
 function buildCertHelp(wsUrl) {
   if (!wsUrl) return null;
   try {
@@ -207,9 +213,9 @@ async function writeClipboardText(text) {
 
 export default function ReverseTunnelVnc({ device }) {
   const [sessionState, setSessionState] = useState("idle");
+  const [vncStage, setVncStage] = useState("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [loading, setLoading] = useState(false);
-  const [tunnel, setTunnel] = useState(null);
   const [certHelp, setCertHelp] = useState(null);
   const [viewOnly, setViewOnly] = useState(false);
   const [clipboardSync, setClipboardSync] = useState(true);
@@ -311,7 +317,7 @@ export default function ReverseTunnelVnc({ device }) {
     await notifyAgentOnboarding();
     setStatusMessage("Agent Onboarding Underway.");
     setSessionState("idle");
-    setTunnel(null);
+    setVncStage("agent_onboarding");
   }, [notifyAgentOnboarding]);
 
   const teardownDisplay = useCallback(() => {
@@ -345,13 +351,13 @@ export default function ReverseTunnelVnc({ device }) {
   }, []);
 
   const handleDisconnect = useCallback(async () => {
+    setVncStage("disconnecting");
     setLoading(true);
     setStatusMessage("");
     try {
       teardownDisplay();
       await disconnectVnc("operator_disconnect");
     } finally {
-      setTunnel(null);
       setCertHelp(null);
       setSessionState("idle");
       clipboardLastRef.current = "";
@@ -390,10 +396,12 @@ export default function ReverseTunnelVnc({ device }) {
   const requestTunnel = useCallback(async () => {
     if (!agentId) {
       setStatusMessage("Agent ID is required to establish.");
+      setVncStage("error");
       return null;
     }
     setLoading(true);
     setStatusMessage("");
+    setVncStage("requesting_tunnel");
     try {
       setSessionState("connecting");
       const resp = await fetch("/api/vnc/establish", {
@@ -410,14 +418,11 @@ export default function ReverseTunnelVnc({ device }) {
         const detail = data?.detail ? `: ${data.detail}` : "";
         throw new Error(`${data?.error || `HTTP ${resp.status}`}${detail}`);
       }
-      setTunnel({
-        tunnel_id: data?.tunnel_id,
-        virtual_ip: data?.virtual_ip,
-      });
       return data;
     } catch (err) {
       setSessionState("error");
       setStatusMessage(String(err.message || err));
+      setVncStage("error");
       return null;
     } finally {
       setLoading(false);
@@ -441,6 +446,7 @@ export default function ReverseTunnelVnc({ device }) {
       }
       displayHost.innerHTML = "";
 
+      setVncStage("connecting_ws");
       const rfb = new RFB(displayHost, tunnelUrl, {
         credentials: { password: vncPassword },
       });
@@ -456,18 +462,24 @@ export default function ReverseTunnelVnc({ device }) {
 
       rfb.addEventListener("connect", () => {
         setSessionState("connected");
+        setVncStage("connected");
         setStatusMessage("");
       });
       rfb.addEventListener("disconnect", () => {
         setSessionState("idle");
+        setVncStage((prev) =>
+          prev === "auth_failed" || prev === "error" ? prev : "disconnected"
+        );
         rfbRef.current = null;
       });
       rfb.addEventListener("securityfailure", (evt) => {
         const detail = evt?.detail?.reason ? ` (${evt.detail.reason})` : "";
         setSessionState("error");
+        setVncStage("auth_failed");
         setStatusMessage(`VNC authentication failed${detail}.`);
       });
       rfb.addEventListener("credentialsrequired", () => {
+        setVncStage("handshaking");
         try {
           rfb.sendCredentials({ password: vncPassword });
         } catch {
@@ -515,6 +527,7 @@ export default function ReverseTunnelVnc({ device }) {
     } catch (err) {
       setSessionState("error");
       setStatusMessage(String(err.message || err));
+      setVncStage("error");
     }
   }, [openVncSession, requestTunnel, sessionState]);
 
@@ -638,22 +651,81 @@ export default function ReverseTunnelVnc({ device }) {
   const isConnected = sessionState === "connected";
   const showCertHelp =
     certHelp?.isSecure && (certHelp.trustCheck === "blocked" || sessionState === "error");
-  const sessionChips = [
-    tunnel?.tunnel_id
-      ? {
-          label: `Tunnel ${tunnel.tunnel_id.slice(0, 8)}`,
-          color: MAGIC_UI.accentB,
-          icon: <LinkIcon sx={{ fontSize: 18 }} />,
-        }
-      : null,
-    tunnel?.virtual_ip
-      ? {
-          label: `IP ${String(tunnel.virtual_ip).split("/")[0]}`,
-          color: MAGIC_UI.accentA,
-          icon: <IpIcon sx={{ fontSize: 18 }} />,
-        }
-      : null,
-  ].filter(Boolean);
+  const vncStageInfo = useMemo(() => {
+    const errorDetail = summarizeStatus(statusMessage) || "VNC session encountered an error.";
+    switch (vncStage) {
+      case "requesting_tunnel":
+        return {
+          label: "Requesting Tunnel",
+          detail: "Engine preparing WireGuard + VNC credentials.",
+          accent: MAGIC_UI.accentA,
+          detailTone: MAGIC_UI.textMuted,
+        };
+      case "connecting_ws":
+        return {
+          label: "Connecting noVNC",
+          detail: "Opening WebSocket to the VNC proxy.",
+          accent: MAGIC_UI.accentA,
+          detailTone: MAGIC_UI.textMuted,
+        };
+      case "handshaking":
+        return {
+          label: "Handshaking",
+          detail: "Authenticating with UltraVNC and negotiating display.",
+          accent: MAGIC_UI.accentB,
+          detailTone: MAGIC_UI.textMuted,
+        };
+      case "connected":
+        return {
+          label: "Live",
+          detail: "Desktop stream active.",
+          accent: MAGIC_UI.accentC,
+          detailTone: MAGIC_UI.textMuted,
+        };
+      case "disconnecting":
+        return {
+          label: "Disconnecting",
+          detail: "Closing the VNC session.",
+          accent: MAGIC_UI.accentD,
+          detailTone: MAGIC_UI.textMuted,
+        };
+      case "disconnected":
+        return {
+          label: "Disconnected",
+          detail: "Session closed. Ready to reconnect.",
+          accent: "rgba(148, 163, 184, 0.6)",
+          detailTone: MAGIC_UI.textMuted,
+        };
+      case "agent_onboarding":
+        return {
+          label: "Agent Onboarding",
+          detail: "Waiting for the agent tunnel to finish onboarding.",
+          accent: MAGIC_UI.accentB,
+          detailTone: MAGIC_UI.textMuted,
+        };
+      case "auth_failed":
+        return {
+          label: "Authentication Failed",
+          detail: "UltraVNC rejected the credentials.",
+          accent: "#ff7b89",
+          detailTone: "#ff7b89",
+        };
+      case "error":
+        return {
+          label: "Error",
+          detail: errorDetail,
+          accent: "#ff7b89",
+          detailTone: "#ff7b89",
+        };
+      default:
+        return {
+          label: "Idle",
+          detail: "Waiting for operator to connect.",
+          accent: "rgba(148, 163, 184, 0.6)",
+          detailTone: MAGIC_UI.textMuted,
+        };
+    }
+  }, [statusMessage, vncStage]);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
@@ -946,41 +1018,39 @@ export default function ReverseTunnelVnc({ device }) {
           <Stack spacing={1}>
             <Box sx={sectionHeaderSx}>
               <LinkIcon sx={{ fontSize: 18, color: SIDEBAR_THEME.accent }} />
-              <span>Tunnel Information</span>
+              <span>Connection Info</span>
             </Box>
-            <Stack spacing={1}>
-              {sessionChips.length ? (
-                <Stack direction="row" spacing={1} flexWrap="wrap">
-                  {sessionChips.map((chip) => (
-                    <Chip
-                      key={chip.label}
-                      icon={chip.icon}
-                      label={chip.label}
-                      sx={{
-                        borderRadius: 999,
-                        color: chip.color,
-                        border: `1px solid ${MAGIC_UI.panelBorder}`,
-                        backgroundColor: "rgba(8,12,24,0.65)",
-                      }}
-                    />
-                  ))}
+            <Stack spacing={0.6}>
+              <Stack spacing={0.6}>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Box
+                    sx={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      backgroundColor: vncStageInfo.accent,
+                      boxShadow: `0 0 10px ${vncStageInfo.accent}`,
+                    }}
+                  />
+                  <Typography
+                    variant="body2"
+                    sx={{ color: vncStageInfo.accent, fontWeight: 600 }}
+                  >
+                    {vncStageInfo.label}
+                  </Typography>
                 </Stack>
-              ) : (
-                <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-                  No active tunnel.
-                </Typography>
-              )}
-              <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-                Session: {isConnected ? "Active" : sessionState}
-              </Typography>
-              {statusMessage ? (
                 <Typography
                   variant="body2"
-                  sx={{ color: sessionState === "error" ? "#ff7b89" : MAGIC_UI.textMuted }}
+                  sx={{ color: vncStageInfo.detailTone || MAGIC_UI.textMuted }}
                 >
-                  {statusMessage}
+                  {vncStageInfo.detail}
                 </Typography>
-              ) : null}
+                {statusMessage && vncStage !== "error" && vncStage !== "auth_failed" ? (
+                  <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
+                    {statusMessage}
+                  </Typography>
+                ) : null}
+              </Stack>
             </Stack>
           </Stack>
 

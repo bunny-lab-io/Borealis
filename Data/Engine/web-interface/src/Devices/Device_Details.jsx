@@ -294,6 +294,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const [connectionSaving, setConnectionSaving] = useState(false);
   const [connectionMessage, setConnectionMessage] = useState("");
   const [connectionError, setConnectionError] = useState("");
+  const [tunnelInfo, setTunnelInfo] = useState({ status: "idle", tunnel_id: "", virtual_ip: "" });
   const [historyRows, setHistoryRows] = useState([]);
   const [outputOpen, setOutputOpen] = useState(false);
   const [outputTitle, setOutputTitle] = useState("");
@@ -324,6 +325,14 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     }),
     [agent, device, meta.agentGuid, meta.agentId, meta.hostname, summary]
   );
+  const tunnelAgentId = useMemo(() => {
+    const raw = tunnelDevice?.agent_id ?? "";
+    try {
+      return String(raw).trim();
+    } catch {
+      return "";
+    }
+  }, [tunnelDevice]);
   const quickJobTargets = useMemo(() => {
     const values = [];
     const push = (value) => {
@@ -336,6 +345,18 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     return values;
   }, [agent, device]);
   const canLaunchQuickJob = quickJobTargets.length > 0 && typeof onQuickJobLaunch === "function";
+  const tunnelIndicators = useMemo(() => {
+    const items = [];
+    const peerIp = tunnelInfo?.virtual_ip ? String(tunnelInfo.virtual_ip).split("/")[0] : "";
+    items.push({
+      key: "peer-ip",
+      label: "WireGuard Peer IP",
+      value: peerIp || "Inactive",
+      muted: !peerIp,
+      icon: <LanRoundedIcon sx={{ fontSize: 16 }} />,
+    });
+    return items;
+  }, [tunnelInfo]);
 
   useEffect(() => {
     setConnectionError("");
@@ -347,6 +368,44 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
       setConnectionError("");
     }
   }, [connectionType]);
+
+  useEffect(() => {
+    let canceled = false;
+    if (!tunnelAgentId) {
+      setTunnelInfo({ status: "idle", tunnel_id: "", virtual_ip: "" });
+      return () => {};
+    }
+    const loadTunnelStatus = async () => {
+      try {
+        const resp = await fetch(
+          `/api/tunnel/status?agent_id=${encodeURIComponent(tunnelAgentId)}`
+        );
+        const data = await resp.json().catch(() => ({}));
+        if (canceled) return;
+        if (!resp.ok) {
+          setTunnelInfo({ status: "error", tunnel_id: "", virtual_ip: "" });
+          return;
+        }
+        if (data?.status === "down") {
+          setTunnelInfo({ status: "down", tunnel_id: "", virtual_ip: "" });
+          return;
+        }
+        setTunnelInfo({
+          status: data?.status || "up",
+          tunnel_id: data?.tunnel_id || "",
+          virtual_ip: data?.virtual_ip || "",
+        });
+      } catch {
+        if (!canceled) {
+          setTunnelInfo({ status: "error", tunnel_id: "", virtual_ip: "" });
+        }
+      }
+    };
+    loadTunnelStatus();
+    return () => {
+      canceled = true;
+    };
+  }, [tunnelAgentId]);
 
   useEffect(() => {
     let canceled = false;
@@ -1676,7 +1735,55 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           pointerEvents: "none",
         }}
       >
-        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
+        <Stack
+          direction="row"
+          spacing={1.25}
+          alignItems="center"
+          sx={{ pointerEvents: "auto", flexWrap: "wrap", justifyContent: "flex-end" }}
+        >
+          {tunnelIndicators.length ? (
+            <Stack
+              direction="row"
+              spacing={1.6}
+              alignItems="center"
+              sx={{ pointerEvents: "none", flexWrap: "wrap", justifyContent: "flex-end" }}
+            >
+              {tunnelIndicators.map((item) => {
+                const itemColor = item.muted ? "rgba(125, 211, 252, 0.6)" : MAGIC_UI.accentA;
+                return (
+                  <Stack
+                    key={item.key}
+                    direction="row"
+                    spacing={0.6}
+                    alignItems="center"
+                    sx={{ color: itemColor }}
+                  >
+                    {item.icon}
+                    <Typography
+                      variant="caption"
+                      sx={{ color: itemColor, fontWeight: 600, letterSpacing: 0.2 }}
+                    >
+                      {item.label}:
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: itemColor,
+                        fontWeight: 600,
+                        maxWidth: 180,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={item.value}
+                    >
+                      {item.value}
+                    </Typography>
+                  </Stack>
+                );
+              })}
+            </Stack>
+          ) : null}
           <Button
             size="small"
             startIcon={<MoreHorizIcon />}
@@ -1747,7 +1854,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
           mb: 2,
           "& .MuiTab-root": {
-            color: MAGIC_UI.textMuted,
+            color: "#ffffff !important",
             textTransform: "none",
             fontWeight: 600,
             fontFamily: '"IBM Plex Sans","Helvetica Neue",Arial,sans-serif',
@@ -1757,13 +1864,13 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
             borderRadius: 1,
             transition: "background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease",
             "&:hover": {
-              color: MAGIC_UI.textBright,
+              color: "#ffffff !important",
               backgroundImage: TAB_HOVER_GRADIENT,
               boxShadow: "0 0 0 1px rgba(148,163,184,0.25) inset",
             },
           },
           "& .Mui-selected": {
-            color: MAGIC_UI.textBright,
+            color: "#ffffff !important",
             "&:hover": {
               backgroundImage: TAB_HOVER_GRADIENT,
             },
@@ -1774,7 +1881,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           <Tab
             key={tabDef.key || tabDef.label}
             label={tabDef.label}
-            icon={<tabDef.icon sx={{ fontSize: 18 }} />}
+            icon={<tabDef.icon sx={{ fontSize: 18, color: "#58a6ff" }} />}
             iconPosition="start"
           />
         ))}
