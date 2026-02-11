@@ -65,6 +65,9 @@ Log Management (Raw):
 Scheduled Job List:
 ![Scheduled Job List](Docs/images/repo_screenshots/Scheduled_Job_List.png)
 
+Scheduled Job Editor:
+![Scheduled Job List](Docs/images/repo_screenshots/Scheduled_Job_Editor.png)
+
 Scheduled Job History:
 ![Scheduled Job History](Docs/images/repo_screenshots/Scheduled_Job_History.png)
 
