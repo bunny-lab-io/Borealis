@@ -29,7 +29,17 @@ import {
   Timer as TimerIcon,
   Check as CheckIcon,
   Error as ErrorIcon,
-  Refresh as RefreshIcon
+  Refresh as RefreshIcon,
+  Apps as AppsIcon,
+  DriveFileRenameOutline as DriveFileRenameOutlineIcon,
+  ExtensionRounded as ExtensionRoundedIcon,
+  DevicesRounded as DevicesRoundedIcon,
+  ScheduleRounded as ScheduleRoundedIcon,
+  SettingsApplicationsRounded as SettingsApplicationsRoundedIcon,
+  HistoryRounded as HistoryRoundedIcon,
+  TerminalRounded as TerminalRoundedIcon,
+  MenuBookRounded as MenuBookRoundedIcon,
+  AccountTreeRounded as AccountTreeRoundedIcon
 } from "@mui/icons-material";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
@@ -2848,13 +2858,13 @@ export default function CreateJob({
 
   const tabDefs = useMemo(() => {
     const base = [
-      { key: "name", label: "Job Name" },
-      { key: "components", label: "Assemblies" },
-      { key: "targets", label: "Targets" },
-      { key: "schedule", label: "Schedule" },
-      { key: "context", label: "Execution Context" }
+      { key: "name", label: "Job Name", icon: DriveFileRenameOutlineIcon },
+      { key: "components", label: "Assemblies", icon: AppsIcon },
+      { key: "targets", label: "Targets", icon: DevicesRoundedIcon },
+      { key: "schedule", label: "Schedule", icon: ScheduleRoundedIcon },
+      { key: "context", label: "Execution Context", icon: SettingsApplicationsRoundedIcon }
     ];
-    if (editing) base.push({ key: 'history', label: 'Job History' });
+    if (editing) base.push({ key: "history", label: "Job History", icon: HistoryRoundedIcon });
     return base;
   }, [editing]);
   const historyTabIndex = useMemo(() => tabDefs.findIndex((t) => t.key === "history"), [tabDefs]);
@@ -3065,7 +3075,12 @@ const heroTiles = useMemo(() => {
         sx={buildNavTabsSx()}
       >
         {tabDefs.map((t) => (
-          <Tab key={t.key} label={t.label} />
+          <Tab
+            key={t.key}
+            label={t.label}
+            icon={t.icon ? <t.icon sx={{ fontSize: 18 }} /> : undefined}
+            iconPosition="start"
+          />
         ))}
       </Tabs>
 
@@ -3602,9 +3617,24 @@ const heroTiles = useMemo(() => {
                 ...buildNavTabsSx(NAV_TAB_HEIGHT_COMPACT),
               }}
             >
-              <Tab label="Scripts" value="scripts" />
-              <Tab label="Ansible Playbooks" value="ansible" />
-              <Tab label="Workflows" value="workflows" />
+              <Tab
+                label="Scripts"
+                value="scripts"
+                icon={<TerminalRoundedIcon sx={{ fontSize: 16 }} />}
+                iconPosition="start"
+              />
+              <Tab
+                label="Ansible Playbooks"
+                value="ansible"
+                icon={<MenuBookRoundedIcon sx={{ fontSize: 16 }} />}
+                iconPosition="start"
+              />
+              <Tab
+                label="Workflows"
+                value="workflows"
+                icon={<AccountTreeRoundedIcon sx={{ fontSize: 16 }} />}
+                iconPosition="start"
+              />
             </Tabs>
             <Box sx={{ display: "flex", gap: 1, alignItems: "center", ml: "auto" }}>
               <TextField
@@ -3710,8 +3740,18 @@ const heroTiles = useMemo(() => {
               ...buildNavTabsSx(),
             }}
           >
-            <Tab label="Devices" value="devices" />
-            <Tab label="Filters" value="filters" />
+            <Tab
+              label="Devices"
+              value="devices"
+              icon={<DevicesRoundedIcon sx={{ fontSize: 16 }} />}
+              iconPosition="start"
+            />
+            <Tab
+              label="Filters"
+              value="filters"
+              icon={<FilterListIcon sx={{ fontSize: 16 }} />}
+              iconPosition="start"
+            />
           </Tabs>
 
               {targetPickerTab === "devices" ? (

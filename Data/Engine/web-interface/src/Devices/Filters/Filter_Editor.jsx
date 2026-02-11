@@ -24,6 +24,10 @@ import {
   Cached as CachedIcon,
   CheckCircle as CheckCircleIcon,
   HighlightOff as HighlightOffIcon,
+  DriveFileRenameOutline as DriveFileRenameOutlineIcon,
+  PublicRounded as PublicRoundedIcon,
+  TuneRounded as TuneRoundedIcon,
+  TableViewRounded as TableViewRoundedIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
@@ -134,10 +138,10 @@ const NAV_TAB_COLORS = {
 const TAB_HOVER_GRADIENT = "linear-gradient(120deg, rgba(125,211,252,0.18), rgba(192,132,252,0.22))";
 
 const TABS = [
-  { value: "name", label: "Name" },
-  { value: "scope", label: "Scope" },
-  { value: "criteria", label: "Criteria" },
-  { value: "results", label: "Results" },
+  { value: "name", label: "Name", icon: DriveFileRenameOutlineIcon },
+  { value: "scope", label: "Scope", icon: PublicRoundedIcon },
+  { value: "criteria", label: "Criteria", icon: TuneRoundedIcon },
+  { value: "results", label: "Results", icon: TableViewRoundedIcon },
 ];
 
 const TabPanel = ({ value, active, children }) => {
@@ -1239,7 +1243,13 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
           }}
         >
           {TABS.map((tabDef) => (
-            <Tab key={tabDef.value} label={tabDef.label} value={tabDef.value} />
+            <Tab
+              key={tabDef.value}
+              label={tabDef.label}
+              value={tabDef.value}
+              icon={tabDef.icon ? <tabDef.icon sx={{ fontSize: 18 }} /> : undefined}
+              iconPosition="start"
+            />
           ))}
         </Tabs>
 
