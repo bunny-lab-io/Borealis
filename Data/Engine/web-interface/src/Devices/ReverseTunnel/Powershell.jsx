@@ -8,15 +8,12 @@ import {
   IconButton,
   Tooltip,
   LinearProgress,
-  Chip,
 } from "@mui/material";
 import {
   PlayArrowRounded as PlayIcon,
   StopRounded as StopIcon,
   ContentCopy as CopyIcon,
   RefreshRounded as RefreshIcon,
-  LanRounded as IpIcon,
-  LinkRounded as LinkIcon,
 } from "@mui/icons-material";
 import { io } from "socket.io-client";
 import Prism from "prismjs";
@@ -89,7 +86,6 @@ export default function ReverseTunnelPowershell({ device }) {
   const [tunnel, setTunnel] = useState(null);
   const [output, setOutput] = useState("");
   const [input, setInput] = useState("");
-  const [statusMessage, setStatusMessage] = useState("");
   const [copyFlash, setCopyFlash] = useState(false);
   const [loading, setLoading] = useState(false);
   const socketRef = useRef(null);
@@ -150,7 +146,6 @@ export default function ReverseTunnelPowershell({ device }) {
 
   const handleAgentOnboarding = useCallback(async () => {
     await notifyAgentOnboarding();
-    setStatusMessage("Agent Onboarding Underway.");
     setSessionState("idle");
     setShellState("idle");
     setTunnel(null);
@@ -198,7 +193,6 @@ export default function ReverseTunnelPowershell({ device }) {
 
   const handleDisconnect = useCallback(async () => {
     setLoading(true);
-    setStatusMessage("");
     try {
       await closeShell();
       await disconnectShell("operator_disconnect");
@@ -216,7 +210,6 @@ export default function ReverseTunnelPowershell({ device }) {
       if (sessionState === "connected") {
         setShellState("closed");
         setSessionState("idle");
-        setStatusMessage("Socket disconnected.");
       }
     };
     const handleOutput = (payload) => {
@@ -225,7 +218,6 @@ export default function ReverseTunnelPowershell({ device }) {
     const handleClosed = () => {
       setShellState("closed");
       setSessionState("idle");
-      setStatusMessage("Shell closed.");
     };
 
     socket.on("disconnect", handleDisconnectEvent);
@@ -251,11 +243,9 @@ export default function ReverseTunnelPowershell({ device }) {
 
   const requestTunnel = useCallback(async () => {
     if (!agentId) {
-      setStatusMessage("Agent ID is required to establish.");
       return;
     }
     setLoading(true);
-    setStatusMessage("");
     try {
       setSessionState("connecting");
       setShellState("opening");
@@ -305,13 +295,11 @@ export default function ReverseTunnelPowershell({ device }) {
       if (!opened) {
         return;
       }
-      setStatusMessage("");
       setSessionState("connected");
       setShellState("connected");
     } catch (err) {
       setSessionState("error");
       setShellState("closed");
-      setStatusMessage(String(err.message || err));
     } finally {
       setLoading(false);
     }
@@ -326,7 +314,6 @@ export default function ReverseTunnelPowershell({ device }) {
       setInput("");
       const resp = await emitAsync(socket, "vpn_shell_send", { data: payload });
       if (resp?.error) {
-        setStatusMessage("Send failed.");
       }
     },
     [appendOutput, ensureSocket, sessionState]
@@ -343,23 +330,6 @@ export default function ReverseTunnelPowershell({ device }) {
   };
 
   const isConnected = sessionState === "connected";
-  const sessionChips = [
-    tunnel?.tunnel_id
-      ? {
-          label: `Tunnel ${tunnel.tunnel_id.slice(0, 8)}`,
-          color: MAGIC_UI.accentB,
-          icon: <LinkIcon sx={{ fontSize: 18 }} />,
-        }
-      : null,
-    tunnel?.virtual_ip
-      ? {
-          label: `IP ${String(tunnel.virtual_ip).split("/")[0]}`,
-          color: MAGIC_UI.accentA,
-          icon: <IpIcon sx={{ fontSize: 18 }} />,
-        }
-      : null,
-  ].filter(Boolean);
-
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ xs: "flex-start", sm: "center" }}>
@@ -370,23 +340,8 @@ export default function ReverseTunnelPowershell({ device }) {
           disabled={loading || (!isConnected && !agentId)}
           onClick={isConnected ? handleDisconnect : requestTunnel}
         >
-          {isConnected ? "Disconnect" : "Establish"}
+          {isConnected ? "Disconnect" : "Open Shell"}
         </Button>
-        <Stack direction="row" spacing={1}>
-          {sessionChips.map((chip) => (
-            <Chip
-              key={chip.label}
-              icon={chip.icon}
-              label={chip.label}
-              sx={{
-                borderRadius: 999,
-                color: chip.color,
-                border: `1px solid ${MAGIC_UI.panelBorder}`,
-                backgroundColor: "rgba(8,12,24,0.65)",
-              }}
-            />
-          ))}
-        </Stack>
       </Stack>
 
       <Box
@@ -466,7 +421,7 @@ export default function ReverseTunnelPowershell({ device }) {
             size="small"
             value={input}
             disabled={!isConnected}
-            placeholder={isConnected ? "Enter PowerShell command and press Enter" : "Establish to start sending commands"}
+            placeholder={isConnected ? "Type a command and press `Enter`" : "Click the `Open Shell` button to start sending commands."}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
@@ -490,16 +445,8 @@ export default function ReverseTunnelPowershell({ device }) {
 
       <Stack spacing={0.3} sx={{ mt: 1 }}>
         <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-          Tunnel: {sessionState === "connected" ? "Active" : sessionState}
+          Shell: {shellState === "connected" ? "Connection Established" : shellState}
         </Typography>
-        <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
-          Shell: {shellState === "connected" ? "Ready" : shellState}
-        </Typography>
-        {statusMessage ? (
-          <Typography variant="body2" sx={{ color: "#ff7b89" }}>
-            {statusMessage}
-          </Typography>
-        ) : null}
       </Stack>
     </Box>
   );
