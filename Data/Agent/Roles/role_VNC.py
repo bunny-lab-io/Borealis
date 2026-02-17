@@ -17,12 +17,44 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+
+def _env_bool(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _normalize_service_start_mode(value: Optional[str], default: str = "demand") -> str:
+    raw = (value or default).strip().lower()
+    aliases = {
+        "manual": "demand",
+        "automatic": "auto",
+        "auto_start": "auto",
+        "delayed": "delayed-auto",
+        "delayed_auto": "delayed-auto",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized not in {"demand", "auto", "disabled", "delayed-auto"}:
+        return default
+    return normalized
+
+
 ROLE_NAME = "VNC"
 ROLE_CONTEXTS = ["system"]
 
 VNC_FIREWALL_RULE_NAME = "Borealis - VNC - UltraVNC"
 DEFAULT_VNC_PORT = 5900
 ULTRAVNC_SERVICE_NAME = os.environ.get("BOREALIS_ULTRAVNC_SERVICE") or "uvnc_service"
+ULTRAVNC_SERVICE_START_MODE = _normalize_service_start_mode(
+    os.environ.get("BOREALIS_ULTRAVNC_START_TYPE"),
+    default="demand",
+)
+VNC_REQUIRE_ENGINE_READY = _env_bool(os.environ.get("BOREALIS_VNC_REQUIRE_ENGINE_READY"), True)
 VNC_ALWAYS_ON_INTERVAL_SECONDS = 30
 
 
@@ -718,6 +750,26 @@ class VncManager:
             return None
         return None
 
+    def _configure_service_start_mode(self, service_name: str, start_mode: str) -> None:
+        if os.name != "nt":
+            return
+        try:
+            result = subprocess.run(
+                ["sc.exe", "config", service_name, "start=", start_mode],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                _write_log(
+                    "UltraVNC service start-type config failed: {0}".format(
+                        detail or f"exit {result.returncode}"
+                    )
+                )
+        except Exception as exc:
+            _write_log(f"UltraVNC service start-type config failed: {exc}")
+
     def _ensure_service_binpath(self, service_name: str, config_path: Optional[Path]) -> bool:
         if os.name != "nt":
             return False
@@ -837,8 +889,11 @@ class VncManager:
     def _ensure_service_running(self, config_path: Optional[Path] = None) -> bool:
         if os.name != "nt":
             return False
+        desired_start = ULTRAVNC_SERVICE_START_MODE
         service_name = self._resolve_service_name()
         state = self._service_state_by_name(service_name) if service_name else None
+        if service_name and state is not None:
+            self._configure_service_start_mode(service_name, desired_start)
         if state == "STOP_PENDING" and service_name:
             if not self._wait_for_service_stopped(service_name, timeout=8.0):
                 _write_log(
@@ -861,7 +916,6 @@ class VncManager:
             return False
         if not self._vnc_root:
             self._vnc_root = _resolve_vnc_root()
-        desired_start = "auto"
         try:
             if state is None:
                 service_name = ULTRAVNC_SERVICE_NAME or "uvnc_service"
@@ -896,19 +950,7 @@ class VncManager:
                 updated_binpath = self._ensure_service_binpath(service_name, config_path)
             if not service_name:
                 service_name = ULTRAVNC_SERVICE_NAME
-            config_result = subprocess.run(
-                ["sc.exe", "config", service_name, "start=", desired_start],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if config_result.returncode != 0:
-                detail = (config_result.stderr or config_result.stdout or "").strip()
-                _write_log(
-                    "UltraVNC service config failed: {0}".format(
-                        detail or f"exit {config_result.returncode}"
-                    )
-                )
+            self._configure_service_start_mode(service_name, desired_start)
             start_result = subprocess.run(
                 ["sc.exe", "start", service_name],
                 capture_output=True,
@@ -939,6 +981,28 @@ class VncManager:
                 self._restart_service()
             return True
         return False
+
+    def ensure_standby(self, *, reason: str = "standby") -> None:
+        if os.name != "nt":
+            return
+        with self._lock:
+            service_name = self._resolve_service_name()
+            if not service_name:
+                return
+            state = self._service_state_by_name(service_name)
+            if state is None:
+                return
+            self._configure_service_start_mode(service_name, ULTRAVNC_SERVICE_START_MODE)
+            if state not in {"RUNNING", "START_PENDING", "STOP_PENDING"}:
+                return
+            try:
+                subprocess.run(["sc.exe", "stop", service_name], capture_output=True, text=True, check=False)
+                if not self._wait_for_service_stopped(service_name, timeout=8.0):
+                    _write_log(f"UltraVNC standby stop timed out (service={service_name}); forcing stop.")
+                    self._kill_winvnc_processes()
+                _write_log(f"VNC service standing by reason={reason}.")
+            except Exception as exc:
+                _write_log(f"Failed to place VNC service in standby: {exc}")
 
     def _normalize_firewall_remote(self, allowed_ips: Optional[str]) -> Optional[str]:
         if not allowed_ips:
@@ -1110,9 +1174,13 @@ class Role:
         self._always_on_stop = threading.Event()
         self._always_on_thread: Optional[threading.Thread] = None
         self._missing_password_logged = False
+        self._engine_ready_for_vnc = not VNC_REQUIRE_ENGINE_READY
+        self._engine_wait_logged = False
         self._state = _load_vnc_state()
         self._last_allowed_ips = _parse_allowed_ips(self._state.get("allowed_ips"))
         self.vnc = VncManager()
+        if os.name == "nt":
+            self.vnc.ensure_standby(reason="startup_policy")
         try:
             config_dir = _resolve_vnc_config_dir()
             if config_dir:
@@ -1140,6 +1208,13 @@ class Role:
             except Exception:
                 return None
         return None
+
+    def _mark_engine_ready(self, source: str) -> None:
+        if self._engine_ready_for_vnc:
+            return
+        self._engine_ready_for_vnc = True
+        self._engine_wait_logged = False
+        self._log(f"VNC engine readiness confirmed via {source}.")
 
     def _state_password(self) -> Optional[str]:
         value = self._state.get("password")
@@ -1218,6 +1293,13 @@ class Role:
         return None
 
     def _ensure_always_on(self, *, reason: str) -> None:
+        if not self._engine_ready_for_vnc:
+            if not self._engine_wait_logged:
+                self._engine_wait_logged = True
+                self._log("VNC always-on standby: waiting for engine readiness.")
+            self.vnc.ensure_standby(reason="waiting_for_engine_ready")
+            return
+        self._engine_wait_logged = False
         password = self._state_password()
         if not password:
             if not self._missing_password_logged:
@@ -1242,10 +1324,11 @@ class Role:
         interval = _coerce_int(VNC_ALWAYS_ON_INTERVAL_SECONDS, 30, min_value=5)
         while not self._always_on_stop.is_set():
             try:
-                if not self._state_password() or not self._last_allowed_ips:
+                if (not self._engine_ready_for_vnc) or not self._state_password() or not self._last_allowed_ips:
                     payload = self._request_vnc_bootstrap(reason="agent_boot")
                     if payload:
                         self._apply_bootstrap_payload(payload)
+                        self._mark_engine_ready("bootstrap_api")
                 self._ensure_always_on(reason="always_on_check")
             except Exception as exc:
                 self._log(f"VNC always-on loop error: {exc}", error=True)
@@ -1262,6 +1345,7 @@ class Role:
                     return
                 allowed_ips = payload.get("allowed_ips") or payload.get("engine_virtual_ip")
                 self._update_state(allowed_ips=allowed_ips if allowed_ips else None)
+                self._mark_engine_ready("vpn_tunnel_start")
                 self._ensure_always_on(reason="vpn_tunnel_start")
 
         @sio.on("vpn_tunnel_stop")
@@ -1298,6 +1382,7 @@ class Role:
                 allowed_ips=allowed_ips if allowed_ips else None,
                 port=port if port is not None else None,
             )
+            self._mark_engine_ready("vnc_start_event")
             self._ensure_always_on(reason=str(reason))
 
         @sio.on("vnc_stop")
