@@ -519,16 +519,47 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
 
 
 def initialise_engine_logger(settings: EngineSettings, name: str = "borealis.engine") -> logging.Logger:
-    """Configure the Engine logger to write to Engine log files."""
+    """Configure Engine/runtime loggers to write to Engine log files."""
+
+    formatter = logging.Formatter("%(asctime)s-%(name)s-%(levelname)s: %(message)s")
+    console_logging = _parse_bool(os.environ.get("BOREALIS_ENGINE_CONSOLE_LOG"), default=False)
+
+    def _normalised_path(path: str) -> str:
+        try:
+            return str(Path(path).expanduser().resolve())
+        except Exception:
+            return str(Path(path))
+
+    def _has_file_handler(candidate_logger: logging.Logger, path: str, *, level: Optional[int] = None) -> bool:
+        target = _normalised_path(path)
+        for handler in candidate_logger.handlers:
+            if not isinstance(handler, TimedRotatingFileHandler):
+                continue
+            base = getattr(handler, "baseFilename", "")
+            if _normalised_path(str(base)) != target:
+                continue
+            if level is not None and getattr(handler, "level", logging.NOTSET) != level:
+                continue
+            return True
+        return False
+
+    def _remove_stream_handlers(candidate_logger: logging.Logger) -> None:
+        for handler in list(candidate_logger.handlers):
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                candidate_logger.removeHandler(handler)
 
     logger = logging.getLogger(name)
-    if not logger.handlers:
-        formatter = logging.Formatter("%(asctime)s-%(name)s-%(levelname)s: %(message)s")
-
+    if not console_logging:
+        _remove_stream_handlers(logger)
+    elif not any(
+        isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler)
+        for handler in logger.handlers
+    ):
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
         logger.addHandler(stream_handler)
 
+    if not _has_file_handler(logger, settings.log_file):
         file_handler = TimedRotatingFileHandler(
             settings.log_file,
             when="midnight",
@@ -538,6 +569,7 @@ def initialise_engine_logger(settings: EngineSettings, name: str = "borealis.eng
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
+    if not _has_file_handler(logger, settings.error_log_file, level=logging.ERROR):
         error_handler = TimedRotatingFileHandler(
             settings.error_log_file,
             when="midnight",
@@ -550,6 +582,34 @@ def initialise_engine_logger(settings: EngineSettings, name: str = "borealis.eng
 
     logger.setLevel(logging.INFO)
     logger.propagate = False
+
+    # Route unscoped third-party warnings/errors into Engine files instead of stderr.
+    root_logger = logging.getLogger()
+    if not console_logging:
+        _remove_stream_handlers(root_logger)
+    if not _has_file_handler(root_logger, settings.log_file, level=logging.WARNING):
+        root_file_handler = TimedRotatingFileHandler(
+            settings.log_file,
+            when="midnight",
+            backupCount=0,
+            encoding="utf-8",
+        )
+        root_file_handler.setLevel(logging.WARNING)
+        root_file_handler.setFormatter(formatter)
+        root_logger.addHandler(root_file_handler)
+    if not _has_file_handler(root_logger, settings.error_log_file, level=logging.ERROR):
+        root_error_handler = TimedRotatingFileHandler(
+            settings.error_log_file,
+            when="midnight",
+            backupCount=0,
+            encoding="utf-8",
+        )
+        root_error_handler.setLevel(logging.ERROR)
+        root_error_handler.setFormatter(formatter)
+        root_logger.addHandler(root_error_handler)
+    root_logger.setLevel(logging.WARNING)
+    logging.captureWarnings(True)
+
     return logger
 
 

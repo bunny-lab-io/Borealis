@@ -23,12 +23,20 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .config import initialise_engine_logger, load_runtime_config
 from .security import certificates as engine_certificates
 from .server import EngineContext, create_app
 
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 5000
+
+
+def _bootstrap_logger() -> logging.Logger:
+    """Create a bootstrap logger that writes to Engine log files."""
+
+    settings = load_runtime_config()
+    return initialise_engine_logger(settings, name="borealis.engine.bootstrap")
 
 
 def _project_root() -> Path:
@@ -76,13 +84,7 @@ def _stage_web_interface_assets(logger: Optional[logging.Logger] = None, *, forc
     """Ensure Engine web interface assets are staged and return the staging root."""
 
     if logger is None:
-        logger = logging.getLogger("borealis.engine.bootstrap")
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(asctime)s-%(name)s-%(levelname)s: %(message)s"))
-        logger.addHandler(handler)
-        logger.propagate = False
-    logger.setLevel(logging.INFO)
+        logger = _bootstrap_logger()
 
     project_root = _project_root()
     engine_web_root = project_root / "Engine" / "web-interface"
@@ -222,12 +224,25 @@ def _run_vite(args: list[str], cwd: Path, logger: logging.Logger) -> None:
     logger.info("Running Vite command: %s", " ".join(command))
     start = time.time()
     try:
-        completed = subprocess.run(command, cwd=str(cwd), check=False)
+        completed = subprocess.run(command, cwd=str(cwd), capture_output=True, text=True, check=False)
     except FileNotFoundError as exc:
         raise RuntimeError("npx executable not found; ensure Node.js dependencies are installed.") from exc
     duration = time.time() - start
     if completed.returncode != 0:
+        logger.error(
+            "Vite command failed (%ss): %s\nstdout: %s\nstderr: %s",
+            f"{duration:.2f}",
+            " ".join(command),
+            (completed.stdout or "").strip(),
+            (completed.stderr or "").strip(),
+        )
         raise RuntimeError(f"Vite command {' '.join(command)} failed with exit code {completed.returncode}")
+    stdout = (completed.stdout or "").strip()
+    if stdout:
+        logger.debug("Vite stdout: %s", stdout)
+    stderr = (completed.stderr or "").strip()
+    if stderr:
+        logger.debug("Vite stderr: %s", stderr)
     logger.info("Vite command completed in %.2fs", duration)
 
 
@@ -324,17 +339,17 @@ def _prepare_tls_run_kwargs(context: EngineContext) -> Dict[str, Any]:
 
 def main() -> None:
     config = _build_runtime_config()
+    bootstrap_logger = _bootstrap_logger()
     mode = os.environ.get("BOREALIS_ENGINE_MODE", "production").strip().lower() or "production"
     try:
-        staging_root = _stage_web_interface_assets()
+        staging_root = _stage_web_interface_assets(logger=bootstrap_logger)
     except Exception as exc:
-        logging.getLogger("borealis.engine.bootstrap").error(
+        bootstrap_logger.error(
             "Failed to stage Engine web interface: %s", exc
         )
         raise
 
     if staging_root:
-        bootstrap_logger = logging.getLogger("borealis.engine.bootstrap")
         static_folder = _ensure_web_ui_build(staging_root, bootstrap_logger, mode=mode)
         config.setdefault("STATIC_FOLDER", static_folder)
 

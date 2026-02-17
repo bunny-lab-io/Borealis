@@ -405,7 +405,14 @@ vite_web_frontend_start() {
     )
   else
     write_vite_log "Executing npm run build for production WebUI assets." "vite-build"
-    ( cd "$engine_ui_dest" && "$NPM_BIN" run build )
+    local logdir; logdir=$(ensure_engine_log_dir)
+    local stdout_log="${logdir}/vite-build.stdout.log"
+    local stderr_log="${logdir}/vite-build.stderr.log"
+    if ! ( cd "$engine_ui_dest" && "$NPM_BIN" run build >>"$stdout_log" 2>>"$stderr_log" ); then
+      write_vite_log "npm run build failed. stderr log: ${stderr_log}" "vite-build"
+      return 1
+    fi
+    write_vite_log "npm run build completed successfully." "vite-build"
   fi
 }
 
@@ -426,8 +433,17 @@ flask_engine_launch() {
   export BOREALIS_PROJECT_ROOT="$SCRIPT_DIR"
   echo -e "\n${GREEN}Launching Borealis Engine...${RESET}"
   echo "===================================================================================="
-  echo "${HOURGLASS} Engine Socket Server Started..."
-  "$py" -m Data.Engine.bootstrapper || true
+  local start_label
+  if [[ "$mode" == "developer" ]]; then
+    start_label="(Dev) Engine Started on https://localhost:5173"
+  else
+    start_label="(Production) Engine Started on https://localhost:5000"
+  fi
+  echo "${HOURGLASS} ${start_label}"
+  local logdir; logdir=$(ensure_engine_log_dir)
+  local stdout_log="${logdir}/engine-launch.stdout.log"
+  local stderr_log="${logdir}/engine-launch.stderr.log"
+  "$py" -m Data.Engine.bootstrapper >>"$stdout_log" 2>>"$stderr_log" || true
   # restore env
   if [[ -n "$prev_mode" ]]; then export BOREALIS_ENGINE_MODE="$prev_mode"; else unset BOREALIS_ENGINE_MODE; fi
   if [[ -n "$prev_port" ]]; then export BOREALIS_ENGINE_PORT="$prev_port"; else unset BOREALIS_ENGINE_PORT; fi

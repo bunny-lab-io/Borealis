@@ -274,6 +274,31 @@ function Write-ViteLog {
     "$timestamp-$ServiceName-$Message" | Out-File -FilePath $logPath -Append -Encoding UTF8
 }
 
+function Get-EngineLaunchStreamPaths {
+    $engineLogDir = Ensure-EngineLogDir
+    [PSCustomObject]@{
+        StdOut = Join-Path $engineLogDir 'engine-launch.stdout.log'
+        StdErr = Join-Path $engineLogDir 'engine-launch.stderr.log'
+    }
+}
+
+function Get-EngineStartLabel {
+    param(
+        [string]$EngineMode
+    )
+
+    $resolvedMode = "production"
+    if (-not [string]::IsNullOrWhiteSpace($EngineMode)) {
+        $resolvedMode = $EngineMode.Trim().ToLowerInvariant()
+    }
+
+    if ($resolvedMode -eq "developer") {
+        return "(Dev) Engine Started on https://localhost:5173"
+    }
+
+    return "(Production) Engine Started on https://localhost:5000"
+}
+
 function Ensure-EngineTlsMaterial {
     param(
         [string]$PythonPath,
@@ -2564,8 +2589,10 @@ switch ($choice) {
                 $env:BOREALIS_PROJECT_ROOT = $scriptDir
                 Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
                 Write-Host "===================================================================================="
-                Write-Host "$($symbols.Running) Engine Socket Server Started..."
-                & $py -m Data.Engine.bootstrapper
+                $engineStartLabel = Get-EngineStartLabel -EngineMode $engineOperationMode
+                Write-Host "$($symbols.Running) $engineStartLabel" -ForegroundColor DarkCyan
+                $engineLaunchStreams = Get-EngineLaunchStreamPaths
+                & $py -m Data.Engine.bootstrapper 1>> $engineLaunchStreams.StdOut 2>> $engineLaunchStreams.StdErr
                 if ($previousEngineMode) { $env:BOREALIS_ENGINE_MODE = $previousEngineMode } else { Remove-Item Env:BOREALIS_ENGINE_MODE -ErrorAction SilentlyContinue }
                 if ($previousEnginePort) { $env:BOREALIS_ENGINE_PORT = $previousEnginePort } else { Remove-Item Env:BOREALIS_ENGINE_PORT -ErrorAction SilentlyContinue }
                 if ($previousProjectRoot) { $env:BOREALIS_PROJECT_ROOT = $previousProjectRoot } else { Remove-Item Env:BOREALIS_PROJECT_ROOT -ErrorAction SilentlyContinue }
@@ -2839,7 +2866,15 @@ switch ($choice) {
                     }
                 } else {
                     Write-ViteLog "Executing npm run build for production WebUI assets."
-                    & $npmCmd run build
+                    $engineLogDir = Ensure-EngineLogDir
+                    $viteBuildStdOut = Join-Path $engineLogDir 'vite-build.stdout.log'
+                    $viteBuildStdErr = Join-Path $engineLogDir 'vite-build.stderr.log'
+                    & $npmCmd run build 1>> $viteBuildStdOut 2>> $viteBuildStdErr
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-ViteLog ("npm run build failed with code {0}. stderr log: {1}" -f $LASTEXITCODE, $viteBuildStdErr) 'vite-build'
+                        throw "Vite production build failed. Review $viteBuildStdErr for details."
+                    }
+                    Write-ViteLog "npm run build completed successfully." 'vite-build'
                 }
             } finally {
                 Pop-Location
@@ -2857,8 +2892,10 @@ switch ($choice) {
             $env:BOREALIS_PROJECT_ROOT = $scriptDir
             Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
             Write-Host "===================================================================================="
-            Write-Host "$($symbols.Running) Engine Socket Server Started..."
-            & $py -m Data.Engine.bootstrapper
+            $engineStartLabel = Get-EngineStartLabel -EngineMode $engineOperationMode
+            Write-Host "$($symbols.Running) $engineStartLabel" -ForegroundColor DarkCyan
+            $engineLaunchStreams = Get-EngineLaunchStreamPaths
+            & $py -m Data.Engine.bootstrapper 1>> $engineLaunchStreams.StdOut 2>> $engineLaunchStreams.StdErr
             if ($previousEngineMode) { $env:BOREALIS_ENGINE_MODE = $previousEngineMode } else { Remove-Item Env:BOREALIS_ENGINE_MODE -ErrorAction SilentlyContinue }
             if ($previousEnginePort) { $env:BOREALIS_ENGINE_PORT = $previousEnginePort } else { Remove-Item Env:BOREALIS_ENGINE_PORT -ErrorAction SilentlyContinue }
             if ($previousProjectRoot) { $env:BOREALIS_PROJECT_ROOT = $previousProjectRoot } else { Remove-Item Env:BOREALIS_PROJECT_ROOT -ErrorAction SilentlyContinue }
