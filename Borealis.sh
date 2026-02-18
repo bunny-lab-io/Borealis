@@ -20,7 +20,11 @@ RED="\033[0;31m"
 RESET="\033[0m"
 CHECKMARK="[OK]"; HOURGLASS="[WAIT]"; CROSSMARK="[X]"; INFO="[i]"
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+else
+  SCRIPT_DIR="$(pwd)"
+fi
 cd "$SCRIPT_DIR"
 
 # ---- CLI flags (parity with Borealis.ps1) ----
@@ -34,6 +38,8 @@ ENGINE_PROD_FLAG=0
 ENGINE_DEV_FLAG=0
 ENROLLMENT_CODE=""
 SERVER_URL=""
+BOOTSTRAP_FLAG=0
+INSTALL_DIR_OVERRIDE=""
 
 CHOICE=""
 ENGINE_MODE_CHOICE=""
@@ -55,6 +61,15 @@ while (( "$#" )); do
     -ServerUrl|--ServerUrl|--serverurl|--server-url)
       shift
       SERVER_URL="${1:-}"
+      ;;
+    --bootstrap|--self-bootstrap) BOOTSTRAP_FLAG=1 ;;
+    --install-dir|--install-dir=*)
+      if [[ "$1" == *=* ]]; then
+        INSTALL_DIR_OVERRIDE="${1#*=}"
+      else
+        shift
+        INSTALL_DIR_OVERRIDE="${1:-}"
+      fi
       ;;
     *) ;; # ignore unknown for flexibility
   esac
@@ -201,6 +216,104 @@ run_privileged() {
   return 1
 }
 
+bootstrap_install_dependencies() {
+  detect_distro
+  case "${DISTRO_ID:-}" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt update -qq
+      run_privileged apt install -y curl unzip ca-certificates
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged dnf install -y curl unzip ca-certificates
+      else
+        run_privileged yum install -y curl unzip ca-certificates
+      fi
+      ;;
+    arch)
+      run_privileged pacman -Sy --noconfirm curl unzip ca-certificates
+      ;;
+    *)
+      if ! command_exists curl || ! command_exists unzip; then
+        echo -e "${RED}Unsupported distro '${DISTRO_ID}'. Install curl + unzip manually first.${RESET}" >&2
+        return 1
+      fi
+      ;;
+  esac
+}
+
+bootstrap_install_repo() {
+  local install_dir="$1"
+  local zip_url="${BOREALIS_BOOTSTRAP_ZIP_URL:-https://github.com/bunny-lab-io/Borealis/archive/refs/heads/main.zip}"
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local zip_path="${tmp_dir}/borealis.zip"
+  local extracted_root=""
+
+  echo -e "${INFO} Bootstrapping Borealis repo into ${install_dir}"
+  if ! curl -fL "${zip_url}" -o "${zip_path}"; then
+    rm -rf "${tmp_dir}" 2>/dev/null || true
+    return 1
+  fi
+  if ! unzip -q "${zip_path}" -d "${tmp_dir}"; then
+    rm -rf "${tmp_dir}" 2>/dev/null || true
+    return 1
+  fi
+
+  extracted_root="$(find "${tmp_dir}" -maxdepth 1 -mindepth 1 -type d -name 'Borealis-*' | head -n 1)"
+  if [[ -z "${extracted_root}" || ! -d "${extracted_root}" ]]; then
+    echo -e "${RED}Failed to locate extracted Borealis directory in bootstrap archive.${RESET}" >&2
+    rm -rf "${tmp_dir}" 2>/dev/null || true
+    return 1
+  fi
+
+  run_privileged rm -rf "${install_dir}"
+  run_privileged mkdir -p "${install_dir}"
+  run_privileged cp -a "${extracted_root}/." "${install_dir}/"
+  run_privileged chmod +x "${install_dir}/Borealis.sh"
+  rm -rf "${tmp_dir}" 2>/dev/null || true
+}
+
+build_reexec_args() {
+  REEXEC_ARGS=()
+  (( SERVER_FLAG )) && REEXEC_ARGS+=(--server)
+  (( AGENT_FLAG )) && REEXEC_ARGS+=(--agent)
+  (( VITE_FLAG )) && REEXEC_ARGS+=(--vite)
+  (( FLASK_FLAG )) && REEXEC_ARGS+=(--flask)
+  (( QUICK_FLAG )) && REEXEC_ARGS+=(--quick)
+  (( ENGINE_TESTS_FLAG )) && REEXEC_ARGS+=(--engine-tests)
+  (( ENGINE_PROD_FLAG )) && REEXEC_ARGS+=(--engine-production)
+  (( ENGINE_DEV_FLAG )) && REEXEC_ARGS+=(--engine-dev)
+  [[ -n "${ENROLLMENT_CODE}" ]] && REEXEC_ARGS+=(--enrollmentcode "${ENROLLMENT_CODE}")
+  [[ -n "${SERVER_URL}" ]] && REEXEC_ARGS+=(--serverurl "${SERVER_URL}")
+}
+
+maybe_bootstrap_and_reexec() {
+  local install_dir="${INSTALL_DIR_OVERRIDE:-${BOREALIS_INSTALL_DIR:-/srv/Borealis}}"
+  local needs_repo=0
+
+  if [[ ! -d "${SCRIPT_DIR}/Data/Agent" || ! -d "${SCRIPT_DIR}/Data/Engine" ]]; then
+    needs_repo=1
+  fi
+
+  if [[ "${BOOTSTRAP_FLAG}" -eq 0 && "${needs_repo}" -eq 0 ]]; then
+    return 0
+  fi
+
+  if [[ "${BOREALIS_BOOTSTRAPPED:-0}" == "1" && "${needs_repo}" -eq 1 ]]; then
+    echo -e "${RED}Bootstrap re-entry detected but repository content is still missing.${RESET}" >&2
+    return 1
+  fi
+
+  bootstrap_install_dependencies
+  bootstrap_install_repo "${install_dir}"
+
+  build_reexec_args
+
+  echo -e "${INFO} Re-launching Borealis from ${install_dir}/Borealis.sh"
+  exec env BOREALIS_BOOTSTRAPPED=1 "${install_dir}/Borealis.sh" "${REEXEC_ARGS[@]}"
+}
+
 capture_existing_server_url() {
   local settings_dir="${SCRIPT_DIR}/Agent/Borealis/Settings"
   local old_settings_dir="${SCRIPT_DIR}/Agent/Settings"
@@ -263,6 +376,8 @@ test_webui_build_fresh() {
   fi
   return 0
 }
+
+maybe_bootstrap_and_reexec
 
 # ---- Agent configuration ----
 configure_agent_settings() {
