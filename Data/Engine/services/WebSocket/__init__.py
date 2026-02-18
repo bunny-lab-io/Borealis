@@ -378,14 +378,15 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         if registry and hasattr(registry, "is_registered"):
             try:
                 if not registry.is_registered(agent_id):
+                    # Non-blocking: shell may still be reachable when the agent socket registry
+                    # is stale/unavailable (for example persistent tunnel already ensured via REST).
                     _shell_log(
-                        "vpn_shell_open_failed agent_id={0} sid={1} reason=agent_socket_missing".format(
+                        "vpn_shell_open_warn agent_id={0} sid={1} reason=agent_socket_missing_nonblocking".format(
                             agent_id,
                             request.sid,
                         ),
                         level="WARNING",
                     )
-                    return {"error": "agent_socket_missing"}
             except Exception:
                 agent_logger.debug("agent_socket_registry lookup failed for agent_id=%s", agent_id, exc_info=True)
 

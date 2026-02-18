@@ -80,10 +80,11 @@ function highlightPs(code) {
   }
 }
 
-export default function ReverseTunnelPowershell({ device }) {
+export default function ReverseTunnelRemoteShell({ device }) {
   const [sessionState, setSessionState] = useState("idle");
   const [shellState, setShellState] = useState("idle");
   const [tunnel, setTunnel] = useState(null);
+  const [statusMessage, setStatusMessage] = useState("");
   const [output, setOutput] = useState("");
   const [input, setInput] = useState("");
   const [copyFlash, setCopyFlash] = useState(false);
@@ -243,9 +244,11 @@ export default function ReverseTunnelPowershell({ device }) {
 
   const requestTunnel = useCallback(async () => {
     if (!agentId) {
+      setStatusMessage("Agent ID is required to establish.");
       return;
     }
     setLoading(true);
+    setStatusMessage("");
     try {
       setSessionState("connecting");
       setShellState("opening");
@@ -264,20 +267,20 @@ export default function ReverseTunnelPowershell({ device }) {
         throw new Error(`${data?.error || `HTTP ${resp.status}`}${detail}`);
       }
       if (data?.agent_socket === false) {
-        await handleAgentOnboarding();
-        return;
+        setStatusMessage("Agent socket is offline; attempting direct shell tunnel...");
       }
       setTunnel(data);
 
       const socket = ensureSocket();
       const openShellWithRetry = async () => {
-        const deadline = Date.now() + 30000;
+        const deadline = Date.now() + 60000;
         let lastError = "";
         let attempt = 0;
         while (Date.now() < deadline) {
           attempt += 1;
           const openResp = await emitAsync(socket, "vpn_shell_open", { agent_id: agentId }, 6000);
           if (!openResp?.error) {
+            setStatusMessage("");
             return openResp;
           }
           if (openResp.error === "agent_socket_missing") {
@@ -285,7 +288,7 @@ export default function ReverseTunnelPowershell({ device }) {
             return null;
           }
           lastError = openResp.error;
-          setStatusMessage(`Waiting for PowerShell shell (${attempt})...`);
+          setStatusMessage(`Waiting for shell session (${attempt})...`);
           await sleep(2000);
         }
         throw new Error(lastError || "shell_connect_failed");
@@ -297,9 +300,11 @@ export default function ReverseTunnelPowershell({ device }) {
       }
       setSessionState("connected");
       setShellState("connected");
+      setStatusMessage("");
     } catch (err) {
       setSessionState("error");
       setShellState("closed");
+      setStatusMessage(String(err?.message || err || "shell_connect_failed"));
     } finally {
       setLoading(false);
     }
@@ -314,6 +319,7 @@ export default function ReverseTunnelPowershell({ device }) {
       setInput("");
       const resp = await emitAsync(socket, "vpn_shell_send", { data: payload });
       if (resp?.error) {
+        setStatusMessage(String(resp.error));
       }
     },
     [appendOutput, ensureSocket, sessionState]
@@ -447,6 +453,11 @@ export default function ReverseTunnelPowershell({ device }) {
         <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
           Shell: {shellState === "connected" ? "Connection Established" : shellState}
         </Typography>
+        {statusMessage ? (
+          <Typography variant="body2" sx={{ color: shellState === "connected" ? MAGIC_UI.textMuted : "#ffb4c2" }}>
+            {statusMessage}
+          </Typography>
+        ) : null}
       </Stack>
     </Box>
   );

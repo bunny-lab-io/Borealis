@@ -37,7 +37,7 @@ import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
-import ReverseTunnelPowershell from "./ReverseTunnel/Powershell.jsx";
+import ReverseTunnelRemoteShell from "./ReverseTunnel/RemoteShell.jsx";
 import ReverseTunnelVnc from "./ReverseTunnel/VNC.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -2019,7 +2019,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         minHeight: 0,
       }}
     >
-      <ReverseTunnelPowershell device={tunnelDevice} />
+      <ReverseTunnelRemoteShell device={tunnelDevice} />
     </Box>
   );
 
