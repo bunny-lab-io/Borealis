@@ -28,6 +28,7 @@ ROLE_CONTEXTS = ['system']
 
 
 IS_WINDOWS = os.name == 'nt'
+IS_LINUX = platform.system().lower() == 'linux'
 SERIAL_UNAVAILABLE = "<Unable to Retrieve S/N>"
 
 
@@ -102,6 +103,23 @@ def _run_command(args, timeout: int = 15) -> str:
     except Exception:
         pass
     return ''
+
+
+def _normalize_hostname_for_display(value) -> str:
+    try:
+        text = str(value or '').strip()
+    except Exception:
+        return ''
+    if IS_LINUX and '.' in text:
+        return text.split('.', 1)[0]
+    return text
+
+
+def _local_hostname() -> str:
+    try:
+        return _normalize_hostname_for_display(socket.gethostname())
+    except Exception:
+        return ''
 
 
 def _read_os_release() -> dict:
@@ -588,15 +606,18 @@ def _ansible_ee_version():
 
 def collect_summary(CONFIG):
     try:
-        hostname = socket.gethostname()
+        raw_hostname = socket.gethostname()
+        hostname = _normalize_hostname_for_display(raw_hostname)
         domain = os.environ.get('USERDOMAIN') or ''
         if not domain and not IS_WINDOWS:
             try:
                 fqdn = socket.getfqdn()
-                if fqdn and fqdn != hostname and '.' in fqdn:
+                if fqdn and '.' in fqdn:
                     domain = fqdn.split('.', 1)[1]
             except Exception:
                 pass
+            if not domain and raw_hostname and '.' in raw_hostname:
+                domain = raw_hostname.split('.', 1)[1]
         summary = {
             'hostname': hostname,
             'os': detect_agent_os(),
@@ -608,7 +629,7 @@ def collect_summary(CONFIG):
         return summary
     except Exception:
         return {
-            'hostname': socket.gethostname(),
+            'hostname': _local_hostname(),
             'ansible_ee_ver': _ansible_ee_version(),
         }
 
@@ -1404,7 +1425,7 @@ def _build_details_fallback() -> dict:
     try:
         summary = collect_summary(type('C', (), {'data': {}, '_write': lambda s: None})())
     except Exception:
-        summary = {'hostname': socket.gethostname()}
+        summary = {'hostname': _local_hostname()}
     # Normalize OS field
     if summary.get('os') and not summary.get('operating_system'):
         summary['operating_system'] = summary.get('os')
@@ -1611,7 +1632,7 @@ class Role:
                 get_url = (self.ctx.hooks.get('get_server_url') if isinstance(self.ctx.hooks, dict) else None) or (lambda: 'http://localhost:5000')
                 payload = {
                     'agent_id': self.ctx.agent_id,
-                    'hostname': details_to_send.get('summary', {}).get('hostname', socket.gethostname()),
+                    'hostname': details_to_send.get('summary', {}).get('hostname', _local_hostname()),
                     'details': details_to_send,
                 }
                 client_factory = None

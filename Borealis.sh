@@ -24,8 +24,10 @@ DEFAULT_AGENT_RUNTIME_ROOT="/opt/Borealis/Agent"
 
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
   SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+  RUNNING_FROM_STREAM=0
 else
   SCRIPT_DIR="$(pwd)"
+  RUNNING_FROM_STREAM=1
 fi
 cd "$SCRIPT_DIR"
 
@@ -41,6 +43,7 @@ ENGINE_DEV_FLAG=0
 ENROLLMENT_CODE=""
 SERVER_URL=""
 BOOTSTRAP_FLAG=0
+NO_BOOTSTRAP_FLAG=0
 INSTALL_DIR_OVERRIDE=""
 
 CHOICE=""
@@ -65,6 +68,7 @@ while (( "$#" )); do
       SERVER_URL="${1:-}"
       ;;
     --bootstrap|--self-bootstrap) BOOTSTRAP_FLAG=1 ;;
+    --no-bootstrap) NO_BOOTSTRAP_FLAG=1 ;;
     --install-dir|--install-dir=*)
       if [[ "$1" == *=* ]]; then
         INSTALL_DIR_OVERRIDE="${1#*=}"
@@ -282,13 +286,22 @@ build_reexec_args() {
 
 maybe_bootstrap_and_reexec() {
   local install_dir="${INSTALL_DIR_OVERRIDE:-${BOREALIS_INSTALL_DIR:-${DEFAULT_BOREALIS_ROOT}}}"
+  local should_bootstrap=0
   local needs_repo=0
 
   if [[ ! -d "${SCRIPT_DIR}/Data/Agent" || ! -d "${SCRIPT_DIR}/Data/Engine" ]]; then
     needs_repo=1
   fi
 
-  if [[ "${BOOTSTRAP_FLAG}" -eq 0 && "${needs_repo}" -eq 0 ]]; then
+  if [[ "${NO_BOOTSTRAP_FLAG}" -eq 1 ]]; then
+    return 0
+  fi
+
+  if [[ "${BOOTSTRAP_FLAG}" -eq 1 || "${needs_repo}" -eq 1 || "${RUNNING_FROM_STREAM}" -eq 1 ]]; then
+    should_bootstrap=1
+  fi
+
+  if [[ "${should_bootstrap}" -eq 0 ]]; then
     return 0
   fi
 
