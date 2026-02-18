@@ -112,6 +112,56 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+mount_options_for_target() {
+  local target="$1"
+  if command_exists findmnt; then
+    findmnt -no OPTIONS --target "$target" 2>/dev/null || true
+    return 0
+  fi
+  if [[ -r /proc/mounts ]]; then
+    awk -v t="$target" '
+      BEGIN { best_len = 0; best_opts = "" }
+      {
+        mp = $2
+        opts = $4
+        gsub("\\\\040", " ", mp)
+        if (index(t, mp) == 1) {
+          l = length(mp)
+          if (l > best_len) {
+            best_len = l
+            best_opts = opts
+          }
+        }
+      }
+      END { print best_opts }
+    ' /proc/mounts 2>/dev/null || true
+  fi
+}
+
+target_is_noexec() {
+  local target="$1"
+  local opts
+  opts="$(mount_options_for_target "$target")"
+  [[ ",${opts}," == *,noexec,* ]]
+}
+
+resolve_agent_venv_dir() {
+  if [[ -n "${BOREALIS_AGENT_VENV:-}" ]]; then
+    echo "${BOREALIS_AGENT_VENV}"
+    return 0
+  fi
+
+  local default_dir="${SCRIPT_DIR}/Agent"
+  local fallback_dir="/opt/Borealis/Agent"
+
+  if target_is_noexec "${SCRIPT_DIR}"; then
+    echo "${fallback_dir}"
+    return 0
+  fi
+
+  echo "${default_dir}"
+}
+
 resolve_python_bin() {
   if command_exists python3; then
     echo "python3"
@@ -150,12 +200,37 @@ capture_existing_server_url() {
 }
 
 agent_python_bin() {
-  if [[ -x "${SCRIPT_DIR}/Agent/bin/python3" ]]; then
-    echo "${SCRIPT_DIR}/Agent/bin/python3"
-  elif [[ -x "${SCRIPT_DIR}/Agent/bin/python" ]]; then
-    echo "${SCRIPT_DIR}/Agent/bin/python"
+  local venv_dir
+  venv_dir="$(resolve_agent_venv_dir)"
+  if [[ -x "${venv_dir}/bin/python3" ]]; then
+    echo "${venv_dir}/bin/python3"
+  elif [[ -x "${venv_dir}/bin/python" ]]; then
+    echo "${venv_dir}/bin/python"
   else
     echo ""
+  fi
+}
+
+agent_runtime_script() {
+  local venv_dir
+  venv_dir="$(resolve_agent_venv_dir)"
+  echo "${venv_dir}/Borealis/agent.py"
+}
+
+agent_runtime_dir() {
+  local venv_dir
+  venv_dir="$(resolve_agent_venv_dir)"
+  echo "${venv_dir}"
+}
+
+verify_agent_runtime_exec_path() {
+  local venv_dir
+  venv_dir="$(resolve_agent_venv_dir)"
+  if target_is_noexec "$venv_dir"; then
+    write_agent_log "Agent runtime path '${venv_dir}' is on a noexec mount."
+    return 1
+  else
+    return 0
   fi
 }
 
@@ -393,7 +468,8 @@ install_agent_dependencies() {
 }
 
 create_agent_venv_and_stage_data() {
-  local venv_dir="${SCRIPT_DIR}/Agent"
+  local venv_dir
+  venv_dir="$(agent_runtime_dir)"
   local source_root="${SCRIPT_DIR}/Data/Agent"
   local destination="${venv_dir}/Borealis"
   local py_bin
@@ -407,6 +483,8 @@ create_agent_venv_and_stage_data() {
     echo -e "${RED}Agent source directory '${source_root}' was not found.${RESET}" >&2
     return 1
   }
+
+  mkdir -p "${venv_dir}"
 
   if [[ ! -x "${venv_dir}/bin/python" && ! -x "${venv_dir}/bin/python3" ]]; then
     "${py_bin}" -m venv "${venv_dir}"
@@ -463,12 +541,17 @@ install_agent_python_deps() {
 ensure_agent_systemd_service() {
   local venv_py
   venv_py="$(agent_python_bin)"
+  local agent_script
+  agent_script="$(agent_runtime_script)"
+  local venv_dir
+  venv_dir="$(agent_runtime_dir)"
   [[ -n "$venv_py" ]] || return 1
-  [[ -f "${SCRIPT_DIR}/Agent/Borealis/agent.py" ]] || return 1
+  [[ -f "${agent_script}" ]] || return 1
 
   local unit_name="${BOREALIS_AGENT_SYSTEMD_UNIT:-borealis-agent.service}"
   local unit_path="/etc/systemd/system/${unit_name}"
-  local tmp_unit="${SCRIPT_DIR}/Agent/Logs/${unit_name}"
+  local tmp_unit
+  tmp_unit="$(ensure_agent_log_dir)/${unit_name}"
   mkdir -p "$(dirname "$tmp_unit")"
 
   cat > "$tmp_unit" <<EOF
@@ -482,7 +565,8 @@ Type=simple
 WorkingDirectory=${SCRIPT_DIR}
 Environment=BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
 Environment=BOREALIS_AGENT_MODE=system
-ExecStart=${venv_py} ${SCRIPT_DIR}/Agent/Borealis/agent.py --system-service --config SYSTEM
+Environment=BOREALIS_AGENT_RUNTIME=${venv_dir}
+ExecStart=${venv_py} ${agent_script} --system-service --config SYSTEM
 Restart=always
 RestartSec=5
 
@@ -501,7 +585,10 @@ EOF
 start_agent_background_fallback() {
   local venv_py
   venv_py="$(agent_python_bin)"
+  local agent_script
+  agent_script="$(agent_runtime_script)"
   [[ -n "$venv_py" ]] || return 1
+  [[ -f "$agent_script" ]] || return 1
 
   local logdir
   logdir="$(ensure_agent_log_dir)"
@@ -520,7 +607,7 @@ start_agent_background_fallback() {
 
   (
     cd "${SCRIPT_DIR}"
-    nohup "$venv_py" "${SCRIPT_DIR}/Agent/Borealis/agent.py" --system-service --config SYSTEM >>"$stdout_log" 2>>"$stderr_log" &
+    nohup "$venv_py" "$agent_script" --system-service --config SYSTEM >>"$stdout_log" 2>>"$stderr_log" &
     echo $! > "$pid_file"
   )
 
@@ -544,12 +631,21 @@ install_or_update_borealis_agent() {
   echo -e "${GREEN}Ensuring Agent dependencies exist...${RESET}"
   install_agent_dependencies
 
+  local runtime_dir
+  runtime_dir="$(agent_runtime_dir)"
+  echo -e "${INFO} Agent runtime directory: ${runtime_dir}"
+  write_agent_log "Agent runtime directory resolved to '${runtime_dir}'."
+
   local preserved_url
   preserved_url="$(capture_existing_server_url)"
 
   run_step "Create Borealis Agent virtual environment & stage runtime" create_agent_venv_and_stage_data
   run_step "Install Agent Python dependencies" install_agent_python_deps
   run_step "Configure Agent settings" configure_agent_settings "$preserved_url"
+  if ! verify_agent_runtime_exec_path; then
+    echo -e "${RED}Agent runtime path is on a noexec mount. Set BOREALIS_AGENT_VENV to an executable path (for example /opt/Borealis/Agent).${RESET}"
+    return 1
+  fi
   run_step "Configure Agent supervision" configure_agent_supervision
 }
 
