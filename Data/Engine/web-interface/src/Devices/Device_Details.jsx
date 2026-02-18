@@ -175,6 +175,8 @@ const SUMMARY_GRID_STYLE = {
   height: "100%",
   fontFamily: gridFontFamily,
 };
+const SUMMARY_FIELD_TEXT_COLOR = "#58a6ff"; // matches hostname blue in Device_List.jsx
+const SUMMARY_DEFAULT_TEXT_COLOR = NAV_TAB_COLORS.textActive;
 
 const SUMMARY_GRID_DEBUG_STORAGE_KEY = "borealis.debug.summaryGrid";
 
@@ -210,6 +212,23 @@ const SummarySectionGrid = React.memo(function SummarySectionGrid({
   renderCountRef.current += 1;
 
   const rowCount = Array.isArray(rowData) ? rowData.length : 0;
+  const summaryDefaultColDef = useMemo(() => {
+    const baseColDef = defaultColDef || {};
+    const existingCellStyle = baseColDef.cellStyle;
+    return {
+      ...baseColDef,
+      cellStyle: (params) => {
+        const resolvedStyle =
+          typeof existingCellStyle === "function"
+            ? existingCellStyle(params)
+            : existingCellStyle || {};
+        return {
+          ...(resolvedStyle || {}),
+          color: SUMMARY_DEFAULT_TEXT_COLOR,
+        };
+      },
+    };
+  }, [defaultColDef]);
 
   const handleGridReady = useCallback(
     (params) => {
@@ -277,7 +296,7 @@ const SummarySectionGrid = React.memo(function SummarySectionGrid({
       <AgGridReact
         rowData={rowData}
         columnDefs={columnDefs}
-        defaultColDef={defaultColDef}
+        defaultColDef={summaryDefaultColDef}
         pagination={false}
         animateRows={false}
         suppressCellFocus
@@ -1700,17 +1719,68 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                       </Box>
                     </Box>
 
-                    {summaryDataReady ? (
-                      <SummarySectionGrid
-                        sectionKey="top-level"
-                        rowData={topLevelInfoRows}
-                        columnDefs={topLevelInfoColumnDefs}
-                        defaultColDef={defaultGridColDef}
-                        height={topLevelGridHeight}
-                      />
-                    ) : (
-                      <SummaryGridPlaceholder height={topLevelGridHeight} />
-                    )}
+                    <Box
+                      sx={{
+                        display: "grid",
+                        gridTemplateColumns: { xs: "1fr", lg: "repeat(2, minmax(0,1fr))" },
+                        gap: 1.4,
+                        minWidth: 0,
+                        width: "100%",
+                      }}
+                    >
+                      <Box sx={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 0.7 }}>
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: MAGIC_UI.accentA,
+                            fontWeight: 600,
+                            fontSize: "0.82rem",
+                            letterSpacing: 0.3,
+                            textTransform: "none",
+                            display: "block",
+                          }}
+                        >
+                          Overview
+                        </Typography>
+                        {summaryDataReady ? (
+                          <SummarySectionGrid
+                            sectionKey="top-level-overview"
+                            rowData={overviewInfoRows}
+                            columnDefs={topLevelSplitColumnDefs}
+                            defaultColDef={defaultGridColDef}
+                            height={topLevelSplitGridHeight}
+                          />
+                        ) : (
+                          <SummaryGridPlaceholder height={topLevelSplitGridHeight} />
+                        )}
+                      </Box>
+                      <Box sx={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 0.7 }}>
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: MAGIC_UI.accentA,
+                            fontWeight: 600,
+                            fontSize: "0.82rem",
+                            letterSpacing: 0.3,
+                            textTransform: "none",
+                            display: "block",
+                          }}
+                        >
+                          Borealis Agent
+                        </Typography>
+                        {summaryDataReady ? (
+                          <SummarySectionGrid
+                            sectionKey="top-level-agent"
+                            rowData={borealisAgentRows}
+                            columnDefs={topLevelSplitColumnDefs}
+                            defaultColDef={defaultGridColDef}
+                            height={topLevelSplitGridHeight}
+                          />
+                        ) : (
+                          <SummaryGridPlaceholder height={topLevelSplitGridHeight} />
+                        )}
+                      </Box>
+                    </Box>
                   </Island>
                 </Box>
 
@@ -1887,7 +1957,14 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const memoryColumnDefs = useMemo(
     () => [
-      { field: "slot", headerName: "Slot", width: 120, flex: 0, sortable: false },
+      {
+        field: "slot",
+        headerName: "Slot",
+        width: 120,
+        flex: 0,
+        sortable: false,
+        cellStyle: { color: SUMMARY_FIELD_TEXT_COLOR },
+      },
       { field: "speed", headerName: "Speed", width: 130, flex: 0, sortable: false },
       { field: "serial", headerName: "Serial Number", width: 170, flex: 0, sortable: false },
       {
@@ -1947,6 +2024,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         flex: 0,
         sortable: false,
         filter: "agTextColumnFilter",
+        cellStyle: { color: SUMMARY_FIELD_TEXT_COLOR },
       },
       { field: "disk_type", headerName: "Type", width: 120, flex: 0, sortable: false },
       {
@@ -1997,7 +2075,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const networkColumnDefs = useMemo(
     () => [
-      { field: "adapter", headerName: "Adapter", width: 170, flex: 0 },
+      { field: "adapter", headerName: "Adapter", width: 170, flex: 0, cellStyle: { color: SUMMARY_FIELD_TEXT_COLOR } },
       { field: "ips", headerName: "IP Address(es)", width: 260, flex: 0 },
       { field: "mac", headerName: "MAC Address", width: 180, flex: 0 },
       { field: "link_speed", headerName: "Link Speed", width: 140, flex: 1, minWidth: 140 },
@@ -2033,78 +2111,69 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     summary.external_ip,
   ]);
 
-  const topLevelInfoRows = useMemo(
-    () => [
-      {
-        id: "site",
-        label: "Site",
-        value: meta.siteName || summary.site_name || summary.site || device?.site_name || "placeholder",
-      },
-      {
-        id: "enrollment-date",
-        label: "Enrollment Date",
-        value: formatDateValue(
-          meta.created || summary.created || device?.created || device?.created_at || "",
-          "placeholder"
-        ),
-      },
-      {
-        id: "last-reboot",
-        label: "Last Reboot",
-        value: formatDateValue(meta.lastReboot || summary.last_reboot || "", "unknown"),
-      },
-      {
-        id: "device-type",
-        label: "Device Type",
-        value: meta.deviceType || summary.device_type || agent.device_type || device?.device_type || "unknown",
-      },
-      {
-        id: "model",
-        label: "Model",
-        value: summary.model || summary.system_model || summary.device_model || meta.model || "unknown",
-      },
-      {
-        id: "serial-number",
-        label: "Serial Number",
-        value:
-          summary.serial_number ||
-          summary.serial ||
-          summary.bios_serial ||
-          summary.asset_tag ||
-          meta.serialNumber ||
-          "unknown",
-      },
-      {
-        id: "manufacturer",
-        label: "Manufacturer",
-        value: summary.manufacturer || summary.vendor || meta.manufacturer || "unknown",
-      },
-      {
-        id: "operating-system",
-        label: "Operating System",
-        value: meta.operatingSystem || summary.operating_system || agent.agent_operating_system || "unknown",
-      },
-      {
-        id: "last-user",
-        label: "Last User",
-        value: meta.lastUser || summary.last_user || "unknown",
-      },
-    ],
+  const overviewInfoRows = useMemo(
+    () => {
+      const manufacturerValue = String(summary.manufacturer || summary.vendor || meta.manufacturer || "").trim();
+      const modelValue = String(summary.model || summary.system_model || summary.device_model || meta.model || "").trim();
+      const combinedModel = [manufacturerValue, modelValue].filter(Boolean).join(" ").trim() || "unknown";
+      return [
+        {
+          id: "site",
+          label: "Site",
+          value: meta.siteName || summary.site_name || summary.site || device?.site_name || "placeholder",
+        },
+        {
+          id: "device-type",
+          label: "Device Type",
+          value: meta.deviceType || summary.device_type || agent.device_type || device?.device_type || "unknown",
+        },
+        {
+          id: "last-user",
+          label: "Last User",
+          value: meta.lastUser || summary.last_user || "unknown",
+        },
+        {
+          id: "operating-system",
+          label: "Operating System",
+          value: meta.operatingSystem || summary.operating_system || agent.agent_operating_system || "unknown",
+        },
+        {
+          id: "model",
+          label: "Model",
+          value: combinedModel,
+        },
+        {
+          id: "serial-number",
+          label: "Serial Number",
+          value:
+            summary.serial_number ||
+            summary.serial ||
+            summary.bios_serial ||
+            summary.asset_tag ||
+            meta.serialNumber ||
+            "unknown",
+        },
+        {
+          id: "last-reboot",
+          label: "Last Reboot",
+          value: formatDateValue(meta.lastReboot || summary.last_reboot || "", "unknown"),
+        },
+      ];
+    },
     [
       meta.siteName,
-      meta.created,
-      meta.lastReboot,
       meta.deviceType,
+      meta.lastUser,
+      meta.operatingSystem,
+      meta.manufacturer,
       meta.model,
       meta.serialNumber,
-      meta.manufacturer,
-      meta.operatingSystem,
-      meta.lastUser,
+      meta.lastReboot,
       summary.site_name,
       summary.site,
-      summary.created,
-      summary.last_reboot,
       summary.device_type,
+      summary.manufacturer,
+      summary.vendor,
       summary.model,
       summary.system_model,
       summary.device_model,
@@ -2112,13 +2181,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       summary.serial,
       summary.bios_serial,
       summary.asset_tag,
-      summary.manufacturer,
-      summary.vendor,
       summary.operating_system,
       summary.last_user,
+      summary.last_reboot,
       device?.site_name,
-      device?.created,
-      device?.created_at,
       device?.device_type,
       agent.device_type,
       agent.agent_operating_system,
@@ -2126,7 +2192,51 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     ]
   );
 
-  const topLevelInfoColumnDefs = useMemo(
+  const borealisAgentRows = useMemo(
+    () => {
+      const peerIp = tunnelInfo?.virtual_ip ? String(tunnelInfo.virtual_ip).split("/")[0] : "";
+      return [
+        {
+          id: "agent-guid",
+          label: "AGENT_GUID",
+          value: meta.agentGuid || summary.agent_guid || device?.agent_guid || agent?.agent_guid || "unknown",
+        },
+        {
+          id: "enrollment-date",
+          label: "Enrollment Date",
+          value: formatDateValue(
+            meta.created || summary.created || device?.created || device?.created_at || "",
+            "placeholder"
+          ),
+        },
+        {
+          id: "wireguard-peer-ip",
+          label: "Wireguard Peer IP",
+          value: peerIp || "Inactive",
+        },
+        {
+          id: "vpn-tunnel-id",
+          label: "VPN Tunnel ID",
+          value: tunnelInfo?.tunnel_id || "Inactive",
+        },
+      ];
+    },
+    [
+      meta.agentGuid,
+      meta.created,
+      summary.agent_guid,
+      summary.created,
+      device?.agent_guid,
+      device?.created,
+      device?.created_at,
+      agent?.agent_guid,
+      tunnelInfo?.virtual_ip,
+      tunnelInfo?.tunnel_id,
+      formatDateValue,
+    ]
+  );
+
+  const topLevelSplitColumnDefs = useMemo(
     () => [
       {
         field: "label",
@@ -2135,6 +2245,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         flex: 0,
         sortable: false,
         filter: false,
+        cellStyle: { color: SUMMARY_FIELD_TEXT_COLOR },
       },
       {
         field: "value",
@@ -2158,14 +2269,13 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     return Math.max(minHeight, Math.min(maxHeight, headerHeight + rows * rowHeight + padding));
   }, []);
 
-  const topLevelGridHeight = useMemo(
-    () =>
-      resolveGridHeight(topLevelInfoRows.length, {
-        minHeight: BASE_GRID_HEIGHTS.topLevel,
-        maxHeight: 420,
-      }),
-    [topLevelInfoRows.length, resolveGridHeight]
-  );
+  const topLevelSplitGridHeight = useMemo(() => {
+    const baseHeight = resolveGridHeight(Math.max(overviewInfoRows.length, borealisAgentRows.length), {
+      minHeight: BASE_GRID_HEIGHTS.topLevel,
+      maxHeight: 420,
+    });
+    return Math.round(baseHeight * 1.2);
+  }, [overviewInfoRows.length, borealisAgentRows.length, resolveGridHeight]);
   const storageGridHeight = useMemo(
     () =>
       resolveGridHeight(storageRows.length, {
@@ -2200,7 +2310,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       topTabKey,
       summaryScrollOffset,
       summaryBottomSpacer,
-      topLevelRows: topLevelInfoRows.length,
+      overviewRows: overviewInfoRows.length,
+      agentRows: borealisAgentRows.length,
       storageRows: storageRows.length,
       memoryRows: memoryRows.length,
       networkRows: networkRows.length,
@@ -2209,7 +2320,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     tab,
     summaryScrollOffset,
     summaryBottomSpacer,
-    topLevelInfoRows.length,
+    overviewInfoRows.length,
+    borealisAgentRows.length,
     storageRows.length,
     memoryRows.length,
     networkRows.length,
