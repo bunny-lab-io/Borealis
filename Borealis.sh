@@ -786,6 +786,17 @@ configure_agent_supervision() {
   start_agent_background_fallback
 }
 
+print_agent_service_status() {
+  local unit_name="${BOREALIS_AGENT_SYSTEMD_UNIT:-borealis-agent.service}"
+  if ! command_exists systemctl; then
+    echo -e "${YELLOW}systemctl not available; skipping service status check.${RESET}"
+    return 0
+  fi
+
+  echo -e "${GREEN}Agent service status (${unit_name}):${RESET}"
+  run_privileged systemctl --no-pager --full status "${unit_name}" || true
+}
+
 install_or_update_borealis_agent() {
   echo -e "${GREEN}Ensuring Agent dependencies exist...${RESET}"
   install_agent_dependencies
@@ -806,6 +817,7 @@ install_or_update_borealis_agent() {
     return 1
   fi
   run_step "Configure Agent supervision" configure_agent_supervision
+  print_agent_service_status
 }
 
 # Prefer a resilient resolver for the Engine venv interpreter (some venvs only have 'python')
