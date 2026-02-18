@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 #////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Borealis.sh
-# Linux parity for Borealis.ps1 (Engine focus). Aims to be OS-agnostic across Ubuntu/Debian, RHEL/Rocky/Fedora, Arch.
-# - Installs system deps when needed (python3, venv, pip, curl, unzip, tesseract)
-# - Bundles portable NodeJS into Dependencies/NodeJS to keep a known-good version (no root required)
-# - Mirrors Windows flow: create Engine venv, stage Data/Engine, stage web-interface, Vite dev or prod build, Flask launch
-# - Supports flags: --server/--agent (agent kept for compatibility), --vite/--flask, --quick, --engine-tests,
-#                   --EngineProduction, --EngineDev (auto-select server mode), --enrollmentcode, plus interactive menu
-# NOTE: This script focuses on ENGINE parity. Agent paths remain but are not the goal here.
+# Linux parity for Borealis.ps1.
+# - Installs Linux dependencies for Engine and Agent paths
+# - Mirrors Engine flow: venv + staging + Vite + Flask launch
+# - Mirrors Agent flow: venv + Data/Agent staging + dependency install + settings + supervision
+# - Supports parity flags: --server/--agent, --vite/--flask, --quick, --engine-tests,
+#   --engine-production/--engine-dev, --enrollmentcode, --serverurl
 
 set -o errexit
 set -o nounset
@@ -34,6 +33,10 @@ ENGINE_TESTS_FLAG=0
 ENGINE_PROD_FLAG=0
 ENGINE_DEV_FLAG=0
 ENROLLMENT_CODE=""
+SERVER_URL=""
+
+CHOICE=""
+ENGINE_MODE_CHOICE=""
 
 while (( "$#" )); do
   case "$1" in
@@ -45,8 +48,14 @@ while (( "$#" )); do
     -EngineTests|--engine-tests) ENGINE_TESTS_FLAG=1 ;;
     -EngineProduction|--engine-production) ENGINE_PROD_FLAG=1 ;;
     -EngineDev|--engine-dev) ENGINE_DEV_FLAG=1 ;;
-    # Enrollment: prefer lowercase --enrollmentcode, keep old alias for compatibility
-    -EnrollmentCode|--EnrollmentCode|--enrollmentcode|--enrollment-code) shift; ENROLLMENT_CODE="${1:-}" ;;
+    -EnrollmentCode|--EnrollmentCode|--enrollmentcode|--enrollment-code)
+      shift
+      ENROLLMENT_CODE="${1:-}"
+      ;;
+    -ServerUrl|--ServerUrl|--serverurl|--server-url)
+      shift
+      SERVER_URL="${1:-}"
+      ;;
     *) ;; # ignore unknown for flexibility
   esac
   shift || true
@@ -87,8 +96,88 @@ write_vite_log() {
   printf "%s-%s-%s\n" "$(date +%FT%T)" "$svc" "$msg" >> "${logdir}/vite.log"
 }
 
-# ---- Agent (settings-only parity) ----
+ensure_agent_log_dir() {
+  mkdir -p "${SCRIPT_DIR}/Agent/Logs"
+  echo "${SCRIPT_DIR}/Agent/Logs"
+}
+
+write_agent_log() {
+  local message="$1"
+  local file_name="${2:-install.log}"
+  local logdir; logdir=$(ensure_agent_log_dir)
+  printf "[%s] %s\n" "$(date +%FT%T)" "$message" >> "${logdir}/${file_name}"
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+resolve_python_bin() {
+  if command_exists python3; then
+    echo "python3"
+    return 0
+  fi
+  if command_exists python; then
+    echo "python"
+    return 0
+  fi
+  echo ""
+}
+
+run_privileged() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+    return $?
+  fi
+  if command_exists sudo; then
+    sudo "$@"
+    return $?
+  fi
+  echo -e "${RED}This action requires root privileges and sudo is not available.${RESET}" >&2
+  return 1
+}
+
+capture_existing_server_url() {
+  local settings_dir="${SCRIPT_DIR}/Agent/Borealis/Settings"
+  local old_settings_dir="${SCRIPT_DIR}/Agent/Settings"
+  local current_url=""
+  if [[ -f "${settings_dir}/server_url.txt" ]]; then
+    current_url="$(head -n 1 "${settings_dir}/server_url.txt" 2>/dev/null || true)"
+  elif [[ -f "${old_settings_dir}/server_url.txt" ]]; then
+    current_url="$(head -n 1 "${old_settings_dir}/server_url.txt" 2>/dev/null || true)"
+  fi
+  echo "${current_url:-}"
+}
+
+agent_python_bin() {
+  if [[ -x "${SCRIPT_DIR}/Agent/bin/python3" ]]; then
+    echo "${SCRIPT_DIR}/Agent/bin/python3"
+  elif [[ -x "${SCRIPT_DIR}/Agent/bin/python" ]]; then
+    echo "${SCRIPT_DIR}/Agent/bin/python"
+  else
+    echo ""
+  fi
+}
+
+test_webui_build_fresh() {
+  local source_root="$1"
+  local build_root="$2"
+  local build_index="${build_root}/index.html"
+
+  [[ -d "$source_root" ]] || return 1
+  [[ -f "$build_index" ]] || return 1
+
+  if find "$source_root" \
+    \( -path "*/node_modules/*" -o -path "*/build/*" -o -path "*/dist/*" \) -prune -o \
+    -type f -newer "$build_index" -print -quit | grep -q .; then
+    return 1
+  fi
+  return 0
+}
+
+# ---- Agent configuration ----
 configure_agent_settings() {
+  local preserved_server_url="${1:-}"
   echo -e "${GREEN}Configuring Borealis Agent settings...${RESET}"
   local settings_dir="${SCRIPT_DIR}/Agent/Borealis/Settings"
   local legacy_settings_dir="${SCRIPT_DIR}/Agent/Settings"
@@ -102,17 +191,25 @@ configure_agent_settings() {
 
   local default_url="https://localhost:5000"
   local current_url="${default_url}"
-  if [[ -n "${BOREALIS_SERVER_URL:-}" ]]; then
+  if [[ -n "${SERVER_URL:-}" ]]; then
+    current_url="${SERVER_URL}"
+  elif [[ -n "${BOREALIS_SERVER_URL:-}" ]]; then
     current_url="${BOREALIS_SERVER_URL}"
+  elif [[ -n "${preserved_server_url}" ]]; then
+    current_url="${preserved_server_url}"
   elif [[ -f "${server_url_path}" ]]; then
     current_url="$(head -n 1 "${server_url_path}" || echo "${default_url}")"
   fi
 
-  if [[ -t 0 ]]; then
+  local input_url=""
+  if [[ -n "${SERVER_URL:-}" ]]; then
+    input_url="${SERVER_URL}"
+  elif [[ -n "${BOREALIS_SERVER_URL:-}" ]]; then
+    input_url="${BOREALIS_SERVER_URL}"
+  elif [[ -t 0 ]]; then
     read -r -p "Server URL [${current_url}]: " input_url
-  else
-    input_url=""
   fi
+
   input_url="${input_url:-${current_url}}"
   input_url="$(echo -n "${input_url}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   if [[ -z "${input_url}" ]]; then input_url="${default_url}"; fi
@@ -125,10 +222,13 @@ configure_agent_settings() {
 
   if [[ -z "${provided_code}" ]]; then
     local existing_code=""
-    if [[ -f "${config_path}" ]]; then
-      if command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
-        existing_code="$(CONFIG_PATH="${config_path}" python3 - <<'PY' 2>/dev/null || CONFIG_PATH="${config_path}" python - <<'PY' 2>/dev/null || true
-import json, os
+    local py_bin_read
+    py_bin_read="$(resolve_python_bin)"
+    if [[ -f "${config_path}" && -n "${py_bin_read}" ]]; then
+      existing_code="$(CONFIG_PATH="${config_path}" "${py_bin_read}" - <<'PY' 2>/dev/null || true
+import json
+import os
+
 path = os.environ.get("CONFIG_PATH")
 try:
     with open(path, "r", encoding="utf-8") as fh:
@@ -138,15 +238,15 @@ try:
 except Exception:
     pass
 PY
-        )"
-      fi
+      )"
     fi
-    existing_code="${existing_code:-}"
+
     if [[ -t 0 ]]; then
       read -r -p "Enrollment Code [${existing_code}]: " input_code
     else
       input_code=""
     fi
+
     if [[ -n "${input_code// }" ]]; then
       provided_code="${input_code}"
     elif [[ -n "${existing_code}" ]]; then
@@ -157,11 +257,12 @@ PY
   fi
 
   local py_bin
-  py_bin="$(command -v python3 || command -v python || true)"
+  py_bin="$(resolve_python_bin)"
 
   if [[ -n "${py_bin}" ]]; then
     CONFIG_PATH="${config_path}" ENROLLMENT_CODE_VALUE="${provided_code}" "${py_bin}" - <<'PY'
-import json, os
+import json
+import os
 
 path = os.environ["CONFIG_PATH"]
 code = os.environ.get("ENROLLMENT_CODE_VALUE", "")
@@ -204,34 +305,50 @@ EOF
   else
     echo -e "${YELLOW}Enrollment code cleared in agent_settings.json.${RESET}"
   fi
-  echo -e "${INFO} Agent runtime remains Windows-first; Linux flow configures settings only." 
 }
 
 # ---- Dependency Installation (Linux) ----
 install_shared_dependencies() {
   detect_distro
-  if command -v python3 >/dev/null 2>&1 && command -v pip3 >/dev/null 2>&1; then :; else
-    case "$DISTRO_ID" in
-      ubuntu|debian)
-        sudo apt update -qq && sudo apt install -y python3 python3-venv python3-pip curl unzip ca-certificates ;;
-      rhel|centos|fedora|rocky)
-        if command -v dnf >/dev/null 2>&1; then sudo dnf install -y python3 python3-pip python3-virtualenv curl unzip ca-certificates ; else sudo yum install -y python3 python3-pip python3-virtualenv curl unzip ca-certificates ; fi ;;
-      arch)
-        sudo pacman -Sy --noconfirm python python-pip python-virtualenv curl unzip ca-certificates ;;
-      *) : ;;
-    esac
+  if command_exists python3 && command_exists pip3; then
+    return 0
   fi
+
+  case "$DISTRO_ID" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt update -qq
+      run_privileged apt install -y python3 python3-venv python3-pip curl unzip ca-certificates
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged dnf install -y python3 python3-pip python3-virtualenv curl unzip ca-certificates
+      else
+        run_privileged yum install -y python3 python3-pip python3-virtualenv curl unzip ca-certificates
+      fi
+      ;;
+    arch)
+      run_privileged pacman -Sy --noconfirm python python-pip python-virtualenv curl unzip ca-certificates
+      ;;
+    *)
+      echo -e "${YELLOW}Unsupported distro '${DISTRO_ID}'. Install python3, python3-venv, python3-pip, curl, unzip manually.${RESET}"
+      return 1
+      ;;
+  esac
 }
 
 install_tesseract() {
   detect_distro
   case "$DISTRO_ID" in
-    ubuntu|debian)
-      sudo apt update -qq && sudo apt install -y tesseract-ocr ;;
-    rhel|centos|fedora|rocky)
-      if command -v dnf >/dev/null 2>&1; then sudo dnf install -y tesseract ; else sudo yum install -y tesseract ; fi ;;
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt update -qq
+      run_privileged apt install -y tesseract-ocr
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then run_privileged dnf install -y tesseract; else run_privileged yum install -y tesseract; fi
+      ;;
     arch)
-      sudo pacman -Sy --noconfirm tesseract ;;
+      run_privileged pacman -Sy --noconfirm tesseract
+      ;;
     *) : ;;
   esac
 }
@@ -269,6 +386,171 @@ install_server_dependencies() {
   run_step "Dependency: Python (system)" install_shared_dependencies
   run_step "Dependency: Tesseract-OCR (system)" install_tesseract
   run_step "Dependency: NodeJS (portable)" install_node_portable
+}
+
+install_agent_dependencies() {
+  run_step "Dependency: Python (system)" install_shared_dependencies
+}
+
+create_agent_venv_and_stage_data() {
+  local venv_dir="${SCRIPT_DIR}/Agent"
+  local source_root="${SCRIPT_DIR}/Data/Agent"
+  local destination="${venv_dir}/Borealis"
+  local py_bin
+  py_bin="$(resolve_python_bin)"
+
+  [[ -n "$py_bin" ]] || {
+    echo -e "${RED}Python interpreter not found. Install Python 3 first.${RESET}" >&2
+    return 1
+  }
+  [[ -d "$source_root" ]] || {
+    echo -e "${RED}Agent source directory '${source_root}' was not found.${RESET}" >&2
+    return 1
+  }
+
+  if [[ ! -x "${venv_dir}/bin/python" && ! -x "${venv_dir}/bin/python3" ]]; then
+    "${py_bin}" -m venv "${venv_dir}"
+  else
+    local existing_py
+    existing_py="$(agent_python_bin)"
+    if [[ -z "${existing_py}" ]] || ! "${existing_py}" -c "import sys" >/dev/null 2>&1; then
+      "${py_bin}" -m venv --upgrade "${venv_dir}"
+    fi
+  fi
+
+  rm -rf "${destination}" 2>/dev/null || true
+  mkdir -p "${destination}"
+
+  local core_items=(
+    "Python_API_Endpoints"
+    "Roles"
+    "Scripts"
+    "agent_deployment.py"
+    "agent.py"
+    "ansible-ee-version.txt"
+    "Borealis.ico"
+    "fcntl_stub.py"
+    "launch_service.ps1"
+    "role_manager.py"
+    "security.py"
+    "signature_utils.py"
+    "sitecustomize.py"
+    "termios_stub.py"
+  )
+
+  local item=""
+  for item in "${core_items[@]}"; do
+    if [[ -e "${source_root}/${item}" ]]; then
+      cp -a "${source_root}/${item}" "${destination}/"
+    fi
+  done
+}
+
+install_agent_python_deps() {
+  local venv_py
+  venv_py="$(agent_python_bin)"
+  [[ -n "$venv_py" ]] || {
+    echo -e "${RED}Agent virtual environment is missing Python.${RESET}" >&2
+    return 1
+  }
+
+  local req_path="${SCRIPT_DIR}/Data/Agent/agent-requirements.txt"
+  if [[ -f "$req_path" ]]; then
+    "$venv_py" -m pip install --disable-pip-version-check -q -r "$req_path"
+  fi
+}
+
+ensure_agent_systemd_service() {
+  local venv_py
+  venv_py="$(agent_python_bin)"
+  [[ -n "$venv_py" ]] || return 1
+  [[ -f "${SCRIPT_DIR}/Agent/Borealis/agent.py" ]] || return 1
+
+  local unit_name="${BOREALIS_AGENT_SYSTEMD_UNIT:-borealis-agent.service}"
+  local unit_path="/etc/systemd/system/${unit_name}"
+  local tmp_unit="${SCRIPT_DIR}/Agent/Logs/${unit_name}"
+  mkdir -p "$(dirname "$tmp_unit")"
+
+  cat > "$tmp_unit" <<EOF
+[Unit]
+Description=Borealis Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${SCRIPT_DIR}
+Environment=BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
+Environment=BOREALIS_AGENT_MODE=system
+ExecStart=${venv_py} ${SCRIPT_DIR}/Agent/Borealis/agent.py --system-service --config SYSTEM
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  run_privileged cp "$tmp_unit" "$unit_path" || return 1
+  run_privileged systemctl daemon-reload || return 1
+  run_privileged systemctl enable "$unit_name" || return 1
+  run_privileged systemctl restart "$unit_name" || return 1
+  write_agent_log "Systemd service '${unit_name}' installed/restarted."
+  return 0
+}
+
+start_agent_background_fallback() {
+  local venv_py
+  venv_py="$(agent_python_bin)"
+  [[ -n "$venv_py" ]] || return 1
+
+  local logdir
+  logdir="$(ensure_agent_log_dir)"
+  local pid_file="${logdir}/agent.pid"
+  local stdout_log="${logdir}/agent-launch.stdout.log"
+  local stderr_log="${logdir}/agent-launch.stderr.log"
+
+  if [[ -f "$pid_file" ]]; then
+    local old_pid
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "${old_pid}" ]] && kill -0 "${old_pid}" >/dev/null 2>&1; then
+      kill "${old_pid}" >/dev/null 2>&1 || true
+      sleep 1
+    fi
+  fi
+
+  (
+    cd "${SCRIPT_DIR}"
+    nohup "$venv_py" "${SCRIPT_DIR}/Agent/Borealis/agent.py" --system-service --config SYSTEM >>"$stdout_log" 2>>"$stderr_log" &
+    echo $! > "$pid_file"
+  )
+
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  write_agent_log "Started background Borealis agent (pid=${pid:-unknown})."
+  return 0
+}
+
+configure_agent_supervision() {
+  if command_exists systemctl; then
+    if ensure_agent_systemd_service; then
+      return 0
+    fi
+    write_agent_log "Systemd supervision setup failed; falling back to background launch."
+  fi
+  start_agent_background_fallback
+}
+
+install_or_update_borealis_agent() {
+  echo -e "${GREEN}Ensuring Agent dependencies exist...${RESET}"
+  install_agent_dependencies
+
+  local preserved_url
+  preserved_url="$(capture_existing_server_url)"
+
+  run_step "Create Borealis Agent virtual environment & stage runtime" create_agent_venv_and_stage_data
+  run_step "Install Agent Python dependencies" install_agent_python_deps
+  run_step "Configure Agent settings" configure_agent_settings "$preserved_url"
+  run_step "Configure Agent supervision" configure_agent_supervision
 }
 
 # Prefer a resilient resolver for the Engine venv interpreter (some venvs only have 'python')
@@ -326,13 +608,40 @@ ensure_engine_web_interface() {
   [[ -f "${dest}/package.json" ]] || { echo -e "${RED}Failed to stage Engine web interface into '$dest'.${RESET}" >&2; return 1; }
 }
 
+sync_engine_runtime() {
+  local source_root="${SCRIPT_DIR}/Data/Engine"
+  local destination_root="${SCRIPT_DIR}/Engine/Data/Engine"
+  [[ -d "$source_root" ]] || return 1
+
+  rm -rf "$destination_root" 2>/dev/null || true
+  mkdir -p "$destination_root"
+
+  shopt -s dotglob nullglob
+  local item=""
+  for item in "${source_root}"/*; do
+    local base
+    base="$(basename "$item")"
+    if [[ "$base" == "Assemblies" ]]; then
+      continue
+    fi
+    cp -a "$item" "${destination_root}/"
+  done
+  shopt -u dotglob nullglob
+}
+
 # ---- Engine build+launch flow ----
 create_engine_venv_and_stage_data() {
   local venv_dir="${SCRIPT_DIR}/Engine"
   local engine_src="${SCRIPT_DIR}/Data/Engine"
   local data_dest="${venv_dir}/Data/Engine"
+  local py_bin
+  py_bin="$(resolve_python_bin)"
+  [[ -n "$py_bin" ]] || {
+    echo -e "${RED}Python interpreter not found. Install Python 3 first.${RESET}" >&2
+    return 1
+  }
 
-  [[ -d "$venv_dir" ]] || python3 -m venv "$venv_dir"
+  [[ -d "$venv_dir" ]] || "${py_bin}" -m venv "$venv_dir"
   mkdir -p "${venv_dir}/Data"
 
   rm -rf "$data_dest" 2>/dev/null || true
@@ -366,7 +675,11 @@ install_engine_python_deps() {
   venv_py="$(engine_python_bin)"
   if [[ -z "$venv_py" ]]; then
     # Try to create the venv if it doesn't exist yet
-    python3 -m venv "${SCRIPT_DIR}/Engine" || true
+    local py_bin
+    py_bin="$(resolve_python_bin)"
+    if [[ -n "$py_bin" ]]; then
+      "$py_bin" -m venv "${SCRIPT_DIR}/Engine" || true
+    fi
     venv_py="$(engine_python_bin)"
   fi
   local engine_src="${SCRIPT_DIR}/Data/Engine"
@@ -422,7 +735,11 @@ flask_engine_launch() {
   local py
   py="$(engine_python_bin)"
   if [[ -z "$py" ]]; then
-    python3 -m venv "${SCRIPT_DIR}/Engine" || true
+    local py_bin
+    py_bin="$(resolve_python_bin)"
+    if [[ -n "$py_bin" ]]; then
+      "$py_bin" -m venv "${SCRIPT_DIR}/Engine" || true
+    fi
     py="$(engine_python_bin)"
   fi
   local prev_mode="${BOREALIS_ENGINE_MODE:-}"
@@ -480,15 +797,23 @@ printf "%b\n" "${DARK_GRAY}Automation Platform${RESET}"
 
 # ---- Menus ----
 server_menu() {
-  echo -e "\nConfigure Borealis Engine Mode:"
-  echo -e " 1) Build & Launch > Production Flask Server @ https://localhost:5000"
-  echo -e " 2) [Skip Build] & Immediately Launch > Production Flask Server @ https://localhost:5000"
-  echo -e " 3) Launch > [Hotload-Ready] Vite Dev Server @ https://localhost:5173"
-  read -r -p "Enter choice [1/2/3]: " modeChoice
+  local mode_choice="${1:-}"
+  local borealis_operation_mode="production"
+  local engine_immediate_launch=0
 
-  case "$modeChoice" in
+  if [[ -z "${mode_choice}" ]]; then
+    echo -e "\nConfigure Borealis Engine Mode:"
+    echo -e " 1) Build & Launch > Production Flask Server @ https://localhost:5000"
+    echo -e " 2) [Skip Build] & Immediately Launch > Production Flask Server @ https://localhost:5000"
+    echo -e " 3) Launch > [Hotload-Ready] Vite Dev Server @ https://localhost:5173"
+    read -r -p "Enter choice [1/2/3]: " mode_choice
+  else
+    echo -e "${YELLOW}Auto-selecting Borealis Engine mode option ${mode_choice}.${RESET}"
+  fi
+
+  case "$mode_choice" in
     1) borealis_operation_mode="production" ;;
-    2) borealis_operation_mode="production" ;;
+    2) borealis_operation_mode="production"; engine_immediate_launch=1 ;;
     3) borealis_operation_mode="developer" ;;
     *) echo -e "${RED}Invalid mode choice${RESET}"; return 1 ;;
   esac
@@ -497,9 +822,16 @@ server_menu() {
   install_server_dependencies
   export PATH="${NODE_DIR}/bin:${PATH}"
 
-  if [[ "$modeChoice" == "2" ]]; then
-    # Immediate launch of Flask without rebuild
-    flask_engine_launch "$borealis_operation_mode"
+  if [[ "$engine_immediate_launch" -eq 1 ]]; then
+    if ! test_webui_build_fresh "${SCRIPT_DIR}/Data/Engine/web-interface" "${SCRIPT_DIR}/Engine/web-interface/build"; then
+      echo -e "${YELLOW}Detected newer WebUI source than production build. Running full build instead of Quick/Skip.${RESET}"
+      engine_immediate_launch=0
+    fi
+  fi
+
+  if [[ "$engine_immediate_launch" -eq 1 ]]; then
+    run_step "Sync Engine runtime code from Data/Engine" sync_engine_runtime
+    run_step "Borealis Engine: Launch Flask Server" flask_engine_launch "$borealis_operation_mode"
     return 0
   fi
 
@@ -508,71 +840,86 @@ server_menu() {
   run_step "Copy Engine WebUI Files" ensure_engine_web_interface "$SCRIPT_DIR"
   run_step "Vite Web Frontend: Install NPM Packages" vite_web_frontend_install
   run_step "Vite Web Frontend: Start (${borealis_operation_mode})" vite_web_frontend_start "$borealis_operation_mode"
-  flask_engine_launch "$borealis_operation_mode"
+  run_step "Borealis Engine: Launch Flask Server" flask_engine_launch "$borealis_operation_mode"
+}
+
+agent_menu() {
+  echo -e "\nDeploying Borealis Agent..."
+  install_or_update_borealis_agent
 }
 
 main_menu() {
   echo -e "\nPlease choose which function you want to launch:"
   echo -e " 1) Borealis Engine"
-  echo -e " 2) Borealis Agent (not the focus on Linux)"
+  echo -e " 2) Borealis Agent"
   echo -e " 3) Exit"
   read -r -p "Enter a number: " choice
   case "$choice" in
     1) server_menu ;;
-    2) configure_agent_settings ;;
+    2) agent_menu ;;
     3) exit 0 ;;
     *) echo -e "${RED}Invalid selection. Exiting...${RESET}"; exit 1 ;;
   esac
 }
 
-# ---- Flag-driven auto-select (parity logic) ----
+# ---- Flag validation parity ----
 if [[ $SERVER_FLAG -eq 1 && $AGENT_FLAG -eq 1 ]]; then
-  echo -e "${RED}Cannot use --server and --agent together.${RESET}"; exit 1
+  echo -e "${RED}Cannot use --server and --agent together.${RESET}"
+  exit 1
 fi
 
-if [[ $AGENT_FLAG -eq 1 ]]; then
-  configure_agent_settings
-  exit $?
+if [[ $VITE_FLAG -eq 1 && $FLASK_FLAG -eq 1 ]]; then
+  echo -e "${RED}Cannot combine --vite and --flask.${RESET}"
+  exit 1
 fi
 
-# Auto-select main menu option for Server when EngineProduction/EngineDev provided
-if [[ $ENGINE_PROD_FLAG -eq 1 || $ENGINE_DEV_FLAG -eq 1 ]]; then
-  SERVER_FLAG=1
+if [[ $ENGINE_PROD_FLAG -eq 1 && $ENGINE_DEV_FLAG -eq 1 ]]; then
+  echo -e "${RED}Cannot combine --engine-production and --engine-dev.${RESET}"
+  exit 1
 fi
 
+if [[ ($ENGINE_PROD_FLAG -eq 1 || $ENGINE_DEV_FLAG -eq 1) && ($SERVER_FLAG -eq 1 || $AGENT_FLAG -eq 1) ]]; then
+  echo -e "${RED}Engine automation switches cannot be combined with --server or --agent.${RESET}"
+  exit 1
+fi
+
+# ---- Flag-driven auto-select (matches Borealis.ps1 behavior) ----
 if [[ $SERVER_FLAG -eq 1 ]]; then
-  if [[ $VITE_FLAG -eq 1 && $FLASK_FLAG -eq 1 ]]; then
-    echo -e "${RED}Cannot combine --vite and --flask.${RESET}"; exit 1
-  fi
-  if [[ $ENGINE_PROD_FLAG -eq 1 && $ENGINE_DEV_FLAG -eq 1 ]]; then
-    echo -e "${RED}Cannot combine --EngineProduction and --EngineDev.${RESET}"; exit 1
-  fi
-
-  if [[ $ENGINE_PROD_FLAG -eq 1 || $ENGINE_DEV_FLAG -eq 1 ]]; then
-    # Map to menu choice automatically
-    if [[ $ENGINE_PROD_FLAG -eq 1 ]]; then
-      if [[ $QUICK_FLAG -eq 1 ]]; then
-        server_menu <<< $'2\n' # skip build, immediate launch
-      else
-        server_menu <<< $'1\n' # build & launch
-      fi
-      exit $?
-    fi
-    if [[ $ENGINE_DEV_FLAG -eq 1 ]]; then
-      server_menu <<< $'3\n' # Vite dev
-      exit $?
+  CHOICE="1"
+fi
+if [[ $AGENT_FLAG -eq 1 ]]; then
+  CHOICE="2"
+fi
+if [[ $ENGINE_PROD_FLAG -eq 1 || $ENGINE_DEV_FLAG -eq 1 ]]; then
+  CHOICE="1"
+  if [[ $ENGINE_PROD_FLAG -eq 1 ]]; then
+    ENGINE_MODE_CHOICE="1"
+    if [[ $QUICK_FLAG -eq 1 ]]; then
+      ENGINE_MODE_CHOICE="2"
     fi
   fi
+  if [[ $ENGINE_DEV_FLAG -eq 1 ]]; then
+    ENGINE_MODE_CHOICE="3"
+  fi
+fi
 
-  # Resolve server mode from flags (legacy compatibility)
+# Preserve pre-existing server flow behavior for explicit --server use
+if [[ $SERVER_FLAG -eq 1 && -z "${ENGINE_MODE_CHOICE}" ]]; then
   if [[ $VITE_FLAG -eq 1 ]]; then
-    server_menu <<< $'3\n'
+    ENGINE_MODE_CHOICE="3"
   elif [[ $FLASK_FLAG -eq 1 && $QUICK_FLAG -eq 1 ]]; then
-    server_menu <<< $'2\n'
+    ENGINE_MODE_CHOICE="2"
   else
-    server_menu <<< $'1\n'
+    ENGINE_MODE_CHOICE="1"
   fi
-  exit $?
+fi
+
+if [[ -n "${CHOICE}" ]]; then
+  case "${CHOICE}" in
+    1) server_menu "${ENGINE_MODE_CHOICE}" ; exit $? ;;
+    2) agent_menu ; exit $? ;;
+    *) echo -e "${RED}Invalid selection. Exiting...${RESET}" ; exit 1 ;;
+  esac
 fi
 
 # Default to interactive menu

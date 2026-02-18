@@ -9,6 +9,7 @@ import shutil
 import string
 import asyncio
 import re
+import ipaddress
 from pathlib import Path
 
 try:
@@ -93,6 +94,127 @@ def _read_identity_file(path: str) -> str:
         return ''
 
 
+def _run_command(args, timeout: int = 15) -> str:
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        if out.returncode == 0:
+            return (out.stdout or '').strip()
+    except Exception:
+        pass
+    return ''
+
+
+def _read_os_release() -> dict:
+    data = {}
+    try:
+        with open('/etc/os-release', 'r', encoding='utf-8', errors='ignore') as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                data[key] = value
+    except Exception:
+        pass
+    return data
+
+
+def _linux_os_pretty_name() -> str:
+    info = _read_os_release()
+    pretty = (info.get('PRETTY_NAME') or '').strip()
+    if pretty:
+        return pretty
+    name = (info.get('NAME') or '').strip()
+    version = (info.get('VERSION_ID') or info.get('VERSION') or '').strip()
+    if name and version:
+        return f"{name} {version}".strip()
+    return name
+
+
+def _parse_size_to_bytes(raw_value: str) -> int:
+    text = (raw_value or '').strip()
+    if not text:
+        return 0
+    lowered = text.lower()
+    if 'no module installed' in lowered or lowered in {'unknown', 'n/a', 'na'}:
+        return 0
+
+    match = re.match(r'^(\d+(?:\.\d+)?)\s*([kmgt]?b)$', lowered)
+    if match:
+        value = float(match.group(1))
+        unit = match.group(2)
+        multipliers = {
+            'b': 1,
+            'kb': 1024,
+            'mb': 1024 ** 2,
+            'gb': 1024 ** 3,
+            'tb': 1024 ** 4,
+        }
+        mult = multipliers.get(unit, 1)
+        return int(value * mult)
+
+    compact = re.sub(r'[^0-9]', '', text)
+    if compact:
+        try:
+            return int(compact)
+        except Exception:
+            return 0
+    return 0
+
+
+def _linux_mac_for_interface(name: str) -> str:
+    if not name:
+        return 'unknown'
+    mac = _read_identity_file(f'/sys/class/net/{name}/address')
+    return mac or 'unknown'
+
+
+def _linux_link_speed_for_interface(name: str) -> str:
+    if not name:
+        return ''
+    speed = _read_identity_file(f'/sys/class/net/{name}/speed')
+    if not speed:
+        return ''
+    try:
+        value = int(str(speed).strip())
+        if value > 0:
+            return f"{value} Mb/s"
+    except Exception:
+        pass
+    return ''
+
+
+def _linux_is_virtual_machine() -> bool:
+    if platform.system().lower() != 'linux':
+        return False
+
+    detected = _run_command(['systemd-detect-virt'], timeout=5).strip().lower()
+    if detected and detected not in {'none', 'wsl'}:
+        return True
+
+    hints = [
+        _read_identity_file('/sys/class/dmi/id/sys_vendor'),
+        _read_identity_file('/sys/class/dmi/id/product_name'),
+        _read_identity_file('/sys/class/dmi/id/product_version'),
+    ]
+    combined = ' '.join([str(v or '') for v in hints]).lower()
+    vm_tokens = (
+        'virtual',
+        'vmware',
+        'kvm',
+        'xen',
+        'qemu',
+        'hyper-v',
+        'hyperv',
+        'virtualbox',
+        'bhyve',
+        'parallels',
+    )
+    return any(token in combined for token in vm_tokens)
+
+
 def collect_device_identity() -> dict:
     manufacturer = ''
     model = ''
@@ -142,6 +264,32 @@ $enc = _getCim 'Win32_SystemEnclosure'
                     _read_identity_file('/sys/class/dmi/id/product_uuid'),
                 ]
             )
+            if (not manufacturer or not model or not _first_valid_serial(serial_candidates)) and shutil.which('dmidecode'):
+                try:
+                    out = subprocess.run(
+                        ['dmidecode', '-t', 'system'],
+                        capture_output=True,
+                        text=True,
+                        timeout=20,
+                    )
+                    for raw_line in (out.stdout or '').splitlines():
+                        if ':' not in raw_line:
+                            continue
+                        key, value = raw_line.split(':', 1)
+                        key = key.strip().lower()
+                        value = value.strip()
+                        if not value:
+                            continue
+                        if key == 'manufacturer' and not manufacturer:
+                            manufacturer = value
+                        elif key == 'product name' and not model:
+                            model = value
+                        elif key in ('serial number', 'uuid'):
+                            serial_candidates.append(value)
+                except Exception:
+                    pass
+            if not _first_valid_serial(serial_candidates):
+                serial_candidates.append(_read_identity_file('/etc/machine-id'))
         elif plat == 'darwin':
             out = subprocess.run(
                 ["system_profiler", "SPHardwareDataType"],
@@ -391,9 +539,17 @@ def detect_agent_os():
                 import distro  # type: ignore
                 name = distro.name(pretty=True) or distro.id()
                 ver = distro.version()
-                return f"{name} {ver}".strip()
+                if name or ver:
+                    return f"{name} {ver}".strip()
             except Exception:
-                return platform.platform()
+                pass
+            try:
+                pretty = _linux_os_pretty_name()
+                if pretty:
+                    return pretty
+            except Exception:
+                pass
+            return platform.platform()
     except Exception:
         return "Unknown"
 
@@ -433,11 +589,19 @@ def _ansible_ee_version():
 def collect_summary(CONFIG):
     try:
         hostname = socket.gethostname()
+        domain = os.environ.get('USERDOMAIN') or ''
+        if not domain and not IS_WINDOWS:
+            try:
+                fqdn = socket.getfqdn()
+                if fqdn and fqdn != hostname and '.' in fqdn:
+                    domain = fqdn.split('.', 1)[1]
+            except Exception:
+                pass
         summary = {
             'hostname': hostname,
             'os': detect_agent_os(),
             'username': os.environ.get('USERNAME') or os.environ.get('USER') or '',
-            'domain': os.environ.get('USERDOMAIN') or '',
+            'domain': domain,
             'uptime_sec': int(time.time() - psutil.boot_time()) if psutil else None,
         }
         summary['ansible_ee_ver'] = _ansible_ee_version()
@@ -486,6 +650,42 @@ def _ps_json(cmd: str, timeout: int = 60):
 
 def collect_software():
     plat = platform.system().lower()
+    if plat == 'linux':
+        packages = []
+        try:
+            if shutil.which('dpkg-query'):
+                out = subprocess.run(
+                    ['dpkg-query', '-W', '-f=${Package}\t${Version}\n'],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                for line in (out.stdout or '').splitlines():
+                    parts = line.split('\t', 1)
+                    name = (parts[0] if parts else '').strip()
+                    version = (parts[1] if len(parts) > 1 else '').strip()
+                    if name:
+                        packages.append({'name': name, 'version': version})
+            elif shutil.which('rpm'):
+                out = subprocess.run(
+                    ['rpm', '-qa', '--qf', '%{NAME}\t%{VERSION}-%{RELEASE}\n'],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                for line in (out.stdout or '').splitlines():
+                    parts = line.split('\t', 1)
+                    name = (parts[0] if parts else '').strip()
+                    version = (parts[1] if len(parts) > 1 else '').strip()
+                    if name:
+                        packages.append({'name': name, 'version': version})
+        except Exception:
+            packages = []
+
+        if packages:
+            packages.sort(key=lambda x: (x.get('name') or '').lower())
+        return packages
+
     if plat != 'windows':
         return []
     # 1) Try PowerShell registry scrape (fast when ConvertTo-Json is available)
@@ -606,6 +806,63 @@ def collect_memory():
                     })
             except Exception:
                 pass
+        elif plat == 'linux':
+            # Try per-module memory details (requires dmidecode privileges on many systems).
+            if shutil.which('dmidecode'):
+                try:
+                    out = subprocess.run(
+                        ['dmidecode', '-t', '17'],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    current = None
+                    for raw_line in (out.stdout or '').splitlines():
+                        line = raw_line.strip()
+                        if line.startswith('Memory Device'):
+                            if current and int(current.get('capacity') or 0) > 0:
+                                entries.append(current)
+                            current = {'slot': 'unknown', 'speed': 'unknown', 'serial': 'unknown', 'capacity': 0}
+                            continue
+                        if not current or ':' not in line:
+                            continue
+                        key, value = line.split(':', 1)
+                        key = key.strip().lower()
+                        value = value.strip()
+                        if key == 'locator' and value:
+                            current['slot'] = value
+                        elif key == 'speed' and value and value.lower() != 'unknown':
+                            current['speed'] = value
+                        elif key == 'serial number' and value and value.lower() != 'unknown':
+                            current['serial'] = value
+                        elif key == 'size':
+                            current['capacity'] = _parse_size_to_bytes(value)
+                    if current and int(current.get('capacity') or 0) > 0:
+                        entries.append(current)
+                except Exception:
+                    pass
+
+            if not entries:
+                mem_total_kib = 0
+                try:
+                    with open('/proc/meminfo', 'r', encoding='utf-8', errors='ignore') as fh:
+                        for raw_line in fh:
+                            if raw_line.startswith('MemTotal:'):
+                                parts = raw_line.split()
+                                if len(parts) >= 2:
+                                    mem_total_kib = int(parts[1])
+                                break
+                except Exception:
+                    mem_total_kib = 0
+                if mem_total_kib > 0:
+                    entries.append(
+                        {
+                            'slot': 'physical',
+                            'speed': 'unknown',
+                            'serial': 'unknown',
+                            'capacity': int(mem_total_kib) * 1024,
+                        }
+                    )
     except Exception:
         pass
     if not entries and psutil:
@@ -620,14 +877,46 @@ def collect_memory():
 def collect_storage():
     disks = []
     try:
+        plat = platform.system().lower()
         if psutil:
+            seen_mounts = set()
+            linux_skip_fstypes = {
+                'tmpfs',
+                'devtmpfs',
+                'overlay',
+                'squashfs',
+                'proc',
+                'sysfs',
+                'cgroup',
+                'cgroup2',
+                'nsfs',
+                'mqueue',
+                'fusectl',
+                'tracefs',
+                'debugfs',
+                'configfs',
+                'securityfs',
+                'pstore',
+                'efivarfs',
+                'ramfs',
+            }
             for part in psutil.disk_partitions():
+                mountpoint = (part.mountpoint or '').strip()
+                fstype = (part.fstype or '').strip().lower()
+                if plat == 'linux':
+                    if not mountpoint or mountpoint in seen_mounts:
+                        continue
+                    if fstype in linux_skip_fstypes:
+                        continue
+                    if mountpoint.startswith('/snap/'):
+                        continue
+                    seen_mounts.add(mountpoint)
                 try:
                     usage = psutil.disk_usage(part.mountpoint)
                 except Exception:
                     continue
                 disks.append({
-                    'drive': part.device,
+                    'drive': part.device or mountpoint,
                     'disk_type': 'Removable' if isinstance(part.opts, str) and 'removable' in part.opts.lower() else 'Fixed Disk',
                     'usage': usage.percent,
                     'total': usage.total,
@@ -720,13 +1009,53 @@ def collect_network():
                 except Exception:
                     pass
         else:
-            out = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True, timeout=60)
-            for line in out.stdout.splitlines():
-                parts = line.split()
-                if len(parts) >= 4:
-                    name = parts[1]
-                    ip = parts[3].split("/")[0]
-                    adapters.append({'adapter': name, 'ips': [ip], 'mac': 'unknown'})
+            if shutil.which('ip'):
+                out = subprocess.run(
+                    ["ip", "-o", "-4", "addr", "show", "up", "scope", "global"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                tmp = {}
+                for line in (out.stdout or '').splitlines():
+                    parts = line.split()
+                    if len(parts) < 4:
+                        continue
+                    name = (parts[1] or '').split('@', 1)[0]
+                    ip = parts[3].split("/", 1)[0]
+                    if not name or not ip or ip.startswith('169.254.') or ip == '127.0.0.1':
+                        continue
+                    item = tmp.setdefault(
+                        name,
+                        {
+                            'adapter': name,
+                            'ips': [],
+                            'mac': _linux_mac_for_interface(name),
+                            'link_speed': _linux_link_speed_for_interface(name),
+                        },
+                    )
+                    if ip not in item['ips']:
+                        item['ips'].append(ip)
+                if tmp:
+                    adapters = list(tmp.values())
+
+            if not adapters and psutil:
+                try:
+                    for name, addrs in psutil.net_if_addrs().items():
+                        ips = []
+                        mac = 'unknown'
+                        for addr in addrs:
+                            fam = getattr(addr, 'family', None)
+                            value = getattr(addr, 'address', '')
+                            if fam == socket.AF_INET and value and value != '127.0.0.1' and not value.startswith('169.254.'):
+                                ips.append(value)
+                            elif str(fam).endswith('AF_LINK') or str(fam).endswith('AF_PACKET'):
+                                if value:
+                                    mac = value
+                        if ips:
+                            adapters.append({'adapter': name, 'ips': ips, 'mac': mac, 'link_speed': ''})
+                except Exception:
+                    pass
     except Exception:
         pass
     return adapters
@@ -789,14 +1118,53 @@ def collect_cpu() -> dict:
             # Linux
             try:
                 brand = ''
-                cores = 0
+                logical_cores = 0
                 with open('/proc/cpuinfo', 'r', encoding='utf-8', errors='ignore') as fh:
                     for line in fh:
                         if not brand and 'model name' in line:
                             brand = line.split(':', 1)[-1].strip()
                         if 'processor' in line:
-                            cores += 1
-                out = {'name': brand, 'logical_cores': cores or None}
+                            logical_cores += 1
+
+                physical_cores = None
+                if psutil and hasattr(psutil, 'cpu_count'):
+                    try:
+                        physical_cores = psutil.cpu_count(logical=False)
+                    except Exception:
+                        physical_cores = None
+
+                base_clock_ghz = None
+                if psutil and hasattr(psutil, 'cpu_freq'):
+                    try:
+                        freq = psutil.cpu_freq()
+                        if freq:
+                            mhz = float(freq.max or 0.0) or float(freq.current or 0.0)
+                            if mhz > 0:
+                                base_clock_ghz = mhz / 1000.0
+                    except Exception:
+                        base_clock_ghz = None
+                if base_clock_ghz is None:
+                    lscpu_out = _run_command(['lscpu'], timeout=10)
+                    for raw_line in lscpu_out.splitlines():
+                        line = raw_line.strip()
+                        if ':' not in line:
+                            continue
+                        key, value = line.split(':', 1)
+                        key = key.strip().lower()
+                        val = value.strip()
+                        if key in {'cpu max mhz', 'cpu mhz'} and val:
+                            try:
+                                base_clock_ghz = float(val) / 1000.0
+                                break
+                            except Exception:
+                                continue
+
+                out = {
+                    'name': brand,
+                    'physical_cores': physical_cores,
+                    'logical_cores': logical_cores or None,
+                    'base_clock_ghz': base_clock_ghz,
+                }
                 return out
             except Exception:
                 pass
@@ -817,6 +1185,20 @@ def collect_cpu() -> dict:
 def detect_device_type():
     try:
         plat = platform.system().lower()
+        if plat == 'linux':
+            if _linux_is_virtual_machine():
+                return 'Virtual Machine'
+            if any(
+                os.environ.get(name)
+                for name in ('XDG_CURRENT_DESKTOP', 'DESKTOP_SESSION', 'DISPLAY', 'WAYLAND_DISPLAY')
+            ):
+                return 'Workstation'
+            default_target = _run_command(['systemctl', 'get-default'], timeout=5).strip().lower()
+            if default_target == 'graphical.target':
+                return 'Workstation'
+            return 'Server'
+        if plat == 'darwin':
+            return 'Workstation'
         if plat != 'windows':
             return ''
         ps = r"""
@@ -837,6 +1219,40 @@ else { 'Workstation' }
         return s.splitlines()[0].strip() if s else ''
     except Exception:
         return ''
+
+
+def _collect_last_user_linux() -> str:
+    if platform.system().lower() != 'linux':
+        return ''
+
+    invalid = {'', 'reboot', 'shutdown', 'wtmp'}
+    try:
+        users = []
+        out = subprocess.run(['who'], capture_output=True, text=True, timeout=10)
+        for line in (out.stdout or '').splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            user = (parts[0] or '').strip()
+            if user and user not in invalid and user not in users:
+                users.append(user)
+        if users:
+            return ', '.join(users)
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.run(['last', '-n', '5', '-w'], capture_output=True, text=True, timeout=10)
+        for line in (out.stdout or '').splitlines():
+            raw = line.strip()
+            if not raw or raw.lower().startswith('wtmp begins'):
+                continue
+            user = raw.split()[0] if raw.split() else ''
+            if user and user not in invalid:
+                return user
+    except Exception:
+        pass
+    return ''
 
 
 def _collect_last_user_registry() -> str:
@@ -1011,7 +1427,10 @@ def _build_details_fallback() -> dict:
     try:
         # Derive internal_ip from first private IPv4
         def is_private(ip: str) -> bool:
-            return ip.startswith('10.') or ip.startswith('192.168.') or (ip.startswith('172.') and any(ip.startswith(f'172.{n}.') for n in list(range(16,32))))
+            try:
+                return ipaddress.ip_address(ip).is_private
+            except Exception:
+                return False
         ips = []
         for a in network:
             for ip in (a.get('ips') or []):
@@ -1045,7 +1464,10 @@ def _build_details_fallback() -> dict:
         pass
     # Last user(s)
     try:
-        last_user = _collect_last_user_registry()
+        if IS_WINDOWS:
+            last_user = _collect_last_user_registry()
+        else:
+            last_user = _collect_last_user_linux()
         if last_user:
             summary['last_user'] = last_user
     except Exception:
@@ -1320,7 +1742,10 @@ class Role:
                     pass
                 return False
             if (not lu) or (lu.lower() == 'unknown') or _contains_machine_accounts(lu):
-                lu2 = _collect_last_user_registry().strip()
+                if IS_WINDOWS:
+                    lu2 = _collect_last_user_registry().strip()
+                else:
+                    lu2 = _collect_last_user_linux().strip()
                 summary['last_user'] = lu2 if lu2 else 'No Users Logged In'
         except Exception:
             pass
