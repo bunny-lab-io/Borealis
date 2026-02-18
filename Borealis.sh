@@ -153,13 +153,27 @@ resolve_agent_venv_dir() {
 
   local default_dir="${SCRIPT_DIR}/Agent"
   local fallback_dir="/opt/Borealis/Agent"
+  local preferred_dir="${default_dir}"
+
+  detect_distro
+  case "${DISTRO_ID:-}" in
+    rhel|centos|fedora|rocky|almalinux)
+      # Prefer /opt on RHEL-family systems to avoid common service exec context issues on /srv.
+      preferred_dir="${fallback_dir}"
+      ;;
+  esac
 
   if target_is_noexec "${SCRIPT_DIR}"; then
     echo "${fallback_dir}"
     return 0
   fi
 
-  echo "${default_dir}"
+  if [[ "${preferred_dir}" == "${fallback_dir}" ]] && target_is_noexec "${preferred_dir}"; then
+    echo "${default_dir}"
+    return 0
+  fi
+
+  echo "${preferred_dir}"
 }
 
 resolve_python_bin() {
