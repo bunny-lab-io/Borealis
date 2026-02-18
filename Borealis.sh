@@ -133,6 +133,18 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+selinux_enforcing() {
+  if command_exists selinuxenabled; then
+    selinuxenabled
+    return $?
+  fi
+  if [[ -r /sys/fs/selinux/enforce ]]; then
+    [[ "$(cat /sys/fs/selinux/enforce 2>/dev/null || echo 0)" == "1" ]]
+    return $?
+  fi
+  return 1
+}
+
 mount_options_for_target() {
   local target="$1"
   if command_exists findmnt; then
@@ -212,6 +224,18 @@ run_privileged() {
   return 1
 }
 
+restore_selinux_context_if_needed() {
+  local target="$1"
+  [[ -e "${target}" ]] || return 0
+  if ! selinux_enforcing; then
+    return 0
+  fi
+  if ! command_exists restorecon; then
+    return 0
+  fi
+  run_privileged restorecon -RF "${target}" >/dev/null 2>&1 || true
+}
+
 bootstrap_install_dependencies() {
   detect_distro
   case "${DISTRO_ID:-}" in
@@ -267,6 +291,7 @@ bootstrap_install_repo() {
   run_privileged mkdir -p "${install_dir}"
   run_privileged cp -a "${extracted_root}/." "${install_dir}/"
   run_privileged chmod +x "${install_dir}/Borealis.sh"
+  restore_selinux_context_if_needed "${install_dir}"
   rm -rf "${tmp_dir}" 2>/dev/null || true
 }
 
@@ -651,7 +676,9 @@ create_agent_venv_and_stage_data() {
     local existing_py
     existing_py="$(agent_python_bin)"
     if [[ -z "${existing_py}" ]] || ! "${existing_py}" -c "import sys" >/dev/null 2>&1; then
-      "${py_bin}" -m venv --upgrade "${venv_dir}"
+      rm -rf "${venv_dir}" 2>/dev/null || true
+      mkdir -p "${venv_dir}"
+      "${py_bin}" -m venv "${venv_dir}"
     fi
   fi
 
@@ -681,6 +708,8 @@ create_agent_venv_and_stage_data() {
       cp -a "${source_root}/${item}" "${destination}/"
     fi
   done
+
+  restore_selinux_context_if_needed "${venv_dir}"
 }
 
 install_agent_python_deps() {
@@ -786,6 +815,14 @@ configure_agent_supervision() {
   start_agent_background_fallback
 }
 
+stop_agent_supervision_if_running() {
+  local unit_name="${BOREALIS_AGENT_SYSTEMD_UNIT:-borealis-agent.service}"
+  if ! command_exists systemctl; then
+    return 0
+  fi
+  run_privileged systemctl stop "${unit_name}" >/dev/null 2>&1 || true
+}
+
 print_agent_service_status() {
   local unit_name="${BOREALIS_AGENT_SYSTEMD_UNIT:-borealis-agent.service}"
   if ! command_exists systemctl; then
@@ -795,6 +832,15 @@ print_agent_service_status() {
 
   echo -e "${GREEN}Agent service status (${unit_name}):${RESET}"
   run_privileged systemctl --no-pager --full status "${unit_name}" || true
+
+  local active_state
+  active_state="$(run_privileged systemctl is-active "${unit_name}" 2>/dev/null || true)"
+  if [[ "${active_state}" != "active" && "${active_state}" != "activating" ]]; then
+    if command_exists journalctl; then
+      echo -e "${YELLOW}Recent ${unit_name} logs:${RESET}"
+      run_privileged journalctl -u "${unit_name}" -n 40 --no-pager || true
+    fi
+  fi
 }
 
 install_or_update_borealis_agent() {
@@ -805,6 +851,8 @@ install_or_update_borealis_agent() {
   runtime_dir="$(agent_runtime_dir)"
   echo -e "${INFO} Agent runtime directory: ${runtime_dir}"
   write_agent_log "Agent runtime directory resolved to '${runtime_dir}'."
+
+  stop_agent_supervision_if_running
 
   local preserved_url
   preserved_url="$(capture_existing_server_url)"
