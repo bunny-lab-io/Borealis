@@ -110,14 +110,14 @@ def _normalize_hostname_for_display(value) -> str:
         text = str(value or '').strip()
     except Exception:
         return ''
-    if IS_LINUX and '.' in text:
+    if '.' in text:
         return text.split('.', 1)[0]
     return text
 
 
 def _local_hostname() -> str:
     try:
-        return _normalize_hostname_for_display(socket.gethostname())
+        return str(socket.gethostname() or '').strip()
     except Exception:
         return ''
 
@@ -607,7 +607,8 @@ def _ansible_ee_version():
 def collect_summary(CONFIG):
     try:
         raw_hostname = socket.gethostname()
-        hostname = _normalize_hostname_for_display(raw_hostname)
+        hostname = str(raw_hostname or '').strip() or _local_hostname()
+        short_hostname = _normalize_hostname_for_display(hostname)
         domain = os.environ.get('USERDOMAIN') or ''
         if not domain and not IS_WINDOWS:
             try:
@@ -625,13 +626,20 @@ def collect_summary(CONFIG):
             'domain': domain,
             'uptime_sec': int(time.time() - psutil.boot_time()) if psutil else None,
         }
+        if short_hostname and short_hostname != hostname:
+            summary['hostname_short'] = short_hostname
         summary['ansible_ee_ver'] = _ansible_ee_version()
         return summary
     except Exception:
-        return {
-            'hostname': _local_hostname(),
+        hostname = _local_hostname()
+        summary = {
+            'hostname': hostname,
             'ansible_ee_ver': _ansible_ee_version(),
         }
+        short_hostname = _normalize_hostname_for_display(hostname)
+        if short_hostname and short_hostname != hostname:
+            summary['hostname_short'] = short_hostname
+        return summary
 
 
 def _project_root():
@@ -1425,7 +1433,11 @@ def _build_details_fallback() -> dict:
     try:
         summary = collect_summary(type('C', (), {'data': {}, '_write': lambda s: None})())
     except Exception:
-        summary = {'hostname': _local_hostname()}
+        hostname = _local_hostname()
+        summary = {'hostname': hostname}
+        short_hostname = _normalize_hostname_for_display(hostname)
+        if short_hostname and short_hostname != hostname:
+            summary['hostname_short'] = short_hostname
     # Normalize OS field
     if summary.get('os') and not summary.get('operating_system'):
         summary['operating_system'] = summary.get('os')

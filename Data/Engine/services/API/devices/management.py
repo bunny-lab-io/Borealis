@@ -704,6 +704,7 @@ class DeviceManagementService:
             hostname = _clean_device_str(summary_host)
         if not hostname:
             return {"error": "invalid payload"}, 400
+        incoming_hostname = hostname
 
         agent_id = _clean_device_str(payload.get("agent_id"))
         agent_hash = _clean_device_str(payload.get("agent_hash"))
@@ -727,6 +728,26 @@ class DeviceManagementService:
                 (hostname,),
             )
             row = cur.fetchone()
+            if not row and auth_guid:
+                try:
+                    cur.execute(
+                        f"SELECT {columns_sql}, d.ssl_key_fingerprint FROM {DEVICE_TABLE} AS d WHERE LOWER(d.guid) = LOWER(?)",
+                        (auth_guid,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        existing_host = _clean_device_str(row[1])
+                        if existing_host:
+                            hostname = existing_host
+                            if incoming_hostname and incoming_hostname != existing_host:
+                                self.service_log(
+                                    "server",
+                                    f"/api/agent/details hostname reconciled guid={auth_guid} incoming={incoming_hostname} stored={existing_host}",
+                                    scope_hint,
+                                    level="INFO",
+                                )
+                except Exception:
+                    row = None
 
             prev_details: Dict[str, Any] = {}
             description = ""

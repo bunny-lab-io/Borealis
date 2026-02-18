@@ -113,6 +113,13 @@ const getOsIconClass = (osName) => {
   return "";
 };
 
+const formatHostnameForDisplay = (value) => {
+  const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
+  if (!text) return "";
+  const dotIndex = text.indexOf(".");
+  return dotIndex > 0 ? text.slice(0, dotIndex) : text;
+};
+
 const DescriptionCellRenderer = React.memo(function DescriptionCellRenderer(props) {
   const { value, data, onSaveDescription, fontFamily } = props;
   const safeValue = typeof value === "string" ? value : value == null ? "" : String(value);
@@ -1164,9 +1171,10 @@ export default function DeviceList({
           <a
             href="#"
             onClick={handleClick}
+            title={row.hostname || ""}
             style={{ color: "#58a6ff", textDecoration: "none", fontWeight: 500 }}
           >
-            {row.hostname || ""}
+            {formatHostnameForDisplay(row.hostname || "")}
           </a>
         </Box>
       );

@@ -179,6 +179,13 @@ const SUMMARY_FIELD_TEXT_COLOR = "#58a6ff"; // matches hostname blue in Device_L
 const SUMMARY_DEFAULT_TEXT_COLOR = NAV_TAB_COLORS.textActive;
 const UNABLE_TO_RETRIEVE_SN = "<Unable to Retrieve S/N>";
 
+const formatHostnameForDisplay = (value) => {
+  const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
+  if (!text) return "";
+  const dotIndex = text.indexOf(".");
+  return dotIndex > 0 ? text.slice(0, dotIndex) : text;
+};
+
 const SUMMARY_GRID_DEBUG_STORAGE_KEY = "borealis.debug.summaryGrid";
 
 const isSummaryGridDebugEnabled = () => {
@@ -2522,7 +2529,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
 
-  const displayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "Device Details";
+  const rawDisplayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "";
+  const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Details";
   const pageSubtitle = status ? `Status: ${status}` : "";
 
   useEffect(() => {
