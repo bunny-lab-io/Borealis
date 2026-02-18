@@ -19,6 +19,8 @@ YELLOW="\033[1;33m"
 RED="\033[0;31m"
 RESET="\033[0m"
 CHECKMARK="[OK]"; HOURGLASS="[WAIT]"; CROSSMARK="[X]"; INFO="[i]"
+DEFAULT_BOREALIS_ROOT="/opt/Borealis"
+DEFAULT_AGENT_RUNTIME_ROOT="/opt/Borealis/Agent"
 
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
   SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -166,25 +168,15 @@ resolve_agent_venv_dir() {
     return 0
   fi
 
-  local default_dir="${SCRIPT_DIR}/Agent"
-  local fallback_dir="/opt/Borealis/Agent"
-  local preferred_dir="${default_dir}"
+  local preferred_dir="${DEFAULT_AGENT_RUNTIME_ROOT}"
+  local fallback_dir="${SCRIPT_DIR}/Agent"
 
-  detect_distro
-  case "${DISTRO_ID:-}" in
-    rhel|centos|fedora|rocky|almalinux)
-      # Prefer /opt on RHEL-family systems to avoid common service exec context issues on /srv.
-      preferred_dir="${fallback_dir}"
-      ;;
-  esac
-
-  if target_is_noexec "${SCRIPT_DIR}"; then
-    echo "${fallback_dir}"
-    return 0
-  fi
-
-  if [[ "${preferred_dir}" == "${fallback_dir}" ]] && target_is_noexec "${preferred_dir}"; then
-    echo "${default_dir}"
+  if target_is_noexec "${preferred_dir}"; then
+    if ! target_is_noexec "${fallback_dir}"; then
+      echo "${fallback_dir}"
+      return 0
+    fi
+    echo "${preferred_dir}"
     return 0
   fi
 
@@ -289,7 +281,7 @@ build_reexec_args() {
 }
 
 maybe_bootstrap_and_reexec() {
-  local install_dir="${INSTALL_DIR_OVERRIDE:-${BOREALIS_INSTALL_DIR:-/srv/Borealis}}"
+  local install_dir="${INSTALL_DIR_OVERRIDE:-${BOREALIS_INSTALL_DIR:-${DEFAULT_BOREALIS_ROOT}}}"
   local needs_repo=0
 
   if [[ ! -d "${SCRIPT_DIR}/Data/Agent" || ! -d "${SCRIPT_DIR}/Data/Engine" ]]; then
@@ -315,13 +307,16 @@ maybe_bootstrap_and_reexec() {
 }
 
 resolve_existing_project_root() {
-  if [[ -d "${SCRIPT_DIR}/Data/Agent" && -d "${SCRIPT_DIR}/Data/Engine" ]]; then
+  if [[ "${SCRIPT_DIR}" == "${DEFAULT_BOREALIS_ROOT}" && -d "${SCRIPT_DIR}/Data/Agent" && -d "${SCRIPT_DIR}/Data/Engine" ]]; then
     return 0
   fi
 
   local candidates=()
   [[ -n "${BOREALIS_INSTALL_DIR:-}" ]] && candidates+=("${BOREALIS_INSTALL_DIR}")
-  candidates+=("/srv/Borealis" "/opt/Borealis")
+  candidates+=("${DEFAULT_BOREALIS_ROOT}" "/srv/Borealis")
+  if [[ -d "${SCRIPT_DIR}/Data/Agent" && -d "${SCRIPT_DIR}/Data/Engine" ]]; then
+    candidates+=("${SCRIPT_DIR}")
+  fi
 
   local candidate=""
   for candidate in "${candidates[@]}"; do
