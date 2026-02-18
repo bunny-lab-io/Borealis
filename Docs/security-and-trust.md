@@ -192,9 +192,9 @@ sequenceDiagram
 - `POST /api/auth/logout` (Token Authenticated) - operator logout.
 - `POST /api/auth/mfa/verify` (Token Authenticated, MFA pending) - verify MFA.
 - `GET /api/auth/me` (Token Authenticated) - current operator profile.
-- `GET /api/admin/enrollment-codes` (Admin) - list install codes.
-- `POST /api/admin/enrollment-codes` (Admin) - create install codes.
-- `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - delete install codes.
+- `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
+- `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
+- `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
 
 ## Related Documentation
 - [Agent Runtime](agent-runtime.md)

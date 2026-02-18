@@ -85,41 +85,13 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     revoked_at TEXT,
     last_used_at TEXT
 );
-CREATE TABLE IF NOT EXISTS enrollment_install_codes (
-    id TEXT PRIMARY KEY,
-    code TEXT UNIQUE,
-    expires_at TEXT,
-    created_by_user_id TEXT,
-    used_at TEXT,
-    used_by_guid TEXT,
-    max_uses INTEGER,
-    use_count INTEGER,
-    last_used_at TEXT,
-    site_id INTEGER
-);
-CREATE TABLE IF NOT EXISTS enrollment_install_codes_persistent (
-    id TEXT PRIMARY KEY,
-    code TEXT UNIQUE,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    created_by_user_id TEXT,
-    used_at TEXT,
-    used_by_guid TEXT,
-    max_uses INTEGER NOT NULL DEFAULT 1,
-    last_known_use_count INTEGER NOT NULL DEFAULT 0,
-    last_used_at TEXT,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    archived_at TEXT,
-    consumed_at TEXT,
-    site_id INTEGER
-);
 CREATE TABLE IF NOT EXISTS device_approvals (
     id TEXT PRIMARY KEY,
     approval_reference TEXT UNIQUE,
     guid TEXT,
     hostname_claimed TEXT,
     ssl_key_fingerprint_claimed TEXT,
-    enrollment_code_id TEXT,
+    enrollment_code TEXT,
     site_id INTEGER,
     status TEXT,
     client_nonce TEXT,
@@ -149,7 +121,7 @@ CREATE TABLE IF NOT EXISTS sites (
     name TEXT,
     description TEXT,
     created_at INTEGER,
-    enrollment_code_id TEXT
+    enrollment_code TEXT
 );
 CREATE TABLE IF NOT EXISTS device_sites (
     device_hostname TEXT PRIMARY KEY,
@@ -274,51 +246,10 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
                 "2025-10-01T00:00:00Z",
             ),
         )
-        site_code_id = "SITE-CODE-0001"
         site_code_value = "SITE-MAIN-CODE"
-        site_code_created = "2025-01-01T00:00:00Z"
-        site_code_expires = "2030-01-01T00:00:00Z"
         cur.execute(
-            """
-            INSERT INTO enrollment_install_codes (
-                id,
-                code,
-                expires_at,
-                created_by_user_id,
-                used_at,
-                used_by_guid,
-                max_uses,
-                use_count,
-                last_used_at,
-                site_id
-            ) VALUES (?, ?, ?, ?, NULL, NULL, 0, 0, NULL, ?)
-            """,
-            (site_code_id, site_code_value, site_code_expires, "admin", 1),
-        )
-        cur.execute(
-            """
-            INSERT INTO enrollment_install_codes_persistent (
-                id,
-                code,
-                created_at,
-                expires_at,
-                created_by_user_id,
-                used_at,
-                used_by_guid,
-                max_uses,
-                last_known_use_count,
-                last_used_at,
-                is_active,
-                archived_at,
-                consumed_at,
-                site_id
-            ) VALUES (?, ?, ?, ?, ?, NULL, NULL, 0, 0, NULL, 1, NULL, NULL, ?)
-            """,
-            (site_code_id, site_code_value, site_code_created, site_code_expires, "admin", 1),
-        )
-        cur.execute(
-            "INSERT INTO sites (id, name, description, created_at, enrollment_code_id) VALUES (?, ?, ?, ?, ?)",
-            (1, "Main Lab", "Primary integration site", 1_700_000_000, site_code_id),
+            "INSERT INTO sites (id, name, description, created_at, enrollment_code) VALUES (?, ?, ?, ?, ?)",
+            (1, "Main Lab", "Primary integration site", 1_700_000_000, site_code_value),
         )
         cur.execute(
             "INSERT INTO device_sites (device_hostname, site_id, assigned_at) VALUES (?, ?, ?)",
@@ -339,7 +270,7 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
                 guid,
                 hostname_claimed,
                 ssl_key_fingerprint_claimed,
-                enrollment_code_id,
+                enrollment_code,
                 site_id,
                 status,
                 client_nonce,
@@ -357,7 +288,7 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
                 None,
                 "pending-device",
                 "aa:bb:cc:dd",
-                site_code_id,
+                site_code_value,
                 1,
                 "pending",
                 "client-nonce",

@@ -208,22 +208,6 @@ def test_sites_lifecycle(engine_harness: EngineTestHarness) -> None:
     assert delete_resp.status_code == 200
 
 
-def test_site_enrollment_code_rotation(engine_harness: EngineTestHarness) -> None:
-    client = _client_with_admin_session(engine_harness)
-    sites_resp = client.get("/api/sites")
-    assert sites_resp.status_code == 200
-    sites = sites_resp.get_json()["sites"]
-    assert sites and sites[0]["enrollment_code"]
-    site_id = sites[0]["id"]
-    original_code = sites[0]["enrollment_code"]
-
-    rotate_resp = client.post("/api/sites/rotate_code", json={"site_id": site_id})
-    assert rotate_resp.status_code == 200
-    rotated = rotate_resp.get_json()
-    assert rotated["id"] == site_id
-    assert rotated["enrollment_code"] and rotated["enrollment_code"] != original_code
-
-
 def test_admin_device_approvals(engine_harness: EngineTestHarness) -> None:
     client = _client_with_admin_session(engine_harness)
     list_resp = client.get("/api/admin/device-approvals")

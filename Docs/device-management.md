@@ -46,20 +46,20 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map.
 - `POST /api/sites/assign` (Admin) - assign devices to site.
 - `POST /api/sites/rename` (Admin) - rename site.
-- `POST /api/sites/rotate_code` (Admin) - rotate site enrollment code.
 - `GET /api/device_filters` (Token Authenticated) - list filters.
 - `GET /api/device_filters/<filter_id>` (Token Authenticated) - get filter.
 - `POST /api/device_filters` (Token Authenticated) - create filter.
 - `PUT /api/device_filters/<filter_id>` (Token Authenticated) - update filter.
-- `GET /api/admin/enrollment-codes` (Admin) - list enrollment codes.
-- `POST /api/admin/enrollment-codes` (Admin) - create enrollment codes.
-- `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - delete enrollment codes.
+- `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
+- `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
+- `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
 - `GET /api/admin/device-approvals` (Admin) - approval queue.
 - `POST /api/admin/device-approvals/<approval_id>/approve` (Admin) - approve device.
 - `POST /api/admin/device-approvals/<approval_id>/deny` (Admin) - deny device.
 
 ## Related Documentation
 - [Agent Runtime](agent-runtime.md)
+- [Database Reference](db-reference.md)
 - [Security and Trust](security-and-trust.md)
 - [Scheduled Jobs](scheduled-jobs.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
@@ -86,8 +86,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ### Sites and enrollment codes
 - Sites live in `sites` and `device_sites` tables (see `Data/Engine/database.py`).
-- Enrollment codes are stored in `enrollment_install_codes` and can be site-scoped.
-- Rotating a site code updates the code record and timestamps.
+- Enrollment codes are stored directly on `sites.enrollment_code`.
+- Rotating a site code updates the `sites` record only.
 
 ### Device filters (matching)
 - Filters are stored as JSON criteria groups in `device_filters.criteria_json`.

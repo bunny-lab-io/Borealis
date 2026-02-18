@@ -28,8 +28,6 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_device_aux_tables(conn)
     _ensure_device_vpn_config_table(conn)
     _ensure_refresh_token_table(conn)
-    _ensure_install_code_table(conn)
-    _ensure_install_code_persistence_table(conn)
     _ensure_device_approval_table(conn)
 
     conn.commit()
@@ -160,156 +158,6 @@ def _ensure_refresh_token_table(conn: sqlite3.Connection) -> None:
     )
 
 
-def _ensure_install_code_table(conn: sqlite3.Connection) -> None:
-    cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS enrollment_install_codes (
-            id TEXT PRIMARY KEY,
-            code TEXT NOT NULL UNIQUE,
-            expires_at TEXT NOT NULL,
-            created_by_user_id TEXT,
-            used_at TEXT,
-            used_by_guid TEXT,
-            max_uses INTEGER NOT NULL DEFAULT 1,
-            use_count INTEGER NOT NULL DEFAULT 0,
-            last_used_at TEXT,
-            site_id INTEGER
-        )
-        """
-    )
-    cur.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_eic_expires_at
-            ON enrollment_install_codes(expires_at)
-        """
-    )
-
-    columns = {row[1] for row in _table_info(cur, "enrollment_install_codes")}
-    if "max_uses" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes
-                ADD COLUMN max_uses INTEGER NOT NULL DEFAULT 1
-            """
-        )
-    if "use_count" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes
-                ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0
-            """
-        )
-    if "last_used_at" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes
-                ADD COLUMN last_used_at TEXT
-            """
-        )
-    if "site_id" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes
-                ADD COLUMN site_id INTEGER
-            """
-        )
-
-
-def _ensure_install_code_persistence_table(conn: sqlite3.Connection) -> None:
-    cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS enrollment_install_codes_persistent (
-            id TEXT PRIMARY KEY,
-            code TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            created_by_user_id TEXT,
-            used_at TEXT,
-            used_by_guid TEXT,
-            max_uses INTEGER NOT NULL DEFAULT 1,
-            last_known_use_count INTEGER NOT NULL DEFAULT 0,
-            last_used_at TEXT,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            archived_at TEXT,
-            consumed_at TEXT,
-            site_id INTEGER
-        )
-        """
-    )
-    cur.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_eicp_active
-            ON enrollment_install_codes_persistent(is_active, expires_at)
-        """
-    )
-    cur.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_eicp_code
-            ON enrollment_install_codes_persistent(code)
-        """
-    )
-
-    columns = {row[1] for row in _table_info(cur, "enrollment_install_codes_persistent")}
-    if "last_known_use_count" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes_persistent
-                ADD COLUMN last_known_use_count INTEGER NOT NULL DEFAULT 0
-            """
-        )
-    if "archived_at" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes_persistent
-                ADD COLUMN archived_at TEXT
-            """
-        )
-    if "consumed_at" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes_persistent
-                ADD COLUMN consumed_at TEXT
-            """
-        )
-    if "is_active" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes_persistent
-                ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1
-            """
-        )
-    if "used_at" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes_persistent
-                ADD COLUMN used_at TEXT
-            """
-        )
-    if "used_by_guid" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes_persistent
-                ADD COLUMN used_by_guid TEXT
-            """
-        )
-    if "last_used_at" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes_persistent
-                ADD COLUMN last_used_at TEXT
-            """
-        )
-    if "site_id" not in columns:
-        cur.execute(
-            """
-            ALTER TABLE enrollment_install_codes_persistent
-                ADD COLUMN site_id INTEGER
-            """
-        )
-
-
 def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute(
@@ -320,7 +168,7 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
             guid TEXT,
             hostname_claimed TEXT NOT NULL,
             ssl_key_fingerprint_claimed TEXT NOT NULL,
-            enrollment_code_id TEXT NOT NULL,
+            enrollment_code TEXT NOT NULL,
             site_id INTEGER,
             status TEXT NOT NULL,
             client_nonce TEXT NOT NULL,
@@ -333,7 +181,20 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
         """
     )
     cur.execute("PRAGMA table_info(device_approvals)")
-    columns = {row[1] for row in cur.fetchall()}
+    column_info = cur.fetchall()
+    columns = {row[1] for row in column_info}
+    if "enrollment_code_id" in columns:
+        _rebuild_device_approvals_table(conn, column_info)
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(device_approvals)")
+        columns = {row[1] for row in cur.fetchall()}
+    if "enrollment_code" not in columns:
+        cur.execute(
+            """
+            ALTER TABLE device_approvals
+                ADD COLUMN enrollment_code TEXT
+            """
+        )
     if "site_id" not in columns:
         cur.execute(
             """
@@ -360,6 +221,131 @@ def _ensure_device_approval_table(conn: sqlite3.Connection) -> None:
             ON device_approvals(site_id)
         """
     )
+
+
+def _rebuild_device_approvals_table(
+    conn: sqlite3.Connection, column_info: Sequence[Tuple]
+) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute("SAVEPOINT migrate_device_approvals")
+        cur.execute("ALTER TABLE device_approvals RENAME TO device_approvals_legacy")
+        cur.execute(
+            """
+            CREATE TABLE device_approvals (
+                id TEXT PRIMARY KEY,
+                approval_reference TEXT NOT NULL UNIQUE,
+                guid TEXT,
+                hostname_claimed TEXT NOT NULL,
+                ssl_key_fingerprint_claimed TEXT NOT NULL,
+                enrollment_code TEXT NOT NULL,
+                site_id INTEGER,
+                status TEXT NOT NULL,
+                client_nonce TEXT NOT NULL,
+                server_nonce TEXT NOT NULL,
+                agent_pubkey_der BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                approved_by_user_id TEXT
+            )
+            """
+        )
+
+        legacy_columns = {c[1] for c in column_info}
+        selected_columns = [
+            col
+            for col in (
+                "id",
+                "approval_reference",
+                "guid",
+                "hostname_claimed",
+                "ssl_key_fingerprint_claimed",
+                "enrollment_code",
+                "site_id",
+                "status",
+                "client_nonce",
+                "server_nonce",
+                "agent_pubkey_der",
+                "created_at",
+                "updated_at",
+                "approved_by_user_id",
+            )
+            if col in legacy_columns
+        ]
+        rows = []
+        if selected_columns:
+            cur.execute(
+                f"SELECT {', '.join(selected_columns)} FROM device_approvals_legacy"
+            )
+            rows = cur.fetchall()
+
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        insert_sql = (
+            """
+            INSERT OR REPLACE INTO device_approvals (
+                id,
+                approval_reference,
+                guid,
+                hostname_claimed,
+                ssl_key_fingerprint_claimed,
+                enrollment_code,
+                site_id,
+                status,
+                client_nonce,
+                server_nonce,
+                agent_pubkey_der,
+                created_at,
+                updated_at,
+                approved_by_user_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+        )
+        for row in rows:
+            record = dict(zip(selected_columns, row))
+            hostname_claimed = str(record.get("hostname_claimed") or "").strip()
+            ssl_fp = str(record.get("ssl_key_fingerprint_claimed") or "").strip()
+            client_nonce = str(record.get("client_nonce") or "").strip()
+            server_nonce = str(record.get("server_nonce") or "").strip()
+            agent_pubkey_der = record.get("agent_pubkey_der")
+            if (
+                not hostname_claimed
+                or not ssl_fp
+                or not client_nonce
+                or not server_nonce
+                or agent_pubkey_der is None
+            ):
+                # Legacy/incomplete rows are dropped during rebuild.
+                continue
+            cur.execute(
+                insert_sql,
+                (
+                    str(record.get("id") or uuid.uuid4()),
+                    str(record.get("approval_reference") or uuid.uuid4()),
+                    _normalized_guid(record.get("guid")) or None,
+                    hostname_claimed,
+                    ssl_fp,
+                    str(record.get("enrollment_code") or ""),
+                    record.get("site_id"),
+                    str(record.get("status") or "pending"),
+                    client_nonce,
+                    server_nonce,
+                    agent_pubkey_der,
+                    record.get("created_at") or now_iso,
+                    record.get("updated_at") or now_iso,
+                    record.get("approved_by_user_id"),
+                ),
+            )
+
+        cur.execute("DROP TABLE device_approvals_legacy")
+        cur.execute("RELEASE SAVEPOINT migrate_device_approvals")
+    except Exception:
+        try:
+            cur.execute("ROLLBACK TO SAVEPOINT migrate_device_approvals")
+            cur.execute("RELEASE SAVEPOINT migrate_device_approvals")
+        except Exception:
+            pass
+        raise
 
 
 def _create_devices_table(cur: sqlite3.Cursor) -> None:

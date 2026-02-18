@@ -1,0 +1,403 @@
+# Database Reference
+[Back to Docs Index](index.md) | [Index (HTML)](index.html)
+
+## Purpose
+Describe the Borealis SQLite schema, table ownership, runtime interactions, and deprecated/legacy structures so operators and Codex agents can troubleshoot and change schema safely.
+
+## Scope
+- Primary runtime database: `Engine/database.db` (default; set via `BOREALIS_DATABASE_PATH`).
+- Source-of-truth schema code:
+- `Data/Engine/database.py`
+- `Data/Engine/database_migrations.py`
+- `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`
+- Assembly catalog databases (separate from `Engine/database.db`):
+- `Engine/Assemblies/official.db`
+- `Engine/Assemblies/community.db`
+- `Engine/Assemblies/user_created.db`
+- Assembly schema source: `Data/Engine/assembly_management/databases.py`.
+
+## API Endpoints
+None. This page documents persistence structures used by many endpoints.
+
+## Quick Relationship Map
+```text
+sites (id) --------------------< device_sites (site_id)
+  |                                 |
+  |                                 +---- device hostname mapping (logical to devices.hostname)
+  |
+  +------------------------< device_approvals (site_id, soft relation)
+  |
+  +------------------------< credentials (site_id, ON DELETE SET NULL)
+
+devices (guid) ----------------< refresh_tokens (guid)
+devices (guid) ----------------< device_keys (guid)
+devices (guid) ----------------< device_approvals (guid, optional)
+
+scheduled_jobs (id) ----------< scheduled_job_runs (job_id)
+scheduled_job_runs (id) ------< scheduled_job_run_activity (run_id)
+activity_history (id) --------< scheduled_job_run_activity (activity_id, unique)
+
+users (id/username) ----------< device_approvals.approved_by_user_id (soft relation)
+```
+
+## Important SQLite Behavior
+- The main Engine DB connection factory enables WAL and busy timeout, but does not set `PRAGMA foreign_keys=ON`.
+- Result: foreign keys exist in table definitions, but enforcement can be connection-dependent unless explicitly enabled.
+- This is why some code paths also do explicit cleanup (example: deleting `device_sites` rows before deleting `sites`).
+
+## Engine Runtime Database Tables (`Engine/database.db`)
+### Enrollment, Identity, and Site Mapping
+#### `sites`
+- Status: Active.
+- Purpose: Site records and static enrollment codes.
+- Columns: `id`, `name`, `description`, `created_at`, `enrollment_code`.
+- Constraints and indexes:
+- `id` primary key.
+- `name` unique.
+- `uq_sites_enrollment_code` unique index on `enrollment_code`.
+- Used by:
+- Enrollment request lookup (`/api/agent/enroll/request`) via `enrollment_code`.
+- Site CRUD APIs (`/api/sites*`).
+- Admin code listing (`GET /api/admin/enrollment-codes`).
+- Device, filter, and scheduled-job joins through `device_sites`.
+- Notes:
+- Rebuild migration removes legacy `enrollment_code_id` if present.
+- Current design stores site-code association directly in this table.
+
+#### `device_approvals`
+- Status: Active.
+- Purpose: Enrollment approval queue and history.
+- Columns: `id`, `approval_reference`, `guid`, `hostname_claimed`, `ssl_key_fingerprint_claimed`, `enrollment_code`, `site_id`, `status`, `client_nonce`, `server_nonce`, `agent_pubkey_der`, `created_at`, `updated_at`, `approved_by_user_id`.
+- Constraints and indexes:
+- `id` primary key.
+- `approval_reference` unique.
+- `idx_da_status` on `status`.
+- `idx_da_fp_status` on `(ssl_key_fingerprint_claimed, status)`.
+- `idx_da_site` on `site_id`.
+- Used by:
+- Enrollment request and poll endpoints.
+- Admin approval APIs (`/api/admin/device-approvals*`).
+- Notes:
+- `status` lifecycle typically `pending -> approved|denied|expired -> completed`.
+- `site_id` and `approved_by_user_id` are soft relations (not enforced FK in schema).
+- Rebuild migration removes legacy `enrollment_code_id` if present.
+
+#### `devices`
+- Status: Active (core inventory and identity table).
+- Purpose: Canonical device identity and inventory snapshot.
+- Columns: `guid`, `hostname`, `description`, `created_at`, `agent_hash`, `memory`, `network`, `software`, `storage`, `cpu`, `device_type`, `domain`, `external_ip`, `internal_ip`, `last_reboot`, `last_seen`, `last_user`, `operating_system`, `uptime`, `agent_id`, `ansible_ee_ver`, `connection_type`, `connection_endpoint`, `agent_vnc_password`, `ssl_key_fingerprint`, `token_version`, `status`, `key_added_at`.
+- Constraints and indexes:
+- `guid` primary key.
+- `uq_devices_hostname` unique on `hostname`.
+- `idx_devices_ssl_key` on `ssl_key_fingerprint`.
+- `idx_devices_status` on `status`.
+- Used by:
+- Device auth (`guid + fingerprint + token_version` validation).
+- Enrollment finalize/upsert.
+- Heartbeats and inventory detail updates.
+- VNC/VPN agent routing (`agent_id`, `agent_vnc_password`).
+- Scheduled-jobs online host snapshot (`last_seen`).
+- Notes:
+- Fingerprint change increments `token_version` and revokes active refresh tokens.
+- `status` supports revocation states used by auth and token refresh checks.
+
+#### `device_keys`
+- Status: Active.
+- Purpose: Device key-fingerprint history and retirement tracking.
+- Columns: `id`, `guid`, `ssl_key_fingerprint`, `added_at`, `retired_at`.
+- Constraints and indexes:
+- `id` primary key.
+- `uq_device_keys_guid_fingerprint` unique on `(guid, ssl_key_fingerprint)`.
+- `idx_device_keys_guid` on `guid`.
+- Used by:
+- Enrollment finalize.
+- Agent details updates.
+- Notes:
+- Old active key rows are marked with `retired_at` when key material changes.
+
+#### `refresh_tokens`
+- Status: Active.
+- Purpose: Long-lived refresh token state.
+- Columns: `id`, `guid`, `token_hash`, `dpop_jkt`, `created_at`, `expires_at`, `revoked_at`, `last_used_at`.
+- Constraints and indexes:
+- `id` primary key.
+- `idx_refresh_tokens_guid` on `guid`.
+- `idx_refresh_tokens_expires_at` on `expires_at`.
+- Used by:
+- Enrollment poll finalization (`INSERT`).
+- Token refresh endpoint (`/api/agent/token/refresh`).
+- Enrollment key-rotation logic (`revoked_at` update).
+
+#### `device_sites`
+- Status: Active.
+- Purpose: Site assignment map for hostnames.
+- Columns: `device_hostname`, `site_id`, `assigned_at`.
+- Constraints and indexes:
+- `device_hostname` unique.
+- FK declared: `site_id -> sites(id) ON DELETE CASCADE`.
+- Used by:
+- Enrollment finalize site assignment.
+- Site assignment APIs (`/api/sites/assign`, `/api/sites/device_map`).
+- Device listing/filter joins for site name.
+- Scheduled-job device summaries.
+- Notes:
+- Mapping key is hostname, not GUID.
+- There is no FK to `devices.hostname`; this is a logical relationship.
+
+#### `device_vpn_config`
+- Status: Dormant (schema present, no active read/write paths in current Engine source).
+- Purpose: Reserved per-agent VPN configuration metadata.
+- Columns: `agent_id`, `allowed_ports`, `updated_at`, `updated_by`.
+- Constraints and indexes:
+- `agent_id` primary key.
+- Notes:
+- Created by migrations; currently unused by active APIs/services.
+
+### Operations and UI State
+#### `activity_history`
+- Status: Active.
+- Purpose: Execution/activity ledger for quick jobs and job-like actions.
+- Columns: `id`, `hostname`, `script_path`, `script_name`, `script_type`, `ran_at`, `status`, `stdout`, `stderr`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- Used by:
+- Quick-run execution (`/api/scripts/quick_run`).
+- Scheduled-jobs execution parity records.
+- WebSocket `quick_job_result` updates.
+- Activity APIs (`/api/device/activity/*`).
+- Linked from `scheduled_job_run_activity.activity_id`.
+
+#### `device_list_views`
+- Status: Active.
+- Purpose: Saved table views for the device list UI.
+- Columns: `id`, `name`, `columns_json`, `filters_json`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- `name` unique.
+- Used by:
+- `/api/device_list_views*` CRUD endpoints.
+- Notes:
+- Current schema has no user ownership column; views are globally stored.
+
+#### `device_filters`
+- Status: Active.
+- Purpose: Saved filter definitions for target selection and device segmentation.
+- Columns: `id`, `name`, `site_scope`, `site_name`, `criteria_json`, `last_edited_by`, `last_edited`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- Used by:
+- `/api/device_filters*` endpoints.
+- `DeviceFilterMatcher` for match counts and scheduled-job target expansion.
+- Notes:
+- Legacy columns `scope` and `apply_to_all_sites` are auto-migrated away by table rebuild.
+
+### Scheduling and Automation
+#### `scheduled_jobs`
+- Status: Active.
+- Purpose: Scheduled-job definitions.
+- Columns: `id`, `name`, `components_json`, `targets_json`, `schedule_type`, `start_ts`, `duration_stop_enabled`, `expiration`, `execution_context`, `credential_id`, `use_service_account`, `enabled`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- Used by:
+- `/api/scheduled_jobs*` CRUD endpoints.
+- Scheduler background loop.
+- Notes:
+- `credential_id` is logical linkage to `credentials.id`; no FK constraint in schema.
+
+#### `scheduled_job_runs`
+- Status: Active.
+- Purpose: Per-run/per-target execution state.
+- Columns: `id`, `job_id`, `scheduled_ts`, `started_ts`, `finished_ts`, `status`, `error`, `created_at`, `updated_at`, `target_hostname`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- FK declared: `job_id -> scheduled_jobs(id) ON DELETE CASCADE`.
+- `idx_runs_job_sched_target` on `(job_id, scheduled_ts, target_hostname)`.
+- Used by:
+- Scheduler dispatch and status updates.
+- WebSocket quick result handler for run state transitions.
+- Scheduled-jobs run history and device status endpoints.
+
+#### `scheduled_job_run_activity`
+- Status: Active.
+- Purpose: Link table from scheduled runs to `activity_history` rows.
+- Columns: `id`, `run_id`, `activity_id`, `component_kind`, `script_type`, `component_path`, `component_name`, `created_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- FK declared: `run_id -> scheduled_job_runs(id) ON DELETE CASCADE`.
+- FK declared: `activity_id -> activity_history(id) ON DELETE CASCADE`.
+- `idx_run_activity_run` on `run_id`.
+- `idx_run_activity_activity` unique on `activity_id`.
+- Used by:
+- Scheduler component dispatch bookkeeping.
+- WebSocket run status propagation and run activity lookups.
+
+#### `credentials`
+- Status: Partially wired (schema active, API/service wiring incomplete).
+- Purpose: Stored credential materials for remote execution contexts.
+- Columns: `id`, `name`, `description`, `site_id`, `credential_type`, `connection_type`, `username`, `password_encrypted`, `private_key_encrypted`, `private_key_passphrase_encrypted`, `become_method`, `become_username`, `become_password_encrypted`, `metadata_json`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- `name` unique.
+- FK declared: `site_id -> sites(id) ON DELETE SET NULL`.
+- Used by:
+- Scheduler schema supports `credential_id`, but no active credential-management API is implemented yet.
+- Notes:
+- `Data/Engine/services/API/access_management/credentials.py` is currently a placeholder.
+
+#### `ansible_play_recaps`
+- Status: Dormant (schema present, no active read/write paths in current Engine source).
+- Purpose: Intended run recap storage for Ansible executions.
+- Columns: `id`, `run_id`, `hostname`, `agent_id`, `playbook_path`, `playbook_name`, `scheduled_job_id`, `scheduled_run_id`, `activity_job_id`, `status`, `recap_text`, `recap_json`, `started_ts`, `finished_ts`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- `run_id` unique.
+- `idx_ansible_recaps_host_created` on `(hostname, created_at)`.
+- `idx_ansible_recaps_status` on `status`.
+
+#### `agent_service_account`
+- Status: Dormant (schema present, no active read/write paths in current Engine source).
+- Purpose: Reserved per-agent service account credential storage.
+- Columns: `agent_id`, `username`, `password_hash`, `password_encrypted`, `last_rotated_utc`, `version`.
+- Constraints and indexes:
+- `agent_id` primary key.
+
+### Access Management
+#### `users`
+- Status: Active.
+- Purpose: Operator login accounts and MFA state.
+- Columns: `id`, `username`, `display_name`, `password_sha512`, `role`, `last_login`, `created_at`, `updated_at`, `mfa_enabled`, `mfa_secret`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- `username` unique.
+- Used by:
+- Login and MFA flows.
+- User administration APIs.
+- Device approval auditing (`approved_by_user_id` lookup by id or username).
+- Notes:
+- Startup bootstrap ensures at least one Admin account exists.
+
+#### `github_token`
+- Status: Active.
+- Purpose: Persisted GitHub API token for repo hash checks and integration.
+- Columns: `token`.
+- Constraints and indexes:
+- No explicit primary key.
+- Used by:
+- GitHub integration store/load.
+- `/api/github/token` admin endpoint.
+- Notes:
+- Service writes token by deleting all rows then inserting one row.
+- Reads use `SELECT token FROM github_token LIMIT 1`.
+
+### SQLite Internal Table
+#### `sqlite_sequence`
+- Status: Internal.
+- Purpose: Tracks autoincrement counters for tables using `AUTOINCREMENT`.
+- Notes:
+- Managed by SQLite; do not edit directly.
+
+## Assembly Catalog Databases (`Engine/Assemblies/*.db`)
+### Files and Domains
+- `official.db` (`AssemblyDomain.OFFICIAL`)
+- `community.db` (`AssemblyDomain.COMMUNITY`)
+- `user_created.db` (`AssemblyDomain.USER`)
+
+Each file has the same schema and currently one runtime table:
+
+#### `assemblies`
+- Status: Active.
+- Purpose: Assembly metadata and payload descriptor metadata.
+- Columns: `assembly_guid`, `display_name`, `summary`, `category`, `assembly_kind`, `assembly_type`, `version`, `metadata_json`, `tags_json`, `checksum`, `payload_type`, `payload_file_name`, `payload_file_extension`, `payload_size_bytes`, `payload_checksum`, `payload_created_at`, `payload_updated_at`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `assembly_guid` primary key.
+- `idx_assemblies_kind` on `assembly_kind`.
+- `idx_assemblies_category` on `category`.
+- Notes:
+- Payload bytes/files are stored on disk via payload manager; DB stores metadata pointers.
+- Staging/runtime DB files are mirrored between `Data/Engine/Assemblies/` and `Engine/Assemblies/`.
+
+## Deprecated and Removed Schema
+### Removed Tables
+- `enrollment_install_codes` (removed; superseded by `sites.enrollment_code`).
+- `enrollment_install_codes_persistent` (removed; superseded by `sites.enrollment_code`).
+- `payloads` in assembly DBs (removed by migration to consolidated `assemblies` schema).
+
+### Auto-Migrated Legacy Columns
+- `sites.enrollment_code_id` is removed by startup rebuild migration.
+- `device_approvals.enrollment_code_id` is removed by startup rebuild migration.
+- `device_filters.scope` and `device_filters.apply_to_all_sites` are removed by startup rebuild migration.
+
+### Deprecated API Surface (still present intentionally)
+- `POST /api/admin/enrollment-codes` returns `410` (`legacy_endpoint_removed_use_sites_api`).
+- `DELETE /api/admin/enrollment-codes/<code_id>` returns `410` (`legacy_endpoint_removed_use_sites_api`).
+
+## Codex Agent (Detailed)
+### Troubleshooting queries
+```sql
+-- 1) List all user tables in Engine database.db
+SELECT name
+FROM sqlite_master
+WHERE type='table'
+ORDER BY name;
+
+-- 2) Site-to-enrollment code map (current source of truth)
+SELECT id, name, enrollment_code
+FROM sites
+ORDER BY LOWER(name);
+
+-- 3) Pending approvals with site context
+SELECT da.id, da.approval_reference, da.hostname_claimed, da.enrollment_code, da.status, s.name AS site_name
+FROM device_approvals da
+LEFT JOIN sites s ON s.id = da.site_id
+WHERE LOWER(da.status) = 'pending'
+ORDER BY da.created_at ASC;
+
+-- 4) Device-to-site assignments
+SELECT d.guid, d.hostname, s.id AS site_id, s.name AS site_name
+FROM devices d
+LEFT JOIN device_sites ds ON ds.device_hostname = d.hostname
+LEFT JOIN sites s ON s.id = ds.site_id
+ORDER BY LOWER(d.hostname);
+
+-- 5) Check for orphaned hostname mappings (no matching device row)
+SELECT ds.device_hostname, ds.site_id
+FROM device_sites ds
+LEFT JOIN devices d ON d.hostname = ds.device_hostname
+WHERE d.hostname IS NULL;
+
+-- 6) Check for orphaned site mappings (no matching site row)
+SELECT ds.device_hostname, ds.site_id
+FROM device_sites ds
+LEFT JOIN sites s ON s.id = ds.site_id
+WHERE s.id IS NULL;
+
+-- 7) Scheduled run/activity linkage health
+SELECT r.id AS run_id, r.job_id, r.status, a.id AS link_id, a.activity_id
+FROM scheduled_job_runs r
+LEFT JOIN scheduled_job_run_activity a ON a.run_id = r.id
+ORDER BY r.id DESC
+LIMIT 200;
+
+-- 8) Confirm legacy columns are gone (expect 0 rows)
+SELECT COUNT(*) AS has_legacy_sites_col
+FROM pragma_table_info('sites')
+WHERE name = 'enrollment_code_id';
+```
+
+### Change-management checklist for schema edits
+- Update creation/migration code first (`database.py`, `database_migrations.py`, scheduler table init, or assembly DB manager).
+- Update this document and any affected domain docs (`device-management.md`, `scheduled-jobs.md`, `security-and-trust.md`).
+- Update unit tests that rely on local schema fixtures (`Data/Engine/Unit_Tests/conftest.py`).
+- Verify runtime startup applies schema without errors by checking `Engine/Logs/engine.log`.
+
+### Data-model guidance for the current enrollment design
+- Keep site/code association in `sites.enrollment_code` unless the enrollment model changes fundamentally.
+- Keep `device_sites` as hostname-to-site map for UI and filter joins.
+- Treat `device_approvals.enrollment_code` as immutable audit snapshot of the code used at request time.
+
+## Related Documentation
+- [Engine Runtime](engine-runtime.md)
+- [Security and Trust](security-and-trust.md)
+- [Device Management](device-management.md)
+- [Scheduled Jobs](scheduled-jobs.md)
+- [Assemblies and Quick Jobs](assemblies.md)

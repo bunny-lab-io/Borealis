@@ -13,6 +13,9 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 - [Engine Runtime](engine-runtime.md)
 - [Agent Runtime](agent-runtime.md)
 
+### Data and Schema
+- [Database Reference](db-reference.md)
+
 ### Security and Trust
 - [Security and Trust](security-and-trust.md)
 
@@ -49,6 +52,7 @@ None. This index only links to other pages.
 - Start with `AGENTS.md` at the repo root.
 - Read `getting-started.md` and `architecture-overview.md` to build the global model.
 - Use `engine-runtime.md` and `agent-runtime.md` for implementation-level details.
+- Use `db-reference.md` for SQLite table ownership, relationships, and deprecated schema notes.
 - Use `ui-and-notifications.md` for MagicUI, AG Grid, and toast notification rules.
 - Use `vpn-and-remote-access.md` for WireGuard and remote shell/VNC details.
 - Use `security-and-trust.md` for enrollment, tokens, and code-signing behavior.

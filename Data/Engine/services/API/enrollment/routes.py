@@ -16,7 +16,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone, timedelta
 import time
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional
 
 AGENT_CONTEXT_HEADER = "X-Borealis-Agent-Context"
 
@@ -98,83 +98,23 @@ def register(
     def _poll_log(message: str, context_hint: Optional[str] = None) -> None:
         _enrollment_log(message, context_hint)
 
-    def _load_install_code(cur: sqlite3.Cursor, code_value: str) -> Optional[Dict[str, Any]]:
+    def _load_site_for_enrollment(cur: sqlite3.Cursor, code_value: str) -> Optional[Dict[str, Any]]:
         cur.execute(
             """
             SELECT id,
-                   code,
-                   expires_at,
-                   used_at,
-                   used_by_guid,
-                   max_uses,
-                   use_count,
-                   last_used_at,
-                   site_id
-              FROM enrollment_install_codes
-             WHERE code = ?
+                   name,
+                   enrollment_code
+              FROM sites
+             WHERE UPPER(enrollment_code) = UPPER(?)
             """,
             (code_value,),
         )
         row = cur.fetchone()
         if not row:
             return None
-        keys = [
-            "id",
-            "code",
-            "expires_at",
-            "used_at",
-            "used_by_guid",
-            "max_uses",
-            "use_count",
-            "last_used_at",
-            "site_id",
-        ]
+        keys = ["id", "name", "enrollment_code"]
         record = dict(zip(keys, row))
         return record
-
-    def _install_code_valid(
-        record: Dict[str, Any], fingerprint: str, cur: sqlite3.Cursor
-    ) -> Tuple[bool, Optional[str]]:
-        if not record:
-            return False, None
-        expires_at = record.get("expires_at")
-        if not isinstance(expires_at, str):
-            return False, None
-        try:
-            expiry = datetime.fromisoformat(expires_at)
-        except Exception:
-            return False, None
-        if expiry <= _now():
-            return False, None
-        try:
-            max_uses_raw = record.get("max_uses")
-            max_uses = int(max_uses_raw) if max_uses_raw is not None else 0
-        except Exception:
-            max_uses = 0
-        unlimited = max_uses <= 0
-        try:
-            use_count = int(record.get("use_count") or 0)
-        except Exception:
-            use_count = 0
-        if unlimited or use_count < max_uses:
-            return True, None
-
-        guid = normalize_guid(record.get("used_by_guid"))
-        if not guid:
-            return False, None
-        cur.execute(
-            "SELECT ssl_key_fingerprint FROM devices WHERE UPPER(guid) = ?",
-            (guid,),
-        )
-        row = cur.fetchone()
-        if not row:
-            return False, None
-        stored_fp = (row[0] or "").strip().lower()
-        if not stored_fp:
-            return False, None
-        if stored_fp == (fingerprint or "").strip().lower():
-            return True, guid
-        return False, None
 
     def _normalize_host(hostname: str, guid: str, cur: sqlite3.Cursor) -> str:
         guid_norm = normalize_guid(guid)
@@ -399,31 +339,16 @@ def register(
         conn = db_conn_factory()
         try:
             cur = conn.cursor()
-            install_code = _load_install_code(cur, enrollment_code)
-            site_id = install_code.get("site_id") if install_code else None
-            if site_id is None:
+            site_record = _load_site_for_enrollment(cur, enrollment_code)
+            if not site_record:
                 _enrollment_log(
-                    "enrollment request rejected missing_site_binding "
+                    "enrollment request rejected invalid_site_enrollment_code "
                     f"host={hostname} fingerprint={fingerprint[:12]} code_mask={_mask_code(enrollment_code)}",
                     context_hint,
                 )
                 return jsonify({"error": "invalid_enrollment_code"}), 400
-            cur.execute("SELECT 1 FROM sites WHERE id = ?", (site_id,))
-            if cur.fetchone() is None:
-                _enrollment_log(
-                    "enrollment request rejected missing_site_owner "
-                    f"host={hostname} fingerprint={fingerprint[:12]} code_mask={_mask_code(enrollment_code)}",
-                    context_hint,
-                )
-                return jsonify({"error": "invalid_enrollment_code"}), 400
-            valid_code, reuse_guid = _install_code_valid(install_code, fingerprint, cur)
-            if not valid_code:
-                _enrollment_log(
-                    "enrollment request invalid_code "
-                    f"host={hostname} fingerprint={fingerprint[:12]} code_mask={_mask_code(enrollment_code)}",
-                    context_hint,
-                )
-                return jsonify({"error": "invalid_enrollment_code"}), 400
+            site_id = int(site_record["id"])
+            reuse_guid = None
 
             approval_reference: str
             record_id: str
@@ -449,7 +374,7 @@ def register(
                     UPDATE device_approvals
                        SET hostname_claimed = ?,
                            guid = ?,
-                           enrollment_code_id = ?,
+                           enrollment_code = ?,
                            site_id = ?,
                            client_nonce = ?,
                            server_nonce = ?,
@@ -460,8 +385,8 @@ def register(
                     (
                         hostname,
                         reuse_guid,
-                        install_code["id"],
-                        install_code.get("site_id"),
+                        site_record.get("enrollment_code"),
+                        site_id,
                         client_nonce_b64,
                         server_nonce_b64,
                         agent_pubkey_der,
@@ -476,7 +401,7 @@ def register(
                     """
                     INSERT INTO device_approvals (
                         id, approval_reference, guid, hostname_claimed,
-                        ssl_key_fingerprint_claimed, enrollment_code_id, site_id,
+                        ssl_key_fingerprint_claimed, enrollment_code, site_id,
                         status, client_nonce, server_nonce, agent_pubkey_der,
                         created_at, updated_at
                     )
@@ -488,8 +413,8 @@ def register(
                         reuse_guid,
                         hostname,
                         fingerprint,
-                        install_code["id"],
-                        install_code.get("site_id"),
+                        site_record.get("enrollment_code"),
+                        site_id,
                         client_nonce_b64,
                         server_nonce_b64,
                         agent_pubkey_der,
@@ -559,7 +484,7 @@ def register(
             cur.execute(
                 """
                 SELECT id, guid, hostname_claimed, ssl_key_fingerprint_claimed,
-                       enrollment_code_id, site_id, status, client_nonce, server_nonce,
+                       enrollment_code, site_id, status, client_nonce, server_nonce,
                        agent_pubkey_der, created_at, updated_at, approved_by_user_id
                   FROM device_approvals
                  WHERE approval_reference = ?
@@ -576,7 +501,7 @@ def register(
                 guid,
                 hostname_claimed,
                 fingerprint,
-                enrollment_code_id,
+                _enrollment_code,
                 site_id,
                 status,
                 client_nonce_stored,
@@ -672,71 +597,6 @@ def register(
                     DO UPDATE SET site_id=excluded.site_id, assigned_at=excluded.assigned_at
                     """,
                     (device_record.get("hostname"), site_id, assigned_at),
-                )
-
-            # Mark install code used
-            if enrollment_code_id:
-                cur.execute(
-                    "SELECT use_count, max_uses FROM enrollment_install_codes WHERE id = ?",
-                    (enrollment_code_id,),
-                )
-                usage_row = cur.fetchone()
-                try:
-                    prior_count = int(usage_row[0]) if usage_row else 0
-                except Exception:
-                    prior_count = 0
-                try:
-                    allowed_uses = int(usage_row[1]) if usage_row else 0
-                except Exception:
-                    allowed_uses = 0
-                unlimited = allowed_uses <= 0
-                if allowed_uses < 1:
-                    allowed_uses = 1
-                new_count = prior_count + 1
-                consumed = False if unlimited else new_count >= allowed_uses
-                cur.execute(
-                    """
-                    UPDATE enrollment_install_codes
-                       SET use_count = ?,
-                           used_by_guid = ?,
-                           last_used_at = ?,
-                           used_at = CASE WHEN ? THEN ? ELSE used_at END
-                     WHERE id = ?
-                    """,
-                    (
-                        new_count,
-                        effective_guid,
-                        now_iso,
-                        1 if consumed else 0,
-                        now_iso,
-                        enrollment_code_id,
-                    ),
-                )
-                cur.execute(
-                    """
-                    UPDATE enrollment_install_codes_persistent
-                       SET last_known_use_count = ?,
-                           used_by_guid = ?,
-                           last_used_at = ?,
-                           used_at = CASE WHEN ? THEN ? ELSE used_at END,
-                           is_active = CASE WHEN ? THEN 0 ELSE is_active END,
-                           consumed_at = CASE WHEN ? THEN COALESCE(consumed_at, ?) ELSE consumed_at END,
-                           archived_at = CASE WHEN ? THEN COALESCE(archived_at, ?) ELSE archived_at END
-                     WHERE id = ?
-                    """,
-                    (
-                        new_count,
-                        effective_guid,
-                        now_iso,
-                        1 if consumed else 0,
-                        now_iso,
-                        1 if consumed else 0,
-                        1 if consumed else 0,
-                        now_iso,
-                        1 if consumed else 0,
-                        now_iso,
-                        enrollment_code_id,
-                    ),
                 )
 
             # Update approval record with final state

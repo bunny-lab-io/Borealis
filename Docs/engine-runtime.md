@@ -28,6 +28,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 
 ## Related Documentation
 - [Architecture Overview](architecture-overview.md)
+- [Database Reference](db-reference.md)
 - [Security and Trust](security-and-trust.md)
 - [API Reference](api-reference.md)
 - [Logging and Operations](logging-and-operations.md)

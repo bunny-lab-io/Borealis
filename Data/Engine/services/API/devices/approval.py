@@ -3,9 +3,9 @@
 # Description: Administrative device enrollment endpoints covering code lifecycle and approval queue actions.
 #
 # API Endpoints (if applicable):
-# - GET /api/admin/enrollment-codes (Token Authenticated (Admin)) - Lists enrollment/install codes with optional status filtering.
-# - POST /api/admin/enrollment-codes (Token Authenticated (Admin)) - Creates a new enrollment/install code with TTL and usage limits.
-# - DELETE /api/admin/enrollment-codes/<code_id> (Token Authenticated (Admin)) - Deletes an enrollment/install code record.
+# - GET /api/admin/enrollment-codes (Token Authenticated (Admin)) - Lists static site enrollment codes.
+# - POST /api/admin/enrollment-codes (Token Authenticated (Admin)) - Deprecated (returns 410; use site APIs).
+# - DELETE /api/admin/enrollment-codes/<code_id> (Token Authenticated (Admin)) - Deprecated (returns 410; use site APIs).
 # - GET /api/admin/device-approvals (Token Authenticated (Admin)) - Enumerates pending and historical device approval records.
 # - POST /api/admin/device-approvals/<approval_id>/approve (Token Authenticated (Admin)) - Approves a pending device and handles hostname conflicts.
 # - POST /api/admin/device-approvals/<approval_id>/deny (Token Authenticated (Admin)) - Denies a pending device approval request.
@@ -15,10 +15,8 @@
 from __future__ import annotations
 
 import os
-import secrets
 import sqlite3
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, jsonify, request, session
@@ -30,20 +28,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
 
 
-VALID_TTL_HOURS = {1, 3, 6, 12, 24}
-
-
 def _now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
-
-
-def _generate_install_code() -> str:
-    raw = secrets.token_hex(16).upper()
-    return "-".join(raw[i : i + 4] for i in range(0, len(raw), 4))
 
 
 class AdminDeviceService:
@@ -186,30 +176,14 @@ class AdminDeviceService:
         conn = self._db_conn()
         try:
             cur = conn.cursor()
-            sql = """
-                SELECT id,
-                       code,
-                       expires_at,
-                       created_by_user_id,
-                       used_at,
-                       used_by_guid,
-                       max_uses,
-                       use_count,
-                       last_used_at
-                  FROM enrollment_install_codes
-            """
-            params: List[str] = []
-            now_iso = _iso(_now())
-            if status_filter == "active":
-                sql += " WHERE use_count < max_uses AND expires_at > ?"
-                params.append(now_iso)
-            elif status_filter == "expired":
-                sql += " WHERE use_count < max_uses AND expires_at <= ?"
-                params.append(now_iso)
-            elif status_filter == "used":
-                sql += " WHERE use_count >= max_uses"
-            sql += " ORDER BY expires_at ASC"
-            cur.execute(sql, params)
+            cur.execute(
+                """
+                SELECT id, name, enrollment_code, created_at
+                  FROM sites
+                 WHERE COALESCE(TRIM(enrollment_code), '') != ''
+                 ORDER BY LOWER(name) ASC
+                """
+            )
             rows = cur.fetchall()
         finally:
             conn.close()
@@ -218,126 +192,20 @@ class AdminDeviceService:
         for row in rows:
             records.append(
                 {
-                    "id": row[0],
-                    "code": row[1],
-                    "expires_at": row[2],
-                    "created_by_user_id": row[3],
-                    "used_at": row[4],
-                    "used_by_guid": row[5],
-                    "max_uses": row[6],
-                    "use_count": row[7],
-                    "last_used_at": row[8],
+                    "id": f"site:{row[0]}",
+                    "site_id": row[0],
+                    "site_name": row[1],
+                    "code": row[2],
+                    "created_at": row[3],
                 }
             )
         return {"codes": records}, 200
 
     def create_enrollment_code(self, ttl_hours: int, max_uses: int) -> Tuple[Dict[str, Any], int]:
-        if ttl_hours not in VALID_TTL_HOURS:
-            return {"error": "invalid_ttl"}, 400
-        max_uses = max(1, min(int(max_uses or 1), 10))
-
-        user = self._current_user() or {}
-        username = user.get("username") or ""
-
-        conn = self._db_conn()
-        try:
-            cur = conn.cursor()
-            created_by = self._lookup_user_id(cur, username) or username or "system"
-            code_value = _generate_install_code()
-            issued_at = _now()
-            expires_at = issued_at + timedelta(hours=ttl_hours)
-            record_id = str(uuid.uuid4())
-            cur.execute(
-                """
-                INSERT INTO enrollment_install_codes (
-                    id, code, expires_at, created_by_user_id, max_uses, use_count
-                )
-                VALUES (?, ?, ?, ?, ?, 0)
-                """,
-                (record_id, code_value, _iso(expires_at), created_by, max_uses),
-            )
-            cur.execute(
-                """
-                INSERT INTO enrollment_install_codes_persistent (
-                    id,
-                    code,
-                    created_at,
-                    expires_at,
-                    created_by_user_id,
-                    used_at,
-                    used_by_guid,
-                    max_uses,
-                    last_known_use_count,
-                    last_used_at,
-                    is_active,
-                    archived_at,
-                    consumed_at
-                )
-                VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 0, NULL, 1, NULL, NULL)
-                ON CONFLICT(id) DO UPDATE
-                      SET code = excluded.code,
-                          created_at = excluded.created_at,
-                          expires_at = excluded.expires_at,
-                          created_by_user_id = excluded.created_by_user_id,
-                          max_uses = excluded.max_uses,
-                          last_known_use_count = 0,
-                          used_at = NULL,
-                          used_by_guid = NULL,
-                          last_used_at = NULL,
-                          is_active = 1,
-                          archived_at = NULL,
-                          consumed_at = NULL
-                """,
-                (record_id, code_value, _iso(issued_at), _iso(expires_at), created_by, max_uses),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
-        self.service_log(
-            "server",
-            f"installer code created id={record_id} by={username} ttl={ttl_hours}h max_uses={max_uses}",
-        )
-        return (
-            {
-                "id": record_id,
-                "code": code_value,
-                "expires_at": _iso(expires_at),
-                "max_uses": max_uses,
-                "use_count": 0,
-                "last_used_at": None,
-            },
-            201,
-        )
+        return {"error": "legacy_endpoint_removed_use_sites_api"}, 410
 
     def delete_enrollment_code(self, code_id: str) -> Tuple[Dict[str, Any], int]:
-        conn = self._db_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "DELETE FROM enrollment_install_codes WHERE id = ? AND use_count = 0",
-                (code_id,),
-            )
-            deleted = cur.rowcount
-            if deleted:
-                archive_ts = _iso(_now())
-                cur.execute(
-                    """
-                    UPDATE enrollment_install_codes_persistent
-                       SET is_active = 0,
-                           archived_at = COALESCE(archived_at, ?)
-                     WHERE id = ?
-                    """,
-                    (archive_ts, code_id),
-                )
-            conn.commit()
-        finally:
-            conn.close()
-
-        if not deleted:
-            return {"error": "not_found"}, 404
-        self.service_log("server", f"installer code deleted id={code_id}")
-        return {"status": "deleted"}, 200
+        return {"error": "legacy_endpoint_removed_use_sites_api"}, 410
 
     # ------------------------------------------------------------------ #
     # Device approval helpers
@@ -356,7 +224,7 @@ class AdminDeviceService:
                     da.guid,
                     da.hostname_claimed,
                     da.ssl_key_fingerprint_claimed,
-                    da.enrollment_code_id,
+                    da.enrollment_code,
                     da.site_id,
                     da.status,
                     da.client_nonce,
@@ -412,7 +280,7 @@ class AdminDeviceService:
                         "guid": record_guid,
                         "hostname_claimed": hostname,
                         "ssl_key_fingerprint_claimed": fingerprint_claimed,
-                        "enrollment_code_id": row[5],
+                        "enrollment_code": row[5],
                         "site_id": row[6],
                         "status": row[7],
                         "client_nonce": row[8],
@@ -550,16 +418,7 @@ def register_admin_endpoints(app, adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/admin/enrollment-codes", methods=["POST"])
     def _admin_create_enrollment_code():
-        data = request.get_json(force=True, silent=True) or {}
-        ttl_hours = int(data.get("ttl_hours") or 1)
-        max_uses_value = data.get("max_uses")
-        if max_uses_value is None:
-            max_uses_value = data.get("allowed_uses")
-        try:
-            max_uses = int(max_uses_value) if max_uses_value is not None else 2
-        except Exception:
-            max_uses = 2
-        payload, status = service.create_enrollment_code(ttl_hours, max_uses)
+        payload, status = service.create_enrollment_code(0, 0)
         return jsonify(payload), status
 
     @blueprint.route("/api/admin/enrollment-codes/<code_id>", methods=["DELETE"])

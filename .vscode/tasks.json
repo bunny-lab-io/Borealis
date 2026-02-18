@@ -45,7 +45,7 @@
         "-ExecutionPolicy", "Bypass",
         "-File", "${workspaceFolder}\\Borealis.ps1",
         "-Agent",
-        "-EnrollmentCode", "E925-448B-626D-D595-5A0F-FB24-B4D6-6983",
+        "-EnrollmentCode", "E56F-FD6A-7D68-DEE9-899D-68AC-127D-84FE",
         "-ServerUrl", "https://localhost:5000"
       ],
       "presentation": {

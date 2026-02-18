@@ -49,16 +49,15 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map.
 - `POST /api/sites/assign` (Admin) - assign devices to site.
 - `POST /api/sites/rename` (Admin) - rename site.
-- `POST /api/sites/rotate_code` (Admin) - rotate site enrollment code.
 - `GET /api/repo/current_hash` (Device or Token Authenticated) - current agent repo hash.
 - `GET /api/agent/hash` (Device Authenticated) - get agent hash.
 - `POST /api/agent/hash` (Device Authenticated) - update agent hash.
 - `GET /api/agent/hash_list` (Admin + Loopback) - list agent hashes (local diagnostics).
 
 ### Admin Approvals and Install Codes
-- `GET /api/admin/enrollment-codes` (Admin) - list install codes.
-- `POST /api/admin/enrollment-codes` (Admin) - create install code.
-- `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - delete install code.
+- `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
+- `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
+- `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
 - `GET /api/admin/device-approvals` (Admin) - approval queue.
 - `POST /api/admin/device-approvals/<approval_id>/approve` (Admin) - approve device.
 - `POST /api/admin/device-approvals/<approval_id>/deny` (Admin) - deny device.
@@ -125,6 +124,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)
+- [Database Reference](db-reference.md)
 - [Device Management](device-management.md)
 - [Assemblies and Quick Jobs](assemblies.md)
 - [Scheduled Jobs](scheduled-jobs.md)
