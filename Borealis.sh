@@ -314,6 +314,27 @@ maybe_bootstrap_and_reexec() {
   exec env BOREALIS_BOOTSTRAPPED=1 "${install_dir}/Borealis.sh" "${REEXEC_ARGS[@]}"
 }
 
+resolve_existing_project_root() {
+  if [[ -d "${SCRIPT_DIR}/Data/Agent" && -d "${SCRIPT_DIR}/Data/Engine" ]]; then
+    return 0
+  fi
+
+  local candidates=()
+  [[ -n "${BOREALIS_INSTALL_DIR:-}" ]] && candidates+=("${BOREALIS_INSTALL_DIR}")
+  candidates+=("/srv/Borealis" "/opt/Borealis")
+
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    [[ -n "${candidate}" ]] || continue
+    if [[ -d "${candidate}/Data/Agent" && -d "${candidate}/Data/Engine" ]]; then
+      SCRIPT_DIR="${candidate}"
+      cd "${SCRIPT_DIR}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 capture_existing_server_url() {
   local settings_dir="${SCRIPT_DIR}/Agent/Borealis/Settings"
   local old_settings_dir="${SCRIPT_DIR}/Agent/Settings"
@@ -377,6 +398,7 @@ test_webui_build_fresh() {
   return 0
 }
 
+resolve_existing_project_root || true
 maybe_bootstrap_and_reexec
 
 # ---- Agent configuration ----
