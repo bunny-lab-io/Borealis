@@ -1,6 +1,6 @@
 ////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Devices/Device_Details.jsx
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Box,
   Stack,
@@ -170,6 +170,283 @@ const GridShell = ({ children, sx }) => (
   </Box>
 );
 
+const SUMMARY_GRID_STYLE = {
+  width: "100%",
+  height: "100%",
+  fontFamily: gridFontFamily,
+};
+
+const SUMMARY_GRID_DEBUG_STORAGE_KEY = "borealis.debug.summaryGrid";
+
+const isSummaryGridDebugEnabled = () => {
+  try {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search || "");
+    const queryValue = String(params.get("debugSummaryGrid") || "").toLowerCase();
+    if (queryValue === "1" || queryValue === "true") return true;
+    return window.localStorage?.getItem(SUMMARY_GRID_DEBUG_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
+const summaryGridDebugLog = (...parts) => {
+  if (!isSummaryGridDebugEnabled()) return;
+  const stamp = new Date().toISOString();
+  console.debug(`[DeviceDetails][SummaryDebug][${stamp}]`, ...parts);
+};
+
+const summarySectionRowId = (params) => params.data?.id ?? params.rowIndex;
+
+const SummarySectionGrid = React.memo(function SummarySectionGrid({
+  sectionKey,
+  rowData,
+  columnDefs,
+  defaultColDef,
+  height,
+}) {
+  const renderCountRef = useRef(0);
+  const modelUpdateCountRef = useRef(0);
+  renderCountRef.current += 1;
+
+  const rowCount = Array.isArray(rowData) ? rowData.length : 0;
+
+  const handleGridReady = useCallback(
+    (params) => {
+      summaryGridDebugLog("gridReady", {
+        sectionKey,
+        displayedRows: params?.api?.getDisplayedRowCount?.() ?? null,
+        rowCount,
+      });
+    },
+    [sectionKey, rowCount]
+  );
+
+  const handleFirstDataRendered = useCallback(
+    (params) => {
+      summaryGridDebugLog("firstDataRendered", {
+        sectionKey,
+        displayedRows: params?.api?.getDisplayedRowCount?.() ?? null,
+      });
+    },
+    [sectionKey]
+  );
+
+  const handleRowDataUpdated = useCallback(
+    (params) => {
+      summaryGridDebugLog("rowDataUpdated", {
+        sectionKey,
+        displayedRows: params?.api?.getDisplayedRowCount?.() ?? null,
+        rowCount,
+      });
+    },
+    [sectionKey, rowCount]
+  );
+
+  const handleModelUpdated = useCallback(
+    (params) => {
+      modelUpdateCountRef.current += 1;
+      const updateCount = modelUpdateCountRef.current;
+      if (updateCount <= 12 || updateCount % 25 === 0) {
+        summaryGridDebugLog("modelUpdated", {
+          sectionKey,
+          updateCount,
+          displayedRows: params?.api?.getDisplayedRowCount?.() ?? null,
+        });
+      }
+    },
+    [sectionKey]
+  );
+
+  useEffect(() => {
+    summaryGridDebugLog("mount", { sectionKey });
+    return () => summaryGridDebugLog("unmount", { sectionKey });
+  }, [sectionKey]);
+
+  useEffect(() => {
+    summaryGridDebugLog("render", {
+      sectionKey,
+      renderCount: renderCountRef.current,
+      rowCount,
+      height,
+    });
+  });
+
+  return (
+    <GridShell sx={{ height }}>
+      <AgGridReact
+        rowData={rowData}
+        columnDefs={columnDefs}
+        defaultColDef={defaultColDef}
+        pagination={false}
+        animateRows={false}
+        suppressCellFocus
+        onGridReady={handleGridReady}
+        onFirstDataRendered={handleFirstDataRendered}
+        onRowDataUpdated={handleRowDataUpdated}
+        onModelUpdated={handleModelUpdated}
+        getRowId={summarySectionRowId}
+        theme={myTheme}
+        style={SUMMARY_GRID_STYLE}
+      />
+    </GridShell>
+  );
+});
+
+const SummaryGridPlaceholder = React.memo(function SummaryGridPlaceholder({ height }) {
+  return (
+    <GridShell
+      sx={{
+        height,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted, letterSpacing: 0.2 }}>
+        Loading telemetry...
+      </Typography>
+    </GridShell>
+  );
+});
+
+const SummarySectionsNav = React.memo(function SummarySectionsNav({ onSelectSection }) {
+  const [activeSectionKey, setActiveSectionKey] = useState(SUMMARY_SECTIONS[0]?.key || "top-level");
+  const observerEventCountRef = useRef(0);
+
+  const handleSelect = useCallback(
+    (sectionKey) => {
+      summaryGridDebugLog("navClick", { sectionKey });
+      setActiveSectionKey(sectionKey);
+      onSelectSection?.(sectionKey);
+    },
+    [onSelectSection]
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof IntersectionObserver === "undefined") return undefined;
+    const sectionElements = SUMMARY_SECTIONS
+      .map((section) => document.getElementById(`device-summary-${section.key}`))
+      .filter(Boolean);
+    if (!sectionElements.length) return undefined;
+
+    summaryGridDebugLog("navObserverStart", {
+      sections: sectionElements.map((el) => el.id),
+    });
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        observerEventCountRef.current += 1;
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (!visible.length) return;
+        const nextKey = String(visible[0].target.id || "").replace("device-summary-", "");
+        if (!nextKey) return;
+        setActiveSectionKey((prev) => {
+          if (prev === nextKey) return prev;
+          summaryGridDebugLog("navObserverSectionChange", {
+            from: prev,
+            to: nextKey,
+            eventCount: observerEventCountRef.current,
+            ratio: Number(visible[0].intersectionRatio || 0).toFixed(3),
+          });
+          return nextKey;
+        });
+      },
+      {
+        root: null,
+        rootMargin: "-120px 0px -46% 0px",
+        threshold: [0.15, 0.35, 0.6],
+      }
+    );
+
+    sectionElements.forEach((el) => observer.observe(el));
+    return () => {
+      summaryGridDebugLog("navObserverStop");
+      observer.disconnect();
+    };
+  }, []);
+
+  return (
+    <Box
+      id="device-summary-sections-nav"
+      sx={{
+        position: { xs: "static", lg: "sticky" },
+        top: { lg: 0 },
+        mt: { lg: 0 },
+        alignSelf: "start",
+        borderRadius: 3,
+        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        background:
+          "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), rgba(15,20,28,0.92)",
+        backdropFilter: "blur(8px) saturate(130%)",
+        overflow: "hidden",
+        width: 220,
+        minWidth: 220,
+        flexShrink: 0,
+      }}
+    >
+      <Box sx={{ px: 1.4, py: 1 }}>
+        <Typography
+          sx={{
+            fontSize: "0.72rem",
+            color: "#7db7ff",
+            fontWeight: 700,
+            letterSpacing: 0.35,
+            textTransform: "uppercase",
+          }}
+        >
+          Summary Sections
+        </Typography>
+      </Box>
+      <Box sx={{ py: 0.25 }}>
+        {SUMMARY_SECTIONS.map((section) => {
+          const active = activeSectionKey === section.key;
+          const SectionIcon = section.icon;
+          return (
+            <Button
+              key={section.key}
+              onClick={() => handleSelect(section.key)}
+              startIcon={<SectionIcon sx={{ fontSize: 18 }} />}
+              sx={{
+                width: "100%",
+                justifyContent: "flex-start",
+                textTransform: "none",
+                minHeight: NAV_TAB_HEIGHT,
+                height: NAV_TAB_HEIGHT,
+                py: 0.35,
+                px: 1.6,
+                borderRadius: 0,
+                fontFamily: "inherit",
+                fontSize: "0.8rem",
+                fontWeight: active ? 600 : 400,
+                color: active ? NAV_TAB_COLORS.textActive : NAV_TAB_COLORS.text,
+                position: "relative",
+                background: active ? SUMMARY_SECTION_ACTIVE_BG : "transparent",
+                transition: "background 160ms ease, color 160ms ease, transform 120ms ease",
+                "& .MuiButton-startIcon": {
+                  color: active ? NAV_TAB_COLORS.iconActive : NAV_TAB_COLORS.icon,
+                  mr: 0.9,
+                  transition: "color 160ms ease",
+                },
+                "&:hover": {
+                  background: active ? SUMMARY_SECTION_ACTIVE_BG : NAV_TAB_COLORS.hover,
+                },
+                "&:active": {
+                  transform: "translateY(0.5px)",
+                },
+              }}
+            >
+              {section.label}
+            </Button>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+});
+
 const HISTORY_STATUS_THEME = {
   running: {
     text: "#58a6ff",
@@ -298,7 +575,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     }
   }, []);
   const [tab, setTab] = useState(initialTabIndex);
-  const [summarySectionKey, setSummarySectionKey] = useState("top-level");
   const [agent, setAgent] = useState(device || {});
   const [details, setDetails] = useState({});
   const [meta, setMeta] = useState({});
@@ -310,6 +586,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const [connectionSaving, setConnectionSaving] = useState(false);
   const [connectionMessage, setConnectionMessage] = useState("");
   const [connectionError, setConnectionError] = useState("");
+  const [summaryDataReady, setSummaryDataReady] = useState(false);
   const [summaryScrollOffset, setSummaryScrollOffset] = useState(0);
   const [summaryBottomSpacer, setSummaryBottomSpacer] = useState(0);
   const [tunnelInfo, setTunnelInfo] = useState({ status: "idle", tunnel_id: "", virtual_ip: "" });
@@ -331,7 +608,17 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     const now = Date.now() / 1000;
     return now - tsSec <= 300 ? "Online" : "Offline";
   });
+  const pageRenderCountRef = useRef(0);
+  pageRenderCountRef.current += 1;
   const summary = details.summary || {};
+
+  useEffect(() => {
+    if (!isSummaryGridDebugEnabled()) return;
+    summaryGridDebugLog("debugEnabled", {
+      queryParam: "debugSummaryGrid=1",
+      storageKey: SUMMARY_GRID_DEBUG_STORAGE_KEY,
+    });
+  }, []);
   const tunnelDevice = useMemo(
     () => ({
       ...(device || {}),
@@ -503,6 +790,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   }, [assemblyNameMap]);
 
   useEffect(() => {
+    let canceled = false;
     if (device) {
       setLockedStatus(device.status || statusFromHeartbeat(device.lastSeen));
     }
@@ -510,7 +798,14 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     const guid = device?.agent_guid || device?.guid || device?.agentGuid || device?.summary?.agent_guid;
     const agentId = device?.agentId || device?.summary?.agent_id || device?.id;
     const hostname = device?.hostname || device?.summary?.hostname;
-    if (!device || (!guid && !hostname)) return;
+    if (!device || (!guid && !hostname)) {
+      setSummaryDataReady(true);
+      return () => {
+        canceled = true;
+      };
+    }
+
+    setSummaryDataReady(false);
 
     const load = async () => {
       try {
@@ -538,6 +833,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           agentsPromise?.then((r) => (r ? r.json() : {})).catch(() => ({})),
           detailResponse.json(),
         ]);
+        if (canceled) return;
 
         if (agentsData && agentId && agentsData[agentId]) {
           setAgent({ id: agentId, ...agentsData[agentId] });
@@ -649,11 +945,19 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           setLockedStatus(statusFromHeartbeat(metaPayload.lastSeen));
         }
       } catch (e) {
+        if (canceled) return;
         console.warn("Failed to load device info", e);
         setMeta({});
+      } finally {
+        if (!canceled) {
+          setSummaryDataReady(true);
+        }
       }
     };
     load();
+    return () => {
+      canceled = true;
+    };
   }, [device]);
 
   const activityHostname = useMemo(() => {
@@ -838,7 +1142,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   }, []);
 
   const scrollToSummarySection = useCallback((sectionKey) => {
-    setSummarySectionKey(sectionKey);
     if (typeof document === "undefined" || typeof window === "undefined") return;
     const target = document.getElementById(`device-summary-${sectionKey}`);
     if (!target) return;
@@ -877,6 +1180,14 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         : scrollHost.clientHeight || hostRect.height || 0;
     const spacer = Math.max(0, Math.round(hostViewportHeight - navTopInHost + 28));
     const delta = targetRect.top - navRect.top;
+
+    summaryGridDebugLog("scrollToSection", {
+      sectionKey,
+      scrollHostTag: scrollHost?.tagName || "document",
+      navTopInHost,
+      spacer,
+      delta: Math.round(delta),
+    });
 
     setSummaryScrollOffset((prev) => (prev === navTopInHost ? prev : navTopInHost));
     setSummaryBottomSpacer((prev) => (prev === spacer ? prev : spacer));
@@ -1236,81 +1547,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                 minWidth: 0,
               }}
             >
-              <Box
-                id="device-summary-sections-nav"
-                sx={{
-                  position: { xs: "static", lg: "sticky" },
-                  top: { lg: 0 },
-                  mt: { lg: 0 },
-                  alignSelf: "start",
-                  borderRadius: 3,
-                  border: `1px solid ${MAGIC_UI.panelBorder}`,
-                  background:
-                    "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), rgba(15,20,28,0.92)",
-                  backdropFilter: "blur(8px) saturate(130%)",
-                  overflow: "hidden",
-                  width: 220,
-                  minWidth: 220,
-                  flexShrink: 0,
-                }}
-              >
-                <Box sx={{ px: 1.4, py: 1 }}>
-                  <Typography
-                    sx={{
-                      fontSize: "0.72rem",
-                      color: "#7db7ff",
-                      fontWeight: 700,
-                      letterSpacing: 0.35,
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    Summary Sections
-                  </Typography>
-                </Box>
-                <Box sx={{ py: 0.25 }}>
-                  {SUMMARY_SECTIONS.map((section) => {
-                    const active = summarySectionKey === section.key;
-                    const SectionIcon = section.icon;
-                    return (
-                      <Button
-                        key={section.key}
-                        onClick={() => scrollToSummarySection(section.key)}
-                        startIcon={<SectionIcon sx={{ fontSize: 18 }} />}
-                        sx={{
-                          width: "100%",
-                          justifyContent: "flex-start",
-                          textTransform: "none",
-                          minHeight: NAV_TAB_HEIGHT,
-                          height: NAV_TAB_HEIGHT,
-                          py: 0.35,
-                          px: 1.6,
-                          borderRadius: 0,
-                          fontFamily: "inherit",
-                          fontSize: "0.8rem",
-                          fontWeight: active ? 600 : 400,
-                          color: active ? NAV_TAB_COLORS.textActive : NAV_TAB_COLORS.text,
-                          position: "relative",
-                          background: active ? SUMMARY_SECTION_ACTIVE_BG : "transparent",
-                          transition: "background 160ms ease, color 160ms ease, transform 120ms ease",
-                          "& .MuiButton-startIcon": {
-                            color: active ? NAV_TAB_COLORS.iconActive : NAV_TAB_COLORS.icon,
-                            mr: 0.9,
-                            transition: "color 160ms ease",
-                          },
-                          "&:hover": {
-                            background: active ? SUMMARY_SECTION_ACTIVE_BG : NAV_TAB_COLORS.hover,
-                          },
-                          "&:active": {
-                            transform: "translateY(0.5px)",
-                          },
-                        }}
-                      >
-                        {section.label}
-                      </Button>
-                    );
-                  })}
-                </Box>
-              </Box>
+              <SummarySectionsNav onSelectSection={scrollToSummarySection} />
 
               <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, minWidth: 0, width: "100%" }}>
                 <Box id="device-summary-top-level" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
@@ -1463,22 +1700,17 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                       </Box>
                     </Box>
 
-                    <GridShell sx={{ height: topLevelGridHeight }}>
-                      <AgGridReact
+                    {summaryDataReady ? (
+                      <SummarySectionGrid
+                        sectionKey="top-level"
                         rowData={topLevelInfoRows}
                         columnDefs={topLevelInfoColumnDefs}
                         defaultColDef={defaultGridColDef}
-                        pagination={false}
-                        suppressCellFocus
-                        getRowId={(params) => params.data?.id ?? params.rowIndex}
-                        theme={myTheme}
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          fontFamily: gridFontFamily,
-                        }}
+                        height={topLevelGridHeight}
                       />
-                    </GridShell>
+                    ) : (
+                      <SummaryGridPlaceholder height={topLevelGridHeight} />
+                    )}
                   </Island>
                 </Box>
 
@@ -1497,22 +1729,17 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                     }
                     sx={{ mb: 0 }}
                   >
-                    <GridShell sx={{ height: storageGridHeight }}>
-                      <AgGridReact
+                    {summaryDataReady ? (
+                      <SummarySectionGrid
+                        sectionKey="storage"
                         rowData={storageRows}
                         columnDefs={storageColumnDefs}
                         defaultColDef={defaultGridColDef}
-                        pagination={false}
-                        suppressCellFocus
-                        getRowId={(params) => params.data?.id ?? params.rowIndex}
-                        theme={myTheme}
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          fontFamily: gridFontFamily,
-                        }}
+                        height={storageGridHeight}
                       />
-                    </GridShell>
+                    ) : (
+                      <SummaryGridPlaceholder height={storageGridHeight} />
+                    )}
                   </Island>
                 </Box>
 
@@ -1527,22 +1754,17 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                     }
                     sx={{ mb: 0 }}
                   >
-                    <GridShell sx={{ height: memoryGridHeight }}>
-                      <AgGridReact
+                    {summaryDataReady ? (
+                      <SummarySectionGrid
+                        sectionKey="memory"
                         rowData={memoryRows}
                         columnDefs={memoryColumnDefs}
                         defaultColDef={defaultGridColDef}
-                        pagination={false}
-                        suppressCellFocus
-                        getRowId={(params) => params.data?.id ?? params.rowIndex}
-                        theme={myTheme}
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          fontFamily: gridFontFamily,
-                        }}
+                        height={memoryGridHeight}
                       />
-                    </GridShell>
+                    ) : (
+                      <SummaryGridPlaceholder height={memoryGridHeight} />
+                    )}
                   </Island>
                 </Box>
 
@@ -1553,22 +1775,17 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                     meta={`Internal ${hardwareOverview.internalIp} • External ${hardwareOverview.externalIp}`}
                     sx={{ mb: 0 }}
                   >
-                    <GridShell sx={{ height: networkGridHeight }}>
-                      <AgGridReact
+                    {summaryDataReady ? (
+                      <SummarySectionGrid
+                        sectionKey="network"
                         rowData={networkRows}
                         columnDefs={networkColumnDefs}
                         defaultColDef={defaultGridColDef}
-                        pagination={false}
-                        suppressCellFocus
-                        getRowId={(params) => params.data?.id ?? params.rowIndex}
-                        theme={myTheme}
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          fontFamily: gridFontFamily,
-                        }}
+                        height={networkGridHeight}
                       />
-                    </GridShell>
+                    ) : (
+                      <SummaryGridPlaceholder height={networkGridHeight} />
+                    )}
                   </Island>
                 </Box>
                 <Box sx={{ width: "100%", height: `${summaryBottomSpacer}px`, flexShrink: 0 }} />
@@ -1975,34 +2192,28 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   );
 
   useEffect(() => {
-    const currentTopTabKey = TOP_TABS[tab]?.key || "";
-    if (currentTopTabKey !== "summary") return undefined;
-    if (typeof window === "undefined" || typeof IntersectionObserver === "undefined") return undefined;
-    const sectionElements = SUMMARY_SECTIONS
-      .map((section) => document.getElementById(`device-summary-${section.key}`))
-      .filter(Boolean);
-    if (!sectionElements.length) return undefined;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-        if (!visible.length) return;
-        const nextKey = String(visible[0].target.id || "").replace("device-summary-", "");
-        if (!nextKey) return;
-        setSummarySectionKey((prev) => (prev === nextKey ? prev : nextKey));
-      },
-      {
-        root: null,
-        rootMargin: "-120px 0px -46% 0px",
-        threshold: [0.15, 0.35, 0.6],
-      }
-    );
-
-    sectionElements.forEach((el) => observer.observe(el));
-    return () => observer.disconnect();
-  }, [tab, topLevelInfoRows.length, storageRows.length, memoryRows.length, networkRows.length]);
+    if (!isSummaryGridDebugEnabled()) return;
+    const topTabKey = TOP_TABS[tab]?.key || "";
+    if (topTabKey !== "summary") return;
+    summaryGridDebugLog("deviceDetailsRender", {
+      renderCount: pageRenderCountRef.current,
+      topTabKey,
+      summaryScrollOffset,
+      summaryBottomSpacer,
+      topLevelRows: topLevelInfoRows.length,
+      storageRows: storageRows.length,
+      memoryRows: memoryRows.length,
+      networkRows: networkRows.length,
+    });
+  }, [
+    tab,
+    summaryScrollOffset,
+    summaryBottomSpacer,
+    topLevelInfoRows.length,
+    storageRows.length,
+    memoryRows.length,
+    networkRows.length,
+  ]);
 
   const highlightCode = (code, lang) => {
     try {
