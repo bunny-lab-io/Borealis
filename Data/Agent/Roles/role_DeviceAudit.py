@@ -27,6 +27,160 @@ ROLE_CONTEXTS = ['system']
 
 
 IS_WINDOWS = os.name == 'nt'
+SERIAL_UNAVAILABLE = "<Unable to Retrieve S/N>"
+
+
+def _normalize_identity_text(value) -> str:
+    try:
+        text = str(value or '').strip()
+    except Exception:
+        return ''
+    if not text:
+        return ''
+    lowered = text.lower()
+    invalid_values = {
+        'none',
+        'null',
+        'unknown',
+        'n/a',
+        'na',
+        'not available',
+        'not specified',
+        'default string',
+        'to be filled by o.e.m.',
+        'to be filled by oem',
+    }
+    return '' if lowered in invalid_values else text
+
+
+def _is_invalid_serial(value: str) -> bool:
+    text = _normalize_identity_text(value)
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in {
+        'system serial number',
+        'serial number',
+        '123456789',
+        '1234567890',
+        '0123456789',
+    }:
+        return True
+    compact = re.sub(r'[^a-z0-9]+', '', lowered)
+    if compact in {'', '0', 'none', 'null', 'unknown', 'na'}:
+        return True
+    return False
+
+
+def _first_valid_serial(*candidates) -> str:
+    for candidate in candidates:
+        if isinstance(candidate, (list, tuple, set)):
+            nested = _first_valid_serial(*list(candidate))
+            if nested:
+                return nested
+            continue
+        text = _normalize_identity_text(candidate)
+        if text and not _is_invalid_serial(text):
+            return text
+    return ''
+
+
+def _read_identity_file(path: str) -> str:
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as fh:
+            return (fh.read() or '').strip()
+    except Exception:
+        return ''
+
+
+def collect_device_identity() -> dict:
+    manufacturer = ''
+    model = ''
+    serial_candidates = []
+    try:
+        plat = platform.system().lower()
+        if plat == 'windows':
+            ps = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+function _getCim($cls){
+  try { return Get-CimInstance $cls -ErrorAction Stop }
+  catch { try { return Get-WmiObject -Class $cls -ErrorAction Stop } catch { return $null } }
+}
+$cs = _getCim 'Win32_ComputerSystem'
+$bios = _getCim 'Win32_BIOS'
+$bb = _getCim 'Win32_BaseBoard'
+$enc = _getCim 'Win32_SystemEnclosure'
+[pscustomobject]@{
+  Manufacturer = if ($cs) { [string]$cs.Manufacturer } else { '' }
+  Model = if ($cs) { [string]$cs.Model } else { '' }
+  BiosSerial = if ($bios) { [string]$bios.SerialNumber } else { '' }
+  BoardSerial = if ($bb) { [string]$bb.SerialNumber } else { '' }
+  ChassisSerial = if ($enc) { [string]$enc.SerialNumber } else { '' }
+} | ConvertTo-Json -Compress
+"""
+            data = _ps_json(ps, timeout=20)
+            if isinstance(data, dict):
+                manufacturer = data.get('Manufacturer') or ''
+                model = data.get('Model') or ''
+                serial_candidates.extend(
+                    [
+                        data.get('BiosSerial'),
+                        data.get('BoardSerial'),
+                        data.get('ChassisSerial'),
+                    ]
+                )
+        elif plat == 'linux':
+            manufacturer = _read_identity_file('/sys/class/dmi/id/sys_vendor')
+            model = _read_identity_file('/sys/class/dmi/id/product_name') or _read_identity_file(
+                '/sys/class/dmi/id/product_version'
+            )
+            serial_candidates.extend(
+                [
+                    _read_identity_file('/sys/class/dmi/id/product_serial'),
+                    _read_identity_file('/sys/class/dmi/id/board_serial'),
+                    _read_identity_file('/sys/class/dmi/id/chassis_serial'),
+                    _read_identity_file('/sys/class/dmi/id/product_uuid'),
+                ]
+            )
+        elif plat == 'darwin':
+            out = subprocess.run(
+                ["system_profiler", "SPHardwareDataType"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            for line in (out.stdout or '').splitlines():
+                if ':' not in line:
+                    continue
+                key, value = line.split(':', 1)
+                key = key.strip().lower()
+                value = value.strip()
+                if not value:
+                    continue
+                if key == 'model name':
+                    manufacturer = manufacturer or 'Apple'
+                    model = value
+                elif key == 'model identifier' and not model:
+                    manufacturer = manufacturer or 'Apple'
+                    model = value
+                elif key.startswith('serial number'):
+                    serial_candidates.append(value)
+    except Exception:
+        pass
+
+    manufacturer = _normalize_identity_text(manufacturer)
+    model = _normalize_identity_text(model)
+    combined_model = " ".join([manufacturer, model]).strip() or model or manufacturer or 'unknown'
+    serial_number = _first_valid_serial(serial_candidates) or SERIAL_UNAVAILABLE
+    return {
+        'manufacturer': manufacturer,
+        'system_model': model,
+        'device_model': model,
+        'model': combined_model,
+        'serial_number': serial_number,
+        'serial': serial_number,
+        'bios_serial': serial_number,
+    }
 
 
 def detect_agent_os():
@@ -897,9 +1051,44 @@ def _build_details_fallback() -> dict:
     except Exception:
         pass
 
+    # Device identity (manufacturer, model, serial)
+    identity = {}
+    try:
+        identity = collect_device_identity()
+        manufacturer = (identity.get('manufacturer') or '').strip()
+        system_model = (identity.get('system_model') or '').strip()
+        combined_model = (identity.get('model') or '').strip()
+        serial_number = (identity.get('serial_number') or '').strip()
+        if manufacturer:
+            summary['manufacturer'] = manufacturer
+        if system_model:
+            summary['system_model'] = system_model
+            summary.setdefault('device_model', system_model)
+        if combined_model:
+            summary['model'] = combined_model
+        if serial_number:
+            summary['serial_number'] = serial_number
+            summary.setdefault('serial', serial_number)
+            summary.setdefault('bios_serial', serial_number)
+    except Exception:
+        identity = {}
+
     # CPU information (summary + display string)
     try:
-        cpu = collect_cpu()
+        cpu = collect_cpu() or {}
+        if identity:
+            manufacturer = (identity.get('manufacturer') or '').strip()
+            system_model = (identity.get('system_model') or '').strip()
+            combined_model = (identity.get('model') or '').strip()
+            serial_number = (identity.get('serial_number') or '').strip()
+            if manufacturer:
+                cpu.setdefault('system_manufacturer', manufacturer)
+            if system_model:
+                cpu.setdefault('system_model_raw', system_model)
+            if combined_model:
+                cpu.setdefault('system_model', combined_model)
+            if serial_number:
+                cpu.setdefault('system_serial_number', serial_number)
         if cpu:
             summary['cpu'] = cpu
             cores = cpu.get('logical_cores') or cpu.get('physical_cores')
@@ -1133,6 +1322,61 @@ class Role:
             if (not lu) or (lu.lower() == 'unknown') or _contains_machine_accounts(lu):
                 lu2 = _collect_last_user_registry().strip()
                 summary['last_user'] = lu2 if lu2 else 'No Users Logged In'
+        except Exception:
+            pass
+
+        # Device identity fix-up (manufacturer/model/serial)
+        try:
+            manufacturer = _normalize_identity_text(summary.get('manufacturer') or summary.get('vendor'))
+            system_model = _normalize_identity_text(summary.get('system_model') or summary.get('device_model'))
+            combined_model = _normalize_identity_text(summary.get('model'))
+            serial_number = _first_valid_serial(
+                summary.get('serial_number'),
+                summary.get('serial'),
+                summary.get('bios_serial'),
+            )
+
+            if not manufacturer or not (system_model or combined_model) or not serial_number:
+                identity = collect_device_identity()
+                if not manufacturer:
+                    manufacturer = _normalize_identity_text(identity.get('manufacturer'))
+                if not system_model:
+                    system_model = _normalize_identity_text(identity.get('system_model'))
+                if not combined_model:
+                    combined_model = _normalize_identity_text(identity.get('model'))
+                if not serial_number:
+                    serial_number = _first_valid_serial(identity.get('serial_number'))
+
+            if not combined_model and (manufacturer or system_model):
+                combined_model = " ".join([manufacturer, system_model]).strip()
+            if not serial_number:
+                serial_number = SERIAL_UNAVAILABLE
+
+            if manufacturer:
+                summary['manufacturer'] = manufacturer
+            if system_model:
+                summary['system_model'] = system_model
+                summary.setdefault('device_model', system_model)
+            if combined_model:
+                summary['model'] = combined_model
+            summary['serial_number'] = serial_number
+            summary.setdefault('serial', serial_number)
+            summary.setdefault('bios_serial', serial_number)
+
+            cpu_obj = summary.get('cpu')
+            if not isinstance(cpu_obj, dict):
+                cpu_obj = details.get('cpu') if isinstance(details.get('cpu'), dict) else {}
+            if isinstance(cpu_obj, dict):
+                if manufacturer:
+                    cpu_obj.setdefault('system_manufacturer', manufacturer)
+                if system_model:
+                    cpu_obj.setdefault('system_model_raw', system_model)
+                if combined_model:
+                    cpu_obj.setdefault('system_model', combined_model)
+                cpu_obj.setdefault('system_serial_number', serial_number)
+                if cpu_obj:
+                    summary['cpu'] = cpu_obj
+                    details['cpu'] = cpu_obj
         except Exception:
             pass
 

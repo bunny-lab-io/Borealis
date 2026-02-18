@@ -177,6 +177,7 @@ const SUMMARY_GRID_STYLE = {
 };
 const SUMMARY_FIELD_TEXT_COLOR = "#58a6ff"; // matches hostname blue in Device_List.jsx
 const SUMMARY_DEFAULT_TEXT_COLOR = NAV_TAB_COLORS.textActive;
+const UNABLE_TO_RETRIEVE_SN = "<Unable to Retrieve S/N>";
 
 const SUMMARY_GRID_DEBUG_STORAGE_KEY = "borealis.debug.summaryGrid";
 
@@ -906,6 +907,87 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
               : [],
           cpu: detailData?.cpu || detailData?.details?.cpu || {},
         };
+        const readNonEmpty = (...values) => {
+          for (const value of values) {
+            if (value === undefined || value === null) continue;
+            const text = String(value).trim();
+            if (text) return text;
+          }
+          return "";
+        };
+        const cpuIdentity = normalized.cpu && typeof normalized.cpu === "object" ? normalized.cpu : {};
+        const manufacturerValue = readNonEmpty(
+          detailData?.manufacturer,
+          normalizedSummary.manufacturer,
+          normalizedSummary.vendor,
+          detailData?.details?.summary?.manufacturer,
+          detailData?.details?.summary?.vendor,
+          cpuIdentity.system_manufacturer
+        );
+        const systemModelValue = readNonEmpty(
+          detailData?.system_model,
+          normalizedSummary.system_model,
+          normalizedSummary.device_model,
+          detailData?.details?.summary?.system_model,
+          detailData?.details?.summary?.device_model,
+          cpuIdentity.system_model_raw
+        );
+        const combinedModelValue =
+          readNonEmpty(
+            detailData?.model,
+            normalizedSummary.model,
+            detailData?.details?.summary?.model,
+            cpuIdentity.system_model
+          ) || [manufacturerValue, systemModelValue].filter(Boolean).join(" ").trim();
+        const serialNumberValue =
+          readNonEmpty(
+            detailData?.serial_number,
+            normalizedSummary.serial_number,
+            normalizedSummary.serial,
+            normalizedSummary.bios_serial,
+            detailData?.details?.summary?.serial_number,
+            detailData?.details?.summary?.serial,
+            detailData?.details?.summary?.bios_serial,
+            cpuIdentity.system_serial_number,
+            cpuIdentity.serial_number,
+            detailData?.asset_tag,
+            normalizedSummary.asset_tag
+          ) || UNABLE_TO_RETRIEVE_SN;
+        if (!normalizedSummary.manufacturer && manufacturerValue) {
+          normalizedSummary.manufacturer = manufacturerValue;
+        }
+        if (!normalizedSummary.system_model && systemModelValue) {
+          normalizedSummary.system_model = systemModelValue;
+        }
+        if (!normalizedSummary.device_model && systemModelValue) {
+          normalizedSummary.device_model = systemModelValue;
+        }
+        if (!normalizedSummary.model && combinedModelValue) {
+          normalizedSummary.model = combinedModelValue;
+        }
+        if (!normalizedSummary.serial_number && serialNumberValue) {
+          normalizedSummary.serial_number = serialNumberValue;
+        }
+        if (!normalizedSummary.serial && serialNumberValue) {
+          normalizedSummary.serial = serialNumberValue;
+        }
+        if (!normalizedSummary.bios_serial && serialNumberValue) {
+          normalizedSummary.bios_serial = serialNumberValue;
+        }
+        if (normalized.cpu && typeof normalized.cpu === "object") {
+          if (manufacturerValue && !normalized.cpu.system_manufacturer) {
+            normalized.cpu.system_manufacturer = manufacturerValue;
+          }
+          if (systemModelValue && !normalized.cpu.system_model_raw) {
+            normalized.cpu.system_model_raw = systemModelValue;
+          }
+          if (combinedModelValue && !normalized.cpu.system_model) {
+            normalized.cpu.system_model = combinedModelValue;
+          }
+          if (serialNumberValue && !normalized.cpu.system_serial_number) {
+            normalized.cpu.system_serial_number = serialNumberValue;
+          }
+        }
         setDetails(normalized);
 
         const toYmdHms = (dateObj) => {
@@ -938,6 +1020,10 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           agentHash: detailData?.agent_hash || normalizedSummary.agent_hash || "",
           internalIp: detailData?.internal_ip || normalizedSummary.internal_ip || "",
           externalIp: detailData?.external_ip || normalizedSummary.external_ip || "",
+          manufacturer: manufacturerValue || "",
+          systemModel: systemModelValue || "",
+          model: combinedModelValue || "",
+          serialNumber: serialNumberValue || UNABLE_TO_RETRIEVE_SN,
           siteId: detailData?.site_id,
           siteName: detailData?.site_name || "",
           siteDescription: detailData?.site_description || "",
@@ -2113,9 +2199,25 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const overviewInfoRows = useMemo(
     () => {
-      const manufacturerValue = String(summary.manufacturer || summary.vendor || meta.manufacturer || "").trim();
-      const modelValue = String(summary.model || summary.system_model || summary.device_model || meta.model || "").trim();
-      const combinedModel = [manufacturerValue, modelValue].filter(Boolean).join(" ").trim() || "unknown";
+      const cpuIdentity = details.cpu && typeof details.cpu === "object" ? details.cpu : {};
+      const manufacturerValue = String(
+        summary.manufacturer || summary.vendor || meta.manufacturer || cpuIdentity.system_manufacturer || ""
+      ).trim();
+      const systemModelValue = String(
+        summary.system_model || summary.device_model || meta.systemModel || cpuIdentity.system_model_raw || ""
+      ).trim();
+      const preCombinedModel = String(summary.model || meta.model || cpuIdentity.system_model || "").trim();
+      const combinedModel = [manufacturerValue, systemModelValue].filter(Boolean).join(" ").trim() || preCombinedModel || "unknown";
+      const serialValue =
+        String(
+          summary.serial_number ||
+            summary.serial ||
+            summary.bios_serial ||
+            cpuIdentity.system_serial_number ||
+            summary.asset_tag ||
+            meta.serialNumber ||
+            UNABLE_TO_RETRIEVE_SN
+        ).trim() || UNABLE_TO_RETRIEVE_SN;
       return [
         {
           id: "site",
@@ -2145,13 +2247,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         {
           id: "serial-number",
           label: "Serial Number",
-          value:
-            summary.serial_number ||
-            summary.serial ||
-            summary.bios_serial ||
-            summary.asset_tag ||
-            meta.serialNumber ||
-            "unknown",
+          value: serialValue,
         },
         {
           id: "last-reboot",
@@ -2166,9 +2262,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       meta.lastUser,
       meta.operatingSystem,
       meta.manufacturer,
+      meta.systemModel,
       meta.model,
       meta.serialNumber,
       meta.lastReboot,
+      details.cpu,
       summary.site_name,
       summary.site,
       summary.device_type,

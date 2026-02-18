@@ -35,6 +35,20 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
+ID: TD-20260218-01
+Status: active
+Owner: Agent + WebUI
+Date Added: 2026-02-18
+Summary: Device model and serial are temporarily stored inside the persisted `cpu` JSON payload.
+Impact: System identity fields are available in the UI, but CPU payload semantics now include non-CPU keys.
+Root Cause: The Engine `devices` schema/API persistence path only keeps a subset of summary fields and drops manufacturer/model/serial values from agent details.
+Current Mitigation: `role_DeviceAudit.py` writes system identity fields to summary and mirrors them into `cpu` (`system_model`, `system_serial_number`, etc.); `Device_Details.jsx` reads those keys as fallback.
+Removal Criteria: Engine persistence and APIs store/return dedicated system identity fields (or full summary JSON) without relying on CPU metadata.
+Files: `Data/Agent/Roles/role_DeviceAudit.py`, `Data/Engine/web-interface/src/Devices/Device_Details.jsx`
+Evidence: `Data/Engine/services/API/devices/management.py` `_extract_device_columns` and `get_device_details` only expose selected summary columns.
+Next Step: Add first-class model/serial fields to the Engine device schema and API payload builders, then remove CPU fallback keys from agent/UI.
+GitHub Issue: not yet
+
 ID: TD-20260210-01
 Status: mitigated
 Owner: WebUI
