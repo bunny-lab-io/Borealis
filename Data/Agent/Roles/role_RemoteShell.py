@@ -1,11 +1,12 @@
 # ======================================================
-# Data\Agent\Roles\role_RemoteBash.py
-# Description: Bash TCP server for VPN shell access (Engine connects over WireGuard /32).
+# Data\Agent\Roles\role_RemoteShell.py
+# Description: Cross-platform remote shell TCP server for VPN shell access.
+# Engine connects over WireGuard /32.
 #
 # API Endpoints (if applicable): None
 # ======================================================
 
-"""VPN Bash server for the WireGuard tunnel."""
+"""VPN remote shell server for the WireGuard tunnel (Windows PowerShell + Linux Bash)."""
 
 from __future__ import annotations
 
@@ -26,9 +27,8 @@ try:
 except Exception:
     pty = None
 
-ROLE_NAME = "RemoteBash"
+ROLE_NAME = "RemoteShell"
 ROLE_CONTEXTS = ["system"]
-IS_LINUX = platform.system().lower() == "linux"
 
 
 def _log_path() -> Path:
@@ -69,6 +69,37 @@ def _resolve_shell_port() -> int:
     return value
 
 
+def _detect_shell_kind() -> str:
+    if os.name == "nt":
+        return "powershell"
+    if platform.system().lower() == "linux":
+        return "bash"
+    return ""
+
+
+def _resolve_powershell_binary() -> str:
+    candidates = []
+    override = (os.environ.get("BOREALIS_REMOTE_POWERSHELL_BIN") or "").strip()
+    if override:
+        candidates.append(override)
+    try:
+        system_root = os.environ.get("SystemRoot") or r"C:\Windows"
+        candidates.append(os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
+    except Exception:
+        pass
+    candidates.append("powershell.exe")
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if candidate.lower().endswith(".exe"):
+            if os.path.isfile(candidate):
+                return candidate
+        else:
+            # Keep command-name fallback (powershell.exe) in case PATH resolves it.
+            return candidate
+    return "powershell.exe"
+
+
 def _resolve_bash_binary() -> str:
     # Allow overrides, then prefer bash, then sh as a fallback.
     candidates = []
@@ -83,9 +114,10 @@ def _resolve_bash_binary() -> str:
 
 
 class ShellSession:
-    def __init__(self, conn: socket.socket, address: tuple[str, int], shell_bin: str) -> None:
+    def __init__(self, conn: socket.socket, address: tuple[str, int], shell_kind: str, shell_bin: str) -> None:
         self.conn = conn
         self.address = address
+        self.shell_kind = shell_kind
         self.shell_bin = shell_bin
         self.proc: Optional[subprocess.Popen] = None
         self.master_fd: Optional[int] = None
@@ -98,7 +130,34 @@ class ShellSession:
 
     def start(self) -> None:
         # Spawn an interactive shell process and bridge stdin/stdout.
-        _write_log(f"Shell session starting for {self.address[0]}:{self.address[1]}")
+        _write_log(f"Shell session starting for {self.address[0]}:{self.address[1]} type={self.shell_kind}")
+        if self.shell_kind == "powershell":
+            self._start_powershell()
+            return
+        if self.shell_kind == "bash":
+            self._start_bash()
+            return
+        self._send_stdout(b"[borealis] Unsupported remote shell platform.\n")
+        self.close()
+
+    def _start_powershell(self) -> None:
+        try:
+            self.proc = subprocess.Popen(
+                [self.shell_bin, "-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                bufsize=0,
+            )
+        except Exception as exc:
+            self._send_stdout(f"[borealis] Failed to start PowerShell: {exc}\n".encode("utf-8", errors="replace"))
+            self.close()
+            return
+        threading.Thread(target=self._reader_loop_powershell, daemon=True).start()
+        self._writer_loop_powershell()
+
+    def _start_bash(self) -> None:
         if not self.shell_bin:
             self._send_stdout(b"[borealis] No bash-compatible shell found on this agent.\n")
             self.close()
@@ -129,7 +188,7 @@ class ShellSession:
                 bufsize=0,
             )
         except Exception as exc:
-            self._send_stdout(f"[borealis] Failed to start shell: {exc}\n".encode("utf-8", errors="replace"))
+            self._send_stdout(f"[borealis] Failed to start bash shell: {exc}\n".encode("utf-8", errors="replace"))
             self.close()
             return
         finally:
@@ -139,8 +198,8 @@ class ShellSession:
                 except Exception:
                     pass
 
-        threading.Thread(target=self._reader_loop, daemon=True).start()
-        self._writer_loop()
+        threading.Thread(target=self._reader_loop_bash, daemon=True).start()
+        self._writer_loop_bash()
 
     def _send_stdout(self, chunk: bytes) -> None:
         if not chunk:
@@ -153,8 +212,20 @@ class ShellSession:
         except Exception as exc:
             _write_log(f"Shell stdout send failed: {exc}")
 
-    def _reader_loop(self) -> None:
-        # Forward shell stdout/stderr to the engine as JSONL payloads.
+    def _reader_loop_powershell(self) -> None:
+        if not self.proc or not self.proc.stdout:
+            return
+        try:
+            while not self._stop.is_set():
+                chunk = self.proc.stdout.readline()
+                if not chunk:
+                    break
+                self._send_stdout(chunk)
+                _write_log(f"Shell stdout forwarded bytes={len(chunk)}")
+        except Exception as exc:
+            _write_log(f"Shell stdout error: {exc}")
+
+    def _reader_loop_bash(self) -> None:
         if self.master_fd is None:
             return
         try:
@@ -182,8 +253,48 @@ class ShellSession:
         except Exception as exc:
             _write_log(f"Shell stdout error: {exc}")
 
-    def _writer_loop(self) -> None:
-        # Read JSONL stdin from the engine and feed it into the shell.
+    def _writer_loop_powershell(self) -> None:
+        # Read JSONL stdin from the engine and feed it into PowerShell.
+        buffer = b""
+        try:
+            while not self._stop.is_set():
+                try:
+                    data = self.conn.recv(4096)
+                except Exception as exc:
+                    _write_log(f"Shell stdin recv error: {exc}")
+                    break
+                if not data:
+                    break
+                buffer += data
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line.decode("utf-8"))
+                    except Exception:
+                        continue
+                    if msg.get("type") == "stdin":
+                        payload = msg.get("data") or ""
+                        if self.proc and self.proc.stdin:
+                            try:
+                                decoded = _b64decode(str(payload))
+                                self.proc.stdin.write(decoded)
+                                self.proc.stdin.flush()
+                                self.input_messages += 1
+                                self.input_bytes += len(decoded)
+                                _write_log(f"Shell stdin received bytes={len(decoded)}")
+                            except Exception:
+                                _write_log("Shell stdin write failed.")
+                    if msg.get("type") == "close":
+                        self._stop.set()
+                        _write_log("Shell close requested by engine.")
+                        break
+        finally:
+            self.close()
+
+    def _writer_loop_bash(self) -> None:
+        # Read JSONL stdin from the engine and feed it into bash/sh.
         buffer = b""
         try:
             while not self._stop.is_set():
@@ -261,16 +372,18 @@ class ShellSession:
 
 
 class ShellServer:
-    def __init__(self, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
+    def __init__(self, shell_kind: str, shell_bin: str, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
         self.host = host
         self.port = port or _resolve_shell_port()
-        self.shell_bin = _resolve_bash_binary()
+        self.shell_kind = shell_kind
+        self.shell_bin = shell_bin
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
         _write_log(
-            "VPN shell server listening on {0}:{1} shell={2}".format(
+            "VPN shell server listening on {0}:{1} type={2} shell={3}".format(
                 self.host,
                 self.port,
+                self.shell_kind,
                 self.shell_bin or "missing",
             )
         )
@@ -289,7 +402,7 @@ class ShellServer:
                     conn.close()
                     continue
                 _write_log(f"Accepted shell connection from {remote_ip}")
-                session = ShellSession(conn, addr, self.shell_bin)
+                session = ShellSession(conn, addr, self.shell_kind, self.shell_bin)
                 threading.Thread(target=session.start, daemon=True).start()
 
 
@@ -298,10 +411,16 @@ class Role:
         # Start the shell server immediately when the role loads.
         self.ctx = ctx
         self.server = None
-        if not IS_LINUX:
-            _write_log("RemoteBash role skipped on non-Linux platform.")
+
+        shell_kind = _detect_shell_kind()
+        if shell_kind == "powershell":
+            self.server = ShellServer(shell_kind="powershell", shell_bin=_resolve_powershell_binary())
             return
-        self.server = ShellServer()
+        if shell_kind == "bash":
+            self.server = ShellServer(shell_kind="bash", shell_bin=_resolve_bash_binary())
+            return
+
+        _write_log(f"RemoteShell role skipped on unsupported platform '{platform.system()}'.")
 
     def register_events(self) -> None:
         return
