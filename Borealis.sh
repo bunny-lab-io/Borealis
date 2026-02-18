@@ -321,9 +321,9 @@ install_shared_dependencies() {
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
-        run_privileged dnf install -y python3 python3-pip python3-virtualenv curl unzip ca-certificates
+        run_privileged dnf install -y python3 python3-pip curl unzip ca-certificates
       else
-        run_privileged yum install -y python3 python3-pip python3-virtualenv curl unzip ca-certificates
+        run_privileged yum install -y python3 python3-pip curl unzip ca-certificates
       fi
       ;;
     arch)

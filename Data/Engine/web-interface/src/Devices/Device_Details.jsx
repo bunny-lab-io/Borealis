@@ -2091,7 +2091,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       }
       return {
         id: `${d.drive || idx}`,
-        driveLabel: `Drive ${String(d.drive || "").replace("\\\\", "")}`,
+        driveLabel: String(d.drive || "").replace("\\\\", ""),
         disk_type: d.disk_type || "Fixed Disk",
         total,
         used: usedBytes,
