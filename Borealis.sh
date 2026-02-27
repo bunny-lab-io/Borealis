@@ -649,6 +649,40 @@ install_server_dependencies() {
 
 install_agent_dependencies() {
   run_step "Dependency: Python (system)" install_shared_dependencies
+  install_wireguard_tools_best_effort
+}
+
+install_wireguard_tools_best_effort() {
+  if command_exists wg && command_exists wg-quick; then
+    return 0
+  fi
+
+  detect_distro
+  case "$DISTRO_ID" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt update -qq || true
+      run_privileged apt install -y wireguard-tools || true
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged dnf install -y wireguard-tools || true
+      else
+        run_privileged yum install -y wireguard-tools || true
+      fi
+      ;;
+    arch)
+      run_privileged pacman -Sy --noconfirm wireguard-tools || true
+      ;;
+    *)
+      ;;
+  esac
+
+  if command_exists wg && command_exists wg-quick; then
+    write_agent_log "WireGuard tools available (wg/wg-quick)."
+  else
+    write_agent_log "WireGuard tools not found; remote shell/VNC over tunnel may fail until wireguard-tools is installed."
+    echo -e "${YELLOW}WireGuard tools not found. Install 'wireguard-tools' for remote shell/VNC tunnel support.${RESET}"
+  fi
 }
 
 create_agent_venv_and_stage_data() {

@@ -93,6 +93,10 @@ export default function ReverseTunnelRemoteShell({ device }) {
   const localSocketRef = useRef(false);
   const terminalRef = useRef(null);
   const agentIdRef = useRef("");
+  const activeSessionIdRef = useRef("");
+  const activeAgentIdRef = useRef("");
+  const previousAgentIdRef = useRef("");
+  const connectAttemptRef = useRef(0);
 
   const agentId = useMemo(() => {
     return (
@@ -106,6 +110,10 @@ export default function ReverseTunnelRemoteShell({ device }) {
       ""
     );
   }, [device]);
+
+  const cancelPendingConnect = useCallback(() => {
+    connectAttemptRef.current += 1;
+  }, []);
 
   useEffect(() => {
     agentIdRef.current = agentId;
@@ -146,11 +154,15 @@ export default function ReverseTunnelRemoteShell({ device }) {
   }, []);
 
   const handleAgentOnboarding = useCallback(async () => {
+    cancelPendingConnect();
     await notifyAgentOnboarding();
+    activeSessionIdRef.current = "";
+    activeAgentIdRef.current = "";
+    setLoading(false);
     setSessionState("idle");
     setShellState("idle");
     setTunnel(null);
-  }, [notifyAgentOnboarding]);
+  }, [cancelPendingConnect, notifyAgentOnboarding]);
 
   const appendOutput = useCallback((text) => {
     if (!text) return;
@@ -173,8 +185,8 @@ export default function ReverseTunnelRemoteShell({ device }) {
     scrollToBottom();
   }, [output, scrollToBottom]);
 
-  const disconnectShell = useCallback(async (reason = "operator_disconnect") => {
-    const currentAgentId = agentIdRef.current;
+  const disconnectShell = useCallback(async (reason = "operator_disconnect", targetAgentId = "") => {
+    const currentAgentId = String(targetAgentId || activeAgentIdRef.current || agentIdRef.current || "").trim();
     if (!currentAgentId) return;
     try {
       await fetch("/api/shell/disconnect", {
@@ -193,30 +205,76 @@ export default function ReverseTunnelRemoteShell({ device }) {
   }, [ensureSocket]);
 
   const handleDisconnect = useCallback(async () => {
+    cancelPendingConnect();
+    const connectedAgentId = activeAgentIdRef.current;
     setLoading(true);
     try {
       await closeShell();
-      await disconnectShell("operator_disconnect");
+      await disconnectShell("operator_disconnect", connectedAgentId);
     } finally {
+      activeSessionIdRef.current = "";
+      activeAgentIdRef.current = "";
       setTunnel(null);
       setShellState("closed");
       setSessionState("idle");
       setLoading(false);
     }
-  }, [closeShell, disconnectShell]);
+  }, [cancelPendingConnect, closeShell, disconnectShell]);
+
+  useEffect(() => {
+    const previousAgentId = previousAgentIdRef.current;
+    previousAgentIdRef.current = agentId;
+    if (!previousAgentId || previousAgentId === agentId) {
+      return;
+    }
+    cancelPendingConnect();
+    const connectedAgentId = activeAgentIdRef.current || previousAgentId;
+    activeSessionIdRef.current = "";
+    activeAgentIdRef.current = "";
+    setLoading(false);
+    setSessionState("idle");
+    setShellState("idle");
+    setTunnel(null);
+    setStatusMessage("");
+    closeShell();
+    disconnectShell("component_unmount", connectedAgentId);
+  }, [agentId, cancelPendingConnect, closeShell, disconnectShell]);
 
   useEffect(() => {
     const socket = ensureSocket();
     const handleDisconnectEvent = () => {
-      if (sessionState === "connected") {
-        setShellState("closed");
-        setSessionState("idle");
-      }
+      cancelPendingConnect();
+      activeSessionIdRef.current = "";
+      activeAgentIdRef.current = "";
+      setLoading(false);
+      setShellState("closed");
+      setSessionState("idle");
+      setStatusMessage("Socket disconnected.");
     };
     const handleOutput = (payload) => {
+      const currentSessionId = activeSessionIdRef.current;
+      if (currentSessionId && payload?.session_id !== currentSessionId) {
+        return;
+      }
+      const currentAgentId = activeAgentIdRef.current || agentIdRef.current;
+      if (currentAgentId && payload?.agent_id && payload.agent_id !== currentAgentId) {
+        return;
+      }
       appendOutput(payload?.data || "");
     };
-    const handleClosed = () => {
+    const handleClosed = (payload) => {
+      const currentSessionId = activeSessionIdRef.current;
+      if (currentSessionId && payload?.session_id !== currentSessionId) {
+        return;
+      }
+      const currentAgentId = activeAgentIdRef.current || agentIdRef.current;
+      if (currentAgentId && payload?.agent_id && payload.agent_id !== currentAgentId) {
+        return;
+      }
+      cancelPendingConnect();
+      activeSessionIdRef.current = "";
+      activeAgentIdRef.current = "";
+      setLoading(false);
       setShellState("closed");
       setSessionState("idle");
     };
@@ -233,20 +291,27 @@ export default function ReverseTunnelRemoteShell({ device }) {
         socket.disconnect();
       }
     };
-  }, [appendOutput, ensureSocket, sessionState]);
+  }, [appendOutput, cancelPendingConnect, ensureSocket]);
 
   useEffect(() => {
     return () => {
+      cancelPendingConnect();
+      const connectedAgentId = activeAgentIdRef.current;
       closeShell();
-      disconnectShell("component_unmount");
+      disconnectShell("component_unmount", connectedAgentId);
     };
-  }, [closeShell, disconnectShell]);
+  }, [cancelPendingConnect, closeShell, disconnectShell]);
 
   const requestTunnel = useCallback(async () => {
     if (!agentId) {
       setStatusMessage("Agent ID is required to establish.");
       return;
     }
+    const targetAgentId = agentId;
+    const connectAttempt = connectAttemptRef.current + 1;
+    connectAttemptRef.current = connectAttempt;
+    activeSessionIdRef.current = "";
+    activeAgentIdRef.current = targetAgentId;
     setLoading(true);
     setStatusMessage("");
     try {
@@ -255,8 +320,11 @@ export default function ReverseTunnelRemoteShell({ device }) {
       const resp = await fetch("/api/shell/establish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: agentId }),
+        body: JSON.stringify({ agent_id: targetAgentId }),
       });
+      if (connectAttemptRef.current !== connectAttempt || activeAgentIdRef.current !== targetAgentId) {
+        return;
+      }
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         if (data?.error === "agent_socket_missing") {
@@ -277,9 +345,16 @@ export default function ReverseTunnelRemoteShell({ device }) {
         let lastError = "";
         let attempt = 0;
         while (Date.now() < deadline) {
+          if (connectAttemptRef.current !== connectAttempt || activeAgentIdRef.current !== targetAgentId) {
+            return { cancelled: true };
+          }
           attempt += 1;
-          const openResp = await emitAsync(socket, "vpn_shell_open", { agent_id: agentId }, 6000);
+          const openResp = await emitAsync(socket, "vpn_shell_open", { agent_id: targetAgentId }, 6000);
+          if (connectAttemptRef.current !== connectAttempt || activeAgentIdRef.current !== targetAgentId) {
+            return { cancelled: true };
+          }
           if (!openResp?.error) {
+            activeSessionIdRef.current = String(openResp?.session_id || "").trim();
             setStatusMessage("");
             return openResp;
           }
@@ -295,18 +370,28 @@ export default function ReverseTunnelRemoteShell({ device }) {
       };
 
       const opened = await openShellWithRetry();
-      if (!opened) {
+      if (!opened || opened.cancelled) {
+        return;
+      }
+      if (connectAttemptRef.current !== connectAttempt || activeAgentIdRef.current !== targetAgentId) {
         return;
       }
       setSessionState("connected");
       setShellState("connected");
       setStatusMessage("");
     } catch (err) {
+      if (connectAttemptRef.current !== connectAttempt || activeAgentIdRef.current !== targetAgentId) {
+        return;
+      }
+      activeSessionIdRef.current = "";
+      activeAgentIdRef.current = "";
       setSessionState("error");
       setShellState("closed");
       setStatusMessage(String(err?.message || err || "shell_connect_failed"));
     } finally {
-      setLoading(false);
+      if (connectAttemptRef.current === connectAttempt && activeAgentIdRef.current === targetAgentId) {
+        setLoading(false);
+      }
     }
   }, [agentId, ensureSocket, handleAgentOnboarding]);
 

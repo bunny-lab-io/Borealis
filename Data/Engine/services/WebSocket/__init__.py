@@ -407,7 +407,7 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
                 request.sid,
             )
         )
-        return {"status": "ok"}
+        return {"status": "ok", "session_id": getattr(session, "session_id", "")}
 
     @socket_server.on("connect_agent")
     def _connect_agent(data: Any) -> Dict[str, Any]:

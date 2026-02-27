@@ -14,7 +14,8 @@ import json
 import socket
 import threading
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
 
@@ -38,6 +39,9 @@ class ShellSession:
     input_messages: int = 0
     input_bytes: int = 0
     _reader: Optional[threading.Thread] = None
+    on_closed: Optional[Callable[[str, "ShellSession"], None]] = None
+    _closed: bool = False
+    session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def start_reader(self) -> None:
         starter = getattr(self.socketio, "start_background_task", None)
@@ -47,6 +51,22 @@ class ShellSession:
             t = threading.Thread(target=self._read_loop, daemon=True)
             t.start()
             self._reader = t
+
+    def is_active(self) -> bool:
+        if self._closed:
+            return False
+        try:
+            return self.tcp.fileno() >= 0
+        except Exception:
+            return False
+
+    def _notify_closed(self) -> None:
+        if not callable(self.on_closed):
+            return
+        try:
+            self.on_closed(self.sid, self)
+        except Exception:
+            pass
 
     def _service_log_event(self, message: str, *, level: str = "INFO") -> None:
         if not callable(self.service_log):
@@ -91,8 +111,17 @@ class ShellSession:
                             decoded = ""
                         self.output_lines += 1
                         self.output_bytes += len(line)
-                        self.socketio.emit("vpn_shell_output", {"data": decoded}, to=self.sid)
+                        self.socketio.emit(
+                            "vpn_shell_output",
+                            {
+                                "data": decoded,
+                                "agent_id": self.agent_id,
+                                "session_id": self.session_id,
+                            },
+                            to=self.sid,
+                        )
         finally:
+            self._closed = True
             if reason == "read_error":
                 self._service_log_event(
                     "vpn_shell_read_error agent_id={0} sid={1} reason={2} error={3}".format(
@@ -120,11 +149,19 @@ class ShellSession:
                     self.input_bytes,
                 )
             )
-            self.socketio.emit("vpn_shell_closed", {"agent_id": self.agent_id}, to=self.sid)
+            self.socketio.emit(
+                "vpn_shell_closed",
+                {
+                    "agent_id": self.agent_id,
+                    "session_id": self.session_id,
+                },
+                to=self.sid,
+            )
             try:
                 self.tcp.close()
             except Exception:
                 pass
+            self._notify_closed()
 
     def send(self, payload: str) -> None:
         payload_bytes = payload.encode("utf-8")
@@ -144,6 +181,9 @@ class ShellSession:
             )
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         try:
             data = json.dumps({"type": "close"})
             self.tcp.sendall(data.encode("utf-8") + b"\n")
@@ -153,6 +193,7 @@ class ShellSession:
             self.tcp.close()
         except Exception:
             pass
+        self._notify_closed()
 
 
 class VpnShellBridge:
@@ -160,8 +201,15 @@ class VpnShellBridge:
         self.socketio = socketio
         self.context = context
         self._sessions: Dict[str, ShellSession] = {}
+        self._lock = threading.Lock()
         self.logger = context.logger.getChild("vpn_shell")
         self.service_log = service_log
+
+    def _on_session_closed(self, sid: str, session: ShellSession) -> None:
+        with self._lock:
+            current = self._sessions.get(sid)
+            if current is session:
+                self._sessions.pop(sid, None)
 
     def _service_log_event(self, message: str, *, level: str = "INFO") -> None:
         if not callable(self.service_log):
@@ -175,8 +223,22 @@ class VpnShellBridge:
         service = getattr(self.context, "vpn_tunnel_service", None)
         if service is None:
             return None
-        existing = self._sessions.pop(sid, None)
+        existing = None
+        with self._lock:
+            existing = self._sessions.get(sid)
         if existing:
+            if existing.agent_id == agent_id and existing.is_active():
+                self._service_log_event(
+                    "vpn_shell_reuse_session agent_id={0} sid={1}".format(
+                        existing.agent_id,
+                        sid,
+                    )
+                )
+                return existing
+            with self._lock:
+                current = self._sessions.get(sid)
+                if current is existing:
+                    self._sessions.pop(sid, None)
             self._service_log_event(
                 "vpn_shell_replace_session agent_id={0} sid={1}".format(
                     existing.agent_id,
@@ -243,12 +305,14 @@ class VpnShellBridge:
             socketio=self.socketio,
             tcp=tcp,
             service_log=self.service_log,
+            on_closed=self._on_session_closed,
         )
         try:
             session.tcp.settimeout(15)
         except Exception:
             pass
-        self._sessions[sid] = session
+        with self._lock:
+            self._sessions[sid] = session
         self._service_log_event(
             "vpn_shell_connect_success agent_id={0} sid={1} host={2} port={3}".format(
                 agent_id,
@@ -261,7 +325,14 @@ class VpnShellBridge:
         return session
 
     def send(self, sid: str, payload: str) -> None:
-        session = self._sessions.get(sid)
+        with self._lock:
+            session = self._sessions.get(sid)
+        if session and not session.is_active():
+            with self._lock:
+                current = self._sessions.get(sid)
+                if current is session:
+                    self._sessions.pop(sid, None)
+            session = None
         if not session:
             self._service_log_event(
                 "vpn_shell_send_missing sid={0}".format(sid or "-"),
@@ -285,7 +356,8 @@ class VpnShellBridge:
             service.bump_activity(session.agent_id)
 
     def close(self, sid: str) -> None:
-        session = self._sessions.pop(sid, None)
+        with self._lock:
+            session = self._sessions.pop(sid, None)
         if not session:
             return
         self._service_log_event(

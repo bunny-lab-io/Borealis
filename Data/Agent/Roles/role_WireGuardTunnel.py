@@ -24,6 +24,7 @@ import subprocess
 import threading
 import time
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
@@ -700,16 +701,203 @@ class WireGuardClient:
         return
 
 
+class LinuxWireGuardClient:
+    def __init__(self) -> None:
+        base = Path(__file__).resolve().parents[2]
+        self.cert_root = base / "Borealis" / "Certificates" / "VPN_Client"
+        self.settings_root = base / "Borealis" / "Settings" / "WireGuard"
+        self.settings_root.mkdir(parents=True, exist_ok=True)
+        self.interface_name = self._resolve_interface_name()
+        self.conf_path = self.settings_root / f"{self.interface_name}.conf"
+        self.session: Optional[SessionConfig] = None
+        self._session_lock = threading.Lock()
+        self._client_keys = _generate_client_keys(self.cert_root)
+        self._wg_quick = shutil.which("wg-quick") or ""
+        self._wg = shutil.which("wg") or ""
+        self._ip = shutil.which("ip") or ""
+
+    def _resolve_interface_name(self) -> str:
+        raw = (os.environ.get("BOREALIS_WIREGUARD_INTERFACE") or TUNNEL_NAME or "borealis").strip().lower()
+        cleaned = re.sub(r"[^a-z0-9_.-]", "", raw)
+        if not cleaned:
+            cleaned = "borealis"
+        return cleaned[:15]
+
+    def _run(self, args: list[str]) -> tuple[int, str, str]:
+        try:
+            proc = subprocess.run(args, capture_output=True, text=True, check=False)
+            return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
+        except Exception as exc:  # pragma: no cover - runtime guard
+            return 1, "", str(exc)
+
+    def _validate_token(self, token: Dict[str, Any], *, signing_client: Optional[Any] = None) -> None:
+        payload = dict(token or {})
+        signature = payload.pop("signature", None)
+        signing_key = payload.pop("signing_key", None)
+        sig_alg = payload.pop("sig_alg", None)
+
+        required = ("agent_id", "tunnel_id", "expires_at", "port")
+        missing = [field for field in required if field not in token or token[field] in ("", None)]
+        if missing:
+            raise ValueError(f"Missing token fields: {', '.join(missing)}")
+        try:
+            exp = float(payload["expires_at"])
+        except Exception:
+            raise ValueError("Invalid token expiry")
+        if exp <= time.time():
+            raise ValueError("Token expired")
+        try:
+            port = int(payload["port"])
+        except Exception:
+            raise ValueError("Invalid token port")
+        if port < 1 or port > 65535:
+            raise ValueError("Invalid token port")
+
+        if not signature:
+            if sig_alg or signing_key:
+                raise ValueError("Token signature missing")
+            stored_key = None
+            if signing_client is not None and hasattr(signing_client, "load_server_signing_key"):
+                try:
+                    stored_key = signing_client.load_server_signing_key()
+                except Exception:
+                    stored_key = None
+            if isinstance(stored_key, str) and stored_key.strip():
+                raise ValueError("Token signature missing")
+            return
+
+        if sig_alg and str(sig_alg).lower() not in ("ed25519", "eddsa"):
+            raise ValueError("Unsupported token signature algorithm")
+        payload_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        if not verify_and_store_script_signature(signing_client, payload_bytes, str(signature), signing_key):
+            raise ValueError("Token signature invalid")
+
+    def _render_config(self, session: SessionConfig) -> str:
+        private_key = session.client_private_key or self._client_keys["private"]
+        lines = [
+            "[Interface]",
+            f"PrivateKey = {private_key}",
+            f"Address = {session.virtual_ip}",
+            "",
+            "[Peer]",
+            f"PublicKey = {session.server_public_key}",
+            f"AllowedIPs = {session.allowed_ips}",
+            f"Endpoint = {session.endpoint}",
+            f"PersistentKeepalive = {KEEPALIVE_SECONDS}",
+        ]
+        if session.preshared_key:
+            lines.append(f"PresharedKey = {session.preshared_key}")
+        return "\n".join(lines)
+
+    def _write_config(self, text: str) -> bool:
+        try:
+            self.conf_path.parent.mkdir(parents=True, exist_ok=True)
+            self.conf_path.write_text(text + "\n", encoding="ascii")
+            return True
+        except Exception as exc:
+            _write_log(f"Failed to write WireGuard config at {self.conf_path}: {exc}")
+            return False
+
+    def _interface_exists(self) -> bool:
+        if not self._ip:
+            return False
+        code, _, _ = self._run([self._ip, "link", "show", "dev", self.interface_name])
+        return code == 0
+
+    def _service_state(self) -> Optional[str]:
+        if self._wg:
+            code, out, _ = self._run([self._wg, "show", self.interface_name])
+            if code == 0 and out:
+                return "RUNNING"
+        if self._interface_exists():
+            return "RUNNING"
+        return None
+
+    def _bring_down(self) -> None:
+        if self._wg_quick and self.conf_path.is_file():
+            self._run([self._wg_quick, "down", str(self.conf_path)])
+        if self._ip and self._interface_exists():
+            self._run([self._ip, "link", "delete", "dev", self.interface_name])
+
+    def _bring_up(self) -> bool:
+        if not self._wg_quick:
+            _write_log("WireGuard tools missing on Linux agent: 'wg-quick' not found.")
+            return False
+        code, out, err = self._run([self._wg_quick, "up", str(self.conf_path)])
+        if code == 0:
+            return True
+        detail = (err or out or "").strip()
+        _write_log(f"WireGuard Linux up failed: {detail or 'unknown error'}")
+        # Retry once after forced down in case stale interface exists.
+        self._bring_down()
+        code, out, err = self._run([self._wg_quick, "up", str(self.conf_path)])
+        if code == 0:
+            return True
+        detail = (err or out or "").strip()
+        _write_log(f"WireGuard Linux retry up failed: {detail or 'unknown error'}")
+        return False
+
+    def _stop_session_locked(self, reason: str = "stop", ignore_missing: bool = False) -> None:
+        if not self._interface_exists() and not ignore_missing:
+            _write_log("WireGuard Linux interface not found when stopping session.")
+        self._bring_down()
+        self.session = None
+        _write_log(f"WireGuard Linux session stopped (reason={reason}).")
+
+    def start_session(self, session: SessionConfig, *, signing_client: Optional[Any] = None) -> None:
+        with self._session_lock:
+            if self.session and self.session.tunnel_id == session.tunnel_id:
+                if self._service_state() == "RUNNING":
+                    _write_log("WireGuard Linux session already active; reusing existing session.")
+                    return
+            elif self.session:
+                _write_log(
+                    "WireGuard Linux session replace: existing_tunnel_id={0} new_tunnel_id={1}".format(
+                        self.session.tunnel_id, session.tunnel_id
+                    )
+                )
+                self._stop_session_locked(reason="session_replace", ignore_missing=True)
+
+            try:
+                self._validate_token(session.token, signing_client=signing_client)
+            except Exception as exc:
+                _write_log(f"Refusing to start WireGuard Linux session: {exc}")
+                return
+
+            rendered = self._render_config(session)
+            if not self._write_config(rendered):
+                return
+            _write_log(f"Rendered WireGuard Linux client config to {self.conf_path}")
+
+            # Apply latest configuration cleanly.
+            self._bring_down()
+            if not self._bring_up():
+                return
+
+            self.session = session
+            _write_log("WireGuard Linux session started (persistent mode).")
+
+    def stop_session(self, reason: str = "stop", ignore_missing: bool = False) -> None:
+        with self._session_lock:
+            self._stop_session_locked(reason=reason, ignore_missing=ignore_missing)
+
+    def bump_activity(self) -> None:
+        return
+
+
 _client: Optional[WireGuardClient] = None
 _client_lock = threading.Lock()
 
 
-def _get_client() -> WireGuardClient:
+def _get_client() -> Any:
     global _client
     if _client is None:
         with _client_lock:
             if _client is None:
-                _client = WireGuardClient()
+                if os.name == "nt":
+                    _client = WireGuardClient()
+                else:
+                    _client = LinuxWireGuardClient()
     return _client
 
 
