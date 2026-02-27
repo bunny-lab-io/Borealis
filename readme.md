@@ -81,7 +81,10 @@ Site List:
    - Windows: `./Borealis.ps1 -EngineProduction` *Production Engine @ https://localhost:5000*
    - Windows: `./Borealis.ps1 -EngineDev` *Dev (Vite + Flask) @ https://localhost:5173*
    - Linux (Engine only): `./Borealis.sh --EngineProduction` *Production Engine @ https://localhost:5000* (use `--EngineDev` for Vite)
+      - Default Username: `admin`
+      - Default Password: `Password`
 2) Install the Agent:
    - Windows: `./Borealis.ps1 -Agent`
    - Linux: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Borealis.sh | sudo bash -s --`
    - Linux (ServerURL & Enrollment Code Included): `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Borealis.sh | sudo bash -s -- --agent --serverurl https://10.0.0.54:5000 --enrollmentcode E56F-FD6A-7D68-DEE9-899D-68AC-127D-84FE`
+
