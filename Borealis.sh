@@ -284,6 +284,39 @@ ensure_project_layout() {
   return 1
 }
 
+verify_engine_runtime_staging() {
+  local source_root="${SCRIPT_DIR}/Data/Engine"
+  local runtime_root="${SCRIPT_DIR}/Engine/Data/Engine"
+  local source_marker="${source_root}/security/session_secret.py"
+  local runtime_marker="${runtime_root}/security/session_secret.py"
+  local source_config="${source_root}/config.py"
+  local runtime_config="${runtime_root}/config.py"
+
+  if [[ -f "${source_marker}" ]]; then
+    if [[ ! -f "${runtime_marker}" ]]; then
+      echo -e "${RED}Engine runtime staging mismatch: missing ${runtime_marker}.${RESET}" >&2
+      return 1
+    fi
+    if ! cmp -s "${source_marker}" "${runtime_marker}"; then
+      echo -e "${RED}Engine runtime staging mismatch for security/session_secret.py.${RESET}" >&2
+      return 1
+    fi
+  fi
+
+  if [[ -f "${source_config}" ]]; then
+    if [[ ! -f "${runtime_config}" ]]; then
+      echo -e "${RED}Engine runtime staging mismatch: missing ${runtime_config}.${RESET}" >&2
+      return 1
+    fi
+    if ! cmp -s "${source_config}" "${runtime_config}"; then
+      echo -e "${RED}Engine runtime staging mismatch for config.py.${RESET}" >&2
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
 capture_existing_server_url() {
   local settings_dir="${SCRIPT_DIR}/Agent/Borealis/Settings"
   local old_settings_dir="${SCRIPT_DIR}/Agent/Settings"
@@ -348,6 +381,7 @@ test_webui_build_fresh() {
 }
 
 ensure_project_layout
+echo -e "${INFO} Borealis source root: ${SCRIPT_DIR}"
 
 # ---- Agent configuration ----
 configure_agent_settings() {
@@ -891,6 +925,8 @@ sync_engine_runtime() {
     cp -a "$item" "${destination_root}/"
   done
   shopt -u dotglob nullglob
+
+  verify_engine_runtime_staging
 }
 
 engine_service_runner_path() {
@@ -1091,6 +1127,7 @@ create_engine_venv_and_stage_data() {
   # Auth_Tokens and database
   mkdir -p "${SCRIPT_DIR}/Engine/Auth_Tokens"
   # database.db will be created by the app if not present; ensure dir exists
+  verify_engine_runtime_staging
 }
 
 install_engine_python_deps() {
@@ -1246,6 +1283,8 @@ server_menu() {
   esac
 
   echo -e "${GREEN}Ensuring Engine Dependencies Exist...${RESET}"
+  echo -e "${INFO} Engine source path: ${SCRIPT_DIR}/Data/Engine"
+  echo -e "${INFO} Engine runtime path: ${SCRIPT_DIR}/Engine/Data/Engine"
   install_server_dependencies
   export PATH="${NODE_DIR}/bin:${PATH}"
   ENGINE_USE_SYSTEMD_SUPERVISION=0

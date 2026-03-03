@@ -26,9 +26,8 @@ defaults that mirror the legacy server runtime.  Key environment variables are
 ``BOREALIS_DATABASE_PATH``  path to the SQLite database file.  Defaults to
 ``<ProjectRoot>/Engine/database.db`` so data persists across Engine redeploys.
 ``BOREALIS_CORS_ORIGINS``   comma separated list of allowed origins for CORS.
-``BOREALIS_SECRET``         Flask session secret key override.
 ``BOREALIS_ENGINE_SECRET_PATH`` path to persistent generated secret (default:
-                            ``<ProjectRoot>/Engine/engine_secret.txt``).
+                                ``<ProjectRoot>/Engine/engine_secret.txt``).
 ``BOREALIS_COOKIE_*``       Session cookie policies (``SAMESITE``, ``SECURE``,
                             ``DOMAIN``).
 ``BOREALIS_TLS_*``          TLS certificate, private key, and bundle paths.
@@ -376,7 +375,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         runtime_config.get("CORS_ORIGINS") or os.environ.get("BOREALIS_CORS_ORIGINS")
     )
 
-    configured_secret = runtime_config.get("SECRET_KEY") or os.environ.get("BOREALIS_SECRET")
+    configured_secret = runtime_config.get("SECRET_KEY")
     if configured_secret and str(configured_secret).strip():
         secret_key = str(configured_secret).strip()
     else:

@@ -53,3 +53,16 @@ def test_runtime_config_prefers_explicit_secret_without_file_creation(tmp_path: 
 
     assert settings.secret_key == "explicit-engine-secret-override-value"
     assert not secret_path.exists()
+
+
+def test_runtime_config_ignores_env_secret_and_uses_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_SECRET", "legacy-shared-secret")
+
+    config = _base_config(tmp_path)
+    secret_path = tmp_path / "engine" / "engine_secret.txt"
+    config["ENGINE_SECRET_PATH"] = str(secret_path)
+
+    settings = load_runtime_config(config)
+
+    assert settings.secret_key != "legacy-shared-secret"
+    assert secret_path.exists()

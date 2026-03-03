@@ -9,7 +9,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Pinned TLS: the Engine generates a root + leaf chain and agents pin the bundle for REST and Socket.IO traffic.
 - Short-lived access tokens: JWTs signed with Ed25519, default lifetime about 15 minutes.
 - Long-lived refresh tokens: 90-day sliding window, hashed in the Engine database.
-- Operator session signing secret: generated once and persisted at `Engine/engine_secret.txt` (override via `BOREALIS_SECRET`).
+- Operator session signing secret: generated once and persisted at `Engine/engine_secret.txt`.
 - Code signing: scripts are signed by the Engine; agents reject payloads with invalid signatures.
 
 ## Security Breakdown (Full)
