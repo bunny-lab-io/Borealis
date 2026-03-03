@@ -42,6 +42,7 @@ SERVER_URL=""
 
 CHOICE=""
 ENGINE_MODE_CHOICE=""
+ENGINE_USE_SYSTEMD_SUPERVISION=0
 
 while (( "$#" )); do
   case "$1" in
@@ -110,6 +111,13 @@ write_vite_log() {
   local msg="$1"; local svc="${2:-vite-dev}"
   local logdir; logdir=$(ensure_engine_log_dir)
   printf "%s-%s-%s\n" "$(date +%FT%T)" "$svc" "$msg" >> "${logdir}/vite.log"
+}
+
+write_engine_log() {
+  local message="$1"
+  local file_name="${2:-engine-supervision.log}"
+  local logdir; logdir=$(ensure_engine_log_dir)
+  printf "[%s] %s\n" "$(date +%FT%T)" "$message" >> "${logdir}/${file_name}"
 }
 
 ensure_agent_log_dir() {
@@ -885,6 +893,165 @@ sync_engine_runtime() {
   shopt -u dotglob nullglob
 }
 
+engine_service_runner_path() {
+  echo "${SCRIPT_DIR}/Engine/run-engine-service.sh"
+}
+
+ensure_engine_service_runner() {
+  local venv_py
+  venv_py="$(engine_python_bin)"
+  [[ -n "${venv_py}" ]] || {
+    write_engine_log "Engine service runner generation failed: engine python missing."
+    return 1
+  }
+
+  local runner_path
+  runner_path="$(engine_service_runner_path)"
+  local npm_cmd=""
+  if [[ -x "${NPM_BIN:-}" ]]; then
+    npm_cmd="${NPM_BIN}"
+  elif command_exists npm; then
+    npm_cmd="$(command -v npm)"
+  fi
+
+  mkdir -p "$(dirname "${runner_path}")"
+  cat > "${runner_path}" <<EOF
+#!/usr/bin/env bash
+set -o errexit
+set -o nounset
+set -o pipefail
+
+MODE="\${1:-production}"
+PROJECT_ROOT="${SCRIPT_DIR}"
+ENGINE_DIR="\${PROJECT_ROOT}/Engine"
+ENGINE_LOG_DIR="\${PROJECT_ROOT}/Engine/Logs"
+ENGINE_UI_DIR="\${PROJECT_ROOT}/Engine/web-interface"
+NODE_BIN_DIR="${NODE_DIR}/bin"
+VENV_PY="${venv_py}"
+NPM_CMD="${npm_cmd}"
+
+mkdir -p "\${ENGINE_LOG_DIR}"
+cd "\${ENGINE_DIR}"
+
+export BOREALIS_PROJECT_ROOT="\${PROJECT_ROOT}"
+export BOREALIS_ENGINE_PORT="5000"
+export BOREALIS_ENGINE_MODE="\${MODE}"
+export BOREALIS_CERT_DIR="\${PROJECT_ROOT}/Engine/Certificates"
+export BOREALIS_TLS_CERT="\${BOREALIS_CERT_DIR}/borealis-server-cert.pem"
+export BOREALIS_TLS_KEY="\${BOREALIS_CERT_DIR}/borealis-server-key.pem"
+export BOREALIS_TLS_BUNDLE="\${BOREALIS_CERT_DIR}/borealis-server-bundle.pem"
+export PATH="\${NODE_BIN_DIR}:\${PATH}"
+
+if [[ ! -x "\${VENV_PY}" ]]; then
+  echo "Engine python not found at \${VENV_PY}" >&2
+  exit 1
+fi
+
+VITE_PID=""
+cleanup() {
+  if [[ -n "\${VITE_PID}" ]]; then
+    kill "\${VITE_PID}" >/dev/null 2>&1 || true
+    wait "\${VITE_PID}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+if [[ "\${MODE}" == "developer" ]]; then
+  if [[ -z "\${NPM_CMD}" || ! -x "\${NPM_CMD}" ]]; then
+    if command -v npm >/dev/null 2>&1; then
+      NPM_CMD="\$(command -v npm)"
+    fi
+  fi
+  if [[ -z "\${NPM_CMD}" ]]; then
+    echo "npm not found; cannot launch developer-mode Vite service." >&2
+    exit 1
+  fi
+  cd "\${ENGINE_UI_DIR}"
+  "\${NPM_CMD}" run dev -- --open false >>"\${ENGINE_LOG_DIR}/vite-dev.stdout.log" 2>>"\${ENGINE_LOG_DIR}/vite-dev.stderr.log" &
+  VITE_PID=\$!
+  cd "\${ENGINE_DIR}"
+fi
+
+"\${VENV_PY}" -m Data.Engine.bootstrapper >>"\${ENGINE_LOG_DIR}/engine-launch.stdout.log" 2>>"\${ENGINE_LOG_DIR}/engine-launch.stderr.log"
+EOF
+
+  chmod +x "${runner_path}"
+  echo "${runner_path}"
+}
+
+ensure_engine_systemd_service() {
+  local mode="$1" # production|developer
+  local unit_name="borealis-engine.service"
+  local unit_path="/etc/systemd/system/${unit_name}"
+  local tmp_unit
+  tmp_unit="$(ensure_engine_log_dir)/${unit_name}"
+
+  local runner_path
+  runner_path="$(ensure_engine_service_runner)"
+  [[ -x "${runner_path}" ]] || {
+    write_engine_log "Engine systemd unit generation failed: runner script missing."
+    return 1
+  }
+
+  cat > "${tmp_unit}" <<EOF
+[Unit]
+Description=Borealis Engine Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${SCRIPT_DIR}/Engine
+ExecStart=/usr/bin/env bash ${runner_path} ${mode}
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  run_privileged cp "${tmp_unit}" "${unit_path}" || return 1
+  run_privileged systemctl daemon-reload || return 1
+  run_privileged systemctl enable "${unit_name}" || return 1
+  run_privileged systemctl restart "${unit_name}" || return 1
+  write_engine_log "Systemd service '${unit_name}' installed/restarted in ${mode} mode."
+  return 0
+}
+
+print_engine_service_status() {
+  local unit_name="borealis-engine.service"
+  if ! command_exists systemctl; then
+    echo -e "${YELLOW}systemctl not available; skipping engine service status check.${RESET}"
+    return 0
+  fi
+
+  echo -e "${GREEN}Engine service status (${unit_name}):${RESET}"
+  run_privileged systemctl --no-pager --full status "${unit_name}" || true
+
+  local active_state
+  active_state="$(run_privileged systemctl is-active "${unit_name}" 2>/dev/null || true)"
+  if [[ "${active_state}" != "active" && "${active_state}" != "activating" ]]; then
+    if command_exists journalctl; then
+      echo -e "${YELLOW}Recent ${unit_name} logs:${RESET}"
+      run_privileged journalctl -u "${unit_name}" -n 40 --no-pager || true
+    fi
+  fi
+}
+
+configure_engine_supervision() {
+  local mode="$1" # production|developer
+  if command_exists systemctl; then
+    ensure_engine_systemd_service "${mode}"
+    print_engine_service_status
+    return 0
+  fi
+
+  echo -e "${YELLOW}systemctl not available; launching Engine in the current shell instead.${RESET}"
+  flask_engine_launch "${mode}"
+}
+
 # ---- Engine build+launch flow ----
 create_engine_venv_and_stage_data() {
   local venv_dir="${SCRIPT_DIR}/Engine"
@@ -962,6 +1129,10 @@ vite_web_frontend_start() {
   ensure_engine_tls_material "$(engine_python_bin)" ""
 
   if [[ "$mode" == "developer" ]]; then
+    if [[ "${ENGINE_USE_SYSTEMD_SUPERVISION:-0}" -eq 1 ]]; then
+      write_vite_log "Skipping direct Vite dev launch; borealis-engine.service will manage developer-mode processes." "vite-dev"
+      return 0
+    fi
     local logdir; logdir=$(ensure_engine_log_dir)
     local stdout_log="${logdir}/vite-dev.stdout.log"
     local stderr_log="${logdir}/vite-dev.stderr.log"
@@ -1077,6 +1248,10 @@ server_menu() {
   echo -e "${GREEN}Ensuring Engine Dependencies Exist...${RESET}"
   install_server_dependencies
   export PATH="${NODE_DIR}/bin:${PATH}"
+  ENGINE_USE_SYSTEMD_SUPERVISION=0
+  if command_exists systemctl; then
+    ENGINE_USE_SYSTEMD_SUPERVISION=1
+  fi
 
   if [[ "$engine_immediate_launch" -eq 1 ]]; then
     if ! test_webui_build_fresh "${SCRIPT_DIR}/Data/Engine/web-interface" "${SCRIPT_DIR}/Engine/web-interface/build"; then
@@ -1087,7 +1262,11 @@ server_menu() {
 
   if [[ "$engine_immediate_launch" -eq 1 ]]; then
     run_step "Sync Engine runtime code from Data/Engine" sync_engine_runtime
-    run_step "Borealis Engine: Launch Flask Server" flask_engine_launch "$borealis_operation_mode"
+    if [[ "${ENGINE_USE_SYSTEMD_SUPERVISION}" -eq 1 ]]; then
+      run_step "Configure Borealis Engine systemd service (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
+    else
+      run_step "Borealis Engine: Launch Flask Server" flask_engine_launch "$borealis_operation_mode"
+    fi
     return 0
   fi
 
@@ -1096,7 +1275,11 @@ server_menu() {
   run_step "Copy Engine WebUI Files" ensure_engine_web_interface "$SCRIPT_DIR"
   run_step "Vite Web Frontend: Install NPM Packages" vite_web_frontend_install
   run_step "Vite Web Frontend: Start (${borealis_operation_mode})" vite_web_frontend_start "$borealis_operation_mode"
-  run_step "Borealis Engine: Launch Flask Server" flask_engine_launch "$borealis_operation_mode"
+  if [[ "${ENGINE_USE_SYSTEMD_SUPERVISION}" -eq 1 ]]; then
+    run_step "Configure Borealis Engine systemd service (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
+  else
+    run_step "Borealis Engine: Launch Flask Server" flask_engine_launch "$borealis_operation_mode"
+  fi
 }
 
 agent_menu() {
