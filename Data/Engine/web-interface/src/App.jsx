@@ -133,6 +133,13 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
   const [pageHeader, setPageHeader] = useState({ title: "", subtitle: "", Icon: null });
 
+  const clearClientSession = useCallback(() => {
+    try { localStorage.removeItem("borealis_session"); } catch {}
+    setUser(null);
+    setUserRole(null);
+    setUserDisplayName(null);
+  }, []);
+
       // Top-bar search state
       const SEARCH_CATEGORIES = [
         { key: "hostname", label: "Hostname", scope: "device", placeholder: "Search Hostname" },
@@ -621,6 +628,10 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             "borealis_session",
             JSON.stringify({ username: me.username, display_name: me.display_name || me.username, role: me.role, timestamp: Date.now() })
           );
+        } else if (resp.status === 401 || resp.status === 403) {
+          if (!canceled) {
+            clearClientSession();
+          }
         }
       } catch {}
 
@@ -633,7 +644,35 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     return () => {
       canceled = true;
     };
-  }, []);
+  }, [clearClientSession]);
+
+  useEffect(() => {
+    if (!sessionResolved || !user) return;
+
+    let canceled = false;
+    const validateSession = async () => {
+      try {
+        const resp = await fetch('/api/auth/me', { credentials: 'include' });
+        if ((resp.status === 401 || resp.status === 403) && !canceled) {
+          clearClientSession();
+        }
+      } catch {}
+    };
+
+    const intervalId = window.setInterval(validateSession, 30 * 1000);
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        validateSession();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      canceled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [clearClientSession, sessionResolved, user]);
 
   useEffect(() => {
     if (!sessionResolved) return;
@@ -858,10 +897,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
     } catch {}
-    try { localStorage.removeItem('borealis_session'); } catch {}
-    setUser(null);
-    setUserRole(null);
-    setUserDisplayName(null);
+    clearClientSession();
     navigateTo('login', { replace: true, allowUnauthenticated: true, suppressPending: true });
   };
 
