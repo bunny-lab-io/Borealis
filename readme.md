@@ -85,6 +85,7 @@ Site List:
       - Default Password: `Password`
 2) Install the Agent:
    - Windows: `./Borealis.ps1 -Agent`
-   - Linux: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Borealis.sh | sudo bash -s --`
-   - Linux (ServerURL & Enrollment Code Included): `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Borealis.sh | sudo bash -s -- --agent --serverurl https://10.0.0.54:5000 --enrollmentcode E56F-FD6A-7D68-DEE9-899D-68AC-127D-84FE`
+   - Linux: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --`
+   - Linux (ServerURL & Enrollment Code Included): `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://10.0.0.54:5000" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+`
 
