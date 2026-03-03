@@ -221,6 +221,11 @@ main() {
   extract_and_install
 
   echo -e "${GREEN}Launching ${INSTALL_DIR}/Borealis.sh${RESET}"
+  if [[ ! -t 0 && -r /dev/tty ]]; then
+    # When bootstrap is piped to bash, stdin is consumed by the script stream.
+    # Reattach Borealis.sh stdin to the controlling terminal for interactive menus.
+    exec "${INSTALL_DIR}/Borealis.sh" "${FORWARD_ARGS[@]}" < /dev/tty
+  fi
   exec "${INSTALL_DIR}/Borealis.sh" "${FORWARD_ARGS[@]}"
 }
 
