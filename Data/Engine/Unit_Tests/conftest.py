@@ -330,6 +330,7 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         "TLS_CERT_PATH": str(cert_path),
         "TLS_KEY_PATH": str(key_path),
         "TLS_BUNDLE_PATH": str(bundle_path),
+        "SECRET_KEY": "engine-test-secret-key-for-unit-tests-only",
         "LOG_FILE": str(log_path),
         "ERROR_LOG_FILE": str(error_log_path),
         "STATIC_FOLDER": str(static_dir),

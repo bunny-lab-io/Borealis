@@ -44,6 +44,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ....auth.guid_utils import normalize_guid
 from ....auth.device_auth import DeviceAuthError, require_device_auth
+from ...auth.secrets import require_app_secret
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
@@ -392,7 +393,7 @@ class DeviceManagementService:
         return self.db_conn_factory()
 
     def _token_serializer(self) -> URLSafeTimedSerializer:
-        secret = self.app.secret_key or "borealis-dev-secret"
+        secret = require_app_secret(self.app)
         return URLSafeTimedSerializer(secret, salt="borealis-auth")
 
     def _current_user(self) -> Optional[Dict[str, str]]:

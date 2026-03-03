@@ -26,7 +26,9 @@ defaults that mirror the legacy server runtime.  Key environment variables are
 ``BOREALIS_DATABASE_PATH``  path to the SQLite database file.  Defaults to
 ``<ProjectRoot>/Engine/database.db`` so data persists across Engine redeploys.
 ``BOREALIS_CORS_ORIGINS``   comma separated list of allowed origins for CORS.
-``BOREALIS_SECRET``         Flask session secret key.
+``BOREALIS_SECRET``         Flask session secret key override.
+``BOREALIS_ENGINE_SECRET_PATH`` path to persistent generated secret (default:
+                            ``<ProjectRoot>/Engine/engine_secret.txt``).
 ``BOREALIS_COOKIE_*``       Session cookie policies (``SAMESITE``, ``SECURE``,
                             ``DOMAIN``).
 ``BOREALIS_TLS_*``          TLS certificate, private key, and bundle paths.
@@ -48,7 +50,7 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
-from .security import certificates
+from .security import certificates, session_secret
 
 
 ENGINE_DIR = Path(__file__).resolve().parent
@@ -78,6 +80,7 @@ LOG_FILE_PATH = LOG_ROOT / "engine.log"
 ERROR_LOG_FILE_PATH = LOG_ROOT / "error.log"
 API_LOG_FILE_PATH = LOG_ROOT / "api.log"
 VPN_TUNNEL_LOG_FILE_PATH = LOG_ROOT / "VPN_Tunnel" / "tunnel.log"
+ENGINE_SECRET_PATH = PROJECT_ROOT / "Engine" / "engine_secret.txt"
 
 # WireGuard (VPN)
 WIREGUARD_PORT = 30000
@@ -373,7 +376,16 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         runtime_config.get("CORS_ORIGINS") or os.environ.get("BOREALIS_CORS_ORIGINS")
     )
 
-    secret_key = str(runtime_config.get("SECRET_KEY") or os.environ.get("BOREALIS_SECRET") or "borealis-dev-secret")
+    configured_secret = runtime_config.get("SECRET_KEY") or os.environ.get("BOREALIS_SECRET")
+    if configured_secret and str(configured_secret).strip():
+        secret_key = str(configured_secret).strip()
+    else:
+        secret_path = Path(
+            runtime_config.get("ENGINE_SECRET_PATH")
+            or os.environ.get("BOREALIS_ENGINE_SECRET_PATH")
+            or ENGINE_SECRET_PATH
+        ).expanduser()
+        secret_key = session_secret.load_or_create_engine_secret(secret_path)
 
     session_cookie_samesite = str(
         runtime_config.get("SESSION_COOKIE_SAMESITE")

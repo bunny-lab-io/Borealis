@@ -38,6 +38,7 @@ except Exception:  # pragma: no cover - optional dependency
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from Data.Engine.services.API import EngineServiceAdapters
 
+from ...auth.secrets import require_app_secret
 from .github import register_github_token_management
 from .multi_factor_authentication import register_mfa_management
 from .users import register_user_management
@@ -132,7 +133,7 @@ class _AuthService:
         return self.db_conn_factory()
 
     def _token_serializer(self) -> URLSafeTimedSerializer:
-        secret = self.app.secret_key or "borealis-dev-secret"
+        secret = require_app_secret(self.app)
         return URLSafeTimedSerializer(secret, salt="borealis-auth")
 
     def _make_token(self, username: str, role: str) -> str:
@@ -436,4 +437,3 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     register_user_management(app, adapters)
     register_mfa_management(app, adapters)
     register_github_token_management(app, adapters)
-

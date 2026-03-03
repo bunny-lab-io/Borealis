@@ -38,6 +38,8 @@ except Exception:  # pragma: no cover - optional dependency
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from . import EngineServiceAdapters
 
+from ..auth.secrets import require_app_secret
+
 _logger = logging.getLogger(__name__)
 _qr_logger_warning_emitted = False
 
@@ -130,7 +132,7 @@ class _AuthService:
 
     # Token helpers ----------------------------------------------------
     def _token_serializer(self) -> URLSafeTimedSerializer:
-        secret = self.app.secret_key or "borealis-dev-secret"
+        secret = require_app_secret(self.app)
         return URLSafeTimedSerializer(secret, salt="borealis-auth")
 
     def _make_token(self, username: str, role: str) -> str:
@@ -435,4 +437,3 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
 
     app.register_blueprint(blueprint)
     adapters.context.logger.info("Engine registered API group 'auth'.")
-

@@ -23,6 +23,7 @@ from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ....auth.guid_utils import normalize_guid
+from ...auth.secrets import require_app_secret
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
@@ -50,7 +51,7 @@ class AdminDeviceService:
         return self.db_conn_factory()
 
     def _token_serializer(self) -> URLSafeTimedSerializer:
-        secret = self.app.secret_key or "borealis-dev-secret"
+        secret = require_app_secret(self.app)
         return URLSafeTimedSerializer(secret, salt="borealis-auth")
 
     def _current_user(self) -> Optional[Dict[str, Any]]:

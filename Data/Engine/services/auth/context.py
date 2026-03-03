@@ -18,6 +18,7 @@ from flask import Request, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from .dev_mode import DevModeManager
+from .secrets import require_app_secret
 
 PermissionResult = Tuple[Dict[str, Any], int]
 
@@ -47,7 +48,7 @@ class RequestAuthContext:
         self._dev_mode_manager = dev_mode_manager
         self._config = config or {}
         self._logger = logger or logging.getLogger(__name__)
-        secret = app.secret_key or "borealis-dev-secret"
+        secret = require_app_secret(app)
         self._serializer = URLSafeTimedSerializer(secret, salt="borealis-auth")
         default_token_ttl = int(os.environ.get("BOREALIS_TOKEN_TTL_SECONDS", 60 * 60 * 24 * 30))
         self._token_ttl = _coerce_positive_int(

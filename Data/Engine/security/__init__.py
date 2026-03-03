@@ -7,6 +7,6 @@
 
 """Security helper exports for the Borealis Engine runtime."""
 
-from . import certificates, signing
+from . import certificates, session_secret, signing
 
-__all__ = ["certificates", "signing"]
+__all__ = ["certificates", "session_secret", "signing"]

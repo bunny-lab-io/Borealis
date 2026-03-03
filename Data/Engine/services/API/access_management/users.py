@@ -24,6 +24,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
 
+from ...auth.secrets import require_app_secret
 
 def _now_ts() -> int:
     return int(time.time())
@@ -56,7 +57,7 @@ class UserManagementService:
         return self.db_conn_factory()
 
     def _token_serializer(self) -> URLSafeTimedSerializer:
-        secret = self.app.secret_key or "borealis-dev-secret"
+        secret = require_app_secret(self.app)
         return URLSafeTimedSerializer(secret, salt="borealis-auth")
 
     def _current_user(self) -> Optional[Dict[str, Any]]:

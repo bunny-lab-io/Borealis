@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from ...auth.secrets import require_app_secret
 from .tunnel import _get_tunnel_service
 
 if False:  # pragma: no cover - hint for type checkers
@@ -39,7 +40,7 @@ def _current_user(app) -> Optional[Dict[str, str]]:
         return None
 
     try:
-        serializer = URLSafeTimedSerializer(app.secret_key or "borealis-dev-secret", salt="borealis-auth")
+        serializer = URLSafeTimedSerializer(require_app_secret(app), salt="borealis-auth")
         token_ttl = int(os.environ.get("BOREALIS_TOKEN_TTL_SECONDS", 60 * 60 * 24 * 30))
         data = serializer.loads(token, max_age=token_ttl)
         username = data.get("u")
