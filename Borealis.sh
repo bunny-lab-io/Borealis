@@ -78,6 +78,17 @@ run_step() {
   fi
 }
 
+prompt_input() {
+  local prompt="$1"
+  local value=""
+  if [[ -r /dev/tty ]]; then
+    IFS= read -r -p "${prompt}" value < /dev/tty || true
+  else
+    IFS= read -r -p "${prompt}" value || true
+  fi
+  printf '%s' "${value}"
+}
+
 detect_distro() {
   DISTRO_ID="unknown"; DISTRO_LIKE=""
   if [[ -f /etc/os-release ]]; then
@@ -362,7 +373,7 @@ configure_agent_settings() {
   elif [[ -n "${BOREALIS_SERVER_URL:-}" ]]; then
     input_url="${BOREALIS_SERVER_URL}"
   elif [[ -t 0 ]]; then
-    read -r -p "Server URL [${current_url}]: " input_url
+    input_url="$(prompt_input "Server URL [${current_url}]: ")"
   fi
 
   input_url="${input_url:-${current_url}}"
@@ -397,7 +408,7 @@ PY
     fi
 
     if [[ -t 0 ]]; then
-      read -r -p "Enrollment Code [${existing_code}]: " input_code
+      input_code="$(prompt_input "Enrollment Code [${existing_code}]: ")"
     else
       input_code=""
     fi
@@ -1051,7 +1062,7 @@ server_menu() {
     echo -e " 1) Build & Launch > Production Flask Server @ https://localhost:5000"
     echo -e " 2) [Skip Build] & Immediately Launch > Production Flask Server @ https://localhost:5000"
     echo -e " 3) Launch > [Hotload-Ready] Vite Dev Server @ https://localhost:5173"
-    read -r -p "Enter choice [1/2/3]: " mode_choice
+    mode_choice="$(prompt_input "Enter choice [1/2/3]: ")"
   else
     echo -e "${YELLOW}Auto-selecting Borealis Engine mode option ${mode_choice}.${RESET}"
   fi
@@ -1098,7 +1109,7 @@ main_menu() {
   echo -e " 1) Borealis Engine"
   echo -e " 2) Borealis Agent"
   echo -e " 3) Exit"
-  read -r -p "Enter a number: " choice
+  choice="$(prompt_input "Enter a number: ")"
   case "$choice" in
     1) server_menu ;;
     2) agent_menu ;;
