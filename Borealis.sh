@@ -19,15 +19,12 @@ YELLOW="\033[1;33m"
 RED="\033[0;31m"
 RESET="\033[0m"
 CHECKMARK="[OK]"; HOURGLASS="[WAIT]"; CROSSMARK="[X]"; INFO="[i]"
-DEFAULT_BOREALIS_ROOT="/opt/Borealis"
 DEFAULT_AGENT_RUNTIME_ROOT="/opt/Borealis/Agent"
 
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
   SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-  RUNNING_FROM_STREAM=0
 else
   SCRIPT_DIR="$(pwd)"
-  RUNNING_FROM_STREAM=1
 fi
 cd "$SCRIPT_DIR"
 
@@ -42,9 +39,6 @@ ENGINE_PROD_FLAG=0
 ENGINE_DEV_FLAG=0
 ENROLLMENT_CODE=""
 SERVER_URL=""
-BOOTSTRAP_FLAG=0
-NO_BOOTSTRAP_FLAG=0
-INSTALL_DIR_OVERRIDE=""
 
 CHOICE=""
 ENGINE_MODE_CHOICE=""
@@ -66,16 +60,6 @@ while (( "$#" )); do
     -ServerUrl|--ServerUrl|--serverurl|--server-url)
       shift
       SERVER_URL="${1:-}"
-      ;;
-    --bootstrap|--self-bootstrap) BOOTSTRAP_FLAG=1 ;;
-    --no-bootstrap) NO_BOOTSTRAP_FLAG=1 ;;
-    --install-dir|--install-dir=*)
-      if [[ "$1" == *=* ]]; then
-        INSTALL_DIR_OVERRIDE="${1#*=}"
-      else
-        shift
-        INSTALL_DIR_OVERRIDE="${1:-}"
-      fi
       ;;
     *) ;; # ignore unknown for flexibility
   esac
@@ -236,135 +220,48 @@ restore_selinux_context_if_needed() {
   run_privileged restorecon -RF "${target}" >/dev/null 2>&1 || true
 }
 
-bootstrap_install_dependencies() {
-  detect_distro
-  case "${DISTRO_ID:-}" in
-    ubuntu|debian|linuxmint|pop)
-      run_privileged apt update -qq
-      run_privileged apt install -y curl unzip ca-certificates
-      ;;
-    rhel|centos|fedora|rocky|almalinux)
-      if command_exists dnf; then
-        run_privileged dnf install -y curl unzip ca-certificates
-      else
-        run_privileged yum install -y curl unzip ca-certificates
-      fi
-      ;;
-    arch)
-      run_privileged pacman -Sy --noconfirm curl unzip ca-certificates
-      ;;
-    *)
-      if ! command_exists curl || ! command_exists unzip; then
-        echo -e "${RED}Unsupported distro '${DISTRO_ID}'. Install curl + unzip manually first.${RESET}" >&2
-        return 1
-      fi
-      ;;
-  esac
-}
+download_file() {
+  local url="$1"
+  local destination="$2"
+  local py_bin=""
 
-bootstrap_install_repo() {
-  local install_dir="$1"
-  local zip_url="${BOREALIS_BOOTSTRAP_ZIP_URL:-https://github.com/bunny-lab-io/Borealis/archive/refs/heads/main.zip}"
-  local tmp_dir
-  tmp_dir="$(mktemp -d)"
-  local zip_path="${tmp_dir}/borealis.zip"
-  local extracted_root=""
+  py_bin="$(resolve_python_bin)"
+  if [[ -n "${py_bin}" ]]; then
+    "${py_bin}" - "${url}" "${destination}" <<'PY'
+import sys
+import urllib.request
 
-  echo -e "${INFO} Bootstrapping Borealis repo into ${install_dir}"
-  if ! curl -fL "${zip_url}" -o "${zip_path}"; then
-    rm -rf "${tmp_dir}" 2>/dev/null || true
-    return 1
-  fi
-  if ! unzip -q "${zip_path}" -d "${tmp_dir}"; then
-    rm -rf "${tmp_dir}" 2>/dev/null || true
-    return 1
-  fi
+url = sys.argv[1]
+destination = sys.argv[2]
 
-  extracted_root="$(find "${tmp_dir}" -maxdepth 1 -mindepth 1 -type d -name 'Borealis-*' | head -n 1)"
-  if [[ -z "${extracted_root}" || ! -d "${extracted_root}" ]]; then
-    echo -e "${RED}Failed to locate extracted Borealis directory in bootstrap archive.${RESET}" >&2
-    rm -rf "${tmp_dir}" 2>/dev/null || true
-    return 1
-  fi
-
-  run_privileged rm -rf "${install_dir}"
-  run_privileged mkdir -p "${install_dir}"
-  run_privileged cp -a "${extracted_root}/." "${install_dir}/"
-  run_privileged chmod +x "${install_dir}/Borealis.sh"
-  restore_selinux_context_if_needed "${install_dir}"
-  rm -rf "${tmp_dir}" 2>/dev/null || true
-}
-
-build_reexec_args() {
-  REEXEC_ARGS=()
-  (( SERVER_FLAG )) && REEXEC_ARGS+=(--server)
-  (( AGENT_FLAG )) && REEXEC_ARGS+=(--agent)
-  (( VITE_FLAG )) && REEXEC_ARGS+=(--vite)
-  (( FLASK_FLAG )) && REEXEC_ARGS+=(--flask)
-  (( QUICK_FLAG )) && REEXEC_ARGS+=(--quick)
-  (( ENGINE_TESTS_FLAG )) && REEXEC_ARGS+=(--engine-tests)
-  (( ENGINE_PROD_FLAG )) && REEXEC_ARGS+=(--engine-production)
-  (( ENGINE_DEV_FLAG )) && REEXEC_ARGS+=(--engine-dev)
-  [[ -n "${ENROLLMENT_CODE}" ]] && REEXEC_ARGS+=(--enrollmentcode "${ENROLLMENT_CODE}")
-  [[ -n "${SERVER_URL}" ]] && REEXEC_ARGS+=(--serverurl "${SERVER_URL}")
-}
-
-maybe_bootstrap_and_reexec() {
-  local install_dir="${INSTALL_DIR_OVERRIDE:-${BOREALIS_INSTALL_DIR:-${DEFAULT_BOREALIS_ROOT}}}"
-  local should_bootstrap=0
-  local needs_repo=0
-
-  if [[ ! -d "${SCRIPT_DIR}/Data/Agent" || ! -d "${SCRIPT_DIR}/Data/Engine" ]]; then
-    needs_repo=1
-  fi
-
-  if [[ "${NO_BOOTSTRAP_FLAG}" -eq 1 ]]; then
+with urllib.request.urlopen(url, timeout=120) as response:
+    with open(destination, "wb") as output:
+        output.write(response.read())
+PY
     return 0
   fi
 
-  if [[ "${BOOTSTRAP_FLAG}" -eq 1 || "${needs_repo}" -eq 1 || "${RUNNING_FROM_STREAM}" -eq 1 ]]; then
-    should_bootstrap=1
-  fi
-
-  if [[ "${should_bootstrap}" -eq 0 ]]; then
+  if command_exists curl; then
+    curl -fsSL -o "${destination}" "${url}"
     return 0
   fi
 
-  if [[ "${BOREALIS_BOOTSTRAPPED:-0}" == "1" && "${needs_repo}" -eq 1 ]]; then
-    echo -e "${RED}Bootstrap re-entry detected but repository content is still missing.${RESET}" >&2
-    return 1
+  if command_exists wget; then
+    wget -q -O "${destination}" "${url}"
+    return 0
   fi
 
-  bootstrap_install_dependencies
-  bootstrap_install_repo "${install_dir}"
-
-  build_reexec_args
-
-  echo -e "${INFO} Re-launching Borealis from ${install_dir}/Borealis.sh"
-  exec env BOREALIS_BOOTSTRAPPED=1 "${install_dir}/Borealis.sh" "${REEXEC_ARGS[@]}"
+  echo -e "${RED}No supported downloader found. Install Python 3, curl, or wget.${RESET}" >&2
+  return 1
 }
 
-resolve_existing_project_root() {
-  if [[ "${SCRIPT_DIR}" == "${DEFAULT_BOREALIS_ROOT}" && -d "${SCRIPT_DIR}/Data/Agent" && -d "${SCRIPT_DIR}/Data/Engine" ]]; then
-    return 0
-  fi
-
-  local candidates=()
-  [[ -n "${BOREALIS_INSTALL_DIR:-}" ]] && candidates+=("${BOREALIS_INSTALL_DIR}")
-  candidates+=("${DEFAULT_BOREALIS_ROOT}" "/srv/Borealis")
+ensure_project_layout() {
   if [[ -d "${SCRIPT_DIR}/Data/Agent" && -d "${SCRIPT_DIR}/Data/Engine" ]]; then
-    candidates+=("${SCRIPT_DIR}")
+    return 0
   fi
 
-  local candidate=""
-  for candidate in "${candidates[@]}"; do
-    [[ -n "${candidate}" ]] || continue
-    if [[ -d "${candidate}/Data/Agent" && -d "${candidate}/Data/Engine" ]]; then
-      SCRIPT_DIR="${candidate}"
-      cd "${SCRIPT_DIR}"
-      return 0
-    fi
-  done
+  echo -e "${RED}Missing repository content under ${SCRIPT_DIR}.${RESET}" >&2
+  echo -e "${YELLOW}Run bootstrap.sh first so Borealis is installed to /opt/Borealis, then re-run Borealis.sh.${RESET}" >&2
   return 1
 }
 
@@ -431,8 +328,7 @@ test_webui_build_fresh() {
   return 0
 }
 
-resolve_existing_project_root || true
-maybe_bootstrap_and_reexec
+ensure_project_layout
 
 # ---- Agent configuration ----
 configure_agent_settings() {
@@ -576,20 +472,20 @@ install_shared_dependencies() {
   case "$DISTRO_ID" in
     ubuntu|debian|linuxmint|pop)
       run_privileged apt update -qq
-      run_privileged apt install -y python3 python3-venv python3-pip curl unzip ca-certificates
+      run_privileged apt install -y python3 python3-venv python3-pip ca-certificates
       ;;
     rhel|centos|fedora|rocky|almalinux)
       if command_exists dnf; then
-        run_privileged dnf install -y python3 python3-pip curl unzip ca-certificates
+        run_privileged dnf install -y python3 python3-pip ca-certificates
       else
-        run_privileged yum install -y python3 python3-pip curl unzip ca-certificates
+        run_privileged yum install -y python3 python3-pip ca-certificates
       fi
       ;;
     arch)
-      run_privileged pacman -Sy --noconfirm python python-pip python-virtualenv curl unzip ca-certificates
+      run_privileged pacman -Sy --noconfirm python python-pip python-virtualenv ca-certificates
       ;;
     *)
-      echo -e "${YELLOW}Unsupported distro '${DISTRO_ID}'. Install python3, python3-venv, python3-pip, curl, unzip manually.${RESET}"
+      echo -e "${YELLOW}Unsupported distro '${DISTRO_ID}'. Install python3, python3-venv, python3-pip manually.${RESET}"
       return 1
       ;;
   esac
@@ -625,7 +521,7 @@ install_node_portable() {
   local url="https://nodejs.org/dist/${NODE_VERSION}/${tarball}"
   local dl_path="${SCRIPT_DIR}/Dependencies/${tarball}"
   write_vite_log "Downloading NodeJS ${NODE_VERSION} from ${url}" "bootstrap"
-  curl -fsSL -o "$dl_path" "$url"
+  download_file "$url" "$dl_path"
   rm -rf "${NODE_DIR:?}"/*
   tar -xJf "$dl_path" -C "$NODE_DIR" --strip-components=1
   rm -f "$dl_path"
