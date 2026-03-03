@@ -198,9 +198,26 @@ extract_and_install() {
   fi
 
   echo -e "${INFO} Installing Borealis into ${INSTALL_DIR}"
-  run_privileged rm -rf "${INSTALL_DIR}"
   run_privileged mkdir -p "${INSTALL_DIR}"
-  run_privileged cp -a "${extracted_root}/." "${INSTALL_DIR}/"
+
+  # Keep runtime state directories across bootstrap refreshes.
+  run_privileged find "${INSTALL_DIR}" -mindepth 1 -maxdepth 1 \
+    ! -name "Engine" \
+    ! -name "Agent" \
+    -exec rm -rf {} +
+
+  local src_item=""
+  local base_name=""
+  shopt -s dotglob nullglob
+  for src_item in "${extracted_root}"/*; do
+    base_name="$(basename "${src_item}")"
+    if [[ "${base_name}" == "Engine" || "${base_name}" == "Agent" ]]; then
+      continue
+    fi
+    run_privileged cp -a "${src_item}" "${INSTALL_DIR}/"
+  done
+  shopt -u dotglob nullglob
+
   run_privileged chmod +x "${INSTALL_DIR}/Borealis.sh" || true
   run_privileged chmod +x "${INSTALL_DIR}/bootstrap.sh" || true
   restore_selinux_context_if_needed "${INSTALL_DIR}"
