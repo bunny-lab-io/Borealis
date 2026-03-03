@@ -153,16 +153,18 @@
       text-decoration: none;
       font-size: 0.82rem;
       padding: 6px 10px;
-      border-radius: 7px;
-      transition: color 160ms ease, background 160ms ease;
-      border: 1px solid transparent;
+      border-radius: 0;
+      transition: color 160ms ease, font-weight 120ms ease;
+      border: none;
+      background: transparent;
       white-space: nowrap;
     }
 
     .nav a:hover,
     .nav a:focus-visible {
-      color: var(--text-nav-active);
-      background: var(--item-active-bg);
+      color: #ffffff;
+      font-weight: 600;
+      background: transparent;
       outline: none;
     }
 
@@ -170,6 +172,8 @@
       color: #0b1220;
       background-image: linear-gradient(135deg, var(--accent-a), var(--accent-b));
       border-color: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
       font-weight: 600;
       box-shadow: var(--shadow-accent);
     }
@@ -822,6 +826,56 @@
       max-width: 108ch;
     }
 
+    .quickstart-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 2px 0 12px 0;
+    }
+
+    .quickstart-action-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      border-radius: 999px;
+      padding: 9px 14px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      border: 1px solid transparent;
+      transition: transform 120ms ease, background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, color 160ms ease;
+    }
+
+    .quickstart-action-btn:hover,
+    .quickstart-action-btn:focus-visible {
+      outline: none;
+      transform: translateY(-1px);
+    }
+
+    .quickstart-action-btn.release {
+      color: #0b1220;
+      background-image: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+      box-shadow: 0 10px 24px rgba(124, 58, 237, 0.25);
+    }
+
+    .quickstart-action-btn.release:hover,
+    .quickstart-action-btn.release:focus-visible {
+      background-image: linear-gradient(135deg, #86e1ff, #d1a6ff);
+      box-shadow: 0 12px 28px rgba(124, 58, 237, 0.32);
+    }
+
+    .quickstart-action-btn.unstable {
+      color: #e6f2ff;
+      border-color: rgba(148, 163, 184, 0.42);
+      background: rgba(8, 15, 32, 0.74);
+    }
+
+    .quickstart-action-btn.unstable:hover,
+    .quickstart-action-btn.unstable:focus-visible {
+      border-color: rgba(125, 183, 255, 0.62);
+      background: rgba(12, 21, 41, 0.9);
+    }
+
     .quickstart-intro a {
       color: var(--accent-a);
       text-decoration: none;
@@ -1004,6 +1058,10 @@
     <section id="quickstart" class="section">
       <div class="section-head">
         <h2>Quick Start</h2>
+      </div>
+      <div class="quickstart-actions">
+        <a class="quickstart-action-btn release" href="https://github.com/bunny-lab-io/Borealis/releases" target="_blank" rel="noopener noreferrer">Download Latest Release</a>
+        <a class="quickstart-action-btn unstable" href="https://github.com/bunny-lab-io/Borealis/archive/refs/heads/main.zip" target="_blank" rel="noopener noreferrer">Download Unstable Build</a>
       </div>
       <p class="quickstart-intro">
         To get started, download the <a href="https://github.com/bunny-lab-io/Borealis/releases" target="_blank" rel="noopener noreferrer">latest release</a> from GitHub.
