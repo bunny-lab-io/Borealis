@@ -267,14 +267,7 @@ function Run-Step {
 $scriptDir  = Split-Path $MyInvocation.MyCommand.Path -Parent
 $depsRoot   = Join-Path $scriptDir 'Dependencies'
 $pythonExe  = Join-Path $depsRoot 'Python\python.exe'
-$sevenZipCandidates = @(
-    (Join-Path $depsRoot '7zip\7z.exe'),
-    (Join-Path $depsRoot 'Dependencies\7zip\7z.exe')
-)
-$sevenZipExe = $sevenZipCandidates | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
-if (-not $sevenZipExe) {
-    $sevenZipExe = $sevenZipCandidates[0]
-}
+$sevenZipExe = Join-Path $depsRoot '7zip\7z.exe'
 $ansibleEeRequirementsPath = Join-Path $scriptDir 'Data\Agent\ansible-ee-requirements.txt'
 $ansibleEeVersionFile      = Join-Path $scriptDir 'Data\Agent\ansible-ee-version.txt'
 $script:AnsibleExecutionEnvironmentVersion = '1.0.0'

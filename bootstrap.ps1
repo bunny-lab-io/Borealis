@@ -127,6 +127,13 @@ for ($i = 0; $i -lt $rawArgs.Count; $i++) {
     $passthroughArgs.Add($token)
 }
 
+if ([string]::IsNullOrWhiteSpace($forwardedServerUrl) -and -not [string]::IsNullOrWhiteSpace($env:BOREALIS_SERVER_URL)) {
+    $forwardedServerUrl = $env:BOREALIS_SERVER_URL
+}
+if ([string]::IsNullOrWhiteSpace($forwardedEnrollmentCode) -and -not [string]::IsNullOrWhiteSpace($env:BOREALIS_ENROLLMENT_CODE)) {
+    $forwardedEnrollmentCode = $env:BOREALIS_ENROLLMENT_CODE
+}
+
 if ([string]::IsNullOrWhiteSpace($installDir)) {
     throw "Refusing to install into an empty path or root path."
 }
@@ -203,10 +210,12 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($forwardedServerUrl)) {
         $invokeArgs.Add('-ServerUrl')
         $invokeArgs.Add($forwardedServerUrl)
+        $env:BOREALIS_SERVER_URL = $forwardedServerUrl
     }
     if (-not [string]::IsNullOrWhiteSpace($forwardedEnrollmentCode)) {
         $invokeArgs.Add('-EnrollmentCode')
         $invokeArgs.Add($forwardedEnrollmentCode)
+        $env:BOREALIS_ENROLLMENT_CODE = $forwardedEnrollmentCode
     }
     foreach ($arg in $passthroughArgs) {
         if (-not [string]::IsNullOrWhiteSpace($arg)) {
