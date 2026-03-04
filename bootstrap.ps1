@@ -210,9 +210,30 @@ try {
         }
     }
 
+    $powershellExe = (Get-Command powershell.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
+    if (-not $powershellExe) {
+        $powershellExe = (Get-Process -Id $PID).Path
+    }
+    if (-not $powershellExe) {
+        throw 'Unable to locate a PowerShell host to launch Borealis.ps1.'
+    }
+
+    $launcherArgs = New-Object System.Collections.Generic.List[string]
+    $launcherArgs.Add('-NoProfile')
+    $launcherArgs.Add('-ExecutionPolicy')
+    $launcherArgs.Add('Bypass')
+    $launcherArgs.Add('-File')
+    $launcherArgs.Add($borealisScript)
+    foreach ($arg in $invokeArgs) {
+        $launcherArgs.Add($arg)
+    }
+
     Write-Host "[i] Launching $borealisScript"
-    & $borealisScript @($invokeArgs.ToArray())
-    exit $LASTEXITCODE
+    & $powershellExe @($launcherArgs.ToArray())
+    if ($null -ne $LASTEXITCODE) {
+        exit $LASTEXITCODE
+    }
+    exit 0
 }
 finally {
     if (Test-Path $extractRoot) {
