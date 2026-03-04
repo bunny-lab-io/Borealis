@@ -1013,7 +1013,7 @@
           <article class="lane">
             <h3>In Progress</h3>
             <ul>
-              <li>Current focus remains Engine runtime and WebUI delivery on the Windows reference platform.</li>
+              <li>Current focus remains Engine runtime and WebUI delivery on the Linux Engine platform.</li>
               <li>Continue Engine-centric runtime migration and API/service parity work across legacy paths.</li>
               <li>Harden tunnel and remote-shell operator flow for onboarding/readiness checks.</li>
             </ul>
@@ -1077,26 +1077,18 @@
 
         <div id="qs-panel-engine" class="qs-panel active" role="tabpanel" aria-labelledby="qs-tab-engine" data-qs-panel="engine">
           <div class="quickstart-grid quickstart-engine">
-            <article class="cmd">
-              <strong>Windows Engine</strong>
-              <div class="code-wrap">
-                <button class="copy-btn" type="button" data-copy-target="cmd-win-engine" aria-label="Copy Windows Engine commands"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
-                <code id="cmd-win-engine">./Borealis.ps1 -EngineProduction
-./Borealis.ps1 -EngineDev</code>
-              </div>
-              <ul class="cmd-meta">
-                <li><strong>Production:</strong> <code>https://localhost:5000</code></li>
-                <li><strong>Development:</strong> <code>https://localhost:5173</code></li>
-              </ul>
-            </article>
-            <article class="cmd">
+            <article class="cmd cmd-wide">
               <strong>Linux Engine</strong>
               <div class="code-wrap">
                 <button class="copy-btn" type="button" data-copy-target="cmd-linux-engine" aria-label="Copy Linux Engine commands"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
                 <code id="cmd-linux-engine">./Borealis.sh --EngineProduction
 ./Borealis.sh --EngineDev</code>
               </div>
-              <p>Linux currently supports Engine workflows; use production or Vite-backed dev mode.</p>
+              <ul class="cmd-meta">
+                <li><strong>Production:</strong> <code>https://localhost:5000</code></li>
+                <li><strong>Development:</strong> <code>https://localhost:5173</code></li>
+              </ul>
+              <p>Engine deployment is Linux-only; use production or Vite-backed dev mode.</p>
             </article>
             <article class="cmd cmd-wide">
               <strong>Default Login Credentials</strong>
@@ -1122,15 +1114,23 @@
                 <strong>Windows Agent Install</strong>
                 <div class="code-wrap">
                   <button class="copy-btn" type="button" data-copy-target="cmd-win-agent-install" aria-label="Copy Windows Agent install command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
-                  <code id="cmd-win-agent-install">./Borealis.ps1 -Agent</code>
+                  <code id="cmd-win-agent-install">./Borealis.ps1</code>
                 </div>
                 <p>Run in elevated PowerShell. Enrollment still requires operator approval in the queue.</p>
+              </article>
+              <article class="cmd">
+                <strong>Windows Agent Bootstrap</strong>
+                <div class="code-wrap">
+                  <button class="copy-btn" type="button" data-copy-target="cmd-win-agent-bootstrap" aria-label="Copy Windows Agent bootstrap command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
+                  <code id="cmd-win-agent-bootstrap">&amp; ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent</code>
+                </div>
+                <p>Downloads to <code>C:\Borealis</code>, stages files, and launches agent deployment.</p>
               </article>
               <article class="cmd cmd-wide">
                 <strong>Windows Agent (embedded server URL + enrollment code)</strong>
                 <div class="code-wrap">
                   <button class="copy-btn" type="button" data-copy-target="cmd-win-agent-embedded" aria-label="Copy Windows embedded Agent command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
-                  <code id="cmd-win-agent-embedded">./Borealis.ps1 -Agent -ServerUrl "https://10.0.0.54:5000" -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"</code>
+                  <code id="cmd-win-agent-embedded">&amp; ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://10.0.0.54:5000" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"</code>
                 </div>
                 <span class="embedded-label">Embedded bootstrap example</span>
                 <p>Use when distributing non-interactive installs with a predefined server endpoint and enrollment code.</p>
@@ -1144,7 +1144,7 @@
                 <strong>Linux Agent Path</strong>
                 <div class="code-wrap">
                   <button class="copy-btn" type="button" data-copy-target="cmd-linux-agent-path" aria-label="Copy Linux Agent command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
-                  <code id="cmd-linux-agent-path">curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Borealis.sh | sudo bash -s --</code>
+                  <code id="cmd-linux-agent-path">curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --</code>
                 </div>
                 <p>Current Linux agent support is incomplete; treat this path as experimental.</p>
               </article>
@@ -1152,7 +1152,7 @@
                 <strong>Linux Agent (embedded server URL + enrollment code)</strong>
                 <div class="code-wrap">
                   <button class="copy-btn" type="button" data-copy-target="cmd-linux-agent-embedded" aria-label="Copy Linux embedded Agent command"><span class="material-symbols-outlined" aria-hidden="true">content_copy</span></button>
-                  <code id="cmd-linux-agent-embedded">curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Borealis.sh | sudo bash -s -- --agent --serverurl https://10.0.0.54:5000 --enrollmentcode E56F-FD6A-7D68-DEE9-899D-68AC-127D-84FE</code>
+                  <code id="cmd-linux-agent-embedded">curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl https://10.0.0.54:5000 --enrollmentcode E56F-FD6A-7D68-DEE9-899D-68AC-127D-84FE</code>
                 </div>
                 <span class="embedded-label">Embedded bootstrap example</span>
                 <p>Passes server URL and enrollment code directly during scripted install.</p>

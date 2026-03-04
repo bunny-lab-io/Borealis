@@ -38,7 +38,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ## Codex Agent (Detailed)
 ### Source vs runtime
 - Edit only in `Data/Engine/`.
-- `Engine/` is a runtime mirror and will be wiped/rebuilt by `Borealis.ps1` or `Borealis.sh`.
+- `Engine/` is a runtime mirror and is staged by `Borealis.sh` on Linux.
 
 ### EngineContext and lifecycle
 - `Data/Engine/server.py` builds an `EngineContext` that includes:
@@ -86,14 +86,14 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Quick jobs and scheduled jobs share this runtime to resolve scripts and variables.
 
 ### Platform parity
-- Windows is the reference platform.
-- Linux Engine works via `Borealis.sh`; Linux agent remains incomplete.
+- Engine deployment is Linux-only via `Borealis.sh`.
+- Linux agent remains incomplete.
 
 ### Borealis Engine Codex (Full)
 Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `ui-and-notifications.md` and other knowledgebase pages.
 
 #### Scope and runtime paths
-- Bootstrap: `Borealis.ps1` launches the Engine and/or Agent. The equivalent bootstrap script exists for Linux when running `Borealis.sh`.
+- Bootstrap: `Borealis.sh` handles Engine staging and launch on Linux. (`Borealis.ps1` is agent-only.)
 - Edit in `Data/Engine`; runtime copies live under `/Engine` and are discarded every time the engine is launched.
 
 #### Architecture
@@ -120,12 +120,12 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - UI shell bridge: `Data/Engine/services/WebSocket/vpn_shell.py`.
 
 #### WebUI and WebSocket migration
-- Static/template handling: `Data/Engine/services/WebUI`; deployment copy paths are wired through `Borealis.ps1` with TLS-aware URL generation.
+- Static/template handling: `Data/Engine/services/WebUI`; deployment copy paths are wired through `Borealis.sh` with TLS-aware URL generation.
 - Stage 6 tasks: migration switch in the legacy server for WebUI delegation and porting device/admin API endpoints into Engine services.
 - Stage 7 (queued): `register_realtime` hooks, Engine-side Socket.IO handlers, integration checks, legacy delegation updates.
 
 #### Platform parity
-- Windows is primary target. Keep Engine tooling aligned with the agent experience; Linux packaging must catch up before macOS work resumes.
+- Linux is the Engine target platform. Keep Engine tooling aligned with Linux packaging and runtime behavior.
 
 #### Ansible support (shared state)
 - Mirrors the agent's unfinished story: treat orchestration as experimental until packaging, connection management, and logging mature.

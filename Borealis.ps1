@@ -1,15 +1,8 @@
-﻿#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Borealis.ps1
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Borealis.ps1
 
 [CmdletBinding()]
 param(
-    [switch]$Server,
     [switch]$Agent,
-    [switch]$Vite,
-    [switch]$Flask,
-    [switch]$Quick,
-    [switch]$EngineTests,
-    [switch]$EngineProduction,
-    [switch]$EngineDev,
     [string]$EnrollmentCode = '',
     [string]$ServerUrl = ''
 )
@@ -32,7 +25,7 @@ function Request-BorealisElevation {
     if (Test-IsAdmin) { return $true }
 
     Write-Host ""  # spacer
-    Write-Host "Borealis requires Administrator permissions for Engine and Agent tasks." -ForegroundColor Yellow -BackgroundColor Black
+    Write-Host "Borealis requires Administrator permissions for Agent deployment." -ForegroundColor Yellow -BackgroundColor Black
     Write-Host "Grant elevated permissions now? (Y/N)" -ForegroundColor Yellow -BackgroundColor Black
     $resp = Read-Host
     if ($resp -notin @('y','Y','yes','YES')) { return $false }
@@ -76,11 +69,6 @@ function Request-BorealisElevation {
     }
 }
 
-# Preselect menu choices from CLI args (optional)
-$choice = $null
-$modeChoice = $null
-$engineModeChoice = $null
-
 $scriptPath = $PSCommandPath
 if (-not $scriptPath -or $scriptPath -eq '') { $scriptPath = $MyInvocation.MyCommand.Definition }
 if (-not (Request-BorealisElevation -ScriptPath $scriptPath -BoundParameters $PSBoundParameters -ExtraArgs $MyInvocation.UnboundArguments)) {
@@ -88,65 +76,9 @@ if (-not (Request-BorealisElevation -ScriptPath $scriptPath -BoundParameters $PS
 }
 
 $scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
-
-if ($EngineTests) {
-    Set-Location -Path $scriptDir
-    $env:BOREALIS_PROJECT_ROOT = $scriptDir
-
-    $python = Get-Command python3 -ErrorAction SilentlyContinue
-    if (-not $python) {
-        $python = Get-Command python -ErrorAction SilentlyContinue
-    }
-
-    if (-not $python) {
-        Write-Host "Python interpreter not found. Install Python 3 to run Engine tests." -ForegroundColor Red
-        exit 1
-    }
-
-    & $python.Source -m pytest 'Data/Engine/Unit_Tests'
-    exit $LASTEXITCODE
-}
-
-if ($Server -and $Agent) {
-    Write-Host "Cannot use -Server and -Agent together." -ForegroundColor Red
-    exit 1
-}
-
-if ($Vite -and $Flask) {
-    Write-Host "Cannot combine -Vite and -Flask." -ForegroundColor Red
-    exit 1
-}
-
-if ($EngineProduction -and $EngineDev) {
-    Write-Host "Cannot combine -EngineProduction and -EngineDev." -ForegroundColor Red
-    exit 1
-}
-
-if (($EngineProduction -or $EngineDev) -and ($Server -or $Agent)) {
-    Write-Host "Engine automation switches cannot be combined with -Server or -Agent." -ForegroundColor Red
-    exit 1
-}
-
-if ($Server) {
-    # Auto-select main menu option for Server when -Server flag is provided
-    $choice = '1'
-} elseif ($Agent) {
-    $choice = '2'
-} elseif ($EngineProduction -or $EngineDev) {
-    $choice = '1'
-    if ($EngineProduction) { $engineModeChoice = '1' }
-    if ($EngineDev) { $engineModeChoice = '3' }
-}
-
-if ($Server) {
-    if     ($Vite)             { $modeChoice = '3' }
-    elseif ($Flask -and $Quick){ $modeChoice = '2' }
-    elseif ($Flask)            { $modeChoice = '1' }
-}
 $host.UI.RawUI.WindowTitle = "Borealis"
 Clear-Host
 
-## Note: Heavy dependency downloads are deferred until selecting Server (option 1)
 # ---------------------- ASCII Art Terminal Required Changes ----------------------
 # Set the .NET Console output encoding to UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -184,103 +116,6 @@ function Set-FileUtf8Content {
     }
 }
 
-function Get-LatestWriteTime {
-    param(
-        [string]$Path
-    )
-    try {
-        $item = Get-ChildItem -Path $Path -Recurse -Force -ErrorAction Stop |
-            Sort-Object -Property LastWriteTime -Descending |
-            Select-Object -First 1
-        if ($item) { return $item.LastWriteTime }
-    } catch {
-        return [datetime]::MinValue
-    }
-    return [datetime]::MinValue
-}
-
-function Sync-EngineRuntime {
-    param(
-        [string]$SourceRoot,
-        [string]$DestinationRoot
-    )
-    if (-not (Test-Path $SourceRoot)) { return $false }
-
-    $needsSync = $false
-    if (-not (Test-Path $DestinationRoot)) {
-        $needsSync = $true
-    } else {
-        $sourceTime = Get-LatestWriteTime -Path $SourceRoot
-        $destTime = Get-LatestWriteTime -Path $DestinationRoot
-        if ($sourceTime -gt $destTime) { $needsSync = $true }
-    }
-
-    if (-not $needsSync) { return $false }
-
-    if (Test-Path $DestinationRoot) {
-        Remove-Item $DestinationRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    New-Item -Path $DestinationRoot -ItemType Directory -Force | Out-Null
-
-    Get-ChildItem -Path $SourceRoot -Force | ForEach-Object {
-        if ($_.Name -ieq 'Assemblies') {
-            return
-        }
-        Copy-Item -Path $_.FullName -Destination $DestinationRoot -Recurse -Force
-    }
-    return $true
-}
-
-function Sync-EngineAssembliesRuntime {
-    param(
-        [string]$SourceAssembliesRoot,
-        [string]$RuntimeAssembliesRoot
-    )
-
-    if (-not (Test-Path $RuntimeAssembliesRoot)) {
-        New-Item -Path $RuntimeAssembliesRoot -ItemType Directory -Force | Out-Null
-    }
-
-    if (-not (Test-Path $SourceAssembliesRoot)) {
-        Write-Host "Engine assemblies source directory '$SourceAssembliesRoot' was not found. Skipping assemblies sync." -ForegroundColor Yellow
-        return
-    }
-
-    foreach ($dbName in @('official.db', 'community.db')) {
-        $sourceDb = Join-Path $SourceAssembliesRoot $dbName
-        $runtimeDb = Join-Path $RuntimeAssembliesRoot $dbName
-
-        if (-not (Test-Path $sourceDb)) {
-            Write-Host "Engine assemblies source database '$sourceDb' was not found. Skipping '$dbName'." -ForegroundColor Yellow
-            continue
-        }
-
-        foreach ($suffix in @('', '-wal', '-shm')) {
-            $runtimeCandidate = "$runtimeDb$suffix"
-            $sourceCandidate = "$sourceDb$suffix"
-
-            if (Test-Path $runtimeCandidate) {
-                Remove-Item -Path $runtimeCandidate -Force -ErrorAction SilentlyContinue
-            }
-            if (Test-Path $sourceCandidate) {
-                Copy-Item -Path $sourceCandidate -Destination $runtimeCandidate -Force
-            }
-        }
-    }
-
-    $sourceUserDb = Join-Path $SourceAssembliesRoot 'user_created.db'
-    $runtimeUserDb = Join-Path $RuntimeAssembliesRoot 'user_created.db'
-    if (-not (Test-Path $runtimeUserDb) -and (Test-Path $sourceUserDb)) {
-        foreach ($suffix in @('', '-wal', '-shm')) {
-            $runtimeCandidate = "$runtimeUserDb$suffix"
-            $sourceCandidate = "$sourceUserDb$suffix"
-            if (Test-Path $sourceCandidate) {
-                Copy-Item -Path $sourceCandidate -Destination $runtimeCandidate -Force
-            }
-        }
-    }
-}
-
 # Ensure log directories
 function Ensure-AgentLogDir {
     $agentRoot = Join-Path $scriptDir 'Agent'
@@ -299,167 +134,6 @@ function Write-AgentLog {
     $path = Join-Path $dir $FileName
     $ts = Get-Date -Format s
     "[$ts] $Message" | Out-File -FilePath $path -Append -Encoding UTF8
-}
-
-function Ensure-EngineLogDir {
-    $engineRoot = Join-Path $scriptDir 'Engine'
-    if (-not (Test-Path $engineRoot)) {
-        New-Item -ItemType Directory -Path $engineRoot -Force | Out-Null
-    }
-    $engineLogDir = Join-Path $engineRoot 'Logs'
-    if (-not (Test-Path $engineLogDir)) {
-        New-Item -ItemType Directory -Path $engineLogDir -Force | Out-Null
-    }
-    return $engineLogDir
-}
-
-function Write-ViteLog {
-    param(
-        [string]$Message,
-        [string]$ServiceName = 'vite-dev'
-    )
-    $engineLogDir = Ensure-EngineLogDir
-    $logPath = Join-Path $engineLogDir 'vite.log'
-    $timestamp = (Get-Date).ToString('s')
-    "$timestamp-$ServiceName-$Message" | Out-File -FilePath $logPath -Append -Encoding UTF8
-}
-
-function Get-EngineLaunchStreamPaths {
-    $engineLogDir = Ensure-EngineLogDir
-    [PSCustomObject]@{
-        StdOut = Join-Path $engineLogDir 'engine-launch.stdout.log'
-        StdErr = Join-Path $engineLogDir 'engine-launch.stderr.log'
-    }
-}
-
-function Get-EngineStartLabel {
-    param(
-        [string]$EngineMode
-    )
-
-    $resolvedMode = "production"
-    if (-not [string]::IsNullOrWhiteSpace($EngineMode)) {
-        $resolvedMode = $EngineMode.Trim().ToLowerInvariant()
-    }
-
-    if ($resolvedMode -eq "developer") {
-        return "(Dev) Engine Started on https://localhost:5173"
-    }
-
-    return "(Production) Engine Started on https://localhost:5000"
-}
-
-function Ensure-EngineTlsMaterial {
-    param(
-        [string]$PythonPath,
-        [string]$CertificateRoot
-    )
-
-    $effectiveRoot = $null
-
-    if (Test-Path $PythonPath) {
-        $code = @'
-from Data.Engine.security import certificates
-certificates.ensure_certificate()
-print(certificates.engine_certificates_root())
-'@
-        try {
-            $output = & $PythonPath -c $code
-            if ($output) {
-                $raw = $output | Select-Object -Last 1
-                if ($raw) {
-                    $effectiveRoot = ([string]$raw).Trim()
-                }
-            }
-        } catch {
-            Write-Host "Failed to pre-generate Engine TLS certificates: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-
-    if (-not $effectiveRoot -and $CertificateRoot) {
-        $certCandidate = Join-Path $CertificateRoot 'borealis-server-cert.pem'
-        $keyCandidate  = Join-Path $CertificateRoot 'borealis-server-key.pem'
-        if ((Test-Path $certCandidate) -and (Test-Path $keyCandidate)) {
-            $effectiveRoot = $CertificateRoot
-        } else {
-            $fallbackMessage = "Provided certificate root '$CertificateRoot' is missing expected TLS material; using Engine runtime certificates instead."
-            Write-Host $fallbackMessage -ForegroundColor Yellow
-            try { Write-ViteLog $fallbackMessage } catch {}
-        }
-    }
-
-    if (-not $effectiveRoot) {
-        $effectiveRoot = Join-Path $scriptDir 'Engine\Certificates'
-    }
-
-    if (-not (Test-Path $effectiveRoot)) {
-        New-Item -Path $effectiveRoot -ItemType Directory -Force | Out-Null
-    }
-
-    $env:BOREALIS_CERT_DIR   = $effectiveRoot
-    $env:BOREALIS_TLS_CERT   = Join-Path $effectiveRoot 'borealis-server-cert.pem'
-    $env:BOREALIS_TLS_KEY    = Join-Path $effectiveRoot 'borealis-server-key.pem'
-    $env:BOREALIS_TLS_BUNDLE = Join-Path $effectiveRoot 'borealis-server-bundle.pem'
-}
-
-function Ensure-EngineWebInterface {
-    param(
-        [string]$ProjectRoot
-    )
-
-    $engineDestination = Join-Path $ProjectRoot 'Engine\web-interface'
-    $engineStageSource = Join-Path $ProjectRoot 'Data\Engine\web-interface'
-
-    if (-not (Test-Path $engineStageSource)) {
-        throw "Engine web interface source missing at '$engineStageSource'."
-    }
-
-    if (Test-Path $engineDestination) {
-        Remove-Item $engineDestination -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    New-Item -Path $engineDestination -ItemType Directory -Force | Out-Null
-
-    Copy-Item (Join-Path $engineStageSource '*') $engineDestination -Recurse -Force
-
-    if (-not (Test-Path (Join-Path $engineDestination 'package.json'))) {
-        throw "Failed to stage Engine web interface into '$engineDestination' from '$engineStageSource'."
-    }
-}
-
-function Get-WebUiLatestWriteTime {
-    param([string]$Root)
-
-    if (-not (Test-Path $Root)) { return $null }
-
-    $exclusions = @('\node_modules\', '\build\', '\dist\')
-    $files = Get-ChildItem -Path $Root -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
-        $full = $_.FullName
-        -not ($exclusions | Where-Object { $full -like "*$_*" })
-    }
-    if (-not $files) { return $null }
-    return ($files | Sort-Object -Property LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
-}
-
-function Test-WebUiBuildFresh {
-    param(
-        [string]$SourceRoot,
-        [string]$BuildRoot
-    )
-
-    $sourceLatest = Get-WebUiLatestWriteTime -Root $SourceRoot
-    if (-not $sourceLatest) { return $false }
-
-    $buildIndex = Join-Path $BuildRoot 'index.html'
-    if (-not (Test-Path $buildIndex -PathType Leaf)) { return $false }
-
-    try {
-        $buildTime = (Get-Item $buildIndex -ErrorAction Stop).LastWriteTime
-    } catch {
-        return $false
-    }
-
-    return ($buildTime -ge $sourceLatest)
 }
 
 $script:Utf8CodePageChanged = $false
@@ -589,18 +263,11 @@ function Run-Step {
     }
 }
 
-# ---------------------- Server Deployment / Operation Mode Variables ----------------------
-# Define the default operation mode: production  | developer
-[string]$borealis_operation_mode = 'production'
-
 # ---------------------- Bundle Executables Setup ----------------------
 $scriptDir  = Split-Path $MyInvocation.MyCommand.Path -Parent
 $depsRoot   = Join-Path $scriptDir 'Dependencies'
 $pythonExe  = Join-Path $depsRoot 'Python\python.exe'
-$nodeExe    = Join-Path $depsRoot 'NodeJS\node.exe'
 $sevenZipExe    = Join-Path $depsRoot "7zip\7z.exe"
-$npmCmd     = Join-Path (Split-Path $nodeExe) 'npm.cmd'
-$npxCmd     = Join-Path (Split-Path $nodeExe) 'npx.cmd'
 $ansibleEeRequirementsPath = Join-Path $scriptDir 'Data\Agent\ansible-ee-requirements.txt'
 $ansibleEeVersionFile      = Join-Path $scriptDir 'Data\Agent\ansible-ee-version.txt'
 $script:AnsibleExecutionEnvironmentVersion = '1.0.0'
@@ -614,9 +281,6 @@ if (Test-Path $ansibleEeVersionFile -PathType Leaf) {
         # Leave default version value
     }
 }
-$node7zUrl      = "https://nodejs.org/dist/v23.11.0/node-v23.11.0-win-x64.7z"
-$nodeInstallDir = Join-Path $depsRoot "NodeJS"
-$node7zPath     = Join-Path $depsRoot "node-v23.11.0-win-x64.7z"
 $gitVersionTag  = 'v2.47.1.windows.1'
 $gitPackageName = 'MinGit-2.47.1-64-bit.zip'
 $gitZipUrl      = "https://github.com/git-for-windows/git/releases/download/$gitVersionTag/$gitPackageName"
@@ -645,7 +309,7 @@ $wintunZipPath        = Join-Path $wireGuardInstallerDir $wintunZipName
 
 # ---------------------- Dependency Installation Functions ----------------------
 function Install_Shared_Dependencies {
-    # Python (shared by Server and Agent)
+    # Python bootstrap for the Borealis Agent runtime.
     Run-Step "Dependency: Python" {
         $pythonInstallDir = Join-Path $scriptDir "Dependencies\Python"
         $localPythonExe   = Join-Path $pythonInstallDir "python.exe"
@@ -688,79 +352,6 @@ function Install_Shared_Dependencies {
             if (-not (Test-Path $localPythonExe)) {
                 throw "Python executable not found after MSI extraction."
             }
-        }
-    }
-}
-
-function Install_Server_Dependencies {
-    # Tesseract OCR Engine
-    Run-Step "Dependency: Tesseract-OCR" {
-        $tessExeUrl     = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
-        $tessExePath    = Join-Path $depsRoot "tesseract-installer.exe"
-        $tessInstallDir = Join-Path $scriptDir "Data\Engine\Python_API_Endpoints\Tesseract-OCR"
-
-        if (-not (Test-Path (Join-Path $tessInstallDir "tesseract.exe"))) {
-            # Download the installer if it doesn't exist
-            if (-not (Test-Path $tessExePath)) {
-                Invoke-WebRequest -Uri $tessExeUrl -OutFile $tessExePath
-            }
-
-            # Extract using 7-Zip
-            if (-not (Test-Path $sevenZipExe)) {
-                throw "7-Zip CLI not found at: $sevenZipExe"
-            }
-
-            if (Test-Path $tessInstallDir) {
-                Remove-Item $tessInstallDir -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            New-Item -ItemType Directory -Path $tessInstallDir | Out-Null
-
-            & $sevenZipExe x $tessExePath "-o$tessInstallDir" -y | Out-Null
-
-            # Optional cleanup
-            Remove-Item $tessExePath -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    # Tesseract Language Data
-    Run-Step "Dependency: Tesseract-OCR - Pre-Trained Model Data" {
-        $langDataDir = Join-Path $scriptDir "Data\Engine\Python_API_Endpoints\Tesseract-OCR\tessdata"
-        $engPath     = Join-Path $langDataDir "eng.traineddata"
-        $osdPath     = Join-Path $langDataDir "osd.traineddata"
-
-        if (-not (Test-Path $engPath)) {
-            Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata" -OutFile $engPath
-        }
-
-        if (-not (Test-Path $osdPath)) {
-            Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/osd.traineddata" -OutFile $osdPath
-        }
-    }
-
-    # NodeJS (required for Vite / Web UI)
-    Run-Step "Dependency: NodeJS" {
-        if (-not (Test-Path $nodeExe)) {
-            # Download archive if not present
-            if (-not (Test-Path $node7zPath)) {
-                Invoke-WebRequest -Uri $node7zUrl -OutFile $node7zPath
-            }
-
-            # Extract using bundled 7z
-            if (-not (Test-Path $sevenZipExe)) {
-                throw "7-Zip CLI not found at: $sevenZipExe"
-            }
-
-            & $sevenZipExe x $node7zPath "-o$nodeInstallDir" -y | Out-Null
-
-            # The extracted contents might live under a subfolder; flatten if needed
-            $extracted = Get-ChildItem $nodeInstallDir | Where-Object { $_.PSIsContainer } | Select-Object -First 1
-            if ($extracted) {
-                Get-ChildItem $extracted.FullName | Move-Item -Destination $nodeInstallDir -Force
-                Remove-Item $extracted.FullName -Recurse -Force
-            }
-
-            # Clean Up 7z File After Extraction
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $node7zPath
         }
     }
 }
@@ -2200,7 +1791,7 @@ function InstallOrUpdate-BorealisAgent {
             if ($pyCmd) { $pythonForVenv = $pyCmd.Source }
             elseif ($pythonCmd) { $pythonForVenv = $pythonCmd.Source }
             else {
-                Write-Host "Python not found. Install Python or run Server setup (option 1)." -ForegroundColor Red
+                Write-Host "Python bootstrap not found. Ensure Dependencies\\Python is present or install Python 3." -ForegroundColor Red
                 exit 1
             }
         }
@@ -2540,430 +2131,12 @@ function InstallOrUpdate-BorealisAgent {
 # ---------------------- Main -----------------------
 $Host.UI.RawUI.BackgroundColor = 'Black'
 Clear-Host
-@'
-:::::::::   ::::::::  :::::::::  ::::::::::     :::     :::        ::::::::::: :::::::: 
-:+:    :+: :+:    :+: :+:    :+: :+:          :+: :+:   :+:            :+:    :+:    :+:
-+:+    +:+ +:+    +:+ +:+    +:+ +:+         +:+   +:+  +:+            +:+    +:+       
-+#++:++#+  +#+    +:+ +#++:++#:  +#++:++#   +#++:++#++: +#+            +#+    +#++:++#++
-+#+    +#+ +#+    +#+ +#+    +#+ +#+        +#+     +#+ +#+            +#+           +#+
-#+#    #+# #+#    #+# #+#    #+# #+#        #+#     #+# #+#            #+#    #+#    #+#
-#########   ########  ###    ### ########## ###     ### ########## ########### ######## 
-'@ | Write-Host -ForegroundColor DarkCyan
-@'
-____ _  _ ___ ____ _  _ ____ ___ _ ____ _  _    ___  _    ____ ___ ____ ____ ____ _  _
-|__| |  |  |  |  | |\/| |__|  |  | |  | |\ |    |__] |    |__|  |  |___ |  | |__/ |\/|
-|  | |__|  |  |__| |  | |  |  |  | |__| | \|    |    |___ |  |  |  |    |__| |  \ |  |
-'@ | Write-Host -ForegroundColor DarkGray
-
-if (-not $choice) {
-    Write-Host " "
-    Write-Host "Please choose which function you want to launch:"
-    Write-Host " 1) Borealis Engine" -ForegroundColor DarkGray
-    Write-Host " 2) Borealis Agent" -ForegroundColor DarkGray
-    Write-Host "Type a number and press " -NoNewLine
-    Write-Host "<ENTER>" -ForegroundColor DarkCyan
-    $choice = Read-Host
+$host.UI.RawUI.WindowTitle = 'Borealis Agent'
+Write-Host ''
+if (-not (Test-IsAdmin)) {
+    Write-Host 'Administrator permissions are required to deploy the Borealis Agent.' -ForegroundColor Red
+    exit 1
 }
-
-switch ($choice) {
-    "1" {
-        $host.UI.RawUI.WindowTitle = "Borealis Engine"
-        Write-Host "Ensuring Engine Dependencies Exist..." -ForegroundColor DarkCyan
-
-        Install_Shared_Dependencies
-        Install_Server_Dependencies
-
-        foreach ($tool in @($pythonExe, $nodeExe, $npmCmd, $npxCmd)) {
-            if (-not (Test-Path $tool)) {
-                Write-Host "`r$($symbols.Fail) Bundled executable not found at '$tool'." -ForegroundColor Red
-                exit 1
-            }
-        }
-        $nodeDir = Split-Path $nodeExe
-        $env:BOREALIS_NODE_DIR = $nodeDir
-        $env:BOREALIS_NPM_CMD  = $npmCmd
-        $env:BOREALIS_NPX_CMD  = $npxCmd
-        $env:PATH = '{0};{1};{2}' -f (Split-Path $pythonExe), $nodeDir, $env:PATH
-
-        if (-not $engineModeChoice) {
-            Write-Host " "
-            Write-Host "Configure Borealis Engine Mode:" -ForegroundColor DarkYellow
-            Write-Host " 1) Build & Launch > Production Flask Server @ https://localhost:5000" -ForegroundColor DarkCyan
-            Write-Host " 2) [Skip Build] & Immediately Launch > Production Flask Server @ https://localhost:5000" -ForegroundColor DarkCyan
-            Write-Host " 3) Launch > [Hotload-Ready] Vite Dev Server @ http://localhost:5173" -ForegroundColor DarkCyan
-            $engineModeChoice = Read-Host "Enter choice [1/2/3]"
-        } else {
-            Write-Host "Auto-selecting Borealis Engine mode option $engineModeChoice." -ForegroundColor DarkYellow
-        }
-
-        $engineOperationMode = "production"
-        $engineImmediateLaunch = $false
-        switch ($engineModeChoice) {
-            "1" { $engineOperationMode = "production" }
-            "2" { $engineImmediateLaunch = $true }
-            "3" { $engineOperationMode = "developer" }
-            default {
-                Write-Host "Invalid mode choice: $engineModeChoice" -ForegroundColor Red
-                break
-            }
-        }
-
-        if ($engineImmediateLaunch) {
-            $webUiSourceRoot = Join-Path $scriptDir 'Data\Engine\web-interface'
-            $webUiBuildRoot  = Join-Path $scriptDir 'Engine\web-interface\build'
-            $webUiFresh = Test-WebUiBuildFresh -SourceRoot $webUiSourceRoot -BuildRoot $webUiBuildRoot
-            if (-not $webUiFresh) {
-                Write-Host "Detected WebUI changes newer than the last production build. Running full build instead of Quick/Skip." -ForegroundColor Yellow
-                $engineImmediateLaunch = $false
-            }
-        }
-
-        if ($engineModeChoice -notin @('1','2','3')) {
-            break
-        }
-
-        if ($engineImmediateLaunch) {
-            $engineSourceAbsolute = Join-Path $scriptDir 'Data\Engine'
-            $engineDataAbsolute = Join-Path $scriptDir 'Engine\Data\Engine'
-            if (Sync-EngineRuntime -SourceRoot $engineSourceAbsolute -DestinationRoot $engineDataAbsolute) {
-                Write-Host "Synced Engine runtime code from Data\\Engine." -ForegroundColor DarkCyan
-            }
-            Run-Step "Sync Engine Assembly Databases" {
-                $runtimeAssemblies = Join-Path $scriptDir 'Engine\Assemblies'
-                $sourceAssemblies = Join-Path $engineSourceAbsolute 'Assemblies'
-                Sync-EngineAssembliesRuntime -SourceAssembliesRoot $sourceAssemblies -RuntimeAssembliesRoot $runtimeAssemblies
-            }
-            Run-Step "Borealis Engine: Launch Flask Server" {
-                Push-Location (Join-Path $scriptDir "Engine")
-                $py = Join-Path $scriptDir "Engine\Scripts\python.exe"
-                $previousEngineMode = $env:BOREALIS_ENGINE_MODE
-                $previousEnginePort = $env:BOREALIS_ENGINE_PORT
-                $previousProjectRoot = $env:BOREALIS_PROJECT_ROOT
-                $env:BOREALIS_ENGINE_MODE = $engineOperationMode
-                $env:BOREALIS_ENGINE_PORT = "5000"
-                $env:BOREALIS_PROJECT_ROOT = $scriptDir
-                Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
-                Write-Host "===================================================================================="
-                $engineStartLabel = Get-EngineStartLabel -EngineMode $engineOperationMode
-                Write-Host "$($symbols.Running) $engineStartLabel" -ForegroundColor DarkCyan
-                $engineLaunchStreams = Get-EngineLaunchStreamPaths
-                & $py -m Data.Engine.bootstrapper 1>> $engineLaunchStreams.StdOut 2>> $engineLaunchStreams.StdErr
-                if ($previousEngineMode) { $env:BOREALIS_ENGINE_MODE = $previousEngineMode } else { Remove-Item Env:BOREALIS_ENGINE_MODE -ErrorAction SilentlyContinue }
-                if ($previousEnginePort) { $env:BOREALIS_ENGINE_PORT = $previousEnginePort } else { Remove-Item Env:BOREALIS_ENGINE_PORT -ErrorAction SilentlyContinue }
-                if ($previousProjectRoot) { $env:BOREALIS_PROJECT_ROOT = $previousProjectRoot } else { Remove-Item Env:BOREALIS_PROJECT_ROOT -ErrorAction SilentlyContinue }
-                Pop-Location
-            }
-            break
-        }
-
-        Write-Host "Deploying Borealis Engine in '$engineOperationMode' mode" -ForegroundColor Blue
-
-        $venvFolder            = "Engine"
-        $dataSource            = "Data"
-        $engineSource          = "$dataSource\Engine"
-        $engineDataDestination = "$venvFolder\Data\Engine"
-        $webUIDestination      = "$venvFolder\web-interface"
-        $venvPython            = Join-Path $venvFolder 'Scripts\python.exe'
-        $engineSourceAbsolute  = Join-Path $scriptDir $engineSource
-
-        Run-Step "Create Borealis Engine Virtual Python Environment" {
-            $venvActivate = Join-Path $venvFolder 'Scripts\Activate'
-            $pyvenvCfg = Join-Path $venvFolder 'pyvenv.cfg'
-            $expectedPython = $pythonExe
-            $expectedPythonNorm = $null
-            $expectedHomeNorm = $null
-            try {
-                if (Test-Path $pythonExe -PathType Leaf) {
-                    $expectedPython = (Resolve-Path $pythonExe -ErrorAction Stop).ProviderPath
-                }
-            } catch {
-                $expectedPython = $pythonExe
-            }
-            if ($expectedPython) {
-                $expectedPythonNorm = $expectedPython.ToLowerInvariant()
-                try {
-                    $expectedHome = Split-Path -Path $expectedPython -Parent
-                } catch {
-                    $expectedHome = $null
-                }
-                if ($expectedHome) {
-                    $expectedHomeNorm = $expectedHome.ToLowerInvariant()
-                }
-            }
-
-            $venvNeedsUpgrade = $false
-            if (Test-Path $pyvenvCfg -PathType Leaf) {
-                try {
-                    $cfgLines = Get-Content -Path $pyvenvCfg -ErrorAction Stop
-                    $cfgMap = @{}
-                    foreach ($line in $cfgLines) {
-                        $trimmed = $line.Trim()
-                        if (-not $trimmed -or $trimmed.StartsWith('#')) {
-                            continue
-                        }
-                        $parts = $trimmed -split '=', 2
-                        if ($parts.Count -ne 2) {
-                            continue
-                        }
-                        $cfgMap[$parts[0].Trim().ToLowerInvariant()] = $parts[1].Trim()
-                    }
-
-                    $cfgExecutable = $cfgMap['executable']
-                    $cfgHome = $cfgMap['home']
-
-                    if ($cfgExecutable -and -not (Test-Path $cfgExecutable -PathType Leaf)) {
-                        $venvNeedsUpgrade = $true
-                    } elseif ($cfgHome -and -not (Test-Path $cfgHome -PathType Container)) {
-                        $venvNeedsUpgrade = $true
-                    } else {
-                        if ($cfgExecutable -and $expectedPythonNorm) {
-                            try {
-                                $resolvedExe = (Resolve-Path $cfgExecutable -ErrorAction Stop).ProviderPath
-                            } catch {
-                                $resolvedExe = $cfgExecutable
-                            }
-                            if ($resolvedExe) {
-                                $resolvedExeNorm = $resolvedExe.ToLowerInvariant()
-                            } else {
-                                $resolvedExeNorm = $null
-                            }
-                            if ($resolvedExeNorm -and $resolvedExeNorm -ne $expectedPythonNorm) {
-                                $venvNeedsUpgrade = $true
-                            }
-                        }
-                        if (-not $venvNeedsUpgrade -and $cfgHome -and $expectedHomeNorm) {
-                            try {
-                                $resolvedHome = (Resolve-Path $cfgHome -ErrorAction Stop).ProviderPath
-                            } catch {
-                                $resolvedHome = $cfgHome
-                            }
-                            if ($resolvedHome) {
-                                $resolvedHomeNorm = $resolvedHome.ToLowerInvariant()
-                            } else {
-                                $resolvedHomeNorm = $null
-                            }
-                            if ($resolvedHomeNorm -and $resolvedHomeNorm -ne $expectedHomeNorm) {
-                                $venvNeedsUpgrade = $true
-                            }
-                        }
-                    }
-                } catch {
-                    $venvNeedsUpgrade = $true
-                }
-            }
-
-            if (-not (Test-Path $venvActivate)) {
-                & $pythonExe -m venv $venvFolder | Out-Null
-            } elseif ($venvNeedsUpgrade) {
-                Write-Host "Detected relocated Engine virtual environment. Rebuilding interpreter bindings..." -ForegroundColor Yellow
-                & $pythonExe -m venv --upgrade $venvFolder | Out-Null
-            }
-
-            $engineDataRoot = Join-Path $venvFolder 'Data'
-            if (-not (Test-Path $engineDataRoot)) {
-                New-Item -Path $engineDataRoot -ItemType Directory -Force | Out-Null
-            }
-
-            $engineDataAbsolute = Join-Path $scriptDir $engineDataDestination
-
-            $runtimeAssemblies = Join-Path $scriptDir 'Engine\Assemblies'
-            $sourceAssemblies  = Join-Path $engineSourceAbsolute 'Assemblies'
-
-            $runtimeDatabase   = Join-Path $scriptDir 'Engine\database.db'
-
-            $runtimeAuthTokens = Join-Path $scriptDir 'Engine\Auth_Tokens'
-
-            if (Test-Path $engineDataAbsolute) {
-                Remove-Item $engineDataAbsolute -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            New-Item -Path $engineDataAbsolute -ItemType Directory -Force | Out-Null
-
-            if (-not (Test-Path $engineSourceAbsolute)) {
-                throw "Engine source directory '$engineSourceAbsolute' not found."
-            }
-            Get-ChildItem -Path $engineSourceAbsolute -Force | ForEach-Object {
-                if ($_.Name -ieq 'Assemblies') {
-                    return
-                }
-                Copy-Item -Path $_.FullName -Destination $engineDataAbsolute -Recurse -Force
-            }
-            Sync-EngineAssembliesRuntime -SourceAssembliesRoot $sourceAssemblies -RuntimeAssembliesRoot $runtimeAssemblies
-
-            if (-not (Test-Path $runtimeAuthTokens)) {
-                New-Item -Path $runtimeAuthTokens -ItemType Directory -Force | Out-Null
-            }
-
-            if (-not (Test-Path $runtimeDatabase)) {
-                $runtimeDatabaseDir = Split-Path -Path $runtimeDatabase -Parent
-                if (-not (Test-Path $runtimeDatabaseDir)) {
-                    New-Item -Path $runtimeDatabaseDir -ItemType Directory -Force | Out-Null
-                }
-            }
-
-            . (Join-Path $venvFolder 'Scripts\Activate')
-        }
-
-        Run-Step "Install Engine Python Dependencies into Virtual Python Environment" {
-            $engineRequirements = @(
-                (Join-Path $engineSourceAbsolute 'engine-requirements.txt'),
-                (Join-Path $engineSourceAbsolute 'requirements.txt')
-            )
-            $requirementsPath = $engineRequirements | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if ($requirementsPath) {
-                & $venvPython -m pip install --disable-pip-version-check -q -r $requirementsPath | Out-Null
-            }
-        }
-
-        Run-Step "Copy Borealis Engine WebUI Files into: $webUIDestination" {
-            Ensure-EngineWebInterface -ProjectRoot $scriptDir
-            $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
-            if (-not (Test-Path (Join-Path $webUIDestinationAbsolute 'package.json'))) {
-                throw "Failed to stage Engine web interface into '$webUIDestinationAbsolute'."
-            }
-        }
-
-        Run-Step "Vite Web Frontend: Install NPM Packages" {
-            $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
-            if (Test-Path $webUIDestinationAbsolute) {
-                Push-Location $webUIDestinationAbsolute
-                try {
-                    $env:npm_config_loglevel = "silent"
-                    & $npmCmd install --silent --no-fund --audit=false *> $null
-                    if ($LASTEXITCODE -ne 0) {
-                        throw "npm install exited with code $LASTEXITCODE"
-                    }
-                } finally {
-                    Pop-Location
-                }
-            } else {
-                Write-Host "Web interface destination '$webUIDestinationAbsolute' not found." -ForegroundColor Yellow
-                throw "Web interface destination missing; cannot install npm packages."
-            }
-        }
-
-        Run-Step "Vite Web Frontend: Start ($engineOperationMode)" {
-            $webUIDestinationAbsolute = Join-Path $scriptDir $webUIDestination
-            if (-not (Test-Path $webUIDestinationAbsolute)) {
-                Write-ViteLog "WebUI destination missing at '$webUIDestinationAbsolute'; skipping Vite start."
-                return
-            }
-
-            Push-Location $webUIDestinationAbsolute
-            try {
-                Ensure-EngineTlsMaterial -PythonPath $venvPython
-                $requiredTlsFiles = @($env:BOREALIS_TLS_CERT, $env:BOREALIS_TLS_KEY, $env:BOREALIS_TLS_BUNDLE)
-                foreach ($tlsFile in $requiredTlsFiles) {
-                    if ([string]::IsNullOrWhiteSpace($tlsFile) -or -not (Test-Path $tlsFile)) {
-                        Write-ViteLog "TLS artifact missing or unreadable: '$tlsFile'"
-                        throw "Unable to locate Borealis TLS material needed for Vite."
-                    }
-                }
-                $tlsSummary = "cert=$env:BOREALIS_TLS_CERT bundle=$env:BOREALIS_TLS_BUNDLE"
-
-                if ($engineOperationMode -eq "developer") {
-                    $engineLogDir = Ensure-EngineLogDir
-                    $viteStdOut = Join-Path $engineLogDir 'vite-dev.stdout.log'
-                    $viteStdErr = Join-Path $engineLogDir 'vite-dev.stderr.log'
-                    foreach ($logPath in @($viteStdOut, $viteStdErr)) {
-                        if (Test-Path $logPath) {
-                            $archivePath = '{0}.{1}' -f $logPath, (Get-Date).ToString('yyyyMMddHHmmss')
-                            Move-Item -Path $logPath -Destination $archivePath -Force
-                            Write-ViteLog ("Archived previous {0} -> {1}" -f (Split-Path $logPath -Leaf), (Split-Path $archivePath -Leaf))
-                        }
-                    }
-
-                    $nodeDirForVite = Split-Path $nodeExe -ErrorAction SilentlyContinue
-                    $localBin = Join-Path $webUIDestinationAbsolute 'node_modules\.bin'
-                    foreach ($candidate in @($nodeDirForVite, $localBin)) {
-                        if ([string]::IsNullOrWhiteSpace($candidate)) {
-                            continue
-                        }
-                        if (-not (Test-Path $candidate)) {
-                            continue
-                        }
-                        $pathParts = $env:PATH -split [System.IO.Path]::PathSeparator
-                        if ($pathParts -notcontains $candidate) {
-                            $env:PATH = "$candidate$([System.IO.Path]::PathSeparator)$env:PATH"
-                            Write-ViteLog "Appended '$candidate' to PATH for Vite session."
-                        }
-                    }
-
-                    Write-ViteLog "Starting Vite dev server from '$webUIDestinationAbsolute' using TLS ($tlsSummary)."
-                    Write-ViteLog "npm CLI: $npmCmd"
-                    $startInfoArgs = @('run', 'dev')
-                    try {
-                        $viteProcess = Start-Process -FilePath $npmCmd `
-                                                     -ArgumentList $startInfoArgs `
-                                                     -WorkingDirectory $webUIDestinationAbsolute `
-                                                     -RedirectStandardOutput $viteStdOut `
-                                                     -RedirectStandardError $viteStdErr `
-                                                     -NoNewWindow -PassThru
-                        Write-ViteLog ("Spawned npm run dev (PID {0}); streaming to {1} / {2}" -f $viteProcess.Id, (Split-Path $viteStdOut -Leaf), (Split-Path $viteStdErr -Leaf))
-                        Start-Sleep -Seconds 2
-                        if ($viteProcess.HasExited) {
-                            $stderrTail = ''
-                            if (Test-Path $viteStdErr) {
-                                $stderrTail = (Get-Content $viteStdErr -Tail 20) -join ' | '
-                            }
-                            Write-ViteLog ("npm run dev exited with code {0}. stderr tail: {1}" -f $viteProcess.ExitCode, $stderrTail)
-                            throw "Vite dev server failed to start. Review $viteStdErr for details."
-                        } else {
-                            Write-ViteLog "Vite dev server is listening on https://localhost:5173 (PID $($viteProcess.Id))."
-                        }
-                    } catch {
-                        Write-ViteLog ("Failed to launch npm run dev: {0}" -f $_.Exception.Message)
-                        throw
-                    }
-                } else {
-                    Write-ViteLog "Executing npm run build for production WebUI assets."
-                    $engineLogDir = Ensure-EngineLogDir
-                    $viteBuildStdOut = Join-Path $engineLogDir 'vite-build.stdout.log'
-                    $viteBuildStdErr = Join-Path $engineLogDir 'vite-build.stderr.log'
-                    & $npmCmd run build 1>> $viteBuildStdOut 2>> $viteBuildStdErr
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-ViteLog ("npm run build failed with code {0}. stderr log: {1}" -f $LASTEXITCODE, $viteBuildStdErr) 'vite-build'
-                        throw "Vite production build failed. Review $viteBuildStdErr for details."
-                    }
-                    Write-ViteLog "npm run build completed successfully." 'vite-build'
-                }
-            } finally {
-                Pop-Location
-            }
-        }
-
-        Run-Step "Borealis Engine: Launch Flask Server" {
-            Push-Location (Join-Path $scriptDir "Engine")
-            $py = Join-Path $scriptDir "Engine\Scripts\python.exe"
-            $previousEngineMode = $env:BOREALIS_ENGINE_MODE
-            $previousEnginePort = $env:BOREALIS_ENGINE_PORT
-            $previousProjectRoot = $env:BOREALIS_PROJECT_ROOT
-            $env:BOREALIS_ENGINE_MODE = $engineOperationMode
-            $env:BOREALIS_ENGINE_PORT = "5000"
-            $env:BOREALIS_PROJECT_ROOT = $scriptDir
-            Write-Host "`nLaunching Borealis Engine..." -ForegroundColor Green
-            Write-Host "===================================================================================="
-            $engineStartLabel = Get-EngineStartLabel -EngineMode $engineOperationMode
-            Write-Host "$($symbols.Running) $engineStartLabel" -ForegroundColor DarkCyan
-            $engineLaunchStreams = Get-EngineLaunchStreamPaths
-            & $py -m Data.Engine.bootstrapper 1>> $engineLaunchStreams.StdOut 2>> $engineLaunchStreams.StdErr
-            if ($previousEngineMode) { $env:BOREALIS_ENGINE_MODE = $previousEngineMode } else { Remove-Item Env:BOREALIS_ENGINE_MODE -ErrorAction SilentlyContinue }
-            if ($previousEnginePort) { $env:BOREALIS_ENGINE_PORT = $previousEnginePort } else { Remove-Item Env:BOREALIS_ENGINE_PORT -ErrorAction SilentlyContinue }
-            if ($previousProjectRoot) { $env:BOREALIS_PROJECT_ROOT = $previousProjectRoot } else { Remove-Item Env:BOREALIS_PROJECT_ROOT -ErrorAction SilentlyContinue }
-            Pop-Location
-        }
-    }
-    
-    "2" {
-        $host.UI.RawUI.WindowTitle = "Borealis Agent"
-        Write-Host " "
-        if (-not (Test-IsAdmin)) {
-            Write-Host "Administrator permissions are required to deploy the Borealis Agent." -ForegroundColor Red
-            return
-        }
-        Write-Host "Escalated Permissions Granted > Agent is Eligible for Deployment." -ForegroundColor Green
-        Write-Host "Deploying Borealis Agent (fresh install/update path)..." -ForegroundColor Cyan
-        InstallOrUpdate-BorealisAgent
-        break
-    }
-    default { Write-Host "Invalid selection. Exiting..." -ForegroundColor Red; exit 1 }
-}
+Write-Host 'Escalated Permissions Granted > Agent is Eligible for Deployment.' -ForegroundColor Green
+Write-Host 'Deploying Borealis Agent (fresh install/update path)...' -ForegroundColor Cyan
+InstallOrUpdate-BorealisAgent

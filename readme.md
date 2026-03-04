@@ -16,11 +16,11 @@ I'm the sole maintainer and still learning as I go, while working a full-time IT
 - **Jobs and Scheduling**: Launch "*Quick Jobs*" instantly or create more advanced schedules.
 - **Visual Workflows**: Drag-and-drop node canvas for combining steps, analysis, and logic.
 - **Ansible Playbooks**: Ansible playbook support is unfinished/broken in both the Engine and agent runtimes. The goal is to ship server-driven Ansible (SSH/WinRM) alongside agent-driven playbooks.
-- **Windows-first**. Linux Engine support ships via `Borealis.sh` (Engine is currently the focus); the Linux agent is not yet available; only settings can be staged - and the current Linux agent build would not execute scripts, audits, or likely even enroll reliably.
+- **Linux Engine + Windows Agent**: Engine deployment is Linux-only (`Borealis.sh`); Windows deployment is agent-only (`Borealis.ps1`/`bootstrap.ps1`).
 
 ## Current Status & Limitations
 - Ansible is disabled/unstable: Engine quick-run returns not implemented, scheduled-job and agent paths are incomplete, and server-side SSH/WinRM playbook dispatch is still on the roadmap. Expect failures until the Ansible pipeline is rebuilt.
-- Linux agent is non-functional: script execution, auditing, and enrollment flows are Windows-only right now. Avoid Linux agent deployments until a proper port is delivered.  The core of Borealis is Python and Java, so it's already inherantly compatible with Linux, and you will find that the Engine runs fine in Linux, but the Agent needs a huge amount of work to account for various Linux distributions.
+- Linux agent is non-functional: script execution, auditing, and enrollment flows are Windows-only right now. Avoid Linux agent deployments until a proper port is delivered.
 
 ## Device Management
 Device List:
@@ -77,15 +77,23 @@ Site List:
 ## Getting Started
 
 ### Installation
-1) Start the Engine:
-   - Windows: `./Borealis.ps1 -EngineProduction` *Production Engine @ https://localhost:5000*
-   - Windows: `./Borealis.ps1 -EngineDev` *Dev (Vite + Flask) @ https://localhost:5173*
-   - Linux (Engine only): `./Borealis.sh --EngineProduction` *Production Engine @ https://localhost:5000* (use `--EngineDev` for Vite)
-      - Default Username: `admin`
-      - Default Password: `Password`
-2) Install the Agent:
-   - Windows: `./Borealis.ps1 -Agent`
-   - Linux: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --`
-   - Linux (ServerURL & Enrollment Code Included): `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://10.0.0.54:5000" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
-`
+#### Local Repository
+1) Start the Engine (Linux):
+   - `./Borealis.sh --EngineProduction` *Production Engine @ https://localhost:5000*
+   - `./Borealis.sh --EngineDev` *Dev (Vite + Flask) @ https://localhost:5173*
+   - Default Username: `admin`
+   - Default Password: `Password`
+2) Install the Agent (Windows):
+   - `./Borealis.ps1`
+   - `./Borealis.ps1 -ServerUrl "https://10.0.0.54:5000" -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 
+#### One-Line Bootstrapper
+1) Start the Engine (Linux):
+   - `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --engineproduction`
+   - `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --enginedev`
+2) Install the Agent (Windows):
+   - `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent`
+   - `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://10.0.0.54:5000" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+3) Install the Agent (Linux, experimental):
+   - `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --`
+   - `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://10.0.0.54:5000" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`

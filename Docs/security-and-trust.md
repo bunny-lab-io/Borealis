@@ -71,7 +71,7 @@ If you deploy the agent via Group Policy or another automation platform, you can
 
 **Windows**:
 ```powershell
-.\Borealis.ps1 -Agent -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
+.\Borealis.ps1 -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
 ```
 **Linux**: Agent enrollment is not yet available on Linux; `Borealis.sh --Agent` only writes settings placeholders.
 

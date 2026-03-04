@@ -5,17 +5,20 @@
 Help operators install, launch, and verify the Borealis Engine and (optionally) the Agent.
 
 ## Quick Start (Engine)
-- Windows production: `./Borealis.ps1 -EngineProduction` (Engine UI at `https://localhost:5000`).
-- Windows dev: `./Borealis.ps1 -EngineDev` (Vite + Flask at `https://localhost:5173`).
-- Linux Engine: `./Borealis.sh --EngineProduction` (use `--EngineDev` for Vite).
+- Linux production: `./Borealis.sh --EngineProduction` (Engine UI at `https://localhost:5000`).
+- Linux dev: `./Borealis.sh --EngineDev` (Vite + Flask at `https://localhost:5173`).
 - TLS is auto-provisioned under `Engine/Certificates` on first launch.
 
 ## Optional: Install the Agent (Windows)
-- Run in elevated PowerShell: `./Borealis.ps1 -Agent`.
+- Run in elevated PowerShell: `./Borealis.ps1`.
+- Bootstrap one-liner:
+  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent`
 - Automated enrollment example:
-  `./Borealis.ps1 -Agent -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+  `./Borealis.ps1 -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Non-interactive server URL + enrollment example:
-  `./Borealis.ps1 -Agent -ServerUrl "https://localhost:5000" -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+  `./Borealis.ps1 -ServerUrl "https://localhost:5000" -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+- Bootstrap + server URL + enrollment example:
+  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://localhost:5000" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Linux agent binaries are not available; `Borealis.sh --Agent` only stages settings.
 
 ## First Run Checklist
@@ -46,10 +49,10 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Always edit source under `Data/` and re-run the bootstrap scripts to apply changes.
 
 ### Launch mechanics
-- `Borealis.ps1` handles dependency setup, venv activation, and staging for Windows.
-- `Borealis.sh` provides the same for Linux Engine; the Linux agent path only stages config today.
-- Dev mode (`-EngineDev` / `--EngineDev`) uses Vite for the WebUI and Flask for APIs.
-- Production (`-EngineProduction` / `--EngineProduction`) serves the built SPA through Flask.
+- `Borealis.sh` handles dependency setup, venv activation, and staging for the Linux Engine runtime.
+- `Borealis.ps1` handles dependency setup and staging for the Windows agent runtime.
+- Dev mode (`--EngineDev`) uses Vite for the WebUI and Flask for APIs.
+- Production (`--EngineProduction`) serves the built SPA through Flask.
 
 ### Configuration precedence
 - Engine config is assembled by `Data/Engine/config.py` in this order:
