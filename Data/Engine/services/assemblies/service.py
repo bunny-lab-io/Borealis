@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import copy
 import datetime as _dt
-import hashlib
 import json
 import logging
 import re
@@ -19,10 +18,9 @@ import uuid
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Union
 
 from ...assembly_management.bootstrap import AssemblyCache
-from ...assembly_management.models import AssemblyDomain, AssemblyRecord, CachedAssembly, PayloadType
+from ...assembly_management.models import AssemblyDomain, AssemblyRecord, CachedAssembly, PayloadDescriptor
 from .serialization import (
     AssemblySerializationError,
-    MAX_DOCUMENT_BYTES,
     prepare_import_request,
     record_to_legacy_payload,
 )
@@ -44,14 +42,14 @@ class AssemblyRuntimeService:
         self,
         *,
         domain: Optional[str] = None,
-        kind: Optional[str] = None,
+        assembly_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         domain_filter = _coerce_domain(domain) if domain else None
         entries = self._cache.list_entries(domain=domain_filter)
         results: List[Dict[str, Any]] = []
         for entry in entries:
             record = entry.record
-            if kind and record.assembly_kind.lower() != kind.lower():
+            if assembly_type and record.assembly_type.lower() != assembly_type.lower():
                 continue
             results.append(self._serialize_entry(entry, include_payload=False))
         return results
@@ -64,13 +62,28 @@ class AssemblyRuntimeService:
         data = self._serialize_entry(entry, include_payload=True, payload_text=payload_text)
         return data
 
+    def resolve_document_by_guid(
+        self,
+        assembly_guid: str,
+        *,
+        include_payload: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        guid = _coerce_guid(assembly_guid)
+        if not guid:
+            return None
+        entry = self._cache.get_entry(guid)
+        if not entry:
+            return None
+        payload_text = self._read_payload_text(guid) if include_payload else None
+        return self._serialize_entry(entry, include_payload=include_payload, payload_text=payload_text)
+
     def resolve_document_by_source_path(
         self,
         source_path: str,
         *,
         include_payload: bool = True,
     ) -> Optional[Dict[str, Any]]:
-        """Return an assembly record whose metadata source_path matches the provided value."""
+        """Return an assembly record whose virtual path matches the provided value."""
 
         normalized = _normalize_source_path(source_path)
         if not normalized:
@@ -81,7 +94,7 @@ class AssemblyRuntimeService:
         except Exception:
             entries = []
         for entry in entries:
-            for candidate in _iter_source_paths(entry.record):
+            for candidate in _iter_virtual_paths(entry.record):
                 if candidate.lower() != lookup_key:
                     continue
                 payload_text = self._read_payload_text(entry.record.assembly_guid) if include_payload else None
@@ -163,26 +176,23 @@ class AssemblyRuntimeService:
             raise ValueError(f"Assembly '{clone_guid}' already exists; provide a unique identifier.")
 
         payload_text = self._read_payload_text(assembly_guid)
-        descriptor = self._cache.payload_manager.store_payload(
-            _payload_type_from_kind(source_entry.record.assembly_kind),
-            payload_text,
-            assembly_guid=clone_guid,
-            extension=".json",
-        )
-
         now = _utcnow()
+        descriptor = PayloadDescriptor(
+            assembly_guid=clone_guid,
+            file_name="payload.json",
+            file_extension=".json",
+            size_bytes=len(payload_text.encode("utf-8")),
+            created_at=now,
+            updated_at=now,
+        )
         record = AssemblyRecord(
             assembly_guid=clone_guid,
             display_name=source_entry.record.display_name,
             summary=source_entry.record.summary,
-            category=source_entry.record.category,
-            assembly_kind=source_entry.record.assembly_kind,
             assembly_type=source_entry.record.assembly_type,
-            version=source_entry.record.version,
+            assembly_subtype=source_entry.record.assembly_subtype,
             payload=descriptor,
-            metadata=copy.deepcopy(source_entry.record.metadata),
-            tags=copy.deepcopy(source_entry.record.tags),
-            checksum=hashlib.sha256(payload_text.encode("utf-8")).hexdigest(),
+            payload_json=payload_text,
             created_at=now,
             updated_at=now,
         )
@@ -198,15 +208,11 @@ class AssemblyRuntimeService:
         domain: AssemblyDomain,
         document: Union[str, Mapping[str, Any]],
         assembly_guid: Optional[str] = None,
-        metadata_override: Optional[Mapping[str, Any]] = None,
-        tags_override: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         resolved_guid, payload = prepare_import_request(
             document,
             domain=domain,
             assembly_guid=assembly_guid,
-            metadata_override=metadata_override,
-            tags_override=tags_override,
         )
         if resolved_guid and self._cache.get_entry(resolved_guid):
             return self.update_assembly(resolved_guid, payload)
@@ -224,49 +230,51 @@ class AssemblyRuntimeService:
         existing: Optional[CachedAssembly],
     ) -> AssemblyRecord:
         now = _utcnow()
-        kind = str(payload.get("assembly_kind") or (existing.record.assembly_kind if existing else "") or "script").lower()
-        metadata = _coerce_dict(payload.get("metadata"))
-        display_name = payload.get("display_name") or metadata.get("display_name")
-        summary = payload.get("summary") or metadata.get("summary")
-        category = payload.get("category") or metadata.get("category")
-        assembly_type = payload.get("assembly_type") or metadata.get("assembly_type")
-        version = _coerce_int(payload.get("version"), default=existing.record.version if existing else 1)
-        tags = _coerce_dict(payload.get("tags") or (existing.record.tags if existing else {}))
+        assembly_type = _normalize_assembly_type(
+            payload.get("assembly_type") or (existing.record.assembly_type if existing else "") or "script"
+        )
+        display_name = payload.get("display_name") or (existing.record.display_name if existing else None)
+        summary = payload.get("summary")
+        if summary is None and existing:
+            summary = existing.record.summary
+        assembly_subtype = _normalize_optional_text(
+            payload.get("assembly_subtype") or (existing.record.assembly_subtype if existing else None)
+        )
+        if not assembly_subtype:
+            assembly_subtype = _default_assembly_subtype(assembly_type)
 
         payload_content = payload.get("payload")
         payload_text = _serialize_payload(payload_content) if payload_content is not None else None
 
         if existing:
-            metadata = _merge_metadata(existing.record.metadata, metadata)
             if payload_text is None:
                 # Keep existing payload descriptor/content
                 descriptor = existing.record.payload
-                payload_text = self._read_payload_text(existing.record.assembly_guid)
+                payload_text = existing.record.payload_json
             else:
-                descriptor = self._cache.payload_manager.update_payload(existing.record.payload, payload_text)
+                descriptor = copy.deepcopy(existing.record.payload)
+                descriptor.size_bytes = len(payload_text.encode("utf-8"))
+                descriptor.updated_at = now
         else:
             if payload_text is None:
                 raise ValueError("payload content required for new assemblies")
-            descriptor = self._cache.payload_manager.store_payload(
-                _payload_type_from_kind(kind),
-                payload_text,
+            descriptor = PayloadDescriptor(
                 assembly_guid=assembly_guid,
-                extension=".json",
+                file_name="payload.json",
+                file_extension=".json",
+                size_bytes=len(payload_text.encode("utf-8")),
+                created_at=now,
+                updated_at=now,
             )
 
-        checksum = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
         record = AssemblyRecord(
             assembly_guid=assembly_guid,
             display_name=display_name or assembly_guid,
             summary=summary,
-            category=category,
-            assembly_kind=kind,
             assembly_type=assembly_type,
-            version=version,
+            assembly_subtype=assembly_subtype,
             payload=descriptor,
-            metadata=metadata,
-            tags=tags,
-            checksum=checksum,
+            payload_json=payload_text,
             created_at=existing.record.created_at if existing else now,
             updated_at=now,
         )
@@ -284,20 +292,18 @@ class AssemblyRuntimeService:
             "assembly_guid": record.assembly_guid,
             "display_name": record.display_name,
             "summary": record.summary,
-            "category": record.category,
-            "assembly_kind": record.assembly_kind,
             "assembly_type": record.assembly_type,
-            "version": record.version,
+            "assembly_subtype": record.assembly_subtype,
             "source": entry.domain.value,
             "is_dirty": entry.is_dirty,
             "dirty_since": entry.dirty_since.isoformat() if entry.dirty_since else None,
             "last_persisted": entry.last_persisted.isoformat() if entry.last_persisted else None,
             "payload_guid": record.payload.assembly_guid,
+            "virtual_path": _fallback_source_path(record),
             "created_at": record.created_at.isoformat(),
             "updated_at": record.updated_at.isoformat(),
-            "metadata": copy.deepcopy(record.metadata),
-            "tags": copy.deepcopy(record.tags),
         }
+        data["path"] = data["virtual_path"]
         data.setdefault("assembly_id", record.assembly_guid)  # legacy alias for older clients
         if include_payload:
             payload_text = payload_text if payload_text is not None else self._read_payload_text(record.assembly_guid)
@@ -342,19 +348,8 @@ def _coerce_guid(value: Any) -> Optional[str]:
     return text.lower()
 
 
-def _payload_type_from_kind(kind: str) -> PayloadType:
-    kind_lower = (kind or "").lower()
-    if kind_lower == "workflow":
-        return PayloadType.WORKFLOW
-    if kind_lower == "script":
-        return PayloadType.SCRIPT
-    if kind_lower == "ansible":
-        return PayloadType.BINARY
-    return PayloadType.UNKNOWN
-
-
 def _normalize_source_path(value: Any) -> str:
-    """Normalise metadata source_path for comparison."""
+    """Normalise virtual assembly paths for comparison."""
 
     if value is None:
         return ""
@@ -374,46 +369,28 @@ def _normalize_source_path(value: Any) -> str:
     return "/".join(segments)
 
 
-def _iter_source_paths(record: AssemblyRecord) -> Iterable[str]:
-    """Yield canonical source paths for the provided assembly record."""
+def _iter_virtual_paths(record: AssemblyRecord) -> Iterable[str]:
+    """Yield canonical virtual paths for the provided assembly record."""
 
-    metadata = record.metadata or {}
     seen: Set[str] = set()
-    for key in (
-        "source_path",
-        "rel_path",
-        "legacy_path",
-        "legacy_rel_path",
-        "path",
-        "relative_path",
-        "script_path",
-        "playbook_path",
-        "workflow_path",
-    ):
-        candidate = _normalize_source_path(metadata.get(key))
-        if not candidate:
-            continue
-        lowered = candidate.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        yield candidate
-
     fallback = _fallback_source_path(record)
     if fallback:
         lowered = fallback.lower()
         if lowered not in seen:
             seen.add(lowered)
             yield fallback
+    fallback_leaf = fallback.split("/", 1)[1] if "/" in fallback else fallback
+    if fallback_leaf:
+        lowered_leaf = fallback_leaf.lower()
+        if lowered_leaf not in seen:
+            seen.add(lowered_leaf)
+            yield fallback_leaf
 
 
 def _fallback_source_path(record: AssemblyRecord) -> str:
-    metadata = record.metadata or {}
-    prefix = _kind_prefix(record.assembly_kind, record.assembly_type)
+    prefix = _type_prefix(record.assembly_type)
     fallback_name = (
-        metadata.get("display_name")
-        or record.display_name
-        or metadata.get("name")
+        record.display_name
         or record.summary
         or record.assembly_guid
         or "Assembly"
@@ -423,12 +400,11 @@ def _fallback_source_path(record: AssemblyRecord) -> str:
     return _normalize_source_path(candidate)
 
 
-def _kind_prefix(kind: Optional[str], assembly_type: Optional[str]) -> str:
-    key = (kind or "").strip().lower()
-    type_key = (assembly_type or "").strip().lower()
-    if key == "ansible" or type_key == "ansible":
+def _type_prefix(assembly_type: Optional[str]) -> str:
+    key = (assembly_type or "").strip().lower()
+    if key == "ansible":
         return "Ansible_Playbooks"
-    if key == "workflow" or type_key == "workflow":
+    if key == "workflow":
         return "Workflows"
     return "Scripts"
 
@@ -453,24 +429,27 @@ def _serialize_payload(value: Any) -> str:
     raise ValueError("payload must be JSON object, array, or string")
 
 
-def _coerce_dict(value: Any) -> Dict[str, Any]:
-    if isinstance(value, dict):
-        return copy.deepcopy(value)
-    return {}
+def _default_assembly_subtype(assembly_type: str) -> str:
+    lowered = str(assembly_type or "").strip().lower()
+    if lowered == "workflow":
+        return "workflow"
+    if lowered == "ansible":
+        return "ansible"
+    return "powershell"
 
 
-def _merge_metadata(existing: Dict[str, Any], new_values: Dict[str, Any]) -> Dict[str, Any]:
-    combined = copy.deepcopy(existing or {})
-    for key, val in (new_values or {}).items():
-        combined[key] = val
-    return combined
+def _normalize_assembly_type(value: Any) -> str:
+    lowered = str(value or "").strip().lower()
+    if lowered in {"workflow", "ansible", "script"}:
+        return lowered
+    return "script"
 
 
-def _coerce_int(value: Any, *, default: int = 0) -> int:
-    try:
-        return int(value)
-    except Exception:
-        return default
+def _normalize_optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    return text or None
 
 
 def _utcnow() -> _dt.datetime:

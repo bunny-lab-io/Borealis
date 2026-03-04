@@ -942,7 +942,53 @@ sync_engine_runtime() {
   done
   shopt -u dotglob nullglob
 
+  sync_engine_assemblies_runtime
   verify_engine_runtime_staging
+}
+
+sync_engine_assemblies_runtime() {
+  local source_assemblies="${SCRIPT_DIR}/Data/Engine/Assemblies"
+  local runtime_assemblies="${SCRIPT_DIR}/Engine/Assemblies"
+  local db_name=""
+  mkdir -p "${runtime_assemblies}"
+
+  if [[ ! -d "${source_assemblies}" ]]; then
+    echo -e "${YELLOW}Engine assemblies source directory '${source_assemblies}' was not found. Skipping assemblies sync.${RESET}"
+    write_engine_log "Engine assemblies source directory '${source_assemblies}' missing; skipped assemblies sync."
+    return 0
+  fi
+
+  for db_name in official.db community.db; do
+    local source_db="${source_assemblies}/${db_name}"
+    local runtime_db="${runtime_assemblies}/${db_name}"
+    local suffix=""
+
+    if [[ ! -f "${source_db}" ]]; then
+      echo -e "${YELLOW}Engine assemblies source database '${source_db}' was not found. Skipping ${db_name}.${RESET}"
+      write_engine_log "Engine assemblies source database '${source_db}' missing; skipped ${db_name} sync."
+      continue
+    fi
+
+    rm -f "${runtime_db}" "${runtime_db}-wal" "${runtime_db}-shm" 2>/dev/null || true
+    cp -f "${source_db}" "${runtime_db}"
+    for suffix in -wal -shm; do
+      if [[ -f "${source_db}${suffix}" ]]; then
+        cp -f "${source_db}${suffix}" "${runtime_db}${suffix}"
+      fi
+    done
+  done
+
+  local source_user_db="${source_assemblies}/user_created.db"
+  local runtime_user_db="${runtime_assemblies}/user_created.db"
+  if [[ ! -f "${runtime_user_db}" && -f "${source_user_db}" ]]; then
+    local suffix=""
+    cp -f "${source_user_db}" "${runtime_user_db}"
+    for suffix in -wal -shm; do
+      if [[ -f "${source_user_db}${suffix}" ]]; then
+        cp -f "${source_user_db}${suffix}" "${runtime_user_db}${suffix}"
+      fi
+    done
+  fi
 }
 
 purge_engine_runtime_for_deploy() {
@@ -967,7 +1013,7 @@ purge_engine_runtime_for_deploy() {
   done
   shopt -u dotglob nullglob
 
-  # Inside Assemblies, preserve only user DB + payload artifacts.
+  # Inside Assemblies, preserve only user DB artifacts.
   if [[ -d "${assemblies_root}" ]]; then
     shopt -s dotglob nullglob
     local asm_entry=""
@@ -975,7 +1021,7 @@ purge_engine_runtime_for_deploy() {
       local asm_base
       asm_base="$(basename "${asm_entry}")"
       case "${asm_base}" in
-        user_created.db|Payloads)
+        user_created.db|user_created.db-wal|user_created.db-shm)
           continue
           ;;
         *)
@@ -1178,14 +1224,10 @@ create_engine_venv_and_stage_data() {
   done
   shopt -u dotglob nullglob
 
-  # Assemblies runtime folder
-  [[ -d "${SCRIPT_DIR}/Engine/Assemblies" ]] || {
-    if [[ -d "${engine_src}/Assemblies" ]]; then
-      cp -a "${engine_src}/Assemblies" "${SCRIPT_DIR}/Engine/Assemblies"
-    else
-      mkdir -p "${SCRIPT_DIR}/Engine/Assemblies"
-    fi
-  }
+  # Assemblies runtime databases:
+  # - official/community are always refreshed from staging
+  # - user_created is seeded only when missing
+  sync_engine_assemblies_runtime
 
   # Auth_Tokens and database
   mkdir -p "${SCRIPT_DIR}/Engine/Auth_Tokens"

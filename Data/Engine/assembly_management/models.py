@@ -46,22 +46,18 @@ class PayloadDescriptor:
     """Represents on-disk payload material referenced by an assembly."""
 
     assembly_guid: str
-    payload_type: PayloadType
     file_name: str
     file_extension: str
     size_bytes: int
-    checksum: Optional[str]
     created_at: _dt.datetime
     updated_at: _dt.datetime
 
     def as_dict(self) -> Dict[str, Any]:
         return {
             "assembly_guid": self.assembly_guid,
-            "payload_type": self.payload_type.value,
             "file_name": self.file_name,
             "file_extension": self.file_extension,
             "size_bytes": self.size_bytes,
-            "checksum": self.checksum,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -80,14 +76,10 @@ class AssemblyRecord:
     assembly_guid: str
     display_name: str
     summary: Optional[str]
-    category: Optional[str]
-    assembly_kind: str
-    assembly_type: Optional[str]
-    version: int
+    assembly_type: str
+    assembly_subtype: Optional[str]
     payload: PayloadDescriptor
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    tags: Dict[str, Any] = field(default_factory=dict)
-    checksum: Optional[str] = None
+    payload_json: str
     created_at: _dt.datetime = field(default_factory=_dt.datetime.utcnow)
     updated_at: _dt.datetime = field(default_factory=_dt.datetime.utcnow)
 

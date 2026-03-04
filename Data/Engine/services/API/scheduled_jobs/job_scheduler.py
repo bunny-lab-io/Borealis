@@ -341,9 +341,6 @@ class JobScheduler:
         self._running = False
         self._service_log = service_logger
         self._assembly_runtime = assembly_runtime
-        # Simulated run duration to hold jobs in "Running" before Success.
-        # Default is disabled (0) so that agent callbacks control run status.
-        self.SIMULATED_RUN_SECONDS = int(os.environ.get("BOREALIS_SIM_RUN_SECONDS", "30"))
         # Retention for run history (days)
         self.RETENTION_DAYS = int(os.environ.get("BOREALIS_JOB_HISTORY_DAYS", "30"))
         # Callback to retrieve current set of online hostnames
@@ -441,24 +438,30 @@ class JobScheduler:
         self,
         rel_path: str,
         default_type: str,
+        assembly_guid: Optional[str] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         runtime = self._assembly_runtime
-        if runtime is None or not rel_path:
+        if runtime is None:
             return None, None
+        record = None
         try:
-            record = runtime.resolve_document_by_source_path(rel_path)
+            guid_lookup = str(assembly_guid or "").strip().lower()
+            if guid_lookup:
+                record = runtime.resolve_document_by_guid(guid_lookup)
+            if record is None and rel_path:
+                record = runtime.resolve_document_by_source_path(rel_path)
         except Exception as exc:
             self._log_event(
                 "assembly cache lookup failed",
                 level="ERROR",
-                extra={"error": str(exc), "path": rel_path},
+                extra={"error": str(exc), "path": rel_path, "assembly_guid": assembly_guid or ""},
             )
             return None, None
         if not record:
             self._log_event(
                 "assembly not found in cache",
                 level="ERROR",
-                extra={"path": rel_path},
+                extra={"path": rel_path, "assembly_guid": assembly_guid or ""},
             )
             return None, None
         payload_doc = record.get("payload_json")
@@ -476,16 +479,15 @@ class JobScheduler:
                 extra={"path": rel_path},
             )
             return None, None
-        doc = self._load_assembly_document(rel_path, default_type, payload=payload_doc)
+        source_identifier = (
+            rel_path
+            or str(record.get("virtual_path") or "").strip()
+            or str(record.get("assembly_guid") or "").strip()
+            or "Assembly"
+        )
+        doc = self._load_assembly_document(source_identifier, default_type, payload=payload_doc)
         if doc:
-            metadata_block = doc.get("metadata")
-            if not isinstance(metadata_block, dict):
-                metadata_block = {}
-            metadata_block.setdefault("assembly_guid", record.get("assembly_guid"))
-            record_meta = record.get("metadata", {})
-            if isinstance(record_meta, dict):
-                metadata_block.setdefault("source_path", record_meta.get("source_path") or rel_path)
-            doc["metadata"] = metadata_block
+            doc["assembly_guid"] = record.get("assembly_guid")
             if not doc.get("name"):
                 doc["name"] = record.get("display_name") or doc.get("name")
         return doc, record
@@ -529,7 +531,6 @@ class JobScheduler:
             "variables": [],
             "files": [],
             "timeout_seconds": 3600,
-            "metadata": {},
         }
         data: Dict[str, Any] = {}
         if isinstance(payload, dict):
@@ -543,7 +544,6 @@ class JobScheduler:
         if isinstance(data, dict) and data:
             doc["name"] = str(data.get("name") or doc["name"])
             doc["description"] = str(data.get("description") or "")
-            doc["metadata"] = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
             cat = str(data.get("category") or doc["category"]).strip().lower()
             if cat in ("application", "script"):
                 doc["category"] = cat
@@ -663,7 +663,9 @@ class JobScheduler:
             ans_root = self._ansible_root()
             rel_path = ""
             overrides_map: Dict[str, Any] = {}
+            assembly_guid_hint = ""
             if isinstance(component, dict):
+                assembly_guid_hint = str(component.get("assembly_guid") or component.get("assemblyGuid") or "").strip().lower()
                 rel_path = component.get("path") or component.get("playbook_path") or component.get("script_path") or ""
                 raw_overrides = component.get("variable_values")
                 if isinstance(raw_overrides, dict):
@@ -691,12 +693,14 @@ class JobScheduler:
             rel_join = rel_norm
             if rel_join.lower().startswith("ansible_playbooks/"):
                 rel_join = rel_join.split("/", 1)[1] if "/" in rel_join else ""
-            doc, record = self._resolve_runtime_document(rel_norm, "ansible")
+            doc, record = self._resolve_runtime_document(rel_norm, "ansible", assembly_guid=assembly_guid_hint)
             if not doc:
                 return None
+            resolved_virtual_path = str(record.get("virtual_path") or "").strip() if isinstance(record, dict) else ""
+            if not rel_norm:
+                rel_norm = resolved_virtual_path
             assembly_source = "runtime"
-            metadata_block = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
-            assembly_guid = metadata_block.get("assembly_guid") if isinstance(metadata_block, dict) else None
+            assembly_guid = str(record.get("assembly_guid") or "").strip().lower() if isinstance(record, dict) else ""
             friendly_name = (doc.get("name") or "").strip()
             if not friendly_name:
                 friendly_name = os.path.basename(rel_norm) if rel_norm else f"Job-{scheduled_job_id}"
@@ -892,14 +896,16 @@ class JobScheduler:
         """
         try:
             rel_path_raw = ""
+            assembly_guid_hint = ""
             if isinstance(component, dict):
+                assembly_guid_hint = str(component.get("assembly_guid") or component.get("assemblyGuid") or "").strip().lower()
                 rel_path_raw = str(component.get("path") or component.get("script_path") or "")
             else:
                 rel_path_raw = str(component or "")
             path_norm = (rel_path_raw or "").replace("\\", "/").strip()
             if path_norm and not path_norm.startswith("Scripts/"):
                 path_norm = f"Scripts/{path_norm}"
-            if not self._is_valid_scripts_relpath(path_norm):
+            if path_norm and not self._is_valid_scripts_relpath(path_norm):
                 self._log_event(
                     "script component path rejected",
                     job_id=job_id,
@@ -909,9 +915,20 @@ class JobScheduler:
                     extra={"script_path": path_norm},
                 )
                 return None
-            doc, record = self._resolve_runtime_document(path_norm, "powershell")
+            if not path_norm and not assembly_guid_hint:
+                self._log_event(
+                    "script component missing path and assembly_guid",
+                    job_id=job_id,
+                    host=str(hostname),
+                    run_id=run_row_id,
+                    level="ERROR",
+                )
+                return None
+            doc, record = self._resolve_runtime_document(path_norm, "powershell", assembly_guid=assembly_guid_hint)
             if not doc:
                 return None
+            if not path_norm and isinstance(record, dict):
+                path_norm = str(record.get("virtual_path") or "").strip()
             assembly_source = "runtime"
             stype = (doc.get("type") or "powershell").lower()
             # For now, only PowerShell is supported by agents for scheduled jobs
@@ -1029,10 +1046,9 @@ class JobScheduler:
                 "scheduled_job_run_id": int(run_row_id),
                 "scheduled_ts": int(scheduled_ts or 0),
             }
-            assembly_guid = None
-            metadata_block = doc.get("metadata")
-            if isinstance(metadata_block, dict):
-                assembly_guid = metadata_block.get("assembly_guid")
+            assembly_guid = str(record.get("assembly_guid") or "").strip().lower() if isinstance(record, dict) else ""
+            if assembly_guid:
+                payload["context"]["assembly_guid"] = assembly_guid
             try:
                 self.socketio.emit("quick_job_run", payload)
                 if act_id:
@@ -1306,48 +1322,6 @@ class JobScheduler:
                 level="ERROR",
                 extra={"error": str(exc)},
             )
-
-        if self.SIMULATED_RUN_SECONDS > 0:
-            try:
-                cur.execute(
-                    "SELECT id, job_id, target_hostname, started_ts FROM scheduled_job_runs WHERE status='Running'"
-                )
-                rows = cur.fetchall()
-                self._log_event(
-                    "evaluating running runs for simulated completion",
-                    extra={"running_count": len(rows), "now_ts": now, "simulated_window": self.SIMULATED_RUN_SECONDS},
-                )
-                for rid, row_job_id, row_host, started_ts in rows:
-                    if started_ts and (int(started_ts) + self.SIMULATED_RUN_SECONDS) <= now:
-                        try:
-                            c2 = conn.cursor()
-                            c2.execute(
-                                "UPDATE scheduled_job_runs SET finished_ts=?, status='Success', updated_at=? WHERE id=?",
-                                (now, now, rid),
-                            )
-                            conn.commit()
-                            self._log_event(
-                                "auto-completed simulated run",
-                                job_id=row_job_id,
-                                host=row_host,
-                                run_id=rid,
-                                extra={"started_ts": started_ts},
-                            )
-                        except Exception as exc:
-                            self._log_event(
-                                "failed to auto-complete simulated run",
-                                job_id=row_job_id,
-                                host=row_host,
-                                run_id=rid,
-                                level="ERROR",
-                                extra={"error": str(exc)},
-                            )
-            except Exception as exc:
-                self._log_event(
-                    "failed to auto-complete simulated runs",
-                    level="ERROR",
-                    extra={"error": str(exc)},
-                )
 
         try:
             cutoff = now - (self.RETENTION_DAYS * 86400)

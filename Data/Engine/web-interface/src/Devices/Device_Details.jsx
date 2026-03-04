@@ -767,14 +767,12 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         const items = Array.isArray(data?.items) ? data.items : [];
         items.forEach((item) => {
           if (!item || typeof item !== "object") return;
-          const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
           const displayName =
             (item.display_name || "").trim() ||
-            (metadata.display_name ? String(metadata.display_name).trim() : "") ||
             item.assembly_guid ||
             "";
           if (!displayName) return;
-          storeName(metadata.source_path || metadata.legacy_path || "", displayName);
+          storeName(item.virtual_path || item.path || "", displayName);
           if (item.assembly_guid && !next[item.assembly_guid]) {
             next[item.assembly_guid] = displayName;
           }

@@ -15,7 +15,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple, Union
 from ...assembly_management.models import AssemblyDomain, AssemblyRecord
 
 
-MAX_DOCUMENT_BYTES = 1_048_576  # 1 MiB safety limit for import payloads
+MAX_DOCUMENT_BYTES = 950_000_000  # Practical upper bound under SQLite MAX_LENGTH=1,000,000,000 in this runtime
 
 
 class AssemblySerializationError(ValueError):
@@ -42,18 +42,12 @@ def record_to_legacy_payload(
     return {
         "assembly_guid": record.assembly_guid,
         "domain": domain.value,
-        "assembly_kind": record.assembly_kind,
         "assembly_type": record.assembly_type,
-        "version": record.version,
+        "assembly_subtype": record.assembly_subtype,
         "display_name": record.display_name,
         "summary": record.summary,
-        "category": record.category,
-        "metadata": dict(record.metadata or {}),
-        "tags": dict(record.tags or {}),
         "payload": payload_body,
-        "payload_type": record.payload.payload_type.value,
         "payload_guid": record.payload.assembly_guid,
-        "payload_checksum": record.payload.checksum,
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
     }
@@ -64,8 +58,6 @@ def prepare_import_request(
     *,
     domain: AssemblyDomain,
     assembly_guid: Optional[str] = None,
-    metadata_override: Optional[Mapping[str, Any]] = None,
-    tags_override: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Validate a legacy assembly document and convert it into a runtime payload suitable
@@ -76,39 +68,35 @@ def prepare_import_request(
 
     payload_json = _coerce_document(document)
     _enforce_size_limit(payload_json)
-    assembly_kind = _infer_kind(payload_json)
-    if assembly_kind == "unknown":
-        raise AssemblySerializationError("Unable to determine assembly kind from legacy JSON document.")
+    assembly_type = _infer_assembly_type(payload_json)
+    if assembly_type == "unknown":
+        raise AssemblySerializationError("Unable to determine assembly type from JSON document.")
 
-    metadata = _metadata_from_document(assembly_kind, payload_json, source_path=None)
-    if metadata_override:
-        metadata.update({k: v for k, v in metadata_override.items() if v is not None})
-
-    tags = dict(tags_override or {})
     display_name = _coerce_str(
-        metadata.get("display_name")
+        payload_json.get("display_name")
         or payload_json.get("name")
         or payload_json.get("tab_name")
         or "Imported Assembly"
     )
-    summary = _coerce_optional_str(metadata.get("summary") or payload_json.get("description"))
-    category = _coerce_optional_str(metadata.get("category") or payload_json.get("category"))
-    assembly_type = _coerce_optional_str(metadata.get("assembly_type") or payload_json.get("type"))
-    version = _coerce_positive_int(payload_json.get("version"), default=1)
+    summary = _coerce_optional_str(payload_json.get("summary") or payload_json.get("description"))
+    assembly_subtype = _coerce_optional_str(payload_json.get("assembly_subtype") or payload_json.get("type"))
+    if not assembly_subtype:
+        if assembly_type == "workflow":
+            assembly_subtype = "workflow"
+        elif assembly_type == "ansible":
+            assembly_subtype = "ansible"
+        else:
+            assembly_subtype = "powershell"
 
     resolved_guid = _coerce_guid(assembly_guid)
 
     payload = {
         "assembly_guid": resolved_guid,
         "domain": domain.value,
-        "assembly_kind": assembly_kind,
+        "assembly_type": assembly_type,
         "display_name": display_name,
         "summary": summary,
-        "category": category,
-        "assembly_type": assembly_type,
-        "version": version,
-        "metadata": metadata,
-        "tags": tags,
+        "assembly_subtype": assembly_subtype,
         "payload": payload_json,
     }
 
@@ -140,12 +128,17 @@ def _enforce_size_limit(document: Mapping[str, Any]) -> None:
         )
 
 
-def _infer_kind(document: Mapping[str, Any]) -> str:
-    kind_hint = _coerce_optional_str(document.get("assembly_kind") or document.get("kind"))
-    if kind_hint:
-        lowercase = kind_hint.lower()
-        if lowercase in {"script", "workflow", "ansible"}:
-            return lowercase
+def _infer_assembly_type(document: Mapping[str, Any]) -> str:
+    type_hint = _coerce_optional_str(document.get("assembly_type") or document.get("kind"))
+    if type_hint:
+        type_lower = type_hint.lower()
+        if type_lower in {"script", "workflow", "ansible"}:
+            return type_lower
+    subtype_hint = _coerce_optional_str(document.get("assembly_subtype") or document.get("type") or document.get("script_type"))
+    if subtype_hint:
+        subtype_lower = subtype_hint.lower()
+        if subtype_lower in {"workflow", "ansible"}:
+            return subtype_lower
     if "nodes" in document and "edges" in document:
         return "workflow"
     if "script" in document:
@@ -153,52 +146,6 @@ def _infer_kind(document: Mapping[str, Any]) -> str:
     if "playbook" in document or "tasks" in document or "roles" in document:
         return "ansible"
     return "unknown"
-
-
-def _metadata_from_document(kind: str, document: Mapping[str, Any], source_path: Optional[str]) -> Dict[str, Any]:
-    metadata: Dict[str, Any] = {
-        "source_path": source_path,
-        "display_name": None,
-        "summary": None,
-        "category": None,
-        "assembly_type": None,
-    }
-
-    if kind == "workflow":
-        metadata.update(
-            {
-                "display_name": document.get("tab_name") or document.get("name"),
-                "summary": document.get("description"),
-                "category": "workflow",
-                "assembly_type": "workflow",
-            }
-        )
-    elif kind == "script":
-        metadata.update(
-            {
-                "display_name": document.get("name") or document.get("display_name"),
-                "summary": document.get("description"),
-                "category": (document.get("category") or "script"),
-                "assembly_type": (document.get("type") or "powershell"),
-            }
-        )
-    elif kind == "ansible":
-        metadata.update(
-            {
-                "display_name": document.get("name") or document.get("display_name"),
-                "summary": document.get("description"),
-                "category": "ansible",
-                "assembly_type": "ansible",
-            }
-        )
-
-    # Carry additional legacy fields through metadata for round-trip fidelity.
-    for key in ("sites", "variables", "files", "timeout_seconds", "script_encoding"):
-        if key in document:
-            metadata[key] = document[key]
-
-    metadata = {key: value for key, value in metadata.items() if value is not None}
-    return metadata
 
 
 def _coerce_guid(value: Optional[str]) -> Optional[str]:
@@ -220,16 +167,6 @@ def _coerce_optional_str(value: Any) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
-
-
-def _coerce_positive_int(value: Any, *, default: int) -> int:
-    try:
-        candidate = int(value)
-        if candidate > 0:
-            return candidate
-    except (TypeError, ValueError):
-        pass
-    return default
 
 
 __all__ = [

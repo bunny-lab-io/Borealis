@@ -3475,8 +3475,28 @@ if __name__=='__main__':
                 rc = -1; out = ''; err = ''
                 if run_mode == 'system':
                     if not SYSTEM_SERVICE_MODE:
-                        # Let the SYSTEM service handle these exclusively
-                        _log_agent(f"quick_job_run ignored job_id={job_label} (system payload routed to SYSTEM service)")
+                        fail_reason = (
+                            "SYSTEM run requested but this agent instance is running in CURRENTUSER mode; "
+                            "SYSTEM service not running for this execution context."
+                        )
+                        operator_guidance = (
+                            f"{fail_reason}\n"
+                            "How to fix:\n"
+                            "1) Reboot the target device.\n"
+                            "2) Re-deploy the Borealis Agent to the target device.\n"
+                            "3) If SYSTEM privileges are not required, change the assembly execution context to Current User."
+                        )
+                        result_payload = {
+                            'job_id': job_id,
+                            'status': 'Failed',
+                            'stdout': operator_guidance,
+                            'stderr': fail_reason,
+                        }
+                        if isinstance(context, dict):
+                            result_payload['context'] = context
+                        await sio.emit('quick_job_result', result_payload)
+                        _log_agent(f"quick_job_run failed job_id={job_label}: {fail_reason}")
+                        _log_agent(fail_reason, fname='agent.error.log')
                         return
                     try:
                         # Save last SYSTEM script for debugging

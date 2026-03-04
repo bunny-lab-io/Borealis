@@ -1045,7 +1045,8 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         ...row,
         domain: (row?.domain || "user").toLowerCase(),
       };
-      const mode = normalizedRow.typeKey === "ansible" || normalizedRow.mode === "ansible" ? "ansible" : "script";
+      const rowKind = String(normalizedRow.assemblyKind || normalizedRow.assembly_type || "").toLowerCase();
+      const mode = rowKind === "ansible" ? "ansible" : "script";
       const nonce = Date.now();
       const state = {
         mode,
@@ -1062,7 +1063,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     async (row) => {
       const newId = "flow_" + Date.now();
       const rawDomain = (row?.domain || "user").toLowerCase();
-      const sourcePath = row?.sourcePath || row?.metadata?.source_path || "";
+      const sourcePath = row?.sourcePath || row?.path || "";
       const folderPath = sourcePath ? sourcePath.split("/").slice(0, -1).join("/") : "";
       if (row?.assemblyGuid) {
         try {

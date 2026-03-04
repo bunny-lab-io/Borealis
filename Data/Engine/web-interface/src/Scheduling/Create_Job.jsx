@@ -1971,6 +1971,7 @@ export default function CreateJob({
         description: raw.description || record.summary || record.path,
         variables: mergedVariables,
         localId: generateLocalId(),
+        assembly_guid: record.assemblyGuid,
         assemblyGuid: record.assemblyGuid,
         domain: record.domain,
         domainLabel: record.domainLabel
@@ -1984,6 +1985,11 @@ export default function CreateJob({
       if (!comp || typeof comp !== "object") return comp;
       const { localId, ...rest } = comp;
       const sanitized = { ...rest };
+      const guidRaw = comp.assembly_guid || comp.assemblyGuid || "";
+      if (guidRaw) {
+        sanitized.assembly_guid = String(guidRaw).trim().toLowerCase();
+      }
+      delete sanitized.assemblyGuid;
       if (Array.isArray(comp.variables)) {
         const valuesMap = {};
         sanitized.variables = comp.variables
@@ -2715,6 +2721,7 @@ export default function CreateJob({
           description: record.summary || normalizedPath,
           variables: mergedVariables,
           localId: generateLocalId(),
+          assembly_guid: record.assemblyGuid,
           assemblyGuid: record.assemblyGuid,
           domain: record.domain,
           domainLabel: record.domainLabel

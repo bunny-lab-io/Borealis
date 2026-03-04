@@ -17,7 +17,6 @@ import pytest
 
 from Data.Engine.assembly_management.databases import AssemblyDatabaseManager
 from Data.Engine.assembly_management.models import AssemblyDomain
-from Data.Engine.assembly_management.payloads import PayloadManager
 from Data.Engine.assembly_management.bootstrap import AssemblyCache
 from Data.Engine.services.assemblies.service import AssemblyRuntimeService
 
@@ -29,14 +28,8 @@ def assembly_runtime(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Tuple
 
     db_manager = AssemblyDatabaseManager(staging_root=staging_root, runtime_root=runtime_root, logger=logging.getLogger("test.assemblies.db"))
     db_manager.initialise()
-    payload_manager = PayloadManager(
-        staging_root=staging_root / "Payloads",
-        runtime_root=runtime_root / "Payloads",
-        logger=logging.getLogger("test.assemblies.payload"),
-    )
     cache = AssemblyCache(
         database_manager=db_manager,
-        payload_manager=payload_manager,
         flush_interval_seconds=5.0,
         logger=logging.getLogger("test.assemblies.cache"),
     )
@@ -53,11 +46,11 @@ def _script_payload(display_name: str = "Cache Test Script") -> dict:
     return {
         "domain": "user",
         "assembly_guid": None,
-        "assembly_kind": "script",
+        "assembly_type": "script",
+        "assembly_subtype": "powershell",
         "display_name": display_name,
         "summary": "Cache test fixture payload.",
         "category": "script",
-        "assembly_type": "powershell",
         "version": 1,
         "metadata": {
             "sites": {"mode": "all", "values": []},

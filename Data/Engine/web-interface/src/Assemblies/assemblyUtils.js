@@ -153,12 +153,11 @@ export function normalizeAssemblyRecord(item, queueEntry = null) {
     return null;
   }
 
-  const metadata = item.metadata && typeof item.metadata === "object" ? { ...item.metadata } : {};
-  const domain = toLowerSafe(item.source || item.domain || metadata.domain || "user") || "user";
+  const domain = toLowerSafe(item.source || item.domain || "user") || "user";
   const domainMeta = resolveDomainMeta(domain);
 
-  let kind = toLowerSafe(item.assembly_kind || metadata.assembly_kind);
-  const typeHint = toLowerSafe(item.assembly_type || metadata.assembly_type);
+  let kind = toLowerSafe(item.assembly_type);
+  const typeHint = toLowerSafe(item.assembly_subtype);
   if (!kind) {
     if (typeHint === "ansible") kind = "ansible";
     else if (typeHint === "workflow") kind = "workflow";
@@ -172,19 +171,11 @@ export function normalizeAssemblyRecord(item, queueEntry = null) {
 
   const displayName =
     item.display_name ||
-    metadata.display_name ||
     item.summary ||
-    metadata.name ||
     sanitizeNameForPath(assemblyGuid);
-  const summary = item.summary || metadata.summary || "";
+  const summary = item.summary || "";
 
-  const rawPath =
-    metadata.source_path ||
-    metadata.rel_path ||
-    metadata.legacy_path ||
-    metadata.path ||
-    metadata.relative_path ||
-    "";
+  const rawPath = item.virtual_path || item.path || "";
   const normalizedPath = normalizeAssemblyPath(kind, rawPath, displayName);
   const pathLower = normalizedPath.toLowerCase();
   let pathLowerNoPrefix = pathLower;
@@ -212,8 +203,6 @@ export function normalizeAssemblyRecord(item, queueEntry = null) {
     type: assemblyType,
     domain,
     domainLabel: domainMeta.label,
-    metadata,
-    tags: item.tags && typeof item.tags === "object" ? { ...item.tags } : {},
     path: normalizedPath,
     pathLower,
     pathLowerNoPrefix,
@@ -377,7 +366,6 @@ export function parseAssemblyExport(exportDoc) {
     };
   }
 
-  const metadata = exportDoc.metadata && typeof exportDoc.metadata === "object" ? { ...exportDoc.metadata } : {};
   let payload = exportDoc.payload;
   if (typeof payload === "string") {
     try {
@@ -390,8 +378,8 @@ export function parseAssemblyExport(exportDoc) {
     payload = {};
   }
 
-  const kindHint = toLowerSafe(exportDoc.assembly_kind || metadata.assembly_kind || payload.assembly_kind);
-  const typeHint = toLowerSafe(exportDoc.assembly_type || metadata.assembly_type || payload.type);
+  const kindHint = toLowerSafe(exportDoc.assembly_type || payload.assembly_type);
+  const typeHint = toLowerSafe(exportDoc.assembly_subtype || payload.assembly_subtype || payload.type);
   let kind = "script";
   if (kindHint === "ansible" || typeHint === "ansible") {
     kind = "ansible";
@@ -412,10 +400,7 @@ export function parseAssemblyExport(exportDoc) {
   else if (scriptLines) scriptSource = scriptLines.map((line) => (line == null ? "" : String(line))).join("\n");
 
   const encodingHint = toLowerSafe(
-    payload.script_encoding ||
-      payload.scriptEncoding ||
-      metadata.script_encoding ||
-      metadata.scriptEncoding
+    payload.script_encoding || payload.scriptEncoding
   );
   let script = "";
   if (typeof scriptSource === "string") {
@@ -428,16 +413,8 @@ export function parseAssemblyExport(exportDoc) {
     }
   }
 
-  const variablesRaw = Array.isArray(payload.variables)
-    ? payload.variables
-    : Array.isArray(metadata.variables)
-      ? metadata.variables
-      : [];
-  const filesRaw = Array.isArray(payload.files)
-    ? payload.files
-    : Array.isArray(metadata.files)
-      ? metadata.files
-      : [];
+  const variablesRaw = Array.isArray(payload.variables) ? payload.variables : [];
+  const filesRaw = Array.isArray(payload.files) ? payload.files : [];
 
   const variablesDetailed = normalizeVariablesFromServer(variablesRaw);
   const variables = normalizeAssemblyVariables(variablesRaw);
@@ -446,19 +423,15 @@ export function parseAssemblyExport(exportDoc) {
   const timeoutCandidate =
     payload.timeout_seconds ??
     payload.timeout ??
-    metadata.timeout_seconds ??
-    metadata.timeoutSeconds ??
-    metadata.timeout ??
     null;
   const timeoutSeconds = Number.isFinite(Number(timeoutCandidate)) ? Number(timeoutCandidate) : 0;
 
   const sites =
     (payload.sites && typeof payload.sites === "object" ? payload.sites : null) ||
-    (metadata.sites && typeof metadata.sites === "object" ? metadata.sites : null) ||
     { mode: "all", values: [] };
 
   return {
-    metadata,
+    metadata: {},
     payload,
     kind,
     type,

@@ -306,14 +306,16 @@ Each file has the same schema and currently one runtime table:
 
 #### `assemblies`
 - Status: Active.
-- Purpose: Assembly metadata and payload descriptor metadata.
-- Columns: `assembly_guid`, `display_name`, `summary`, `category`, `assembly_kind`, `assembly_type`, `version`, `metadata_json`, `tags_json`, `checksum`, `payload_type`, `payload_file_name`, `payload_file_extension`, `payload_size_bytes`, `payload_checksum`, `payload_created_at`, `payload_updated_at`, `created_at`, `updated_at`.
+- Purpose: Assembly summary fields and inline payload JSON.
+- Columns: `assembly_guid`, `display_name`, `summary`, `assembly_type`, `assembly_subtype`, `payload_json`, `payload_size_bytes`, `created_at`, `updated_at`.
 - Constraints and indexes:
 - `assembly_guid` primary key.
-- `idx_assemblies_kind` on `assembly_kind`.
-- `idx_assemblies_category` on `category`.
+- `idx_assemblies_type` on `assembly_type`.
 - Notes:
-- Payload bytes/files are stored on disk via payload manager; DB stores metadata pointers.
+- Payload JSON is stored inline in `payload_json`.
+- `assembly_type` is the authoritative routing discriminator for editors and execution pipelines.
+- `metadata_json` and `payload_type` are removed from the active schema.
+- Engine startup validates this schema strictly and fails fast if legacy columns are still present.
 - Staging/runtime DB files are mirrored between `Data/Engine/Assemblies/` and `Engine/Assemblies/`.
 
 ## Deprecated and Removed Schema

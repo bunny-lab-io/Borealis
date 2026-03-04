@@ -231,6 +231,56 @@ function Sync-EngineRuntime {
     return $true
 }
 
+function Sync-EngineAssembliesRuntime {
+    param(
+        [string]$SourceAssembliesRoot,
+        [string]$RuntimeAssembliesRoot
+    )
+
+    if (-not (Test-Path $RuntimeAssembliesRoot)) {
+        New-Item -Path $RuntimeAssembliesRoot -ItemType Directory -Force | Out-Null
+    }
+
+    if (-not (Test-Path $SourceAssembliesRoot)) {
+        Write-Host "Engine assemblies source directory '$SourceAssembliesRoot' was not found. Skipping assemblies sync." -ForegroundColor Yellow
+        return
+    }
+
+    foreach ($dbName in @('official.db', 'community.db')) {
+        $sourceDb = Join-Path $SourceAssembliesRoot $dbName
+        $runtimeDb = Join-Path $RuntimeAssembliesRoot $dbName
+
+        if (-not (Test-Path $sourceDb)) {
+            Write-Host "Engine assemblies source database '$sourceDb' was not found. Skipping '$dbName'." -ForegroundColor Yellow
+            continue
+        }
+
+        foreach ($suffix in @('', '-wal', '-shm')) {
+            $runtimeCandidate = "$runtimeDb$suffix"
+            $sourceCandidate = "$sourceDb$suffix"
+
+            if (Test-Path $runtimeCandidate) {
+                Remove-Item -Path $runtimeCandidate -Force -ErrorAction SilentlyContinue
+            }
+            if (Test-Path $sourceCandidate) {
+                Copy-Item -Path $sourceCandidate -Destination $runtimeCandidate -Force
+            }
+        }
+    }
+
+    $sourceUserDb = Join-Path $SourceAssembliesRoot 'user_created.db'
+    $runtimeUserDb = Join-Path $RuntimeAssembliesRoot 'user_created.db'
+    if (-not (Test-Path $runtimeUserDb) -and (Test-Path $sourceUserDb)) {
+        foreach ($suffix in @('', '-wal', '-shm')) {
+            $runtimeCandidate = "$runtimeUserDb$suffix"
+            $sourceCandidate = "$sourceUserDb$suffix"
+            if (Test-Path $sourceCandidate) {
+                Copy-Item -Path $sourceCandidate -Destination $runtimeCandidate -Force
+            }
+        }
+    }
+}
+
 # Ensure log directories
 function Ensure-AgentLogDir {
     $agentRoot = Join-Path $scriptDir 'Agent'
@@ -2578,6 +2628,11 @@ switch ($choice) {
             if (Sync-EngineRuntime -SourceRoot $engineSourceAbsolute -DestinationRoot $engineDataAbsolute) {
                 Write-Host "Synced Engine runtime code from Data\\Engine." -ForegroundColor DarkCyan
             }
+            Run-Step "Sync Engine Assembly Databases" {
+                $runtimeAssemblies = Join-Path $scriptDir 'Engine\Assemblies'
+                $sourceAssemblies = Join-Path $engineSourceAbsolute 'Assemblies'
+                Sync-EngineAssembliesRuntime -SourceAssembliesRoot $sourceAssemblies -RuntimeAssembliesRoot $runtimeAssemblies
+            }
             Run-Step "Borealis Engine: Launch Flask Server" {
                 Push-Location (Join-Path $scriptDir "Engine")
                 $py = Join-Path $scriptDir "Engine\Scripts\python.exe"
@@ -2732,12 +2787,7 @@ switch ($choice) {
                 }
                 Copy-Item -Path $_.FullName -Destination $engineDataAbsolute -Recurse -Force
             }
-
-            if (-not (Test-Path $runtimeAssemblies) -and (Test-Path $sourceAssemblies)) {
-                Copy-Item -Path $sourceAssemblies -Destination $runtimeAssemblies -Recurse -Force
-            } elseif (-not (Test-Path $runtimeAssemblies)) {
-                New-Item -Path $runtimeAssemblies -ItemType Directory -Force | Out-Null
-            }
+            Sync-EngineAssembliesRuntime -SourceAssembliesRoot $sourceAssemblies -RuntimeAssembliesRoot $runtimeAssemblies
 
             if (-not (Test-Path $runtimeAuthTokens)) {
                 New-Item -Path $runtimeAuthTokens -ItemType Directory -Force | Out-Null

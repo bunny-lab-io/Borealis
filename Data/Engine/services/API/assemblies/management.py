@@ -3,8 +3,8 @@
 # Description: Assembly REST API routes backed by AssemblyCache for multi-domain persistence.
 #
 # API Endpoints (if applicable):
-# - GET /api/assemblies (Token Authenticated) - Lists assemblies with domain/source metadata.
-# - GET /api/assemblies/<assembly_guid> (Token Authenticated) - Returns assembly metadata and payload reference.
+# - GET /api/assemblies (Token Authenticated) - Lists assemblies by domain/type with summary fields.
+# - GET /api/assemblies/<assembly_guid> (Token Authenticated) - Returns assembly summary and payload.
 # - POST /api/assemblies (Token Authenticated) - Creates a new assembly within the allowed domain.
 # - PUT /api/assemblies/<assembly_guid> (Token Authenticated) - Updates an existing assembly and stages persistence.
 # - DELETE /api/assemblies/<assembly_guid> (Token Authenticated) - Marks an assembly for deletion.
@@ -12,7 +12,7 @@
 # - POST /api/assemblies/dev-mode/switch (Token Authenticated (Admin)) - Enables or disables Dev Mode overrides for the current session.
 # - POST /api/assemblies/dev-mode/write (Token Authenticated (Admin+Dev Mode)) - Flushes queued assembly writes immediately.
 # - POST /api/assemblies/import (Token Authenticated (Domain write permissions)) - Imports a legacy assembly JSON document into the selected domain.
-# - GET /api/assemblies/<assembly_guid>/export (Token Authenticated) - Exports an assembly as legacy JSON with metadata.
+# - GET /api/assemblies/<assembly_guid>/export (Token Authenticated) - Exports an assembly as JSON.
 # ======================================================
 
 """Assembly CRUD REST endpoints backed by AssemblyCache."""
@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from flask import Blueprint, jsonify, request
 
 from ....assembly_management.models import AssemblyDomain
+from ...assemblies.serialization import AssemblySerializationError
 from ...assemblies.service import AssemblyRuntimeService
 from ...auth import RequestAuthContext
 
@@ -162,11 +163,6 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
     service = AssemblyAPIService(app, adapters)
     blueprint = Blueprint("assemblies", __name__, url_prefix="/api/assemblies")
 
-    def _coerce_mapping(value: Any) -> Optional[Dict[str, Any]]:
-        if isinstance(value, dict):
-            return value
-        return None
-
     # ------------------------------------------------------------------
     # Collections
     # ------------------------------------------------------------------
@@ -177,8 +173,8 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify(error[0]), error[1]
 
         domain = request.args.get("domain")
-        kind = request.args.get("kind")
-        items = service.runtime.list_assemblies(domain=domain, kind=kind)
+        assembly_type = request.args.get("type")
+        items = service.runtime.list_assemblies(domain=domain, assembly_type=assembly_type)
         queue_state = service.runtime.queue_snapshot()
         return jsonify({"items": items, "queue": queue_state}), 200
 
@@ -444,8 +440,6 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
                 domain=domain,
                 document=document,
                 assembly_guid=pending_guid,
-                metadata_override=_coerce_mapping(payload.get("metadata")),
-                tags_override=_coerce_mapping(payload.get("tags")),
             )
             record["queue"] = service.runtime.queue_snapshot()
             service._audit(

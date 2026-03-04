@@ -176,17 +176,16 @@ const SourceCellRenderer = React.memo(function SourceCellRenderer(props) {
 const normalizeRow = (item, queueEntry) => {
   if (!item) return null;
   const assemblyGuid = item.assembly_guid || item.assembly_id || "";
-  const assemblyKind = String(item.assembly_kind || "").toLowerCase();
-  const assemblyType = String(item.assembly_type || "").toLowerCase();
+  const assemblyKind = String(item.assembly_type || "").toLowerCase();
+  const assemblyType = String(item.assembly_subtype || "").toLowerCase();
   let typeKey = "script";
   if (assemblyKind === "workflow") {
     typeKey = "workflow";
-  } else if (assemblyKind === "ansible" || assemblyType === "ansible") {
+  } else if (assemblyKind === "ansible") {
     typeKey = "ansible";
   }
 
-  const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
-  const sourcePath = String(metadata.source_path || metadata.rel_path || "").replace(/\\/g, "/");
+  const sourcePath = String(item.virtual_path || item.path || "").replace(/\\/g, "/");
   const pathParts = sourcePath ? sourcePath.split("/") : [];
   const fileName = pathParts.length ? pathParts[pathParts.length - 1] : "";
   const folder = pathParts.length > 1 ? pathParts.slice(0, -1).join("/") : "";
@@ -195,12 +194,10 @@ const normalizeRow = (item, queueEntry) => {
   const domainMeta = resolveDomainMeta(domain);
   const displayName =
     item.display_name ||
-    metadata.display_name ||
     fileName.replace(/\.[^.]+$/, "") ||
     fileName ||
     "Assembly";
-  const summary = item.summary || metadata.summary || "";
-  const category = item.category || metadata.category || "";
+  const summary = item.summary || "";
   const queueRecord = queueEntry || null;
   const isDirty = Boolean(item.is_dirty);
 
@@ -211,7 +208,6 @@ const normalizeRow = (item, queueEntry) => {
     assemblyKind,
     assemblyType,
     name: displayName,
-    category,
     description: summary,
     relPath: sourcePath,
     sourcePath,
@@ -223,9 +219,6 @@ const normalizeRow = (item, queueEntry) => {
     dirtySince: item.dirty_since || queueRecord?.dirty_since || "",
     lastPersisted: item.last_persisted || queueRecord?.last_persisted || "",
     queueEntry: queueRecord,
-    version: item.version ?? null,
-    metadata,
-    tags: item.tags || {},
     payloadGuid: item.payload_guid,
     updatedAt: item.updated_at,
     createdAt: item.created_at,
@@ -306,7 +299,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       setTimeout(() => {
         const columnApi = gridRef.current?.columnApi;
         if (columnApi) {
-          const ids = ["assemblyType", "source", "category", "name"];
+          const ids = ["assemblyType", "source", "name"];
           columnApi.autoSizeColumns(ids, false);
         }
       }, 0);
@@ -503,17 +496,6 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         resizable: true,
       },
       {
-        colId: "category",
-        field: "category",
-        headerName: "Category",
-        valueGetter: (params) => params?.data?.category || "",
-        minWidth: 160,
-        flex: 0,
-        sortable: true,
-        filter: "agTextColumnFilter",
-        resizable: true,
-      },
-      {
         colId: "name",
         field: "name",
         headerName: "Name",
@@ -585,9 +567,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       assemblyKind: isAnsible ? "ansible" : "script",
       assemblyType: isAnsible ? "ansible" : context.type,
       name: trimmed,
-      category: context.category,
       domain: "user",
-      metadata: { ...context },
       isDirty: false,
       isNew: true,
       createContext: context,
@@ -608,7 +588,6 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       assemblyType: "workflow",
       name: trimmed,
       domain: "user",
-      metadata: { display_name: trimmed, category: "workflow" },
       isNew: true,
     };
     onOpenWorkflow?.(newWorkflow);

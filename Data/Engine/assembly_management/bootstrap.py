@@ -1,6 +1,6 @@
 # ======================================================
 # Data\Engine\assembly_management\bootstrap.py
-# Description: Startup helpers that initialise assembly databases, payload storage, and cache services.
+# Description: Startup helpers that initialise assembly databases and cache services.
 #
 # API Endpoints (if applicable): None
 # ======================================================
@@ -17,7 +17,8 @@ from typing import Dict, List, Mapping, Optional
 
 from .databases import AssemblyDatabaseManager
 from .models import AssemblyDomain, AssemblyRecord, CachedAssembly
-from .payloads import PayloadManager
+
+
 class AssemblyCache:
     """Caches assemblies in memory and coordinates background persistence."""
 
@@ -28,7 +29,6 @@ class AssemblyCache:
     def initialise(
         cls,
         database_manager: AssemblyDatabaseManager,
-        payload_manager: PayloadManager,
         *,
         flush_interval_seconds: float = 60.0,
         logger: Optional[logging.Logger] = None,
@@ -37,7 +37,6 @@ class AssemblyCache:
             if cls._singleton is None:
                 cls._singleton = cls(
                     database_manager=database_manager,
-                    payload_manager=payload_manager,
                     flush_interval_seconds=flush_interval_seconds,
                     logger=logger,
                 )
@@ -52,12 +51,10 @@ class AssemblyCache:
         self,
         *,
         database_manager: AssemblyDatabaseManager,
-        payload_manager: PayloadManager,
         flush_interval_seconds: float,
         logger: Optional[logging.Logger],
     ) -> None:
         self._db_manager = database_manager
-        self._payload_manager = payload_manager
         self._flush_interval = max(5.0, float(flush_interval_seconds))
         self._logger = logger or logging.getLogger(__name__)
         self._store: Dict[str, CachedAssembly] = {}
@@ -87,7 +84,6 @@ class AssemblyCache:
                 self._domain_index[domain].clear()
                 records = self._db_manager.load_all(domain)
                 for record in records:
-                    self._payload_manager.ensure_runtime_copy(record.payload)
                     entry = CachedAssembly(domain=domain, record=record, is_dirty=False, last_persisted=record.updated_at)
                     self._store[record.assembly_guid] = entry
                     self._domain_index[domain][record.assembly_guid] = entry
@@ -175,17 +171,13 @@ class AssemblyCache:
             self._flush_dirty_entries()
 
     def read_payload_bytes(self, assembly_guid: str) -> bytes:
-        """Return the payload bytes for the specified assembly."""
+        """Return the payload bytes for the specified assembly from SQLite-backed cache."""
 
         with self._lock:
             entry = self._store.get(assembly_guid)
         if not entry:
             raise KeyError(f"Assembly '{assembly_guid}' not found in cache")
-        return self._payload_manager.read_payload_bytes(entry.record.payload)
-
-    @property
-    def payload_manager(self) -> PayloadManager:
-        return self._payload_manager
+        return (entry.record.payload_json or "{}").encode("utf-8")
 
     @property
     def database_manager(self) -> AssemblyDatabaseManager:
@@ -217,7 +209,6 @@ class AssemblyCache:
         for entry in delete_items:
             try:
                 self._db_manager.delete_record(entry.domain, entry)
-                self._payload_manager.delete_payload(entry.record.payload)
                 with self._lock:
                     self._store.pop(entry.record.assembly_guid, None)
                     self._domain_index[entry.domain].pop(entry.record.assembly_guid, None)
@@ -235,7 +226,6 @@ class AssemblyCache:
         for entry in dirty_items:
             try:
                 self._db_manager.upsert_record(entry.domain, entry)
-                self._payload_manager.ensure_runtime_copy(entry.record.payload)
                 entry.mark_clean()
             except Exception as exc:
                 self._logger.error(
@@ -268,20 +258,14 @@ def initialise_assembly_runtime(
 
     staging_root = _discover_staging_root()
     runtime_root = _discover_runtime_root()
-    payload_staging = staging_root / "Payloads"
-    payload_runtime = runtime_root / "Payloads"
 
     db_manager = AssemblyDatabaseManager(staging_root=staging_root, runtime_root=runtime_root, logger=logger)
     db_manager.initialise()
 
-    payload_manager = PayloadManager(staging_root=payload_staging, runtime_root=payload_runtime, logger=logger)
-    # Automatic JSON-to-database imports have been retired so that staging official.db remains the single source
-    # of truth.
     flush_interval = _resolve_flush_interval(config)
 
     return AssemblyCache.initialise(
         database_manager=db_manager,
-        payload_manager=payload_manager,
         flush_interval_seconds=flush_interval,
         logger=logger,
     )

@@ -274,7 +274,6 @@ def _load_assembly_document(
         "variables": [],
         "files": [],
         "timeout_seconds": 3600,
-        "metadata": {},
     }
     data: Dict[str, Any] = {}
     if isinstance(payload, dict):
@@ -288,7 +287,6 @@ def _load_assembly_document(
     if isinstance(data, dict) and data:
         doc["name"] = str(data.get("name") or doc["name"])
         doc["description"] = str(data.get("description") or "")
-        doc["metadata"] = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
         cat = str(data.get("category") or doc["category"]).strip().lower()
         if cat in {"application", "script"}:
             doc["category"] = cat
@@ -418,6 +416,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         if error:
             return jsonify(error[0]), error[1]
         data = request.get_json(silent=True) or {}
+        assembly_guid_input = str(data.get("assembly_guid") or "").strip().lower()
         rel_path_input = data.get("script_path")
         rel_path_normalized = _normalize_script_relpath(rel_path_input)
         hostnames = _normalize_hostnames(data.get("hostnames"))
@@ -425,10 +424,12 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         admin_user = str(data.get("admin_user") or "").strip()
         admin_pass = str(data.get("admin_pass") or "").strip()
 
-        if not rel_path_normalized or not hostnames:
-            return jsonify({"error": "Missing script_path or hostnames[]"}), 400
+        if not hostnames:
+            return jsonify({"error": "Missing hostnames[]"}), 400
+        if not rel_path_normalized and not assembly_guid_input:
+            return jsonify({"error": "Missing script_path or assembly_guid"}), 400
 
-        rel_path_canonical = rel_path_normalized
+        rel_path_canonical = rel_path_normalized or ""
         username = (user.get("username") if isinstance(user, dict) else None) or "unknown"
 
         assembly_source = "runtime"
@@ -436,10 +437,16 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         abs_path_str = rel_path_canonical
         doc: Optional[Dict[str, Any]] = None
         record: Optional[Dict[str, Any]] = None
-        try:
-            record = assembly_runtime.resolve_document_by_source_path(rel_path_canonical)
-        except Exception:
-            record = None
+        if assembly_guid_input:
+            try:
+                record = assembly_runtime.resolve_document_by_guid(assembly_guid_input)
+            except Exception:
+                record = None
+        if record is None and rel_path_canonical:
+            try:
+                record = assembly_runtime.resolve_document_by_source_path(rel_path_canonical)
+            except Exception:
+                record = None
         if record:
             payload_doc = record.get("payload_json")
             if not isinstance(payload_doc, dict):
@@ -450,15 +457,22 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     except Exception:
                         payload_doc = None
             if isinstance(payload_doc, dict):
-                doc = _load_assembly_document(rel_path_canonical, "powershell", payload=payload_doc)
+                assembly_guid = str(record.get("assembly_guid") or "").strip().lower() or None
+                source_identifier = (
+                    rel_path_canonical
+                    or str(record.get("virtual_path") or "").strip()
+                    or (assembly_guid or "Scripts/Assembly")
+                )
+                doc = _load_assembly_document(source_identifier, "powershell", payload=payload_doc)
                 if doc:
-                    metadata_block = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
-                    if isinstance(metadata_block, dict):
-                        assembly_guid = metadata_block.get("assembly_guid")
                     if not doc.get("name"):
                         doc["name"] = record.get("display_name") or doc.get("name")
+                    if not rel_path_canonical:
+                        rel_path_canonical = str(record.get("virtual_path") or "").strip() or source_identifier
         if doc is None:
             assembly_source = "filesystem"
+            if not rel_path_canonical:
+                return jsonify({"error": "Script not found"}), 404
             try:
                 scripts_root = _scripts_root()
                 assemblies_root = scripts_root.parent.resolve()

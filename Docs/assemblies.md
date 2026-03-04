@@ -7,8 +7,12 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 ## Assemblies at a Glance
 - Assemblies are script definitions stored in SQLite domains.
 - Domains include: `official`, `community`, and `user_created`.
-- Payload artifacts live under `Payloads/<payload-guid>`.
+- Payload JSON is stored inline in each `assemblies` row (`payload_json`).
 - Assemblies are cached at runtime by the Engine and served via API.
+- `assembly_type` is the canonical classifier used to route assemblies to the Script Editor, Workflow Editor, and execution paths.
+- `assembly_subtype` captures implementation/runtime subtype (for example: `powershell`, `workflow`, `ansible`).
+- The assembly table does not use `metadata_json` or `payload_type`.
+- Engine startup enforces the compact `assemblies` schema exactly; legacy extra columns are rejected instead of auto-migrated.
 
 ## Quick Jobs
 - Quick jobs are immediate executions of a script assembly.
@@ -18,6 +22,12 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 ## Activity History
 - Quick job executions are tracked in `activity_history`.
 - Operators can view or delete device activity history via API.
+
+## Payload Size Limits
+- Operator target: up to `500 MB` per assembly payload (`payload_json`) under normal resource conditions.
+- Borealis import guardrail: `950,000,000` bytes per document.
+- SQLite per-value hard ceiling in the current runtime build: `1,000,000,000` bytes for a single TEXT/BLOB value.
+- Payloads near the hard ceiling are best-effort and depend on available Engine memory/CPU during JSON parse and DB write.
 
 ## Ansible Status (Current)
 - Ansible quick-run exists as an endpoint but is not implemented.
@@ -52,9 +62,12 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
   - `official.db`
   - `community.db`
   - `user_created.db`
-  - `Payloads/` for large script assets
 - Runtime mirror lives under `Engine/Assemblies/` and is refreshed at launch.
 - The Engine loads and caches assemblies via `Data/Engine/assembly_management` and `AssemblyRuntimeService`.
+
+### Payload sizing guidance
+- Treat `500 MB` as the practical operator-facing target for a single assembly payload.
+- Runtime import limit is `950,000,000` bytes to remain below SQLite's current per-value ceiling (`1,000,000,000` bytes).
 
 ### Dev Mode behavior
 - User-created domain writes are allowed for authenticated operators.
@@ -63,7 +76,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - Use `/api/assemblies/dev-mode/switch` to toggle and `/api/assemblies/dev-mode/write` to flush.
 
 ### Quick job execution path
-1) Operator calls `/api/scripts/quick_run` with `script_path` and `hostnames`.
+1) Operator calls `/api/scripts/quick_run` with `script_path` or `assembly_guid`, plus `hostnames`.
 2) Engine resolves the assembly document (DB-backed or filesystem).
 3) Engine rewrites variable placeholders and signs the script with Ed25519.
 4) Engine creates `activity_history` rows and emits `quick_job_run` over Socket.IO.
@@ -84,7 +97,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - Use `/api/device/activity/<hostname>` to query or clear entries.
 
 ### Backup guidance
-- Back up `Data/Engine/Assemblies/` and `Data/Engine/Assemblies/Payloads/` together.
+- Back up `Data/Engine/Assemblies/`.
 - Also back up `Engine/Assemblies/` if you need runtime snapshots.
 
 ### Known limitations

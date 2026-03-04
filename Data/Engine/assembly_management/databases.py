@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import datetime as _dt
-import json
 import logging
 import shutil
 import sqlite3
@@ -18,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from .models import AssemblyDomain, AssemblyRecord, CachedAssembly, PayloadDescriptor, PayloadType
+from .models import AssemblyDomain, AssemblyRecord, CachedAssembly, PayloadDescriptor
 
 
 _SCHEMA_STATEMENTS: Iterable[str] = (
@@ -27,28 +26,28 @@ _SCHEMA_STATEMENTS: Iterable[str] = (
         assembly_guid TEXT PRIMARY KEY,
         display_name TEXT NOT NULL,
         summary TEXT,
-        category TEXT,
-        assembly_kind TEXT NOT NULL,
-        assembly_type TEXT,
-        version INTEGER NOT NULL DEFAULT 1,
-        metadata_json TEXT,
-        tags_json TEXT,
-        checksum TEXT,
-        payload_type TEXT NOT NULL,
-        payload_file_name TEXT NOT NULL,
-        payload_file_extension TEXT NOT NULL,
+        assembly_type TEXT NOT NULL,
+        assembly_subtype TEXT,
+        payload_json TEXT NOT NULL,
         payload_size_bytes INTEGER NOT NULL DEFAULT 0,
-        payload_checksum TEXT,
-        payload_created_at TEXT NOT NULL,
-        payload_updated_at TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_assemblies_kind ON assemblies(assembly_kind)",
-    "CREATE INDEX IF NOT EXISTS idx_assemblies_category ON assemblies(category)",
+    "CREATE INDEX IF NOT EXISTS idx_assemblies_type ON assemblies(assembly_type)",
 )
 
+_ASSEMBLIES_COLUMNS: tuple[str, ...] = (
+    "assembly_guid",
+    "display_name",
+    "summary",
+    "assembly_type",
+    "assembly_subtype",
+    "payload_json",
+    "payload_size_bytes",
+    "created_at",
+    "updated_at",
+)
 
 def _parse_datetime(value: str) -> _dt.datetime:
     try:
@@ -127,66 +126,51 @@ class AssemblyDatabaseManager:
                     assembly_guid,
                     display_name,
                     summary,
-                    category,
-                    assembly_kind,
                     assembly_type,
-                    version,
-                    metadata_json,
-                    tags_json,
-                    checksum AS assembly_checksum,
-                    payload_type,
-                    payload_file_name,
-                    payload_file_extension,
+                    assembly_subtype,
+                    payload_json,
                     payload_size_bytes,
-                    payload_checksum,
-                    payload_created_at,
-                    payload_updated_at,
-                    created_at AS assembly_created_at,
-                    updated_at AS assembly_updated_at
+                    created_at,
+                    updated_at
                 FROM assemblies
                 """
             )
             records: List[AssemblyRecord] = []
             for row in cur.fetchall():
-                payload_type_raw = row["payload_type"]
-                try:
-                    payload_type = PayloadType(payload_type_raw)
-                except Exception:
-                    payload_type = PayloadType.UNKNOWN
+                payload_json = row["payload_json"] or "{}"
+                assembly_type = str(row["assembly_type"] or "script").strip().lower() or "script"
+                assembly_subtype = row["assembly_subtype"]
+                if not assembly_subtype:
+                    if assembly_type == "workflow":
+                        assembly_subtype = "workflow"
+                    elif assembly_type == "ansible":
+                        assembly_subtype = "ansible"
+                    else:
+                        assembly_subtype = "powershell"
+
+                payload_size = int(row["payload_size_bytes"] or 0)
+                if payload_size <= 0:
+                    payload_size = len(payload_json.encode("utf-8"))
+                row_created = _parse_datetime(row["created_at"])
+                row_updated = _parse_datetime(row["updated_at"])
                 payload = PayloadDescriptor(
                     assembly_guid=row["assembly_guid"],
-                    payload_type=payload_type,
-                    file_name=row["payload_file_name"],
-                    file_extension=row["payload_file_extension"],
-                    size_bytes=row["payload_size_bytes"],
-                    checksum=row["payload_checksum"],
-                    created_at=_parse_datetime(row["payload_created_at"]),
-                    updated_at=_parse_datetime(row["payload_updated_at"]),
+                    file_name="payload.json",
+                    file_extension=".json",
+                    size_bytes=payload_size,
+                    created_at=row_created,
+                    updated_at=row_updated,
                 )
-                metadata_json = row["metadata_json"] or "{}"
-                tags_json = row["tags_json"] or "{}"
-                try:
-                    metadata = json.loads(metadata_json)
-                except Exception:
-                    metadata = {}
-                try:
-                    tags = json.loads(tags_json)
-                except Exception:
-                    tags = {}
                 record = AssemblyRecord(
                     assembly_guid=row["assembly_guid"],
                     display_name=row["display_name"],
                     summary=row["summary"],
-                    category=row["category"],
-                    assembly_kind=row["assembly_kind"],
-                    assembly_type=row["assembly_type"],
-                    version=row["version"],
+                    assembly_type=assembly_type,
+                    assembly_subtype=assembly_subtype,
                     payload=payload,
-                    metadata=metadata,
-                    tags=tags,
-                    checksum=row["assembly_checksum"],
-                    created_at=_parse_datetime(row["assembly_created_at"]),
-                    updated_at=_parse_datetime(row["assembly_updated_at"]),
+                    payload_json=payload_json,
+                    created_at=row_created,
+                    updated_at=row_updated,
                 )
                 records.append(record)
             return records
@@ -201,69 +185,40 @@ class AssemblyDatabaseManager:
         try:
             cur = conn.cursor()
             payload = record.payload
-            metadata_json = json.dumps(record.metadata or {})
-            tags_json = json.dumps(record.tags or {})
+            payload_size = int(payload.size_bytes or 0)
+            if payload_size <= 0:
+                payload_size = len((record.payload_json or "{}").encode("utf-8"))
             cur.execute(
                 """
                 INSERT INTO assemblies (
                     assembly_guid,
                     display_name,
                     summary,
-                    category,
-                    assembly_kind,
                     assembly_type,
-                    version,
-                    metadata_json,
-                    tags_json,
-                    checksum,
-                    payload_type,
-                    payload_file_name,
-                    payload_file_extension,
+                    assembly_subtype,
+                    payload_json,
                     payload_size_bytes,
-                    payload_checksum,
-                    payload_created_at,
-                    payload_updated_at,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(assembly_guid) DO UPDATE SET
                     display_name = excluded.display_name,
                     summary = excluded.summary,
-                    category = excluded.category,
-                    assembly_kind = excluded.assembly_kind,
                     assembly_type = excluded.assembly_type,
-                    version = excluded.version,
-                    metadata_json = excluded.metadata_json,
-                    tags_json = excluded.tags_json,
-                    checksum = excluded.checksum,
-                    payload_type = excluded.payload_type,
-                    payload_file_name = excluded.payload_file_name,
-                    payload_file_extension = excluded.payload_file_extension,
+                    assembly_subtype = excluded.assembly_subtype,
+                    payload_json = excluded.payload_json,
                     payload_size_bytes = excluded.payload_size_bytes,
-                    payload_checksum = excluded.payload_checksum,
-                    payload_created_at = excluded.payload_created_at,
-                    payload_updated_at = excluded.payload_updated_at,
                     updated_at = excluded.updated_at
                 """,
                 (
                     record.assembly_guid,
                     record.display_name,
                     record.summary,
-                    record.category,
-                    record.assembly_kind,
                     record.assembly_type,
-                    record.version,
-                    metadata_json,
-                    tags_json,
-                    record.checksum,
-                    payload.payload_type.value,
-                    payload.file_name,
-                    payload.file_extension,
-                    payload.size_bytes,
-                    payload.checksum,
-                    payload.created_at.isoformat(),
-                    payload.updated_at.isoformat(),
+                    record.assembly_subtype,
+                    record.payload_json,
+                    payload_size,
                     record.created_at.isoformat(),
                     record.updated_at.isoformat(),
                 ),
@@ -284,6 +239,7 @@ class AssemblyDatabaseManager:
             conn.commit()
         finally:
             conn.close()
+            self._mirror_database(domain)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -336,151 +292,58 @@ class AssemblyDatabaseManager:
 
     def _apply_schema(self, conn: sqlite3.Connection) -> None:
         cur = conn.cursor()
-        self._migrate_legacy_schema(cur)
         for statement in _SCHEMA_STATEMENTS:
             cur.execute(statement)
+        self._validate_schema(cur)
         conn.commit()
 
-    def _migrate_legacy_schema(self, cur: sqlite3.Cursor) -> None:
-        """Upgrade legacy assembly/payload tables to the consolidated schema."""
-
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='assemblies'")
-        if not cur.fetchone():
-            return
-
+    def _validate_schema(self, cur: sqlite3.Cursor) -> None:
         cur.execute("PRAGMA table_info('assemblies')")
-        legacy_columns = {row[1] for row in cur.fetchall()}
-        if "assembly_guid" in legacy_columns:
-            return  # Already migrated
-
-        self._logger.info("Migrating legacy assemblies schema to assembly_guid layout.")
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS assemblies_new (
-                assembly_guid TEXT PRIMARY KEY,
-                display_name TEXT NOT NULL,
-                summary TEXT,
-                category TEXT,
-                assembly_kind TEXT NOT NULL,
-                assembly_type TEXT,
-                version INTEGER NOT NULL DEFAULT 1,
-                metadata_json TEXT,
-                tags_json TEXT,
-                checksum TEXT,
-                payload_type TEXT NOT NULL,
-                payload_file_name TEXT NOT NULL,
-                payload_file_extension TEXT NOT NULL,
-                payload_size_bytes INTEGER NOT NULL DEFAULT 0,
-                payload_checksum TEXT,
-                payload_created_at TEXT NOT NULL,
-                payload_updated_at TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+        columns = [row[1] for row in cur.fetchall()]
+        if not columns:
+            raise RuntimeError("Assemblies schema validation failed: missing assemblies table.")
+        expected_set = set(_ASSEMBLIES_COLUMNS)
+        column_set = set(columns)
+        missing = [name for name in _ASSEMBLIES_COLUMNS if name not in column_set]
+        extra = [name for name in columns if name not in expected_set]
+        if missing or extra:
+            problems: List[str] = []
+            if missing:
+                problems.append(f"missing columns: {', '.join(missing)}")
+            if extra:
+                problems.append(f"unexpected columns: {', '.join(extra)}")
+            joined = "; ".join(problems)
+            raise RuntimeError(
+                f"Assemblies schema validation failed ({joined}). "
+                "Run the documented manual SQL rebuild for assemblies DB files."
             )
-            """
-        )
 
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payloads'")
-        has_payloads = cur.fetchone() is not None
+    def _mirror_database(self, domain: AssemblyDomain) -> None:
+        paths = self._paths[domain]
+        runtime_db = paths.runtime
+        staging_db = paths.staging
+        staging_db.parent.mkdir(parents=True, exist_ok=True)
 
-        if has_payloads:
-            cur.execute(
-                """
-                INSERT INTO assemblies_new (
-                    assembly_guid,
-                    display_name,
-                    summary,
-                    category,
-                    assembly_kind,
-                    assembly_type,
-                    version,
-                    metadata_json,
-                    tags_json,
-                    checksum,
-                    payload_type,
-                    payload_file_name,
-                    payload_file_extension,
-                    payload_size_bytes,
-                    payload_checksum,
-                    payload_created_at,
-                    payload_updated_at,
-                    created_at,
-                    updated_at
+        for suffix in ("", "-wal", "-shm"):
+            runtime_candidate = runtime_db.parent / f"{runtime_db.name}{suffix}"
+            staging_candidate = staging_db.parent / f"{staging_db.name}{suffix}"
+            if not runtime_candidate.exists():
+                if staging_candidate.exists():
+                    try:
+                        staging_candidate.unlink()
+                    except Exception as exc:
+                        self._logger.debug(
+                            "Failed to remove stale staging assembly database file %s: %s",
+                            staging_candidate,
+                            exc,
+                        )
+                continue
+            try:
+                shutil.copy2(runtime_candidate, staging_candidate)
+            except Exception as exc:
+                self._logger.debug(
+                    "Failed to mirror runtime assembly database file %s -> %s: %s",
+                    runtime_candidate,
+                    staging_candidate,
+                    exc,
                 )
-                SELECT
-                    a.assembly_id AS assembly_guid,
-                    a.display_name,
-                    a.summary,
-                    a.category,
-                    a.assembly_kind,
-                    a.assembly_type,
-                    a.version,
-                    COALESCE(a.metadata_json, '{}') AS metadata_json,
-                    COALESCE(a.tags_json, '{}') AS tags_json,
-                    a.checksum,
-                    COALESCE(p.payload_type, 'unknown') AS payload_type,
-                    COALESCE(p.file_name, 'payload.json') AS payload_file_name,
-                    COALESCE(p.file_extension, '.json') AS payload_file_extension,
-                    COALESCE(p.size_bytes, 0) AS payload_size_bytes,
-                    COALESCE(p.checksum, '') AS payload_checksum,
-                    COALESCE(p.created_at, a.created_at) AS payload_created_at,
-                    COALESCE(p.updated_at, a.updated_at) AS payload_updated_at,
-                    a.created_at,
-                    a.updated_at
-                FROM assemblies AS a
-                LEFT JOIN payloads AS p ON p.payload_guid = a.payload_guid
-                """
-            )
-        else:
-            cur.execute(
-                """
-                INSERT INTO assemblies_new (
-                    assembly_guid,
-                    display_name,
-                    summary,
-                    category,
-                    assembly_kind,
-                    assembly_type,
-                    version,
-                    metadata_json,
-                    tags_json,
-                    checksum,
-                    payload_type,
-                    payload_file_name,
-                    payload_file_extension,
-                    payload_size_bytes,
-                    payload_checksum,
-                    payload_created_at,
-                    payload_updated_at,
-                    created_at,
-                    updated_at
-                )
-                SELECT
-                    assembly_id AS assembly_guid,
-                    display_name,
-                    summary,
-                    category,
-                    assembly_kind,
-                    assembly_type,
-                    version,
-                    COALESCE(metadata_json, '{}'),
-                    COALESCE(tags_json, '{}'),
-                    checksum,
-                    'unknown' AS payload_type,
-                    'payload.json' AS payload_file_name,
-                    '.json' AS payload_file_extension,
-                    0 AS payload_size_bytes,
-                    '' AS payload_checksum,
-                    created_at AS payload_created_at,
-                    updated_at AS payload_updated_at,
-                    created_at,
-                    updated_at
-                FROM assemblies
-                """
-            )
-
-        cur.execute("DROP TABLE assemblies")
-        if has_payloads:
-            cur.execute("DROP TABLE payloads")
-        cur.execute("ALTER TABLE assemblies_new RENAME TO assemblies")
-        self._logger.info("Legacy assemblies schema migration completed.")

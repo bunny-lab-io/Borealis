@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import datetime as _dt
-import hashlib
 import logging
 import shutil
 import uuid
@@ -47,7 +46,6 @@ class PayloadManager:
         resolved_extension = self._normalise_extension(extension or self._default_extension(payload_type))
         now = _dt.datetime.utcnow()
         data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
-        checksum = hashlib.sha256(data).hexdigest()
 
         runtime_dir = self._payload_dir(self._runtime_root, resolved_guid)
         runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -60,11 +58,9 @@ class PayloadManager:
 
         descriptor = PayloadDescriptor(
             assembly_guid=resolved_guid,
-            payload_type=payload_type,
             file_name=file_name,
             file_extension=resolved_extension,
             size_bytes=len(data),
-            checksum=checksum,
             created_at=now,
             updated_at=now,
         )
@@ -74,7 +70,6 @@ class PayloadManager:
         """Replace payload content while retaining GUID and metadata."""
 
         data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
-        checksum = hashlib.sha256(data).hexdigest()
         now = _dt.datetime.utcnow()
 
         runtime_path = self._payload_dir(self._runtime_root, descriptor.assembly_guid) / descriptor.file_name
@@ -84,7 +79,6 @@ class PayloadManager:
             handle.write(data)
 
         descriptor.size_bytes = len(data)
-        descriptor.checksum = checksum
         descriptor.updated_at = now
         return descriptor
 

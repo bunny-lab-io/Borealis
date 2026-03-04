@@ -74,7 +74,7 @@ def test_script_import_export_round_trip(engine_harness: EngineTestHarness) -> N
     exported = export_response.get_json()
     assert exported["assembly_guid"] == assembly_guid
     assert exported["payload"]["script"] == document["script"]
-    assert exported["metadata"]["display_name"] == document["name"]
+    assert exported["display_name"] == document["name"]
     assert exported["payload"]["variables"][0]["name"] == "example"
     assert isinstance(exported["queue"], list)
 
@@ -96,4 +96,4 @@ def test_workflow_import_export_round_trip(engine_harness: EngineTestHarness) ->
     assert export_response.status_code == 200
     exported = export_response.get_json()
     assert exported["payload"]["nodes"][0]["id"] == "node-1"
-    assert exported["metadata"]["display_name"] == document["tab_name"]
+    assert exported["display_name"] == document["tab_name"]

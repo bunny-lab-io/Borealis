@@ -291,6 +291,8 @@ function toServerDocument(assembly) {
   const timeoutSeconds = Number.isFinite(timeoutNumeric) ? Math.max(0, Math.round(timeoutNumeric)) : 3600;
   const encodedScript = encodeBase64String(normalizedScript);
   return {
+    assembly_type: (assembly.type || "").toLowerCase() === "ansible" ? "ansible" : "script",
+    assembly_subtype: assembly.type || "powershell",
     version: 1,
     name: assembly.name?.trim() || "",
     description: assembly.description || "",
@@ -466,42 +468,24 @@ export default function AssemblyEditor({
         }
         const data = await resp.json();
         if (canceled) return;
-        const metadata = data?.metadata && typeof data.metadata === "object" ? data.metadata : {};
         const payload = data?.payload && typeof data.payload === "object" ? data.payload : {};
         const enrichedDoc = { ...payload };
         const fallbackName =
-          metadata.display_name || data?.display_name || row?.name || assembly.name || "";
+          data?.display_name || row?.name || assembly.name || "";
         enrichedDoc.name = enrichedDoc.name || fallbackName;
         enrichedDoc.display_name = enrichedDoc.display_name || fallbackName;
         enrichedDoc.description =
           enrichedDoc.description ||
-          metadata.summary ||
           data?.summary ||
           row?.description ||
           "";
-        enrichedDoc.category =
-          enrichedDoc.category || metadata.category || data?.category || row?.category || "";
+        enrichedDoc.category = enrichedDoc.category || row?.category || "";
         enrichedDoc.type =
           enrichedDoc.type ||
-          metadata.assembly_type ||
-          data?.assembly_type ||
-          row?.assembly_type ||
+          data?.assembly_subtype ||
+          row?.assembly_subtype ||
+          row?.assemblyType ||
           defaultType;
-        if (enrichedDoc.timeout_seconds == null) {
-          const metaTimeout =
-            metadata.timeout_seconds ?? metadata.timeoutSeconds ?? metadata.timeout ?? null;
-          if (metaTimeout != null) enrichedDoc.timeout_seconds = metaTimeout;
-        }
-        if (!enrichedDoc.sites) {
-          const metaSites = metadata.sites && typeof metadata.sites === "object" ? metadata.sites : {};
-          enrichedDoc.sites = metaSites;
-        }
-        if (!Array.isArray(enrichedDoc.variables) || !enrichedDoc.variables.length) {
-          enrichedDoc.variables = Array.isArray(metadata.variables) ? metadata.variables : [];
-        }
-        if (!Array.isArray(enrichedDoc.files) || !enrichedDoc.files.length) {
-          enrichedDoc.files = Array.isArray(metadata.files) ? metadata.files : [];
-        }
         hydrateFromDocument({ ...enrichedDoc });
         setAssemblyGuid(data?.assembly_guid || guid);
         setDomain((data?.source || data?.domain || row?.domain || "user").toLowerCase());
@@ -511,7 +495,7 @@ export default function AssemblyEditor({
         });
         setIsDirtyQueue(Boolean(data?.is_dirty));
         const exportName = sanitizeFileName(
-          data?.display_name || metadata.display_name || row?.name || guid
+          data?.display_name || row?.name || guid
         );
         setFileName(exportName);
       } catch (err) {
@@ -833,8 +817,8 @@ export default function AssemblyEditor({
         const exportDoc = {
           assembly_guid: assemblyGuid,
           domain,
-          assembly_kind: isAnsible ? "ansible" : "script",
-          assembly_type: assembly.type,
+          assembly_type: isAnsible ? "ansible" : "script",
+          assembly_subtype: assembly.type,
           display_name: assembly.name,
           summary: assembly.description,
           category: assembly.category,
