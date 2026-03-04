@@ -16,11 +16,12 @@ I'm the sole maintainer and still learning as I go, while working a full-time IT
 - **Jobs and Scheduling**: Launch "*Quick Jobs*" instantly or create more advanced schedules.
 - **Visual Workflows**: Drag-and-drop node canvas for combining steps, analysis, and logic.
 - **Ansible Playbooks**: Ansible playbook support is unfinished/broken in both the Engine and agent runtimes. The goal is to ship server-driven Ansible (SSH/WinRM) alongside agent-driven playbooks.
-- **Linux Engine + Windows Agent**: Engine deployment is Linux-only (`Borealis.sh`); Windows deployment is agent-only (`Borealis.ps1`/`bootstrap.ps1`).
+- **Linux Engine + Cross-Platform Agents**: Engine deployment is Linux-only (`Borealis.sh`), and agents run on both Windows (`Borealis.ps1`/`bootstrap.ps1` and Linux (`Borealis.sh`/`bootstrap.sh`).
 
 ## Current Status & Limitations
 - Ansible is disabled/unstable: Engine quick-run returns not implemented, scheduled-job and agent paths are incomplete, and server-side SSH/WinRM playbook dispatch is still on the roadmap. Expect failures until the Ansible pipeline is rebuilt.
-- Linux agent is non-functional: script execution, auditing, and enrollment flows are Windows-only right now. Avoid Linux agent deployments until a proper port is delivered.
+- Linux agents are functional, including enrollment and remote shell workflows.
+- Remote bash script execution is not fully implemented or validated yet; treat Linux remote script execution as in-progress.
 
 ## Device Management
 Device List:
@@ -94,6 +95,6 @@ Site List:
 2) Install the Agent (Windows):
    - `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent`
    - `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://10.0.0.54:5000" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
-3) Install the Agent (Linux, experimental):
+3) Install the Agent (Linux):
    - `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --`
    - `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://10.0.0.54:5000" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
