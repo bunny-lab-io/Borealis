@@ -186,7 +186,11 @@ try {
 
     Get-ChildItem -Path $extractedRoot.FullName -Force | ForEach-Object {
         if ($preserveDirectories -contains $_.Name) { return }
-        Copy-Item -Path $_.FullName -Destination (Join-Path $installDir $_.Name) -Recurse -Force
+        $destinationPath = Join-Path $installDir $_.Name
+        if (Test-Path $destinationPath) {
+            Remove-Item -Path $destinationPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Copy-Item -Path $_.FullName -Destination $destinationPath -Recurse -Force
     }
 
     $borealisScript = Join-Path $installDir 'Borealis.ps1'
