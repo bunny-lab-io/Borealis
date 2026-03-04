@@ -593,16 +593,24 @@ ensure_node_bins() {
 install_server_dependencies() {
   run_step "Dependency: Python (system)" install_shared_dependencies
   run_step "Dependency: Tesseract-OCR (system)" install_tesseract
+  run_step "Dependency: WireGuard tools (system)" install_wireguard_tools_best_effort engine
   run_step "Dependency: NodeJS (portable)" install_node_portable
 }
 
 install_agent_dependencies() {
   run_step "Dependency: Python (system)" install_shared_dependencies
-  install_wireguard_tools_best_effort
+  run_step "Dependency: WireGuard tools (system)" install_wireguard_tools_best_effort agent
 }
 
 install_wireguard_tools_best_effort() {
+  local install_target="${1:-agent}"
+
   if command_exists wg && command_exists wg-quick; then
+    if [[ "${install_target}" == "engine" ]]; then
+      write_engine_log "WireGuard tools available (wg/wg-quick)." "engine-supervision.log"
+    else
+      write_agent_log "WireGuard tools available (wg/wg-quick)."
+    fi
     return 0
   fi
 
@@ -627,10 +635,18 @@ install_wireguard_tools_best_effort() {
   esac
 
   if command_exists wg && command_exists wg-quick; then
-    write_agent_log "WireGuard tools available (wg/wg-quick)."
+    if [[ "${install_target}" == "engine" ]]; then
+      write_engine_log "WireGuard tools available (wg/wg-quick)." "engine-supervision.log"
+    else
+      write_agent_log "WireGuard tools available (wg/wg-quick)."
+    fi
   else
-    write_agent_log "WireGuard tools not found; remote shell/VNC over tunnel may fail until wireguard-tools is installed."
-    echo -e "${YELLOW}WireGuard tools not found. Install 'wireguard-tools' for remote shell/VNC tunnel support.${RESET}"
+    if [[ "${install_target}" == "engine" ]]; then
+      write_engine_log "WireGuard tools not found; VPN tunnel workflows may fail until wireguard-tools is installed." "engine-supervision.log"
+    else
+      write_agent_log "WireGuard tools not found; VPN tunnel workflows may fail until wireguard-tools is installed."
+    fi
+    echo -e "${YELLOW}WireGuard tools not found. Install 'wireguard-tools' for VPN tunnel support.${RESET}"
   fi
 }
 

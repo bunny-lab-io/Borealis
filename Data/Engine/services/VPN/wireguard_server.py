@@ -8,9 +8,8 @@
 """WireGuard server scaffolding for the Engine runtime.
 
 This module prepares WireGuard server material (keys, config rendering, ACL
-defaults) without starting a live tunnel. It is designed for the Windows-first
-reverse VPN migration where the Engine will run a host-only WireGuard listener
-on UDP/30000 and issue per-agent /32 peers with restricted AllowedIPs.
+defaults) and applies listener/firewall state. Windows uses WireGuard tunnel
+services while Linux uses wg-quick-managed interfaces.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ import ipaddress
 import logging
 import os
 import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -75,7 +75,18 @@ class WireGuardServerManager:
         self._service_name = "borealis-wg"
         self._service_display_name = "Borealis - WireGuard - Engine"
         self._config_dir = self._resolve_config_dir()
+        self._is_windows = os.name == "nt"
+        self._interface_name = self._resolve_interface_name()
         self._wireguard_exe = self._resolve_wireguard_exe()
+        self._wg_quick = shutil.which("wg-quick") or ""
+        self._wg = shutil.which("wg") or ""
+        self._ip = shutil.which("ip") or ""
+        self._iptables = shutil.which("iptables") or ""
+        self._firewall_cmd = shutil.which("firewall-cmd") or ""
+        self._linux_listener_rule_name = f"Borealis-WG-Listener-{self._interface_name}"
+        self._linux_rule_specs: Dict[str, Dict[str, object]] = {}
+        self._firewall_backend = self._detect_firewall_backend()
+        self._log_startup_context()
 
     def _resolve_config_dir(self) -> Path:
         config_dir = engine_config.PROJECT_ROOT / "Engine" / "WireGuard"
@@ -85,7 +96,20 @@ class WireGuardServerManager:
             self.logger.error("Failed to ensure WireGuard config dir at %s", config_dir, exc_info=True)
         return config_dir
 
+    def _resolve_interface_name(self) -> str:
+        raw = str(os.environ.get("BOREALIS_WIREGUARD_INTERFACE") or self._service_name or "borealis-wg").strip().lower()
+        cleaned = re.sub(r"[^a-z0-9_.-]", "", raw)
+        if not cleaned:
+            cleaned = "borealis-wg"
+        return cleaned[:15]
+
+    def _listener_config_path(self) -> Path:
+        filename = f"{self._service_name}.conf" if self._is_windows else f"{self._interface_name}.conf"
+        return self._config_dir / filename
+
     def _resolve_wireguard_exe(self) -> str:
+        if not self._is_windows:
+            return ""
         candidates = [
             str(Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "WireGuard" / "wireguard.exe"),
             str(Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")) / "WireGuard" / "wireguard.exe"),
@@ -217,6 +241,260 @@ class WireGuardServerManager:
                     return
             state = self._query_service_state()
         raise RuntimeError(f"WireGuard tunnel service {service_id} failed to start (state={state})")
+
+    def _service_is_active(self, name: str) -> bool:
+        if not name:
+            return False
+        if shutil.which("systemctl"):
+            code, out, err = self._run_command(["systemctl", "is-active", name])
+            if code == 0 and (out or "").strip().lower() == "active":
+                return True
+        if shutil.which("service"):
+            code, out, err = self._run_command(["service", name, "status"])
+            if code == 0:
+                return True
+        return False
+
+    def _is_firewalld_running(self) -> bool:
+        if self._firewall_cmd:
+            code, out, err = self._run_command([self._firewall_cmd, "--state"])
+            if code == 0 and (out or "").strip().lower() == "running":
+                return True
+        return self._service_is_active("firewalld")
+
+    def _is_iptables_service_running(self) -> bool:
+        return self._service_is_active("iptables") or self._service_is_active("nftables")
+
+    def _detect_firewall_backend(self) -> str:
+        if self._is_windows:
+            return "windows"
+        if self._is_firewalld_running() and self._firewall_cmd:
+            return "firewalld"
+        if self._iptables:
+            return "iptables"
+        if self._is_iptables_service_running() and not self._iptables:
+            self.logger.warning("iptables/nftables service appears active but 'iptables' binary was not found.")
+        if self._firewall_cmd and not self._is_firewalld_running():
+            self.logger.warning("firewall-cmd found but firewalld is not active; falling back to iptables if available.")
+        return "none"
+
+    def _log_startup_context(self) -> None:
+        if self._is_windows:
+            service_state = self._query_service_state() or "missing"
+            wireguard_exe = self._wireguard_exe or "missing"
+            self.logger.info(
+                "vpn_startup_context platform=windows firewall_backend=netsh service_id=%s service_state=%s wireguard_exe=%s",
+                self._service_id(),
+                service_state,
+                wireguard_exe,
+            )
+            return
+
+        firewalld_active = self._is_firewalld_running()
+        iptables_service_active = self._is_iptables_service_running()
+        self.logger.info(
+            "vpn_startup_context platform=linux firewall_backend=%s firewalld_active=%s iptables_service_active=%s firewall_cmd=%s iptables_bin=%s wg_quick=%s wg=%s ip=%s interface=%s",
+            self._firewall_backend,
+            "true" if firewalld_active else "false",
+            "true" if iptables_service_active else "false",
+            "present" if self._firewall_cmd else "missing",
+            "present" if self._iptables else "missing",
+            "present" if self._wg_quick else "missing",
+            "present" if self._wg else "missing",
+            "present" if self._ip else "missing",
+            self._interface_name,
+        )
+
+    def _linux_interface_exists(self) -> bool:
+        if self._wg:
+            code, out, err = self._run_command([self._wg, "show", self._interface_name])
+            if code == 0:
+                return True
+        if self._ip:
+            code, out, err = self._run_command([self._ip, "link", "show", "dev", self._interface_name])
+            return code == 0
+        return False
+
+    def _linux_bring_down(self, config_path: Path) -> None:
+        if not self._wg_quick:
+            return
+        code, out, err = self._run_command([self._wg_quick, "down", str(config_path)])
+        if code != 0 and self._linux_interface_exists():
+            detail = err or out or "unknown error"
+            self.logger.warning("Failed to bring down WireGuard listener interface %s: %s", self._interface_name, detail)
+
+    def _linux_bring_up(self, config_path: Path) -> None:
+        if not self._wg_quick:
+            raise RuntimeError("WireGuard tools missing on Linux Engine: 'wg-quick' not found")
+        code, out, err = self._run_command([self._wg_quick, "up", str(config_path)])
+        if code == 0:
+            return
+        detail = (err or out or "unknown error").strip()
+        self.logger.warning("WireGuard Linux up failed for %s: %s", self._interface_name, detail)
+        self._linux_bring_down(config_path)
+        code, out, err = self._run_command([self._wg_quick, "up", str(config_path)])
+        if code == 0:
+            return
+        detail = (err or out or "unknown error").strip()
+        raise RuntimeError(f"WireGuard Linux listener failed to start: {detail}")
+
+    def _linux_firewall_ensure_rule(self, chain: str, params: Sequence[str], *, label: str) -> bool:
+        if not self._iptables:
+            return False
+        check_args = [self._iptables, "-w", "-C", chain, *params]
+        check_code, _, _ = self._run_command(check_args)
+        if check_code == 0:
+            return True
+        add_args = [self._iptables, "-w", "-I", chain, "1", *params]
+        add_code, out, err = self._run_command(add_args)
+        if add_code != 0:
+            self.logger.warning("Failed to apply Linux firewall rule %s code=%s err=%s", label, add_code, err or out)
+            return False
+        self.logger.info("Applied Linux firewall rule %s", label)
+        return True
+
+    def _linux_firewall_remove_rule(self, chain: str, params: Sequence[str], *, label: str) -> None:
+        if not self._iptables:
+            return
+        while True:
+            check_args = [self._iptables, "-w", "-C", chain, *params]
+            check_code, _, _ = self._run_command(check_args)
+            if check_code != 0:
+                break
+            del_args = [self._iptables, "-w", "-D", chain, *params]
+            del_code, out, err = self._run_command(del_args)
+            if del_code != 0:
+                self.logger.warning("Failed to remove Linux firewall rule %s code=%s err=%s", label, del_code, err or out)
+                break
+        self.logger.info("Removed Linux firewall rule %s", label)
+
+    def _firewalld_ensure_direct_rule(
+        self,
+        table: str,
+        chain: str,
+        priority: int,
+        params: Sequence[str],
+        *,
+        label: str,
+    ) -> bool:
+        if not self._firewall_cmd:
+            return False
+        query_args = [
+            self._firewall_cmd,
+            "--direct",
+            "--query-rule",
+            "ipv4",
+            table,
+            chain,
+            str(int(priority)),
+            *params,
+        ]
+        check_code, _, _ = self._run_command(query_args)
+        if check_code == 0:
+            return True
+        add_args = [
+            self._firewall_cmd,
+            "--direct",
+            "--add-rule",
+            "ipv4",
+            table,
+            chain,
+            str(int(priority)),
+            *params,
+        ]
+        add_code, out, err = self._run_command(add_args)
+        if add_code != 0:
+            self.logger.warning("Failed to apply firewalld direct rule %s code=%s err=%s", label, add_code, err or out)
+            return False
+        self.logger.info("Applied firewalld direct rule %s", label)
+        return True
+
+    def _firewalld_remove_direct_rule(
+        self,
+        table: str,
+        chain: str,
+        priority: int,
+        params: Sequence[str],
+        *,
+        label: str,
+    ) -> None:
+        if not self._firewall_cmd:
+            return
+        while True:
+            query_args = [
+                self._firewall_cmd,
+                "--direct",
+                "--query-rule",
+                "ipv4",
+                table,
+                chain,
+                str(int(priority)),
+                *params,
+            ]
+            check_code, _, _ = self._run_command(query_args)
+            if check_code != 0:
+                break
+            remove_args = [
+                self._firewall_cmd,
+                "--direct",
+                "--remove-rule",
+                "ipv4",
+                table,
+                chain,
+                str(int(priority)),
+                *params,
+            ]
+            remove_code, out, err = self._run_command(remove_args)
+            if remove_code != 0:
+                self.logger.warning(
+                    "Failed to remove firewalld direct rule %s code=%s err=%s",
+                    label,
+                    remove_code,
+                    err or out,
+                )
+                break
+        self.logger.info("Removed firewalld direct rule %s", label)
+
+    def _ensure_linux_listener_rule(self) -> None:
+        params = (
+            "-p",
+            "udp",
+            "--dport",
+            str(int(self.config.port)),
+            "-m",
+            "comment",
+            "--comment",
+            self._linux_listener_rule_name,
+            "-j",
+            "ACCEPT",
+        )
+        if self._firewall_backend == "firewalld":
+            self._firewalld_ensure_direct_rule("filter", "INPUT", 0, params, label=self._linux_listener_rule_name)
+            return
+        if self._firewall_backend == "iptables":
+            self._linux_firewall_ensure_rule("INPUT", params, label=self._linux_listener_rule_name)
+            return
+        self.logger.warning("No supported Linux firewall backend is available for listener rule management.")
+
+    def _remove_linux_listener_rule(self) -> None:
+        params = (
+            "-p",
+            "udp",
+            "--dport",
+            str(int(self.config.port)),
+            "-m",
+            "comment",
+            "--comment",
+            self._linux_listener_rule_name,
+            "-j",
+            "ACCEPT",
+        )
+        if self._firewall_backend == "firewalld":
+            self._firewalld_remove_direct_rule("filter", "INPUT", 0, params, label=self._linux_listener_rule_name)
+            return
+        if self._firewall_backend == "iptables":
+            self._linux_firewall_remove_rule("INPUT", params, label=self._linux_listener_rule_name)
+            return
 
     def _normalise_allowed_ports(
         self,
@@ -358,13 +636,15 @@ class WireGuardServerManager:
 
     def describe_acl_defaults(self) -> Mapping[str, object]:
         return {
-            "windows": list(self._normalise_allowed_ports(self.config.acl_allowlist_ports)),
+            "platform": "windows" if self._is_windows else "linux",
+            "firewall_backend": self._firewall_backend if not self._is_windows else "netsh",
+            "allowlist_ports": list(self._normalise_allowed_ports(self.config.acl_allowlist_ports)),
             "client_to_client": False,
             "host_only": True,
         }
 
     def apply_firewall_rules(self, peer: Mapping[str, object]) -> List[str]:
-        """Apply outbound firewall allow rules for the agent's virtual IP/ports (Windows netsh)."""
+        """Apply outbound firewall allow rules for the agent's virtual IP/ports."""
 
         rules = self.build_firewall_rules(peer)
         rule_names: List[str] = []
@@ -373,41 +653,105 @@ class WireGuardServerManager:
             protocol = str(rule.get("protocol") or "TCP").upper()
             local_port = rule.get("local_port")
             remote_port = rule.get("remote_port")
-            self._run_command(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"])
-            args = [
-                "netsh",
-                "advfirewall",
-                "firewall",
-                "add",
-                "rule",
-                f"name={name}",
-                "dir=out",
-                "action=allow",
-                f"remoteip={rule.get('remote_address','')}",
-                f"protocol={protocol}",
-            ]
-            if remote_port:
-                args.append(f"remoteport={remote_port}")
-            elif local_port:
-                args.append(f"localport={local_port}")
-            code, out, err = self._run_command(args)
-            if code != 0:
-                self.logger.warning("Failed to apply firewall rule %s code=%s err=%s", name, code, err)
-            else:
+            if self._is_windows:
+                self._run_command(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"])
+                args = [
+                    "netsh",
+                    "advfirewall",
+                    "firewall",
+                    "add",
+                    "rule",
+                    f"name={name}",
+                    "dir=out",
+                    "action=allow",
+                    f"remoteip={rule.get('remote_address','')}",
+                    f"protocol={protocol}",
+                ]
+                if remote_port:
+                    args.append(f"remoteport={remote_port}")
+                elif local_port:
+                    args.append(f"localport={local_port}")
+                code, out, err = self._run_command(args)
+                if code != 0:
+                    self.logger.warning("Failed to apply firewall rule %s code=%s err=%s", name, code, err)
+                    continue
                 self.logger.info("Applied firewall rule %s", name)
                 rule_names.append(name)
+                continue
+
+            remote_ip = str(rule.get("remote_address") or "").strip()
+            remote_ports = str(remote_port or local_port or "").strip()
+            if not remote_ip or not remote_ports:
+                continue
+            params = (
+                "-d",
+                remote_ip,
+                "-p",
+                protocol.lower(),
+                "-m",
+                "multiport",
+                "--dports",
+                remote_ports,
+                "-m",
+                "comment",
+                "--comment",
+                name,
+                "-j",
+                "ACCEPT",
+            )
+            if self._firewall_backend == "firewalld":
+                if self._firewalld_ensure_direct_rule("filter", "OUTPUT", 0, params, label=name):
+                    self._linux_rule_specs[name] = {
+                        "backend": "firewalld",
+                        "table": "filter",
+                        "chain": "OUTPUT",
+                        "priority": 0,
+                        "params": params,
+                    }
+                    rule_names.append(name)
+                continue
+            if self._firewall_backend == "iptables":
+                if self._linux_firewall_ensure_rule("OUTPUT", params, label=name):
+                    self._linux_rule_specs[name] = {
+                        "backend": "iptables",
+                        "chain": "OUTPUT",
+                        "params": params,
+                    }
+                    rule_names.append(name)
+                continue
+            self.logger.warning("No supported Linux firewall backend; skipping firewall rule %s", name)
         return rule_names
 
     def remove_firewall_rules(self, rule_names: Sequence[str]) -> None:
         for name in rule_names:
             if not name:
                 continue
-            args = ["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"]
-            code, out, err = self._run_command(args)
-            if code != 0:
-                self.logger.warning("Failed to remove firewall rule %s code=%s err=%s", name, code, err)
-            else:
-                self.logger.info("Removed firewall rule %s", name)
+            if self._is_windows:
+                args = ["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"]
+                code, out, err = self._run_command(args)
+                if code != 0:
+                    self.logger.warning("Failed to remove firewall rule %s code=%s err=%s", name, code, err)
+                else:
+                    self.logger.info("Removed firewall rule %s", name)
+                continue
+
+            spec = self._linux_rule_specs.pop(name, None)
+            if not spec:
+                self.logger.debug("Linux firewall rule metadata missing for %s; skipping removal.", name)
+                continue
+            backend = str(spec.get("backend") or "").strip().lower()
+            params = tuple(spec.get("params") or ())
+            if backend == "firewalld":
+                table = str(spec.get("table") or "filter")
+                chain = str(spec.get("chain") or "OUTPUT")
+                priority = int(spec.get("priority") or 0)
+                self._firewalld_remove_direct_rule(table, chain, priority, params, label=name)
+                continue
+            if backend == "iptables":
+                chain = str(spec.get("chain") or "OUTPUT")
+                self._linux_firewall_remove_rule(chain, params, label=name)
+                continue
+            self.logger.debug("Unknown Linux firewall backend metadata for %s; skipping removal.", name)
 
     def start_listener(self, peers: Sequence[Mapping[str, object]]) -> None:
         """Render a temporary WireGuard config and start the service."""
@@ -417,10 +761,17 @@ class WireGuardServerManager:
         except Exception:
             self.logger.warning("Failed to create temp dir for WireGuard config", exc_info=True)
 
-        config_path = self._config_dir / f"{self._service_name}.conf"
+        config_path = self._listener_config_path()
         rendered = self.render_server_config(peers)
         config_path.write_text(rendered, encoding="utf-8")
         self.logger.info("Rendered WireGuard config to %s", config_path)
+
+        if not self._is_windows:
+            self._linux_bring_down(config_path)
+            self._linux_bring_up(config_path)
+            self._ensure_linux_listener_rule()
+            self.logger.info("WireGuard listener active on Linux interface %s", self._interface_name)
+            return
 
         if self._service_exists():
             if not self._stop_service(timeout=20):
@@ -440,6 +791,24 @@ class WireGuardServerManager:
 
     def stop_listener(self, *, ignore_missing: bool = False) -> None:
         """Stop the WireGuard tunnel service (leave installed for reuse)."""
+
+        if not self._is_windows:
+            config_path = self._listener_config_path()
+            interface_exists = self._linux_interface_exists()
+            if not self._wg_quick:
+                if ignore_missing:
+                    self.logger.info("WireGuard tools not available; Linux listener already absent")
+                else:
+                    self.logger.warning("WireGuard tools not available; cannot stop Linux listener.")
+                self._remove_linux_listener_rule()
+                return
+            code, out, err = self._run_command([self._wg_quick, "down", str(config_path)])
+            if code != 0 and interface_exists and not ignore_missing:
+                self.logger.warning("WireGuard Linux listener did not stop cleanly: %s", err or out)
+            else:
+                self.logger.info("WireGuard Linux listener stopped")
+            self._remove_linux_listener_rule()
+            return
 
         if not self._service_exists():
             if ignore_missing:
