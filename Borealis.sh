@@ -945,6 +945,50 @@ sync_engine_runtime() {
   verify_engine_runtime_staging
 }
 
+purge_engine_runtime_for_deploy() {
+  local engine_root="${SCRIPT_DIR}/Engine"
+  local assemblies_root="${engine_root}/Assemblies"
+  mkdir -p "${engine_root}"
+
+  # Preserve only explicit runtime artifacts; purge everything else.
+  shopt -s dotglob nullglob
+  local entry=""
+  for entry in "${engine_root}"/*; do
+    local base
+    base="$(basename "${entry}")"
+    case "${base}" in
+      Assemblies|Auth_Tokens|Certificates|Logs|WireGuard|database.db|engine_secret.txt)
+        continue
+        ;;
+      *)
+        rm -rf "${entry}" 2>/dev/null || true
+        ;;
+    esac
+  done
+  shopt -u dotglob nullglob
+
+  # Inside Assemblies, preserve only user DB + payload artifacts.
+  if [[ -d "${assemblies_root}" ]]; then
+    shopt -s dotglob nullglob
+    local asm_entry=""
+    for asm_entry in "${assemblies_root}"/*; do
+      local asm_base
+      asm_base="$(basename "${asm_entry}")"
+      case "${asm_base}" in
+        user_created.db|Payloads)
+          continue
+          ;;
+        *)
+          rm -rf "${asm_entry}" 2>/dev/null || true
+          ;;
+      esac
+    done
+    shopt -u dotglob nullglob
+  fi
+
+  mkdir -p "${assemblies_root}" "${engine_root}/Auth_Tokens" "${engine_root}/Certificates" "${engine_root}/Logs" "${engine_root}/WireGuard"
+}
+
 engine_service_runner_path() {
   echo "${SCRIPT_DIR}/Engine/run-engine-service.sh"
 }
@@ -1116,7 +1160,10 @@ create_engine_venv_and_stage_data() {
     return 1
   }
 
-  [[ -d "$venv_dir" ]] || "${py_bin}" -m venv "$venv_dir"
+  purge_engine_runtime_for_deploy
+  if [[ ! -x "${venv_dir}/bin/python" && ! -x "${venv_dir}/bin/python3" ]]; then
+    "${py_bin}" -m venv "$venv_dir"
+  fi
   mkdir -p "${venv_dir}/Data"
 
   rm -rf "$data_dest" 2>/dev/null || true
