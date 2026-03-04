@@ -88,6 +88,121 @@ function Normalize-BorealisArgument {
     }
 }
 
+function Get-BootstrapZipUris {
+    param(
+        [string]$PrimaryUrl
+    )
+
+    $uris = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($PrimaryUrl)) {
+        $uris.Add($PrimaryUrl.Trim())
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:BOREALIS_BOOTSTRAP_FALLBACK_ZIP_URL)) {
+        $uris.Add($env:BOREALIS_BOOTSTRAP_FALLBACK_ZIP_URL.Trim())
+    }
+
+    return $uris | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+}
+
+function Invoke-WebRequestWithRetry {
+    param(
+        [string[]]$Uris,
+        [string]$OutFile,
+        [int]$MaxAttemptsPerUri = 3,
+        [int]$InitialDelaySeconds = 2
+    )
+
+    $lastError = $null
+    foreach ($uri in @($Uris)) {
+        if ([string]::IsNullOrWhiteSpace($uri)) { continue }
+
+        for ($attempt = 1; $attempt -le $MaxAttemptsPerUri; $attempt++) {
+            try {
+                if (Test-Path $OutFile) {
+                    Remove-Item -Path $OutFile -Force -ErrorAction SilentlyContinue
+                }
+
+                Write-Host ("[i] Download attempt {0}/{1} from {2}" -f $attempt, $MaxAttemptsPerUri, $uri)
+
+                $iwrParams = @{
+                    Uri = $uri
+                    OutFile = $OutFile
+                    ErrorAction = 'Stop'
+                }
+                $iwrCommand = Get-Command Invoke-WebRequest -ErrorAction Stop
+                if ($iwrCommand.Parameters.ContainsKey('UseBasicParsing')) {
+                    $iwrParams['UseBasicParsing'] = $true
+                }
+
+                Invoke-WebRequest @iwrParams
+
+                if (-not (Test-Path $OutFile -PathType Leaf)) {
+                    throw "Download completed but '$OutFile' was not created."
+                }
+                $fileInfo = Get-Item -LiteralPath $OutFile -ErrorAction Stop
+                if ($fileInfo.Length -le 0) {
+                    throw "Downloaded file '$OutFile' is empty."
+                }
+
+                return $uri
+            } catch {
+                $lastError = $_
+                if ($attempt -lt $MaxAttemptsPerUri) {
+                    $delaySeconds = [Math]::Min(30, [int]([Math]::Pow(2, $attempt - 1) * $InitialDelaySeconds))
+                    Write-Host ("[!] Download failed from {0}: {1}" -f $uri, $_.Exception.Message) -ForegroundColor Yellow
+                    Write-Host ("[i] Retrying in {0} second(s)..." -f $delaySeconds) -ForegroundColor Yellow
+                    Start-Sleep -Seconds $delaySeconds
+                } else {
+                    Write-Host ("[!] Exhausted retries for {0}: {1}" -f $uri, $_.Exception.Message) -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+
+    if ($lastError) {
+        throw $lastError
+    }
+    throw 'No usable download URL was provided.'
+}
+
+function Expand-ZipArchiveCompat {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ArchivePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath,
+
+        [Parameter()]
+        [switch]$ClearDestination
+    )
+
+    if (-not (Test-Path $ArchivePath -PathType Leaf)) {
+        throw "Archive file not found: $ArchivePath"
+    }
+
+    if ($ClearDestination -and (Test-Path $DestinationPath)) {
+        Remove-Item -Path $DestinationPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not (Test-Path $DestinationPath)) {
+        New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
+    }
+
+    try {
+        Expand-Archive -LiteralPath $ArchivePath -DestinationPath $DestinationPath -Force -ErrorAction Stop
+        return
+    } catch {
+        try {
+            Add-Type -AssemblyName 'System.IO.Compression.FileSystem' -ErrorAction SilentlyContinue
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
+            return
+        } catch {
+            throw "Failed to extract archive '$ArchivePath': $($_.Exception.Message)"
+        }
+    }
+}
+
 $rawArgs = @($args)
 for ($i = 0; $i -lt $rawArgs.Count; $i++) {
     $token = [string]$rawArgs[$i]
@@ -133,6 +248,12 @@ if ([string]::IsNullOrWhiteSpace($forwardedServerUrl) -and -not [string]::IsNull
 if ([string]::IsNullOrWhiteSpace($forwardedEnrollmentCode) -and -not [string]::IsNullOrWhiteSpace($env:BOREALIS_ENROLLMENT_CODE)) {
     $forwardedEnrollmentCode = $env:BOREALIS_ENROLLMENT_CODE
 }
+if (-not [string]::IsNullOrWhiteSpace($forwardedServerUrl)) {
+    $forwardedServerUrl = $forwardedServerUrl.Trim()
+}
+if (-not [string]::IsNullOrWhiteSpace($forwardedEnrollmentCode)) {
+    $forwardedEnrollmentCode = $forwardedEnrollmentCode.Trim()
+}
 
 if ([string]::IsNullOrWhiteSpace($installDir)) {
     throw "Refusing to install into an empty path or root path."
@@ -168,10 +289,22 @@ if (Test-Path $extractRoot) {
 New-Item -Path $extractRoot -ItemType Directory -Force | Out-Null
 
 try {
-    Write-Host "[i] Downloading Borealis ZIP from $zipUrl"
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch {}
 
-    Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
+    $zipUris = Get-BootstrapZipUris -PrimaryUrl $zipUrl
+    if ($zipUris.Count -eq 0) {
+        throw "No valid ZIP URL was provided."
+    }
+
+    Write-Host "[i] Downloading Borealis ZIP from $($zipUris[0])"
+    $resolvedZipUri = Invoke-WebRequestWithRetry -Uris $zipUris -OutFile $zipPath
+    if ($resolvedZipUri -ne $zipUrl) {
+        Write-Host "[i] Used fallback ZIP source: $resolvedZipUri"
+    }
+
+    Expand-ZipArchiveCompat -ArchivePath $zipPath -DestinationPath $extractRoot -ClearDestination
 
     $extractedRoot = Get-ChildItem -Path $extractRoot -Directory -ErrorAction Stop |
         Where-Object { $_.Name -like 'Borealis-*' } |
@@ -208,11 +341,13 @@ try {
     $invokeArgs = New-Object System.Collections.Generic.List[string]
     $invokeArgs.Add('-Agent')
     if (-not [string]::IsNullOrWhiteSpace($forwardedServerUrl)) {
+        Write-Host "[i] Forwarding server URL to Borealis.ps1"
         $invokeArgs.Add('-ServerUrl')
         $invokeArgs.Add($forwardedServerUrl)
         $env:BOREALIS_SERVER_URL = $forwardedServerUrl
     }
     if (-not [string]::IsNullOrWhiteSpace($forwardedEnrollmentCode)) {
+        Write-Host "[i] Forwarding enrollment code to Borealis.ps1"
         $invokeArgs.Add('-EnrollmentCode')
         $invokeArgs.Add($forwardedEnrollmentCode)
         $env:BOREALIS_ENROLLMENT_CODE = $forwardedEnrollmentCode

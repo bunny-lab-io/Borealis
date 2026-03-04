@@ -8,6 +8,8 @@ param(
 )
 
 # Admin/Elevation helpers for Borealis runtime
+$script:BorealisElevatedExitCode = $null
+
 function Test-IsAdmin {
     try {
         $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -31,10 +33,12 @@ function Request-BorealisElevation {
     if ($resp -notin @('y','Y','yes','YES')) { return $false }
 
     $argTokens = @('-NoProfile','-ExecutionPolicy','Bypass','-File', $ScriptPath)
+    $boundParameterKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     if ($BoundParameters) {
         foreach ($entry in $BoundParameters.GetEnumerator()) {
             $key = $entry.Key
             $value = $entry.Value
+            [void]$boundParameterKeys.Add([string]$key)
             if ($value -is [System.Management.Automation.SwitchParameter]) {
                 if ($value.IsPresent) { $argTokens += "-$key" }
                 continue
@@ -49,6 +53,16 @@ function Request-BorealisElevation {
             }
         }
     }
+
+    if (-not $boundParameterKeys.Contains('ServerUrl') -and -not [string]::IsNullOrWhiteSpace($env:BOREALIS_SERVER_URL)) {
+        $argTokens += '-ServerUrl'
+        $argTokens += $env:BOREALIS_SERVER_URL.Trim()
+    }
+    if (-not $boundParameterKeys.Contains('EnrollmentCode') -and -not [string]::IsNullOrWhiteSpace($env:BOREALIS_ENROLLMENT_CODE)) {
+        $argTokens += '-EnrollmentCode'
+        $argTokens += $env:BOREALIS_ENROLLMENT_CODE.Trim()
+    }
+
     if ($ExtraArgs) { $argTokens += $ExtraArgs }
 
     $argLine = ($argTokens | ForEach-Object {
@@ -61,10 +75,15 @@ function Request-BorealisElevation {
     }) -join ' '
 
     try {
-        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argLine -WindowStyle Normal | Out-Null
+        $proc = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argLine -WindowStyle Normal -PassThru
+        if ($proc) {
+            $proc.WaitForExit()
+            try { $script:BorealisElevatedExitCode = [int]$proc.ExitCode } catch { $script:BorealisElevatedExitCode = 0 }
+        }
         return $false  # stop current non-elevated instance
     } catch {
         Write-Host "Elevation was denied or failed." -ForegroundColor Red
+        $script:BorealisElevatedExitCode = 1
         return $false
     }
 }
@@ -72,6 +91,9 @@ function Request-BorealisElevation {
 $scriptPath = $PSCommandPath
 if (-not $scriptPath -or $scriptPath -eq '') { $scriptPath = $MyInvocation.MyCommand.Definition }
 if (-not (Request-BorealisElevation -ScriptPath $scriptPath -BoundParameters $PSBoundParameters -ExtraArgs $MyInvocation.UnboundArguments)) {
+    if ($null -ne $script:BorealisElevatedExitCode) {
+        exit ([int]$script:BorealisElevatedExitCode)
+    }
     exit 0
 }
 
@@ -113,6 +135,47 @@ function Set-FileUtf8Content {
         [System.IO.File]::WriteAllText($Path, $text, $utf8NoBom)
     } catch {
         [System.IO.File]::WriteAllText($Path, $text, $utf8NoBom)
+    }
+}
+
+function Expand-ZipArchiveWithFallback {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ArchivePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath,
+
+        [Parameter()]
+        [string]$SevenZipPath = '',
+
+        [Parameter()]
+        [switch]$ClearDestination
+    )
+
+    if (-not (Test-Path $ArchivePath -PathType Leaf)) {
+        throw "Archive file not found: $ArchivePath"
+    }
+
+    if ($ClearDestination -and (Test-Path $DestinationPath)) {
+        Remove-Item -Path $DestinationPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not (Test-Path $DestinationPath)) {
+        New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
+    }
+
+    try {
+        Expand-Archive -LiteralPath $ArchivePath -DestinationPath $DestinationPath -Force -ErrorAction Stop
+        return
+    } catch {
+        if (Test-Path $SevenZipPath -PathType Leaf) {
+            & $SevenZipPath x $ArchivePath "-o$DestinationPath" -y | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                return
+            }
+            throw "7-Zip extraction failed for '$ArchivePath' with exit code $LASTEXITCODE."
+        }
+        throw
     }
 }
 
@@ -1225,18 +1288,11 @@ ListenPort = 0
             Select-Object -First 1
 
         if (-not $uvncExe) {
-            if (-not (Test-Path $sevenZipExe)) {
-                throw "7-Zip CLI not found at: $sevenZipExe"
-            }
             try {
                 if (-not (Test-Path $uvncZipPath)) {
                     Invoke-WebRequest -Uri $uvncZipUrl -OutFile $uvncZipPath
                 }
-                if (Test-Path $uvncPayloadRoot) {
-                    Remove-Item $uvncPayloadRoot -Recurse -Force -ErrorAction SilentlyContinue
-                }
-                New-Item -ItemType Directory -Path $uvncPayloadRoot -Force | Out-Null
-                & $sevenZipExe x $uvncZipPath "-o$uvncPayloadRoot" -y | Out-Null
+                Expand-ZipArchiveWithFallback -ArchivePath $uvncZipPath -DestinationPath $uvncPayloadRoot -SevenZipPath $sevenZipExe -ClearDestination
             } catch {
                 Write-Host "UltraVNC zip download/extract failed. Trying MSI fallback." -ForegroundColor Yellow
             }
@@ -1275,16 +1331,20 @@ ListenPort = 0
             if (-not (Test-Path $uvncInstallerPath)) {
                 Invoke-WebRequest -Uri $uvncInstallerUrl -OutFile $uvncInstallerPath
             }
-            if (-not (Test-Path $sevenZipExe)) {
-                throw "7-Zip CLI not found at: $sevenZipExe"
-            }
-            try {
-                if (-not (Test-Path $uvncPayloadRoot)) {
-                    New-Item -ItemType Directory -Path $uvncPayloadRoot -Force | Out-Null
+            if (Test-Path $sevenZipExe -PathType Leaf) {
+                try {
+                    if (-not (Test-Path $uvncPayloadRoot)) {
+                        New-Item -ItemType Directory -Path $uvncPayloadRoot -Force | Out-Null
+                    }
+                    & $sevenZipExe x $uvncInstallerPath "-o$uvncPayloadRoot" -y | Out-Null
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "7-Zip extraction returned exit code $LASTEXITCODE."
+                    }
+                } catch {
+                    Write-Host "UltraVNC installer extraction failed." -ForegroundColor Yellow
                 }
-                & $sevenZipExe x $uvncInstallerPath "-o$uvncPayloadRoot" -y | Out-Null
-            } catch {
-                Write-Host "UltraVNC installer extraction failed." -ForegroundColor Yellow
+            } else {
+                Write-Host "7-Zip CLI not found. Skipping UltraVNC installer extraction fallback." -ForegroundColor Yellow
             }
             $uvncExe = Get-ChildItem -Path $uvncPayloadRoot -Recurse -Filter "winvnc*.exe" -ErrorAction SilentlyContinue |
                 Select-Object -First 1
@@ -1302,14 +1362,8 @@ ListenPort = 0
                 if (-not (Test-Path $passwordToolZip)) {
                     Invoke-WebRequest -Uri $passwordToolUrl -OutFile $passwordToolZip
                 }
-                if (Test-Path $sevenZipExe) {
-                    $toolDir = Join-Path $uvncRoot "tools"
-                    if (Test-Path $toolDir) {
-                        Remove-Item $toolDir -Recurse -Force -ErrorAction SilentlyContinue
-                    }
-                    New-Item -ItemType Directory -Path $toolDir | Out-Null
-                    & $sevenZipExe x $passwordToolZip "-o$toolDir" -y | Out-Null
-                }
+                $toolDir = Join-Path $uvncRoot "tools"
+                Expand-ZipArchiveWithFallback -ArchivePath $passwordToolZip -DestinationPath $toolDir -SevenZipPath $sevenZipExe -ClearDestination
             } catch {
                 Write-Host "UltraVNC createpassword tool download failed. Set BOREALIS_VNC_PASSWORD_TOOL_URL to override." -ForegroundColor Yellow
             }
@@ -1357,15 +1411,7 @@ ListenPort = 0
                 Invoke-WebRequest -Uri $ahkZipUrl -OutFile $ahkZipPath
             }
 
-            if (-not (Test-Path $sevenZipExe)) {
-                throw "7-Zip CLI not found at: $sevenZipExe"
-            }
-
-            if (Test-Path $ahkInstallDir) {
-                Remove-Item $ahkInstallDir -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            New-Item -ItemType Directory -Path $ahkInstallDir | Out-Null
-            & $sevenZipExe x $ahkZipPath "-o$ahkInstallDir" -y | Out-Null
+            Expand-ZipArchiveWithFallback -ArchivePath $ahkZipPath -DestinationPath $ahkInstallDir -SevenZipPath $sevenZipExe -ClearDestination
 
             Remove-Item $ahkZipPath -Force -ErrorAction SilentlyContinue
 
@@ -1382,16 +1428,7 @@ ListenPort = 0
                 Invoke-WebRequest -Uri $gitZipUrl -OutFile $gitZipPath
             }
 
-            if (-not (Test-Path $sevenZipExe)) {
-                throw "7-Zip CLI not found at: $sevenZipExe"
-            }
-
-            if (Test-Path $gitInstallDir) {
-                Remove-Item $gitInstallDir -Recurse -Force -ErrorAction SilentlyContinue
-            }
-
-            New-Item -ItemType Directory -Path $gitInstallDir | Out-Null
-            & $sevenZipExe x $gitZipPath "-o$gitInstallDir" -y | Out-Null
+            Expand-ZipArchiveWithFallback -ArchivePath $gitZipPath -DestinationPath $gitInstallDir -SevenZipPath $sevenZipExe -ClearDestination
 
             Remove-Item $gitZipPath -Force -ErrorAction SilentlyContinue
 
