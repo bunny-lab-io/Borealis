@@ -28,7 +28,7 @@ import AddDevice from "./Add_Device.jsx";
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const myTheme = themeQuartz.withParams({
-  accentColor: "#8b5cf6",
+  accentColor: "#7dd3fc",
   backgroundColor: "#070b1a",
   browserColorScheme: "dark",
   chromeBackgroundColor: {
@@ -234,13 +234,13 @@ const DescriptionCellRenderer = React.memo(function DescriptionCellRenderer(prop
           py: 0,
           pr: 0,
           '& fieldset': {
-            borderColor: editing ? "#FFA6FF" : "rgba(255,255,255,0.25)",
+            borderColor: editing ? MAGIC_UI.accentA : "rgba(255,255,255,0.25)",
           },
           '&:hover fieldset': {
-            borderColor: "#FFA6FF",
+            borderColor: MAGIC_UI.accentA,
           },
           '&.Mui-focused fieldset': {
-            borderColor: "#FFA6FF",
+            borderColor: MAGIC_UI.accentA,
           },
           '&.Mui-disabled': {
             backgroundColor: "rgba(255,255,255,0.08)",
@@ -1847,8 +1847,8 @@ export default function DeviceList({
               backgroundColor: "rgba(124, 58, 237, 0.15) !important",
             },
             "& .ag-row-selected": {
-              backgroundColor: "rgba(56,189,248,0.18) !important",
-              boxShadow: "inset 0 0 0 1px rgba(56,189,248,0.35)",
+              backgroundColor: "rgba(125,211,252,0.2) !important",
+              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
             },
             "& .ag-icon": {
               fontFamily: iconFontFamily,
