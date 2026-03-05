@@ -164,18 +164,13 @@ function Expand-ZipArchiveWithFallback {
         New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
     }
 
-    try {
-        Expand-Archive -LiteralPath $ArchivePath -DestinationPath $DestinationPath -Force -ErrorAction Stop
-        return
-    } catch {
-        if (Test-Path $SevenZipPath -PathType Leaf) {
-            & $SevenZipPath x $ArchivePath "-o$DestinationPath" -y | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                return
-            }
-            throw "7-Zip extraction failed for '$ArchivePath' with exit code $LASTEXITCODE."
-        }
-        throw
+    if ([string]::IsNullOrWhiteSpace($SevenZipPath) -or -not (Test-Path $SevenZipPath -PathType Leaf)) {
+        throw "7-Zip CLI not found at: $SevenZipPath"
+    }
+
+    & $SevenZipPath x $ArchivePath "-o$DestinationPath" -y | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "7-Zip extraction failed for '$ArchivePath' with exit code $LASTEXITCODE."
     }
 }
 

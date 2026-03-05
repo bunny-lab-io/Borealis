@@ -28,6 +28,7 @@ $forwardedServerUrl = $null
 $forwardedEnrollmentCode = $null
 $passthroughArgs = New-Object System.Collections.Generic.List[string]
 $script:BootstrapCurlExe = $null
+$script:BootstrapSevenZipExe = $null
 $script:BootstrapScriptPath = $PSCommandPath
 if (-not $script:BootstrapScriptPath -or [string]::IsNullOrWhiteSpace($script:BootstrapScriptPath)) {
     $script:BootstrapScriptPath = $MyInvocation.MyCommand.Path
@@ -149,6 +150,41 @@ function Get-BootstrapCurlExe {
     }
 
     return $script:BootstrapCurlExe
+}
+
+function Get-BootstrapSevenZipExe {
+    param(
+        [string]$InstallDirHint = '',
+        [switch]$Refresh
+    )
+
+    if ($Refresh) {
+        $script:BootstrapSevenZipExe = $null
+    }
+    if ($script:BootstrapSevenZipExe -and (Test-Path $script:BootstrapSevenZipExe -PathType Leaf)) {
+        return $script:BootstrapSevenZipExe
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($env:BOREALIS_7ZIP_EXE)) {
+        $candidates.Add($env:BOREALIS_7ZIP_EXE.Trim())
+    }
+    if (-not [string]::IsNullOrWhiteSpace($script:BootstrapScriptDir)) {
+        $candidates.Add((Join-Path $script:BootstrapScriptDir 'Dependencies\7zip\7z.exe'))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($InstallDirHint)) {
+        $candidates.Add((Join-Path $InstallDirHint 'Dependencies\7zip\7z.exe'))
+    }
+    $candidates.Add((Join-Path (Get-Location).Path 'Dependencies\7zip\7z.exe'))
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate -PathType Leaf)) {
+            $script:BootstrapSevenZipExe = $candidate
+            break
+        }
+    }
+
+    return $script:BootstrapSevenZipExe
 }
 
 function Invoke-WebRequestWithRetry {
@@ -276,6 +312,12 @@ function Expand-ZipArchiveCompat {
         [string]$DestinationPath,
 
         [Parameter()]
+        [string]$SevenZipPath = '',
+
+        [Parameter()]
+        [string]$InstallDirHint = '',
+
+        [Parameter()]
         [switch]$ClearDestination
     )
 
@@ -290,17 +332,16 @@ function Expand-ZipArchiveCompat {
         New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
     }
 
-    try {
-        Expand-Archive -LiteralPath $ArchivePath -DestinationPath $DestinationPath -Force -ErrorAction Stop
-        return
-    } catch {
-        try {
-            Add-Type -AssemblyName 'System.IO.Compression.FileSystem' -ErrorAction SilentlyContinue
-            [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
-            return
-        } catch {
-            throw "Failed to extract archive '$ArchivePath': $($_.Exception.Message)"
-        }
+    if ([string]::IsNullOrWhiteSpace($SevenZipPath)) {
+        $SevenZipPath = Get-BootstrapSevenZipExe -InstallDirHint $InstallDirHint
+    }
+    if ([string]::IsNullOrWhiteSpace($SevenZipPath) -or -not (Test-Path $SevenZipPath -PathType Leaf)) {
+        throw "Bundled 7-Zip CLI not found. Expected Dependencies\7zip\7z.exe (checked install dir '$InstallDirHint')."
+    }
+
+    & $SevenZipPath x $ArchivePath "-o$DestinationPath" -y | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "7-Zip extraction failed for '$ArchivePath' with exit code $LASTEXITCODE."
     }
 }
 
@@ -355,7 +396,7 @@ function Ensure-PortableGit {
 
     Write-Host "[i] Downloading portable Git from $GitZipUrl"
     Invoke-WebRequestWithRetry -Uri $GitZipUrl -OutFile $GitZipPath -InstallDirHint $installDir
-    Expand-ZipArchiveCompat -ArchivePath $GitZipPath -DestinationPath $GitRoot -ClearDestination
+    Expand-ZipArchiveCompat -ArchivePath $GitZipPath -DestinationPath $GitRoot -ClearDestination -InstallDirHint $installDir
 
     if (-not (Test-Path $gitExe -PathType Leaf)) {
         throw "Portable Git was extracted but git.exe was not found at '$gitExe'."
