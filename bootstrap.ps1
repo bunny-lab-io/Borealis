@@ -27,6 +27,16 @@ $gitCacheDir = $defaultGitCacheDir
 $forwardedServerUrl = $null
 $forwardedEnrollmentCode = $null
 $passthroughArgs = New-Object System.Collections.Generic.List[string]
+$script:BootstrapCurlExe = $null
+$script:BootstrapScriptPath = $PSCommandPath
+if (-not $script:BootstrapScriptPath -or [string]::IsNullOrWhiteSpace($script:BootstrapScriptPath)) {
+    $script:BootstrapScriptPath = $MyInvocation.MyCommand.Path
+}
+$script:BootstrapScriptDir = if (-not [string]::IsNullOrWhiteSpace($script:BootstrapScriptPath)) {
+    Split-Path -Path $script:BootstrapScriptPath -Parent
+} else {
+    $null
+}
 
 function Show-Usage {
     @'
@@ -103,10 +113,49 @@ function Normalize-BorealisArgument {
     }
 }
 
+function Get-BootstrapCurlExe {
+    param(
+        [string]$InstallDirHint = '',
+        [switch]$Refresh
+    )
+
+    if ($Refresh) {
+        $script:BootstrapCurlExe = $null
+    }
+    if ($script:BootstrapCurlExe -and (Test-Path $script:BootstrapCurlExe -PathType Leaf)) {
+        return $script:BootstrapCurlExe
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($env:BOREALIS_CURL_EXE)) {
+        $candidates.Add($env:BOREALIS_CURL_EXE.Trim())
+    }
+    if (-not [string]::IsNullOrWhiteSpace($script:BootstrapScriptDir)) {
+        $candidates.Add((Join-Path $script:BootstrapScriptDir 'Dependencies\curl\bin\curl.exe'))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($InstallDirHint)) {
+        $candidates.Add((Join-Path $InstallDirHint 'Dependencies\curl\bin\curl.exe'))
+    }
+    $systemCurl = Get-Command curl.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
+    if (-not [string]::IsNullOrWhiteSpace($systemCurl)) {
+        $candidates.Add($systemCurl)
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate -PathType Leaf)) {
+            $script:BootstrapCurlExe = $candidate
+            break
+        }
+    }
+
+    return $script:BootstrapCurlExe
+}
+
 function Invoke-WebRequestWithRetry {
     param(
         [string]$Uri,
         [string]$OutFile,
+        [string]$InstallDirHint = '',
         [int]$MaxAttempts = 3,
         [int]$InitialDelaySeconds = 2
     )
@@ -123,18 +172,74 @@ function Invoke-WebRequestWithRetry {
             }
 
             Write-Host ("[i] Download attempt {0}/{1} from {2}" -f $attempt, $MaxAttempts, $Uri)
+            $downloaded = $false
+            $methodErrors = New-Object System.Collections.Generic.List[string]
 
-            $iwrParams = @{
-                Uri = $Uri
-                OutFile = $OutFile
-                ErrorAction = 'Stop'
-            }
-            $iwrCommand = Get-Command Invoke-WebRequest -ErrorAction Stop
-            if ($iwrCommand.Parameters.ContainsKey('UseBasicParsing')) {
-                $iwrParams['UseBasicParsing'] = $true
+            $curlExe = Get-BootstrapCurlExe -InstallDirHint $InstallDirHint
+            if (-not [string]::IsNullOrWhiteSpace($curlExe)) {
+                try {
+                    $curlArgs = @(
+                        '--fail',
+                        '--location',
+                        '--retry', '3',
+                        '--retry-all-errors',
+                        '--connect-timeout', '20',
+                        '--output', $OutFile,
+                        $Uri
+                    )
+                    & $curlExe @curlArgs | Out-Null
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "curl exited with code $LASTEXITCODE."
+                    }
+                    $downloaded = $true
+                } catch {
+                    $methodErrors.Add("curl: $($_.Exception.Message)")
+                }
+            } else {
+                $methodErrors.Add('curl: no curl executable found')
             }
 
-            Invoke-WebRequest @iwrParams
+            if (-not $downloaded) {
+                $bitsCommand = Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue
+                if ($bitsCommand) {
+                    try {
+                        Start-BitsTransfer -Source $Uri -Destination $OutFile -ErrorAction Stop
+                        $downloaded = $true
+                    } catch {
+                        $methodErrors.Add("BITS: $($_.Exception.Message)")
+                    }
+                } else {
+                    $methodErrors.Add('BITS: Start-BitsTransfer unavailable')
+                }
+            }
+
+            if (-not $downloaded) {
+                try {
+                    $iwrParams = @{
+                        Uri = $Uri
+                        OutFile = $OutFile
+                        ErrorAction = 'Stop'
+                    }
+                    $iwrCommand = Get-Command Invoke-WebRequest -ErrorAction Stop
+                    if ($iwrCommand.Parameters.ContainsKey('UseBasicParsing')) {
+                        $iwrParams['UseBasicParsing'] = $true
+                    }
+                    $oldProgressPreference = $ProgressPreference
+                    $ProgressPreference = 'SilentlyContinue'
+                    try {
+                        Invoke-WebRequest @iwrParams
+                    } finally {
+                        $ProgressPreference = $oldProgressPreference
+                    }
+                    $downloaded = $true
+                } catch {
+                    $methodErrors.Add("Invoke-WebRequest: $($_.Exception.Message)")
+                }
+            }
+
+            if (-not $downloaded) {
+                throw "All download methods failed. $($methodErrors -join '; ')"
+            }
 
             if (-not (Test-Path $OutFile -PathType Leaf)) {
                 throw "Download completed but '$OutFile' was not created."
@@ -249,7 +354,7 @@ function Ensure-PortableGit {
     }
 
     Write-Host "[i] Downloading portable Git from $GitZipUrl"
-    Invoke-WebRequestWithRetry -Uri $GitZipUrl -OutFile $GitZipPath
+    Invoke-WebRequestWithRetry -Uri $GitZipUrl -OutFile $GitZipPath -InstallDirHint $installDir
     Expand-ZipArchiveCompat -ArchivePath $GitZipPath -DestinationPath $GitRoot -ClearDestination
 
     if (-not (Test-Path $gitExe -PathType Leaf)) {

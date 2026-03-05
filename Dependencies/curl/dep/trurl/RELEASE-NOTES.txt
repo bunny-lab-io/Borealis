@@ -1,0 +1,15 @@
+# trurl 0.16.1
+
+## Bugfixes
+
+- COPYING: add the "and many contributors" text from the curl license
+- scripts: import cd2nroff from curl
+- trurl: handle zero length query pairs
+- trurl.md: fix typo in --replace-append
+- Update README.md to link to the getting trurl wiki page
+- Autogenerate ZSH completions based on trurl.md
+- Makefile: only create MANDIR when manpage is installed
+
+Contributors to this release:
+
+ Daniel Stenberg, Jacob Mealey, Sertonix

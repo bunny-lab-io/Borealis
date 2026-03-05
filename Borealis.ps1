@@ -326,6 +326,177 @@ function Run-Step {
     }
 }
 
+$script:BorealisCurlExe = $null
+
+function Get-BorealisCurlExe {
+    param([switch]$Refresh)
+
+    if ($Refresh) {
+        $script:BorealisCurlExe = $null
+    }
+    if ($script:BorealisCurlExe -and (Test-Path $script:BorealisCurlExe -PathType Leaf)) {
+        return $script:BorealisCurlExe
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($env:BOREALIS_CURL_EXE)) {
+        $candidates.Add($env:BOREALIS_CURL_EXE.Trim())
+    }
+    if (-not [string]::IsNullOrWhiteSpace($scriptDir)) {
+        $candidates.Add((Join-Path $scriptDir 'Dependencies\curl\bin\curl.exe'))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($depsRoot)) {
+        $candidates.Add((Join-Path $depsRoot 'curl\bin\curl.exe'))
+    }
+    $systemCurl = Get-Command curl.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
+    if (-not [string]::IsNullOrWhiteSpace($systemCurl)) {
+        $candidates.Add($systemCurl)
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate -PathType Leaf)) {
+            $script:BorealisCurlExe = $candidate
+            break
+        }
+    }
+
+    return $script:BorealisCurlExe
+}
+
+function Invoke-BorealisDownload {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath,
+
+        [Parameter()]
+        [int]$MaxAttempts = 3,
+
+        [Parameter()]
+        [int]$InitialDelaySeconds = 2,
+
+        [Parameter()]
+        [string]$LogName = 'Install.log',
+
+        [Parameter()]
+        [string]$LogPrefix = '[Download]'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        throw "$LogPrefix Download URL cannot be empty."
+    }
+    if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
+        throw "$LogPrefix Destination path cannot be empty."
+    }
+
+    $destDir = Split-Path -Path $DestinationPath -Parent
+    if (-not [string]::IsNullOrWhiteSpace($destDir) -and -not (Test-Path $destDir)) {
+        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+    }
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            if (Test-Path $DestinationPath -PathType Leaf) {
+                Remove-Item -Path $DestinationPath -Force -ErrorAction SilentlyContinue
+            }
+
+            Write-AgentLog -FileName $LogName -Message ("{0} Download attempt {1}/{2} from {3}" -f $LogPrefix, $attempt, $MaxAttempts, $Url)
+            $downloaded = $false
+            $methodErrors = New-Object System.Collections.Generic.List[string]
+
+            $curlExe = Get-BorealisCurlExe
+            if (-not [string]::IsNullOrWhiteSpace($curlExe)) {
+                try {
+                    $curlArgs = @(
+                        '--fail',
+                        '--location',
+                        '--retry', '3',
+                        '--retry-all-errors',
+                        '--connect-timeout', '20',
+                        '--output', $DestinationPath,
+                        $Url
+                    )
+                    & $curlExe @curlArgs | Out-Null
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "curl exited with code $LASTEXITCODE."
+                    }
+                    $downloaded = $true
+                } catch {
+                    $methodErrors.Add("curl: $($_.Exception.Message)")
+                }
+            } else {
+                $methodErrors.Add('curl: no curl executable found')
+            }
+
+            if (-not $downloaded) {
+                $bitsCommand = Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue
+                if ($bitsCommand) {
+                    try {
+                        Start-BitsTransfer -Source $Url -Destination $DestinationPath -ErrorAction Stop
+                        $downloaded = $true
+                    } catch {
+                        $methodErrors.Add("BITS: $($_.Exception.Message)")
+                    }
+                } else {
+                    $methodErrors.Add('BITS: Start-BitsTransfer unavailable')
+                }
+            }
+
+            if (-not $downloaded) {
+                try {
+                    $iwrParams = @{
+                        Uri = $Url
+                        OutFile = $DestinationPath
+                        ErrorAction = 'Stop'
+                    }
+                    $iwrCommand = Get-Command Invoke-WebRequest -ErrorAction Stop
+                    if ($iwrCommand.Parameters.ContainsKey('UseBasicParsing')) {
+                        $iwrParams['UseBasicParsing'] = $true
+                    }
+                    $oldProgressPreference = $ProgressPreference
+                    $ProgressPreference = 'SilentlyContinue'
+                    try {
+                        Invoke-WebRequest @iwrParams
+                    } finally {
+                        $ProgressPreference = $oldProgressPreference
+                    }
+                    $downloaded = $true
+                } catch {
+                    $methodErrors.Add("Invoke-WebRequest: $($_.Exception.Message)")
+                }
+            }
+
+            if (-not $downloaded) {
+                throw "All download methods failed. $($methodErrors -join '; ')"
+            }
+            if (-not (Test-Path $DestinationPath -PathType Leaf)) {
+                throw "Download completed but '$DestinationPath' was not created."
+            }
+            $fileInfo = Get-Item -LiteralPath $DestinationPath -ErrorAction Stop
+            if ($fileInfo.Length -le 0) {
+                throw "Downloaded file '$DestinationPath' is empty."
+            }
+
+            return
+        } catch {
+            $lastError = $_
+            Write-AgentLog -FileName $LogName -Message ("{0} Download attempt failed: {1}" -f $LogPrefix, $_.Exception.Message)
+            if ($attempt -lt $MaxAttempts) {
+                $delaySeconds = [Math]::Min(30, [int]([Math]::Pow(2, $attempt - 1) * $InitialDelaySeconds))
+                Start-Sleep -Seconds $delaySeconds
+            }
+        }
+    }
+
+    if ($lastError) {
+        throw $lastError
+    }
+    throw "$LogPrefix Failed to download '$Url'."
+}
+
 # ---------------------- Bundle Executables Setup ----------------------
 $scriptDir  = Split-Path $MyInvocation.MyCommand.Path -Parent
 $depsRoot   = Join-Path $scriptDir 'Dependencies'
@@ -397,7 +568,7 @@ function Install_Shared_Dependencies {
 
                 # Download if missing
                 if (-not (Test-Path $localPath)) {
-                    Invoke-WebRequest -Uri $url -OutFile $localPath
+                    Invoke-BorealisDownload -Url $url -DestinationPath $localPath -LogName 'Install.log' -LogPrefix '[Python]'
                 }
 
                 # Extract MSI into install directory
@@ -453,7 +624,7 @@ function Install_Agent_Dependencies {
         }
 
         Write-AgentLog -FileName $LogName -Message ("[WireGuard] Downloading installer from {0}" -f $Url)
-        Invoke-WebRequest -Uri $Url -OutFile $DestinationPath
+        Invoke-BorealisDownload -Url $Url -DestinationPath $DestinationPath -LogName $LogName -LogPrefix '[WireGuard]'
         Write-AgentLog -FileName $LogName -Message ("[WireGuard] Cached installer at {0}" -f $DestinationPath)
     }
 
@@ -1290,7 +1461,7 @@ ListenPort = 0
         if (-not $uvncExe) {
             try {
                 if (-not (Test-Path $uvncZipPath)) {
-                    Invoke-WebRequest -Uri $uvncZipUrl -OutFile $uvncZipPath
+                    Invoke-BorealisDownload -Url $uvncZipUrl -DestinationPath $uvncZipPath -LogName 'Install.log' -LogPrefix '[UltraVNC]'
                 }
                 Expand-ZipArchiveWithFallback -ArchivePath $uvncZipPath -DestinationPath $uvncPayloadRoot -SevenZipPath $sevenZipExe -ClearDestination
             } catch {
@@ -1303,7 +1474,7 @@ ListenPort = 0
         if (-not $uvncExe) {
             try {
                 if (-not (Test-Path $uvncMsiPath)) {
-                    Invoke-WebRequest -Uri $uvncMsiUrl -OutFile $uvncMsiPath
+                    Invoke-BorealisDownload -Url $uvncMsiUrl -DestinationPath $uvncMsiPath -LogName 'Install.log' -LogPrefix '[UltraVNC]'
                 }
                 $msiExtractRoot = Join-Path $uvncPayloadRoot "msi_extract"
                 if (Test-Path $msiExtractRoot) {
@@ -1329,7 +1500,7 @@ ListenPort = 0
 
         if (-not $uvncExe) {
             if (-not (Test-Path $uvncInstallerPath)) {
-                Invoke-WebRequest -Uri $uvncInstallerUrl -OutFile $uvncInstallerPath
+                Invoke-BorealisDownload -Url $uvncInstallerUrl -DestinationPath $uvncInstallerPath -LogName 'Install.log' -LogPrefix '[UltraVNC]'
             }
             if (Test-Path $sevenZipExe -PathType Leaf) {
                 try {
@@ -1360,7 +1531,7 @@ ListenPort = 0
             $passwordToolZip = Join-Path $uvncRoot "createpassword.zip"
             try {
                 if (-not (Test-Path $passwordToolZip)) {
-                    Invoke-WebRequest -Uri $passwordToolUrl -OutFile $passwordToolZip
+                    Invoke-BorealisDownload -Url $passwordToolUrl -DestinationPath $passwordToolZip -LogName 'Install.log' -LogPrefix '[UltraVNC]'
                 }
                 $toolDir = Join-Path $uvncRoot "tools"
                 Expand-ZipArchiveWithFallback -ArchivePath $passwordToolZip -DestinationPath $toolDir -SevenZipPath $sevenZipExe -ClearDestination
@@ -1408,7 +1579,7 @@ ListenPort = 0
 
         if (-not (Test-Path $ahkExePath)) {
             if (-not (Test-Path $ahkZipPath)) {
-                Invoke-WebRequest -Uri $ahkZipUrl -OutFile $ahkZipPath
+                Invoke-BorealisDownload -Url $ahkZipUrl -DestinationPath $ahkZipPath -LogName 'Install.log' -LogPrefix '[AutoHotKey]'
             }
 
             Expand-ZipArchiveWithFallback -ArchivePath $ahkZipPath -DestinationPath $ahkInstallDir -SevenZipPath $sevenZipExe -ClearDestination
@@ -1425,7 +1596,7 @@ ListenPort = 0
     Run-Step "Dependency: Git CLI" {
         if (-not (Test-Path $gitExePath)) {
             if (-not (Test-Path $gitZipPath)) {
-                Invoke-WebRequest -Uri $gitZipUrl -OutFile $gitZipPath
+                Invoke-BorealisDownload -Url $gitZipUrl -DestinationPath $gitZipPath -LogName 'Install.log' -LogPrefix '[GitCLI]'
             }
 
             Expand-ZipArchiveWithFallback -ArchivePath $gitZipPath -DestinationPath $gitInstallDir -SevenZipPath $sevenZipExe -ClearDestination

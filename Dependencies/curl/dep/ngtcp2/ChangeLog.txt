@@ -1,0 +1,462 @@
+commit 9e32add590fc74707b62f61aa5e0aa5c6f8a2c60
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-26
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-26
+
+    Bump package and library versions
+
+commit 21a4b817e9f2044f2f0dc7475f525aac3d070b05
+Merge: 40124100 a9134fdd
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-26
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-26
+
+    Merge pull request #2029 from ngtcp2/bump-aws-lc
+    
+    Bump aws-lc to v1.68.0
+
+commit a9134fddc611e3f0bf274f8e2bd6b487090fdec5
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-25
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-26
+
+    Bump aws-lc to v1.68.0
+
+commit 4012410079880a1f5c508186c6a81eec25fa26fd
+Merge: dc14d8c8 8665c61d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-26
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-26
+
+    Merge pull request #2028 from ngtcp2/bump-openssl
+    
+    Bump OpenSSL to v3.6.1
+
+commit 8665c61d13f3339a30fd50d6e4758753f207c8d7
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-25
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-26
+
+    Bump OpenSSL to v3.6.1
+
+commit dc14d8c8a9d341f4be052be476794f28f08d8373
+Merge: bcb23d79 769faa7a
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-26
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-26
+
+    Merge pull request #2027 from ngtcp2/bump-boringssl
+    
+    Bump boringssl
+
+commit 769faa7a2698d397ed7cb979c87a86b090f8a547
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-25
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-25
+
+    Bump boringssl
+
+commit bcb23d795c38c320f9082126487dad72c211d361
+Merge: e6edcd16 8902aa0b
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-21
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-21
+
+    Merge pull request #2026 from ngtcp2/conn-tests
+    
+    Conn tests
+
+commit 8902aa0b5f5adad0612318190da1a4733ef7be90
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-21
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-21
+
+    tests: Add test for NEW_TOKEN reception
+
+commit 4505c25454a8a0a676ae4d1c8bbef8163f200344
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-21
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-21
+
+    tests: Add test for STREAMS_BLOCKED reception
+
+commit 86be96db2528b79f3640e644186f9b18048f45b0
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-21
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-21
+
+    tests: Add test for HANDSHAKE_DONE reception
+
+commit b476f7f9b916140756f4d0eda65a9ee0b236bf41
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-21
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-21
+
+    tests: Add test for handling of loss detection timer with amplification
+
+commit e6edcd1690de18730d94597242c1a26a7510596e
+Merge: 26e9e72b 00483b00
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-20
+
+    Merge pull request #2025 from ngtcp2/add-get-active-dcid-test
+    
+    Add more tests for ngtcp2_conn_get_active_dcid
+
+commit 00483b00e81576841cb9ce80dd096aaffe2c2f1b
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-20
+
+    Add more tests for ngtcp2_conn_get_active_dcid
+
+commit 26e9e72bbaff932aa84ee5586cbbc8c67578101d
+Merge: 9b92f0b0 6539fd19
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-19
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-19
+
+    Merge pull request #2024 from ngtcp2/simplify-qlog-pkt-type
+    
+    Simplify qlog_pkt_type
+
+commit 6539fd19aee3898b28cc8d77f439188afaf6ae74
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-19
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-19
+
+    Simplify qlog_pkt_type
+    
+    Simplify qlog_pkt_type in the same way we did for ngtcp2_log.
+
+commit 9b92f0b0879501c7785ef92da4c4b26a1fdffb75
+Merge: e2756986 c348796f
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-19
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-19
+
+    Merge pull request #2023 from ngtcp2/bbr-const
+    
+    bbr: Add const qualifier
+
+commit c348796f070b96b78a18e6fed068549ac2bba930
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-19
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-19
+
+    bbr: Add const qualifier
+
+commit e2756986214fe213a596bc567a3ea4442a2dba85
+Merge: c1ce20f9 be8de0d0
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-19
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-19
+
+    Merge pull request #2022 from ngtcp2/simplify-log-pkt-types
+    
+    Simplify strpkttype
+
+commit be8de0d0927613ffbcbcd07fdc51eba8bfc7f4cb
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-19
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-19
+
+    Simplify strpkttype
+    
+    Because the packet types codepoints are unique, it is enough to pick
+    one in a single switch-case.
+
+commit c1ce20f9ffe5a8ae8b92672403d1cbcc18b5cb90
+Merge: f5334ba8 9edfa80c
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-16
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-16
+
+    Merge pull request #2020 from ngtcp2/rename-s6_addr
+    
+    Rename in6_addr to s6_addr
+
+commit 9edfa80c2d09d0fa30dd2c9f766ca904a4f983ab
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-16
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-16
+
+    Rename in6_addr to s6_addr
+    
+    This only affects the build with NGTCP2_USE_GENERIC_SOCKADDR.  s6_addr
+    is widely used standard name.  Using different name causes headaches
+    when dealing with this field.  This is still most likely binary
+    compatible, but when building with newer ngtcp2, the application
+    source code needs to be changed if it touches the field directly.
+    Most of the packaged ngtcp2 are built without
+    NGTCP2_USE_GENERIC_SOCKADDR, so I guess the impact is minimal.
+
+commit f5334ba82411c742d347f0f09d015c5bf80cff5f
+Merge: 4f786814 8501b00d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-16
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-16
+
+    Merge pull request #2019 from ngtcp2/log-test
+    
+    log: Add tests
+
+commit 8501b00d678000ef04af4579600d7565e50087f2
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-16
+
+    log: Add tests
+
+commit 4f786814e480fa5a72c6e86c77a197e6a3a165d8
+Merge: 1a336dc9 37b84f80
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-16
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-16
+
+    Merge pull request #2018 from ngtcp2/remove-datagram-rdata
+    
+    Remove ngtcp2_datagram.rdata
+
+commit 37b84f80e629a74f236d8e7bd64159b60f7ba367
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-16
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-16
+
+    Remove ngtcp2_datagram.rdata
+    
+    Remove ngtcp2_datagram.rdata.  Share ngtcp2_vec in
+    ngtcp2_frame_decoder with ngtcp2_stream.
+
+commit 1a336dc9f62b79254a87ce8b684bbe18819bd841
+Merge: a68a1cca 3cf3b1e8
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-15
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-15
+
+    Merge pull request #2017 from ngtcp2/remove-log_tx_cancel
+    
+    log: Remove unused ngtcp2_log_tx_cancel
+
+commit 3cf3b1e8aea359f9b058e273d7472742451dd77d
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-15
+
+    log: Remove unused ngtcp2_log_tx_cancel
+
+commit a68a1cca7d0507d3bcd86f705a4492735e4722fa
+Merge: 89ce9a9f 1150c3c0
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-15
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-15
+
+    Merge pull request #2016 from ngtcp2/more-tests
+    
+    More tests
+
+commit 1150c3c006f85dea7b8e6c21fea97ad2b4006171
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-15
+
+    cid: Add more tests for greater coverage
+
+commit daaf51dd891e54073c7b46f1b5630ea2bcc6ce87
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-15
+
+    pv: Add more tests for greater coverage
+
+commit ff9c1c65d7b91da5315df1291c14d35c80cca727
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-15
+
+    map: Add more tests for greater coverage
+
+commit 4e657eabfbc8c2c3b3b1711d4fd70f856d54ecd6
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-15
+
+    ksl: Add more tests for greater coverage
+
+commit 89ce9a9f96fde56d456cb90197f45d89fd1499d9
+Merge: cc75e527 d7f68eff
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-15
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-15
+
+    Merge pull request #2015 from ngtcp2/lib-only-checks
+    
+    autotool: Do not check third-party libs and C++ flags with lib-only
+
+commit d7f68effe64eac8bd314709738163ab0ba77baef
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-15
+
+    autotool: Do not check third-party libs and C++ flags with lib-only
+
+commit cc75e527571667e53a6b40179e3c19bab8dbce08
+Merge: 6c0ea1a3 03f04f66
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-14
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-14
+
+    Merge pull request #2014 from ngtcp2/ksl-inline-compar
+    
+    ksl: Inline comparison functions
+
+commit 03f04f666a782049b2ff44fbfd559b78c1d9a050
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-14
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-14
+
+    ksl: Inline comparison functions
+
+commit 6c0ea1a3c5a976bdc2d6eb2a426495efde3b85d0
+Merge: 037f2598 cbf8cf0f
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-12
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-12
+
+    Merge pull request #2013 from ngtcp2/assert-nwrite
+    
+    Assert that nwrite is not larger than the provided buffer length
+
+commit cbf8cf0f6706df55261537a337fd110a04e29f79
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-12
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-12
+
+    Assert that nwrite is not larger than the provided buffer length
+
+commit 037f25982294be23005647f2ca7a8f89f15c5c47
+Merge: 07f30b15 ca015c58
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-11
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-11
+
+    Merge pull request #2011 from ngtcp2/bbr-rework-spurious-packet-loss
+    
+    bbr: Rework spurious loss handling based on the latest draft
+
+commit 07f30b157264f46ae296ce33a6fb82b3a0e7ff33
+Merge: 43237f47 fef611ae
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-11
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-11
+
+    Merge pull request #2010 from ngtcp2/fix-resent-handshake-pkt-construction
+    
+    Fix Initial/Handshake packet construction
+
+commit fef611aea9ae99e13e05be64577b5730ede5ea41
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-11
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-11
+
+    Fix Initial/Handshake packet construction
+    
+    Fix the bug in Initial/Handshake packet construction that might add
+    garbage at the end.
+
+commit ca015c586fc55ff11366f187680a8d082ea89bf5
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-11
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-11
+
+    bbr: Rework spurious loss handling based on the latest draft
+
+commit 43237f478d0199841f3f9f8a176792b1d9cf8986
+Merge: 3ce3bbea a151964b
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-11
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-11
+
+    Merge pull request #2009 from ngtcp2/update-doc
+    
+    Update doc
+
+commit a151964ba1edca1fdf8edf85759d1a5cfa23fc77
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-11
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-11
+
+    Update doc
+
+commit 3ce3bbeadd67c4bbe00d3ee710d9de4e2617882a
+Merge: aea8d155 9d93d80c
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-01-27
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-01-27
+
+    Merge pull request #2006 from ngtcp2/revert-1979-examples-avoid-strict-aliasing
+    
+    Revert "examples: Avoid strict aliasing violation"
+
+commit 9d93d80cc25a3a6cebb5ceb934f9171b0d79907a
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-01-27
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-01-27
+
+    Revert "examples: Avoid strict aliasing violation"
+
+commit aea8d1557dcc762c7c60d58fd031f5b2c324d1c5
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-01-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-01-20
+
+    Bump package version

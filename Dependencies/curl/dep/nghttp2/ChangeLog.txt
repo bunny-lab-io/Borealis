@@ -1,0 +1,944 @@
+commit 534b74b72524e962c18c7146470914632ca7eb2d
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-10-25
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-10-25
+
+    Update bash_completion
+
+commit 090c7fe26cc3db91de6fcab47b112ba1cfa440b8
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-10-25
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-10-25
+
+    Update manual pages
+
+commit 527cdebfee9bcf2d2489a9895602b05a1ab221f6
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-10-25
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-10-25
+
+    Bump package and library versions
+
+commit a2667a66924372e656727fedaac6ef0f4ab1b1f6
+Merge: 19fbcf52 aedc3487
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-10-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-10-22
+
+    Merge pull request #2544 from nghttp2/bump-ngtcp2
+    
+    Bump ngtcp2 and its dependencies
+
+commit aedc348754e57e4f40880215108ab6baeec4da31
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-10-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-10-22
+
+    Bump ngtcp2 and its dependencies
+
+commit 19fbcf5238ec3a047fea1eda6723b0c79fd80f99
+Merge: 0139746d 6fe99003
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-10-14
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-10-14
+
+    Merge pull request #2543 from nghttp2/remove-ticket_keys-from-WorkerEvent
+    
+    nghttpx: Remove unused ticket_keys from WorkerEvent
+
+commit 6fe99003dfc26ccaeec9cc162ac9014b309e81f8
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-10-14
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-10-14
+
+    nghttpx: Remove unused ticket_keys from WorkerEvent
+
+commit 0139746d53f86667d3954fd6df525c0fad3cc463
+Merge: 26e2d535 8dd0c86b
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-10-14
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-10-14
+
+    Merge pull request #2542 from nghttp2/optimize-quic-io
+    
+    Optimize quic io
+
+commit 8dd0c86bdec889a2b9e44e49bd3dc2945ab3e043
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-10-14
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-10-14
+
+    h2load: Prioritize QUIC UDP read event over the other events
+
+commit 5d4df477e896817774794dbd73dacd0875df3c6c
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-10-14
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-10-14
+
+    h2load: Defer write to the next event loop for QUIC
+
+commit 2b355a338cc6b1e3db322e3e081a0543fa431c9b
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-10-14
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-10-14
+
+    nghttpx: Prioritize QUIC UDP read event over the other events
+
+commit cfeec12a520147e241cc0ee3fa43fcefe5b8167a
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-10-14
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-10-14
+
+    nghttpx: Defer write to the next event loop for QUIC
+
+commit 26e2d53536334ec2d2f8c241a17ef79bda0528d1
+Merge: 8f729331 d921c542
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-10-14
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-10-14
+
+    Merge pull request #2541 from nghttp2/dependabot/go_modules/golang.org/x/net-0.46.0
+    
+    build(deps): bump golang.org/x/net from 0.44.0 to 0.46.0
+
+commit d921c542099a17261b8039d15bf5f9230f6c9fe6
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2025-10-13
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-10-13
+
+    build(deps): bump golang.org/x/net from 0.44.0 to 0.46.0
+    
+    Bumps [golang.org/x/net](https://github.com/golang/net) from 0.44.0 to 0.46.0.
+    - [Commits](https://github.com/golang/net/compare/v0.44.0...v0.46.0)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: golang.org/x/net
+      dependency-version: 0.46.0
+      dependency-type: direct:production
+      update-type: version-update:semver-minor
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 8f729331c1e4acc97e67bafd923d2a2eab1e8d61
+Merge: 2f1565b0 a25dd128
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-10-13
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-10-13
+
+    Merge pull request #2540 from nghttp2/nghttpx-quic-recv-pktcnt
+    
+    nghttpx: Increase number of UDP packets to read
+
+commit a25dd12811884a13a842e80db7875f3f82cfbbbf
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-10-13
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-10-13
+
+    nghttpx: Increase number of UDP packets to read
+    
+    It turns out that the limit of 10 packets per event loop is too small,
+    that prevents an endpoint from consuming ACKs and other control frames
+    (e.g., MAX_STREAM_DATA, MAX_STREAMS), resulting in the loss of
+    throughput.  This change increases maximum number of packets to read
+    to 64.
+
+commit 2f1565b0e2385094ad90596960e99a7c573e40bd
+Merge: a60e00c6 389ae66d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-10-07
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-10-07
+
+    Merge pull request #2538 from nghttp2/dependabot/go_modules/github.com/quic-go/quic-go-0.55.0
+    
+    build(deps): bump github.com/quic-go/quic-go from 0.54.1 to 0.55.0
+
+commit 389ae66d126bde8f9ea06a22e70daafb98838734
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2025-10-06
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-10-06
+
+    build(deps): bump github.com/quic-go/quic-go from 0.54.1 to 0.55.0
+    
+    Bumps [github.com/quic-go/quic-go](https://github.com/quic-go/quic-go) from 0.54.1 to 0.55.0.
+    - [Release notes](https://github.com/quic-go/quic-go/releases)
+    - [Commits](https://github.com/quic-go/quic-go/compare/v0.54.1...v0.55.0)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: github.com/quic-go/quic-go
+      dependency-version: 0.55.0
+      dependency-type: direct:production
+      update-type: version-update:semver-minor
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit a60e00c6285b5dd6a1aee80f70bce77d0c198288
+Merge: e802ccc0 53ce0886
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-30
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-30
+
+    Merge pull request #2537 from nghttp2/dependabot/go_modules/github.com/quic-go/quic-go-0.54.1
+    
+    build(deps): bump github.com/quic-go/quic-go from 0.54.0 to 0.54.1
+
+commit 53ce08869476ed4ed3c2ffe59a2fa9b13e32a87b
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2025-09-29
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-29
+
+    build(deps): bump github.com/quic-go/quic-go from 0.54.0 to 0.54.1
+    
+    Bumps [github.com/quic-go/quic-go](https://github.com/quic-go/quic-go) from 0.54.0 to 0.54.1.
+    - [Release notes](https://github.com/quic-go/quic-go/releases)
+    - [Commits](https://github.com/quic-go/quic-go/compare/v0.54.0...v0.54.1)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: github.com/quic-go/quic-go
+      dependency-version: 0.54.1
+      dependency-type: direct:production
+      update-type: version-update:semver-patch
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit e802ccc02ad647ef48346b330c614583615d7118
+Author:     Copilot <198982749+Copilot@users.noreply.github.com>
+AuthorDate: 2025-09-29
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-29
+
+    Fix typos in documentation: "or3xx" → "or 3xx" and missing space after period (#2536)
+    
+    Fix typos in documentation: "or3xx" → "or 3xx" and "itself.To" → "itself. To"
+    
+    Co-authored-by: tatsuhiro-t <404610+tatsuhiro-t@users.noreply.github.com>
+
+commit 17428a5d09c7d79b92638e5a8e98847b18d63c6c
+Merge: fa585e91 83683742
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-29
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-29
+
+    Merge pull request #2535 from nghttp2/h2load-quic-window-bits-default
+    
+    h2load: Set QUIC window-bits to 24 by default
+
+commit 83683742f1bbc35797e14743e10799f66b8d6462
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-29
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-29
+
+    h2load: Set QUIC window-bits to 24 by default
+    
+    Reduce the default windows-bits for QUIC to 24 (16MiB).  The previous
+    default (1 << 30) is too large and causes too many packet losses on
+    very fast connection with super low RTT.
+
+commit fa585e91821b7ccc7b329aa3fede300033e7c5e6
+Merge: a2c47748 7434a370
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-28
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-28
+
+    Merge pull request #2534 from nghttp2/remove-redundant-semicolon
+    
+    Remove redundant semicolon
+
+commit 7434a370169a2ca6324265fec61cbea8a8f79ebb
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-28
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-28
+
+    Remove redundant semicolon
+
+commit a2c47748f07df9bdbe075ed7bdc5027f70566dd7
+Merge: 59a9534a 1784c1c0
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-25
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-25
+
+    Merge pull request #2533 from nghttp2/iterators
+    
+    src: Use std::ranges::begin and std::ranges::end consistently
+
+commit 1784c1c0d105b046a22ffac47882223d30694cd0
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-25
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-25
+
+    src: Use std::ranges::begin and std::ranges::end consistently
+
+commit 59a9534a2da2d332e64156b7fd9bc310236953cf
+Merge: 4e0738d2 7fcbcd78
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-25
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-25
+
+    Merge pull request #2532 from nghttp2/adopt-nghttp3_conn_read_stream2
+    
+    src: Adopt nghttp3_conn_read_stream2
+
+commit 7fcbcd786e438d8019fbb9ce593e15bf26c1f03c
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-25
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-25
+
+    src: Adopt nghttp3_conn_read_stream2
+    
+    Adopt nghttp3_conn_read_stream2 which requires nghttp3 v1.12.0.  To
+    pass the current timestamp, ngtcp2_conn_get_timestamp is used, which
+    requires ngtcp2 v1.16.0.
+
+commit 4e0738d24ad615b0af6227c37164b86a5a206f5a
+Merge: 06e7219d 1e0413f4
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-25
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-25
+
+    Merge pull request #2531 from nghttp2/bump-ngtcp2
+    
+    Bump ngtcp2 and its dependencies
+
+commit 1e0413f4a6a1c3befa5b623c381ef640d3c11cf1
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-25
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-25
+
+    Bump ngtcp2 and its dependencies
+
+commit 06e7219d108ea88f5a950440613eba5d85e25176
+Merge: d8ed2559 c06c0691
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-24
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-24
+
+    Merge pull request #2530 from nghttp2/examples-consistent-cond-macro-comments
+    
+    examples: Consistent conditional macro comments
+
+commit c06c069126d85eff176401ab392b4985b7be791e
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-24
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-24
+
+    examples: Consistent conditional macro comments
+
+commit d8ed2559f68df53c258c2b7b9d6dfdb5b66f56f0
+Merge: 6aa9f6c7 d829be35
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-24
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-24
+
+    Merge pull request #2529 from nghttp2/sgi-daemonize
+    
+    src: Move sgi _daemonize to util::daemonize
+
+commit d829be3517303c50c3d07be72282bf58ba2f5b20
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-24
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-24
+
+    src: Move sgi _daemonize to util::daemonize
+    
+    Move sgi _daemonize to util::daemonize so that we do not need to
+    handle sgi case in the multiple places.  Because we have no test
+    environment for sgi machine, the flags adjustment is omitted.  This is
+    not a problem now because we only call util::daemonize with zeros.
+
+commit 6aa9f6c72e98985586ca3c76e48fa1c2626a294f
+Merge: 8f8eef40 4181fffc
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-24
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-24
+
+    Merge pull request #2528 from nghttp2/src-consistent-cond-macro-comments
+    
+    src: Consistent conditional macro comments
+
+commit 4181fffc02d9d290c23eb79bd3a0313caf381997
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-23
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-24
+
+    src: Consistent conditional macro comments
+
+commit 8f8eef40e8e47d98c595fe3a6be3690aa3c784f1
+Merge: c218d441 3a95bf47
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-23
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-23
+
+    Merge pull request #2527 from nghttp2/lib-consistent-cond-macro-comments
+    
+    lib: Consistent conditional macro comments
+
+commit 3a95bf47f38d49e83a365c06771e31cfe668fb81
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-23
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-23
+
+    lib: Consistent conditional macro comments
+    
+    Make conditional macro comments consistent.
+    
+    - Repeat condition in closing #endif.
+    - Use #ifdef for a single macro.  Do not use #if defined(...) in this
+      case.  Use defined(...) form when repeating condition in #endif.
+    - Apply De Morgan when negating conditions in #else.
+
+commit c218d441ea861e8cb6da0983dcdd81023754148e
+Merge: bcfb5d83 1952b166
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-23
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-23
+
+    Merge pull request #2526 from nghttp2/nullptr
+    
+    src: Use nullptr in C++ code
+
+commit 1952b166e9ac78e1ae4b386fb9c7ccce65203c35
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-22
+
+    src: Use nullptr in C++ code
+
+commit bcfb5d8305275c90f25becccd3f7b1d55accd6a6
+Merge: 00bd05ed 37fb8262
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-22
+
+    Merge pull request #2525 from nghttp2/nghttpx-cert-type-constexpr
+    
+    nghttpx: Define NGHTTP2_CERT_TYPE as constexpr
+
+commit 37fb82621c9ad558c120203abadb1dffd078e9a7
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-22
+
+    nghttpx: Define NGHTTP2_CERT_TYPE as constexpr
+
+commit 00bd05edccf99e0cb8e36369fb9276a4ea8913ee
+Merge: d94ce2a5 45c67616
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-21
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-21
+
+    Merge pull request #2524 from nghttp2/nghttpx-drop-tlsv1.1
+    
+    nghttpx: Drop TLSv1.0 and TLSv1.1 support
+
+commit 45c67616b9cc96262fb8506d9009af9bbf73e629
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-21
+
+    nghttpx: Drop TLSv1.0 and TLSv1.1 support
+    
+    Nowadays, people always use TLSv1.3.  TLSv1.2 may be used for a
+    particular situation where TLSv1.3 is not available due to TLS stack
+    limitation.  The large companies started to drop TLSv1.1 and earlier
+    versions.  I do not feel keeping their support without a strong
+    reason, and I could not find any.
+
+commit d94ce2a5577155959e510281f4b1a2d5d3079a0c
+Merge: 6dfb3bdb 8a5c7315
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-21
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-21
+
+    Merge pull request #2523 from nghttp2/nghttpx-consistent-servername-cb-behavior
+    
+    nghttpx: Make servername_callback behavior consistent
+
+commit 8a5c731533c7f6c0fb205cfb7872a85b4af831d2
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-21
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-21
+
+    nghttpx: Make servername_callback behavior consistent
+    
+    Make servername_callback behavior consistent across all supported TLS
+    stacks.  RFC 6066 does not provide any guidance or requirement when a
+    server must not acknowledge Server Name Indication.
+
+commit 6dfb3bdb8feee9b0dda1e6775c3f6257a7f7dd0e
+Merge: b35fa94b 43649c80
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-21
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-21
+
+    Merge pull request #2522 from nghttp2/nghttpx-wolfssl-support-mldsa-cert-select
+    
+    nghttpx: Support ML-DSA certificate selection with wolfSSL
+
+commit 43649c8004aeae7654b8440f4e4cb954f5f00121
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-21
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-21
+
+    nghttpx: Support ML-DSA certificate selection with wolfSSL
+
+commit b35fa94ba5e4138366f3b21c7c992cb91682cfc0
+Merge: 7caa11f0 ee6565fe
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-21
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-21
+
+    Merge pull request #2521 from nghttp2/nghttpx-refactor-cert-type-detection
+    
+    nghttpx: Select a certificate in a single pass
+
+commit ee6565feb7de90275468d77fbed4b09a27c4dbec
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-21
+
+    nghttpx: Select a certificate in a single pass
+    
+    Refactored the certificate selection to select the certificate in a
+    single pass.  Cache the type of certificate to reduce the overhead.
+
+commit 7caa11f09e7595d6bc94b5dcaa9cca497763ed6e
+Merge: 4da70b34 cb73b18a
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-20
+
+    Merge pull request #2520 from nghttp2/nghttpx-cert-select-fast-path
+    
+    nghttpx: Add the fast path when selecting a certificate
+
+commit cb73b18a53fdfb26a87466d8e909d5c6f35c1c91
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-20
+
+    nghttpx: Add the fast path when selecting a certificate
+
+commit 4da70b34d18c8bc466d08e2d1b70867c49782ba8
+Merge: 9fc31cfd cd868f00
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-20
+
+    Merge pull request #2519 from nghttp2/nghttpx-wolfssl-cert-select
+    
+    nghttpx: Select certificate with wolfSSL
+
+commit cd868f00b99eb20aa4633a01145bad74de8b7ba6
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-20
+
+    nghttpx: Select certificate with wolfSSL
+    
+    This change adds the certificate selection with the supported
+    signature algorithms for wolfSSL in a way similar to BoringSSL.
+    wolfSSL does not support ML-DSA certificate as of this writing.
+
+commit 9fc31cfd16522067448833dad57908c5a6c7a344
+Merge: 5e75f0ac e9f04ae0
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-20
+
+    Merge pull request #2518 from nghttp2/nghttpx-boringssl-cert-select
+    
+    nghttpx: Select certificate with BoringSSL
+
+commit e9f04ae0ad1dce0d029d07dcba7d3e5de0f56fa8
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-20
+
+    nghttpx: Select certificate with BoringSSL
+    
+    Previously, the certificate selection in nghttpx depending on the
+    supported signature algorithm is dedicated to OpenSSL.  This change
+    brings the same capability to the BoringSSL build.  BoringSSL does not
+    support ML-DSA certificate as of this writing.
+
+commit 5e75f0ac81f37d116feafbea1c2c7b2b9c5cc691
+Merge: 9cbe936a 8c3f077c
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-20
+
+    Merge pull request #2517 from nghttp2/nghttpx-cert-select-pkey-base-id
+    
+    nghttpx: Select ECDSA cert based on EVP_PKEY_base_id
+
+commit 8c3f077c5e25f562a9c663f7d8726f1421be03db
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-20
+
+    nghttpx: Select ECDSA cert based on EVP_PKEY_base_id
+    
+    We once refactored this with the shared curves, but it seems that it
+    is not entirely correct for this.  Perhaps, the usage of
+    X509_get_signature_nid was incorrect.
+
+commit 9cbe936a25e825b4a35a4d3fd52db18fa5ea7862
+Merge: 59b6d0d1 b815972b
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-19
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-19
+
+    Merge pull request #2516 from nghttp2/nghttpx-ml-dsa-cert-select
+    
+    nghttpx: Prefer ML-DSA certificate over ECDSA
+
+commit b815972b0323b67f618790779c9e127af93b2c3d
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-19
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-19
+
+    nghttpx: Prefer ML-DSA certificate over ECDSA
+
+commit 59b6d0d1d9e910aaf8b80c1db764994aae3528b5
+Merge: 1feb3679 028eeeef
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-19
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-19
+
+    Merge pull request #2515 from nghttp2/nghttpx-supported-groups
+    
+    nghttpx: Add groups option
+
+commit 028eeeefeb713154e8d1a53326c0c391f873b609
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-19
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-19
+
+    nghttpx: Add groups option
+    
+    The groups option takes the list of the supported groups.  This
+    deprecates ecdh-curves option.  If ecdh-curves option is used, it is
+    treated as if groups option is specified.
+
+commit 1feb3679fe781d950bdc4dcd9de2794755073bd3
+Merge: 9df3962d b00d8da2
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-19
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-19
+
+    Merge pull request #2514 from nghttp2/groups-list
+    
+    Use SSL_CTX_set1_groups_list
+
+commit b00d8da2e2a03003615bcb56e6501ae02d063eb7
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-19
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-19
+
+    Use SSL_CTX_set1_groups_list
+    
+    Replace SSL_CTX_set1_curves_list with SSL_CTX_set1_groups_list.
+    Remove the workaround for wolfSSL because the bug has been fixed.
+
+commit 9df3962d08058698c230c98d4d196a38df7bbe13
+Merge: 280845e5 304bfcbb
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-19
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-19
+
+    Merge pull request #2513 from nghttp2/nghttpd-supported-groups
+    
+    nghttpd: Make the supported groups configurable
+
+commit 304bfcbb70c77a94f0c60e5b6b692d2457099031
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-19
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-19
+
+    nghttpd: Make the supported groups configurable
+    
+    Use the same default list of groups as h2load.
+
+commit 280845e52e29cc6a8acf7d17dfd54d32041fd7f2
+Merge: c9ff3599 bdc5d5a6
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-16
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-16
+
+    Merge pull request #2511 from nghttp2/dependabot/go_modules/golang.org/x/net-0.44.0
+    
+    build(deps): bump golang.org/x/net from 0.43.0 to 0.44.0
+
+commit bdc5d5a6d10844b24b770ee904cef7ef749ba553
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2025-09-15
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-15
+
+    build(deps): bump golang.org/x/net from 0.43.0 to 0.44.0
+    
+    Bumps [golang.org/x/net](https://github.com/golang/net) from 0.43.0 to 0.44.0.
+    - [Commits](https://github.com/golang/net/compare/v0.43.0...v0.44.0)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: golang.org/x/net
+      dependency-version: 0.44.0
+      dependency-type: direct:production
+      update-type: version-update:semver-minor
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit c9ff3599de36ffe0e4aadee7917e9e25a11a6b2f
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-15
+
+    Bump library version due to the patch release
+
+commit 15912bf810ef64e17e2177ce5ee2187dd8107c30
+Merge: 80ecefeb 9e65104b
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-15
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-15
+
+    Merge pull request #2510 from nghttp2/remove-glitch-from-invalid-stream2
+    
+    Remove session_update_glitch_ratelim called from deep inside the chain
+
+commit 9e65104b000cc7b7494ce0aa0424393acb5855d3
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-15
+
+    Remove session_update_glitch_ratelim called from deep inside the chain
+    
+    Calling session_update_glitch_ratelim from
+    session_handle_invalid_stream2 makes handling error quite difficult
+    because it might be called in nested function calls.  It seems to me
+    that adding that is accidental.
+
+commit 80ecefebb54c4d5ad173304e0e78fee1b4b0decf
+Merge: 89b30903 43b4369f
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-15
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-15
+
+    Merge pull request #2509 from nghttp2/fix-assertion-failure
+    
+    Fix assertion failure
+
+commit 43b4369fba1039b0e13176c8f089c6c9b9f8497a
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-15
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-15
+
+    Fix assertion failure
+    
+    Fix assertion failure due to the missing check for NGHTTP2_IB_IGN_ALL
+    state.  Add tests.
+
+commit 89b30903cc4d6db77f3e4a8faa4a02e20b4190e7
+Merge: 3b45a194 4904c736
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-13
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-13
+
+    Merge pull request #2508 from nghttp2/more-builtin-ext-glitch
+    
+    Increase glitch counter for unexpected builtin extension frames
+
+commit 4904c736e1e6b71d8f1dd9c9948b4a68431883c1
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-13
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-13
+
+    Increase glitch counter for unexpected builtin extension frames
+
+commit 3b45a19423f6d627828d70e847533c07cc0b0b5e
+Merge: fbf4a7b7 877a7818
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-09
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-09
+
+    Merge pull request #2507 from nghttp2/dependabot/github_actions/actions/stale-10
+    
+    build(deps): bump actions/stale from 9 to 10
+
+commit fbf4a7b750a08764d19e375fcc09fe32ce6cc63e
+Merge: 2a190bf5 3d363ae4
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-09
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-09
+
+    Merge pull request #2506 from nghttp2/dependabot/github_actions/actions/setup-go-6
+    
+    build(deps): bump actions/setup-go from 5 to 6
+
+commit 2a190bf5ee67593348e464126cc3a2f158821bcd
+Merge: eacf3484 73141a76
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2025-09-09
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-09
+
+    Merge pull request #2505 from nghttp2/dependabot/github_actions/actions/github-script-8
+    
+    build(deps): bump actions/github-script from 7 to 8
+
+commit 877a78186c07e9cfbdd38e5df189e3f5de53af16
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2025-09-08
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-08
+
+    build(deps): bump actions/stale from 9 to 10
+    
+    Bumps [actions/stale](https://github.com/actions/stale) from 9 to 10.
+    - [Release notes](https://github.com/actions/stale/releases)
+    - [Changelog](https://github.com/actions/stale/blob/main/CHANGELOG.md)
+    - [Commits](https://github.com/actions/stale/compare/v9...v10)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: actions/stale
+      dependency-version: '10'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 3d363ae478e30cb3806fba247477404b83a0c0af
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2025-09-08
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-08
+
+    build(deps): bump actions/setup-go from 5 to 6
+    
+    Bumps [actions/setup-go](https://github.com/actions/setup-go) from 5 to 6.
+    - [Release notes](https://github.com/actions/setup-go/releases)
+    - [Commits](https://github.com/actions/setup-go/compare/v5...v6)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: actions/setup-go
+      dependency-version: '6'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 73141a7698e63d38751a183e72d9cc996268d56b
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2025-09-08
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2025-09-08
+
+    build(deps): bump actions/github-script from 7 to 8
+    
+    Bumps [actions/github-script](https://github.com/actions/github-script) from 7 to 8.
+    - [Release notes](https://github.com/actions/github-script/releases)
+    - [Commits](https://github.com/actions/github-script/compare/v7...v8)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: actions/github-script
+      dependency-version: '8'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit eacf3484ca418486f8de10044f479adb3aa98229
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-09-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-09-02
+
+    Bump package version
