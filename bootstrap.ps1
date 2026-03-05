@@ -410,6 +410,66 @@ function Ensure-PortableGit {
     return $gitExe
 }
 
+function Stop-BorealisPythonProcesses {
+    param(
+        [string]$DestinationPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
+        return
+    }
+
+    $resolvedDestination = $DestinationPath
+    try {
+        $resolvedDestination = [System.IO.Path]::GetFullPath($DestinationPath)
+    } catch {}
+
+    $scopePattern = Join-Path $resolvedDestination '*'
+    $stoppedCount = 0
+
+    $candidates = @()
+    try {
+        $candidates = Get-Process python,pythonw -ErrorAction SilentlyContinue
+    } catch {
+        $candidates = @()
+    }
+
+    foreach ($proc in $candidates) {
+        $procPath = $null
+        try {
+            $procPath = $proc.Path
+        } catch {
+            $procPath = $null
+        }
+
+        if ([string]::IsNullOrWhiteSpace($procPath)) {
+            try {
+                $cimProc = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $proc.Id) -ErrorAction SilentlyContinue
+                if ($cimProc) {
+                    $procPath = [string]$cimProc.ExecutablePath
+                }
+            } catch {
+                $procPath = $null
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($procPath)) {
+            continue
+        }
+
+        if ($procPath -like $scopePattern) {
+            try {
+                Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+                $stoppedCount++
+            } catch {}
+        }
+    }
+
+    if ($stoppedCount -gt 0) {
+        Write-Host ("[i] Stopped {0} Borealis Python process(es) before repository sync." -f $stoppedCount)
+    }
+}
+
 function Sync-BorealisRepository {
     param(
         [string]$GitExe,
@@ -567,6 +627,8 @@ try {
     } catch {}
 
     $gitExe = Ensure-PortableGit -GitZipUrl $gitZipUrl -GitZipPath $gitZipPath -GitRoot $gitCacheDir
+
+    Stop-BorealisPythonProcesses -DestinationPath $installDir
 
     Write-Host "[i] Syncing Borealis repository into $installDir"
     Sync-BorealisRepository -GitExe $gitExe -RepositoryUrl $repoUrl -Ref $repoRef -DestinationPath $installDir -PreserveDirectories @('Agent')
