@@ -1886,6 +1886,7 @@ export default function DeviceList({
             defaultColDef={defaultColDef}
             rowSelection="multiple"
             suppressRowClickSelection
+            suppressCellFocus
             pagination
             paginationPageSize={20}
             paginationPageSizeSelector={[20, 50, 100]}

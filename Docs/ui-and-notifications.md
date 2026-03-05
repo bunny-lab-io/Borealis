@@ -196,6 +196,7 @@ const NAV_TAB_COLORS = {
 - Style helper: reuse a `GRID_STYLE_BASE` (or similar) to set fonts/icons and `--ag-cell-horizontal-padding: "18px"` on every grid, then merge it with per-grid dimensions.
 - Fill column: last column `{ flex: 1, minWidth: X }` (no width/maxWidth) to stretch when horizontal space remains.
 - Pagination baseline: every Quartz grid ships with `pagination`, `paginationPageSize={20}`, and `paginationPageSizeSelector={[20, 50, 100]}`. This matches Device List behavior and prevents infinitely tall tables (Targets, assembly pickers, job histories, etc.).
+- Focus highlight baseline: set `suppressCellFocus` on AG Grid tables that do not rely on keyboard cell navigation so click/focus does not draw the magenta single-cell outline. Keep row hover/row selected styling for context.
 - Example: follow the scaffolding in `Engine/web-interface/src/Scheduling/Scheduled_Jobs_List.jsx` and the structure in `Data/Engine/web-interface/src/Admin/Page_Template.jsx`.
 
 ### Toast Notifications (Full)
