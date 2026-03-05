@@ -65,7 +65,6 @@ def _ensure_devices_table(conn: sqlite3.Connection) -> None:
         "operating_system": "TEXT",
         "uptime": "INTEGER",
         "agent_id": "TEXT",
-        "ansible_ee_ver": "TEXT",
         "connection_type": "TEXT",
         "connection_endpoint": "TEXT",
         "agent_vnc_password": "TEXT",
@@ -372,7 +371,6 @@ def _create_devices_table(cur: sqlite3.Cursor) -> None:
             operating_system TEXT,
             uptime INTEGER,
             agent_id TEXT,
-            ansible_ee_ver TEXT,
             connection_type TEXT,
             connection_endpoint TEXT,
             agent_vnc_password TEXT,
@@ -442,10 +440,10 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             guid, hostname, description, created_at, agent_hash, memory,
             network, software, storage, cpu, device_type, domain, external_ip,
             internal_ip, last_reboot, last_seen, last_user, operating_system,
-            uptime, agent_id, ansible_ee_ver, connection_type, connection_endpoint,
+            uptime, agent_id, connection_type, connection_endpoint,
             agent_vnc_password, ssl_key_fingerprint, token_version, status, key_added_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
     )
 
@@ -481,7 +479,6 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             record.get("operating_system"),
             record.get("uptime"),
             record.get("agent_id"),
-            record.get("ansible_ee_ver"),
             record.get("connection_type"),
             record.get("connection_endpoint"),
             record.get("agent_vnc_password"),

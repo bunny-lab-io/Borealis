@@ -335,14 +335,52 @@ function Expand-ZipArchiveCompat {
     if ([string]::IsNullOrWhiteSpace($SevenZipPath)) {
         $SevenZipPath = Get-BootstrapSevenZipExe -InstallDirHint $InstallDirHint
     }
-    if ([string]::IsNullOrWhiteSpace($SevenZipPath) -or -not (Test-Path $SevenZipPath -PathType Leaf)) {
-        throw "Bundled 7-Zip CLI not found. Expected Dependencies\7zip\7z.exe (checked install dir '$InstallDirHint')."
+    if (-not [string]::IsNullOrWhiteSpace($SevenZipPath) -and (Test-Path $SevenZipPath -PathType Leaf)) {
+        & $SevenZipPath x $ArchivePath "-o$DestinationPath" -y | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip extraction failed for '$ArchivePath' with exit code $LASTEXITCODE."
+        }
+        return
     }
 
-    & $SevenZipPath x $ArchivePath "-o$DestinationPath" -y | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "7-Zip extraction failed for '$ArchivePath' with exit code $LASTEXITCODE."
+    # First-run bootstrap may not have the repository staged yet, so bundled 7-Zip
+    # can be unavailable. Allow a one-time built-in fallback for portable Git unzip.
+    Write-Host "[i] Bundled 7-Zip not found yet; using bootstrap ZIP fallback extractor."
+    $extractErrors = New-Object System.Collections.Generic.List[string]
+
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
+        return
+    } catch {
+        $extractErrors.Add(".NET ZipFile: $($_.Exception.Message)")
     }
+
+    try {
+        $oldProgressPreference = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            Expand-Archive -LiteralPath $ArchivePath -DestinationPath $DestinationPath -Force -ErrorAction Stop
+        } finally {
+            $ProgressPreference = $oldProgressPreference
+        }
+        return
+    } catch {
+        $extractErrors.Add("Expand-Archive: $($_.Exception.Message)")
+    }
+
+    $tarExe = Get-Command tar.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
+    if (-not [string]::IsNullOrWhiteSpace($tarExe)) {
+        & $tarExe -xf $ArchivePath -C $DestinationPath
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        $extractErrors.Add("tar: exited with code $LASTEXITCODE")
+    } else {
+        $extractErrors.Add('tar: tar.exe unavailable')
+    }
+
+    throw "Failed to extract '$ArchivePath'. Tried bundled 7-Zip and bootstrap fallbacks. $($extractErrors -join '; ')"
 }
 
 function Invoke-GitCommand {
@@ -625,6 +663,10 @@ try {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     } catch {}
+
+    if (-not (Test-Path $installDir -PathType Container)) {
+        New-Item -Path $installDir -ItemType Directory -Force | Out-Null
+    }
 
     $gitExe = Ensure-PortableGit -GitZipUrl $gitZipUrl -GitZipPath $gitZipPath -GitRoot $gitCacheDir
 

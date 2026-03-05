@@ -67,7 +67,6 @@ _SCHEMA_DEFINITION = """CREATE TABLE IF NOT EXISTS devices (
     operating_system TEXT,
     uptime INTEGER,
     agent_id TEXT,
-    ansible_ee_ver TEXT,
     connection_type TEXT,
     connection_endpoint TEXT,
     ssl_key_fingerprint TEXT,
@@ -206,7 +205,6 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
                 operating_system,
                 uptime,
                 agent_id,
-                ansible_ee_ver,
                 connection_type,
                 connection_endpoint,
                 ssl_key_fingerprint,
@@ -214,7 +212,7 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
                 status,
                 key_added_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "GUID-TEST-0001",
@@ -237,7 +235,6 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
                 "Windows 11 Pro",
                 7200,
                 "test-device-agent",
-                "1.0.0",
                 "",
                 "",
                 "FF:FF:FF",

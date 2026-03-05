@@ -1719,25 +1719,11 @@ function Invoke-BorealisUpdate {
 
     $preservePath = Join-Path $scriptDir "Data\Server\Python_API_Endpoints\Tesseract-OCR"
     $preserveBackupPath = Join-Path $scriptDir "Update_Staging\Tesseract-OCR"
-    $ansibleEePath = Join-Path $scriptDir "Agent\Ansible_EE"
-    $ansibleEeBackupPath = Join-Path $scriptDir "Update_Staging\Ansible_EE"
-
     Run-Step "Updating: Move Tesseract-OCR Folder Somewhere Safe to Restore Later" {
         if (Test-Path $preservePath) {
             $stagingPath = Join-Path $scriptDir "Update_Staging"
             if (-not (Test-Path $stagingPath)) { New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null }
             Move-Item -Path $preservePath -Destination $preserveBackupPath -Force
-        }
-    }
-
-    Run-Step "Updating: Preserve Ansible Execution Environment" {
-        if (Test-Path $ansibleEePath) {
-            $stagingPath = Join-Path $scriptDir "Update_Staging"
-            if (-not (Test-Path $stagingPath)) { New-Item -ItemType Directory -Force -Path $stagingPath | Out-Null }
-            if (Test-Path $ansibleEeBackupPath) {
-                Remove-Item -Path $ansibleEeBackupPath -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            Move-Item -Path $ansibleEePath -Destination $ansibleEeBackupPath -Force
         }
     }
 
@@ -1807,14 +1793,6 @@ function Invoke-BorealisUpdate {
         if (Test-Path $preserveBackupPath) {
             if (-not (Test-Path $restorePath)) { New-Item -ItemType Directory -Force -Path $restorePath | Out-Null }
             Move-Item -Path $preserveBackupPath -Destination $restorePath -Force
-        }
-    }
-
-    Run-Step "Updating: Restore Ansible Execution Environment" {
-        $restorePath = Join-Path $scriptDir "Agent"
-        if (Test-Path $ansibleEeBackupPath) {
-            if (-not (Test-Path $restorePath)) { New-Item -ItemType Directory -Force -Path $restorePath | Out-Null }
-            Move-Item -Path $ansibleEeBackupPath -Destination $restorePath -Force
         }
     }
 

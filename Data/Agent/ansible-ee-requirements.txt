@@ -1,8 +1,0 @@
-#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Agent/ansible-ee-requirements.txt
-# Ansible execution environment dependencies
-ansible-core==2.16.7
-ansible-runner==2.3.5
-pywinrm==0.4.3
-requests-credssp==2.0.0
-requests-ntlm==1.2.0
-pypsrp==0.8.1

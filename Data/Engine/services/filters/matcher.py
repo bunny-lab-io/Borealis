@@ -40,7 +40,6 @@ _DEVICE_SELECT_SQL = """
         d.operating_system,
         d.uptime,
         d.agent_id,
-        d.ansible_ee_ver,
         d.connection_type,
         d.connection_endpoint,
         s.id AS site_id,
@@ -143,7 +142,6 @@ class DeviceFilterMatcher:
             "created_at": created_at or 0,
             "connection_type": row["connection_type"] or "",
             "connection_endpoint": row["connection_endpoint"] or "",
-            "ansible_ee_ver": row["ansible_ee_ver"] or "",
         }
         details = {
             "summary": summary,

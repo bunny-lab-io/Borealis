@@ -85,7 +85,7 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 #### `devices`
 - Status: Active (core inventory and identity table).
 - Purpose: Canonical device identity and inventory snapshot.
-- Columns: `guid`, `hostname`, `description`, `created_at`, `agent_hash`, `memory`, `network`, `software`, `storage`, `cpu`, `device_type`, `domain`, `external_ip`, `internal_ip`, `last_reboot`, `last_seen`, `last_user`, `operating_system`, `uptime`, `agent_id`, `ansible_ee_ver`, `connection_type`, `connection_endpoint`, `agent_vnc_password`, `ssl_key_fingerprint`, `token_version`, `status`, `key_added_at`.
+- Columns: `guid`, `hostname`, `description`, `created_at`, `agent_hash`, `memory`, `network`, `software`, `storage`, `cpu`, `device_type`, `domain`, `external_ip`, `internal_ip`, `last_reboot`, `last_seen`, `last_user`, `operating_system`, `uptime`, `agent_id`, `connection_type`, `connection_endpoint`, `agent_vnc_password`, `ssl_key_fingerprint`, `token_version`, `status`, `key_added_at`.
 - Constraints and indexes:
 - `guid` primary key.
 - `uq_devices_hostname` unique on `hostname`.

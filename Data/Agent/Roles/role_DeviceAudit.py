@@ -10,7 +10,6 @@ import string
 import asyncio
 import re
 import ipaddress
-from pathlib import Path
 
 try:
     import psutil  # type: ignore
@@ -572,38 +571,6 @@ def detect_agent_os():
         return "Unknown"
 
 
-def _ansible_ee_version():
-    try:
-        root = _project_root()
-        meta_path = os.path.join(root, 'Ansible_EE', 'metadata.json')
-        if os.path.isfile(meta_path):
-            try:
-                with open(meta_path, 'r', encoding='utf-8') as fh:
-                    data = json.load(fh)
-                if isinstance(data, dict):
-                    for key in ('version', 'ansible_ee_ver', 'ansible_ee_version'):
-                        value = data.get(key)
-                        if isinstance(value, (str, int, float)):
-                            text = str(value).strip()
-                            if text:
-                                return text
-            except Exception:
-                pass
-        version_txt = os.path.join(root, 'Ansible_EE', 'version.txt')
-        if os.path.isfile(version_txt):
-            try:
-                raw = Path(version_txt).read_text(encoding='utf-8')
-                if raw:
-                    text = raw.splitlines()[0].strip()
-                    if text:
-                        return text
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return ''
-
-
 def collect_summary(CONFIG):
     try:
         raw_hostname = socket.gethostname()
@@ -628,26 +595,16 @@ def collect_summary(CONFIG):
         }
         if short_hostname and short_hostname != hostname:
             summary['hostname_short'] = short_hostname
-        summary['ansible_ee_ver'] = _ansible_ee_version()
         return summary
     except Exception:
         hostname = _local_hostname()
         summary = {
             'hostname': hostname,
-            'ansible_ee_ver': _ansible_ee_version(),
         }
         short_hostname = _normalize_hostname_for_display(hostname)
         if short_hostname and short_hostname != hostname:
             summary['hostname_short'] = short_hostname
         return summary
-
-
-def _project_root():
-    try:
-        # Agent layout: Agent/Borealis/{this_file}; root is two levels up
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    except Exception:
-        return os.getcwd()
 
 
 # Removed Ansible-based audit path; Python collectors provide details directly.
