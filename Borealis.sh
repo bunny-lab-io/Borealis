@@ -690,7 +690,6 @@ create_agent_venv_and_stage_data() {
     "Scripts"
     "agent_deployment.py"
     "agent.py"
-    "ansible-ee-version.txt"
     "Borealis.ico"
     "fcntl_stub.py"
     "launch_service.ps1"
