@@ -1,17 +1,29 @@
 # Borealis Windows bootstrapper:
-# - Downloads Borealis ZIP from GitHub
-# - Extracts to C:\Borealis (or --install-dir)
+# - Ensures portable Git is available
+# - Uses Git to fetch/checkout Borealis into C:\Borealis (or --install-dir)
 # - Executes Borealis.ps1, forwarding agent enrollment arguments
 
 $ErrorActionPreference = 'Stop'
 
 $defaultInstallDir = if ($env:BOREALIS_INSTALL_DIR) { $env:BOREALIS_INSTALL_DIR } else { 'C:\Borealis' }
-$defaultZipUrl = if ($env:BOREALIS_BOOTSTRAP_ZIP_URL) { $env:BOREALIS_BOOTSTRAP_ZIP_URL } else { 'https://github.com/bunny-lab-io/Borealis/archive/refs/heads/main.zip' }
-$defaultZipPath = if ($env:BOREALIS_BOOTSTRAP_ZIP_PATH) { $env:BOREALIS_BOOTSTRAP_ZIP_PATH } else { Join-Path $env:TEMP 'BorealisBootstrap.zip' }
+$defaultRepoUrl = if ($env:BOREALIS_BOOTSTRAP_REPO_URL) { $env:BOREALIS_BOOTSTRAP_REPO_URL } else { 'https://github.com/bunny-lab-io/Borealis.git' }
+$defaultRepoRef = if ($env:BOREALIS_BOOTSTRAP_REF) { $env:BOREALIS_BOOTSTRAP_REF } else { 'main' }
+$defaultGitZipUrl = if ($env:BOREALIS_BOOTSTRAP_GIT_ZIP_URL) { $env:BOREALIS_BOOTSTRAP_GIT_ZIP_URL } else { 'https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip' }
+$defaultGitZipPath = if ($env:BOREALIS_BOOTSTRAP_GIT_ZIP_PATH) { $env:BOREALIS_BOOTSTRAP_GIT_ZIP_PATH } else { Join-Path $env:TEMP 'BorealisBootstrap_MinGit.zip' }
+$defaultGitCacheDir = if ($env:BOREALIS_BOOTSTRAP_GIT_DIR) {
+    $env:BOREALIS_BOOTSTRAP_GIT_DIR
+} elseif (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    Join-Path $env:LOCALAPPDATA 'Borealis\Bootstrap\git'
+} else {
+    Join-Path $env:TEMP 'BorealisBootstrapGit'
+}
 
 $installDir = $defaultInstallDir
-$zipUrl = $defaultZipUrl
-$zipPath = $defaultZipPath
+$repoUrl = $defaultRepoUrl
+$repoRef = $defaultRepoRef
+$gitZipUrl = $defaultGitZipUrl
+$gitZipPath = $defaultGitZipPath
+$gitCacheDir = $defaultGitCacheDir
 $forwardedServerUrl = $null
 $forwardedEnrollmentCode = $null
 $passthroughArgs = New-Object System.Collections.Generic.List[string]
@@ -22,8 +34,11 @@ Usage: bootstrap.ps1 [bootstrap options] [Borealis.ps1 options]
 
 Bootstrap options:
   --install-dir <path>   Install location (default: C:\Borealis)
-  --zip-url <url>        ZIP source URL
-  --zip-path <path>      ZIP destination path (default: %TEMP%\BorealisBootstrap.zip)
+  --repo-url <url>       Git repository URL (default: https://github.com/bunny-lab-io/Borealis.git)
+  --ref <name>           Git ref/branch/tag/commit to deploy (default: main)
+  --git-zip-url <url>    Portable Git ZIP URL
+  --git-zip-path <path>  Portable Git ZIP cache path
+  --git-dir <path>       Portable Git extraction directory
   -h, --help             Show this help
 
 Any other arguments are forwarded to Borealis.ps1.
@@ -88,74 +103,55 @@ function Normalize-BorealisArgument {
     }
 }
 
-function Get-BootstrapZipUris {
-    param(
-        [string]$PrimaryUrl
-    )
-
-    $uris = New-Object System.Collections.Generic.List[string]
-    if (-not [string]::IsNullOrWhiteSpace($PrimaryUrl)) {
-        $uris.Add($PrimaryUrl.Trim())
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($env:BOREALIS_BOOTSTRAP_FALLBACK_ZIP_URL)) {
-        $uris.Add($env:BOREALIS_BOOTSTRAP_FALLBACK_ZIP_URL.Trim())
-    }
-
-    return $uris | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-}
-
 function Invoke-WebRequestWithRetry {
     param(
-        [string[]]$Uris,
+        [string]$Uri,
         [string]$OutFile,
-        [int]$MaxAttemptsPerUri = 3,
+        [int]$MaxAttempts = 3,
         [int]$InitialDelaySeconds = 2
     )
 
+    if ([string]::IsNullOrWhiteSpace($Uri)) {
+        throw 'Download URL cannot be empty.'
+    }
+
     $lastError = $null
-    foreach ($uri in @($Uris)) {
-        if ([string]::IsNullOrWhiteSpace($uri)) { continue }
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            if (Test-Path $OutFile) {
+                Remove-Item -Path $OutFile -Force -ErrorAction SilentlyContinue
+            }
 
-        for ($attempt = 1; $attempt -le $MaxAttemptsPerUri; $attempt++) {
-            try {
-                if (Test-Path $OutFile) {
-                    Remove-Item -Path $OutFile -Force -ErrorAction SilentlyContinue
-                }
+            Write-Host ("[i] Download attempt {0}/{1} from {2}" -f $attempt, $MaxAttempts, $Uri)
 
-                Write-Host ("[i] Download attempt {0}/{1} from {2}" -f $attempt, $MaxAttemptsPerUri, $uri)
+            $iwrParams = @{
+                Uri = $Uri
+                OutFile = $OutFile
+                ErrorAction = 'Stop'
+            }
+            $iwrCommand = Get-Command Invoke-WebRequest -ErrorAction Stop
+            if ($iwrCommand.Parameters.ContainsKey('UseBasicParsing')) {
+                $iwrParams['UseBasicParsing'] = $true
+            }
 
-                $iwrParams = @{
-                    Uri = $uri
-                    OutFile = $OutFile
-                    ErrorAction = 'Stop'
-                }
-                $iwrCommand = Get-Command Invoke-WebRequest -ErrorAction Stop
-                if ($iwrCommand.Parameters.ContainsKey('UseBasicParsing')) {
-                    $iwrParams['UseBasicParsing'] = $true
-                }
+            Invoke-WebRequest @iwrParams
 
-                Invoke-WebRequest @iwrParams
+            if (-not (Test-Path $OutFile -PathType Leaf)) {
+                throw "Download completed but '$OutFile' was not created."
+            }
+            $fileInfo = Get-Item -LiteralPath $OutFile -ErrorAction Stop
+            if ($fileInfo.Length -le 0) {
+                throw "Downloaded file '$OutFile' is empty."
+            }
 
-                if (-not (Test-Path $OutFile -PathType Leaf)) {
-                    throw "Download completed but '$OutFile' was not created."
-                }
-                $fileInfo = Get-Item -LiteralPath $OutFile -ErrorAction Stop
-                if ($fileInfo.Length -le 0) {
-                    throw "Downloaded file '$OutFile' is empty."
-                }
-
-                return $uri
-            } catch {
-                $lastError = $_
-                if ($attempt -lt $MaxAttemptsPerUri) {
-                    $delaySeconds = [Math]::Min(30, [int]([Math]::Pow(2, $attempt - 1) * $InitialDelaySeconds))
-                    Write-Host ("[!] Download failed from {0}: {1}" -f $uri, $_.Exception.Message) -ForegroundColor Yellow
-                    Write-Host ("[i] Retrying in {0} second(s)..." -f $delaySeconds) -ForegroundColor Yellow
-                    Start-Sleep -Seconds $delaySeconds
-                } else {
-                    Write-Host ("[!] Exhausted retries for {0}: {1}" -f $uri, $_.Exception.Message) -ForegroundColor Yellow
-                }
+            return
+        } catch {
+            $lastError = $_
+            if ($attempt -lt $MaxAttempts) {
+                $delaySeconds = [Math]::Min(30, [int]([Math]::Pow(2, $attempt - 1) * $InitialDelaySeconds))
+                Write-Host ("[!] Download failed from {0}: {1}" -f $Uri, $_.Exception.Message) -ForegroundColor Yellow
+                Write-Host ("[i] Retrying in {0} second(s)..." -f $delaySeconds) -ForegroundColor Yellow
+                Start-Sleep -Seconds $delaySeconds
             }
         }
     }
@@ -163,7 +159,7 @@ function Invoke-WebRequestWithRetry {
     if ($lastError) {
         throw $lastError
     }
-    throw 'No usable download URL was provided.'
+    throw "Failed to download from '$Uri'."
 }
 
 function Expand-ZipArchiveCompat {
@@ -203,6 +199,125 @@ function Expand-ZipArchiveCompat {
     }
 }
 
+function Invoke-GitCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GitExe,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+
+        [Parameter()]
+        [string]$WorkingDirectory = ''
+    )
+
+    if ($WorkingDirectory) {
+        & $GitExe -C $WorkingDirectory @Arguments
+    } else {
+        & $GitExe @Arguments
+    }
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "Git command failed with exit code ${exitCode}: git $($Arguments -join ' ')"
+    }
+}
+
+function Ensure-PortableGit {
+    param(
+        [string]$GitZipUrl,
+        [string]$GitZipPath,
+        [string]$GitRoot
+    )
+
+    if ([string]::IsNullOrWhiteSpace($GitRoot)) {
+        throw 'Portable Git destination cannot be empty.'
+    }
+
+    $gitExe = Join-Path $GitRoot 'cmd\git.exe'
+    if (Test-Path $gitExe -PathType Leaf) {
+        try {
+            & $gitExe --version | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                return $gitExe
+            }
+        } catch {}
+    }
+
+    $gitZipDir = Split-Path -Path $GitZipPath -Parent
+    if (-not [string]::IsNullOrWhiteSpace($gitZipDir) -and -not (Test-Path $gitZipDir)) {
+        New-Item -Path $gitZipDir -ItemType Directory -Force | Out-Null
+    }
+
+    Write-Host "[i] Downloading portable Git from $GitZipUrl"
+    Invoke-WebRequestWithRetry -Uri $GitZipUrl -OutFile $GitZipPath
+    Expand-ZipArchiveCompat -ArchivePath $GitZipPath -DestinationPath $GitRoot -ClearDestination
+
+    if (-not (Test-Path $gitExe -PathType Leaf)) {
+        throw "Portable Git was extracted but git.exe was not found at '$gitExe'."
+    }
+
+    & $gitExe --version | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Portable Git failed validation after extraction.'
+    }
+
+    return $gitExe
+}
+
+function Sync-BorealisRepository {
+    param(
+        [string]$GitExe,
+        [string]$RepositoryUrl,
+        [string]$Ref,
+        [string]$DestinationPath,
+        [string[]]$PreserveDirectories = @('Agent')
+    )
+
+    if (-not (Test-Path $DestinationPath)) {
+        New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
+    }
+
+    $gitMetadataPath = Join-Path $DestinationPath '.git'
+    if (-not (Test-Path $gitMetadataPath -PathType Container)) {
+        Get-ChildItem -Path $DestinationPath -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($PreserveDirectories -contains $_.Name) { return }
+            Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('init')
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('remote', 'add', 'origin', $RepositoryUrl)
+    } else {
+        $originUrl = ''
+        try {
+            $originUrl = (& $GitExe -C $DestinationPath remote get-url origin 2>$null | Select-Object -First 1)
+        } catch {
+            $originUrl = ''
+        }
+
+        if ([string]::IsNullOrWhiteSpace($originUrl)) {
+            Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('remote', 'add', 'origin', $RepositoryUrl)
+        } elseif ($originUrl.Trim() -ne $RepositoryUrl) {
+            Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('remote', 'set-url', 'origin', $RepositoryUrl)
+        }
+    }
+
+    Write-Host "[i] Fetching Borealis ref '$Ref' from $RepositoryUrl"
+    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('fetch', '--depth', '1', '--force', 'origin', $Ref)
+    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('checkout', '--force', '-B', 'bootstrap-deploy', 'FETCH_HEAD')
+    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @('reset', '--hard', 'FETCH_HEAD')
+
+    $cleanArgs = New-Object System.Collections.Generic.List[string]
+    $cleanArgs.Add('clean')
+    $cleanArgs.Add('-fdx')
+    foreach ($preserve in $PreserveDirectories) {
+        if (-not [string]::IsNullOrWhiteSpace($preserve)) {
+            $cleanArgs.Add('-e')
+            $cleanArgs.Add($preserve)
+        }
+    }
+    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $DestinationPath -Arguments @($cleanArgs.ToArray())
+}
+
 $rawArgs = @($args)
 for ($i = 0; $i -lt $rawArgs.Count; $i++) {
     $token = [string]$rawArgs[$i]
@@ -219,17 +334,41 @@ for ($i = 0; $i -lt $rawArgs.Count; $i++) {
             $i = $result.NextIndex
             continue
         }
-        '^(--zip-url|-zip-url|-zipurl)(=.*)?$' {
-            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--zip-url'
-            $zipUrl = $result.Value
+        '^(--repo-url|-repo-url|-repourl)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--repo-url'
+            $repoUrl = $result.Value
             $i = $result.NextIndex
             continue
         }
-        '^(--zip-path|-zip-path|-zippath)(=.*)?$' {
-            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--zip-path'
-            $zipPath = $result.Value
+        '^(--ref|--branch|-ref|-branch)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--ref'
+            $repoRef = $result.Value
             $i = $result.NextIndex
             continue
+        }
+        '^(--git-zip-url|-git-zip-url|-gitzipurl)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-zip-url'
+            $gitZipUrl = $result.Value
+            $i = $result.NextIndex
+            continue
+        }
+        '^(--git-zip-path|-git-zip-path|-gitzippath)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-zip-path'
+            $gitZipPath = $result.Value
+            $i = $result.NextIndex
+            continue
+        }
+        '^(--git-dir|-git-dir|-gitdir)(=.*)?$' {
+            $result = Read-OptionValue -Token $token -Index $i -SourceArgs $rawArgs -OptionName '--git-dir'
+            $gitCacheDir = $result.Value
+            $i = $result.NextIndex
+            continue
+        }
+        '^(--zip-url|-zip-url|-zipurl)(=.*)?$' {
+            throw 'ZIP-based repository bootstrap is no longer supported. Use --repo-url/--ref.'
+        }
+        '^(--zip-path|-zip-path|-zippath)(=.*)?$' {
+            throw 'ZIP-based repository bootstrap is no longer supported. Use --repo-url/--ref.'
         }
     }
 
@@ -269,73 +408,26 @@ if ($resolvedInstallDir.TrimEnd('\') -eq $installRoot.TrimEnd('\')) {
 if ($resolvedInstallDir -ne $installDir) {
     $installDir = $resolvedInstallDir
 }
-if ([string]::IsNullOrWhiteSpace($zipPath)) {
-    throw 'ZIP path cannot be empty.'
+if ([string]::IsNullOrWhiteSpace($repoUrl)) {
+    throw 'Repository URL cannot be empty.'
 }
-
-$zipDirectory = Split-Path -Path $zipPath -Parent
-if (-not [string]::IsNullOrWhiteSpace($zipDirectory) -and -not (Test-Path $zipDirectory)) {
-    New-Item -Path $zipDirectory -ItemType Directory -Force | Out-Null
+if ([string]::IsNullOrWhiteSpace($repoRef)) {
+    throw 'Repository ref cannot be empty.'
 }
-
-if (Test-Path $zipPath) {
-    Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
-}
-
-$extractRoot = Join-Path $env:TEMP ("BorealisBootstrap_{0}" -f ([guid]::NewGuid().ToString('N')))
-if (Test-Path $extractRoot) {
-    Remove-Item -Path $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
-}
-New-Item -Path $extractRoot -ItemType Directory -Force | Out-Null
 
 try {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     } catch {}
 
-    $zipUris = Get-BootstrapZipUris -PrimaryUrl $zipUrl
-    if ($zipUris.Count -eq 0) {
-        throw "No valid ZIP URL was provided."
-    }
+    $gitExe = Ensure-PortableGit -GitZipUrl $gitZipUrl -GitZipPath $gitZipPath -GitRoot $gitCacheDir
 
-    Write-Host "[i] Downloading Borealis ZIP from $($zipUris[0])"
-    $resolvedZipUri = Invoke-WebRequestWithRetry -Uris $zipUris -OutFile $zipPath
-    if ($resolvedZipUri -ne $zipUrl) {
-        Write-Host "[i] Used fallback ZIP source: $resolvedZipUri"
-    }
-
-    Expand-ZipArchiveCompat -ArchivePath $zipPath -DestinationPath $extractRoot -ClearDestination
-
-    $extractedRoot = Get-ChildItem -Path $extractRoot -Directory -ErrorAction Stop |
-        Where-Object { $_.Name -like 'Borealis-*' } |
-        Select-Object -First 1
-    if (-not $extractedRoot) {
-        throw 'Could not locate extracted Borealis directory.'
-    }
-
-    if (-not (Test-Path $installDir)) {
-        New-Item -Path $installDir -ItemType Directory -Force | Out-Null
-    }
-
-    Write-Host "[i] Installing Borealis into $installDir"
-    $preserveDirectories = @('Agent')
-    Get-ChildItem -Path $installDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
-        if ($preserveDirectories -contains $_.Name) { return }
-        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    Get-ChildItem -Path $extractedRoot.FullName -Force | ForEach-Object {
-        if ($preserveDirectories -contains $_.Name) { return }
-        $destinationPath = Join-Path $installDir $_.Name
-        if (Test-Path $destinationPath) {
-            Remove-Item -Path $destinationPath -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        Copy-Item -Path $_.FullName -Destination $destinationPath -Recurse -Force
-    }
+    Write-Host "[i] Syncing Borealis repository into $installDir"
+    Sync-BorealisRepository -GitExe $gitExe -RepositoryUrl $repoUrl -Ref $repoRef -DestinationPath $installDir -PreserveDirectories @('Agent')
 
     $borealisScript = Join-Path $installDir 'Borealis.ps1'
     if (-not (Test-Path $borealisScript -PathType Leaf)) {
-        throw "Borealis.ps1 not found at '$borealisScript' after extraction."
+        throw "Borealis.ps1 not found at '$borealisScript' after Git checkout."
     }
 
     $invokeArgs = New-Object System.Collections.Generic.List[string]
@@ -384,7 +476,7 @@ try {
     exit 0
 }
 finally {
-    if (Test-Path $extractRoot) {
-        Remove-Item -Path $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $gitZipPath) {
+        Remove-Item -Path $gitZipPath -Force -ErrorAction SilentlyContinue
     }
 }
