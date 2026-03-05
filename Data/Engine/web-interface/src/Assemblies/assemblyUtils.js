@@ -26,6 +26,85 @@ const sanitizeNameForPath = (value, fallback = FALLBACK_ASSEMBLY_NAME) => {
   return value.trim().replace(/[^a-zA-Z0-9._-]+/g, "_");
 };
 
+const firstText = (...values) => {
+  for (const value of values) {
+    if (value == null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return "";
+};
+
+const parseObjectMaybe = (value) => {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const normalizeKindFromHints = (kindHint, subtypeHint, payload = null) => {
+  const kind = toLowerSafe(kindHint);
+  const subtype = toLowerSafe(subtypeHint);
+  if (kind === "ansible" || subtype === "ansible" || subtype === "playbook") return "ansible";
+  if (kind === "workflow" || subtype === "workflow") return "workflow";
+  if (kind === "script" || kind === "powershell" || kind === "batch" || kind === "bash") return "script";
+  if (payload && Array.isArray(payload.nodes) && Array.isArray(payload.edges)) return "workflow";
+  if (payload && (typeof payload.script === "string" || Array.isArray(payload.script_lines))) return "script";
+  return "script";
+};
+
+const normalizeSubtypeFromHints = (subtypeHint, kind, payload = null) => {
+  const subtype = toLowerSafe(subtypeHint);
+  if (subtype) return subtype;
+  if (kind === "workflow") return "workflow";
+  if (kind === "ansible") return "ansible";
+  if (payload && Array.isArray(payload.nodes) && Array.isArray(payload.edges)) return "workflow";
+  return "powershell";
+};
+
+const queueGuidKey = (entry) =>
+  firstText(
+    entry?.assembly_guid,
+    entry?.assemblyGuid,
+    entry?.assembly_id,
+    entry?.assemblyId,
+    entry?.guid,
+    entry?.id
+  ).toLowerCase();
+
+export function parseAssembliesCollectionPayload(rawPayload) {
+  if (Array.isArray(rawPayload)) {
+    return { items: rawPayload, queue: [] };
+  }
+
+  const root =
+    rawPayload && typeof rawPayload === "object" && rawPayload.data && typeof rawPayload.data === "object"
+      ? rawPayload.data
+      : rawPayload;
+
+  const items =
+    (Array.isArray(root?.items) && root.items) ||
+    (Array.isArray(root?.assemblies) && root.assemblies) ||
+    (Array.isArray(root?.results) && root.results) ||
+    (Array.isArray(root?.rows) && root.rows) ||
+    [];
+  const queue =
+    (Array.isArray(root?.queue) && root.queue) ||
+    (Array.isArray(root?.pending) && root.pending) ||
+    (Array.isArray(root?.queued) && root.queued) ||
+    (Array.isArray(root?.write_queue) && root.write_queue) ||
+    [];
+
+  return { items, queue };
+}
+
 export function decodeBase64String(data = "") {
   if (typeof data !== "string") {
     return { success: false, value: "" };
@@ -148,34 +227,63 @@ export function normalizeAssemblyRecord(item, queueEntry = null) {
     return null;
   }
 
-  const assemblyGuid = (item.assembly_guid || item.assembly_id || "").toString().trim();
+  const assemblyGuid = firstText(
+    item.assembly_guid,
+    item.assemblyGuid,
+    item.assembly_id,
+    item.assemblyId,
+    item.guid,
+    item.id
+  );
   if (!assemblyGuid) {
     return null;
   }
 
-  const domain = toLowerSafe(item.source || item.domain || "user") || "user";
+  const payloadFromItem =
+    parseObjectMaybe(item.payload_json) ||
+    parseObjectMaybe(item.payload) ||
+    parseObjectMaybe(item.document) ||
+    null;
+
+  const domain = toLowerSafe(
+    firstText(item.source, item.domain, item.assembly_domain, item.scope, item.origin, "user")
+  ) || "user";
   const domainMeta = resolveDomainMeta(domain);
 
-  let kind = toLowerSafe(item.assembly_type);
-  const typeHint = toLowerSafe(item.assembly_subtype);
-  if (!kind) {
-    if (typeHint === "ansible") kind = "ansible";
-    else if (typeHint === "workflow") kind = "workflow";
-    else kind = "script";
-  }
-
-  let assemblyType = typeHint || (kind === "ansible" ? "ansible" : kind === "workflow" ? "workflow" : "powershell");
-  if (!assemblyType) {
-    assemblyType = kind === "ansible" ? "ansible" : kind === "workflow" ? "workflow" : "powershell";
-  }
+  const kindHint = firstText(item.assembly_type, item.assemblyType, item.kind, item.category);
+  const subtypeHint = firstText(
+    item.assembly_subtype,
+    item.assemblySubtype,
+    item.type,
+    item.script_type,
+    item.runtime_type,
+    item.payload_type
+  );
+  const kind = normalizeKindFromHints(kindHint, subtypeHint, payloadFromItem);
+  const assemblyType = normalizeSubtypeFromHints(subtypeHint, kind, payloadFromItem);
 
   const displayName =
-    item.display_name ||
-    item.summary ||
+    firstText(
+      item.display_name,
+      item.displayName,
+      item.name,
+      item.tab_name,
+      item.tabName,
+      item.title,
+      item.summary
+    ) ||
     sanitizeNameForPath(assemblyGuid);
-  const summary = item.summary || "";
+  const summary = firstText(item.summary, item.description, item.desc);
 
-  const rawPath = item.virtual_path || item.path || "";
+  const rawPath = firstText(
+    item.virtual_path,
+    item.virtualPath,
+    item.path,
+    item.source_path,
+    item.sourcePath,
+    item.rel_path,
+    item.relPath
+  );
   const normalizedPath = normalizeAssemblyPath(kind, rawPath, displayName);
   const pathLower = normalizedPath.toLowerCase();
   let pathLowerNoPrefix = pathLower;
@@ -185,12 +293,13 @@ export function normalizeAssemblyRecord(item, queueEntry = null) {
     }
   });
 
-  const queueDirtySince = queueEntry?.dirty_since || item.dirty_since || null;
-  const queueLastPersisted = queueEntry?.last_persisted || item.last_persisted || null;
+  const queueDirtySince = queueEntry?.dirty_since || queueEntry?.dirtySince || item.dirty_since || item.dirtySince || null;
+  const queueLastPersisted =
+    queueEntry?.last_persisted || queueEntry?.lastPersisted || item.last_persisted || item.lastPersisted || null;
   const queueIsDirty =
     typeof queueEntry?.is_dirty === "string"
       ? queueEntry.is_dirty.toLowerCase() === "true"
-      : queueEntry?.is_dirty ?? Boolean(item.is_dirty);
+      : queueEntry?.is_dirty ?? queueEntry?.isDirty ?? Boolean(item.is_dirty ?? item.isDirty);
 
   const segments = normalizedPath.split("/").filter(Boolean);
 
@@ -210,9 +319,9 @@ export function normalizeAssemblyRecord(item, queueEntry = null) {
     isDirty: queueIsDirty,
     dirtySince: queueDirtySince,
     lastPersisted: queueLastPersisted,
-    payloadGuid: item.payload_guid,
-    createdAt: item.created_at,
-    updatedAt: item.updated_at,
+    payloadGuid: firstText(item.payload_guid, item.payloadGuid),
+    createdAt: firstText(item.created_at, item.createdAt),
+    updatedAt: firstText(item.updated_at, item.updatedAt),
     queueEntry,
     raw: item
   };
@@ -222,7 +331,7 @@ export function buildAssemblyIndex(items = [], queue = []) {
   const queueMap = new Map();
   (Array.isArray(queue) ? queue : []).forEach((entry) => {
     if (!entry || typeof entry !== "object") return;
-    const guid = (entry.assembly_guid || entry.guid || "").toString().trim().toLowerCase();
+    const guid = queueGuidKey(entry);
     if (guid) {
       queueMap.set(guid, entry);
     }
@@ -233,7 +342,14 @@ export function buildAssemblyIndex(items = [], queue = []) {
   const byPath = new Map();
 
   (Array.isArray(items) ? items : []).forEach((item) => {
-    const guidLower = (item?.assembly_guid || item?.assembly_id || "").toString().trim().toLowerCase();
+    const guidLower = firstText(
+      item?.assembly_guid,
+      item?.assemblyGuid,
+      item?.assembly_id,
+      item?.assemblyId,
+      item?.guid,
+      item?.id
+    ).toLowerCase();
     const queueEntry = guidLower ? queueMap.get(guidLower) || null : null;
     const record = normalizeAssemblyRecord(item, queueEntry);
     if (!record) return;
@@ -260,10 +376,13 @@ export function buildAssemblyIndex(items = [], queue = []) {
     return a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" });
   });
 
+  const isWorkflow = (record) => record.kind === "workflow" || record.type === "workflow";
+  const isAnsible = (record) => record.kind === "ansible" || record.type === "ansible";
+
   const grouped = {
-    scripts: records.filter((r) => r.kind === "script" && r.type !== "ansible"),
-    ansible: records.filter((r) => r.kind === "ansible" || r.type === "ansible"),
-    workflows: records.filter((r) => r.kind === "workflow")
+    scripts: records.filter((r) => !isWorkflow(r) && !isAnsible(r)),
+    ansible: records.filter((r) => isAnsible(r)),
+    workflows: records.filter((r) => isWorkflow(r))
   };
 
   return { records, byGuid, byPath, grouped };
@@ -366,32 +485,29 @@ export function parseAssemblyExport(exportDoc) {
     };
   }
 
-  let payload = exportDoc.payload;
-  if (typeof payload === "string") {
-    try {
-      payload = JSON.parse(payload);
-    } catch {
-      payload = {};
-    }
-  }
-  if (!payload || typeof payload !== "object") {
-    payload = {};
-  }
+  const payloadDocCandidate =
+    parseObjectMaybe(exportDoc.payload) ||
+    parseObjectMaybe(exportDoc.payload_json) ||
+    parseObjectMaybe(exportDoc.document) ||
+    null;
+  const looksLikeInlinePayload =
+    Array.isArray(exportDoc?.nodes) ||
+    Array.isArray(exportDoc?.edges) ||
+    typeof exportDoc?.script === "string" ||
+    typeof exportDoc?.content === "string" ||
+    Array.isArray(exportDoc?.script_lines);
+  const payload = payloadDocCandidate || (looksLikeInlinePayload ? exportDoc : {});
 
-  const kindHint = toLowerSafe(exportDoc.assembly_type || payload.assembly_type);
-  const typeHint = toLowerSafe(exportDoc.assembly_subtype || payload.assembly_subtype || payload.type);
-  let kind = "script";
-  if (kindHint === "ansible" || typeHint === "ansible") {
-    kind = "ansible";
-  } else if (kindHint === "workflow" || (Array.isArray(payload.nodes) && Array.isArray(payload.edges))) {
-    kind = "workflow";
-  }
-  let type = typeHint;
-  if (!type) {
-    if (kind === "ansible") type = "ansible";
-    else if (kind === "workflow") type = "workflow";
-    else type = "powershell";
-  }
+  const kindHint = firstText(exportDoc.assembly_type, exportDoc.kind, payload.assembly_type, payload.kind);
+  const typeHint = firstText(
+    exportDoc.assembly_subtype,
+    exportDoc.type,
+    payload.assembly_subtype,
+    payload.type,
+    payload.script_type
+  );
+  const kind = normalizeKindFromHints(kindHint, typeHint, payload);
+  const type = normalizeSubtypeFromHints(typeHint, kind, payload);
 
   const scriptLines = Array.isArray(payload.script_lines) ? payload.script_lines : null;
   let scriptSource = "";
@@ -430,8 +546,17 @@ export function parseAssemblyExport(exportDoc) {
     (payload.sites && typeof payload.sites === "object" ? payload.sites : null) ||
     { mode: "all", values: [] };
 
+  const metadata = {
+    assembly_guid: firstText(exportDoc.assembly_guid, exportDoc.assemblyGuid),
+    display_name: firstText(exportDoc.display_name, exportDoc.displayName, exportDoc.name),
+    summary: firstText(exportDoc.summary, exportDoc.description),
+    domain: firstText(exportDoc.domain, exportDoc.source),
+    assembly_type: kind,
+    assembly_subtype: type
+  };
+
   return {
-    metadata: {},
+    metadata,
     payload,
     kind,
     type,
@@ -463,9 +588,18 @@ export function resolveAssemblyForComponent(index, component = {}, kindHint = nu
   }
 
   const determineKind = () => {
-    const componentType = toLowerSafe(component?.type || component?.component_type || component?.mode);
+    const componentType = toLowerSafe(
+      component?.type ||
+      component?.component_type ||
+      component?.mode ||
+      component?.assembly_type ||
+      component?.assemblyType
+    );
+    const subtype = toLowerSafe(component?.assembly_subtype || component?.assemblySubtype || component?.script_type);
     if (componentType === "ansible" || componentType === "playbook") return "ansible";
+    if (subtype === "ansible" || subtype === "playbook") return "ansible";
     if (componentType === "workflow") return "workflow";
+    if (subtype === "workflow") return "workflow";
     if (kindHint) return kindHint;
     return "script";
   };
@@ -478,9 +612,14 @@ export function resolveAssemblyForComponent(index, component = {}, kindHint = nu
     if (!candidatePaths.includes(normalized)) {
       candidatePaths.push(normalized);
     }
-    const trimmed = normalized.toLowerCase().replace(TRIM_PREFIX_MATCHERS[0], "");
-    if (trimmed && !candidatePaths.includes(trimmed)) {
-      candidatePaths.push(trimmed);
+    let withoutPrefix = normalized.toLowerCase();
+    TRIM_PREFIX_MATCHERS.forEach((matcher) => {
+      if (withoutPrefix.match(matcher)) {
+        withoutPrefix = withoutPrefix.replace(matcher, "");
+      }
+    });
+    if (withoutPrefix && !candidatePaths.includes(withoutPrefix)) {
+      candidatePaths.push(withoutPrefix);
     }
   };
 

@@ -59,6 +59,7 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
 import { DomainBadge } from "../Assemblies/Assembly_Badges";
 import {
   buildAssemblyIndex,
+  parseAssembliesCollectionPayload,
   normalizeAssemblyPath,
   parseAssemblyExport,
   resolveAssemblyForComponent
@@ -101,6 +102,7 @@ const LEFT_ALIGN_CELL_STYLE = {
   alignItems: "center",
   justifyContent: "flex-start",
   textAlign: "left",
+  color: "#e2e8f0",
 };
 
 const GRID_STYLE_BASE = {
@@ -109,6 +111,16 @@ const GRID_STYLE_BASE = {
   fontFamily: gridFontFamily,
   "--ag-icon-font-family": iconFontFamily,
   "--ag-cell-horizontal-padding": "18px",
+  "--ag-background-color": "#070b1a",
+  "--ag-foreground-color": "#f4f7ff",
+  "--ag-header-background-color": "#0f172a",
+  "--ag-header-foreground-color": "#cfe0ff",
+  "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+  "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+  "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+  "--ag-border-color": "rgba(125,183,255,0.18)",
+  "--ag-row-border-color": "rgba(125,183,255,0.14)",
+  "--ag-border-radius": "8px",
 };
 
 const GRID_WRAPPER_SX = {
@@ -139,6 +151,9 @@ const GRID_WRAPPER_SX = {
   "& .ag-row": {
     borderColor: "rgba(255,255,255,0.04)",
     transition: "background 0.2s ease",
+  },
+  "& .ag-cell": {
+    color: MAGIC_UI.textBright,
   },
   "& .ag-row:nth-of-type(even)": {
     backgroundColor: "rgba(15,23,42,0.32)",
@@ -990,10 +1005,11 @@ export default function CreateJob({
         throw new Error(detail || `HTTP ${resp.status}`);
       }
       const data = await resp.json();
+      const normalized = parseAssembliesCollectionPayload(data);
       assemblyExportCacheRef.current.clear();
       setAssembliesPayload({
-        items: Array.isArray(data?.items) ? data.items : [],
-        queue: Array.isArray(data?.queue) ? data.queue : []
+        items: normalized.items,
+        queue: normalized.queue
       });
     } catch (err) {
       console.error("Failed to load assemblies:", err);
@@ -1101,7 +1117,7 @@ export default function CreateJob({
     assemblyGridApiRef.current = params.api;
     requestAnimationFrame(() => {
       try {
-        params.api.autoSizeColumns(ASSEMBLY_AUTO_COLUMNS.current, true);
+        params.api.autoSizeColumns(ASSEMBLY_AUTO_COLUMNS.current, false);
       } catch {}
     });
   }, []);
@@ -1109,7 +1125,7 @@ export default function CreateJob({
     if (!assemblyGridApiRef.current) return;
     requestAnimationFrame(() => {
       try {
-        assemblyGridApiRef.current.autoSizeColumns(ASSEMBLY_AUTO_COLUMNS.current, true);
+        assemblyGridApiRef.current.autoSizeColumns(ASSEMBLY_AUTO_COLUMNS.current, false);
       } catch {}
     });
   }, [assemblyRowData, compTab]);
@@ -1906,17 +1922,33 @@ export default function CreateJob({
     const results = [];
     for (const raw of rawComponents) {
       if (!raw || typeof raw !== "object") continue;
-      const typeRaw = raw.type || raw.component_type || "script";
-      if (typeRaw === "workflow") {
+      const typeRaw = String(
+        raw.type ||
+        raw.component_type ||
+        raw.assembly_type ||
+        raw.assemblyType ||
+        "script"
+      ).trim().toLowerCase();
+      const subtypeRaw = String(
+        raw.assembly_subtype ||
+        raw.assemblySubtype ||
+        raw.script_type ||
+        ""
+      ).trim().toLowerCase();
+      const isWorkflow = typeRaw === "workflow" || subtypeRaw === "workflow";
+      const isAnsible = typeRaw === "ansible" || typeRaw === "playbook" || subtypeRaw === "ansible" || subtypeRaw === "playbook";
+      if (isWorkflow) {
         results.push({
           ...raw,
           type: "workflow",
+          assembly_type: "workflow",
+          assembly_subtype: "workflow",
           variables: Array.isArray(raw.variables) ? raw.variables : [],
           localId: generateLocalId()
         });
         continue;
       }
-      const kind = typeRaw === "ansible" ? "ansible" : "script";
+      const kind = isAnsible ? "ansible" : "script";
       const assemblyGuidRaw = raw.assembly_guid || raw.assemblyGuid;
       let record = null;
       if (assemblyGuidRaw) {
@@ -1947,6 +1979,8 @@ export default function CreateJob({
         results.push({
           ...raw,
           type: kind,
+          assembly_type: kind,
+          assembly_subtype: kind === "ansible" ? "ansible" : "powershell",
           path: normalizeAssemblyPath(
             kind,
             raw.path || raw.script_path || raw.playbook_path || "",
@@ -1966,6 +2000,8 @@ export default function CreateJob({
       results.push({
         ...raw,
         type: kind,
+        assembly_type: record.kind || kind,
+        assembly_subtype: record.type || (kind === "ansible" ? "ansible" : "powershell"),
         path: normalizeAssemblyPath(kind, record.path || "", record.displayName),
         name: raw.name || record.displayName,
         description: raw.description || record.summary || record.path,
@@ -1990,6 +2026,24 @@ export default function CreateJob({
         sanitized.assembly_guid = String(guidRaw).trim().toLowerCase();
       }
       delete sanitized.assemblyGuid;
+      const typeRaw = String(
+        comp.type ||
+        comp.component_type ||
+        comp.assembly_type ||
+        ""
+      ).trim().toLowerCase();
+      const subtypeRaw = String(comp.assembly_subtype || "").trim().toLowerCase();
+      const isWorkflow = typeRaw === "workflow" || subtypeRaw === "workflow";
+      const isAnsible = typeRaw === "ansible" || typeRaw === "playbook" || subtypeRaw === "ansible";
+      const normalizedKind = isWorkflow ? "workflow" : isAnsible ? "ansible" : "script";
+      sanitized.type = normalizedKind;
+      sanitized.assembly_type = normalizedKind;
+      sanitized.assembly_subtype =
+        normalizedKind === "workflow"
+          ? "workflow"
+          : normalizedKind === "ansible"
+            ? "ansible"
+            : subtypeRaw || "powershell";
       if (Array.isArray(comp.variables)) {
         const valuesMap = {};
         sanitized.variables = comp.variables
@@ -2708,14 +2762,21 @@ export default function CreateJob({
     try {
       const exportDoc = await loadAssemblyExport(record.assemblyGuid);
       const parsed = parseAssemblyExport(exportDoc);
+      if (parsed.kind === "workflow") {
+        alert("Workflows within Scheduled Jobs are not supported yet");
+        return false;
+      }
       const docVars = Array.isArray(parsed.rawVariables) ? parsed.rawVariables : [];
       const mergedVariables = mergeComponentVariables(docVars, [], {});
-      const type = record.kind === "ansible" || record.type === "ansible" || compTab === "ansible" ? "ansible" : "script";
+      const type = parsed.kind === "ansible" || record.kind === "ansible" || record.type === "ansible" || compTab === "ansible" ? "ansible" : "script";
+      const subtype = parsed.type || record.type || (type === "ansible" ? "ansible" : "powershell");
       const normalizedPath = normalizeAssemblyPath(type, record.path || "", record.displayName);
       setComponents((prev) => [
         ...prev,
         {
           type,
+          assembly_type: type,
+          assembly_subtype: subtype,
           path: normalizedPath,
           name: record.displayName,
           description: record.summary || normalizedPath,

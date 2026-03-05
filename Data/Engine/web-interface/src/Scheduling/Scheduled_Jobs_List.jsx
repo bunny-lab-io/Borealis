@@ -27,7 +27,11 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DomainBadge, resolveDomainMeta } from "../Assemblies/Assembly_Badges";
-import { buildAssemblyIndex, resolveAssemblyForComponent } from "../Assemblies/assemblyUtils";
+import {
+  buildAssemblyIndex,
+  parseAssembliesCollectionPayload,
+  resolveAssemblyForComponent
+} from "../Assemblies/assemblyUtils";
 
 // -----------------------------------------------------------------------------
 //  Register AG Grid community modules
@@ -259,9 +263,10 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         throw new Error(detail || `HTTP ${resp.status}`);
       }
       const data = await resp.json();
+      const normalized = parseAssembliesCollectionPayload(data);
       setAssembliesPayload({
-        items: Array.isArray(data?.items) ? data.items : [],
-        queue: Array.isArray(data?.queue) ? data.queue : []
+        items: normalized.items,
+        queue: normalized.queue
       });
     } catch (err) {
       console.error("Failed to load assemblies:", err);
