@@ -19,7 +19,7 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const gridTheme = themeQuartz.withParams({
-  accentColor: "#8b5cf6",
+  accentColor: "#7dd3fc",
   backgroundColor: "#070b1a",
   browserColorScheme: "dark",
   fontFamily: { googleFont: "IBM Plex Sans" },
@@ -447,6 +447,10 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
               textAlign: "left",
               justifyContent: "flex-start",
             },
+            "& .ag-row-selected": {
+              backgroundColor: "rgba(125,211,252,0.2) !important",
+              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+            },
           }}
           style={{
             "--ag-icon-font-family": iconFontFamily,
@@ -456,7 +460,7 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
             "--ag-header-foreground-color": "#cfe0ff",
             "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
             "--ag-row-hover-color": "rgba(125,183,255,0.08)",
-            "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+            "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
             "--ag-border-color": "rgba(125,183,255,0.18)",
             "--ag-row-border-color": "rgba(125,183,255,0.14)",
             "--ag-border-radius": "8px",

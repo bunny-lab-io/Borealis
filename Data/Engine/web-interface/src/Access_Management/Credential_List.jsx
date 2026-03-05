@@ -24,7 +24,7 @@ import { ConfirmDeleteDialog } from "../Dialogs.jsx";
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const myTheme = themeQuartz.withParams({
-  accentColor: "#FFA6FF",
+  accentColor: "#7dd3fc",
   backgroundColor: "#1f2836",
   browserColorScheme: "dark",
   chromeBackgroundColor: {
@@ -428,9 +428,17 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
               },
               "& .ag-icon": {
                 fontFamily: iconFontFamily
+              },
+              "& .ag-row-selected": {
+                backgroundColor: "rgba(125,211,252,0.2) !important",
+                boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
               }
             }}
-            style={{ color: "#f5f7fa" }}
+            style={{
+              color: "#f5f7fa",
+              "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+              "--ag-checkbox-checked-color": "#7dd3fc",
+            }}
           >
             <AgGridReact
               rowData={rows}

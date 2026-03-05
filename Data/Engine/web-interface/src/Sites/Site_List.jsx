@@ -20,7 +20,7 @@ import { CreateSiteDialog, ConfirmDeleteDialog, RenameSiteDialog } from "../Dial
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const myTheme = themeQuartz.withParams({
-  accentColor: "#8b5cf6",
+  accentColor: "#7dd3fc",
   backgroundColor: "#070b1a",
   browserColorScheme: "dark",
   fontFamily: { googleFont: "IBM Plex Sans" },
@@ -347,8 +347,8 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
               backgroundColor: "rgba(124, 58, 237, 0.15) !important",
             },
             "& .ag-row-selected": {
-              backgroundColor: "rgba(56,189,248,0.18) !important",
-              boxShadow: "inset 0 0 0 1px rgba(56,189,248,0.35)",
+              backgroundColor: "rgba(125,211,252,0.2) !important",
+              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
             },
           }}
         >
@@ -359,6 +359,7 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
             defaultColDef={defaultColDef}
             rowSelection="multiple"
             rowMultiSelectWithClick
+            suppressCellFocus
             pagination
             paginationPageSize={20}
             paginationPageSizeSelector={[20, 50, 100]}

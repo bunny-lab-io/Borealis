@@ -42,7 +42,7 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 //  MagicUI x Quartz Theme (parity with Page_Template)
 // -----------------------------------------------------------------------------
 const gridTheme = themeQuartz.withParams({
-  accentColor: "#8b5cf6",
+  accentColor: "#7dd3fc",
   backgroundColor: "#070b1a",
   browserColorScheme: "dark",
   fontFamily: { googleFont: "IBM Plex Sans" },
@@ -935,6 +935,10 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
               textAlign: "left !important",
               justifyContent: "flex-start !important",
             },
+            "& .ag-row-selected": {
+              backgroundColor: "rgba(125,211,252,0.2) !important",
+              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+            },
           }}
           style={{
             "--ag-background-color": "#070b1a",
@@ -943,7 +947,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             "--ag-header-foreground-color": "#cfe0ff",
             "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
             "--ag-row-hover-color": "rgba(125,183,255,0.08)",
-            "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+            "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
             "--ag-border-color": "rgba(125,183,255,0.18)",
             "--ag-row-border-color": "rgba(125,183,255,0.14)",
             "--ag-border-radius": "8px",

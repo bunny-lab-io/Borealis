@@ -65,7 +65,7 @@ const gradientButtonSx = {
 };
 
 const quartzTheme = themeQuartz.withParams({
-  accentColor: "#7db7ff",
+  accentColor: "#7dd3fc",
   backgroundColor: "#05070f",
   foregroundColor: "#f8fafc",
   headerBackgroundColor: "#0b1527",
@@ -84,6 +84,7 @@ const gridThemeStyle = {
   "--ag-header-background-color": "#0f1a2e",
   "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
   "--ag-row-hover-color": "rgba(109, 196, 255, 0.12)",
+  "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
   "--ag-border-color": "rgba(148,163,184,0.28)",
   "--ag-font-family": gridFontFamily,
 };
@@ -730,7 +731,16 @@ const defaultColDef = useMemo(
                   <CircularProgress />
                 </Stack>
               ) : (
-                <div className={quartzThemeClass} style={gridThemeStyle}>
+                <Box
+                  className={quartzThemeClass}
+                  sx={{
+                    "& .ag-row-selected": {
+                      backgroundColor: "rgba(125,211,252,0.2) !important",
+                      boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+                    },
+                  }}
+                  style={gridThemeStyle}
+                >
                   <AgGridReact
                     ref={gridRef}
                     rowData={entries}
@@ -743,7 +753,7 @@ const defaultColDef = useMemo(
                     suppressCellFocus
                     overlayNoRowsTemplate="<span style='color:#94a3b8'>No log entries to display.</span>"
                   />
-                </div>
+                </Box>
               )}
             </Box>
           ) : (

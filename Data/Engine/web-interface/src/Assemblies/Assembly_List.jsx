@@ -34,7 +34,7 @@ ModuleRegistry.registerModules([AllCommunityModule]);
  * MagicUI Theme: Quartz base with Borealis aurora accents
  */
 const myTheme = themeQuartz.withParams({
-  accentColor: "#FFA6FF",
+  accentColor: "#7dd3fc",
   backgroundColor: "#1f2836",
   browserColorScheme: "dark",
   chromeBackgroundColor: {
@@ -718,6 +718,10 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
               paddingTop: "8px",
               paddingBottom: "8px",
             },
+            "& .ag-row-selected": {
+              backgroundColor: "rgba(125,211,252,0.2) !important",
+              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+            },
           }}
           style={{
             // Theme CSS variables for fine-grain color control
@@ -727,7 +731,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
             "--ag-header-foreground-color": "#cfe0ff",
             "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
             "--ag-row-hover-color": "rgba(125,183,255,0.08)",
-            "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+            "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
             "--ag-border-color": "rgba(125,183,255,0.18)",
             "--ag-row-border-color": "rgba(125,183,255,0.14)",
             "--ag-border-radius": "8px",
@@ -740,6 +744,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
             defaultColDef={defaultColDef}
             context={{ openRow }}
             rowSelection="single"
+            suppressCellFocus
             pagination
             paginationPageSize={PAGE_SIZE}
             animateRows

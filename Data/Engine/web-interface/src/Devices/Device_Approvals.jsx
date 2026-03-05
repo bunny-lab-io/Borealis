@@ -44,7 +44,7 @@ const MAGIC_UI = {
 
 // Quartz theme instance (same params used across MagicUI pages)
 const gridTheme = themeQuartz.withParams({
-  accentColor: "#8b5cf6",
+  accentColor: "#7dd3fc",
   backgroundColor: "#070b1a",
   browserColorScheme: "dark",
   fontFamily: { googleFont: "IBM Plex Sans" },
@@ -498,7 +498,15 @@ export default function DeviceApprovals({ onPageMetaChange }) {
       {/* Data Grid */}
       <Box
         className={themeClassName}
-        sx={{ flex: 1, p: 2, overflow: "hidden" }}
+        sx={{
+          flex: 1,
+          p: 2,
+          overflow: "hidden",
+          "& .ag-row-selected": {
+            backgroundColor: "rgba(125,211,252,0.2) !important",
+            boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+          },
+        }}
         style={{
           "--ag-background-color": "#070b1a",
           "--ag-foreground-color": "#f4f7ff",
@@ -506,7 +514,7 @@ export default function DeviceApprovals({ onPageMetaChange }) {
           "--ag-header-foreground-color": "#cfe0ff",
           "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
           "--ag-row-hover-color": "rgba(125,183,255,0.08)",
-          "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+          "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
           "--ag-font-family": "'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif",
           "--ag-border-color": "rgba(125,183,255,0.18)",
           "--ag-row-border-color": "rgba(125,183,255,0.14)",
@@ -518,6 +526,7 @@ export default function DeviceApprovals({ onPageMetaChange }) {
           rowData={dedupedApprovals}
           columnDefs={columns}
           defaultColDef={defaultColDef}
+          suppressCellFocus
           animateRows
           pagination
           paginationPageSize={20}
