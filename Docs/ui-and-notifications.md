@@ -197,6 +197,7 @@ const NAV_TAB_COLORS = {
 - Fill column: last column `{ flex: 1, minWidth: X }` (no width/maxWidth) to stretch when horizontal space remains.
 - Pagination baseline: every Quartz grid ships with `pagination`, `paginationPageSize={20}`, and `paginationPageSizeSelector={[20, 50, 100]}`. This matches Device List behavior and prevents infinitely tall tables (Targets, assembly pickers, job histories, etc.).
 - Focus highlight baseline: set `suppressCellFocus` on AG Grid tables that do not rely on keyboard cell navigation so click/focus does not draw the magenta single-cell outline. Keep row hover/row selected styling for context.
+- Clickable name cells baseline: when a grid cell is just a row navigation trigger (for example Device hostname or Scheduled Job name), render plain text links (`<a>` with `textDecoration: "none"`) instead of MUI `Button`/`IconButton` so hover only shows a pointer cursor with no button box/highlight.
 - Borealis blue accent baseline: use `themeQuartz.withParams({ accentColor: "#7dd3fc" })` and keep `--ag-checkbox-checked-color: "#7dd3fc"` where checkbox columns are present.
 - Row hover baseline: use a darker Borealis blue hover state (`--ag-row-hover-color: "rgba(73,156,196,0.2)"`) so hover stays in the same color family as selected rows without matching the selected intensity.
 - Selected row highlight baseline: use `backgroundColor: "rgba(125,211,252,0.2) !important"` with `boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)"` so checkbox selection state reads in Borealis blue.

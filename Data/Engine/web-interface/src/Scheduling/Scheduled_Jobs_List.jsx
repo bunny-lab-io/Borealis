@@ -579,18 +579,20 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         }
       };
       return (
-        <Button
+        <a
+          href="#"
           onClick={handleClick}
-          sx={{
+          title={row.name || ""}
+          style={{
             color: "#58a6ff",
-            textTransform: "none",
-            p: 0,
-            minWidth: 0,
+            textDecoration: "none",
+            fontWeight: 500,
+            cursor: "pointer",
             fontFamily: gridFontFamily
           }}
         >
           {row.name || "-"}
-        </Button>
+        </a>
       );
     },
     [onEditJob]
