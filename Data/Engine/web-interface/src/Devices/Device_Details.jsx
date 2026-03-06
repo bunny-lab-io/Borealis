@@ -57,6 +57,12 @@ const MAGIC_UI = {
   accentC: "#34d399",
 };
 
+const DEVICE_LIST_STATUS_COLORS = Object.freeze({
+  online: "#00d18c",
+  offline: "#b0b8c8",
+});
+const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
+
 const PAGE_ICON = DeveloperBoardRoundedIcon;
 
 const NAV_TAB_HEIGHT = 32;
@@ -643,7 +649,12 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const [summaryDataReady, setSummaryDataReady] = useState(false);
   const [summaryScrollOffset, setSummaryScrollOffset] = useState(0);
   const [summaryBottomSpacer, setSummaryBottomSpacer] = useState(0);
-  const [tunnelInfo, setTunnelInfo] = useState({ status: "idle", tunnel_id: "", virtual_ip: "" });
+  const [tunnelInfo, setTunnelInfo] = useState({
+    status: "idle",
+    tunnel_id: "",
+    virtual_ip: "",
+    agent_socket: false,
+  });
   const [historyRows, setHistoryRows] = useState([]);
   const [outputOpen, setOutputOpen] = useState(false);
   const [outputTitle, setOutputTitle] = useState("");
@@ -728,11 +739,17 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const tunnelIndicators = useMemo(() => {
     const items = [];
     const peerIp = tunnelInfo?.virtual_ip ? String(tunnelInfo.virtual_ip).split("/")[0] : "";
+    const tunnelState = String(tunnelInfo?.status || "").toLowerCase();
+    const isTunnelOnline = tunnelState === "up" && Boolean(tunnelInfo?.agent_socket) && Boolean(peerIp);
+    const tunnelStatusText = isTunnelOnline ? "Online" : "Offline";
+    const tunnelStatusColor = isTunnelOnline
+      ? DEVICE_LIST_STATUS_COLORS.online
+      : DEVICE_LIST_STATUS_COLORS.offline;
     items.push({
       key: "peer-ip",
       label: "WireGuard Peer IP",
-      value: peerIp || "Inactive",
-      muted: !peerIp,
+      value: `${tunnelStatusText} - ${peerIp || "Inactive"}`,
+      color: tunnelStatusColor,
       icon: <LanRoundedIcon sx={{ fontSize: 16 }} />,
     });
     return items;
@@ -751,11 +768,15 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
 
   useEffect(() => {
     let canceled = false;
+    let inFlight = false;
+    let pollingTimer = null;
     if (!tunnelAgentId) {
-      setTunnelInfo({ status: "idle", tunnel_id: "", virtual_ip: "" });
+      setTunnelInfo({ status: "idle", tunnel_id: "", virtual_ip: "", agent_socket: false });
       return () => {};
     }
     const loadTunnelStatus = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         const resp = await fetch(
           `/api/tunnel/status?agent_id=${encodeURIComponent(tunnelAgentId)}`
@@ -763,27 +784,37 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         const data = await resp.json().catch(() => ({}));
         if (canceled) return;
         if (!resp.ok) {
-          setTunnelInfo({ status: "error", tunnel_id: "", virtual_ip: "" });
+          setTunnelInfo({ status: "error", tunnel_id: "", virtual_ip: "", agent_socket: false });
           return;
         }
         if (data?.status === "down") {
-          setTunnelInfo({ status: "down", tunnel_id: "", virtual_ip: "" });
+          setTunnelInfo({
+            status: "down",
+            tunnel_id: "",
+            virtual_ip: "",
+            agent_socket: Boolean(data?.agent_socket),
+          });
           return;
         }
         setTunnelInfo({
           status: data?.status || "up",
           tunnel_id: data?.tunnel_id || "",
           virtual_ip: data?.virtual_ip || "",
+          agent_socket: Boolean(data?.agent_socket),
         });
       } catch {
         if (!canceled) {
-          setTunnelInfo({ status: "error", tunnel_id: "", virtual_ip: "" });
+          setTunnelInfo({ status: "error", tunnel_id: "", virtual_ip: "", agent_socket: false });
         }
+      } finally {
+        inFlight = false;
       }
     };
     loadTunnelStatus();
+    pollingTimer = setInterval(loadTunnelStatus, TUNNEL_STATUS_POLL_INTERVAL_MS);
     return () => {
       canceled = true;
+      if (pollingTimer) clearInterval(pollingTimer);
     };
   }, [tunnelAgentId]);
 
@@ -2670,7 +2701,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
               sx={{ pointerEvents: "none", flexWrap: "wrap", justifyContent: "flex-end" }}
             >
               {tunnelIndicators.map((item) => {
-                const itemColor = item.muted ? "rgba(125, 211, 252, 0.6)" : MAGIC_UI.accentA;
+                const itemColor =
+                  item.color || (item.muted ? "rgba(125, 211, 252, 0.6)" : MAGIC_UI.accentA);
                 return (
                   <Stack
                     key={item.key}
