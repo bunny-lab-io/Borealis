@@ -99,6 +99,11 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Admin approval handles hostname conflicts (merge or rename).
 - Denials are logged and remove pending requests.
 
+### WebUI deep links
+- Device Details route: `/device/<agent_guid_or_hostname>`.
+- Tab query keys: `device_summary`, `installed_software`, `activity_history`, `remote_shell`, `remote_desktop`.
+- Route parsing and URL preservation are implemented in `Data/Engine/web-interface/src/App.jsx`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Devices/Device_Details.jsx`.
+
 ### Debug checklist
 - Device missing from list: check `Engine/database.db` tables `devices` and `device_keys`.
 - Online status wrong: check `last_seen` timestamps in `devices` table.

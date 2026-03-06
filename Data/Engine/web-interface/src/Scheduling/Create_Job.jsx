@@ -85,6 +85,26 @@ const MAGIC_UI = {
 const PAGE_ICON = PendingActionsIcon;
 const PAGE_TITLE = "Create Job";
 const PAGE_SUBTITLE = "Configure scheduled or immediate jobs against targeted devices or filters.";
+const CREATE_JOB_TAB_URL_BY_KEY = Object.freeze({
+  name: "job_name",
+  components: "assemblies",
+  targets: "targets",
+  schedule: "schedule",
+  context: "execution_context",
+  history: "job_history",
+});
+const CREATE_JOB_TAB_KEY_BY_URL = Object.freeze({
+  job_name: "name",
+  name: "name",
+  assemblies: "components",
+  components: "components",
+  targets: "targets",
+  schedule: "schedule",
+  execution_context: "context",
+  context: "context",
+  job_history: "history",
+  history: "history",
+});
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#8b5cf6",
@@ -2936,6 +2956,55 @@ export default function CreateJob({
     return base;
   }, [editing]);
   const historyTabIndex = useMemo(() => tabDefs.findIndex((t) => t.key === "history"), [tabDefs]);
+  const tabFromUrlAppliedRef = useRef(false);
+
+  useEffect(() => {
+    if (tabFromUrlAppliedRef.current) return;
+    if (!Array.isArray(tabDefs) || tabDefs.length === 0) return;
+    let rawTab = "";
+    try {
+      rawTab = (new URLSearchParams(window.location.search || "").get("tab") || "").trim().toLowerCase();
+    } catch {
+      rawTab = "";
+    }
+    if (!rawTab) {
+      tabFromUrlAppliedRef.current = true;
+      return;
+    }
+    const internalTabKey = CREATE_JOB_TAB_KEY_BY_URL[rawTab] || null;
+    if (internalTabKey) {
+      const index = tabDefs.findIndex((tabDef) => tabDef.key === internalTabKey);
+      if (index < 0) return;
+      setTab(index);
+    }
+    tabFromUrlAppliedRef.current = true;
+  }, [tabDefs]);
+
+  useEffect(() => {
+    const activeTabKey = tabDefs[tab]?.key || "";
+    if (!activeTabKey) return;
+    const urlTabKey = CREATE_JOB_TAB_URL_BY_KEY[activeTabKey] || activeTabKey;
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      if ((params.get("tab") || "").trim().toLowerCase() === urlTabKey) {
+        return;
+      }
+      params.set("tab", urlTabKey);
+      const query = params.toString();
+      const nextLocation = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+      const currentLocation = window.location.pathname + window.location.search;
+      if (nextLocation !== currentLocation) {
+        window.history.replaceState({}, "", nextLocation);
+      }
+    } catch {
+      /* URL update failures are non-blocking */
+    }
+  }, [tab, tabDefs]);
+
+  useEffect(() => {
+    if (tab < tabDefs.length) return;
+    setTab(0);
+  }, [tab, tabDefs.length]);
 
   const scheduleSummary = useMemo(() => {
     const base = SCHEDULE_LABELS[scheduleType] || "Scheduled run";

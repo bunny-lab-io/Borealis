@@ -89,6 +89,25 @@ const TOP_TABS = [
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
   { key: "vnc", label: "Remote Desktop (VNC)", icon: DesktopWindowsRoundedIcon },
 ];
+const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
+  summary: "device_summary",
+  software: "installed_software",
+  activity: "activity_history",
+  shell: "remote_shell",
+  vnc: "remote_desktop",
+});
+const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
+  device_summary: "summary",
+  summary: "summary",
+  installed_software: "software",
+  software: "software",
+  activity_history: "activity",
+  activity: "activity",
+  remote_shell: "shell",
+  shell: "shell",
+  remote_desktop: "vnc",
+  vnc: "vnc",
+});
 
 const SUMMARY_SECTIONS = [
   { key: "top-level", label: "Top-Level", icon: InfoOutlinedIcon },
@@ -591,11 +610,11 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const initialTabIndex = useMemo(() => {
     try {
       const params = new URLSearchParams(window.location.search || "");
-      const tabKey = (params.get("tab") || "").toLowerCase();
-      if (!tabKey) return 0;
-      const matchIndex = TOP_TABS.findIndex(
-        (tabDef) => String(tabDef.key || tabDef.label || "").toLowerCase() === tabKey
-      );
+      const tabRaw = (params.get("tab") || "").trim().toLowerCase();
+      if (!tabRaw) return 0;
+      const internalTabKey = DEVICE_DETAILS_TAB_KEY_BY_URL[tabRaw] || null;
+      if (!internalTabKey) return 0;
+      const matchIndex = TOP_TABS.findIndex((tabDef) => tabDef.key === internalTabKey);
       return matchIndex >= 0 ? matchIndex : 0;
     } catch {
       return 0;
@@ -638,6 +657,27 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const pageRenderCountRef = useRef(0);
   pageRenderCountRef.current += 1;
   const summary = details.summary || {};
+
+  useEffect(() => {
+    const activeTabKey = TOP_TABS[tab]?.key || "";
+    if (!activeTabKey) return;
+    const urlTabKey = DEVICE_DETAILS_TAB_URL_BY_KEY[activeTabKey] || activeTabKey;
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      if ((params.get("tab") || "").trim().toLowerCase() === urlTabKey) {
+        return;
+      }
+      params.set("tab", urlTabKey);
+      const query = params.toString();
+      const nextLocation = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+      const currentLocation = window.location.pathname + window.location.search;
+      if (nextLocation !== currentLocation) {
+        window.history.replaceState({}, "", nextLocation);
+      }
+    } catch {
+      /* URL update failures are non-blocking */
+    }
+  }, [tab]);
 
   useEffect(() => {
     if (!isSummaryGridDebugEnabled()) return;

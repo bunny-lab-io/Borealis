@@ -160,6 +160,34 @@ const NAV_TAB_COLORS = {
 - Interaction rules: tabs should never scroll vertically; rely on horizontal scroll for overflow. Always align the tab rail with the first section header on the page so the aurora indicator lines up with hero metrics.
 - Accessibility: keep `aria-label` and `aria-controls` pairs when the panes hold complex content, and ensure the gradient backgrounds preserve 4.5:1 contrast for the text (the current cyan on dark meets this).
 
+#### URL-Synced Tabs and Deep Links
+- Use URL paths for resource identity and `?tab=` for active tab state.
+- Keep create and edit routes distinct when an entity has an identifier:
+- Create route example: `/scheduling/create_job`
+- Edit route example: `/scheduling/job/<job_id>`
+- Parse and serialize routes in `Data/Engine/web-interface/src/App.jsx` (`interpretPath` and `pageToPath`) so SPA login restore and refresh keep deep links intact.
+- For detail/editor pages, preserve `tab` in route parsing options; otherwise the app bootstrap can strip query parameters during `navigateByPath`.
+- In each tabbed page component:
+- Read `tab` from `window.location.search` on initial mount and map it to the internal tab key/index.
+- Write `tab` back to the URL on tab changes using `window.history.replaceState` (not push) so browser history does not spam each tab click.
+- Keep stable URL keys and map them to internal keys; internal keys can stay implementation-specific.
+- Maintain backward compatibility with alias mapping (old tab keys -> new tab keys) when renaming tab params.
+- Recommended URL tab key style: lowercase snake_case (for example, `execution_context`, `remote_desktop`).
+- Scheduled Job editor keys in production:
+- `job_name`
+- `assemblies`
+- `targets`
+- `schedule`
+- `execution_context`
+- `job_history` (editing mode only)
+- Device Details keys in production:
+- `device_summary`
+- `installed_software`
+- `activity_history`
+- `remote_shell`
+- `remote_desktop`
+- New pages adopting this pattern should document their canonical tab key list in their domain doc and keep aliases local to the component.
+
 #### Page-Level Action Buttons
 - Place page-level actions/buttons/hero-badges in a fixed overlay at the top-right, just below the global menu bar. Match the Filter Editor placement if an example is needed `Data/Engine/web-interface/src/Devices/Filters/Filter_Editor.jsx`: wrapper `position: "fixed"`, `top: { xs: 72, md: 88 }`, `right: { xs: 12, md: 20 }`, `zIndex: 1400`, with `pointerEvents: "none"` on the wrapper and `pointerEvents: "auto"` on the inner `Stack` so underlying content remains clickable.
 - Use gradient primary pills and outlined secondary pills (rounded 999 radius, MagicUI colors). Keep horizontal spacing via a `Stack` (for example, `spacing={1.25}`); do not nest these buttons inside the title grid or tab rail.

@@ -226,6 +226,11 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
           return query ? `/devices/filters/editor?${query}` : "/devices/filters/editor";
         }
         case "device_details": {
+          const params = new URLSearchParams();
+          const tabKey = typeof options.tab === "string" ? options.tab.trim() : "";
+          if (tabKey) {
+            params.set("tab", tabKey);
+          }
           const device =
             options.device ||
             selectedDevice ||
@@ -239,14 +244,28 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             device?.hostname ||
             device?.id;
           if (deviceId) {
-            return `/device/${encodeURIComponent(deviceId)}`;
+            const query = params.toString();
+            const base = `/device/${encodeURIComponent(deviceId)}`;
+            return query ? `${base}?${query}` : base;
           }
           return "/devices";
         }
         case "jobs":
           return "/scheduling";
-        case "create_job":
-          return "/scheduling/create_job";
+        case "create_job": {
+          const params = new URLSearchParams();
+          const tabKey = typeof options.tab === "string" ? options.tab.trim() : "";
+          if (tabKey) {
+            params.set("tab", tabKey);
+          }
+          const jobId = options.jobId || options.job?.id || editingJob?.id || null;
+          const query = params.toString();
+          if (jobId != null && String(jobId).trim() !== "") {
+            const base = `/scheduling/job/${encodeURIComponent(String(jobId).trim())}`;
+            return query ? `${base}?${query}` : base;
+          }
+          return query ? `/scheduling/create_job?${query}` : "/scheduling/create_job";
+        }
         case "workflows":
           return "/workflows";
         case "workflow-editor":
@@ -283,7 +302,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return "/devices";
       }
     },
-    [assemblyEditorState, selectedDevice]
+    [assemblyEditorState, editingJob?.id, selectedDevice]
   );
 
   const interpretPath = useCallback((rawPath) => {
@@ -309,14 +328,43 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       }
       if (segments[0] === "device" && segments[1]) {
         const id = decodeURIComponent(segments[1]);
+        const tab = (params.get("tab") || "").trim().toLowerCase();
         return {
           page: "device_details",
-          options: { device: { agent_guid: id, hostname: id } }
+          options: {
+            device: { agent_guid: id, hostname: id },
+            ...(tab ? { tab } : {}),
+          }
         };
       }
       if (path === "/sites") return { page: "sites", options: {} };
       if (path === "/scheduling") return { page: "jobs", options: {} };
-      if (path === "/scheduling/create_job") return { page: "create_job", options: {} };
+      if (path === "/scheduling/create_job") {
+        const tab = (params.get("tab") || "").trim().toLowerCase();
+        const rawJobId = (params.get("id") || "").trim();
+        const parsedJobId = Number(rawJobId);
+        const jobId = Number.isInteger(parsedJobId) && parsedJobId > 0 ? parsedJobId : null;
+        return {
+          page: "create_job",
+          options: {
+            ...(jobId ? { jobId } : {}),
+            ...(tab ? { tab } : {}),
+          },
+        };
+      }
+      if (segments[0] === "scheduling" && segments[1] === "job" && segments[2]) {
+        const decodedId = decodeURIComponent(segments[2]).trim();
+        const parsedId = Number(decodedId);
+        const jobId = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : null;
+        const tab = (params.get("tab") || "").trim().toLowerCase();
+        return {
+          page: "create_job",
+          options: {
+            ...(jobId ? { jobId } : {}),
+            ...(tab ? { tab } : {}),
+          },
+        };
+      }
       if (path === "/workflows") return { page: "workflows", options: {} };
       if (path === "/workflows/editor") return { page: "workflow-editor", options: {} };
       if (path === "/assemblies") return { page: "assemblies", options: {} };
@@ -376,8 +424,37 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       } else if (!options.preserveFilter) {
         setFilterEditorState(null);
       }
+
+      if (page === "create_job") {
+        if (options.job && typeof options.job === "object") {
+          setEditingJob(options.job);
+        } else if (options.jobId) {
+          const parsedId = Number(options.jobId);
+          if (Number.isInteger(parsedId) && parsedId > 0) {
+            setEditingJob((prev) => {
+              if (Number(prev?.id) === parsedId) {
+                return prev;
+              }
+              return { id: parsedId };
+            });
+          } else {
+            setEditingJob(null);
+          }
+        } else if (!options.preserveJob) {
+          setEditingJob(null);
+        }
+      } else if (!options.preserveJob) {
+        setEditingJob(null);
+      }
     },
-    [filterEditorState, setAssemblyEditorState, setCurrentPageState, setFilterEditorState, setSelectedDevice]
+    [
+      filterEditorState,
+      setAssemblyEditorState,
+      setCurrentPageState,
+      setEditingJob,
+      setFilterEditorState,
+      setSelectedDevice,
+    ]
   );
 
   const navigateTo = useCallback(
@@ -479,6 +556,41 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
     });
   }, []);
 
+  useEffect(() => {
+    if (currentPage !== "create_job") return;
+    const parsedId = Number(editingJob?.id);
+    if (!Number.isInteger(parsedId) || parsedId <= 0) return;
+    const alreadyHydrated =
+      typeof editingJob?.name === "string" &&
+      Array.isArray(editingJob?.components) &&
+      Array.isArray(editingJob?.targets);
+    if (alreadyHydrated) return;
+
+    let canceled = false;
+    (async () => {
+      try {
+        const resp = await fetch(`/api/scheduled_jobs/${parsedId}`);
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          throw new Error(data?.error || `HTTP ${resp.status}`);
+        }
+        const hydrated = data?.job;
+        if (!hydrated || typeof hydrated !== "object") return;
+        if (canceled) return;
+        setEditingJob((prev) => {
+          if (Number(prev?.id) !== parsedId) return prev;
+          return hydrated;
+        });
+      } catch (err) {
+        console.warn("Failed to hydrate scheduled job from URL", err);
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [currentPage, editingJob]);
+
   // Build breadcrumb items for current view
   const breadcrumbs = React.useMemo(() => {
     const items = [];
@@ -503,7 +615,19 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
       case "create_job":
         items.push({ label: "Automation", page: "jobs" });
         items.push({ label: "Scheduled Jobs", page: "jobs" });
-        items.push({ label: editingJob ? "Edit Job" : "Create Job", page: "create_job" });
+        if (editingJob) {
+          const trimmedName = typeof editingJob?.name === "string" ? editingJob.name.trim() : "";
+          const idValue = editingJob?.id;
+          if (trimmedName && idValue != null && String(idValue).trim() !== "") {
+            items.push({ label: `${trimmedName} (#${idValue})` });
+          } else if (idValue != null && String(idValue).trim() !== "") {
+            items.push({ label: `Job #${idValue}` });
+          } else {
+            items.push({ label: "Edit Job" });
+          }
+        } else {
+          items.push({ label: "Create Job" });
+        }
         break;
       case "workflows":
         items.push({ label: "Automation", page: "jobs" });
@@ -1238,8 +1362,20 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
         return (
           <ScheduledJobsList
             onPageMetaChange={handlePageMetaChange}
-            onCreateJob={() => { setEditingJob(null); navigateTo("create_job"); }}
-            onEditJob={(job) => { setEditingJob(job); navigateTo("create_job"); }}
+            onCreateJob={() => {
+              setEditingJob(null);
+              setQuickJobDraft(null);
+              navigateTo("create_job");
+            }}
+            onEditJob={(job) => {
+              const jobId = Number(job?.id);
+              setEditingJob(job || null);
+              setQuickJobDraft(null);
+              navigateTo("create_job", {
+                ...(Number.isInteger(jobId) && jobId > 0 ? { jobId } : {}),
+                ...(job && typeof job === "object" ? { job } : {}),
+              });
+            }}
             refreshToken={jobsRefreshToken}
           />
         );
