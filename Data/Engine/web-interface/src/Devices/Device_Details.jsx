@@ -2213,8 +2213,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 0.8,
-                color: STORAGE_USAGE_ALERT_COLOR,
-                fontWeight: 600,
                 whiteSpace: "nowrap",
                 lineHeight: 1.1,
               }}
@@ -2223,7 +2221,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
               <Box
                 component="i"
                 className="fa-solid fa-triangle-exclamation fa-exclamation-triangle"
-                sx={{ color: STORAGE_USAGE_ALERT_COLOR, fontSize: "0.88rem", lineHeight: 1 }}
+                sx={{ color: STORAGE_USAGE_ALERT_COLOR, fontSize: "1.15rem", lineHeight: 1 }}
               />
               <Box component="span">{STORAGE_USAGE_ALERT_LABEL}</Box>
             </Box>
