@@ -197,6 +197,14 @@ const SUMMARY_GRID_STYLE = {
 const SUMMARY_FIELD_TEXT_COLOR = "#58a6ff"; // matches hostname blue in Device_List.jsx
 const SUMMARY_DEFAULT_TEXT_COLOR = NAV_TAB_COLORS.textActive;
 const UNABLE_TO_RETRIEVE_SN = "<Unable to Retrieve S/N>";
+const STORAGE_USAGE_ALERT_THRESHOLD_PCT = 90;
+const STORAGE_USAGE_ALERT_LABEL = `Usage Exceeding ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}%`;
+const STORAGE_USAGE_ALERT_COLOR = "#facc15";
+
+const isStorageUsageAlert = (usageValue) =>
+  typeof usageValue === "number" &&
+  !Number.isNaN(usageValue) &&
+  usageValue > STORAGE_USAGE_ALERT_THRESHOLD_PCT;
 
 const formatHostnameForDisplay = (value) => {
   const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
@@ -1923,7 +1931,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                       hardwareOverview.storageCount
                         ? `${hardwareOverview.storageCount} volumes${
                             hardwareOverview.storageCritical > 0
-                              ? ` • ${hardwareOverview.storageCritical} above 90% usage`
+                              ? ` • ${hardwareOverview.storageCritical} exceeding ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}% usage`
                               : ""
                           }`
                         : "No storage telemetry"
@@ -2186,7 +2194,41 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           params.value === undefined || Number.isNaN(params.value) ? "unknown" : `${Math.round(params.value)}%`,
         width: 110,
         minWidth: 110,
+        flex: 0,
+      },
+      {
+        field: "alerts",
+        headerName: "Alerts",
+        width: 240,
+        minWidth: 240,
         flex: 1,
+        sortable: false,
+        filter: false,
+        cellRenderer: (params) => {
+          if (!isStorageUsageAlert(params?.data?.usage)) return "";
+          return (
+            <Box
+              component="span"
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 0.8,
+                color: STORAGE_USAGE_ALERT_COLOR,
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+                lineHeight: 1.1,
+              }}
+              title={STORAGE_USAGE_ALERT_LABEL}
+            >
+              <Box
+                component="i"
+                className="fa-solid fa-triangle-exclamation fa-exclamation-triangle"
+                sx={{ color: STORAGE_USAGE_ALERT_COLOR, fontSize: "0.88rem", lineHeight: 1 }}
+              />
+              <Box component="span">{STORAGE_USAGE_ALERT_LABEL}</Box>
+            </Box>
+          );
+        },
       },
     ],
     []
@@ -2216,7 +2258,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const hardwareOverview = useMemo(() => {
     const storageCritical = storageRows.filter(
-      (row) => typeof row.usage === "number" && !Number.isNaN(row.usage) && row.usage >= 90
+      (row) => isStorageUsageAlert(row.usage)
     ).length;
     const installedMemory = memoryRows.filter((row) => {
       if (typeof row.capacity === "number") return row.capacity > 0;
