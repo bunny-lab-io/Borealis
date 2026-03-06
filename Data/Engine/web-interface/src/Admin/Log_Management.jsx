@@ -83,7 +83,7 @@ const gridThemeStyle = {
   "--ag-background-color": "#050b16",
   "--ag-header-background-color": "#0f1a2e",
   "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-  "--ag-row-hover-color": "rgba(109, 196, 255, 0.12)",
+  "--ag-row-hover-color": "rgba(73,156,196,0.2)",
   "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
   "--ag-border-color": "rgba(148,163,184,0.28)",
   "--ag-font-family": gridFontFamily,

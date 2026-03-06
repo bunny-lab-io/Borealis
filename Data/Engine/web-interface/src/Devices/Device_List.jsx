@@ -1844,7 +1844,7 @@ export default function DeviceList({
               backgroundColor: "rgba(15,23,42,0.45)",
             },
             "& .ag-row-hover": {
-              backgroundColor: "rgba(124, 58, 237, 0.15) !important",
+              backgroundColor: "rgba(73,156,196,0.2) !important",
             },
             "& .ag-row-selected": {
               backgroundColor: "rgba(125,211,252,0.2) !important",

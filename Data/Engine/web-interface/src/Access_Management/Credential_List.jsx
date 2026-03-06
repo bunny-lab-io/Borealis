@@ -436,6 +436,7 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
             }}
             style={{
               color: "#f5f7fa",
+              "--ag-row-hover-color": "rgba(73,156,196,0.2)",
               "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
               "--ag-checkbox-checked-color": "#7dd3fc",
             }}

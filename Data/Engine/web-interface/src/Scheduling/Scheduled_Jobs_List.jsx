@@ -946,7 +946,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             "--ag-header-background-color": "#0f172a",
             "--ag-header-foreground-color": "#cfe0ff",
             "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-            "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+            "--ag-row-hover-color": "rgba(73,156,196,0.2)",
             "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
             "--ag-border-color": "rgba(125,183,255,0.18)",
             "--ag-row-border-color": "rgba(125,183,255,0.14)",
