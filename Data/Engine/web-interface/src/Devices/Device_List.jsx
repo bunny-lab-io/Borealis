@@ -375,6 +375,7 @@ export default function DeviceList({
       os: "OS",
       internalIp: "Internal IP",
       externalIp: "External IP",
+      wireguardVpnStatus: "Wireguard VPN Status",
       wireguardPeerIp: "WireGuard Peer IP",
       lastReboot: "Last Reboot",
       created: "Created",
@@ -397,6 +398,7 @@ export default function DeviceList({
   const defaultColumns = useMemo(
     () => [
       { id: "status", label: COL_LABELS.status },
+      { id: "wireguardVpnStatus", label: COL_LABELS.wireguardVpnStatus },
       { id: "agentVersion", label: COL_LABELS.agentVersion },
       { id: "site", label: COL_LABELS.site },
       { id: "hostname", label: COL_LABELS.hostname },
@@ -411,6 +413,7 @@ export default function DeviceList({
   const [colChooserAnchor, setColChooserAnchor] = useState(null);
   const gridRef = useRef(null);
   const tunnelPeerCacheRef = useRef(new Map());
+  const tunnelStatusCacheRef = useRef(new Map());
 
   // Per-column filters
   const [filtersState, setFiltersState] = useState({});
@@ -628,46 +631,63 @@ export default function DeviceList({
     return () => onPageMetaChange?.(null);
   }, [computedTitle, heroSubtitle, onPageMetaChange]);
 
-  const fetchTunnelPeers = useCallback(async () => {
-    const nextMap = new Map();
+  const fetchTunnelTelemetry = useCallback(async () => {
+    const peerByAgent = new Map();
+    const statusByAgent = new Map();
+    let fetched = false;
     try {
       const tunnelResp = await fetch('/api/tunnel/active', {
         cache: "no-store",
         credentials: "include",
       });
       if (tunnelResp.ok) {
+        fetched = true;
         const tunnelJson = await tunnelResp.json();
         const tunnels = Array.isArray(tunnelJson?.tunnels) ? tunnelJson.tunnels : [];
         tunnels.forEach((tunnel) => {
           if (!tunnel || typeof tunnel !== 'object') return;
           const agentId = (tunnel.agent_id || '').trim();
           if (!agentId) return;
+          const agentKey = agentId.toLowerCase();
           let ip = (tunnel.virtual_ip || '').trim();
           if (ip.includes('/')) ip = ip.split('/')[0];
-          if (ip) nextMap.set(agentId.toLowerCase(), ip);
+          if (ip) peerByAgent.set(agentKey, ip);
+          const tunnelState = String(tunnel.status || "").trim().toLowerCase();
+          const agentSocket = Boolean(tunnel.agent_socket);
+          const vpnStatus = tunnelState === "up" && agentSocket && Boolean(ip) ? "Online" : "Offline";
+          statusByAgent.set(agentKey, vpnStatus);
         });
+        tunnelPeerCacheRef.current = peerByAgent;
+        tunnelStatusCacheRef.current = statusByAgent;
       }
     } catch (err) {
       console.warn('Failed to fetch active tunnel list', err);
     }
-    if (nextMap.size) {
-      tunnelPeerCacheRef.current = nextMap;
-    }
-    return nextMap;
+    return { fetched, peerByAgent, statusByAgent };
   }, []);
 
-  const applyTunnelPeers = useCallback((peerMap) => {
-    if (!peerMap || !peerMap.size) return;
+  const applyTunnelTelemetry = useCallback((telemetry) => {
+    const fetched = Boolean(telemetry?.fetched);
+    const peerByAgent = telemetry?.peerByAgent instanceof Map ? telemetry.peerByAgent : new Map();
+    const statusByAgent = telemetry?.statusByAgent instanceof Map ? telemetry.statusByAgent : new Map();
+    if (!fetched && !peerByAgent.size && !statusByAgent.size) return;
     setRows((prev) => {
       if (!Array.isArray(prev) || !prev.length) return prev;
       let changed = false;
       const next = prev.map((row) => {
         const agentKey = (row.agentId || row.agentGuid || row.id || '').toString().trim().toLowerCase();
         if (!agentKey) return row;
-        const peerIp = peerMap.get(agentKey);
-        if (!peerIp || peerIp === row.wireguardPeerIp) return row;
+        const peerIp = peerByAgent.get(agentKey) || "";
+        const vpnStatus = statusByAgent.get(agentKey) || "Offline";
+        const shouldUpdatePeerIp = Boolean(peerIp) && peerIp !== row.wireguardPeerIp;
+        const shouldUpdateStatus = vpnStatus !== row.wireguardVpnStatus;
+        if (!shouldUpdatePeerIp && !shouldUpdateStatus) return row;
         changed = true;
-        return { ...row, wireguardPeerIp: peerIp };
+        return {
+          ...row,
+          wireguardPeerIp: shouldUpdatePeerIp ? peerIp : row.wireguardPeerIp,
+          wireguardVpnStatus: vpnStatus,
+        };
       });
       return changed ? next : prev;
     });
@@ -713,9 +733,13 @@ export default function DeviceList({
     }
 
     try {
-      const tunnelByAgent = await fetchTunnelPeers();
-      const tunnelLookup =
-        tunnelByAgent.size ? tunnelByAgent : tunnelPeerCacheRef.current || new Map();
+      const tunnelTelemetry = await fetchTunnelTelemetry();
+      const tunnelLookup = tunnelTelemetry.fetched
+        ? tunnelTelemetry.peerByAgent
+        : tunnelPeerCacheRef.current || new Map();
+      const tunnelStatusLookup = tunnelTelemetry.fetched
+        ? tunnelTelemetry.statusByAgent
+        : tunnelStatusCacheRef.current || new Map();
       const res = await fetch('/api/devices');
       if (!res.ok) {
         const err = new Error(`Failed to fetch devices (${res.status})`);
@@ -784,6 +808,7 @@ export default function DeviceList({
         const externalIp = (device.external_ip || summary.external_ip || '').trim();
         const agentKey = agentId.toLowerCase();
         const tunnelPeerIp = agentKey ? (tunnelLookup.get(agentKey) || '') : '';
+        const wireguardVpnStatus = agentKey ? (tunnelStatusLookup.get(agentKey) || "Offline") : "Offline";
         const wireguardPeerIp = (
           device.wireguard_peer_ip ||
           device.peer_ip ||
@@ -846,6 +871,7 @@ export default function DeviceList({
           domain,
           internalIp,
           externalIp,
+          wireguardVpnStatus,
           wireguardPeerIp,
           lastReboot,
           uptime: uptimeSeconds,
@@ -879,27 +905,29 @@ export default function DeviceList({
       }
 
       setRows(filtered);
-      if (tunnelByAgent.size) {
-        applyTunnelPeers(tunnelByAgent);
-      }
+      if (tunnelTelemetry.fetched) applyTunnelTelemetry(tunnelTelemetry);
     } catch (e) {
       console.warn('Failed to load devices:', e);
       setRows([]);
     }
-  }, [repoHash, fetchLatestRepoHash, computeAgentVersion, filterMode, fetchTunnelPeers, applyTunnelPeers]);
+  }, [repoHash, fetchLatestRepoHash, computeAgentVersion, filterMode, fetchTunnelTelemetry, applyTunnelTelemetry]);
 
   const hasWireguardColumn = useMemo(
     () => columns.some((col) => col.id === "wireguardPeerIp"),
     [columns]
   );
+  const hasWireguardVpnStatusColumn = useMemo(
+    () => columns.some((col) => col.id === "wireguardVpnStatus"),
+    [columns]
+  );
 
   useEffect(() => {
-    if (!hasWireguardColumn) return;
+    if (!hasWireguardColumn && !hasWireguardVpnStatusColumn) return;
     let alive = true;
     const refresh = async () => {
-      const map = await fetchTunnelPeers();
+      const telemetry = await fetchTunnelTelemetry();
       if (!alive) return;
-      applyTunnelPeers(map);
+      applyTunnelTelemetry(telemetry);
     };
     refresh();
     const interval = setInterval(refresh, 20000);
@@ -907,7 +935,7 @@ export default function DeviceList({
       alive = false;
       clearInterval(interval);
     };
-  }, [hasWireguardColumn, fetchTunnelPeers, applyTunnelPeers]);
+  }, [hasWireguardColumn, hasWireguardVpnStatusColumn, fetchTunnelTelemetry, applyTunnelTelemetry]);
 
   useEffect(() => {
     setRows((prev) => {
@@ -1425,6 +1453,16 @@ export default function DeviceList({
             headerName: col.label,
             width: 140,
             minWidth: 140,
+            flex: 0,
+          };
+        case "wireguardVpnStatus":
+          return {
+            field: "wireguardVpnStatus",
+            headerName: col.label,
+            cellRenderer: statusCellRenderer,
+            cellClass: "status-pill-cell",
+            width: 190,
+            minWidth: 190,
             flex: 0,
           };
         case "wireguardPeerIp":

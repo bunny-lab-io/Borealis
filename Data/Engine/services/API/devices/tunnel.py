@@ -246,6 +246,20 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
 
         tunnel_service = _get_tunnel_service(adapters)
         sessions = list(tunnel_service.list_sessions())
+        registry = getattr(adapters.context, "agent_socket_registry", None)
+        enriched_sessions = []
+        for session_payload in sessions:
+            payload = dict(session_payload or {})
+            agent_id = _normalize_text(payload.get("agent_id"))
+            agent_socket = False
+            if agent_id and registry and hasattr(registry, "is_registered"):
+                try:
+                    agent_socket = bool(registry.is_registered(agent_id))
+                except Exception:
+                    agent_socket = False
+            payload["agent_socket"] = agent_socket
+            enriched_sessions.append(payload)
+        sessions = enriched_sessions
         _service_log_event(
             "vpn_api_active_response count={0} remote={1}".format(
                 len(sessions),
