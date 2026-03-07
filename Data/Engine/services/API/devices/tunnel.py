@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional, Tuple
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from ....auth.guid_utils import normalize_guid
 from ...auth.secrets import require_app_secret
 from ...VPN import WireGuardServerConfig, WireGuardServerManager, VpnTunnelService
 
@@ -130,6 +131,50 @@ def _down_status_payload(agent_id: str, *, agent_socket: bool) -> Dict[str, Any]
     }
 
 
+def _guid_candidate(value: Any) -> str:
+    text = _normalize_text(value)
+    if not text:
+        return ""
+    normalized = normalize_guid(text)
+    if not normalized:
+        return ""
+    return normalized if normalized == text.strip().strip("{}").upper() else ""
+
+
+def _resolve_requested_agent_id(adapters: "EngineServiceAdapters", requested_agent_id: Any) -> str:
+    agent_id = _normalize_text(requested_agent_id)
+    if not agent_id:
+        return ""
+
+    guid = _guid_candidate(agent_id)
+    if not guid:
+        return agent_id
+
+    conn_factory = getattr(adapters, "db_conn_factory", None)
+    if not callable(conn_factory):
+        return agent_id
+
+    conn = None
+    try:
+        conn = conn_factory()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT agent_id FROM devices WHERE UPPER(guid) = ? ORDER BY last_seen DESC LIMIT 1",
+            (guid,),
+        )
+        row = cur.fetchone()
+        resolved = _normalize_text(row[0] if row else "")
+        return resolved or agent_id
+    except Exception:
+        return agent_id
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
     blueprint = Blueprint("vpn_tunnel", __name__)
     logger = adapters.context.logger.getChild("vpn_tunnel.api")
@@ -160,15 +205,17 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
         operator_id = user.get("username") or None
 
         body = request.get_json(silent=True) or {}
-        agent_id = _normalize_text(body.get("agent_id"))
-        if not agent_id:
+        requested_agent_id = _normalize_text(body.get("agent_id"))
+        if not requested_agent_id:
             return jsonify({"error": "agent_id_required"}), 400
+        agent_id = _resolve_requested_agent_id(adapters, requested_agent_id)
 
         try:
             tunnel_service = _get_tunnel_service(adapters)
             endpoint_host = _infer_endpoint_host(request)
             _service_log_event(
-                "vpn_api_connect_request agent_id={0} operator={1} endpoint_host={2} remote={3}".format(
+                "vpn_api_connect_request requested_agent_id={0} resolved_agent_id={1} operator={2} endpoint_host={3} remote={4}".format(
+                    requested_agent_id,
                     agent_id,
                     operator_id or "-",
                     endpoint_host or "-",
@@ -207,9 +254,10 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
             payload, status = requirement
             return jsonify(payload), status
 
-        agent_id = _normalize_text(request.args.get("agent_id") or "")
-        if not agent_id:
+        requested_agent_id = _normalize_text(request.args.get("agent_id") or "")
+        if not requested_agent_id:
             return jsonify({"error": "agent_id_required"}), 400
+        agent_id = _resolve_requested_agent_id(adapters, requested_agent_id)
 
         tunnel_service = _get_tunnel_service(adapters)
         payload = tunnel_service.status(agent_id)
@@ -222,7 +270,8 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
                 agent_socket = False
         bump = _normalize_text(request.args.get("bump") or "")
         _service_log_event(
-            "vpn_api_status_request agent_id={0} bump={1} remote={2}".format(
+            "vpn_api_status_request requested_agent_id={0} resolved_agent_id={1} bump={2} remote={3}".format(
+                requested_agent_id,
                 agent_id,
                 "true" if bump else "false",
                 _request_remote() or "-",

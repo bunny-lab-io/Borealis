@@ -21,7 +21,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ...auth.secrets import require_app_secret
 from ...RemoteDesktop.vnc_proxy import VNC_WS_PATH, ensure_vnc_proxy
-from .tunnel import _get_tunnel_service
+from .tunnel import _get_tunnel_service, _resolve_requested_agent_id
 
 if False:  # pragma: no cover - hint for type checkers
     from .. import EngineServiceAdapters
@@ -255,10 +255,11 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         operator_id = user.get("username") or None
 
         body = request.get_json(silent=True) or {}
-        agent_id = _normalize_text(body.get("agent_id"))
+        requested_agent_id = _normalize_text(body.get("agent_id"))
 
-        if not agent_id:
+        if not requested_agent_id:
             return jsonify({"error": "agent_id_required"}), 400
+        agent_id = _resolve_requested_agent_id(adapters, requested_agent_id)
 
         remove_wallpaper = _normalize_bool(body.get("remove_wallpaper"), default=True)
 

@@ -18,7 +18,7 @@ from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ...auth.secrets import require_app_secret
-from .tunnel import _get_tunnel_service
+from .tunnel import _get_tunnel_service, _resolve_requested_agent_id
 
 if False:  # pragma: no cover - hint for type checkers
     from .. import EngineServiceAdapters
@@ -112,15 +112,17 @@ def register_shell(app, adapters: "EngineServiceAdapters") -> None:
         operator_id = user.get("username") or None
 
         body = request.get_json(silent=True) or {}
-        agent_id = _normalize_text(body.get("agent_id"))
-        if not agent_id:
+        requested_agent_id = _normalize_text(body.get("agent_id"))
+        if not requested_agent_id:
             return jsonify({"error": "agent_id_required"}), 400
+        agent_id = _resolve_requested_agent_id(adapters, requested_agent_id)
 
         try:
             tunnel_service = _get_tunnel_service(adapters)
             endpoint_host = _infer_endpoint_host(request)
             _service_log_event(
-                "vpn_shell_establish_request agent_id={0} operator={1} endpoint_host={2} remote={3}".format(
+                "vpn_shell_establish_request requested_agent_id={0} resolved_agent_id={1} operator={2} endpoint_host={3} remote={4}".format(
+                    requested_agent_id,
                     agent_id,
                     operator_id or "-",
                     endpoint_host or "-",

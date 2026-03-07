@@ -288,6 +288,13 @@ function statusFromHeartbeat(tsSec, offlineAfter = 300) {
   return now - tsSec <= offlineAfter ? "Online" : "Offline";
 }
 
+function extractGuidFromAgentId(value) {
+  const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
+  if (!text) return "";
+  const match = text.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  return match ? match[1].toUpperCase() : "";
+}
+
 function wireguardStatusFromTunnel(tunnel) {
   if (!tunnel || typeof tunnel !== "object") return "Offline";
   if (Boolean(tunnel.recovery_in_progress)) return "Recovering";
@@ -660,11 +667,16 @@ export default function DeviceList({
           const agentId = (tunnel.agent_id || '').trim();
           if (!agentId) return;
           const agentKey = agentId.toLowerCase();
+          const guidKey = extractGuidFromAgentId(agentId).toLowerCase();
           let ip = (tunnel.virtual_ip || '').trim();
           if (ip.includes('/')) ip = ip.split('/')[0];
           if (ip) peerByAgent.set(agentKey, ip);
           const vpnStatus = wireguardStatusFromTunnel(tunnel);
           statusByAgent.set(agentKey, vpnStatus);
+          if (guidKey) {
+            if (ip && !peerByAgent.has(guidKey)) peerByAgent.set(guidKey, ip);
+            if (!statusByAgent.has(guidKey)) statusByAgent.set(guidKey, vpnStatus);
+          }
         });
         tunnelPeerCacheRef.current = peerByAgent;
         tunnelStatusCacheRef.current = statusByAgent;
@@ -815,9 +827,9 @@ export default function DeviceList({
         const domain = (device.domain || summary.domain || '').trim();
         const internalIp = (device.internal_ip || summary.internal_ip || '').trim();
         const externalIp = (device.external_ip || summary.external_ip || '').trim();
-        const agentKey = agentId.toLowerCase();
-        const tunnelPeerIp = agentKey ? (tunnelLookup.get(agentKey) || '') : '';
-        const wireguardVpnStatus = agentKey ? (tunnelStatusLookup.get(agentKey) || "Offline") : "Offline";
+        const agentLookupKey = (agentId || guidRaw || '').toLowerCase();
+        const tunnelPeerIp = agentLookupKey ? (tunnelLookup.get(agentLookupKey) || '') : '';
+        const wireguardVpnStatus = agentLookupKey ? (tunnelStatusLookup.get(agentLookupKey) || "Offline") : "Offline";
         const wireguardPeerIp = (
           device.wireguard_peer_ip ||
           device.peer_ip ||

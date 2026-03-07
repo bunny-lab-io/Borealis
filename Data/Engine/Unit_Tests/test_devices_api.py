@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from typing import Any
 from types import SimpleNamespace
 
@@ -58,6 +59,16 @@ def _patch_repo_call(monkeypatch: pytest.MonkeyPatch, calls: dict) -> None:
         raise request_exception("network error")
 
     monkeypatch.setattr(github_integration.requests, "get", fake_get)
+
+
+def _set_test_device_guid(engine_harness: EngineTestHarness, guid: str) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE devices SET guid = ? WHERE hostname = ?", (guid, "test-device"))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class _DummySocketIO:
@@ -152,11 +163,22 @@ class _FakeTunnelApiService:
         self._status_payload = status_payload
         self._active_payloads = active_payloads
         self.bumped_agents: list[str] = []
+        self.connect_calls: list[tuple[str, Any, Any]] = []
 
     def status(self, agent_id: str) -> Any:
         if callable(self._status_payload):
             return self._status_payload(agent_id)
         return self._status_payload
+
+    def connect(self, *, agent_id: str, operator_id: Any, endpoint_host: Any) -> dict[str, Any]:
+        self.connect_calls.append((agent_id, operator_id, endpoint_host))
+        return {
+            "tunnel_id": "tun-1",
+            "agent_id": agent_id,
+            "virtual_ip": "10.255.0.2/32",
+            "engine_virtual_ip": "10.255.0.1/32",
+            "endpoint": "engine.local:30000",
+        }
 
     def list_sessions(self) -> list[dict[str, Any]]:
         return list(self._active_payloads)
@@ -410,6 +432,53 @@ def test_tunnel_status_endpoint_exposes_listener_health(engine_harness: EngineTe
     assert payload["last_recovery_attempt_at"] == 1_700_123_456
     assert payload["last_recovery_attempt_at_iso"] == "2025-11-14T00:00:00+00:00"
     assert fake_service.bumped_agents == ["test-device-agent"]
+
+
+def test_tunnel_status_endpoint_resolves_guid_to_agent_id(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
+    _set_test_device_guid(engine_harness, valid_guid)
+    client = _client_with_admin_session(engine_harness)
+    fake_service = _FakeTunnelApiService(
+        status_payload=lambda agent_id: {
+            "tunnel_id": "tun-1",
+            "agent_id": agent_id,
+            "virtual_ip": "10.255.0.2/32",
+            "listener_healthy": True,
+            "recovery_in_progress": False,
+            "last_recovery_attempt_at": None,
+            "last_recovery_attempt_at_iso": "",
+        }
+        if agent_id == "test-device-agent"
+        else None,
+        active_payloads=[],
+    )
+    monkeypatch.setattr(tunnel_api, "_get_tunnel_service", lambda _adapters: fake_service)
+
+    response = client.get(f"/api/tunnel/status?agent_id={valid_guid}")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "up"
+    assert payload["agent_id"] == "test-device-agent"
+
+
+def test_tunnel_connect_endpoint_resolves_guid_to_agent_id(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
+    _set_test_device_guid(engine_harness, valid_guid)
+    client = _client_with_admin_session(engine_harness)
+    fake_service = _FakeTunnelApiService(status_payload=None, active_payloads=[])
+    monkeypatch.setattr(tunnel_api, "_get_tunnel_service", lambda _adapters: fake_service)
+
+    response = client.post("/api/tunnel/connect", json={"agent_id": valid_guid})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["agent_id"] == "test-device-agent"
+    assert fake_service.connect_calls == [("test-device-agent", "admin", "localhost")]
 
 
 def test_tunnel_status_endpoint_returns_down_health_defaults(

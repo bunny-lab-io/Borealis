@@ -307,11 +307,11 @@ export default function ReverseTunnelRemoteShell({ device }) {
       setStatusMessage("Agent ID is required to establish.");
       return;
     }
-    const targetAgentId = agentId;
+    const requestedAgentId = agentId;
     const connectAttempt = connectAttemptRef.current + 1;
     connectAttemptRef.current = connectAttempt;
     activeSessionIdRef.current = "";
-    activeAgentIdRef.current = targetAgentId;
+    activeAgentIdRef.current = requestedAgentId;
     setLoading(true);
     setStatusMessage("");
     try {
@@ -320,9 +320,9 @@ export default function ReverseTunnelRemoteShell({ device }) {
       const resp = await fetch("/api/shell/establish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: targetAgentId }),
+        body: JSON.stringify({ agent_id: requestedAgentId }),
       });
-      if (connectAttemptRef.current !== connectAttempt || activeAgentIdRef.current !== targetAgentId) {
+      if (connectAttemptRef.current !== connectAttempt) {
         return;
       }
       const data = await resp.json().catch(() => ({}));
@@ -337,6 +337,8 @@ export default function ReverseTunnelRemoteShell({ device }) {
       if (data?.agent_socket === false) {
         setStatusMessage("Agent socket is offline; attempting direct shell tunnel...");
       }
+      const resolvedAgentId = normalizeText(data?.agent_id) || requestedAgentId;
+      activeAgentIdRef.current = resolvedAgentId;
       setTunnel(data);
 
       const socket = ensureSocket();
@@ -345,12 +347,12 @@ export default function ReverseTunnelRemoteShell({ device }) {
         let lastError = "";
         let attempt = 0;
         while (Date.now() < deadline) {
-          if (connectAttemptRef.current !== connectAttempt || activeAgentIdRef.current !== targetAgentId) {
+          if (connectAttemptRef.current !== connectAttempt) {
             return { cancelled: true };
           }
           attempt += 1;
-          const openResp = await emitAsync(socket, "vpn_shell_open", { agent_id: targetAgentId }, 6000);
-          if (connectAttemptRef.current !== connectAttempt || activeAgentIdRef.current !== targetAgentId) {
+          const openResp = await emitAsync(socket, "vpn_shell_open", { agent_id: resolvedAgentId }, 6000);
+          if (connectAttemptRef.current !== connectAttempt) {
             return { cancelled: true };
           }
           if (!openResp?.error) {
@@ -373,7 +375,7 @@ export default function ReverseTunnelRemoteShell({ device }) {
       if (!opened || opened.cancelled) {
         return;
       }
-      if (connectAttemptRef.current !== connectAttempt || activeAgentIdRef.current !== targetAgentId) {
+      if (connectAttemptRef.current !== connectAttempt) {
         return;
       }
       setSessionState("connected");

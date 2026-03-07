@@ -86,7 +86,7 @@ Site List:
    - Default Password: `Password`
 2) Install the Agent (Windows):
    - `./Borealis.ps1`
-   - `./Borealis.ps1 -ServerUrl "https://10.0.0.54:5000" -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+   - `./Borealis.ps1 -ServerUrl "https://192.168.3.252:5000" -EnrollmentCode "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"`
 
 #### One-Line Bootstrapper
 1) Start the Engine (Linux):
