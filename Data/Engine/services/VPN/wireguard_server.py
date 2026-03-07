@@ -338,6 +338,55 @@ class WireGuardServerManager:
         detail = (err or out or "unknown error").strip()
         raise RuntimeError(f"WireGuard Linux listener failed to start: {detail}")
 
+    def check_listener_health(self) -> Dict[str, Optional[Union[str, bool]]]:
+        """Return the current listener health without mutating listener state."""
+
+        if self._is_windows:
+            service_exists = self._service_exists()
+            service_state = self._query_service_state()
+            if not service_exists:
+                return {
+                    "healthy": False,
+                    "reason": "service_missing",
+                    "service_state": service_state,
+                }
+            if service_state in ("RUNNING", "START_PENDING"):
+                return {
+                    "healthy": True,
+                    "reason": "service_running",
+                    "service_state": service_state,
+                }
+            return {
+                "healthy": False,
+                "reason": "service_unhealthy",
+                "service_state": service_state,
+            }
+
+        if not self._linux_interface_exists():
+            return {
+                "healthy": False,
+                "reason": "interface_down",
+                "service_state": None,
+            }
+        if not self._wg:
+            return {
+                "healthy": False,
+                "reason": "wg_unavailable",
+                "service_state": None,
+            }
+        code, _out, _err = self._run_command([self._wg, "show", self._interface_name])
+        if code != 0:
+            return {
+                "healthy": False,
+                "reason": "wg_show_failed",
+                "service_state": None,
+            }
+        return {
+            "healthy": True,
+            "reason": "listener_running",
+            "service_state": "RUNNING",
+        }
+
     def _linux_firewall_ensure_rule(self, chain: str, params: Sequence[str], *, label: str) -> bool:
         if not self._iptables:
             return False

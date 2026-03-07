@@ -288,6 +288,17 @@ function statusFromHeartbeat(tsSec, offlineAfter = 300) {
   return now - tsSec <= offlineAfter ? "Online" : "Offline";
 }
 
+function wireguardStatusFromTunnel(tunnel) {
+  if (!tunnel || typeof tunnel !== "object") return "Offline";
+  if (Boolean(tunnel.recovery_in_progress)) return "Recovering";
+  const tunnelState = String(tunnel.status || "").trim().toLowerCase();
+  const agentSocket = Boolean(tunnel.agent_socket);
+  const listenerHealthy = tunnel.listener_healthy !== false;
+  let peerIp = String(tunnel.virtual_ip || "").trim();
+  if (peerIp.includes("/")) peerIp = peerIp.split("/")[0];
+  return tunnelState === "up" && agentSocket && listenerHealthy && Boolean(peerIp) ? "Online" : "Offline";
+}
+
 function formatUptime(seconds) {
   const total = Number(seconds);
   if (!Number.isFinite(total) || total <= 0) return "";
@@ -652,9 +663,7 @@ export default function DeviceList({
           let ip = (tunnel.virtual_ip || '').trim();
           if (ip.includes('/')) ip = ip.split('/')[0];
           if (ip) peerByAgent.set(agentKey, ip);
-          const tunnelState = String(tunnel.status || "").trim().toLowerCase();
-          const agentSocket = Boolean(tunnel.agent_socket);
-          const vpnStatus = tunnelState === "up" && agentSocket && Boolean(ip) ? "Online" : "Offline";
+          const vpnStatus = wireguardStatusFromTunnel(tunnel);
           statusByAgent.set(agentKey, vpnStatus);
         });
         tunnelPeerCacheRef.current = peerByAgent;
@@ -1064,6 +1073,12 @@ export default function DeviceList({
         border: "1px solid rgba(0, 209, 140, 0.45)",
         dot: "#00d18c",
       },
+      Recovering: {
+        text: "#ffb347",
+        background: "rgba(255, 179, 71, 0.16)",
+        border: "1px solid rgba(255, 179, 71, 0.45)",
+        dot: "#ffb347",
+      },
       Offline: {
         text: "#b0b8c8",
         background: "rgba(176, 184, 200, 0.14)",
@@ -1461,8 +1476,8 @@ export default function DeviceList({
             headerName: col.label,
             cellRenderer: statusCellRenderer,
             cellClass: "status-pill-cell",
-            width: 190,
-            minWidth: 190,
+            width: 200,
+            minWidth: 200,
             flex: 0,
           };
         case "wireguardPeerIp":

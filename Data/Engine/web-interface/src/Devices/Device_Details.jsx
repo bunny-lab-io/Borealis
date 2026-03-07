@@ -59,6 +59,7 @@ const MAGIC_UI = {
 
 const DEVICE_LIST_STATUS_COLORS = Object.freeze({
   online: "#00d18c",
+  recovering: "#ffb347",
   offline: "#b0b8c8",
 });
 const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
@@ -121,6 +122,25 @@ const SUMMARY_SECTIONS = [
   { key: "memory", label: "Memory", icon: MemoryRoundedIcon },
   { key: "network", label: "Network", icon: LanRoundedIcon },
 ];
+
+function getWireguardTunnelPresentation(tunnelInfo) {
+  const peerIp = tunnelInfo?.virtual_ip ? String(tunnelInfo.virtual_ip).split("/")[0] : "";
+  const tunnelState = String(tunnelInfo?.status || "").toLowerCase();
+  const recoveryInProgress = Boolean(tunnelInfo?.recovery_in_progress);
+  const listenerHealthy = tunnelInfo?.listener_healthy !== false;
+  const isTunnelOnline =
+    tunnelState === "up" &&
+    Boolean(tunnelInfo?.agent_socket) &&
+    listenerHealthy &&
+    Boolean(peerIp);
+  const statusText = recoveryInProgress ? "Recovering" : isTunnelOnline ? "Online" : "Offline";
+  const statusColor = recoveryInProgress
+    ? DEVICE_LIST_STATUS_COLORS.recovering
+    : isTunnelOnline
+      ? DEVICE_LIST_STATUS_COLORS.online
+      : DEVICE_LIST_STATUS_COLORS.offline;
+  return { peerIp, statusText, statusColor, isTunnelOnline };
+}
 
 const myTheme = themeQuartz.withParams({
   accentColor: "#8b5cf6",
@@ -654,6 +674,10 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     tunnel_id: "",
     virtual_ip: "",
     agent_socket: false,
+    listener_healthy: false,
+    recovery_in_progress: false,
+    last_recovery_attempt_at: null,
+    last_recovery_attempt_at_iso: "",
   });
   const [historyRows, setHistoryRows] = useState([]);
   const [outputOpen, setOutputOpen] = useState(false);
@@ -738,18 +762,12 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const canLaunchQuickJob = quickJobTargets.length > 0 && typeof onQuickJobLaunch === "function";
   const tunnelIndicators = useMemo(() => {
     const items = [];
-    const peerIp = tunnelInfo?.virtual_ip ? String(tunnelInfo.virtual_ip).split("/")[0] : "";
-    const tunnelState = String(tunnelInfo?.status || "").toLowerCase();
-    const isTunnelOnline = tunnelState === "up" && Boolean(tunnelInfo?.agent_socket) && Boolean(peerIp);
-    const tunnelStatusText = isTunnelOnline ? "Online" : "Offline";
-    const tunnelStatusColor = isTunnelOnline
-      ? DEVICE_LIST_STATUS_COLORS.online
-      : DEVICE_LIST_STATUS_COLORS.offline;
+    const { peerIp, statusText, statusColor } = getWireguardTunnelPresentation(tunnelInfo);
     items.push({
       key: "peer-ip",
       label: "WireGuard Peer IP",
-      value: `${tunnelStatusText} - ${peerIp || "Inactive"}`,
-      color: tunnelStatusColor,
+      value: `${statusText} - ${peerIp || "Inactive"}`,
+      color: statusColor,
       icon: <LanRoundedIcon sx={{ fontSize: 16 }} />,
     });
     return items;
@@ -771,7 +789,16 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     let inFlight = false;
     let pollingTimer = null;
     if (!tunnelAgentId) {
-      setTunnelInfo({ status: "idle", tunnel_id: "", virtual_ip: "", agent_socket: false });
+      setTunnelInfo({
+        status: "idle",
+        tunnel_id: "",
+        virtual_ip: "",
+        agent_socket: false,
+        listener_healthy: false,
+        recovery_in_progress: false,
+        last_recovery_attempt_at: null,
+        last_recovery_attempt_at_iso: "",
+      });
       return () => {};
     }
     const loadTunnelStatus = async () => {
@@ -784,7 +811,16 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         const data = await resp.json().catch(() => ({}));
         if (canceled) return;
         if (!resp.ok) {
-          setTunnelInfo({ status: "error", tunnel_id: "", virtual_ip: "", agent_socket: false });
+          setTunnelInfo({
+            status: "error",
+            tunnel_id: "",
+            virtual_ip: "",
+            agent_socket: false,
+            listener_healthy: false,
+            recovery_in_progress: false,
+            last_recovery_attempt_at: null,
+            last_recovery_attempt_at_iso: "",
+          });
           return;
         }
         if (data?.status === "down") {
@@ -793,6 +829,10 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
             tunnel_id: "",
             virtual_ip: "",
             agent_socket: Boolean(data?.agent_socket),
+            listener_healthy: Boolean(data?.listener_healthy),
+            recovery_in_progress: Boolean(data?.recovery_in_progress),
+            last_recovery_attempt_at: data?.last_recovery_attempt_at ?? null,
+            last_recovery_attempt_at_iso: data?.last_recovery_attempt_at_iso || "",
           });
           return;
         }
@@ -801,10 +841,23 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           tunnel_id: data?.tunnel_id || "",
           virtual_ip: data?.virtual_ip || "",
           agent_socket: Boolean(data?.agent_socket),
+          listener_healthy: data?.listener_healthy !== false,
+          recovery_in_progress: Boolean(data?.recovery_in_progress),
+          last_recovery_attempt_at: data?.last_recovery_attempt_at ?? null,
+          last_recovery_attempt_at_iso: data?.last_recovery_attempt_at_iso || "",
         });
       } catch {
         if (!canceled) {
-          setTunnelInfo({ status: "error", tunnel_id: "", virtual_ip: "", agent_socket: false });
+          setTunnelInfo({
+            status: "error",
+            tunnel_id: "",
+            virtual_ip: "",
+            agent_socket: false,
+            listener_healthy: false,
+            recovery_in_progress: false,
+            last_recovery_attempt_at: null,
+            last_recovery_attempt_at_iso: "",
+          });
         }
       } finally {
         inFlight = false;

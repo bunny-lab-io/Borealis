@@ -43,6 +43,22 @@ def _ensure_eventlet_stub() -> None:
 
 _ensure_eventlet_stub()
 
+
+def _ensure_websockets_stub() -> None:
+    if "websockets" in sys.modules:
+        return
+    websockets_module = types.ModuleType("websockets")
+
+    async def _serve(*_args, **_kwargs):
+        raise RuntimeError("websockets stub should not be used in unit tests")
+
+    websockets_module.serve = _serve  # type: ignore[attr-defined]
+    websockets_module.__spec__ = importlib.machinery.ModuleSpec("websockets", loader=None)
+    sys.modules["websockets"] = websockets_module
+
+
+_ensure_websockets_stub()
+
 from Data.Engine.server import create_app
 
 

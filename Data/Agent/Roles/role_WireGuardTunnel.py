@@ -326,6 +326,28 @@ class WireGuardClient:
                 return match.group(1).upper()
         return None
 
+    def _service_is_healthy(self) -> bool:
+        return self._service_state() in ("RUNNING", "START_PENDING")
+
+    def _log_recovery_event(
+        self,
+        outcome: str,
+        *,
+        reason: str,
+        tunnel_id: str,
+        prior_state: Optional[str],
+        detail: Optional[str] = None,
+    ) -> None:
+        message = "vpn_agent_recovery_{0} reason={1} tunnel_id={2} prior_service_state={3}".format(
+            outcome,
+            reason or "-",
+            tunnel_id or "-",
+            prior_state or "-",
+        )
+        if detail:
+            message = "{0} detail={1}".format(message, detail)
+        _write_log(message)
+
     def _wireguard_config_path(self) -> Path:
         settings_dir = self.temp_root.parent / "Settings" / "WireGuard"
         candidates = [
@@ -643,27 +665,55 @@ class WireGuardClient:
 
     def start_session(self, session: SessionConfig, *, signing_client: Optional[Any] = None) -> None:
         with self._session_lock:
+            recovery_reason: Optional[str] = None
+            prior_service_state: Optional[str] = None
             if self.session:
                 if self.session.tunnel_id == session.tunnel_id:
-                    _write_log("WireGuard session already active; reusing existing session.")
-                    self.bump_activity()
-                    return
-                _write_log(
-                    "WireGuard session replace: existing_tunnel_id={0} new_tunnel_id={1}".format(
-                        self.session.tunnel_id, session.tunnel_id
+                    prior_service_state = self._service_state()
+                    if prior_service_state in ("RUNNING", "START_PENDING"):
+                        _write_log("WireGuard session already active; reusing existing session.")
+                        self.bump_activity()
+                        return
+                    recovery_reason = "same_tunnel_id_service_unhealthy"
+                    self._log_recovery_event(
+                        "attempt",
+                        reason=recovery_reason,
+                        tunnel_id=session.tunnel_id,
+                        prior_state=prior_service_state,
                     )
-                )
-                self._stop_session_locked(reason="session_replace", ignore_missing=True)
+                else:
+                    _write_log(
+                        "WireGuard session replace: existing_tunnel_id={0} new_tunnel_id={1}".format(
+                            self.session.tunnel_id, session.tunnel_id
+                        )
+                    )
+                    self._stop_session_locked(reason="session_replace", ignore_missing=True)
 
             try:
                 self._validate_token(session.token, signing_client=signing_client)
             except Exception as exc:
                 _write_log(f"Refusing to start WireGuard session: {exc}")
+                if recovery_reason:
+                    self._log_recovery_event(
+                        "failed",
+                        reason=recovery_reason,
+                        tunnel_id=session.tunnel_id,
+                        prior_state=prior_service_state,
+                        detail="token_validation_failed",
+                    )
                 return
 
             rendered = self._render_config(session)
             if not self._write_config(rendered):
                 _write_log("Failed to write WireGuard client config.")
+                if recovery_reason:
+                    self._log_recovery_event(
+                        "failed",
+                        reason=recovery_reason,
+                        tunnel_id=session.tunnel_id,
+                        prior_state=prior_service_state,
+                        detail="config_write_failed",
+                    )
                 return
             _write_log(f"Rendered WireGuard client config to {self.conf_path}")
 
@@ -674,6 +724,14 @@ class WireGuardClient:
 
             if not self._service_exists():
                 if not self._install_service():
+                    if recovery_reason:
+                        self._log_recovery_event(
+                            "failed",
+                            reason=recovery_reason,
+                            tunnel_id=session.tunnel_id,
+                            prior_state=prior_service_state,
+                            detail="service_install_failed",
+                        )
                     return
 
             service_present = self._service_exists()
@@ -682,6 +740,14 @@ class WireGuardClient:
                 service_present = True
             if not service_present:
                 _write_log("WireGuard tunnel service still missing after install attempt.")
+                if recovery_reason:
+                    self._log_recovery_event(
+                        "failed",
+                        reason=recovery_reason,
+                        tunnel_id=session.tunnel_id,
+                        prior_state=prior_service_state,
+                        detail="service_missing_after_install",
+                    )
                 return
 
             self._restart_service()
@@ -691,6 +757,23 @@ class WireGuardClient:
 
             self.session = session
             self.idle_deadline = None
+            if recovery_reason:
+                current_state = self._service_state()
+                if current_state in ("RUNNING", "START_PENDING"):
+                    self._log_recovery_event(
+                        "success",
+                        reason=recovery_reason,
+                        tunnel_id=session.tunnel_id,
+                        prior_state=prior_service_state,
+                    )
+                else:
+                    self._log_recovery_event(
+                        "failed",
+                        reason=recovery_reason,
+                        tunnel_id=session.tunnel_id,
+                        prior_state=prior_service_state,
+                        detail="service_not_healthy_after_restart",
+                    )
             _write_log("WireGuard client session started (persistent mode).")
 
     def stop_session(self, reason: str = "stop", ignore_missing: bool = False) -> None:

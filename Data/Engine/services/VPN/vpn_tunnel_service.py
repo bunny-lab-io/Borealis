@@ -37,6 +37,10 @@ def _format_ports(ports: Iterable[int]) -> str:
     return ",".join(items)
 
 
+WATCHDOG_INTERVAL_SECONDS = 15
+LISTENER_RECOVERY_MIN_INTERVAL_SECONDS = 30
+
+
 @dataclass
 class VpnSession:
     tunnel_id: str
@@ -83,9 +87,18 @@ class VpnTunnelService:
         self._sessions_by_tunnel: Dict[str, VpnSession] = {}
         self._engine_ip = ipaddress.ip_interface(context.wireguard_engine_virtual_ip)
         self._peer_network = ipaddress.ip_network(context.wireguard_peer_network, strict=False)
+        self._listener_healthy = False
+        self._listener_health_reason = "startup"
+        self._recovery_in_progress = False
+        self._last_recovery_attempt_at: Optional[float] = None
+        self._last_recovery_attempt_at_iso = ""
+        self._last_throttle_log_at: Optional[float] = None
+        self._watchdog_thread: Optional[Any] = None
         self._cleanup_listener()
         self._idle_thread: Optional[threading.Thread] = None
-        if not self.persistent:
+        if self.persistent:
+            self._start_watchdog()
+        else:
             self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True)
             self._idle_thread.start()
 
@@ -210,14 +223,120 @@ class VpnTunnelService:
     def _cleanup_listener(self) -> None:
         self._service_log_event("vpn_listener_cleanup_skipped reason=startup")
 
-    def _is_soft_disconnect(self, reason: Optional[str]) -> bool:
-        if not reason:
-            return False
-        return str(reason).lower() in ("operator_disconnect", "component_unmount")
+    def _sleep(self, seconds: float) -> None:
+        try:
+            import eventlet  # type: ignore
 
-    def _refresh_listener(self) -> None:
+            eventlet.sleep(seconds)
+        except Exception:
+            time.sleep(seconds)
+
+    def _start_watchdog(self) -> None:
+        def _loop() -> None:
+            while True:
+                try:
+                    self._watchdog_tick()
+                except Exception as exc:
+                    self._service_log_event(
+                        "vpn_listener_watchdog_failed error={0}".format(repr(exc)),
+                        level="ERROR",
+                    )
+                    self.logger.debug("WireGuard listener watchdog tick failed.", exc_info=True)
+                self._sleep(WATCHDOG_INTERVAL_SECONDS)
+
+        starter = getattr(self.socketio, "start_background_task", None)
+        try:
+            if callable(starter):
+                self._watchdog_thread = starter(_loop)
+                self._service_log_event(
+                    "vpn_listener_watchdog_started transport=socketio interval={0}".format(
+                        WATCHDOG_INTERVAL_SECONDS
+                    )
+                )
+                return
+        except Exception:
+            self.logger.debug("Failed to start WireGuard listener watchdog via socketio.", exc_info=True)
+
+        thread = threading.Thread(target=_loop, daemon=True)
+        thread.start()
+        self._watchdog_thread = thread
+        self._service_log_event(
+            "vpn_listener_watchdog_started transport=thread interval={0}".format(
+                WATCHDOG_INTERVAL_SECONDS
+            )
+        )
+
+    def _active_sessions(self) -> List[VpnSession]:
+        with self._lock:
+            return list(self._sessions_by_agent.values())
+
+    def _apply_listener_health_locked(
+        self,
+        health: Mapping[str, Any],
+        *,
+        active_sessions: bool,
+        recovery_in_progress: Optional[bool] = None,
+    ) -> None:
+        self._listener_healthy = bool(health.get("healthy"))
+        self._listener_health_reason = str(health.get("reason") or "")
+        if recovery_in_progress is None:
+            recovery_flag = active_sessions and not self._listener_healthy
+        else:
+            recovery_flag = active_sessions and bool(recovery_in_progress)
+        self._recovery_in_progress = recovery_flag
+        if self._listener_healthy:
+            self._last_throttle_log_at = None
+
+    def _clear_listener_health(self, *, reason: str) -> None:
+        with self._lock:
+            self._listener_healthy = False
+            self._listener_health_reason = reason
+            self._recovery_in_progress = False
+
+    def _check_listener_health(self) -> Mapping[str, Any]:
+        try:
+            return dict(self.wg.check_listener_health())
+        except Exception as exc:
+            self.logger.debug("WireGuard listener health check failed.", exc_info=True)
+            return {
+                "healthy": False,
+                "reason": "health_check_failed",
+                "service_state": None,
+                "error": repr(exc),
+            }
+
+    def _listener_health_payload(self, *, refresh: bool = False) -> Mapping[str, Any]:
+        active_sessions = self._active_sessions()
+        if not active_sessions:
+            self._clear_listener_health(reason="no_active_sessions")
+            return {
+                "listener_healthy": False,
+                "recovery_in_progress": False,
+                "last_recovery_attempt_at": None,
+                "last_recovery_attempt_at_iso": "",
+            }
+
+        if refresh:
+            health = self._check_listener_health()
+            with self._lock:
+                self._apply_listener_health_locked(
+                    health,
+                    active_sessions=True,
+                )
+
+        with self._lock:
+            return {
+                "listener_healthy": self._listener_healthy,
+                "recovery_in_progress": self._recovery_in_progress,
+                "last_recovery_attempt_at": (
+                    int(self._last_recovery_attempt_at) if self._last_recovery_attempt_at is not None else None
+                ),
+                "last_recovery_attempt_at_iso": self._last_recovery_attempt_at_iso,
+            }
+
+    def _build_listener_peers(self) -> List[Mapping[str, object]]:
         peers: List[Mapping[str, object]] = []
-        for session in self._sessions_by_agent.values():
+        for session in self._active_sessions():
             peer = self.wg.build_peer_profile(
                 session.agent_id,
                 session.virtual_ip,
@@ -226,13 +345,133 @@ class VpnTunnelService:
             peer = dict(peer)
             peer["public_key"] = session.client_public_key
             peers.append(peer)
+        return peers
+
+    def _refresh_listener(self) -> None:
+        peers = self._build_listener_peers()
         if not peers:
             self._service_log_event("vpn_listener_stop reason=no_peers")
             self.wg.stop_listener()
+            self._clear_listener_health(reason="no_active_sessions")
             return
         agent_list = ",".join(str(peer.get("agent_id", "")) for peer in peers if peer.get("agent_id"))
         self._service_log_event("vpn_listener_start peers={0} agents={1}".format(len(peers), agent_list))
         self.wg.start_listener(peers)
+        health = self._check_listener_health()
+        with self._lock:
+            self._apply_listener_health_locked(health, active_sessions=True)
+
+    def _recover_listener(self, *, trigger: str, reason: str) -> Mapping[str, Any]:
+        active_sessions = self._active_sessions()
+        if not active_sessions:
+            self._clear_listener_health(reason="no_active_sessions")
+            return self._listener_health_payload(refresh=False)
+
+        initial_health = self._check_listener_health()
+        if initial_health.get("healthy"):
+            with self._lock:
+                self._apply_listener_health_locked(initial_health, active_sessions=True, recovery_in_progress=False)
+            return self._listener_health_payload(refresh=False)
+
+        now = time.time()
+        throttled = False
+        with self._lock:
+            self._apply_listener_health_locked(initial_health, active_sessions=True, recovery_in_progress=True)
+            last_attempt = self._last_recovery_attempt_at
+            if last_attempt is not None and (now - last_attempt) < LISTENER_RECOVERY_MIN_INTERVAL_SECONDS:
+                if (
+                    self._last_throttle_log_at is None
+                    or (now - self._last_throttle_log_at) >= LISTENER_RECOVERY_MIN_INTERVAL_SECONDS
+                ):
+                    self._service_log_event(
+                        "vpn_listener_recovery_throttled trigger={0} reason={1} service_reason={2} min_retry_interval={3}".format(
+                            trigger or "-",
+                            reason or "-",
+                            self._listener_health_reason or "-",
+                            LISTENER_RECOVERY_MIN_INTERVAL_SECONDS,
+                        ),
+                        level="WARNING",
+                    )
+                    self._last_throttle_log_at = now
+                throttled = True
+            else:
+                self._last_recovery_attempt_at = now
+                self._last_recovery_attempt_at_iso = self._ts_to_iso(now)
+
+        if throttled:
+            return self._listener_health_payload(refresh=False)
+
+        prior_state = initial_health.get("service_state") or "-"
+        prior_reason = initial_health.get("reason") or "unhealthy"
+        self._service_log_event(
+            "vpn_listener_recovery_attempt trigger={0} reason={1} prior_reason={2} prior_state={3}".format(
+                trigger or "-",
+                reason or "-",
+                prior_reason,
+                prior_state,
+            ),
+            level="WARNING",
+        )
+
+        try:
+            self._refresh_listener()
+        except Exception as exc:
+            with self._lock:
+                self._recovery_in_progress = True
+                self._listener_healthy = False
+                self._listener_health_reason = "refresh_failed"
+            self._service_log_event(
+                "vpn_listener_recovery_failed trigger={0} reason={1} error={2}".format(
+                    trigger or "-",
+                    reason or "-",
+                    repr(exc),
+                ),
+                level="ERROR",
+            )
+            self.logger.debug("WireGuard listener recovery attempt failed.", exc_info=True)
+            return self._listener_health_payload(refresh=False)
+
+        recovered_health = self._check_listener_health()
+        with self._lock:
+            self._apply_listener_health_locked(
+                recovered_health,
+                active_sessions=True,
+                recovery_in_progress=not bool(recovered_health.get("healthy")),
+            )
+        event_name = "vpn_listener_recovery_success" if recovered_health.get("healthy") else "vpn_listener_recovery_failed"
+        event_level = "INFO" if recovered_health.get("healthy") else "ERROR"
+        self._service_log_event(
+            "{0} trigger={1} reason={2} service_reason={3} service_state={4}".format(
+                event_name,
+                trigger or "-",
+                reason or "-",
+                recovered_health.get("reason") or "-",
+                recovered_health.get("service_state") or "-",
+            ),
+            level=event_level,
+        )
+        return self._listener_health_payload(refresh=False)
+
+    def _ensure_listener_ready(self, *, trigger: str, reason: str) -> Mapping[str, Any]:
+        health = self._listener_health_payload(refresh=True)
+        if health.get("listener_healthy"):
+            return health
+        return self._recover_listener(trigger=trigger, reason=reason)
+
+    def _watchdog_tick(self) -> None:
+        active_sessions = self._active_sessions()
+        if not active_sessions:
+            self._clear_listener_health(reason="no_active_sessions")
+            return
+        health = self._listener_health_payload(refresh=True)
+        if health.get("listener_healthy"):
+            return
+        self._recover_listener(trigger="watchdog", reason="listener_unhealthy")
+
+    def _is_soft_disconnect(self, reason: Optional[str]) -> bool:
+        if not reason:
+            return False
+        return str(reason).lower() in ("operator_disconnect", "component_unmount")
 
     def connect(
         self,
@@ -271,8 +510,15 @@ class VpnTunnelService:
                         str(refreshed).lower(),
                     )
                 )
-                return self._session_payload(existing)
+                payload = dict(self._session_payload(existing))
+            else:
+                payload = {}
 
+        if payload:
+            self._ensure_listener_ready(trigger="connect_reuse", reason="session_reuse")
+            return payload
+
+        with self._lock:
             tunnel_id = uuid.uuid4().hex
             virtual_ip = self._allocate_virtual_ip(agent_id)
             allowed_ports = self._load_allowed_ports(agent_id)
@@ -361,12 +607,21 @@ class VpnTunnelService:
             session = self._sessions_by_agent.get(agent_id)
         if not session:
             return None
-        return self._session_payload(session, include_token=False)
+        payload = dict(self._session_payload(session, include_token=False))
+        payload.update(self._listener_health_payload(refresh=True))
+        return payload
 
     def list_sessions(self) -> List[Mapping[str, Any]]:
         with self._lock:
             sessions = sorted(self._sessions_by_agent.values(), key=lambda s: s.agent_id)
-        return [self._session_summary(session) for session in sessions]
+        health = self._listener_health_payload(refresh=bool(sessions))
+        return [
+            {
+                **self._session_summary(session),
+                **health,
+            }
+            for session in sessions
+        ]
 
     def session_payload(self, agent_id: str, *, include_token: bool = True) -> Optional[Mapping[str, Any]]:
         with self._lock:

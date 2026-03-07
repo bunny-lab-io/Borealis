@@ -118,6 +118,18 @@ def _infer_endpoint_host(req) -> str:
     return host
 
 
+def _down_status_payload(agent_id: str, *, agent_socket: bool) -> Dict[str, Any]:
+    return {
+        "status": "down",
+        "agent_id": agent_id,
+        "agent_socket": agent_socket,
+        "listener_healthy": False,
+        "recovery_in_progress": False,
+        "last_recovery_attempt_at": None,
+        "last_recovery_attempt_at_iso": "",
+    }
+
+
 def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
     blueprint = Blueprint("vpn_tunnel", __name__)
     logger = adapters.context.logger.getChild("vpn_tunnel.api")
@@ -220,7 +232,7 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
             _service_log_event(
                 "vpn_api_status_response agent_id={0} status=down".format(agent_id)
             )
-            return jsonify({"status": "down", "agent_id": agent_id, "agent_socket": agent_socket}), 200
+            return jsonify(_down_status_payload(agent_id, agent_socket=agent_socket)), 200
         payload["status"] = "up"
         payload["agent_socket"] = agent_socket
         if bump:
