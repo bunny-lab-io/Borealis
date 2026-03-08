@@ -130,7 +130,6 @@ function getWireguardTunnelPresentation(tunnelInfo) {
   const listenerHealthy = tunnelInfo?.listener_healthy !== false;
   const isTunnelOnline =
     tunnelState === "up" &&
-    Boolean(tunnelInfo?.agent_socket) &&
     listenerHealthy &&
     Boolean(peerIp);
   const statusText = recoveryInProgress ? "Recovering" : isTunnelOnline ? "Online" : "Offline";

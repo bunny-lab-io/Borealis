@@ -299,11 +299,10 @@ function wireguardStatusFromTunnel(tunnel) {
   if (!tunnel || typeof tunnel !== "object") return "Offline";
   if (Boolean(tunnel.recovery_in_progress)) return "Recovering";
   const tunnelState = String(tunnel.status || "").trim().toLowerCase();
-  const agentSocket = Boolean(tunnel.agent_socket);
   const listenerHealthy = tunnel.listener_healthy !== false;
   let peerIp = String(tunnel.virtual_ip || "").trim();
   if (peerIp.includes("/")) peerIp = peerIp.split("/")[0];
-  return tunnelState === "up" && agentSocket && listenerHealthy && Boolean(peerIp) ? "Online" : "Offline";
+  return tunnelState === "up" && listenerHealthy && Boolean(peerIp) ? "Online" : "Offline";
 }
 
 function formatUptime(seconds) {
