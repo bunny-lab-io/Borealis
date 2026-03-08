@@ -377,33 +377,69 @@ class ShellServer:
         self.port = port or _resolve_shell_port()
         self.shell_kind = shell_kind
         self.shell_bin = shell_bin
+        self._stop = threading.Event()
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
-        _write_log(
-            "VPN shell server listening on {0}:{1} type={2} shell={3}".format(
-                self.host,
-                self.port,
-                self.shell_kind,
-                self.shell_bin or "missing",
-            )
-        )
 
     def _serve(self) -> None:
-        # Accept TCP shell connections; restrict to the WireGuard subnet.
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server.bind((self.host, self.port))
-            server.listen(5)
-            while True:
-                conn, addr = server.accept()
-                remote_ip = addr[0]
-                if not remote_ip.startswith("10.255."):
-                    _write_log(f"Rejected shell connection from {remote_ip}")
-                    conn.close()
-                    continue
-                _write_log(f"Accepted shell connection from {remote_ip}")
-                session = ShellSession(conn, addr, self.shell_kind, self.shell_bin)
-                threading.Thread(target=session.start, daemon=True).start()
+        # Accept TCP shell connections; restrict to the WireGuard subnet and keep retrying on bind failures.
+        retry_delay = 5
+        while not self._stop.is_set():
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+                    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    server.bind((self.host, self.port))
+                    server.listen(5)
+                    server.settimeout(1.0)
+                    _write_log(
+                        "VPN shell server listening on {0}:{1} type={2} shell={3}".format(
+                            self.host,
+                            self.port,
+                            self.shell_kind,
+                            self.shell_bin or "missing",
+                        )
+                    )
+                    while not self._stop.is_set():
+                        try:
+                            conn, addr = server.accept()
+                        except socket.timeout:
+                            continue
+                        except Exception as exc:
+                            if self._stop.is_set():
+                                break
+                            _write_log(
+                                "VPN shell server accept error on {0}:{1}: {2}".format(
+                                    self.host,
+                                    self.port,
+                                    exc,
+                                )
+                            )
+                            break
+                        remote_ip = addr[0]
+                        if not remote_ip.startswith("10.255."):
+                            _write_log(f"Rejected shell connection from {remote_ip}")
+                            conn.close()
+                            continue
+                        _write_log(f"Accepted shell connection from {remote_ip}")
+                        session = ShellSession(conn, addr, self.shell_kind, self.shell_bin)
+                        threading.Thread(target=session.start, daemon=True).start()
+            except Exception as exc:
+                if self._stop.is_set():
+                    break
+                _write_log(
+                    "VPN shell server failed on {0}:{1} type={2} shell={3} error={4}; retrying in {5}s".format(
+                        self.host,
+                        self.port,
+                        self.shell_kind,
+                        self.shell_bin or "missing",
+                        exc,
+                        retry_delay,
+                    )
+                )
+                time.sleep(retry_delay)
+
+    def stop(self) -> None:
+        self._stop.set()
 
 
 class Role:
@@ -426,4 +462,9 @@ class Role:
         return
 
     def stop_all(self) -> None:
+        if self.server and hasattr(self.server, "stop"):
+            try:
+                self.server.stop()
+            except Exception:
+                pass
         return

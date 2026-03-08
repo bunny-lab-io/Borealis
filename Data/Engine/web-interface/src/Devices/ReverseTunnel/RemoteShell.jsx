@@ -368,6 +368,9 @@ export default function ReverseTunnelRemoteShell({ device }) {
           setStatusMessage(`Waiting for shell session (${attempt})...`);
           await sleep(2000);
         }
+        if ((lastError || "") === "shell_connect_failed") {
+          throw new Error("Agent shell service did not accept a WireGuard connection within 60 seconds.");
+        }
         throw new Error(lastError || "shell_connect_failed");
       };
 
@@ -382,7 +385,7 @@ export default function ReverseTunnelRemoteShell({ device }) {
       setShellState("connected");
       setStatusMessage("");
     } catch (err) {
-      if (connectAttemptRef.current !== connectAttempt || activeAgentIdRef.current !== targetAgentId) {
+      if (connectAttemptRef.current !== connectAttempt) {
         return;
       }
       activeSessionIdRef.current = "";
@@ -391,7 +394,7 @@ export default function ReverseTunnelRemoteShell({ device }) {
       setShellState("closed");
       setStatusMessage(String(err?.message || err || "shell_connect_failed"));
     } finally {
-      if (connectAttemptRef.current === connectAttempt && activeAgentIdRef.current === targetAgentId) {
+      if (connectAttemptRef.current === connectAttempt) {
         setLoading(false);
       }
     }
