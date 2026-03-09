@@ -312,6 +312,7 @@ export default function DeviceList({
   onPageMetaChange,
 }) {
   const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [selected, setSelected] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -686,17 +687,18 @@ export default function DeviceList({
   }, []);
 
   const fetchDevices = useCallback(async (options = {}) => {
-    const { refreshRepo = false } = options || {};
-    let repoSha = repoHash;
-    if (refreshRepo || !repoSha) {
-      const fetched = await fetchLatestRepoHash({ force: refreshRepo });
-      if (fetched) repoSha = fetched;
-    }
-
-    const hashById = new Map();
-    const hashByGuid = new Map();
-    const hashByHost = new Map();
+    const { refreshRepo = false, showLoading = true } = options || {};
+    if (showLoading) setLoading(true);
     try {
+      let repoSha = repoHash;
+      if (refreshRepo || !repoSha) {
+        const fetched = await fetchLatestRepoHash({ force: refreshRepo });
+        if (fetched) repoSha = fetched;
+      }
+
+      const hashById = new Map();
+      const hashByGuid = new Map();
+      const hashByHost = new Map();
       const hashResp = await fetch('/api/agent/hash_list');
       if (hashResp.ok) {
         const hashJson = await hashResp.json();
@@ -901,6 +903,8 @@ export default function DeviceList({
     } catch (e) {
       console.warn('Failed to load devices:', e);
       setRows([]);
+    } finally {
+      if (showLoading) setLoading(false);
     }
   }, [repoHash, fetchLatestRepoHash, computeAgentVersion, filterMode, fetchTunnelTelemetry, applyTunnelTelemetry]);
 
