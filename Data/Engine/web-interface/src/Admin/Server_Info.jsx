@@ -1,24 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Paper, Box, Typography, Button, Stack } from "@mui/material";
+import { Paper, Box, Typography } from "@mui/material";
 import { GitHub as GitHubIcon, InfoOutlined as InfoIcon } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreditsDialog } from "../Dialogs.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
-
-const gradientButtonSx = {
-  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
-  color: "#0b1220",
-  borderRadius: 999,
-  textTransform: "none",
-  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
-  "&:hover": {
-    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
-    filter: "none",
-  },
-};
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -59,15 +46,6 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
     return () => { isMounted = false; clearInterval(id); };
   }, [isAdmin]);
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: "Server Info",
-      page_subtitle: "Basic server information and project links for debugging and support.",
-      page_icon: InfoIcon,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange]);
-
   const infoRows = useMemo(
     () => [
       {
@@ -79,6 +57,36 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
     ],
     [error, serverTime]
   );
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "server-github",
+        label: "GitHub Project",
+        icon: <GitHubIcon />,
+        tone: "secondary",
+        onClick: () => window.open("https://github.com/bunny-lab-io/Borealis", "_blank"),
+      },
+      {
+        id: "server-about",
+        label: "About Borealis",
+        icon: <InfoIcon />,
+        tone: "primary",
+        onClick: () => setAboutOpen(true),
+      },
+    ],
+    []
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: "Server Info",
+      page_subtitle: "Basic server information and project links for debugging and support.",
+      page_icon: InfoIcon,
+      page_header_actions: pageHeaderActions,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions]);
 
   const columnDefs = useMemo(
     () => [
@@ -93,46 +101,6 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
 
   return (
     <Paper sx={{ m: 0, p: 0, bgcolor: "transparent", border: "none", boxShadow: "none" }} elevation={0}>
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 20 },
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
-          <Button
-            variant="outlined"
-            startIcon={<GitHubIcon />}
-            onClick={() => window.open("https://github.com/bunny-lab-io/Borealis", "_blank")}
-            sx={{
-              borderColor: "rgba(148,163,184,0.4)",
-              color: "#e2e8f0",
-              textTransform: "none",
-              borderRadius: 999,
-              px: 1.9,
-              minWidth: 150,
-              backgroundColor: "rgba(12,18,35,0.85)",
-              "&:hover": {
-                borderColor: "rgba(125,211,252,0.85)",
-                backgroundColor: "rgba(16,24,44,0.95)",
-              },
-            }}
-          >
-            GitHub Project
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<InfoIcon />}
-            onClick={() => setAboutOpen(true)}
-            sx={{ ...gradientButtonSx, minWidth: 150 }}
-          >
-            About Borealis
-          </Button>
-        </Stack>
-      </Box>
       <Box
         sx={{
           p: 2,

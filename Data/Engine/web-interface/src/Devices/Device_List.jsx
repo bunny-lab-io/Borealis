@@ -11,9 +11,7 @@ import {
   MenuItem,
   Popover,
   TextField,
-  Tooltip,
   Checkbox,
-  Stack,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import ViewColumnIcon from "@mui/icons-material/ViewColumn";
@@ -67,23 +65,6 @@ const MAGIC_UI = {
 };
 
 const PAGE_ICON = DevicesOtherIcon;
-
-const RAINBOW_BUTTON_SX = {
-  borderRadius: 999,
-  textTransform: "none",
-  fontWeight: 600,
-  px: 2.5,
-  color: "#f8fafc",
-  border: "1px solid transparent",
-  backgroundImage:
-    "linear-gradient(#05070f, #05070f), linear-gradient(120deg, #ff7c7c, #ffd36b, #7dffb7, #7dd3fc, #c084fc)",
-  backgroundOrigin: "border-box",
-  backgroundClip: "padding-box, border-box",
-  boxShadow: "0 0 26px rgba(45, 212, 191, 0.45)",
-  "&:hover": {
-    boxShadow: "0 0 32px rgba(45, 212, 191, 0.55)",
-  },
-};
 
 const getOsIconClass = (osName) => {
   const value = (osName || "").toString().toLowerCase();
@@ -639,15 +620,6 @@ export default function DeviceList({
     return `Monitoring ${heroStats.total} managed endpoint(s) ${sitePart}.`;
   }, [heroStats]);
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: computedTitle,
-      page_subtitle: heroSubtitle,
-      page_icon: PAGE_ICON,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [computedTitle, heroSubtitle, onPageMetaChange]);
-
   const fetchTunnelTelemetry = useCallback(async () => {
     const peerByAgent = new Map();
     const statusByAgent = new Map();
@@ -1138,6 +1110,76 @@ export default function DeviceList({
     },
     [replaceFilters]
   );
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "device-columns",
+        label: "Columns",
+        icon: <ViewColumnIcon />,
+        tone: "secondary",
+        onClick: (event) => setColChooserAnchor(event.currentTarget),
+      },
+      {
+        id: "device-refresh",
+        label: "Refresh",
+        icon: <CachedIcon />,
+        tone: "secondary",
+        loading,
+        onClick: () => fetchDevices({ refreshRepo: true }),
+      },
+      {
+        id: "device-quick-job",
+        label: "Quick Job",
+        tone: "accent",
+        disabled: !canLaunchQuickJob,
+        onClick: () => {
+          if (!canLaunchQuickJob) return;
+          const hostnames = rows
+            .filter((row) => selectedIds.has(row.id))
+            .map((row) => row.hostname)
+            .filter((hostname) => Boolean(hostname));
+          if (!hostnames.length) return;
+          onQuickJobLaunch(hostnames);
+        },
+      },
+      ...(derivedShowAddButton
+        ? [
+            {
+              id: "device-add",
+              label: derivedAddLabel,
+              icon: <AddIcon />,
+              tone: "primary",
+              onClick: () => {
+                setAddDeviceType(derivedDefaultType ?? null);
+                setAddDeviceOpen(true);
+              },
+            },
+          ]
+        : []),
+    ],
+    [
+      canLaunchQuickJob,
+      derivedAddLabel,
+      derivedDefaultType,
+      derivedShowAddButton,
+      fetchDevices,
+      loading,
+      onQuickJobLaunch,
+      rows,
+      selectedIds,
+    ]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: computedTitle,
+      page_subtitle: heroSubtitle,
+      page_icon: PAGE_ICON,
+      page_header_actions: pageHeaderActions,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [computedTitle, heroSubtitle, onPageMetaChange, pageHeaderActions]);
 
   const handleSelectionChanged = useCallback(() => {
     const api = gridRef.current?.api;
@@ -1682,102 +1724,6 @@ export default function DeviceList({
       }}
       elevation={0}
     >
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 20 },
-          display: "flex",
-          justifyContent: "flex-end",
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
-          <Button
-            variant="contained"
-            size="small"
-            disabled={!canLaunchQuickJob}
-            disableElevation
-            onClick={() => {
-              if (!canLaunchQuickJob) return;
-              const hostnames = rows
-                .filter((r) => selectedIds.has(r.id))
-                .map((r) => r.hostname)
-                .filter((hostname) => Boolean(hostname));
-              if (!hostnames.length) return;
-              onQuickJobLaunch(hostnames);
-            }}
-            sx={{
-              borderRadius: 999,
-              px: 2.2,
-              textTransform: "none",
-              fontWeight: 600,
-              background: canLaunchQuickJob ? "linear-gradient(135deg, #34d399, #22d3ee)" : "rgba(148,163,184,0.2)",
-              color: canLaunchQuickJob ? "#041224" : MAGIC_UI.textMuted,
-              border: canLaunchQuickJob ? "none" : "1px solid rgba(148,163,184,0.35)",
-              boxShadow: canLaunchQuickJob ? "0 0 24px rgba(45, 212, 191, 0.45)" : "none",
-            }}
-          >
-            Quick Job
-          </Button>
-          <Tooltip title="Refresh devices to detect changes">
-            <span>
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<CachedIcon fontSize="small" />}
-                onClick={() => fetchDevices({ refreshRepo: true })}
-                sx={{
-                  borderRadius: 999,
-                  textTransform: "none",
-                  fontWeight: 600,
-                  color: MAGIC_UI.textBright,
-                  borderColor: "rgba(148,163,184,0.45)",
-                  px: 1.8,
-                  "&:hover": { borderColor: MAGIC_UI.accentA, backgroundColor: "rgba(125,211,252,0.08)" },
-                }}
-              >
-                Refresh
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip title="Column chooser">
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<ViewColumnIcon fontSize="small" />}
-              onClick={(e) => setColChooserAnchor(e.currentTarget)}
-              sx={{
-                borderRadius: 999,
-                textTransform: "none",
-                fontWeight: 600,
-                color: MAGIC_UI.textBright,
-                borderColor: "rgba(148,163,184,0.45)",
-                px: 1.8,
-                "&:hover": { borderColor: MAGIC_UI.accentA, backgroundColor: "rgba(125,211,252,0.08)" },
-              }}
-            >
-              Columns
-            </Button>
-          </Tooltip>
-          {derivedShowAddButton && (
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<AddIcon />}
-              disableElevation
-              sx={RAINBOW_BUTTON_SX}
-              onClick={() => {
-                setAddDeviceType(derivedDefaultType ?? null);
-                setAddDeviceOpen(true);
-              }}
-            >
-              {derivedAddLabel}
-            </Button>
-          )}
-        </Stack>
-      </Box>
       <Box sx={{ px: { xs: 2, md: 3 }, pt: { xs: 2, md: 3 }, pb: 1.5 }}>
         <Typography sx={{ fontSize: "0.72rem", color: MAGIC_UI.textMuted, textTransform: "uppercase", letterSpacing: 0.45, mb: 0.5 }}>
           Custom View

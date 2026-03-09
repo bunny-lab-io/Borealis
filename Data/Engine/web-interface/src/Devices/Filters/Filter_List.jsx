@@ -4,9 +4,6 @@ import {
   Box,
   Typography,
   Button,
-  IconButton,
-  Stack,
-  Tooltip,
 } from "@mui/material";
 import {
   FilterAlt as HeaderIcon,
@@ -42,18 +39,6 @@ const PAGE_TITLE = "Device Filters";
 const PAGE_SUBTITLE =
   "Build reusable filter definitions to target devices and assemblies without per-site duplication.";
 const PAGE_ICON = HeaderIcon;
-
-const gradientButtonSx = {
-  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
-  color: "#0b1220",
-  borderRadius: 999,
-  textTransform: "none",
-  px: 2.4,
-  minWidth: 126,
-  "&:hover": {
-    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-  },
-};
 
 const AUTO_SIZE_COLUMNS = ["type", "deviceCount", "site", "lastEditedBy", "lastEdited"];
 const FILTER_TYPE_META = {
@@ -216,15 +201,6 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
   }, []);
 
   useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: PAGE_ICON,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange]);
-
-  useEffect(() => {
     loadFilters();
   }, [loadFilters, refreshToken]);
 
@@ -339,6 +315,37 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
     []
   );
 
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "filter-list-refresh",
+        label: "Refresh",
+        icon: <CachedIcon />,
+        tone: "secondary",
+        loading,
+        onClick: loadFilters,
+      },
+      {
+        id: "filter-list-create",
+        label: "New Filter",
+        icon: <AddIcon />,
+        tone: "primary",
+        onClick: () => onCreateFilter?.(),
+      },
+    ],
+    [loadFilters, loading, onCreateFilter]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: PAGE_TITLE,
+      page_subtitle: PAGE_SUBTITLE,
+      page_icon: PAGE_ICON,
+      page_header_actions: pageHeaderActions,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions]);
+
   return (
     <Paper
       elevation={0}
@@ -354,55 +361,6 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
         gap: 2,
       }}
     >
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 24 },
-          display: "flex",
-          justifyContent: "flex-end",
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
-          <Tooltip title="Refresh">
-            <span>
-              <Button
-                startIcon={<CachedIcon fontSize="small" />}
-                variant="outlined"
-                aria-label="Refresh filters"
-                onClick={loadFilters}
-                sx={{
-                  textTransform: "none",
-                  color: "#a5e0ff",
-                  borderColor: "rgba(148,163,184,0.4)",
-                  backgroundColor: "rgba(5,7,15,0.6)",
-                  borderRadius: 999,
-                  px: 2.4,
-                  minWidth: 126,
-                  height: 38,
-                  "&:hover": {
-                    backgroundColor: "rgba(125,183,255,0.16)",
-                    borderColor: "rgba(148,163,184,0.6)",
-                  },
-                }}
-              >
-                Refresh
-              </Button>
-            </span>
-          </Tooltip>
-          <Button
-            startIcon={<AddIcon />}
-            variant="contained"
-            onClick={() => onCreateFilter?.()}
-            sx={gradientButtonSx}
-          >
-            New Filter
-          </Button>
-        </Stack>
-      </Box>
-
       <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 1.5 }}>
         <Box
           className={gridTheme.themeName}

@@ -8,6 +8,7 @@ import {
   CloseAllDialog, RenameTabDialog, TabContextMenu, NotAuthorizedDialog
 } from "./Dialogs";
 import NavigationSidebar from "./Navigation_Sidebar";
+import { PageHeaderActionRail } from "./Page_Header_Actions.jsx";
 
 // Styling Imports
 import {
@@ -102,6 +103,14 @@ const APP_AURORA_BACKGROUND =
   "linear-gradient(180deg, #040711 0%, #050816 45%, #050816 100%)";
 
 const LOCAL_STORAGE_KEY = "borealis_persistent_state";
+const EMPTY_PAGE_HEADER = {
+  title: "",
+  subtitle: "",
+  Icon: null,
+  actions: [],
+  controls: [],
+  badges: [],
+};
 
   export default function App() {
   const [tabs, setTabs] = useState([{ id: "flow_1", tab_name: "Flow 1", nodes: [], edges: [] }]);
@@ -131,7 +140,7 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   const pendingPathRef = useRef(null);
   const quickJobSeedRef = useRef(0);
       const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
-  const [pageHeader, setPageHeader] = useState({ title: "", subtitle: "", Icon: null });
+  const [pageHeader, setPageHeader] = useState(EMPTY_PAGE_HEADER);
 
   const clearClientSession = useCallback(() => {
     try { localStorage.removeItem("borealis_session"); } catch {}
@@ -182,16 +191,22 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
 
   const handlePageMetaChange = useCallback((meta) => {
     if (!meta) {
-      setPageHeader({ title: "", subtitle: "", Icon: null });
+      setPageHeader(EMPTY_PAGE_HEADER);
       return;
     }
     const titleValue = typeof meta.page_title === "string" ? meta.page_title : meta.title;
     const subtitleValue = typeof meta.page_subtitle === "string" ? meta.page_subtitle : meta.subtitle;
     const iconValue = meta.page_icon || meta.Icon || null;
+    const actionsValue = Array.isArray(meta.page_header_actions) ? meta.page_header_actions.filter(Boolean) : [];
+    const controlsValue = Array.isArray(meta.page_header_controls) ? meta.page_header_controls.filter(Boolean) : [];
+    const badgesValue = Array.isArray(meta.page_header_badges) ? meta.page_header_badges.filter(Boolean) : [];
     setPageHeader({
       title: typeof titleValue === "string" ? titleValue : "",
       subtitle: typeof subtitleValue === "string" ? subtitleValue : "",
       Icon: iconValue || null,
+      actions: actionsValue,
+      controls: controlsValue,
+      badges: badgesValue,
     });
   }, []);
 
@@ -1541,7 +1556,14 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
   }
 
   const HeaderIcon = pageHeader.Icon;
-  const hasPageHeader = Boolean(pageHeader.title);
+  const hasPageHeader = Boolean(
+    pageHeader.title ||
+    pageHeader.subtitle ||
+    pageHeader.Icon ||
+    pageHeader.actions?.length ||
+    pageHeader.controls?.length ||
+    pageHeader.badges?.length
+  );
 
   return (
     <ThemeProvider theme={darkTheme}>
@@ -1700,20 +1722,35 @@ const LOCAL_STORAGE_KEY = "borealis_persistent_state";
             }}
           >
             {hasPageHeader ? (
-              <Box sx={{ px: 3, pt: 3, pb: 1, flexShrink: 0 }}>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
-                  {HeaderIcon ? <HeaderIcon sx={{ fontSize: 22, color: "#7dd3fc" }} /> : null}
-                  <Typography variant="h6" sx={{ color: "#e2e8f0", fontWeight: 700, letterSpacing: 0.5 }}>
-                    {pageHeader.title}
-                  </Typography>
+              <Box sx={{ px: 3, pt: 3, pb: 1.5, flexShrink: 0 }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    flexDirection: { xs: "column", xl: "row" },
+                    alignItems: { xs: "stretch", xl: "flex-start" },
+                    justifyContent: "space-between",
+                    gap: 2,
+                  }}
+                >
+                  <Box sx={{ minWidth: 0, flex: "1 1 auto" }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+                      {HeaderIcon ? <HeaderIcon sx={{ fontSize: 22, color: "#7dd3fc" }} /> : null}
+                      <Typography variant="h6" sx={{ color: "#e2e8f0", fontWeight: 700, letterSpacing: 0.5 }}>
+                        {pageHeader.title}
+                      </Typography>
+                    </Box>
+                    {pageHeader.subtitle ? (
+                      <Typography variant="body2" sx={{ color: "#aaa", mt: 0.5 }}>
+                        {pageHeader.subtitle}
+                      </Typography>
+                    ) : null}
+                  </Box>
+                  <PageHeaderActionRail
+                    actions={pageHeader.actions}
+                    controls={pageHeader.controls}
+                    badges={pageHeader.badges}
+                  />
                 </Box>
-                {pageHeader.subtitle ? (
-                  <Typography variant="body2" sx={{ color: "#aaa", mt: 0.5, mb: 2 }}>
-                    {pageHeader.subtitle}
-                  </Typography>
-                ) : (
-                  <Box sx={{ mb: 2 }} />
-                )}
               </Box>
             ) : null}
             <Box

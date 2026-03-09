@@ -409,15 +409,6 @@ export default function AssemblyEditor({
     [pageTitle]
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: pageTitle,
-      page_subtitle: pageSubtitle,
-      page_icon: PAGE_ICON,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageSubtitle, pageTitle]);
-
   const TYPE_OPTIONS = useMemo(
     () => (isAnsible ? TYPE_OPTIONS_ALL.filter((o) => o.key === "ansible") : TYPE_OPTIONS_ALL.filter((o) => o.key !== "ansible")),
     [isAnsible]
@@ -895,6 +886,100 @@ export default function AssemblyEditor({
     ? new Date(queueInfo.dirty_since).toLocaleString()
     : null;
 
+  const pageHeaderBadges = useMemo(
+    () =>
+      [
+        <DomainBadge key="assembly-domain" domain={domain} size="small" />,
+        dirtyPillVisible ? <DirtyStatePill key="assembly-dirty" compact /> : null,
+      ].filter(Boolean),
+    [dirtyPillVisible, domain]
+  );
+
+  const pageHeaderActions = useMemo(() => {
+    const actions = [];
+    if (isAdmin && devModeEnabled) {
+      actions.push({
+        id: "assembly-flush-queue",
+        label: "Flush Queue",
+        tone: "warning",
+        disabled: devModeBusy || !dirtyPillVisible,
+        onClick: triggerFlushQueue,
+      });
+    }
+    if (isAdmin) {
+      actions.push({
+        id: "assembly-dev-mode",
+        label: devModeEnabled ? "Disable Dev Mode" : "Enable Dev Mode",
+        tone: "warning",
+        disabled: devModeBusy,
+        onClick: () => handleDevModeToggle(!devModeEnabled),
+      });
+    }
+    if (assemblyGuid) {
+      actions.push({
+        id: "assembly-delete",
+        label: "Delete",
+        icon: <DeleteIcon />,
+        tone: "danger",
+        disabled: deleteDisabled,
+        onClick: () => setDeleteOpen(true),
+      });
+    }
+    actions.push(
+      {
+        id: "assembly-import-export",
+        label: "Import / Export",
+        icon: <UploadFileIcon />,
+        tone: "secondary",
+        onClick: handleMenuOpen,
+      },
+      {
+        id: "assembly-rename",
+        label: "Rename",
+        tone: "secondary",
+        disabled: renameDisabled,
+        onClick: () => {
+          setRenameValue(assembly.name || "");
+          setRenameOpen(true);
+        },
+      },
+      {
+        id: "assembly-save",
+        label: "Save Assembly",
+        tone: "primary",
+        disabled: saveDisabled,
+        loading: saving,
+        onClick: handleSaveAssembly,
+      }
+    );
+    return actions;
+  }, [
+    assembly.name,
+    assemblyGuid,
+    deleteDisabled,
+    devModeBusy,
+    devModeEnabled,
+    dirtyPillVisible,
+    handleMenuOpen,
+    handleSaveAssembly,
+    isAdmin,
+    renameDisabled,
+    saveDisabled,
+    saving,
+    triggerFlushQueue,
+  ]);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: pageTitle,
+      page_subtitle: pageSubtitle,
+      page_icon: PAGE_ICON,
+      page_header_actions: pageHeaderActions,
+      page_header_badges: pageHeaderBadges,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions, pageHeaderBadges, pageSubtitle, pageTitle]);
+
   const siteScopeValue = assembly.sites?.mode === "specific" ? "specific" : "all";
   const selectedSiteValues = Array.isArray(assembly.sites?.values)
     ? assembly.sites.values.map((v) => String(v))
@@ -915,135 +1000,6 @@ export default function AssemblyEditor({
     >
       <Box sx={{ flex: 1, overflow: "auto", p: { xs: 2, md: 3 } }}>
         <Paper sx={{ p: { xs: 2.5, md: 3 }, ...SECTION_CARD_SX, minHeight: "100%" }} elevation={0}>
-          
-      <Grid container alignItems="center" justifyContent="space-between" sx={{ mb: 3 }}>
-        {/* Left half */}
-        <Grid item xs={12} sm={6}>
-          <Box>
-            <Typography variant="h6" sx={{ color: '#58a6ff', mb: 0 }}>Assembly Editor</Typography>
-            <Typography variant="body2" sx={{ color: '#aaa' }}>Create and edit variables, scripts, and other fields related to assemblies.</Typography>
-          </Box>
-        </Grid>
-
-        {/* Right half */}
-        <Grid item xs={12} sm={6}>
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 1.5,
-              flexWrap: "wrap",
-              justifyContent: { xs: "flex-start", sm: "flex-end" },
-              mt: { xs: 2, sm: 0 }
-            }}
-          >
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-              <DomainBadge domain={domain} size="small" />
-              {dirtyPillVisible ? <DirtyStatePill compact /> : null}
-            </Box>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={handleMenuOpen}
-              sx={{
-                textTransform: "none",
-                borderColor: "#2b3544",
-                color: "#e6edf3",
-                "&:hover": {
-                  borderColor: "#58a6ff",
-                  color: "#58a6ff",
-                },
-              }}
-            >
-              Import / Export
-            </Button>
-            {isAdmin ? (
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => handleDevModeToggle(!devModeEnabled)}
-                disabled={devModeBusy}
-                sx={{
-                  textTransform: "none",
-                  borderColor: devModeEnabled ? "#ffb347" : "#2b3544",
-                  color: devModeEnabled ? "#ffb347" : "#e6edf3",
-                  "&:hover": {
-                    borderColor: devModeEnabled ? "#ffcc80" : "#58a6ff",
-                    color: devModeEnabled ? "#ffcc80" : "#58a6ff",
-                  },
-                }}
-              >
-                {devModeEnabled ? "Disable Dev Mode" : "Enable Dev Mode"}
-              </Button>
-            ) : null}
-            {isAdmin && devModeEnabled ? (
-              <Button
-                size="small"
-                onClick={triggerFlushQueue}
-                disabled={devModeBusy || !dirtyPillVisible}
-                sx={{ color: "#f8d47a", textTransform: "none" }}
-              >
-                Flush Queue
-              </Button>
-            ) : null}
-            <Tooltip title="Rename Assembly">
-              <span>
-                <Button
-                  size="small"
-                  onClick={() => {
-                    setRenameValue(assembly.name || "");
-                    setRenameOpen(true);
-                  }}
-                  disabled={renameDisabled}
-                  sx={{ color: "#58a6ff", textTransform: "none" }}
-                >
-                  Rename
-                </Button>
-              </span>
-            </Tooltip>
-            {assemblyGuid ? (
-              <Tooltip title="Delete Assembly">
-                <span>
-                  <Button
-                    size="small"
-                    onClick={() => setDeleteOpen(true)}
-                    disabled={deleteDisabled}
-                    sx={{ color: "#ff6b6b", textTransform: "none" }}
-                  >
-                    Delete
-                  </Button>
-                </span>
-              </Tooltip>
-            ) : null}
-            <Button
-              variant="outlined"
-              onClick={handleSaveAssembly}
-              disabled={saveDisabled}
-              sx={{
-                color: saveDisabled ? "#3c4452" : "#58a6ff",
-                borderColor: saveDisabled ? "#2b3544" : "#58a6ff",
-                textTransform: "none",
-                backgroundColor: saving
-                  ? BACKGROUND_COLORS.primaryActionSaving
-                  : BACKGROUND_COLORS.field,
-                "&:hover": {
-                  borderColor: saveDisabled ? "#2b3544" : "#7db7ff",
-                  backgroundColor: saveDisabled
-                    ? BACKGROUND_COLORS.field
-                    : BACKGROUND_COLORS.primaryActionHover,
-                },
-                "&.Mui-disabled": {
-                  color: "#3c4452",
-                  borderColor: "#2b3544"
-                }
-              }}
-            >
-              {saving ? "Saving..." : "Save Assembly"}
-            </Button>
-          </Box>
-      </Grid>
-      </Grid>
-
       <Menu
         anchorEl={menuAnchorEl}
         open={Boolean(menuAnchorEl)}

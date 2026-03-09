@@ -6,7 +6,6 @@ import {
   Button,
   Menu,
   MenuItem,
-  IconButton,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -14,7 +13,6 @@ import {
   TextField,
   CircularProgress,
   Link as MuiLink,
-  Stack,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
@@ -264,15 +262,6 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       /* notification transport is best-effort */
     }
   }, []);
-
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: "Assemblies",
-      page_subtitle: "Collections of scripts, workflows, and playbooks used to automate tasks across devices.",
-      page_icon: AppsIcon,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange]);
 
   const fetchAssemblies = useCallback(async () => {
     setLoading(true);
@@ -536,7 +525,36 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
 
   const gridWrapperClass = themeClassName;
 
-  const handleRefresh = () => fetchAssemblies();
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "assemblies-refresh",
+        label: "Refresh",
+        icon: <CachedIcon />,
+        tone: "secondary",
+        loading,
+        onClick: fetchAssemblies,
+      },
+      {
+        id: "assemblies-new",
+        label: "New Assembly",
+        icon: <AddIcon />,
+        tone: "primary",
+        onClick: (event) => setNewMenuAnchor(event.currentTarget),
+      },
+    ],
+    [fetchAssemblies, loading]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: "Assemblies",
+      page_subtitle: "Collections of scripts, workflows, and playbooks used to automate tasks across devices.",
+      page_icon: AppsIcon,
+      page_header_actions: pageHeaderActions,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions]);
 
   const handleNewAssemblyOption = (typeKey) => {
     setNewMenuAnchor(null);
@@ -613,71 +631,23 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       }}
       elevation={0}
     >
-      {/* Page-level action button (floating top-right) */}
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 20 },
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
+      <Box sx={{ px: 2, mt: 1, minHeight: 28, display: "flex", alignItems: "center" }}>
+        {error ? (
+          <Typography variant="body2" sx={{ color: "#ff8a8a" }}>
+            {error}
+          </Typography>
+        ) : null}
+      </Box>
+      <Menu
+        anchorEl={newMenuAnchor}
+        open={Boolean(newMenuAnchor)}
+        onClose={() => setNewMenuAnchor(null)}
+        PaperProps={MENU_PROPS.PaperProps}
       >
-        <Stack direction="row" spacing={1.25} alignItems="center" sx={{ pointerEvents: "auto" }}>
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={<AddIcon />}
-            onClick={(event) => setNewMenuAnchor(event.currentTarget)}
-            sx={{
-              backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
-              color: "#0b1220",
-              borderRadius: 999,
-              textTransform: "none",
-              boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
-              "&:hover": {
-                backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-                boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
-                filter: "none",
-              },
-            }}
-          >
-            New Assembly
-          </Button>
-        </Stack>
-      </Box>
-
-      <Box sx={{ px: 2, mt: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1 }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <IconButton
-            size="small"
-            onClick={handleRefresh}
-            sx={{
-              color: "#ccc",
-              border: "none",
-              borderRadius: 1,
-              "&:hover": { color: "#fff", borderColor: "#555" },
-            }}
-          >
-            <CachedIcon fontSize="small" />
-          </IconButton>
-          {error ? (
-            <Typography variant="body2" sx={{ color: "#ff8a8a" }}>
-              {error}
-            </Typography>
-          ) : null}
-        </Box>
-        <Menu
-          anchorEl={newMenuAnchor}
-          open={Boolean(newMenuAnchor)}
-          onClose={() => setNewMenuAnchor(null)}
-          PaperProps={MENU_PROPS.PaperProps}
-        >
-          <MenuItem onClick={() => handleNewAssemblyOption("script")}>Script</MenuItem>
-          <MenuItem onClick={() => handleNewAssemblyOption("workflow")}>Workflow</MenuItem>
-          <MenuItem onClick={() => handleNewAssemblyOption("ansible")}>Ansible Playbook</MenuItem>
-        </Menu>
-      </Box>
+        <MenuItem onClick={() => handleNewAssemblyOption("script")}>Script</MenuItem>
+        <MenuItem onClick={() => handleNewAssemblyOption("workflow")}>Workflow</MenuItem>
+        <MenuItem onClick={() => handleNewAssemblyOption("ansible")}>Ansible Playbook</MenuItem>
+      </Menu>
       <Box sx={{ mt: "10px", px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Box
           className={gridWrapperClass}

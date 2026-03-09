@@ -1,14 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
-  Button,
   IconButton,
   Menu,
   MenuItem,
   Paper,
   Typography,
   CircularProgress,
-  Stack,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import AddIcon from "@mui/icons-material/Add";
@@ -42,19 +40,6 @@ const myTheme = themeQuartz.withParams({
 const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
-const gradientButtonSx = {
-  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
-  color: "#0b1220",
-  borderRadius: 999,
-  textTransform: "none",
-  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
-  "&:hover": {
-    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
-    filter: "none",
-  },
-};
-
 function formatTs(ts) {
   if (!ts) return "-";
   const date = new Date(Number(ts) * 1000);
@@ -229,20 +214,11 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
     fetchCredentials();
   }, [fetchCredentials]);
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: "Credentials",
-      page_subtitle: "Stored credentials for remote automation tasks and Ansible playbook runs.",
-      page_icon: LockIcon,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange]);
-
-  const handleCreate = () => {
+  const handleCreate = useCallback(() => {
     setEditorMode("create");
     setEditingCredential(null);
     setEditorOpen(true);
-  };
+  }, []);
 
   const handleEdit = (row) => {
     closeMenu();
@@ -296,6 +272,37 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
     }
   }, [loading, rows]);
 
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "credentials-refresh",
+        label: "Refresh",
+        icon: <RefreshIcon />,
+        tone: "secondary",
+        loading,
+        onClick: fetchCredentials,
+      },
+      {
+        id: "credentials-create",
+        label: "New Credential",
+        icon: <AddIcon />,
+        tone: "primary",
+        onClick: handleCreate,
+      },
+    ],
+    [fetchCredentials, handleCreate, loading]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: "Credentials",
+      page_subtitle: "Stored credentials for remote automation tasks and Ansible playbook runs.",
+      page_icon: LockIcon,
+      page_header_actions: pageHeaderActions,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions]);
+
   if (!isAdmin) {
     return (
       <Paper sx={{ m: 2, p: 3, bgcolor: "transparent" }}>
@@ -311,53 +318,6 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
 
   return (
     <>
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 20 },
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<RefreshIcon />}
-            sx={{
-              borderColor: "rgba(148,163,184,0.4)",
-              color: "#e2e8f0",
-              textTransform: "none",
-              borderRadius: 999,
-              px: 1.9,
-              minWidth: 112,
-              backgroundColor: "rgba(12,18,35,0.85)",
-              "&:hover": {
-                borderColor: "rgba(125,211,252,0.85)",
-                backgroundColor: "rgba(16,24,44,0.95)",
-              },
-            }}
-            onClick={fetchCredentials}
-            disabled={loading}
-          >
-            Refresh
-          </Button>
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={<AddIcon />}
-            sx={{
-              ...gradientButtonSx,
-              minWidth: 150,
-            }}
-            onClick={handleCreate}
-          >
-            New Credential
-          </Button>
-        </Stack>
-      </Box>
-
       <Paper
         sx={{
           m: 0,

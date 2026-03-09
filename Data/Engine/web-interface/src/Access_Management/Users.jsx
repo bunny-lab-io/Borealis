@@ -30,6 +30,7 @@ import MoreVertIcon from "@mui/icons-material/MoreVert";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import GroupIcon from "@mui/icons-material/Group";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
+import { PageHeaderActionRail } from "../Page_Header_Actions.jsx";
 
 /* ---------- Formatting helpers to keep this page in lockstep with Device_List ---------- */
 const tablePaperSx = { m: 0, p: 0, bgcolor: "transparent", border: "none", boxShadow: "none" };
@@ -54,19 +55,8 @@ const filterFieldSx = {
   }
 };
 
-const gradientButtonSx = {
-  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
-  color: "#0b1220",
-  borderRadius: 999,
-  textTransform: "none",
-  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
-  "&:hover": {
-    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
-    filter: "none",
-  },
-};
-/* -------------------------------------------------------------------- */
+const PAGE_TITLE = "User Management";
+const PAGE_SUBTITLE = "Manage platform users, roles, MFA, and credentials.";
 
 function formatTs(tsSec) {
   if (!tsSec) return "-";
@@ -173,15 +163,6 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
     })();
     fetchUsers();
   }, [fetchUsers, isAdmin]);
-
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: "User Management",
-      page_subtitle: "Manage platform users, roles, MFA, and credentials.",
-      page_icon: GroupIcon,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange]);
 
   const handleSort = (col) => {
     if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
@@ -421,7 +402,32 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
     setNewPassword("");
   };
 
-  const openCreate = () => { setCreateOpen(true); setCreateForm({ username: "", display_name: "", password: "", role: "User" }); };
+  const openCreate = useCallback(() => {
+    setCreateOpen(true);
+    setCreateForm({ username: "", display_name: "", password: "", role: "User" });
+  }, []);
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "users-create",
+        label: "Create User",
+        tone: "primary",
+        onClick: openCreate,
+      },
+    ],
+    [openCreate]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: PAGE_TITLE,
+      page_subtitle: PAGE_SUBTITLE,
+      page_icon: GroupIcon,
+      page_header_actions: pageHeaderActions,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions]);
   const doCreate = async () => {
     const u = (createForm.username || "").trim();
     const dn = (createForm.display_name || u).trim();
@@ -455,27 +461,32 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
   return (
     <>
       <Paper sx={tablePaperSx} elevation={0}>
-        {/* Page-level action button (floating top-right) */}
-        <Box
-          sx={{
-            position: "fixed",
-            top: { xs: 72, md: 88 },
-            right: { xs: 12, md: 20 },
-            zIndex: 1400,
-            pointerEvents: "none",
-          }}
-        >
-          <Stack direction="row" spacing={1.25} alignItems="center" sx={{ pointerEvents: "auto" }}>
-            <Button
-              variant="contained"
-              size="small"
-              onClick={openCreate}
-              sx={gradientButtonSx}
+        {!useGlobalHeader ? (
+          <Box sx={{ px: 3, pt: 3, pb: 1.5 }}>
+            <Box
+              sx={{
+                display: "flex",
+                flexDirection: { xs: "column", xl: "row" },
+                alignItems: { xs: "stretch", xl: "flex-start" },
+                justifyContent: "space-between",
+                gap: 2,
+              }}
             >
-              Create User
-            </Button>
-          </Stack>
-        </Box>
+              <Box sx={{ minWidth: 0 }}>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <GroupIcon sx={{ color: "#7dd3fc" }} />
+                  <Typography variant="h6" sx={{ color: "#e2e8f0", fontWeight: 700 }}>
+                    {PAGE_TITLE}
+                  </Typography>
+                </Stack>
+                <Typography variant="body2" sx={{ color: "#aaa", mt: 0.5 }}>
+                  {PAGE_SUBTITLE}
+                </Typography>
+              </Box>
+              <PageHeaderActionRail actions={pageHeaderActions} />
+            </Box>
+          </Box>
+        ) : null}
 
         <Table size="small" sx={tableSx}>
           <TableHead>

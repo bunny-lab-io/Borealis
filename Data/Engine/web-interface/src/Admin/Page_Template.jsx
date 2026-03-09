@@ -3,10 +3,6 @@ import {
   Paper,
   Box,
   Typography,
-  Button,
-  IconButton,
-  Stack,
-  Tooltip,
 } from "@mui/material";
 import {
   Dashboard as TemplateIcon,
@@ -32,7 +28,7 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
  *       - Material icon to the LEFT of the title (small, ~22px).
  *       - Title styled to match platform typography.
  *       - Subtitle directly beneath the title (muted color, smaller size).
- *       - Top-right utility buttons (e.g., Refresh, New, Settings).
+ *       - App-owned header action rail driven by `onPageMetaChange`.
  *    3) AG Grid using the Quartz theme with rounded corners, sorting, filtering,
  *       pagination, and example data/columns.
  *    4) Gradient-filled primary buttons consistent with MagicUI accents.
@@ -84,14 +80,14 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
  *    • AURORA_SHELL.background — shared gradient.
  *    • AURORA_SHELL.text       — primary text color.
  *    • AURORA_SHELL.subtext    — subtitle/muted copy color.
- *    • Gradient buttons: `gradientButtonSx` (primary CTA look-and-feel).
+ *    • Shared header actions: publish `page_header_actions` metadata instead of rendering local floating buttons.
  *
  *  HEADER CHECKBOX NUDGE
-    • Some builds visually render the header checkbox ~1–2px left of center due to
-      icon font metrics. We apply a tiny `transform: translateX(2px)` on the header
-      checkbox wrapper for optical centering.
-
-  NOTES ON SELECT-ALL RELIABILITY
+ *    • Some builds visually render the header checkbox ~1–2px left of center due to
+ *      icon font metrics. We apply a tiny `transform: translateX(2px)` on the header
+ *      checkbox wrapper for optical centering.
+ *
+ *  NOTES ON SELECT-ALL RELIABILITY
  *    • Using AG Grid built-ins for selection (no custom header renderer) ensures
  *      the header checkbox correctly toggles rows and tracks indeterminate state.
  *    • We also provide a stable `getRowId` in case pages grow to use server-side
@@ -128,24 +124,6 @@ const AURORA_SHELL = {
   text: "#e2e8f0",
   subtext: "#9ba3b4",
   accent: "#7dd3fc",
-};
-
-// -----------------------------------------------------------------------------
-//  Gradient button style — use for primary CTAs to feel 'alive' and branded.
-// -----------------------------------------------------------------------------
-const gradientButtonSx = {
-  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
-  color: "#0b1220",
-  borderRadius: 999,
-  textTransform: "none",
-  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
-  px: 2.6,            // wider for label
-  minWidth: 116,      // ensure comfortable width for "New Item"
-  "&:hover": {
-    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
-    filter: "none",
-  },
 };
 
 // -----------------------------------------------------------------------------
@@ -220,18 +198,44 @@ export default function PageTemplate({ onPageMetaChange }) {
   const columnDefs = useMemo(() => sampleColumnDefs, []);
   const getRowId = useCallback((params) => params.data?.id || String(params.rowIndex ?? ""), []);
 
-  const handleRefresh = () => {
+  const handleRefresh = useCallback(() => {
     console.log("Refresh clicked (template; no-op).");
-  };
+  }, []);
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "template-refresh",
+        label: "Refresh",
+        icon: <CachedIcon />,
+        tone: "secondary",
+        onClick: handleRefresh,
+      },
+      {
+        id: "template-settings",
+        label: "Settings",
+        icon: <TuneIcon />,
+        tone: "secondary",
+      },
+      {
+        id: "template-new",
+        label: "New Item",
+        icon: <AddIcon />,
+        tone: "primary",
+      },
+    ],
+    [handleRefresh]
+  );
 
   useEffect(() => {
     onPageMetaChange?.({
       page_title: "Page Template",
       page_subtitle: "Page Styling Guide and Template — use as a baseline when designing new pages.",
       page_icon: TemplateIcon,
+      page_header_actions: pageHeaderActions,
     });
     return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange]);
+  }, [onPageMetaChange, pageHeaderActions]);
 
   return (
     <Paper
@@ -252,77 +256,6 @@ export default function PageTemplate({ onPageMetaChange }) {
       }}
       elevation={0}
     >
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 20 },
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
-          <Tooltip title="New (example)">
-            <span>
-              <Button size="small" startIcon={<AddIcon />} sx={{ ...gradientButtonSx, minWidth: 120 }}>
-                New Item
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip title="Settings (example)">
-            <span>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<TuneIcon />}
-                sx={{
-                  borderColor: "rgba(148,163,184,0.35)",
-                  color: "#e2e8f0",
-                  textTransform: "none",
-                  borderRadius: 999,
-                  px: 1.7,
-                  minWidth: 100,
-                  "&:hover": { borderColor: "rgba(148,163,184,0.55)" },
-                }}
-              >
-                Settings
-              </Button>
-            </span>
-          </Tooltip>
-        </Stack>
-      </Box>
-
-      <Box
-        sx={{
-          px: 2,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 1,
-          mt: 1,
-        }}
-      >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-          <Tooltip title="Refresh">
-            <span>
-              <IconButton
-                size="small"
-                onClick={handleRefresh}
-                sx={{
-                  color: "#cbd5e1",
-                  borderRadius: 1,
-                  "&:hover": { color: "#ffffff" },
-                }}
-              >
-                <CachedIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-        </Box>
-        <Stack direction="row" spacing={1}>
-        </Stack>
-      </Box>
-
       {/* Content area — offset a little below the shared header */}
       <Box sx={{ mt: "10px", px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Box
@@ -351,30 +284,17 @@ export default function PageTemplate({ onPageMetaChange }) {
 
             /* Center the selection column (header + body) – class-based to beat defaults */
             "& .ag-header .ag-header-select-all, & .ag-header .ag-checkbox-input-wrapper": {
-            /* Absolute centering for selection column (CSS fallback) */
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            },
+            "& .ag-header .ag-header-select-all": {
+              transform: "translateX(2px)",
+            },
             "& .ag-cell.ag-selection-centered": {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              padding: 0,
-            },
-            "& .ag-cell.ag-selection-centered .ag-cell-wrapper": {
-              gap: "0 !important",
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 0,
-            },
-            "& .ag-cell.ag-selection-centered .ag-selection-checkbox, & .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
-              margin: "0 auto",
-            },
-
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            },
-            "& .ag-cell.ag-selection-centered": {
               paddingLeft: 0,
               paddingRight: 0,
             },
@@ -390,10 +310,8 @@ export default function PageTemplate({ onPageMetaChange }) {
             "& .ag-cell.ag-selection-centered .ag-selection-checkbox, & .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
               margin: "0 auto",
               display: "flex",
-              alignItems: "center",
               justifyContent: "center",
             },
-            
             "& .ag-cell.ag-selection-centered .ag-selection-checkbox": {
               display: "flex !important",
               width: "100% !important",

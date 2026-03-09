@@ -28,6 +28,7 @@ import {
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+import { PAGE_HEADER_CONTROL_SX, PageHeaderActionRail } from "../Page_Header_Actions.jsx";
 // NOTE: Do NOT import global AG Grid CSS to avoid affecting other pages.
 // We rely on the Quartz theme class name + scoped CSS vars like the rest of MagicUI.
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -83,6 +84,9 @@ const normalizeStatus = (status) => {
   return status.toLowerCase();
 };
 
+const PAGE_TITLE = "Device Approval Queue";
+const PAGE_SUBTITLE = "Review pending device enrollments and resolve conflicts with existing records.";
+
 export default function DeviceApprovals({ onPageMetaChange }) {
   const [approvals, setApprovals] = useState([]);
   const [statusFilter, setStatusFilter] = useState("pending");
@@ -115,15 +119,6 @@ export default function DeviceApprovals({ onPageMetaChange }) {
   }, [statusFilter]);
 
   useEffect(() => { loadApprovals(); }, [loadApprovals]);
-
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: "Device Approval Queue",
-      page_subtitle: "Review pending device enrollments and resolve conflicts with existing records.",
-      page_icon: SecurityIcon,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange]);
 
   const dedupedApprovals = useMemo(() => {
     const normalized = approvals
@@ -263,6 +258,52 @@ export default function DeviceApprovals({ onPageMetaChange }) {
     },
     [loadApprovals]
   );
+
+  const pageHeaderControls = useMemo(
+    () => [
+      <FormControl key="approval-status-filter" size="small" sx={{ minWidth: 200, ...PAGE_HEADER_CONTROL_SX }}>
+        <InputLabel id="approval-status-filter-label">Status</InputLabel>
+        <Select
+          labelId="approval-status-filter-label"
+          label="Status"
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+        >
+          {STATUS_OPTIONS.map((option) => (
+            <MenuItem key={option.value} value={option.value}>
+              {option.label}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>,
+    ],
+    [statusFilter]
+  );
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "device-approvals-refresh",
+        label: "Refresh",
+        icon: <RefreshIcon />,
+        tone: "secondary",
+        loading,
+        onClick: loadApprovals,
+      },
+    ],
+    [loadApprovals, loading]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: PAGE_TITLE,
+      page_subtitle: PAGE_SUBTITLE,
+      page_icon: SecurityIcon,
+      page_header_actions: pageHeaderActions,
+      page_header_controls: pageHeaderControls,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions, pageHeaderControls]);
 
   const columns = useMemo(() => [
     {
@@ -427,57 +468,32 @@ export default function DeviceApprovals({ onPageMetaChange }) {
     }}
     elevation={0}
   >
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 24 },
-          display: "flex",
-          justifyContent: "flex-end",
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Stack
-          direction={{ xs: "column", sm: "row" }}
-          spacing={1.25}
-          alignItems="center"
-          sx={{ pointerEvents: "auto" }}
-        >
-          <FormControl size="small" sx={{ minWidth: 200 }}>
-            <InputLabel id="approval-status-filter-label">Status</InputLabel>
-            <Select
-              labelId="approval-status-filter-label"
-              label="Status"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <MenuItem key={option.value} value={option.value}>
-                  {option.label}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadApprovals} disabled={loading}>
-            Refresh
-          </Button>
-        </Stack>
-      </Box>
-
       {!useGlobalHeader && (
-        <Box sx={{ p: 3 }}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <SecurityIcon sx={{ color: MAGIC_UI.accentA }} />
-            <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-              Device Approval Queue
-            </Typography>
-          </Stack>
+        <Box sx={{ px: 3, pt: 3, pb: 1.5 }}>
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: { xs: "column", xl: "row" },
+              alignItems: { xs: "stretch", xl: "flex-start" },
+              justifyContent: "space-between",
+              gap: 2,
+            }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <SecurityIcon sx={{ color: MAGIC_UI.accentA }} />
+                <Typography variant="h6" sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+                  {PAGE_TITLE}
+                </Typography>
+              </Stack>
+              <Typography variant="body2" sx={{ color: "#aaa", mt: 0.5 }}>
+                {PAGE_SUBTITLE}
+              </Typography>
+            </Box>
+            <PageHeaderActionRail actions={pageHeaderActions} controls={pageHeaderControls} />
+          </Box>
         </Box>
       )}
-
-      {/* Filters under shared header */}
-      {useGlobalHeader && null}
 
       {/* Feedback */}
       {feedback && (

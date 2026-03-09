@@ -3,7 +3,6 @@ import {
   Box,
   Paper,
   Typography,
-  Button,
   IconButton,
   Tooltip,
 } from "@mui/material";
@@ -16,6 +15,7 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, ConfirmDeleteDialog, RenameSiteDialog } from "../Dialogs.jsx";
+import { PAGE_HEADER_BADGE_SX } from "../Page_Header_Actions.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -52,23 +52,6 @@ const PAGE_TITLE = "Sites";
 const PAGE_SUBTITLE = "Manage site enrollment codes and open device inventories by site.";
 const PAGE_ICON = LocationCityIcon;
 
-const RAINBOW_BUTTON_SX = {
-  borderRadius: 999,
-  textTransform: "none",
-  fontWeight: 600,
-  px: 2.5,
-  color: "#f8fafc",
-  border: "1px solid transparent",
-  backgroundImage:
-    "linear-gradient(#05070f, #05070f), linear-gradient(120deg, #ff7c7c, #ffd36b, #7dffb7, #7dd3fc, #c084fc)",
-  backgroundOrigin: "border-box",
-  backgroundClip: "padding-box, border-box",
-  boxShadow: "0 0 26px rgba(45, 212, 191, 0.45)",
-  "&:hover": {
-    boxShadow: "0 0 32px rgba(45, 212, 191, 0.55)",
-  },
-};
-
 export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
   const [rows, setRows] = useState([]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -96,15 +79,6 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
       /* notification transport errors are non-blocking */
     }
   }, []);
-
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: PAGE_ICON,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange]);
 
   const fetchSites = useCallback(async () => {
     try {
@@ -146,6 +120,14 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
       window.prompt("Copy enrollment code", value);
     }
   }, []);
+
+  const openRenameDialog = useCallback(() => {
+    const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
+    if (selId == null) return;
+    const site = rows.find((row) => row.id === selId);
+    setRenameValue(site?.name || "");
+    setRenameOpen(true);
+  }, [rows, selectedIds]);
 
   const columnDefs = useMemo(() => [
     {
@@ -230,6 +212,58 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
     selected: selectedIds.size,
   }), [rows, selectedIds]);
 
+  const pageHeaderBadges = useMemo(
+    () =>
+        heroStats.selected > 0
+        ? [
+            <Box key="site-selection-count" sx={PAGE_HEADER_BADGE_SX}>
+              {heroStats.selected} selected
+            </Box>,
+          ]
+        : [],
+    [heroStats.selected]
+  );
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "delete-site",
+        label: "Delete",
+        icon: <DeleteIcon />,
+        tone: "danger",
+        disabled: selectedIds.size === 0,
+        onClick: () => setDeleteOpen(true),
+      },
+      {
+        id: "rename-site",
+        label: "Rename",
+        icon: <EditIcon />,
+        tone: "secondary",
+        disabled: selectedIds.size !== 1,
+        onClick: openRenameDialog,
+      },
+      {
+        id: "create-site",
+        label: "Create Site",
+        icon: <AddIcon />,
+        tone: "primary",
+        onClick: () => setCreateOpen(true),
+      },
+    ],
+    [openRenameDialog, selectedIds.size]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: PAGE_TITLE,
+      page_subtitle: PAGE_SUBTITLE,
+      page_icon: PAGE_ICON,
+      page_header_actions: pageHeaderActions,
+      page_header_badges: pageHeaderBadges,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions, pageHeaderBadges]);
+
   return (
     <Paper
       sx={{
@@ -248,73 +282,6 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
       }}
       elevation={0}
     >
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 24 },
-          display: "flex",
-          justifyContent: "flex-end",
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 1,
-            flexWrap: "wrap",
-            justifyContent: "flex-end",
-            pointerEvents: "auto",
-          }}
-        >
-          {heroStats.selected > 0 ? (
-            <Typography sx={{ color: MAGIC_UI.accentA, fontSize: "0.85rem", fontWeight: 600, mr: 1 }}>
-              {heroStats.selected} selected
-            </Typography>
-          ) : null}
-          <Button variant="contained" size="small" startIcon={<AddIcon />} sx={RAINBOW_BUTTON_SX} onClick={() => setCreateOpen(true)}>
-            Create Site
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<EditIcon />}
-            disabled={selectedIds.size !== 1}
-            onClick={() => {
-              const selId = selectedIds.size === 1 ? Array.from(selectedIds)[0] : null;
-              if (selId != null) {
-                const site = rows.find((r) => r.id === selId);
-                setRenameValue(site?.name || "");
-                setRenameOpen(true);
-              }
-            }}
-            sx={{
-              borderColor: "rgba(148,163,184,0.4)",
-              color: MAGIC_UI.textBright,
-              "&:hover": { borderColor: MAGIC_UI.accentA },
-            }}
-          >
-            Rename
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<DeleteIcon />}
-            disabled={selectedIds.size === 0}
-            onClick={() => setDeleteOpen(true)}
-            sx={{
-              borderColor: selectedIds.size ? "#f87171" : "rgba(148,163,184,0.3)",
-              color: selectedIds.size ? "#f87171" : MAGIC_UI.textMuted,
-              "&:hover": { borderColor: "#fb7185" },
-            }}
-          >
-            Delete
-          </Button>
-        </Box>
-      </Box>
-
       {/* AG Grid */}
       <Box sx={{ px: { xs: 2, md: 3 }, pb: 3, flexGrow: 1, display: "flex", flexDirection: "column" }}>
         <Box

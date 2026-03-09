@@ -15,9 +15,6 @@ import {
   DialogTitle,
   DialogActions,
   CircularProgress,
-  IconButton,
-  Stack,
-  Tooltip
 } from "@mui/material";
 import {
   Schedule as HeaderIcon,
@@ -68,21 +65,6 @@ const AURORA_SHELL = {
 const PAGE_TITLE = "Scheduled Jobs";
 const PAGE_SUBTITLE = "Monitor scheduled, recurring, and completed Borealis jobs with live status.";
 const PAGE_ICON = HeaderIcon;
-
-// Gradient button styling
-const gradientButtonSx = {
-  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
-  color: "#0b1220",
-  borderRadius: 999,
-  textTransform: "none",
-  boxShadow: "0 10px 26px rgba(124,58,237,0.28)",
-  px: 2.6,
-  minWidth: 116,
-  "&:hover": {
-    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-    boxShadow: "0 12px 34px rgba(124,58,237,0.38)",
-  },
-};
 
 const FILTER_OPTIONS = [
   { key: "all", label: "All" },
@@ -196,15 +178,6 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       /* best-effort notification */
     }
   }, []);
-
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: PAGE_ICON,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange]);
 
   const autoSizeTrackedColumns = useCallback(() => {
     const api = gridApiRef.current;
@@ -732,6 +705,37 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
     await loadJobs({ showLoading: true });
   }, [loadJobs]);
 
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "scheduled-jobs-refresh",
+        label: "Refresh",
+        icon: <CachedIcon />,
+        tone: "secondary",
+        loading,
+        onClick: handleRefreshClick,
+      },
+      {
+        id: "scheduled-jobs-create",
+        label: "Create Job",
+        icon: <AddIcon />,
+        tone: "primary",
+        onClick: () => onCreateJob && onCreateJob(),
+      },
+    ],
+    [handleRefreshClick, loading, onCreateJob]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: PAGE_TITLE,
+      page_subtitle: PAGE_SUBTITLE,
+      page_icon: PAGE_ICON,
+      page_header_actions: pageHeaderActions,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions]);
+
   return (
     <Paper
       sx={{
@@ -752,38 +756,6 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       }}
       elevation={0}
     >
-      {/* Page-level action buttons (floating top-right) */}
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 20 },
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ pointerEvents: "auto" }}>
-          <Tooltip title="Refresh">
-            <span>
-              <IconButton
-                size="small"
-                onClick={handleRefreshClick}
-                sx={{ color: "#cbd5e1", borderRadius: 1, "&:hover": { color: "#ffffff" } }}
-              >
-                <CachedIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title="Create Job">
-            <span>
-              <Button size="small" startIcon={<AddIcon />} sx={gradientButtonSx} onClick={() => onCreateJob && onCreateJob()}>
-                Create Job
-              </Button>
-            </span>
-          </Tooltip>
-        </Stack>
-      </Box>
-
       <Box sx={{ mt: 2, px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 1.5, mb: 2, px: 0.5 }}>
           <Box

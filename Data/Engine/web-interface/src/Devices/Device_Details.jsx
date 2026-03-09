@@ -2693,15 +2693,69 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const rawDisplayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "";
   const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Details";
   const pageSubtitle = status ? `Status: ${status}` : "";
+  const pageHeaderBadges = useMemo(
+    () =>
+      tunnelIndicators.map((item) => {
+        const itemColor = item.color || (item.muted ? "rgba(125, 211, 252, 0.6)" : MAGIC_UI.accentA);
+        return (
+          <Stack
+            key={item.key}
+            direction="row"
+            spacing={0.6}
+            alignItems="center"
+            sx={{ color: itemColor }}
+          >
+            {item.icon}
+            <Typography
+              variant="caption"
+              sx={{ color: itemColor, fontWeight: 600, letterSpacing: 0.2 }}
+            >
+              {item.label}:
+            </Typography>
+            <Typography
+              variant="caption"
+              sx={{
+                color: itemColor,
+                fontWeight: 600,
+                maxWidth: 180,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={item.value}
+            >
+              {item.value}
+            </Typography>
+          </Stack>
+        );
+      }),
+    [tunnelIndicators]
+  );
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "device-details-actions",
+        label: "Actions",
+        icon: <MoreHorizIcon />,
+        tone: "primary",
+        disabled: !(agent?.hostname || device?.hostname),
+        onClick: (event) => setMenuAnchor(event.currentTarget),
+      },
+    ],
+    [agent?.hostname, device?.hostname]
+  );
 
   useEffect(() => {
     onPageMetaChange?.({
       page_title: displayHostname,
       page_subtitle: pageSubtitle,
       page_icon: PAGE_ICON,
+      page_header_actions: pageHeaderActions,
+      page_header_badges: pageHeaderBadges,
     });
     return () => onPageMetaChange?.(null);
-  }, [displayHostname, onPageMetaChange, pageSubtitle]);
+  }, [displayHostname, onPageMetaChange, pageHeaderActions, pageHeaderBadges, pageSubtitle]);
 
   const topTabRenderers = [
     renderDeviceSummaryTab,
@@ -2730,88 +2784,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         overflowX: "hidden",
       }}
     >
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 20 },
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Stack
-          direction="row"
-          spacing={1.25}
-          alignItems="center"
-          sx={{ pointerEvents: "auto", flexWrap: "wrap", justifyContent: "flex-end" }}
-        >
-          {tunnelIndicators.length ? (
-            <Stack
-              direction="row"
-              spacing={1.6}
-              alignItems="center"
-              sx={{ pointerEvents: "none", flexWrap: "wrap", justifyContent: "flex-end" }}
-            >
-              {tunnelIndicators.map((item) => {
-                const itemColor =
-                  item.color || (item.muted ? "rgba(125, 211, 252, 0.6)" : MAGIC_UI.accentA);
-                return (
-                  <Stack
-                    key={item.key}
-                    direction="row"
-                    spacing={0.6}
-                    alignItems="center"
-                    sx={{ color: itemColor }}
-                  >
-                    {item.icon}
-                    <Typography
-                      variant="caption"
-                      sx={{ color: itemColor, fontWeight: 600, letterSpacing: 0.2 }}
-                    >
-                      {item.label}:
-                    </Typography>
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        color: itemColor,
-                        fontWeight: 600,
-                        maxWidth: 180,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                      title={item.value}
-                    >
-                      {item.value}
-                    </Typography>
-                  </Stack>
-                );
-              })}
-            </Stack>
-          ) : null}
-          <Button
-            size="small"
-            startIcon={<MoreHorizIcon />}
-            disabled={!(agent?.hostname || device?.hostname)}
-            onClick={(e) => setMenuAnchor(e.currentTarget)}
-            sx={{
-              backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
-              color: "#0b1220",
-              borderRadius: 999,
-              textTransform: "none",
-              px: 2.2,
-              minWidth: 120,
-              boxShadow: "none",
-              "&:hover": {
-                backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-                boxShadow: "none",
-              },
-            }}
-          >
-            Actions
-          </Button>
-        </Stack>
-      </Box>
       <Menu
         anchorEl={menuAnchor}
         open={Boolean(menuAnchor)}

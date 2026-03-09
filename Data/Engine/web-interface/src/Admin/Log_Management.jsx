@@ -35,6 +35,7 @@ import Prism from "prismjs";
 import "prismjs/components/prism-bash";
 import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
+import { PageHeaderActionRail } from "../Page_Header_Actions.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -50,6 +51,9 @@ const AURORA_SHELL = {
   muted: "#94a3b8",
   accent: "#7db7ff",
 };
+
+const PAGE_TITLE = "Log Management";
+const PAGE_SUBTITLE = "Analyze engine logs and adjust retention across services.";
 
 const gradientButtonSx = {
   textTransform: "none",
@@ -235,15 +239,6 @@ const defaultColDef = useMemo(
   }, [fetchLogs, isAdmin]);
 
   useEffect(() => {
-    onPageMetaChange?.({
-      page_title: "Log Management",
-      page_subtitle: "Analyze engine logs and adjust retention across services.",
-      page_icon: LogsIcon,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange]);
-
-  useEffect(() => {
     if (!logs.length) {
       setSelectedDomain(null);
       return;
@@ -338,6 +333,33 @@ const defaultColDef = useMemo(
     (String(selectedDomainData.retention_days ?? defaultRetention) === retentionDraft.trim() &&
       retentionDraft.trim() !== "");
 
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "logs-refresh",
+        label: "Refresh",
+        icon: <RefreshIcon />,
+        tone: "secondary",
+        loading: listLoading,
+        onClick: () => {
+          fetchLogs();
+          if (selectedFile) fetchEntries(selectedFile);
+        },
+      },
+    ],
+    [fetchEntries, fetchLogs, listLoading, selectedFile]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: PAGE_TITLE,
+      page_subtitle: PAGE_SUBTITLE,
+      page_icon: LogsIcon,
+      page_header_actions: pageHeaderActions,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions]);
+
   if (!isAdmin) {
     return (
       <Paper sx={{ m: 3, p: 4, bgcolor: AURORA_SHELL.panel }}>
@@ -360,48 +382,37 @@ const defaultColDef = useMemo(
         flexDirection: "column",
       }}
     >
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 },
-          right: { xs: 12, md: 20 },
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
-          <Button
-            variant="contained"
-            startIcon={<RefreshIcon />}
-            onClick={() => {
-              fetchLogs();
-              if (selectedFile) fetchEntries(selectedFile);
-            }}
-            sx={{ ...gradientButtonSx, minWidth: 112 }}
-          >
-            Refresh
-          </Button>
-        </Stack>
-      </Box>
-
       {!useGlobalHeader && (
-        <Box sx={{ px: 3, pt: 3, pb: 1 }}>
-          <Stack direction="row" spacing={1.25} alignItems="center">
-            <LogsIcon sx={{ fontSize: 22, color: AURORA_SHELL.accent, mt: 0.25 }} />
-            <Typography
-              variant="h6"
-              sx={{
-                fontWeight: 700,
-                letterSpacing: 0.5,
-                color: AURORA_SHELL.text,
-              }}
-            >
-              Log Management
-            </Typography>
-          </Stack>
-          <Typography variant="body2" sx={{ color: AURORA_SHELL.muted, mt: 0.75, mb: 2.5 }}>
-            Analyze engine logs and adjust log retention periods for different engine services.
-          </Typography>
+        <Box sx={{ px: 3, pt: 3, pb: 1.5 }}>
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: { xs: "column", xl: "row" },
+              alignItems: { xs: "stretch", xl: "flex-start" },
+              justifyContent: "space-between",
+              gap: 2,
+            }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Stack direction="row" spacing={1.25} alignItems="center">
+                <LogsIcon sx={{ fontSize: 22, color: AURORA_SHELL.accent, mt: 0.25 }} />
+                <Typography
+                  variant="h6"
+                  sx={{
+                    fontWeight: 700,
+                    letterSpacing: 0.5,
+                    color: AURORA_SHELL.text,
+                  }}
+                >
+                  {PAGE_TITLE}
+                </Typography>
+              </Stack>
+              <Typography variant="body2" sx={{ color: AURORA_SHELL.muted, mt: 0.75 }}>
+                {PAGE_SUBTITLE}
+              </Typography>
+            </Box>
+            <PageHeaderActionRail actions={pageHeaderActions} />
+          </Box>
         </Box>
       )}
 

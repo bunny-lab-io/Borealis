@@ -75,7 +75,35 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
 
 #### Page-Level Tabs
-- Placement: sit directly below the hero title/subtitle band (8-16px gap). Tabs span the full width of the content column.
+- Header ownership: `Data/Engine/web-interface/src/App.jsx` owns the page title, subtitle, icon, and the page action rail. Pages publish header metadata through `onPageMetaChange`; they do not position their own page-header buttons.
+- Header action contract:
+```jsx
+onPageMetaChange?.({
+  page_title,
+  page_subtitle,
+  page_icon,
+  page_header_badges: [<DomainBadge key="domain" domain={domain} size="small" />],
+  page_header_controls: [statusSelectControl],
+  page_header_actions: [
+    { id: "refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: loadData },
+    { id: "new-item", label: "New Item", icon: <AddIcon />, tone: "primary", onClick: handleCreate },
+  ],
+});
+```
+- Shared implementation: use `Data/Engine/web-interface/src/Page_Header_Actions.jsx` for the action-rail renderer and the shared button/control tokens. Standalone pages that render without App should use the same `PageHeaderActionRail` component locally instead of re-creating header buttons.
+- Action rail placement: the rail lives inside the shared header band in normal document flow, aligned to the top-right of the page title block. Do not use `position: "fixed"` for page-level actions.
+- Rail ordering: App renders items left-to-right as `badges`, `controls`, `warning/danger`, `secondary`, `accent`, `primary`. Result: the main CTA is always the far-right button and new supporting actions stack leftward.
+- Button tones:
+- `primary`: cyan-to-violet gradient, dark text. Use for the page-defining CTA (`Create Site`, `New Filter`, `About Borealis`, `Save Assembly`).
+- `accent`: green-to-cyan gradient, dark text. Reserve for contextual high-value actions such as `Quick Job`.
+- `secondary`: muted outline, steel border, bright text. Use for `Refresh`, `Columns`, `Rename`, `GitHub Project`, `Cancel`.
+- `warning`: amber outline. Use for dev/admin toggles such as `Enable Dev Mode` and `Flush Queue`.
+- `danger`: red outline. Use for destructive actions such as `Delete`.
+- Strict action sizing: height `38px`, pill radius `999`, IBM Plex Sans, `fontWeight: 600`, `textTransform: "none"`, icon plus label by default. Do not introduce page-specific button heights, widths, or alternate fonts in the rail.
+- Creation CTA rule: page-header creation buttons now use the shared `primary` gradient. Do not use the rainbow-border CTA style in the header rail.
+- Controls in the rail: simple controls such as the Device Approval Queue `Status` select are allowed. Style them with the shared control token from `Page_Header_Actions.jsx` so they match the rail height and border treatment.
+- Responsive behavior: tabs remain in normal flow beneath the header band. On narrow widths, the title block and action rail stack vertically and the rail wraps naturally while staying right-aligned. Because the rail is not fixed, it must never cover the tabs or the first content section.
+- Placement: tabs sit directly below the shared header band (8-16px gap). Tabs span the full width of the content column.
 - Typography: match Navigation Sidebar typography. Inherit the font family (IBM Plex Sans via theme), use `fontSize: "0.8rem"`, mixed case labels (`textTransform: "none"`). Default `fontWeight: 400`; active tabs are `fontWeight: 600`. Standard rail height is `32px` (compact stacks use `28px`).
 - Indicator: 3px tall bar with rounded corners that uses the Navigation Sidebar cyan (`#7db7ff`). Keep it flush with the bottom border so it reads as a light strip under the active tab.
 - Hover/active treatment: hover background uses the Navigation Sidebar hover fill `rgba(255,255,255,0.05)`. Selected tabs use the same active highlight gradient as the sidebar: `linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)`. Keep the highlight on hover for selected tabs.
@@ -159,6 +187,16 @@ const NAV_TAB_COLORS = {
 ```
 - Interaction rules: tabs should never scroll vertically; rely on horizontal scroll for overflow. Always align the tab rail with the first section header on the page so the aurora indicator lines up with hero metrics.
 - Accessibility: keep `aria-label` and `aria-controls` pairs when the panes hold complex content, and ensure the gradient backgrounds preserve 4.5:1 contrast for the text (the current cyan on dark meets this).
+- Representative action rail mappings:
+- `Delete | Rename | Create Site`
+- `Columns | Refresh | Quick Job | Add Device`
+- `Refresh | New Filter`
+- `GitHub Project | About Borealis`
+- `Cancel | Save Filter`
+- Canonical examples:
+- Visual reference page: `Data/Engine/web-interface/src/Admin/Page_Template.jsx`
+- Shared header owner: `Data/Engine/web-interface/src/App.jsx`
+- Shared button rail/tokens: `Data/Engine/web-interface/src/Page_Header_Actions.jsx`
 
 #### URL-Synced Tabs and Deep Links
 - Use URL paths for resource identity and `?tab=` for active tab state.
@@ -187,12 +225,6 @@ const NAV_TAB_COLORS = {
 - `remote_shell`
 - `remote_desktop`
 - New pages adopting this pattern should document their canonical tab key list in their domain doc and keep aliases local to the component.
-
-#### Page-Level Action Buttons
-- Place page-level actions/buttons/hero-badges in a fixed overlay at the top-right, just below the global menu bar. Match the Filter Editor placement if an example is needed `Data/Engine/web-interface/src/Devices/Filters/Filter_Editor.jsx`: wrapper `position: "fixed"`, `top: { xs: 72, md: 88 }`, `right: { xs: 12, md: 20 }`, `zIndex: 1400`, with `pointerEvents: "none"` on the wrapper and `pointerEvents: "auto"` on the inner `Stack` so underlying content remains clickable.
-- Use gradient primary pills and outlined secondary pills (rounded 999 radius, MagicUI colors). Keep horizontal spacing via a `Stack` (for example, `spacing={1.25}`); do not nest these buttons inside the title grid or tab rail.
-- Tabs stay in normal document flow beneath the title/subtitle; the floating action bar should not shift layout. When operators request moving page actions (or when building new pages), apply this fixed overlay pattern instead of absolute positioning tied to tab rails.
-- Keep the responsive offsets (xs/md) unless a specific page has a different header height/padding; only adjust the numeric values when explicitly needed to align with a nonstandard shell.
 
 #### AG Grid Column Behavior (All Tables)
 - Auto-size value columns and let the last column absorb remaining width so views span available space.

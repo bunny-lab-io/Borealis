@@ -387,15 +387,6 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
     applyFilterData(initialFilter);
   }, [applyFilterData, initialFilter]);
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: pageTitle,
-      page_subtitle: pageSubtitle,
-      page_icon: HeaderIcon,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageSubtitle, pageTitle]);
-
   const handlePreviewGridReady = useCallback((params) => {
     previewGridRef.current = params.api;
     requestAnimationFrame(() => {
@@ -975,6 +966,37 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
     }
   }, [groups, initialFilter, name, onSaved, scope, selectedSiteLabels, selectedSites, sendNotification]);
 
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "filter-editor-cancel",
+        label: "Cancel",
+        icon: <CloseIcon />,
+        tone: "secondary",
+        onClick: () => onCancel?.(),
+      },
+      {
+        id: "filter-editor-save",
+        label: saving ? "Saving..." : "Save Filter",
+        icon: saving ? <CachedIcon /> : <SaveIcon />,
+        tone: "primary",
+        disabled: saving,
+        onClick: handleSave,
+      },
+    ],
+    [handleSave, onCancel, saving]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: pageTitle,
+      page_subtitle: pageSubtitle,
+      page_icon: HeaderIcon,
+      page_header_actions: pageHeaderActions,
+    });
+    return () => onPageMetaChange?.(null);
+  }, [onPageMetaChange, pageHeaderActions, pageSubtitle, pageTitle]);
+
   const renderConditionRow = (groupId, condition, isFirst) => {
     const label = DEVICE_FIELDS.find((f) => f.value === condition.field)?.label || condition.field;
     const needsValue = operatorNeedsValue(condition.operator);
@@ -1132,47 +1154,6 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
           {loadError}
         </Box>
       ) : null}
-
-      <Box
-        sx={{
-          position: "fixed",
-          top: { xs: 72, md: 88 }, // align with page title padding beneath the menu bar
-          right: { xs: 12, md: 24 },
-          display: "flex",
-          justifyContent: "flex-end",
-          zIndex: 1400,
-          pointerEvents: "none",
-        }}
-      >
-        <Stack direction="row" spacing={1.25} sx={{ pointerEvents: "auto" }}>
-          <Tooltip title="Cancel and return">
-            <Button
-              variant="outlined"
-              startIcon={<CloseIcon />}
-              onClick={() => onCancel?.()}
-              sx={{
-                textTransform: "none",
-                borderColor: AURORA_SHELL.border,
-                color: AURORA_SHELL.text,
-                borderRadius: 999,
-              }}
-            >
-              Cancel
-            </Button>
-          </Tooltip>
-          <Tooltip title="Save filter">
-            <Button
-              variant="contained"
-              startIcon={saving ? <CachedIcon /> : <SaveIcon />}
-              onClick={handleSave}
-              disabled={saving}
-              sx={gradientButtonSx}
-            >
-              {saving ? "Saving..." : "Save Filter"}
-            </Button>
-          </Tooltip>
-        </Stack>
-      </Box>
 
       <Box
         sx={{
