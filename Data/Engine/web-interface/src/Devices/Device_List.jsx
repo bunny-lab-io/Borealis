@@ -689,16 +689,15 @@ export default function DeviceList({
   const fetchDevices = useCallback(async (options = {}) => {
     const { refreshRepo = false, showLoading = true } = options || {};
     if (showLoading) setLoading(true);
+    let repoSha = repoHash;
+    const hashById = new Map();
+    const hashByGuid = new Map();
+    const hashByHost = new Map();
     try {
-      let repoSha = repoHash;
       if (refreshRepo || !repoSha) {
         const fetched = await fetchLatestRepoHash({ force: refreshRepo });
         if (fetched) repoSha = fetched;
       }
-
-      const hashById = new Map();
-      const hashByGuid = new Map();
-      const hashByHost = new Map();
       const hashResp = await fetch('/api/agent/hash_list');
       if (hashResp.ok) {
         const hashJson = await hashResp.json();
