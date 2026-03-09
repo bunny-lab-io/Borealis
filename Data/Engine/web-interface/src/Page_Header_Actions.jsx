@@ -341,9 +341,10 @@ export function PageHeaderActionRail({ actions = [], controls = [] }) {
     <Box
       ref={containerRef}
       sx={{
-        width: "100%",
+        width: { xs: "100%", xl: "auto" },
         minWidth: 0,
         display: "flex",
+        flexShrink: 0,
         justifyContent: { xs: "flex-start", xl: "flex-end" },
         position: "relative",
       }}
@@ -371,8 +372,9 @@ export function PageHeaderActionRail({ actions = [], controls = [] }) {
 
       <Box
         sx={{
+          width: { xs: "100%", xl: "auto" },
           ml: { xs: 0, xl: "auto" },
-          maxWidth: "100%",
+          maxWidth: { xs: "100%", xl: "none" },
           minWidth: 0,
           display: "flex",
           alignItems: "center",

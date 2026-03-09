@@ -698,7 +698,10 @@ export default function DeviceList({
         const fetched = await fetchLatestRepoHash({ force: refreshRepo });
         if (fetched) repoSha = fetched;
       }
-      const hashResp = await fetch('/api/agent/hash_list');
+      const hashResp = await fetch('/api/agent/hash_list', {
+        cache: "no-store",
+        credentials: "include",
+      });
       if (hashResp.ok) {
         const hashJson = await hashResp.json();
         const list = Array.isArray(hashJson?.agents) ? hashJson.agents : [];
