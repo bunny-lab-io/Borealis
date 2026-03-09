@@ -2693,44 +2693,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const rawDisplayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "";
   const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Details";
   const pageSubtitle = status ? `Status: ${status}` : "";
-  const pageHeaderBadges = useMemo(
-    () =>
-      tunnelIndicators.map((item) => {
-        const itemColor = item.color || (item.muted ? "rgba(125, 211, 252, 0.6)" : MAGIC_UI.accentA);
-        return (
-          <Stack
-            key={item.key}
-            direction="row"
-            spacing={0.6}
-            alignItems="center"
-            sx={{ color: itemColor }}
-          >
-            {item.icon}
-            <Typography
-              variant="caption"
-              sx={{ color: itemColor, fontWeight: 600, letterSpacing: 0.2 }}
-            >
-              {item.label}:
-            </Typography>
-            <Typography
-              variant="caption"
-              sx={{
-                color: itemColor,
-                fontWeight: 600,
-                maxWidth: 180,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-              title={item.value}
-            >
-              {item.value}
-            </Typography>
-          </Stack>
-        );
-      }),
-    [tunnelIndicators]
-  );
 
   const pageHeaderActions = useMemo(
     () => [
@@ -2752,10 +2714,9 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       page_subtitle: pageSubtitle,
       page_icon: PAGE_ICON,
       page_header_actions: pageHeaderActions,
-      page_header_badges: pageHeaderBadges,
     });
     return () => onPageMetaChange?.(null);
-  }, [displayHostname, onPageMetaChange, pageHeaderActions, pageHeaderBadges, pageSubtitle]);
+  }, [displayHostname, onPageMetaChange, pageHeaderActions, pageSubtitle]);
 
   const topTabRenderers = [
     renderDeviceSummaryTab,
@@ -2815,6 +2776,46 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           Clear Device Activity
         </MenuItem>
       </Menu>
+      {tunnelIndicators.length ? (
+        <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1.25 }}>
+          <Stack direction="row" spacing={1.2} alignItems="center" flexWrap="wrap" useFlexGap>
+            {tunnelIndicators.map((item) => {
+              const itemColor = item.color || (item.muted ? "rgba(125, 211, 252, 0.6)" : MAGIC_UI.accentA);
+              return (
+                <Stack
+                  key={item.key}
+                  direction="row"
+                  spacing={0.6}
+                  alignItems="center"
+                  sx={{ color: itemColor }}
+                >
+                  {item.icon}
+                  <Typography
+                    variant="caption"
+                    sx={{ color: itemColor, fontWeight: 600, letterSpacing: 0.2 }}
+                  >
+                    {item.label}:
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: itemColor,
+                      fontWeight: 600,
+                      maxWidth: 280,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={item.value}
+                  >
+                    {item.value}
+                  </Typography>
+                </Stack>
+              );
+            })}
+          </Stack>
+        </Box>
+      ) : null}
       <Tabs
         value={tab}
         onChange={(e, v) => setTab(v)}

@@ -109,7 +109,6 @@ const EMPTY_PAGE_HEADER = {
   Icon: null,
   actions: [],
   controls: [],
-  badges: [],
 };
 
   export default function App() {
@@ -199,14 +198,12 @@ const EMPTY_PAGE_HEADER = {
     const iconValue = meta.page_icon || meta.Icon || null;
     const actionsValue = Array.isArray(meta.page_header_actions) ? meta.page_header_actions.filter(Boolean) : [];
     const controlsValue = Array.isArray(meta.page_header_controls) ? meta.page_header_controls.filter(Boolean) : [];
-    const badgesValue = Array.isArray(meta.page_header_badges) ? meta.page_header_badges.filter(Boolean) : [];
     setPageHeader({
       title: typeof titleValue === "string" ? titleValue : "",
       subtitle: typeof subtitleValue === "string" ? subtitleValue : "",
       Icon: iconValue || null,
       actions: actionsValue,
       controls: controlsValue,
-      badges: badgesValue,
     });
   }, []);
 
@@ -1561,8 +1558,7 @@ const EMPTY_PAGE_HEADER = {
     pageHeader.subtitle ||
     pageHeader.Icon ||
     pageHeader.actions?.length ||
-    pageHeader.controls?.length ||
-    pageHeader.badges?.length
+    pageHeader.controls?.length
   );
 
   return (
@@ -1748,7 +1744,6 @@ const EMPTY_PAGE_HEADER = {
                   <PageHeaderActionRail
                     actions={pageHeader.actions}
                     controls={pageHeader.controls}
-                    badges={pageHeader.badges}
                   />
                 </Box>
               </Box>

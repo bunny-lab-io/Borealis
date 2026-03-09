@@ -68,8 +68,8 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Hardware islands: storage/memory/network blocks reuse Quartz theme in rounded glass shells with flat fills; present numeric columns (Capacity/Used/Free/%) to match Device Inventory.
 - Action surfaces: control bars live in translucent glass bands; filled dark inputs with cyan hover borders; primary actions are pill-shaped gradients; secondary controls are soft-outline icon buttons.
 - Anchored controls: align selectors/utility buttons with grid edges in a single row; reserve glass backdrops for hero sections so content stays flush.
-- Buttons and chips: gradient pills for primary CTAs (`linear-gradient(135deg,#34d399,#22d3ee)` success; `#7dd3fc->#c084fc` creation); neutral actions use rounded outlines with `rgba(148,163,184,0.4)` borders and uppercase microcopy.
-- Rainbow accents: for creation CTAs, use dark-fill pills with rainbow border gradients and teal halo (shared with Quick Job).
+- Buttons and chips: page-header primary CTAs use a consistent cyan-to-violet gradient (`#7dd3fc -> #c084fc`); neutral actions use rounded outlines with `rgba(148,163,184,0.4)` borders and mixed-case labels.
+- Do not use rainbow-border CTAs in the shared page header rail.
 - AG Grid treatment: Quartz theme with matte navy headers, subtle alternating row opacity, cyan/magenta interaction glows, rounded wrappers, soft borders, inset selection glows.
 - Default grid cell padding: keep roughly 18px on the left edge and 12px on the right for standard cells (12px/9px for `auto-col-tight`) so text never hugs a column edge. Target the center + pinned containers so both regions stay aligned.
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
@@ -82,7 +82,6 @@ onPageMetaChange?.({
   page_title,
   page_subtitle,
   page_icon,
-  page_header_badges: [<DomainBadge key="domain" domain={domain} size="small" />],
   page_header_controls: [statusSelectControl],
   page_header_actions: [
     { id: "refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: loadData },
@@ -92,17 +91,20 @@ onPageMetaChange?.({
 ```
 - Shared implementation: use `Data/Engine/web-interface/src/Page_Header_Actions.jsx` for the action-rail renderer and the shared button/control tokens. Standalone pages that render without App should use the same `PageHeaderActionRail` component locally instead of re-creating header buttons.
 - Action rail placement: the rail lives inside the shared header band in normal document flow, aligned to the top-right of the page title block. Do not use `position: "fixed"` for page-level actions.
-- Rail ordering: App renders items left-to-right as `badges`, `controls`, `warning/danger`, `secondary`, `accent`, `primary`. Result: the main CTA is always the far-right button and new supporting actions stack leftward.
+- Rail ordering: pages declare actions in their final left-to-right display order. Supporting actions should be listed first and primary actions should be listed last so the main CTA stays on the far right.
 - Button tones:
-- `primary`: cyan-to-violet gradient, dark text. Use for the page-defining CTA (`Create Site`, `New Filter`, `About Borealis`, `Save Assembly`).
-- `accent`: green-to-cyan gradient, dark text. Reserve for contextual high-value actions such as `Quick Job`.
-- `secondary`: muted outline, steel border, bright text. Use for `Refresh`, `Columns`, `Rename`, `GitHub Project`, `Cancel`.
-- `warning`: amber outline. Use for dev/admin toggles such as `Enable Dev Mode` and `Flush Queue`.
-- `danger`: red outline. Use for destructive actions such as `Delete`.
+- `primary`: cyan-to-violet gradient, dark text. Use for page-defining create/save/launch actions such as `Create Site`, `New Filter`, `Quick Job`, `Add Device`, `About Borealis`, and `Save Assembly`.
+- `secondary`: muted outline, steel border, bright text. Use for passive or supporting actions such as `Refresh`, `Columns`, `Rename`, `GitHub Project`, `Cancel`, and `Settings`.
+- `warning`: amber outline. Use sparingly for high-risk admin toggles such as `Enable Dev Mode` and `Flush Queue`.
+- `danger`: red outline. Use sparingly for destructive actions such as `Delete`.
+- Default authoring rule: think in `primary` and `secondary` first. Only introduce `warning` or `danger` when the semantics are clear and the action truly needs that emphasis.
+- Multiple primary actions are allowed when a page has more than one legitimate top-level outcome, but use them sparingly to avoid clutter. Pages with no obvious CTA may use only secondary actions.
 - Strict action sizing: height `38px`, pill radius `999`, IBM Plex Sans, `fontWeight: 600`, `textTransform: "none"`, icon plus label by default. Do not introduce page-specific button heights, widths, or alternate fonts in the rail.
-- Creation CTA rule: page-header creation buttons now use the shared `primary` gradient. Do not use the rainbow-border CTA style in the header rail.
+- Creation CTA rule: page-header creation buttons use the shared `primary` gradient. `Quick Job` uses the same primary treatment; there is no separate accent tone in the header rail.
 - Controls in the rail: simple controls such as the Device Approval Queue `Status` select are allowed. Style them with the shared control token from `Page_Header_Actions.jsx` so they match the rail height and border treatment.
-- Responsive behavior: tabs remain in normal flow beneath the header band. On narrow widths, the title block and action rail stack vertically and the rail wraps naturally while staying right-aligned. Because the rail is not fixed, it must never cover the tabs or the first content section.
+- Badges/metadata: do not standardize badges as part of the shared header rail. Page-specific metadata belongs in the page body, usually directly under the subtitle or near the first relevant control group.
+- Secondary action overflow: on narrow widths, if the full rail no longer fits on a single row, the shared rail automatically collapses all secondary actions into a single `Actions` secondary button while keeping primary/warning/danger actions visible. Overflow menu ordering should place the secondary action closest to the primary buttons at the top of the menu.
+- Responsive behavior: tabs remain in normal flow beneath the header band. On narrow widths, the title block and action rail stack vertically. The rail should prefer collapsing secondary actions before wrapping and must never cover the tabs or the first content section.
 - Placement: tabs sit directly below the shared header band (8-16px gap). Tabs span the full width of the content column.
 - Typography: match Navigation Sidebar typography. Inherit the font family (IBM Plex Sans via theme), use `fontSize: "0.8rem"`, mixed case labels (`textTransform: "none"`). Default `fontWeight: 400`; active tabs are `fontWeight: 600`. Standard rail height is `32px` (compact stacks use `28px`).
 - Indicator: 3px tall bar with rounded corners that uses the Navigation Sidebar cyan (`#7db7ff`). Keep it flush with the bottom border so it reads as a light strip under the active tab.

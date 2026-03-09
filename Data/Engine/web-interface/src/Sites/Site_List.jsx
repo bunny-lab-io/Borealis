@@ -15,7 +15,6 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, ConfirmDeleteDialog, RenameSiteDialog } from "../Dialogs.jsx";
-import { PAGE_HEADER_BADGE_SX } from "../Page_Header_Actions.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -212,18 +211,6 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
     selected: selectedIds.size,
   }), [rows, selectedIds]);
 
-  const pageHeaderBadges = useMemo(
-    () =>
-        heroStats.selected > 0
-        ? [
-            <Box key="site-selection-count" sx={PAGE_HEADER_BADGE_SX}>
-              {heroStats.selected} selected
-            </Box>,
-          ]
-        : [],
-    [heroStats.selected]
-  );
-
   const pageHeaderActions = useMemo(
     () => [
       {
@@ -259,10 +246,9 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
       page_subtitle: PAGE_SUBTITLE,
       page_icon: PAGE_ICON,
       page_header_actions: pageHeaderActions,
-      page_header_badges: pageHeaderBadges,
     });
     return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageHeaderActions, pageHeaderBadges]);
+  }, [onPageMetaChange, pageHeaderActions]);
 
   return (
     <Paper
@@ -284,6 +270,13 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
     >
       {/* AG Grid */}
       <Box sx={{ px: { xs: 2, md: 3 }, pb: 3, flexGrow: 1, display: "flex", flexDirection: "column" }}>
+        {heroStats.selected > 0 ? (
+          <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1.25 }}>
+            <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 600 }}>
+              {heroStats.selected} selected
+            </Typography>
+          </Box>
+        ) : null}
         <Box
           className={themeClassName}
           sx={{

@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Box,
   IconButton,
   Menu,
   MenuItem,
   Paper,
   Typography,
-  CircularProgress,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import AddIcon from "@mui/icons-material/Add";
@@ -40,6 +40,12 @@ const myTheme = themeQuartz.withParams({
 const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
+const MAGIC_UI = {
+  panelBorder: "rgba(148, 163, 184, 0.35)",
+  textBright: "#e2e8f0",
+  textMuted: "#94a3b8",
+};
+
 function formatTs(ts) {
   if (!ts) return "-";
   const date = new Date(Number(ts) * 1000);
@@ -260,6 +266,21 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
     gridApiRef.current = params.api;
   }, []);
 
+  const placeholderBanner = useMemo(() => {
+    if (!error) return null;
+    if (String(error).includes("HTTP 404")) {
+      return {
+        severity: "warning",
+        message:
+          "Credential management is still using a placeholder grid shell. The backend API endpoint is not implemented yet.",
+      };
+    }
+    return {
+      severity: "error",
+      message: `Unable to load credentials: ${error}`,
+    };
+  }, [error]);
+
   useEffect(() => {
     const api = gridApiRef.current;
     if (!api) return;
@@ -331,71 +352,73 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
           flexDirection: "column",
           flexGrow: 1,
           minWidth: 0,
-          minHeight: 420
+          minHeight: 420,
         }}
         elevation={0}
       >
-        {loading && (
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
-              color: "#7db7ff",
-              px: 2,
-              py: 1.5,
-            }}
-          >
-            <CircularProgress size={18} sx={{ color: "#58a6ff" }} />
-            <Typography variant="body2">Loading credentials…</Typography>
-          </Box>
-        )}
-        {error && (
-          <Box sx={{ px: 2, py: 1.5, color: "#ff8080" }}>
-            <Typography variant="body2">{error}</Typography>
-          </Box>
-        )}
+        <Box sx={{ px: { xs: 2, md: 3 }, pb: 3, flexGrow: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          {placeholderBanner ? (
+            <Box sx={{ mb: 2 }}>
+              <Alert severity={placeholderBanner.severity}>{placeholderBanner.message}</Alert>
+            </Box>
+          ) : null}
 
-        <Box
-          sx={{
-            flexGrow: 1,
-            minHeight: 0,
-            display: "flex",
-            flexDirection: "column",
-            mt: "10px",
-            px: 2,
-            pb: 2
-          }}
-        >
           <Box
             className={themeClassName}
             sx={{
-              width: "100%",
-              height: "100%",
               flexGrow: 1,
+              minHeight: 0,
+              width: "100%",
+              borderRadius: 3,
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              background: "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.85))",
+              boxShadow: "0 20px 60px rgba(2,8,23,0.85)",
               fontFamily: gridFontFamily,
               "--ag-font-family": gridFontFamily,
               "--ag-icon-font-family": iconFontFamily,
-              "--ag-row-border-style": "solid",
-              "--ag-row-border-color": "#2a2a2a",
-              "--ag-row-border-width": "1px",
               "& .ag-root-wrapper": {
-                borderRadius: 1,
-                minHeight: 320
+                borderRadius: 3,
+                minHeight: "100%",
+                background: "transparent",
               },
               "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
-                fontFamily: gridFontFamily
+                fontFamily: gridFontFamily,
+                background: "transparent",
+              },
+              "& .ag-header": {
+                backgroundColor: "rgba(15,23,42,0.9)",
+                borderBottom: "1px solid rgba(148,163,184,0.25)",
+              },
+              "& .ag-header-cell-label": {
+                color: MAGIC_UI.textBright,
+                fontWeight: 600,
+                letterSpacing: 0.3,
               },
               "& .ag-icon": {
-                fontFamily: iconFontFamily
+                fontFamily: iconFontFamily,
+              },
+              "& .ag-row": {
+                borderColor: "rgba(255,255,255,0.04)",
+                transition: "background 0.2s ease",
+              },
+              "& .ag-row:nth-of-type(even)": {
+                backgroundColor: "rgba(15,23,42,0.45)",
+              },
+              "& .ag-row-hover": {
+                backgroundColor: "rgba(73,156,196,0.2) !important",
               },
               "& .ag-row-selected": {
                 backgroundColor: "rgba(125,211,252,0.2) !important",
                 boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-              }
+              },
+              "& .ag-paging-panel": {
+                borderTop: "1px solid rgba(148,163,184,0.2)",
+                backgroundColor: "rgba(3,7,18,0.8)",
+              },
             }}
             style={{
-              color: "#f5f7fa",
+              "--ag-background-color": "transparent",
+              "--ag-foreground-color": "#f5f7fa",
               "--ag-row-hover-color": "rgba(73,156,196,0.2)",
               "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
               "--ag-checkbox-checked-color": "#7dd3fc",
@@ -409,7 +432,11 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
               rowHeight={46}
               headerHeight={44}
               getRowId={getRowId}
-              overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No credentials have been created yet.</span>"
+              overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${
+                placeholderBanner?.severity === "warning"
+                  ? "Credential data will appear here once the API is available."
+                  : "No credentials have been created yet."
+              }</span>`}
               onGridReady={handleGridReady}
               suppressCellFocus
               theme={myTheme}
@@ -417,7 +444,7 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
                 width: "100%",
                 height: "100%",
                 fontFamily: gridFontFamily,
-                "--ag-icon-font-family": iconFontFamily
+                "--ag-icon-font-family": iconFontFamily,
               }}
             />
           </Box>

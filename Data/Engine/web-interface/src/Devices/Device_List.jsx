@@ -1134,7 +1134,7 @@ export default function DeviceList({
       {
         id: "device-quick-job",
         label: "Quick Job",
-        tone: "accent",
+        tone: "primary",
         disabled: !canLaunchQuickJob,
         onClick: () => {
           if (!canLaunchQuickJob) return;

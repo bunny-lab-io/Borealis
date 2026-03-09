@@ -886,15 +886,6 @@ export default function AssemblyEditor({
     ? new Date(queueInfo.dirty_since).toLocaleString()
     : null;
 
-  const pageHeaderBadges = useMemo(
-    () =>
-      [
-        <DomainBadge key="assembly-domain" domain={domain} size="small" />,
-        dirtyPillVisible ? <DirtyStatePill key="assembly-dirty" compact /> : null,
-      ].filter(Boolean),
-    [dirtyPillVisible, domain]
-  );
-
   const pageHeaderActions = useMemo(() => {
     const actions = [];
     if (isAdmin && devModeEnabled) {
@@ -975,10 +966,9 @@ export default function AssemblyEditor({
       page_subtitle: pageSubtitle,
       page_icon: PAGE_ICON,
       page_header_actions: pageHeaderActions,
-      page_header_badges: pageHeaderBadges,
     });
     return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageHeaderActions, pageHeaderBadges, pageSubtitle, pageTitle]);
+  }, [onPageMetaChange, pageHeaderActions, pageSubtitle, pageTitle]);
 
   const siteScopeValue = assembly.sites?.mode === "specific" ? "specific" : "all";
   const selectedSiteValues = Array.isArray(assembly.sites?.values)
@@ -1026,7 +1016,7 @@ export default function AssemblyEditor({
           gap: 2,
           flexWrap: "wrap",
         }}
-      >
+        >
         <TextField
           select
           label="Domain"
@@ -1042,6 +1032,8 @@ export default function AssemblyEditor({
             </MenuItem>
           ))}
         </TextField>
+        <DomainBadge domain={domain} size="small" />
+        {dirtyPillVisible ? <DirtyStatePill compact /> : null}
         {dirtySinceDisplay ? (
           <Typography variant="caption" sx={{ color: "#9ba3b4" }}>
             Dirty since: {dirtySinceDisplay}
