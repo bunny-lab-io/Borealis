@@ -66,6 +66,7 @@ const MAGIC_UI = {
 };
 
 const PAGE_ICON = DevicesOtherIcon;
+const DEFAULT_VISIBLE_COLUMN_IDS = ["status", "site", "hostname", "description", "lastUser", "type", "os"];
 
 const getOsIconClass = (osName) => {
   const value = (osName || "").toString().toLowerCase();
@@ -366,13 +367,13 @@ export default function DeviceList({
   const COL_LABELS = useMemo(
     () => ({
       status: "Status",
-      agentVersion: "Agent Version",
       site: "Site",
       hostname: "Hostname",
       description: "Description",
       lastUser: "Last User",
       type: "Type",
       os: "OS",
+      agentVersion: "Agent Version",
       internalIp: "Internal IP",
       externalIp: "External IP",
       wireguardVpnStatus: "Wireguard VPN Status",
@@ -396,17 +397,7 @@ export default function DeviceList({
   );
 
   const defaultColumns = useMemo(
-    () => [
-      { id: "status", label: COL_LABELS.status },
-      { id: "wireguardVpnStatus", label: COL_LABELS.wireguardVpnStatus },
-      { id: "agentVersion", label: COL_LABELS.agentVersion },
-      { id: "site", label: COL_LABELS.site },
-      { id: "hostname", label: COL_LABELS.hostname },
-      { id: "description", label: COL_LABELS.description },
-      { id: "lastUser", label: COL_LABELS.lastUser },
-      { id: "type", label: COL_LABELS.type },
-      { id: "os", label: COL_LABELS.os },
-    ],
+    () => DEFAULT_VISIBLE_COLUMN_IDS.map((id) => ({ id, label: COL_LABELS[id] })),
     [COL_LABELS]
   );
   const [columns, setColumns] = useState(defaultColumns);
@@ -998,17 +989,11 @@ export default function DeviceList({
           if (obj.site) {
             setColumns((prev) => {
               if (prev.some((c) => c.id === 'site')) return prev;
-              const hasAgentVersion = prev.some((c) => c.id === 'agentVersion');
-              const remainder = prev.filter((c) => !['status', 'agentVersion'].includes(c.id));
-              const base = [
-                { id: 'status', label: COL_LABELS.status },
-                ...(hasAgentVersion ? [{ id: 'agentVersion', label: COL_LABELS.agentVersion }] : []),
-                { id: 'site', label: COL_LABELS.site },
-              ];
-              if (!hasAgentVersion) {
-                return base.concat(prev.filter((c) => c.id !== 'status'));
-              }
-              return [...base, ...remainder];
+              const next = [...prev];
+              const statusIndex = next.findIndex((c) => c.id === 'status');
+              const insertAt = statusIndex >= 0 ? statusIndex + 1 : 0;
+              next.splice(insertAt, 0, { id: 'site', label: COL_LABELS.site });
+              return next;
             });
           }
         }
@@ -1021,8 +1006,8 @@ export default function DeviceList({
           const hasSite = prev.some((c) => c.id === 'site');
           if (hasSite) return prev;
           const next = [...prev];
-          const agentIndex = next.findIndex((c) => c.id === 'agentVersion');
-          const insertAt = agentIndex >= 0 ? agentIndex + 1 : 1;
+          const statusIndex = next.findIndex((c) => c.id === 'status');
+          const insertAt = statusIndex >= 0 ? statusIndex + 1 : 0;
           next.splice(insertAt, 0, { id: 'site', label: COL_LABELS.site });
           return next;
         });
