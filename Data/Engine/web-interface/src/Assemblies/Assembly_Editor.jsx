@@ -435,6 +435,71 @@ export default function AssemblyEditor({
       setFileName((prev) => prev || sanitizeFileName(doc.name || ""));
     };
 
+    const hydrateFromApiPayload = (data, row, guid) => {
+      const parsed = parseAssemblyExport(data);
+      const fallbackName =
+        parsed?.metadata?.display_name ||
+        data?.display_name ||
+        row?.name ||
+        "";
+      const enrichedDoc = {
+        ...(parsed?.payload && typeof parsed.payload === "object" ? parsed.payload : {}),
+        name: fallbackName,
+        display_name: fallbackName,
+        description:
+          parsed?.metadata?.summary ||
+          data?.summary ||
+          row?.description ||
+          "",
+        category:
+          parsed?.payload?.category ||
+          row?.category ||
+          "",
+        type:
+          parsed?.type ||
+          data?.assembly_subtype ||
+          row?.assembly_subtype ||
+          row?.assemblyType ||
+          defaultType,
+        script: parsed?.script || "",
+        timeout_seconds:
+          parsed?.timeoutSeconds ||
+          parsed?.payload?.timeout_seconds ||
+          parsed?.payload?.timeout ||
+          3600,
+        sites:
+          parsed?.sites && typeof parsed.sites === "object"
+            ? parsed.sites
+            : { mode: "all", values: [] },
+        variables: Array.isArray(parsed?.rawVariables) ? parsed.rawVariables : [],
+        files: Array.isArray(parsed?.rawFiles) ? parsed.rawFiles : [],
+      };
+      const hasMeaningfulContent =
+        Boolean(fallbackName) ||
+        Boolean(enrichedDoc.description) ||
+        Boolean(enrichedDoc.script) ||
+        (Array.isArray(enrichedDoc.variables) && enrichedDoc.variables.length > 0) ||
+        (Array.isArray(enrichedDoc.files) && enrichedDoc.files.length > 0) ||
+        (parsed?.payload && typeof parsed.payload === "object" && Object.keys(parsed.payload).length > 0);
+      if (!hasMeaningfulContent) {
+        throw new Error(`Assembly payload was empty for ${guid}`);
+      }
+      hydrateFromDocument(enrichedDoc);
+      setAssemblyGuid(data?.assembly_guid || guid);
+      setDomain((data?.source || data?.domain || row?.domain || "user").toLowerCase());
+      setQueueInfo({
+        dirty_since: data?.dirty_since || row?.queueEntry?.dirty_since || null,
+        last_persisted: data?.last_persisted || row?.queueEntry?.last_persisted || null,
+      });
+      setIsDirtyQueue(Boolean(data?.is_dirty));
+      const exportName = sanitizeFileName(
+        fallbackName || guid
+      );
+      setFileName(exportName);
+      setErrorMessage("");
+      return true;
+    };
+
     const hydrateNewContext = (ctx) => {
       const doc = defaultAssembly(ctx?.defaultType || defaultType);
       if (ctx?.name) doc.name = ctx.name;
@@ -453,64 +518,34 @@ export default function AssemblyEditor({
     const hydrateExisting = async (guid, row) => {
       try {
         setLoading(true);
-        const resp = await fetch(`/api/assemblies/${encodeURIComponent(guid)}/export`);
-        if (!resp.ok) {
-          const problem = await resp.text();
-          throw new Error(problem || `Failed to load assembly (HTTP ${resp.status})`);
+        setErrorMessage("");
+
+        const detailResp = await fetch(`/api/assemblies/${encodeURIComponent(guid)}`);
+        if (detailResp.ok) {
+          const detailData = await detailResp.json();
+          if (!canceled) {
+            try {
+              hydrateFromApiPayload(detailData, row, guid);
+              return;
+            } catch {
+              /* fall back to legacy export response */
+            }
+          }
         }
-        const data = await resp.json();
+
+        const exportResp = await fetch(`/api/assemblies/${encodeURIComponent(guid)}/export`);
+        if (!exportResp.ok) {
+          const detailProblem = detailResp.ok ? "" : await detailResp.text().catch(() => "");
+          const exportProblem = await exportResp.text().catch(() => "");
+          throw new Error(
+            exportProblem ||
+              detailProblem ||
+              `Failed to load assembly (detail HTTP ${detailResp.status}, export HTTP ${exportResp.status})`
+          );
+        }
+        const exportData = await exportResp.json();
         if (canceled) return;
-        const parsed = parseAssemblyExport(data);
-        const fallbackName =
-          parsed?.metadata?.display_name ||
-          data?.display_name ||
-          row?.name ||
-          assembly.name ||
-          "";
-        const enrichedDoc = {
-          ...(parsed?.payload && typeof parsed.payload === "object" ? parsed.payload : {}),
-          name: fallbackName,
-          display_name: fallbackName,
-          description:
-            parsed?.metadata?.summary ||
-            data?.summary ||
-            row?.description ||
-            "",
-          category:
-            parsed?.payload?.category ||
-            row?.category ||
-            "",
-          type:
-            parsed?.type ||
-            data?.assembly_subtype ||
-            row?.assembly_subtype ||
-            row?.assemblyType ||
-            defaultType,
-          script: parsed?.script || "",
-          timeout_seconds:
-            parsed?.timeoutSeconds ||
-            parsed?.payload?.timeout_seconds ||
-            parsed?.payload?.timeout ||
-            3600,
-          sites:
-            parsed?.sites && typeof parsed.sites === "object"
-              ? parsed.sites
-              : { mode: "all", values: [] },
-          variables: Array.isArray(parsed?.rawVariables) ? parsed.rawVariables : [],
-          files: Array.isArray(parsed?.rawFiles) ? parsed.rawFiles : [],
-        };
-        hydrateFromDocument(enrichedDoc);
-        setAssemblyGuid(data?.assembly_guid || guid);
-        setDomain((data?.source || data?.domain || row?.domain || "user").toLowerCase());
-        setQueueInfo({
-          dirty_since: data?.dirty_since || row?.queueEntry?.dirty_since || null,
-          last_persisted: data?.last_persisted || row?.queueEntry?.last_persisted || null,
-        });
-        setIsDirtyQueue(Boolean(data?.is_dirty));
-        const exportName = sanitizeFileName(
-          data?.display_name || row?.name || guid
-        );
-        setFileName(exportName);
+        hydrateFromApiPayload(exportData, row, guid);
       } catch (err) {
         console.error("Failed to load assembly:", err);
         if (!canceled) {

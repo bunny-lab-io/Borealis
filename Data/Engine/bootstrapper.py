@@ -253,10 +253,33 @@ def _ensure_web_ui_build(staging_root: Path, logger: logging.Logger, *, mode: st
     needs_install = not node_modules.is_dir()
     needs_build = not build_dir.is_dir()
 
+    def _latest_source_mtime(root: Path) -> Optional[float]:
+        """Return the latest source/config mtime under the WebUI staging root."""
+
+        try:
+            latest: Optional[float] = None
+            for path in root.rglob("*"):
+                if any(part in {"node_modules", "build", "dist"} for part in path.parts):
+                    continue
+                if not path.is_file():
+                    continue
+                try:
+                    mtime = path.stat().st_mtime
+                except OSError:
+                    continue
+                latest = mtime if latest is None else max(latest, mtime)
+            return latest
+        except Exception:
+            return None
+
     if not needs_build and package_json.is_file():
         build_index = build_dir / "index.html"
         if build_index.is_file():
-            needs_build = build_index.stat().st_mtime < package_json.stat().st_mtime
+            build_mtime = build_index.stat().st_mtime
+            source_mtime = _latest_source_mtime(staging_root)
+            package_mtime = package_json.stat().st_mtime
+            comparison_mtime = max(package_mtime, source_mtime or package_mtime)
+            needs_build = build_mtime < comparison_mtime
         else:
             needs_build = True
 
