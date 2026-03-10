@@ -36,6 +36,7 @@ import "prismjs/components/prism-bash";
 import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
 import { PageHeaderActionRail } from "../Page_Header_Actions.jsx";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -360,6 +361,397 @@ const defaultColDef = useMemo(
     return () => onPageMetaChange?.(null);
   }, [onPageMetaChange, pageHeaderActions]);
 
+  const sidebarContent = (
+    <>
+      <FormControl fullWidth variant="outlined" size="small">
+        <InputLabel id="log-select-label">Log Domain</InputLabel>
+        <Select
+          labelId="log-select-label"
+          label="Log Domain"
+          value={selectedDomain || ""}
+          onChange={(e) => setSelectedDomain(e.target.value)}
+          sx={{
+            "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.35)" },
+            "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.6)" },
+            "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.accent },
+            "& .MuiSelect-select": {
+              bgcolor: "rgba(8,15,32,0.85)",
+              color: AURORA_SHELL.text,
+              borderRadius: 1,
+            },
+            "& svg": { color: AURORA_SHELL.accent },
+          }}
+          MenuProps={{
+            PaperProps: {
+              sx: {
+                bgcolor: "rgba(12,18,36,0.98)",
+                border: `1px solid rgba(148,163,184,0.35)`,
+                mt: 1,
+                boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+                "& .MuiMenuItem-root": {
+                  color: AURORA_SHELL.text,
+                  "&.Mui-selected": {
+                    bgcolor: "rgba(125,183,255,0.18)",
+                  },
+                  "&.Mui-selected:hover": {
+                    bgcolor: "rgba(125,183,255,0.25)",
+                  },
+                },
+              },
+            },
+          }}
+        >
+          {logs.map((log) => (
+            <MenuItem key={log.file} value={log.file}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ width: "100%" }}>
+                <Typography sx={{ flexGrow: 1 }}>{log.display_name || log.file}</Typography>
+                <Chip
+                  label={formatBytes(log.size_bytes || 0)}
+                  size="small"
+                  sx={{
+                    bgcolor: "rgba(96,165,250,0.16)",
+                    color: AURORA_SHELL.text,
+                    borderRadius: 999,
+                    border: "1px solid rgba(96,165,250,0.45)",
+                  }}
+                />
+              </Stack>
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+
+      {selectedDomainData ? (
+        <>
+          <FormControl fullWidth size="small">
+            <InputLabel id="version-select-label">Log File</InputLabel>
+            <Select
+              labelId="version-select-label"
+              label="Log File"
+              value={selectedFile || ""}
+              onChange={(e) => setSelectedFile(e.target.value)}
+              sx={{
+                "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.35)" },
+                "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.6)" },
+                "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.accent },
+                "& .MuiSelect-select": {
+                  bgcolor: "rgba(8,15,32,0.85)",
+                  color: AURORA_SHELL.text,
+                  borderRadius: 1,
+                },
+                "& svg": { color: AURORA_SHELL.accent },
+              }}
+              MenuProps={{
+                PaperProps: {
+                  sx: {
+                    bgcolor: "rgba(12,18,36,0.98)",
+                    border: `1px solid rgba(148,163,184,0.35)`,
+                    mt: 1,
+                    boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+                    "& .MuiMenuItem-root": {
+                      color: AURORA_SHELL.text,
+                      "&.Mui-selected": { bgcolor: "rgba(125,183,255,0.18)" },
+                      "&.Mui-selected:hover": { bgcolor: "rgba(125,183,255,0.25)" },
+                    },
+                  },
+                },
+              }}
+            >
+              {(selectedDomainData.versions || [{ file: selectedDomainData.file, label: "Active" }]).map((ver) => (
+                <MenuItem key={ver.file} value={ver.file}>
+                  {ver.label}{" "}
+                  <Typography component="span" sx={{ ml: 1, color: AURORA_SHELL.muted, fontSize: "0.8rem" }}>
+                    {formatTimestamp(ver.modified)} · {formatBytes(ver.size_bytes || 0)}
+                  </Typography>
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <Box
+            sx={{
+              bgcolor: "rgba(255,255,255,0.03)",
+              borderRadius: 2,
+              border: `1px solid ${AURORA_SHELL.border}`,
+              p: 2,
+            }}
+          >
+            <Typography sx={{ color: AURORA_SHELL.muted, fontSize: "0.85rem", mb: 1 }}>Overview</Typography>
+            <Stack spacing={1}>
+              <Stack direction="row" justifyContent="space-between">
+                <Typography sx={{ color: AURORA_SHELL.muted }}>Size</Typography>
+                <Typography sx={{ color: AURORA_SHELL.text, fontWeight: 600 }}>
+                  {formatBytes(selectedDomainData.size_bytes || 0)}
+                </Typography>
+              </Stack>
+              <Stack direction="row" justifyContent="space-between">
+                <Typography sx={{ color: AURORA_SHELL.muted }}>Last Updated</Typography>
+                <Typography sx={{ color: AURORA_SHELL.text }}>{formatTimestamp(selectedDomainData.modified)}</Typography>
+              </Stack>
+              <Stack direction="row" justifyContent="space-between">
+                <Typography sx={{ color: AURORA_SHELL.muted }}>Rotations</Typography>
+                <Typography sx={{ color: AURORA_SHELL.text }}>{selectedDomainData.rotation_count || 0}</Typography>
+              </Stack>
+              <Stack direction="row" justifyContent="space-between">
+                <Typography sx={{ color: AURORA_SHELL.muted }}>Retention</Typography>
+                <Typography sx={{ color: AURORA_SHELL.text }}>
+                  {(selectedDomainData.retention_days ?? defaultRetention) || defaultRetention} days
+                </Typography>
+              </Stack>
+            </Stack>
+          </Box>
+
+          <Divider light sx={{ borderColor: AURORA_SHELL.border }} />
+
+          <Stack spacing={1}>
+            <Typography sx={{ color: AURORA_SHELL.muted, fontSize: "0.85rem" }}>Retention Policy</Typography>
+            <TextField
+              label="Retention Days"
+              size="small"
+              value={retentionDraft}
+              onChange={(e) => setRetentionDraft(e.target.value)}
+              helperText={`Leave blank to inherit default (${defaultRetention} days).`}
+              InputProps={{ inputProps: { min: 0 } }}
+            />
+            <Button
+              variant="contained"
+              startIcon={<SaveIcon />}
+              onClick={handleRetentionSave}
+              disabled={!selectedDomainData || disableRetentionSave}
+              sx={{
+                ...gradientButtonSx,
+                opacity: !selectedDomainData || disableRetentionSave ? 0.5 : 1,
+              }}
+            >
+              Save Retention
+            </Button>
+          </Stack>
+
+          <Divider light sx={{ borderColor: AURORA_SHELL.border }} />
+
+          <Stack direction="row" spacing={1}>
+            <Button
+              variant="outlined"
+              startIcon={<DeleteIcon />}
+              onClick={() => handleDelete("file")}
+              sx={{
+                color: "#f97316",
+                borderColor: "rgba(249,115,22,0.6)",
+                textTransform: "none",
+                fontWeight: 600,
+              }}
+            >
+              Delete File
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<HistoryIcon />}
+              onClick={() => handleDelete("family")}
+              sx={{
+                color: "#f43f5e",
+                borderColor: "rgba(244,63,94,0.6)",
+                textTransform: "none",
+                fontWeight: 600,
+              }}
+            >
+              Purge Domain
+            </Button>
+          </Stack>
+        </>
+      ) : null}
+
+      {listLoading ? (
+        <Stack alignItems="center" justifyContent="center" sx={{ flexGrow: 1 }}>
+          <CircularProgress size={32} />
+        </Stack>
+      ) : null}
+    </>
+  );
+
+  const mainContent = (
+    <>
+      {error ? <Alert severity="error">{error}</Alert> : null}
+      {actionMessage ? <Alert severity="success">{actionMessage}</Alert> : null}
+
+      <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems="center">
+        <ToggleButtonGroup
+          exclusive
+          size="small"
+          value={gridMode}
+          onChange={(_, val) => val && setGridMode(val)}
+          sx={{
+            background: "rgba(9,14,25,0.9)",
+            borderRadius: 1,
+            border: `1px solid ${AURORA_SHELL.border}`,
+            boxShadow: "0 14px 32px rgba(2,6,23,0.55)",
+            overflow: "hidden",
+            "& .MuiToggleButton-root": {
+              textTransform: "none",
+              color: "#dce7f5",
+              border: "none",
+              px: 2.8,
+              py: 1,
+              fontWeight: 700,
+              fontSize: 13,
+              letterSpacing: 0.1,
+              transition: "all 0.18s ease",
+              backgroundColor: "#0f1627",
+              "&:hover": { backgroundColor: "rgba(148,163,184,0.14)" },
+              "&.Mui-selected": {
+                color: "#0c1224",
+                backgroundImage: "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)",
+                boxShadow: "0 10px 24px rgba(124,58,237,0.4)",
+              },
+              "&.Mui-selected:hover": {
+                backgroundImage: "linear-gradient(135deg,#8bd8ff 0%,#c0a8ff 100%)",
+              },
+            },
+          }}
+        >
+          <ToggleButton value="structured" sx={{ color: AURORA_SHELL.text, textTransform: "none" }}>
+            <VisibilityIcon fontSize="small" sx={{ mr: 1 }} /> Structured
+          </ToggleButton>
+          <ToggleButton value="raw" sx={{ color: AURORA_SHELL.text, textTransform: "none" }}>
+            <VisibilityOffIcon fontSize="small" sx={{ mr: 1 }} /> Raw
+          </ToggleButton>
+        </ToggleButtonGroup>
+        <TextField
+          placeholder="Quick filter"
+          size="small"
+          value={quickFilter}
+          onChange={(e) => applyQuickFilter(e.target.value)}
+          sx={{
+            minWidth: 220,
+            flexGrow: 1,
+            "& .MuiOutlinedInput-root": {
+              bgcolor: "rgba(255,255,255,0.05)",
+              borderRadius: 999,
+              color: AURORA_SHELL.text,
+            },
+            "& .MuiInputBase-input": {
+              color: AURORA_SHELL.text,
+            },
+          }}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <LogsIcon fontSize="small" sx={{ color: AURORA_SHELL.muted }} />
+              </InputAdornment>
+            ),
+          }}
+        />
+        <Tooltip title="Reload entries">
+          <span>
+            <IconButton
+              onClick={() => selectedFile && fetchEntries(selectedFile)}
+              disabled={!selectedFile || entryLoading}
+              sx={{ color: AURORA_SHELL.accent }}
+            >
+              <RefreshIcon />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Stack>
+
+      {gridMode === "structured" ? (
+        <Box
+          sx={{
+            flexGrow: 1,
+            minHeight: 0,
+            borderRadius: 2,
+            border: "none",
+            bgcolor: "transparent",
+            overflow: "hidden",
+          }}
+        >
+          {entryLoading ? (
+            <Stack alignItems="center" justifyContent="center" sx={{ height: "100%" }}>
+              <CircularProgress />
+            </Stack>
+          ) : (
+            <Box
+              className={quartzThemeClass}
+              sx={{
+                height: "100%",
+                "& .ag-root-wrapper": {
+                  minHeight: "100%",
+                  border: "none",
+                  borderRadius: 0,
+                  background: "transparent",
+                },
+                "& .ag-row-selected": {
+                  backgroundColor: "rgba(125,211,252,0.2) !important",
+                  boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+                },
+              }}
+              style={gridThemeStyle}
+            >
+              <AgGridReact
+                ref={gridRef}
+                rowData={entries}
+                columnDefs={columnDefs}
+                defaultColDef={defaultColDef}
+                rowHeight={42}
+                animateRows
+                pagination
+                paginationPageSize={50}
+                suppressCellFocus
+                overlayNoRowsTemplate="<span style='color:#94a3b8'>No log entries to display.</span>"
+              />
+            </Box>
+          )}
+        </Box>
+      ) : (
+        <Box
+          sx={{
+            flexGrow: 1,
+            borderRadius: 2,
+            border: `1px solid ${AURORA_SHELL.border}`,
+            bgcolor: "#050d1f",
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {entryLoading ? (
+            <Stack alignItems="center" justifyContent="center" sx={{ height: "100%" }}>
+              <CircularProgress />
+            </Stack>
+          ) : (
+            <Box sx={{ height: "100%", overflow: "auto" }}>
+              <Editor
+                value={rawContent}
+                onValueChange={() => {}}
+                highlight={(code) => Prism.highlight(code, Prism.languages.bash, "bash")}
+                padding={16}
+                textareaId="raw-log-viewer"
+                textareaProps={{ readOnly: true }}
+                style={{
+                  fontFamily:
+                    '"IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace',
+                  fontSize: 13,
+                  minHeight: "100%",
+                  height: "100%",
+                  color: "#e2e8f0",
+                  background: "transparent",
+                  overflow: "auto",
+                }}
+                readOnly
+              />
+            </Box>
+          )}
+        </Box>
+      )}
+
+      {entriesMeta ? (
+        <Typography sx={{ fontSize: "0.85rem", color: AURORA_SHELL.muted }}>
+          Showing {entriesMeta.returned_lines} of {entriesMeta.total_lines} lines from {entriesMeta.file}
+          {entriesMeta.truncated ? " (truncated to the most recent lines)" : ""}.
+        </Typography>
+      ) : null}
+    </>
+  );
+
   if (!isAdmin) {
     return (
       <Paper sx={{ m: 3, p: 4, bgcolor: AURORA_SHELL.panel }}>
@@ -416,407 +808,7 @@ const defaultColDef = useMemo(
         </Box>
       )}
 
-      {error && (
-        <Box sx={{ px: 3, pt: 2 }}>
-          <Alert severity="error">{error}</Alert>
-        </Box>
-      )}
-      {actionMessage && (
-        <Box sx={{ px: 3, pt: 2 }}>
-          <Alert severity="success">{actionMessage}</Alert>
-        </Box>
-      )}
-
-      <Box sx={{ display: "flex", flexGrow: 1, minHeight: 0 }}>
-        <Box
-          sx={{
-            width: 360,
-            p: 3,
-            borderRight: "none",
-            bgcolor: "transparent",
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-          }}
-        >
-          <FormControl fullWidth variant="outlined" size="small">
-            <InputLabel id="log-select-label">Log Domain</InputLabel>
-            <Select
-              labelId="log-select-label"
-              label="Log Domain"
-              value={selectedDomain || ""}
-              onChange={(e) => setSelectedDomain(e.target.value)}
-              sx={{
-                "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.35)" },
-                "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.6)" },
-                "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.accent },
-                "& .MuiSelect-select": {
-                  bgcolor: "rgba(8,15,32,0.85)",
-                  color: AURORA_SHELL.text,
-                  borderRadius: 1,
-                },
-                "& svg": { color: AURORA_SHELL.accent },
-              }}
-              MenuProps={{
-                PaperProps: {
-                  sx: {
-                    bgcolor: "rgba(12,18,36,0.98)",
-                    border: `1px solid rgba(148,163,184,0.35)`,
-                    mt: 1,
-                    boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
-                    "& .MuiMenuItem-root": {
-                      color: AURORA_SHELL.text,
-                      "&.Mui-selected": {
-                        bgcolor: "rgba(125,183,255,0.18)",
-                      },
-                      "&.Mui-selected:hover": {
-                        bgcolor: "rgba(125,183,255,0.25)",
-                      },
-                    },
-                  },
-                },
-              }}
-            >
-              {logs.map((log) => (
-                <MenuItem key={log.file} value={log.file}>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ width: "100%" }}>
-                    <Typography sx={{ flexGrow: 1 }}>{log.display_name || log.file}</Typography>
-                    <Chip
-                      label={formatBytes(log.size_bytes || 0)}
-                      size="small"
-                      sx={{
-                        bgcolor: "rgba(96,165,250,0.16)",
-                        color: AURORA_SHELL.text,
-                        borderRadius: 999,
-                        border: "1px solid rgba(96,165,250,0.45)",
-                      }}
-                    />
-                  </Stack>
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          {selectedDomainData && (
-            <>
-              <FormControl fullWidth size="small">
-                <InputLabel id="version-select-label">Log File</InputLabel>
-                <Select
-                  labelId="version-select-label"
-                  label="Log File"
-                  value={selectedFile || ""}
-                  onChange={(e) => setSelectedFile(e.target.value)}
-                  sx={{
-                    "& .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.35)" },
-                    "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "rgba(148,163,184,0.6)" },
-                    "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: AURORA_SHELL.accent },
-                    "& .MuiSelect-select": {
-                      bgcolor: "rgba(8,15,32,0.85)",
-                      color: AURORA_SHELL.text,
-                      borderRadius: 1,
-                    },
-                    "& svg": { color: AURORA_SHELL.accent },
-                  }}
-                  MenuProps={{
-                    PaperProps: {
-                      sx: {
-                        bgcolor: "rgba(12,18,36,0.98)",
-                        border: `1px solid rgba(148,163,184,0.35)`,
-                        mt: 1,
-                        boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
-                        "& .MuiMenuItem-root": {
-                          color: AURORA_SHELL.text,
-                          "&.Mui-selected": { bgcolor: "rgba(125,183,255,0.18)" },
-                          "&.Mui-selected:hover": { bgcolor: "rgba(125,183,255,0.25)" },
-                        },
-                      },
-                    },
-                  }}
-                >
-                  {(selectedDomainData.versions || [{ file: selectedDomainData.file, label: "Active" }]).map(
-                    (ver) => (
-                      <MenuItem key={ver.file} value={ver.file}>
-                        {ver.label}{" "}
-                        <Typography component="span" sx={{ ml: 1, color: AURORA_SHELL.muted, fontSize: "0.8rem" }}>
-                          {formatTimestamp(ver.modified)} · {formatBytes(ver.size_bytes || 0)}
-                        </Typography>
-                      </MenuItem>
-                    )
-                  )}
-                </Select>
-              </FormControl>
-
-              <Box
-                sx={{
-                  bgcolor: "rgba(255,255,255,0.03)",
-                  borderRadius: 2,
-                  border: `1px solid ${AURORA_SHELL.border}`,
-                  p: 2,
-                }}
-              >
-                <Typography sx={{ color: AURORA_SHELL.muted, fontSize: "0.85rem", mb: 1 }}>Overview</Typography>
-                <Stack spacing={1}>
-                  <Stack direction="row" justifyContent="space-between">
-                    <Typography sx={{ color: AURORA_SHELL.muted }}>Size</Typography>
-                    <Typography sx={{ color: AURORA_SHELL.text, fontWeight: 600 }}>
-                      {formatBytes(selectedDomainData.size_bytes || 0)}
-                    </Typography>
-                  </Stack>
-                  <Stack direction="row" justifyContent="space-between">
-                    <Typography sx={{ color: AURORA_SHELL.muted }}>Last Updated</Typography>
-                    <Typography sx={{ color: AURORA_SHELL.text }}>{formatTimestamp(selectedDomainData.modified)}</Typography>
-                  </Stack>
-                  <Stack direction="row" justifyContent="space-between">
-                    <Typography sx={{ color: AURORA_SHELL.muted }}>Rotations</Typography>
-                    <Typography sx={{ color: AURORA_SHELL.text }}>{selectedDomainData.rotation_count || 0}</Typography>
-                  </Stack>
-                  <Stack direction="row" justifyContent="space-between">
-                    <Typography sx={{ color: AURORA_SHELL.muted }}>Retention</Typography>
-                    <Typography sx={{ color: AURORA_SHELL.text }}>
-                      {(selectedDomainData.retention_days ?? defaultRetention) || defaultRetention} days
-                    </Typography>
-                  </Stack>
-                </Stack>
-              </Box>
-
-              <Divider light sx={{ borderColor: AURORA_SHELL.border }} />
-
-              <Stack spacing={1}>
-                <Typography sx={{ color: AURORA_SHELL.muted, fontSize: "0.85rem" }}>Retention Policy</Typography>
-                <TextField
-                  label="Retention Days"
-                  size="small"
-                  value={retentionDraft}
-                  onChange={(e) => setRetentionDraft(e.target.value)}
-                  helperText={`Leave blank to inherit default (${defaultRetention} days).`}
-                  InputProps={{ inputProps: { min: 0 } }}
-                />
-                <Button
-                  variant="contained"
-                  startIcon={<SaveIcon />}
-                  onClick={handleRetentionSave}
-                  disabled={!selectedDomainData || disableRetentionSave}
-                  sx={{
-                    ...gradientButtonSx,
-                    opacity: !selectedDomainData || disableRetentionSave ? 0.5 : 1,
-                  }}
-                >
-                  Save Retention
-                </Button>
-              </Stack>
-
-              <Divider light sx={{ borderColor: AURORA_SHELL.border }} />
-
-              <Stack direction="row" spacing={1}>
-                <Button
-                  variant="outlined"
-                  startIcon={<DeleteIcon />}
-                  onClick={() => handleDelete("file")}
-                  sx={{
-                    color: "#f97316",
-                    borderColor: "rgba(249,115,22,0.6)",
-                    textTransform: "none",
-                    fontWeight: 600,
-                  }}
-                >
-                  Delete File
-                </Button>
-                <Button
-                  variant="outlined"
-                  startIcon={<HistoryIcon />}
-                  onClick={() => handleDelete("family")}
-                  sx={{
-                    color: "#f43f5e",
-                    borderColor: "rgba(244,63,94,0.6)",
-                    textTransform: "none",
-                    fontWeight: 600,
-                  }}
-                >
-                  Purge Domain
-                </Button>
-              </Stack>
-            </>
-          )}
-
-          {listLoading && (
-            <Stack alignItems="center" justifyContent="center" sx={{ flexGrow: 1 }}>
-              <CircularProgress size={32} />
-            </Stack>
-          )}
-        </Box>
-
-        <Box sx={{ flexGrow: 1, display: "flex", flexDirection: "column", minWidth: 0, p: 3, gap: 2 }}>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems="center">
-            <ToggleButtonGroup
-              exclusive
-              size="small"
-              value={gridMode}
-              onChange={(_, val) => val && setGridMode(val)}
-              sx={{
-                background: "rgba(9,14,25,0.9)",
-                borderRadius: 1,
-                border: `1px solid ${AURORA_SHELL.border}`,
-                boxShadow: "0 14px 32px rgba(2,6,23,0.55)",
-                overflow: "hidden",
-                "& .MuiToggleButton-root": {
-                  textTransform: "none",
-                  color: "#dce7f5",
-                  border: "none",
-                  px: 2.8,
-                  py: 1,
-                  fontWeight: 700,
-                  fontSize: 13,
-                  letterSpacing: 0.1,
-                  transition: "all 0.18s ease",
-                  backgroundColor: "#0f1627",
-                  "&:hover": { backgroundColor: "rgba(148,163,184,0.14)" },
-                  "&.Mui-selected": {
-                    color: "#0c1224",
-                    backgroundImage: "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)",
-                    boxShadow: "0 10px 24px rgba(124,58,237,0.4)",
-                  },
-                  "&.Mui-selected:hover": {
-                    backgroundImage: "linear-gradient(135deg,#8bd8ff 0%,#c0a8ff 100%)",
-                  },
-                },
-              }}
-            >
-              <ToggleButton value="structured" sx={{ color: AURORA_SHELL.text, textTransform: "none" }}>
-                <VisibilityIcon fontSize="small" sx={{ mr: 1 }} /> Structured
-              </ToggleButton>
-              <ToggleButton value="raw" sx={{ color: AURORA_SHELL.text, textTransform: "none" }}>
-                <VisibilityOffIcon fontSize="small" sx={{ mr: 1 }} /> Raw
-              </ToggleButton>
-            </ToggleButtonGroup>
-            <TextField
-              placeholder="Quick filter"
-              size="small"
-              value={quickFilter}
-              onChange={(e) => applyQuickFilter(e.target.value)}
-              sx={{
-                minWidth: 220,
-                flexGrow: 1,
-                "& .MuiOutlinedInput-root": {
-                  bgcolor: "rgba(255,255,255,0.05)",
-                  borderRadius: 999,
-                  color: AURORA_SHELL.text,
-                },
-                "& .MuiInputBase-input": {
-                  color: AURORA_SHELL.text,
-                },
-              }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <LogsIcon fontSize="small" sx={{ color: AURORA_SHELL.muted }} />
-                  </InputAdornment>
-                ),
-              }}
-            />
-            <Tooltip title="Reload entries">
-              <span>
-                <IconButton
-                  onClick={() => selectedFile && fetchEntries(selectedFile)}
-                  disabled={!selectedFile || entryLoading}
-                  sx={{ color: AURORA_SHELL.accent }}
-                >
-                  <RefreshIcon />
-                </IconButton>
-              </span>
-            </Tooltip>
-          </Stack>
-
-          {gridMode === "structured" ? (
-            <Box
-              sx={{
-                flexGrow: 1,
-                minHeight: 0,
-                borderRadius: 2,
-                border: "none",
-                bgcolor: "transparent",
-                overflow: "hidden",
-              }}
-            >
-              {entryLoading ? (
-                <Stack alignItems="center" justifyContent="center" sx={{ height: "100%" }}>
-                  <CircularProgress />
-                </Stack>
-              ) : (
-                <Box
-                  className={quartzThemeClass}
-                  sx={{
-                    "& .ag-row-selected": {
-                      backgroundColor: "rgba(125,211,252,0.2) !important",
-                      boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-                    },
-                  }}
-                  style={gridThemeStyle}
-                >
-                  <AgGridReact
-                    ref={gridRef}
-                    rowData={entries}
-                    columnDefs={columnDefs}
-                    defaultColDef={defaultColDef}
-                    rowHeight={42}
-                    animateRows
-                    pagination
-                    paginationPageSize={50}
-                    suppressCellFocus
-                    overlayNoRowsTemplate="<span style='color:#94a3b8'>No log entries to display.</span>"
-                  />
-                </Box>
-              )}
-            </Box>
-          ) : (
-            <Box
-              sx={{
-                flexGrow: 1,
-                borderRadius: 2,
-                border: `1px solid ${AURORA_SHELL.border}`,
-                bgcolor: "#050d1f",
-                overflow: "hidden",
-                display: "flex",
-                flexDirection: "column",
-              }}
-            >
-              {entryLoading ? (
-                <Stack alignItems="center" justifyContent="center" sx={{ height: "100%" }}>
-                  <CircularProgress />
-                </Stack>
-              ) : (
-                <Box sx={{ height: "100%", overflow: "auto" }}>
-                  <Editor
-                    value={rawContent}
-                    onValueChange={() => {}}
-                    highlight={(code) => Prism.highlight(code, Prism.languages.bash, "bash")}
-                    padding={16}
-                    textareaId="raw-log-viewer"
-                    textareaProps={{ readOnly: true }}
-                    style={{
-                      fontFamily:
-                        '"IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace',
-                      fontSize: 13,
-                      minHeight: "100%",
-                      height: "100%",
-                      color: "#e2e8f0",
-                      background: "transparent",
-                      overflow: "auto",
-                    }}
-                    readOnly
-                  />
-                </Box>
-              )}
-            </Box>
-          )}
-
-          {entriesMeta && (
-            <Typography sx={{ fontSize: "0.85rem", color: AURORA_SHELL.muted }}>
-              Showing {entriesMeta.returned_lines} of {entriesMeta.total_lines} lines from {entriesMeta.file}
-              {entriesMeta.truncated ? " (truncated to the most recent lines)" : ""}.
-            </Typography>
-          )}
-        </Box>
-      </Box>
+      <PageBodyFrame variant="split_tool" sidebar={sidebarContent} main={mainContent} />
     </Paper>
   );
 }

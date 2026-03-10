@@ -18,6 +18,7 @@ import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import CredentialEditor from "./Credential_Editor.jsx";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -339,117 +340,97 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
 
   return (
     <>
-      <Paper
-        sx={{
-          m: 0,
-          p: 0,
-          bgcolor: "transparent",
-          border: "none",
-          boxShadow: "none",
-          fontFamily: gridFontFamily,
-          color: "#f5f7fa",
-          display: "flex",
-          flexDirection: "column",
-          flexGrow: 1,
-          minWidth: 0,
-          minHeight: 420,
-        }}
-        elevation={0}
+      <PageBodyFrame
+        variant="grid_with_stack"
+        stack={
+          placeholderBanner ? (
+            <Alert severity={placeholderBanner.severity}>{placeholderBanner.message}</Alert>
+          ) : null
+        }
       >
-        <Box sx={{ px: { xs: 2, md: 3 }, pb: 3, flexGrow: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-          {placeholderBanner ? (
-            <Box sx={{ mb: 2 }}>
-              <Alert severity={placeholderBanner.severity}>{placeholderBanner.message}</Alert>
-            </Box>
-          ) : null}
-
-          <Box
-            className={themeClassName}
-            sx={{
-              flexGrow: 1,
-              minHeight: 0,
-              width: "100%",
-              borderRadius: 3,
-              border: `1px solid ${MAGIC_UI.panelBorder}`,
-              background: "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.85))",
-              boxShadow: "0 20px 60px rgba(2,8,23,0.85)",
+        <Box
+          className={themeClassName}
+          sx={{
+            flexGrow: 1,
+            minHeight: 0,
+            width: "100%",
+            fontFamily: gridFontFamily,
+            "--ag-font-family": gridFontFamily,
+            "--ag-icon-font-family": iconFontFamily,
+            "& .ag-root-wrapper": {
+              minHeight: "100%",
+              border: "none",
+              borderRadius: 0,
+              background: "transparent",
+            },
+            "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
               fontFamily: gridFontFamily,
-              "--ag-font-family": gridFontFamily,
-              "--ag-icon-font-family": iconFontFamily,
-              "& .ag-root-wrapper": {
-                borderRadius: 3,
-                minHeight: "100%",
-                background: "transparent",
-              },
-              "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
-                fontFamily: gridFontFamily,
-                background: "transparent",
-              },
-              "& .ag-header": {
-                backgroundColor: "rgba(15,23,42,0.9)",
-                borderBottom: "1px solid rgba(148,163,184,0.25)",
-              },
-              "& .ag-header-cell-label": {
-                color: MAGIC_UI.textBright,
-                fontWeight: 600,
-                letterSpacing: 0.3,
-              },
-              "& .ag-icon": {
-                fontFamily: iconFontFamily,
-              },
-              "& .ag-row": {
-                borderColor: "rgba(255,255,255,0.04)",
-                transition: "background 0.2s ease",
-              },
-              "& .ag-row:nth-of-type(even)": {
-                backgroundColor: "rgba(15,23,42,0.45)",
-              },
-              "& .ag-row-hover": {
-                backgroundColor: "rgba(73,156,196,0.2) !important",
-              },
-              "& .ag-row-selected": {
-                backgroundColor: "rgba(125,211,252,0.2) !important",
-                boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-              },
-              "& .ag-paging-panel": {
-                borderTop: "1px solid rgba(148,163,184,0.2)",
-                backgroundColor: "rgba(3,7,18,0.8)",
-              },
-            }}
+              background: "transparent",
+            },
+            "& .ag-header": {
+              backgroundColor: "rgba(15,23,42,0.9)",
+              borderBottom: "1px solid rgba(148,163,184,0.25)",
+            },
+            "& .ag-header-cell-label": {
+              color: MAGIC_UI.textBright,
+              fontWeight: 600,
+              letterSpacing: 0.3,
+            },
+            "& .ag-icon": {
+              fontFamily: iconFontFamily,
+            },
+            "& .ag-row": {
+              borderColor: "rgba(255,255,255,0.04)",
+              transition: "background 0.2s ease",
+            },
+            "& .ag-row:nth-of-type(even)": {
+              backgroundColor: "rgba(15,23,42,0.45)",
+            },
+            "& .ag-row-hover": {
+              backgroundColor: "rgba(73,156,196,0.2) !important",
+            },
+            "& .ag-row-selected": {
+              backgroundColor: "rgba(125,211,252,0.2) !important",
+              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+            },
+            "& .ag-paging-panel": {
+              borderTop: "1px solid rgba(148,163,184,0.2)",
+              backgroundColor: "rgba(3,7,18,0.8)",
+            },
+          }}
+          style={{
+            "--ag-background-color": "transparent",
+            "--ag-foreground-color": "#f5f7fa",
+            "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+            "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+            "--ag-checkbox-checked-color": "#7dd3fc",
+          }}
+        >
+          <AgGridReact
+            rowData={rows}
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
+            animateRows
+            rowHeight={46}
+            headerHeight={44}
+            getRowId={getRowId}
+            overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${
+              placeholderBanner?.severity === "warning"
+                ? "Credential data will appear here once the API is available."
+                : "No credentials have been created yet."
+            }</span>`}
+            onGridReady={handleGridReady}
+            suppressCellFocus
+            theme={myTheme}
             style={{
-              "--ag-background-color": "transparent",
-              "--ag-foreground-color": "#f5f7fa",
-              "--ag-row-hover-color": "rgba(73,156,196,0.2)",
-              "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
-              "--ag-checkbox-checked-color": "#7dd3fc",
+              width: "100%",
+              height: "100%",
+              fontFamily: gridFontFamily,
+              "--ag-icon-font-family": iconFontFamily,
             }}
-          >
-            <AgGridReact
-              rowData={rows}
-              columnDefs={columnDefs}
-              defaultColDef={defaultColDef}
-              animateRows
-              rowHeight={46}
-              headerHeight={44}
-              getRowId={getRowId}
-              overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${
-                placeholderBanner?.severity === "warning"
-                  ? "Credential data will appear here once the API is available."
-                  : "No credentials have been created yet."
-              }</span>`}
-              onGridReady={handleGridReady}
-              suppressCellFocus
-              theme={myTheme}
-              style={{
-                width: "100%",
-                height: "100%",
-                fontFamily: gridFontFamily,
-                "--ag-icon-font-family": iconFontFamily,
-              }}
-            />
-          </Box>
+          />
         </Box>
-      </Paper>
+      </PageBodyFrame>
 
       <Menu
         anchorEl={menuAnchor}

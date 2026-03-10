@@ -22,6 +22,7 @@ import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
 import AddDevice from "./Add_Device.jsx";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -1730,97 +1731,101 @@ export default function DeviceList({
       }}
       elevation={0}
     >
-      <Box sx={{ px: { xs: 2, md: 3 }, pt: { xs: 2, md: 3 }, pb: 1.5 }}>
-        <Typography sx={{ fontSize: "0.72rem", color: MAGIC_UI.textMuted, textTransform: "uppercase", letterSpacing: 0.45, mb: 0.5 }}>
-          Custom View
-        </Typography>
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
-          <Box sx={{ flex: "1 1 260px", minWidth: 220, display: "flex", alignItems: "center" }}>
-            <TextField
-              select
-              size="small"
-              value={selectedViewId}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSelectedViewId(val);
-                if (val === "default") applyView({ id: "default" });
-                else {
-                  const v = views.find((x) => String(x.id) === String(val));
-                  if (v) applyView(v);
-                }
-              }}
-              sx={{
-                minWidth: 220,
-                mr: 0,
-                "& .MuiOutlinedInput-root": {
-                  height: 36,
-                  pr: 0,
-                  borderTopRightRadius: 0,
-                  borderBottomRightRadius: 0,
-                  background: "rgba(4,7,17,0.6)",
-                  "& fieldset": { borderColor: "rgba(148,163,184,0.4)", borderRight: "1px solid rgba(148,163,184,0.4)" },
-                  "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-                },
-                "& .MuiSelect-select": {
-                  display: "flex",
-                  alignItems: "center",
-                  py: 0,
-                },
-              }}
-              SelectProps={{
-                MenuProps: {
-                  PaperProps: { sx: { bgcolor: "rgba(8,12,24,0.98)", color: "#fff" } },
-                },
-                renderValue: (val) => {
-                  if (val === "default") return "Default View";
-                  const v = views.find((x) => String(x.id) === String(val));
-                  return v ? v.name : "Default View";
-                },
-              }}
-            >
-              <MenuItem value="default">Default View</MenuItem>
-              {views.map((v) => (
-                <MenuItem key={v.id} value={v.id} disableRipple>
-                  <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
-                    <span>{v.name}</span>
-                    <IconButton
-                      size="small"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setViewActionAnchor(e.currentTarget);
-                        setViewActionTarget(v);
-                      }}
-                      sx={{ color: "#ccc" }}
-                    >
-                      <MoreVertIcon fontSize="small" />
-                    </IconButton>
-                  </Box>
-                </MenuItem>
-              ))}
-            </TextField>
-            <IconButton
-              size="small"
-              onClick={() => {
-                setNewViewName("");
-                setCreateDialogOpen(true);
-              }}
-              sx={{
-                ml: "-1px",
-                border: "1px solid rgba(148,163,184,0.4)",
-                borderRadius: "0 8px 8px 0",
-                color: MAGIC_UI.textBright,
-                height: 36,
-                width: 36,
-                background: "rgba(12,18,35,0.8)",
-                "&:hover": { borderColor: MAGIC_UI.accentA },
-                }}
-              >
-                <AddIcon fontSize="small" />
-              </IconButton>
+      <PageBodyFrame
+        variant="grid_with_stack"
+        stack={(
+          <>
+            <Typography sx={{ fontSize: "0.72rem", color: MAGIC_UI.textMuted, textTransform: "uppercase", letterSpacing: 0.45, mb: 0.5 }}>
+              Custom View
+            </Typography>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
+              <Box sx={{ flex: "1 1 260px", minWidth: 220, display: "flex", alignItems: "center" }}>
+                <TextField
+                  select
+                  size="small"
+                  value={selectedViewId}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSelectedViewId(val);
+                    if (val === "default") applyView({ id: "default" });
+                    else {
+                      const v = views.find((x) => String(x.id) === String(val));
+                      if (v) applyView(v);
+                    }
+                  }}
+                  sx={{
+                    minWidth: 220,
+                    mr: 0,
+                    "& .MuiOutlinedInput-root": {
+                      height: 36,
+                      pr: 0,
+                      borderTopRightRadius: 0,
+                      borderBottomRightRadius: 0,
+                      background: "rgba(4,7,17,0.6)",
+                      "& fieldset": { borderColor: "rgba(148,163,184,0.4)", borderRight: "1px solid rgba(148,163,184,0.4)" },
+                      "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+                    },
+                    "& .MuiSelect-select": {
+                      display: "flex",
+                      alignItems: "center",
+                      py: 0,
+                    },
+                  }}
+                  SelectProps={{
+                    MenuProps: {
+                      PaperProps: { sx: { bgcolor: "rgba(8,12,24,0.98)", color: "#fff" } },
+                    },
+                    renderValue: (val) => {
+                      if (val === "default") return "Default View";
+                      const v = views.find((x) => String(x.id) === String(val));
+                      return v ? v.name : "Default View";
+                    },
+                  }}
+                >
+                  <MenuItem value="default">Default View</MenuItem>
+                  {views.map((v) => (
+                    <MenuItem key={v.id} value={v.id} disableRipple>
+                      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                        <span>{v.name}</span>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setViewActionAnchor(e.currentTarget);
+                            setViewActionTarget(v);
+                          }}
+                          sx={{ color: "#ccc" }}
+                        >
+                          <MoreVertIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <IconButton
+                  size="small"
+                  onClick={() => {
+                    setNewViewName("");
+                    setCreateDialogOpen(true);
+                  }}
+                  sx={{
+                    ml: "-1px",
+                    border: "1px solid rgba(148,163,184,0.4)",
+                    borderRadius: "0 8px 8px 0",
+                    color: MAGIC_UI.textBright,
+                    height: 36,
+                    width: 36,
+                    background: "rgba(12,18,35,0.8)",
+                    "&:hover": { borderColor: MAGIC_UI.accentA },
+                  }}
+                >
+                  <AddIcon fontSize="small" />
+                </IconButton>
+              </Box>
             </Box>
-        </Box>
-      </Box>
-      <Box sx={{ px: { xs: 2, md: 3 }, pb: 3, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          </>
+        )}
+      >
         <Box
           className={gridWrapperClass}
           sx={{
@@ -1831,13 +1836,10 @@ export default function DeviceList({
             fontFamily: gridFontFamily,
             "--ag-font-family": gridFontFamily,
             "--ag-icon-font-family": iconFontFamily,
-            background: "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.85))",
-            borderRadius: 3,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            boxShadow: "0 20px 60px rgba(2,8,23,0.85)",
             "& .ag-root-wrapper": {
-              borderRadius: 3,
-              minHeight: 420,
+              minHeight: "100%",
+              border: "none",
+              borderRadius: 0,
               background: "transparent",
             },
             "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
@@ -1920,7 +1922,7 @@ export default function DeviceList({
             }}
           />
         </Box>
-      </Box>
+      </PageBodyFrame>
       {/* View actions menu (rename/delete for custom views) */}
       <Menu
         anchorEl={viewActionAnchor}

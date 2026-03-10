@@ -29,6 +29,7 @@ import {
   parseAssembliesCollectionPayload,
   resolveAssemblyForComponent
 } from "../Assemblies/assemblyUtils";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 
 // -----------------------------------------------------------------------------
 //  Register AG Grid community modules
@@ -778,75 +779,98 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       }}
       elevation={0}
     >
-      <Box sx={{ mt: 2, px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 1.5, mb: 2, px: 0.5 }}>
-          <Box
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 0.75,
-              background: "linear-gradient(120deg, rgba(8,12,24,0.92), rgba(4,7,17,0.85))",
-              borderRadius: 999,
-              border: "1px solid rgba(148,163,184,0.35)",
-              boxShadow: "0 18px 48px rgba(2,8,23,0.45)",
-              padding: "4px"
-            }}
-          >
-            {FILTER_OPTIONS.map((option) => {
-              const active = jobFilterMode === option.key;
-              return (
-                <Box
-                  key={option.key}
-                  component="button"
-                  type="button"
-                  onClick={() => setJobFilterMode(option.key)}
+      <PageBodyFrame
+        variant="grid_with_stack"
+        stack={(
+          <>
+            <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 1.5 }}>
+              <Box
+                sx={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 0.75,
+                  background: "linear-gradient(120deg, rgba(8,12,24,0.92), rgba(4,7,17,0.85))",
+                  borderRadius: 999,
+                  border: "1px solid rgba(148,163,184,0.35)",
+                  boxShadow: "0 18px 48px rgba(2,8,23,0.45)",
+                  padding: "4px"
+                }}
+              >
+                {FILTER_OPTIONS.map((option) => {
+                  const active = jobFilterMode === option.key;
+                  return (
+                    <Box
+                      key={option.key}
+                      component="button"
+                      type="button"
+                      onClick={() => setJobFilterMode(option.key)}
+                      sx={{
+                        border: "none",
+                        outline: "none",
+                        background: active ? "linear-gradient(135deg,#7dd3fc,#c084fc)" : "transparent",
+                        color: active ? "#041224" : "#cbd5e1",
+                        fontWeight: 600,
+                        fontSize: 13,
+                        px: 2,
+                        py: 0.5,
+                        borderRadius: 999,
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 0.6,
+                        boxShadow: active ? "0 0 18px rgba(125,211,252,0.35)" : "none",
+                        transition: "all 0.2s ease",
+                      }}
+                    >
+                      <Box component="span" sx={{ userSelect: "none" }}>{option.label}</Box>
+                      <Box
+                        component="span"
+                        sx={{
+                          minWidth: 28,
+                          textAlign: "center",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          px: 0.75,
+                          py: 0.1,
+                          color: active ? "#041224" : "#94a3b8",
+                          backgroundColor: active ? "rgba(4,18,36,0.2)" : "rgba(15,23,42,0.65)",
+                          border: active ? "1px solid rgba(4,18,36,0.3)" : "1px solid rgba(148,163,184,0.3)"
+                        }}
+                      >
+                        {filterCounts[option.key] ?? 0}
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </Box>
+              <Typography variant="body2" sx={{ color: AURORA_SHELL.subtext }}>
+                {jobFilterMode === "all"
+                  ? `Showing ${filterCounts.all || 0} jobs`
+                  : `Showing ${filterCounts[jobFilterMode] || 0} ${activeFilterLabel} job${(filterCounts[jobFilterMode] || 0) === 1 ? "" : "s"}`}
+              </Typography>
+            </Box>
+            {anySelected ? (
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "#7db7ff" }}>
+                <Button
+                  variant="outlined"
+                  size="small"
                   sx={{
-                    border: "none",
-                    outline: "none",
-                    background: active ? "linear-gradient(135deg,#7dd3fc,#c084fc)" : "transparent",
-                    color: active ? "#041224" : "#cbd5e1",
-                    fontWeight: 600,
-                    fontSize: 13,
-                    px: 2,
-                    py: 0.5,
+                    color: "#ff8080",
+                    borderColor: "rgba(255,128,128,0.5)",
+                    textTransform: "none",
                     borderRadius: 999,
-                    cursor: "pointer",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 0.6,
-                    boxShadow: active ? "0 0 18px rgba(125,211,252,0.35)" : "none",
-                    transition: "all 0.2s ease",
+                    "&:hover": { borderColor: "#ff8080" },
                   }}
+                  onClick={() => setBulkDeleteOpen(true)}
                 >
-                  <Box component="span" sx={{ userSelect: "none" }}>{option.label}</Box>
-                  <Box
-                    component="span"
-                    sx={{
-                      minWidth: 28,
-                      textAlign: "center",
-                      borderRadius: 999,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      px: 0.75,
-                      py: 0.1,
-                      color: active ? "#041224" : "#94a3b8",
-                      backgroundColor: active ? "rgba(4,18,36,0.2)" : "rgba(15,23,42,0.65)",
-                      border: active ? "1px solid rgba(4,18,36,0.3)" : "1px solid rgba(148,163,184,0.3)"
-                    }}
-                  >
-                    {filterCounts[option.key] ?? 0}
-                  </Box>
-                </Box>
-              );
-            })}
-          </Box>
-          <Typography variant="body2" sx={{ color: AURORA_SHELL.subtext }}>
-            {jobFilterMode === "all"
-              ? `Showing ${filterCounts.all || 0} jobs`
-              : `Showing ${filterCounts[jobFilterMode] || 0} ${activeFilterLabel} job${(filterCounts[jobFilterMode] || 0) === 1 ? "" : "s"}`}
-          </Typography>
-        </Box>
-
+                  Delete Job
+                </Button>
+              </Box>
+            ) : null}
+          </>
+        )}
+      >
         <Box
           className={themeClassName}
           sx={{
@@ -861,6 +885,12 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             fontFamily: gridFontFamily,
             "--ag-font-family": gridFontFamily,
             "--ag-icon-font-family": iconFontFamily,
+            "& .ag-root-wrapper": {
+              minHeight: "100%",
+              border: "none",
+              borderRadius: 0,
+              background: "transparent",
+            },
 
             "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
               display: "flex",
@@ -954,26 +984,6 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             "--ag-cell-horizontal-padding": "18px",
           }}
         >
-          {/* Action bar for bulk delete stays above grid when needed */}
-          {anySelected && (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "#7db7ff", px: 1.5, py: 1 }}>
-              <Button
-                variant="outlined"
-                size="small"
-                sx={{
-                  color: "#ff8080",
-                  borderColor: "rgba(255,128,128,0.5)",
-                  textTransform: "none",
-                  borderRadius: 999,
-                  "&:hover": { borderColor: "#ff8080" },
-                }}
-                onClick={() => setBulkDeleteOpen(true)}
-              >
-                Delete Job
-              </Button>
-            </Box>
-          )}
-
           <AgGridReact
             rowData={filteredRows}
             columnDefs={columnDefs}
@@ -993,7 +1003,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             style={{ width: "100%", height: "100%", fontFamily: gridFontFamily, "--ag-icon-font-family": iconFontFamily }}
           />
         </Box>
-      </Box>
+      </PageBodyFrame>
 
       <Dialog
         open={bulkDeleteOpen}

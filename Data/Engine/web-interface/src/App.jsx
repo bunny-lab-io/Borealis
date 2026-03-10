@@ -1751,10 +1751,9 @@ const EMPTY_PAGE_HEADER = {
                 flexDirection: "column",
                 overflow: "auto",
                 minHeight: 0,
-                // Ensure primary page container (usually a Paper with m:2) fills to the bottom
                 "& > *": {
                   alignSelf: "stretch",
-                  minHeight: "calc(100% - 32px)", // account for typical m:2 top+bottom margins
+                  minHeight: 0,
                 },
               }}
             >

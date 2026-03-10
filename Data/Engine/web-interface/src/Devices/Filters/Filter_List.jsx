@@ -1,8 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Paper,
   Box,
-  Typography,
   Button,
 } from "@mui/material";
 import {
@@ -12,6 +10,7 @@ import {
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+import PageBodyFrame from "../../PageBodyFrame.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -25,15 +24,6 @@ const gridTheme = themeQuartz.withParams({
 });
 const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
 const iconFontFamily = "'Quartz Regular'";
-
-const AURORA_SHELL = {
-  background:
-    "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
-    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
-  text: "#e2e8f0",
-  subtext: "#94a3b8",
-  accent: "#7dd3fc",
-};
 
 const PAGE_TITLE = "Device Filters";
 const PAGE_SUBTITLE =
@@ -347,105 +337,96 @@ export default function DeviceFilterList({ onCreateFilter, onEditFilter, refresh
   }, [onPageMetaChange, pageHeaderActions]);
 
   return (
-    <Paper
-      elevation={0}
-      sx={{
-        height: "100vh", // Affects the button vertical position offset
-        backgroundColor: "transparent",
-        color: AURORA_SHELL.text,
-        p: 3,
-        borderRadius: 0,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        gap: 2,
-      }}
-    >
-      <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 1.5 }}>
-        <Box
-          className={gridTheme.themeName}
-          sx={{
-            flexGrow: 1,
-            minHeight: 0,
+    <PageBodyFrame variant="grid">
+      <Box
+        className={gridTheme.themeName}
+        sx={{
+          flexGrow: 1,
+          minHeight: 0,
+          width: "100%",
+          fontFamily: gridFontFamily,
+          "& .ag-root-wrapper": {
+            minHeight: "100%",
+            border: "none",
+            borderRadius: 0,
+            overflow: "hidden",
+            background: "transparent",
+          },
+          "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            textAlign: "left",
+            paddingTop: "8px",
+            paddingBottom: "8px",
+            paddingLeft: "18px",
+            paddingRight: "12px",
+          },
+          "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
             width: "100%",
-            fontFamily: gridFontFamily,
-            "& .ag-root-wrapper": { borderRadius: "8px", overflow: "hidden" },
-            "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "flex-start",
-              textAlign: "left",
-              paddingTop: "8px",
-              paddingBottom: "8px",
-              paddingLeft: "18px",
-              paddingRight: "12px",
-            },
-            "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "flex-start",
-              padding: 0,
-            },
-            "& .ag-center-cols-container .ag-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell .ag-cell-value": {
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "flex-start",
-              textAlign: "left",
-            },
-            "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
-              paddingLeft: "12px",
-              paddingRight: "9px",
-            },
-            "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper": {
-              justifyContent: "flex-start",
-            },
-            "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-value": {
-              textAlign: "left",
-              justifyContent: "flex-start",
-            },
-            "& .ag-row-selected": {
-              backgroundColor: "rgba(125,211,252,0.2) !important",
-              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-            },
-          }}
-          style={{
-            "--ag-icon-font-family": iconFontFamily,
-            "--ag-background-color": "#070b1a",
-            "--ag-foreground-color": "#f4f7ff",
-            "--ag-header-background-color": "#0f172a",
-            "--ag-header-foreground-color": "#cfe0ff",
-            "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-            "--ag-row-hover-color": "rgba(73,156,196,0.2)",
-            "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
-            "--ag-border-color": "rgba(125,183,255,0.18)",
-            "--ag-row-border-color": "rgba(125,183,255,0.14)",
-            "--ag-border-radius": "8px",
-            "--ag-checkbox-border-radius": "3px",
-            "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
-            "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
-            "--ag-checkbox-checked-color": "#7dd3fc",
-          }}
-        >
-          <AgGridReact
-            rowData={rows}
-            columnDefs={columnDefs}
-            defaultColDef={defaultColDef}
-            animateRows
-            rowHeight={46}
-            headerHeight={44}
-            suppressCellFocus
-            pagination
-            paginationPageSize={20}
-            paginationPageSizeSelector={[20, 50, 100]}
-            overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No device filters found.</span>"
-            onGridReady={handleGridReady}
-            theme={gridTheme}
-            style={{ width: "100%", height: "100%", flex: 1, fontFamily: gridFontFamily }}
-          />
-        </Box>
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            padding: 0,
+          },
+          "& .ag-center-cols-container .ag-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell .ag-cell-value": {
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            textAlign: "left",
+          },
+          "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+            paddingLeft: "12px",
+            paddingRight: "9px",
+          },
+          "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper": {
+            justifyContent: "flex-start",
+          },
+          "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-value": {
+            textAlign: "left",
+            justifyContent: "flex-start",
+          },
+          "& .ag-row-selected": {
+            backgroundColor: "rgba(125,211,252,0.2) !important",
+            boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+          },
+        }}
+        style={{
+          "--ag-icon-font-family": iconFontFamily,
+          "--ag-background-color": "#070b1a",
+          "--ag-foreground-color": "#f4f7ff",
+          "--ag-header-background-color": "#0f172a",
+          "--ag-header-foreground-color": "#cfe0ff",
+          "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+          "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+          "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+          "--ag-border-color": "rgba(125,183,255,0.18)",
+          "--ag-row-border-color": "rgba(125,183,255,0.14)",
+          "--ag-border-radius": "8px",
+          "--ag-checkbox-border-radius": "3px",
+          "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
+          "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
+          "--ag-checkbox-checked-color": "#7dd3fc",
+        }}
+      >
+        <AgGridReact
+          rowData={rows}
+          columnDefs={columnDefs}
+          defaultColDef={defaultColDef}
+          animateRows
+          rowHeight={46}
+          headerHeight={44}
+          suppressCellFocus
+          pagination
+          paginationPageSize={20}
+          paginationPageSizeSelector={[20, 50, 100]}
+          overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No device filters found.</span>"
+          onGridReady={handleGridReady}
+          theme={gridTheme}
+          style={{ width: "100%", height: "100%", flex: 1, fontFamily: gridFontFamily }}
+        />
       </Box>
-    </Paper>
+    </PageBodyFrame>
   );
 }

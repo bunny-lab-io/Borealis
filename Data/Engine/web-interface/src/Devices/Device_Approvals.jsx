@@ -29,6 +29,7 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { PAGE_HEADER_CONTROL_SX, PageHeaderActionRail } from "../Page_Header_Actions.jsx";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 // NOTE: Do NOT import global AG Grid CSS to avoid affecting other pages.
 // We rely on the Quartz theme class name + scoped CSS vars like the rest of MagicUI.
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -496,59 +497,68 @@ export default function DeviceApprovals({ onPageMetaChange }) {
       )}
 
       {/* Feedback */}
-      {feedback && (
-        <Box sx={{ px: 3 }}>
-          <Alert severity={feedback.type} variant="outlined" onClose={() => setFeedback(null)}>
-            {feedback.message}
-          </Alert>
-        </Box>
-      )}
-      {error && (
-        <Box sx={{ px: 3 }}>
-          <Alert severity="error" variant="outlined">
-            {error}
-          </Alert>
-        </Box>
-      )}
+      <PageBodyFrame variant="grid">
+        <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
+          {feedback && (
+            <Box sx={{ mb: 2 }}>
+              <Alert severity={feedback.type} variant="outlined" onClose={() => setFeedback(null)}>
+                {feedback.message}
+              </Alert>
+            </Box>
+          )}
+          {error && (
+            <Box sx={{ mb: 2 }}>
+              <Alert severity="error" variant="outlined">
+                {error}
+              </Alert>
+            </Box>
+          )}
 
-      {/* Data Grid */}
-      <Box
-        className={themeClassName}
-        sx={{
-          flex: 1,
-          p: 2,
-          overflow: "hidden",
-          "& .ag-row-selected": {
-            backgroundColor: "rgba(125,211,252,0.2) !important",
-            boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-          },
-        }}
-        style={{
-          "--ag-background-color": "#070b1a",
-          "--ag-foreground-color": "#f4f7ff",
-          "--ag-header-background-color": "#0f172a",
-          "--ag-header-foreground-color": "#cfe0ff",
-          "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-          "--ag-row-hover-color": "rgba(73,156,196,0.2)",
-          "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
-          "--ag-font-family": "'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif",
-          "--ag-border-color": "rgba(125,183,255,0.18)",
-          "--ag-row-border-color": "rgba(125,183,255,0.14)",
-          "--ag-border-radius": "8px",
-        }}
-      >
-        <AgGridReact
-          ref={gridRef}
-          rowData={dedupedApprovals}
-          columnDefs={columns}
-          defaultColDef={defaultColDef}
-          suppressCellFocus
-          animateRows
-          pagination
-          paginationPageSize={20}
-          context={{ startApprove, handleDeny, handleGuidChange, actioningId, guidInputs }}
-        />
-      </Box>
+          <Box
+            className={themeClassName}
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              width: "100%",
+              overflow: "hidden",
+              "& .ag-root-wrapper": {
+                minHeight: "100%",
+                border: "none",
+                background: "transparent",
+              },
+              "& .ag-row-selected": {
+                backgroundColor: "rgba(125,211,252,0.2) !important",
+                boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+              },
+            }}
+            style={{
+              "--ag-background-color": "#070b1a",
+              "--ag-foreground-color": "#f4f7ff",
+              "--ag-header-background-color": "#0f172a",
+              "--ag-header-foreground-color": "#cfe0ff",
+              "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+              "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+              "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+              "--ag-font-family": "'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif",
+              "--ag-border-color": "rgba(125,183,255,0.18)",
+              "--ag-row-border-color": "rgba(125,183,255,0.14)",
+              "--ag-border-radius": "8px",
+            }}
+          >
+            <AgGridReact
+              ref={gridRef}
+              rowData={dedupedApprovals}
+              columnDefs={columns}
+              defaultColDef={defaultColDef}
+              suppressCellFocus
+              animateRows
+              pagination
+              paginationPageSize={20}
+              context={{ startApprove, handleDeny, handleGuidChange, actioningId, guidInputs }}
+            />
+          </Box>
+        </Box>
+      </PageBodyFrame>
 
       {/* Conflict Dialog (unchanged logic) */}
       <Dialog open={Boolean(conflictPrompt)} onClose={handleConflictCancel} maxWidth="sm" fullWidth>

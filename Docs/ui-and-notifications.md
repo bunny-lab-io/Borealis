@@ -44,9 +44,18 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 #### Page Template Reference
 - Purpose: visual-only baseline for new pages; copy structure but wire your data in real pages.
 - Header: small Material icon left of the title, subtitle beneath, utility buttons on the top-right.
+- Body: primary pages should render their main content through `Data/Engine/web-interface/src/PageBodyFrame.jsx` so the shared body shell, outer inset, and header-to-body baseline stay consistent.
 - Shell: avoid gutters on the Paper.
 - Selection column (for bulk actions): pinned left, square checkboxes, header checkbox enabled, about 52px fixed width, no menu/sort/resize; rely on AG Grid built-ins.
 - Typography/buttons: IBM Plex Sans, gradient primary buttons, rounded corners (about 8px), themed Quartz grid wrapper.
+
+#### Standardized Page Bodies
+- Primary pages rendered beneath the shared App header use `Data/Engine/web-interface/src/PageBodyFrame.jsx`.
+- `App.jsx` owns the title, subtitle, icon, and header action rail. `PageBodyFrame` owns the body inset, rounded outer shell, shell chrome, and variant-specific structure.
+- Supported variants: `grid`, `grid_with_stack`, `split_tool`, `content_panel`.
+- Default body inset is `px: 2` and `pb: 2`. Do not add manual `mt: "10px"` drops or top-level `p: 3` wrappers to compensate for the header.
+- Pre-grid banners, filter pills, selector rows, and page-local toolbars belong inside the same shell on `grid_with_stack` pages.
+- Implementation guide: `Docs/features_to_implement/standardized_page_bodies.md`.
 
 #### Navigation Sidebar Active Page Mapping
 - File: `Data/Engine/web-interface/src/Navigation_Sidebar.jsx`.

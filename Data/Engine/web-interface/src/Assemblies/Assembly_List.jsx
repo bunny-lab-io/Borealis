@@ -23,6 +23,7 @@ import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { ConfirmDeleteDialog, NewWorkflowDialog } from "../Dialogs";
 import { DomainBadge, DirtyStatePill, resolveDomainMeta, DOMAIN_OPTIONS } from "./Assembly_Badges";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 
 import { Apps as AppsIcon } from "@mui/icons-material";
 
@@ -631,13 +632,6 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       }}
       elevation={0}
     >
-      <Box sx={{ px: 2, mt: 1, minHeight: 28, display: "flex", alignItems: "center" }}>
-        {error ? (
-          <Typography variant="body2" sx={{ color: "#ff8a8a" }}>
-            {error}
-          </Typography>
-        ) : null}
-      </Box>
       <Menu
         anchorEl={newMenuAnchor}
         open={Boolean(newMenuAnchor)}
@@ -648,111 +642,107 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         <MenuItem onClick={() => handleNewAssemblyOption("workflow")}>Workflow</MenuItem>
         <MenuItem onClick={() => handleNewAssemblyOption("ansible")}>Ansible Playbook</MenuItem>
       </Menu>
-      <Box sx={{ mt: "10px", px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <Box
-          className={gridWrapperClass}
-          sx={{
-            // Card chrome
-            background: "transparent",
-            borderRadius: 0,
-            border: "none",
-            boxShadow: "none",
-            p: 0,
-
-            // Layout
-            width: "100%",
-            flexGrow: 1,
-            minHeight: 0,
-            height: "100%",
-            position: "relative",
-
-            // Typography
-            fontFamily: gridFontFamily,
-            "--ag-font-family": gridFontFamily,
-            "--ag-icon-font-family": iconFontFamily,
-
-            // AG Grid overrides
-            "& .ag-root-wrapper": {
-              borderRadius: 1,
-              minHeight: 400,
-            },
-            "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
-              fontFamily: gridFontFamily,
-            },
-            "& .ag-icon": {
-              fontFamily: iconFontFamily,
-            },
-            "& .ag-cell": {
-              display: "flex",
-              alignItems: "center",
-              paddingTop: "8px",
-              paddingBottom: "8px",
-            },
-            "& .ag-row-selected": {
-              backgroundColor: "rgba(125,211,252,0.2) !important",
-              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-            },
-          }}
-          style={{
-            // Theme CSS variables for fine-grain color control
-            "--ag-background-color": "#070b1a",
-            "--ag-foreground-color": "#f4f7ff",
-            "--ag-header-background-color": "#0f172a",
-            "--ag-header-foreground-color": "#cfe0ff",
-            "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-            "--ag-row-hover-color": "rgba(73,156,196,0.2)",
-            "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
-            "--ag-border-color": "rgba(125,183,255,0.18)",
-            "--ag-row-border-color": "rgba(125,183,255,0.14)",
-            "--ag-border-radius": "8px",
-          }}
-        >
-          <AgGridReact
-            ref={gridRef}
-            rowData={rows}
-            columnDefs={columnDefs}
-            defaultColDef={defaultColDef}
-            context={{ openRow }}
-            rowSelection="single"
-            suppressCellFocus
-            pagination
-            paginationPageSize={PAGE_SIZE}
-            animateRows
-            onRowDoubleClicked={handleRowDoubleClicked}
-            onCellContextMenu={handleCellContextMenu}
-            getRowId={(params) =>
-              params?.data?.assemblyGuid ||
-              params?.data?.id ||
-              params?.data?.relPath ||
-              params?.data?.fileName ||
-              String(params?.rowIndex ?? "")
-            }
-            theme={myTheme}
-            rowHeight={44}
-            style={{
+      <PageBodyFrame variant="grid">
+        <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
+          {error ? (
+            <Typography variant="body2" sx={{ color: "#ff8a8a", mb: 1.5 }}>
+              {error}
+            </Typography>
+          ) : null}
+          <Box
+            className={gridWrapperClass}
+            sx={{
               width: "100%",
+              flexGrow: 1,
+              minHeight: 0,
               height: "100%",
+              position: "relative",
               fontFamily: gridFontFamily,
+              "--ag-font-family": gridFontFamily,
               "--ag-icon-font-family": iconFontFamily,
-            }}
-          />
-          {loading ? (
-            <Box
-              sx={{
-                position: "absolute",
-                inset: 0,
+              "& .ag-root-wrapper": {
+                minHeight: "100%",
+                border: "none",
+                borderRadius: 0,
+                background: "transparent",
+              },
+              "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+                fontFamily: gridFontFamily,
+              },
+              "& .ag-icon": {
+                fontFamily: iconFontFamily,
+              },
+              "& .ag-cell": {
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center",
-                bgcolor: "rgba(30, 30, 30, 0.6)",
-                zIndex: 2,
+                paddingTop: "8px",
+                paddingBottom: "8px",
+              },
+              "& .ag-row-selected": {
+                backgroundColor: "rgba(125,211,252,0.2) !important",
+                boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+              },
+            }}
+            style={{
+              "--ag-background-color": "#070b1a",
+              "--ag-foreground-color": "#f4f7ff",
+              "--ag-header-background-color": "#0f172a",
+              "--ag-header-foreground-color": "#cfe0ff",
+              "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+              "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+              "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+              "--ag-border-color": "rgba(125,183,255,0.18)",
+              "--ag-row-border-color": "rgba(125,183,255,0.14)",
+              "--ag-border-radius": "8px",
+            }}
+          >
+            <AgGridReact
+              ref={gridRef}
+              rowData={rows}
+              columnDefs={columnDefs}
+              defaultColDef={defaultColDef}
+              context={{ openRow }}
+              rowSelection="single"
+              suppressCellFocus
+              pagination
+              paginationPageSize={PAGE_SIZE}
+              animateRows
+              onRowDoubleClicked={handleRowDoubleClicked}
+              onCellContextMenu={handleCellContextMenu}
+              getRowId={(params) =>
+                params?.data?.assemblyGuid ||
+                params?.data?.id ||
+                params?.data?.relPath ||
+                params?.data?.fileName ||
+                String(params?.rowIndex ?? "")
+              }
+              theme={myTheme}
+              rowHeight={44}
+              style={{
+                width: "100%",
+                height: "100%",
+                fontFamily: gridFontFamily,
+                "--ag-icon-font-family": iconFontFamily,
               }}
-            >
-              <CircularProgress size={32} sx={{ color: BOREALIS_BLUE }} />
-            </Box>
-          ) : null}
+            />
+            {loading ? (
+              <Box
+                sx={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  bgcolor: "rgba(30, 30, 30, 0.6)",
+                  zIndex: 2,
+                }}
+              >
+                <CircularProgress size={32} sx={{ color: BOREALIS_BLUE }} />
+              </Box>
+            ) : null}
+          </Box>
         </Box>
-      </Box>
+      </PageBodyFrame>
 
       <Menu
         open={contextMenu !== null}

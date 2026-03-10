@@ -1,8 +1,6 @@
 import React, { useMemo, useRef, useCallback, useEffect } from "react";
 import {
-  Paper,
   Box,
-  Typography,
 } from "@mui/material";
 import {
   Dashboard as TemplateIcon,
@@ -12,6 +10,7 @@ import {
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 
 /**
  * ============================================================================
@@ -238,137 +237,117 @@ export default function PageTemplate({ onPageMetaChange }) {
   }, [onPageMetaChange, pageHeaderActions]);
 
   return (
-    <Paper
-      sx={{
-        m: 0,
-        p: 0,
-        background: "transparent",
-        border: "none",
-        boxShadow: "none",
-        borderRadius: 0,
-        display: "flex",
-        flexDirection: "column",
-        flexGrow: 1,
-        minWidth: 0,
-        height: "100%",
-        color: AURORA_SHELL.text,
-        fontFamily: gridFontFamily,
-      }}
-      elevation={0}
-    >
-      {/* Content area — offset a little below the shared header */}
-      <Box sx={{ mt: "10px", px: 2, pb: 2, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <Box
-          className={themeClassName}
-          sx={{
-            background: "transparent",
-            borderRadius: 0,
+    <PageBodyFrame variant="grid">
+      <Box
+        className={themeClassName}
+        sx={{
+          width: "100%",
+          flexGrow: 1,
+          minHeight: 0,
+          height: "100%",
+          position: "relative",
+          fontFamily: gridFontFamily,
+          "--ag-font-family": gridFontFamily,
+          "--ag-icon-font-family": iconFontFamily,
+          color: AURORA_SHELL.text,
+
+          "& .ag-root-wrapper": {
+            minHeight: "100%",
             border: "none",
-            boxShadow: "none",
-            p: 0,
+            borderRadius: 0,
+            background: "transparent",
+          },
+          "& .ag-cell": {
+            display: "flex",
+            alignItems: "center",
+            paddingTop: "8px",
+            paddingBottom: "8px",
+          },
+
+          "& .ag-header .ag-header-select-all, & .ag-header .ag-checkbox-input-wrapper": {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          },
+          "& .ag-header .ag-header-select-all": {
+            transform: "translateX(2px)",
+          },
+          "& .ag-cell.ag-selection-centered": {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            paddingLeft: 0,
+            paddingRight: 0,
+          },
+          "& .ag-cell.ag-selection-centered .ag-cell-wrapper": {
+            gap: "0 !important",
             width: "100%",
-            flexGrow: 1,
-            minHeight: 0,
-            height: "100%",
-            position: "relative",
-            fontFamily: gridFontFamily,
-            "--ag-font-family": gridFontFamily,
-            "--ag-icon-font-family": iconFontFamily,
-
-            "& .ag-cell": {
-              display: "flex",
-              alignItems: "center",
-              paddingTop: "8px",
-              paddingBottom: "8px",
-            },
-
-            /* Center the selection column (header + body) – class-based to beat defaults */
-            "& .ag-header .ag-header-select-all, & .ag-header .ag-checkbox-input-wrapper": {
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            },
-            "& .ag-header .ag-header-select-all": {
-              transform: "translateX(2px)",
-            },
-            "& .ag-cell.ag-selection-centered": {
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              paddingLeft: 0,
-              paddingRight: 0,
-            },
-            "& .ag-cell.ag-selection-centered .ag-cell-wrapper": {
-              gap: "0 !important",
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              paddingTop: 0,
-              paddingBottom: 0,
-            },
-            "& .ag-cell.ag-selection-centered .ag-selection-checkbox, & .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
-              margin: "0 auto",
-              display: "flex",
-              justifyContent: "center",
-            },
-            "& .ag-cell.ag-selection-centered .ag-selection-checkbox": {
-              display: "flex !important",
-              width: "100% !important",
-              justifyContent: "center !important",
-              margin: "0 !important",
-            },
-            "& .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
-              margin: "0 !important",
-            },
-
-            "& .ag-center-cols-container .ag-cell.ag-selection-centered, & .ag-pinned-left-cols-container .ag-cell.ag-selection-centered": {
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            },
-          }}
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            paddingTop: 0,
+            paddingBottom: 0,
+          },
+          "& .ag-cell.ag-selection-centered .ag-selection-checkbox, & .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
+            margin: "0 auto",
+            display: "flex",
+            justifyContent: "center",
+          },
+          "& .ag-cell.ag-selection-centered .ag-selection-checkbox": {
+            display: "flex !important",
+            width: "100% !important",
+            justifyContent: "center !important",
+            margin: "0 !important",
+          },
+          "& .ag-cell.ag-selection-centered .ag-checkbox-input-wrapper": {
+            margin: "0 !important",
+          },
+          "& .ag-center-cols-container .ag-cell.ag-selection-centered, & .ag-pinned-left-cols-container .ag-cell.ag-selection-centered": {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          },
+        }}
+        style={{
+          "--ag-background-color": "#070b1a",
+          "--ag-foreground-color": "#f4f7ff",
+          "--ag-header-background-color": "#0f172a",
+          "--ag-header-foreground-color": "#cfe0ff",
+          "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+          "--ag-row-hover-color": "rgba(125,183,255,0.08)",
+          "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
+          "--ag-border-color": "rgba(125,183,255,0.18)",
+          "--ag-row-border-color": "rgba(125,183,255,0.14)",
+          "--ag-border-radius": "8px",
+          "--ag-checkbox-border-radius": "3px",
+          "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
+          "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
+          "--ag-checkbox-checked-color": "#7dd3fc",
+        }}
+      >
+        <AgGridReact
+          ref={gridRef}
+          rowData={SAMPLE_ROWS}
+          columnDefs={columnDefs}
+          defaultColDef={defaultColDef}
+          rowSelection="multiple"
+          rowMultiSelectWithClick
+          isRowSelectable={() => true}
+          getRowId={getRowId}
+          pagination
+          paginationPageSize={20}
+          paginationPageSizeSelector={[20, 50, 100]}
+          animateRows
+          theme={gridTheme}
+          rowHeight={44}
           style={{
-            "--ag-background-color": "#070b1a",
-            "--ag-foreground-color": "#f4f7ff",
-            "--ag-header-background-color": "#0f172a",
-            "--ag-header-foreground-color": "#cfe0ff",
-            "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-            "--ag-row-hover-color": "rgba(125,183,255,0.08)",
-            "--ag-selected-row-background-color": "rgba(64,164,255,0.18)",
-            "--ag-border-color": "rgba(125,183,255,0.18)",
-            "--ag-row-border-color": "rgba(125,183,255,0.14)",
-            "--ag-border-radius": "8px",
-            "--ag-checkbox-border-radius": "3px",
-            "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
-            "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
-            "--ag-checkbox-checked-color": "#7dd3fc",
+            width: "100%",
+            height: "100%",
+            fontFamily: gridFontFamily,
+            "--ag-icon-font-family": iconFontFamily,
           }}
-        >
-          <AgGridReact
-            ref={gridRef}
-            rowData={SAMPLE_ROWS}
-            columnDefs={columnDefs}
-            defaultColDef={defaultColDef}
-            rowSelection="multiple"
-            rowMultiSelectWithClick
-            isRowSelectable={() => true}
-            getRowId={getRowId}
-            pagination
-            paginationPageSize={20}
-            paginationPageSizeSelector={[20, 50, 100]}
-            animateRows
-            theme={gridTheme}
-            rowHeight={44}
-            style={{
-              width: "100%",
-              height: "100%",
-              fontFamily: gridFontFamily,
-              "--ag-icon-font-family": iconFontFamily,
-            }}
-          />
-        </Box>
+        />
       </Box>
-    </Paper>
+    </PageBodyFrame>
   );
 }

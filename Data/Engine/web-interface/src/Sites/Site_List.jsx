@@ -15,6 +15,7 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, ConfirmDeleteDialog, RenameSiteDialog } from "../Dialogs.jsx";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -268,76 +269,80 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
       }}
       elevation={0}
     >
-      {/* AG Grid */}
-      <Box sx={{ px: { xs: 2, md: 3 }, pb: 3, flexGrow: 1, display: "flex", flexDirection: "column" }}>
-        {heroStats.selected > 0 ? (
-          <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1.25 }}>
-            <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 600 }}>
-              {heroStats.selected} selected
-            </Typography>
+      <PageBodyFrame variant="grid">
+        <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
+          {heroStats.selected > 0 ? (
+            <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1.25 }}>
+              <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 600 }}>
+                {heroStats.selected} selected
+              </Typography>
+            </Box>
+          ) : null}
+          <Box
+            className={themeClassName}
+            sx={{
+              flexGrow: 1,
+              minHeight: 0,
+              "--ag-font-family": gridFontFamily,
+              "--ag-icon-font-family": iconFontFamily,
+              "& .ag-root-wrapper": {
+                minHeight: "100%",
+                border: "none",
+                borderRadius: 0,
+                background: "transparent",
+              },
+              "& .ag-header": {
+                backgroundColor: "rgba(15,23,42,0.9)",
+                borderBottom: "1px solid rgba(148,163,184,0.25)",
+              },
+              "& .ag-header-cell-label": {
+                color: "#e2e8f0",
+                fontWeight: 600,
+                letterSpacing: 0.3,
+              },
+              "& .ag-row": {
+                borderColor: "rgba(255,255,255,0.04)",
+                transition: "background 0.2s ease",
+              },
+              "& .ag-row:nth-of-type(even)": {
+                backgroundColor: "rgba(15,23,42,0.45)",
+              },
+              "& .ag-row-hover": {
+                backgroundColor: "rgba(73,156,196,0.2) !important",
+              },
+              "& .ag-row-selected": {
+                backgroundColor: "rgba(125,211,252,0.2) !important",
+                boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+              },
+            }}
+          >
+            <AgGridReact
+              ref={gridRef}
+              rowData={rows}
+              columnDefs={columnDefs}
+              defaultColDef={defaultColDef}
+              rowSelection="multiple"
+              rowMultiSelectWithClick
+              suppressCellFocus
+              pagination
+              paginationPageSize={20}
+              paginationPageSizeSelector={[20, 50, 100]}
+              animateRows
+              onGridReady={(params) => {
+                gridApiRef.current = params.api;
+                autoSizeColumns();
+              }}
+              onSelectionChanged={() => {
+                const api = gridApiRef.current || gridRef.current?.api;
+                if (!api) return;
+                const selected = api.getSelectedNodes().map((n) => n.data?.id).filter(Boolean);
+                setSelectedIds(new Set(selected));
+              }}
+              theme={myTheme}
+            />
           </Box>
-        ) : null}
-        <Box
-          className={themeClassName}
-          sx={{
-            flexGrow: 1,
-            borderRadius: 3,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            background: "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.85))",
-            boxShadow: "0 20px 60px rgba(2,8,23,0.85)",
-            "--ag-font-family": gridFontFamily,
-            "--ag-icon-font-family": iconFontFamily,
-            "& .ag-header": {
-              backgroundColor: "rgba(15,23,42,0.9)",
-              borderBottom: "1px solid rgba(148,163,184,0.25)",
-            },
-            "& .ag-header-cell-label": {
-              color: "#e2e8f0",
-              fontWeight: 600,
-              letterSpacing: 0.3,
-            },
-            "& .ag-row": {
-              borderColor: "rgba(255,255,255,0.04)",
-              transition: "background 0.2s ease",
-            },
-            "& .ag-row:nth-of-type(even)": {
-              backgroundColor: "rgba(15,23,42,0.45)",
-            },
-            "& .ag-row-hover": {
-              backgroundColor: "rgba(73,156,196,0.2) !important",
-            },
-            "& .ag-row-selected": {
-              backgroundColor: "rgba(125,211,252,0.2) !important",
-              boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-            },
-          }}
-        >
-          <AgGridReact
-            ref={gridRef}
-            rowData={rows}
-            columnDefs={columnDefs}
-            defaultColDef={defaultColDef}
-            rowSelection="multiple"
-            rowMultiSelectWithClick
-            suppressCellFocus
-            pagination
-            paginationPageSize={20}
-            paginationPageSizeSelector={[20, 50, 100]}
-            animateRows
-            onGridReady={(params) => {
-              gridApiRef.current = params.api;
-              autoSizeColumns();
-            }}
-            onSelectionChanged={() => {
-              const api = gridApiRef.current || gridRef.current?.api;
-              if (!api) return;
-              const selected = api.getSelectedNodes().map((n) => n.data?.id).filter(Boolean);
-              setSelectedIds(new Set(selected));
-            }}
-            theme={myTheme}
-          />
         </Box>
-      </Box>
+      </PageBodyFrame>
 
       <CreateSiteDialog
         open={createOpen}
