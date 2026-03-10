@@ -8,9 +8,9 @@ export const PAGE_BODY_FRAME_BACKGROUND =
 export const PAGE_BODY_FRAME_SHADOW = "0 20px 60px rgba(2,8,23,0.85)";
 
 export const PAGE_BODY_FRAME_OUTER_SX = {
-  px: 2,
-  pt: 2.5,
-  pb: 2,
+  px: 3,
+  pt: 3,
+  pb: 3,
   display: "flex",
   flexDirection: "column",
   minWidth: 0,
