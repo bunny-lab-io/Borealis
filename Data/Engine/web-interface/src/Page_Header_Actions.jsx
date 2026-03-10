@@ -112,6 +112,13 @@ export const PAGE_HEADER_CONTROL_SX = {
     fontFamily: PAGE_HEADER_FONT_FAMILY,
     fontSize: "0.82rem",
   },
+  "& .MuiInputLabel-root.MuiInputLabel-shrink": {
+    transform: "translate(16px, -6px) scale(0.76)",
+    px: 0.55,
+    borderRadius: 999,
+    background: "rgba(5, 10, 24, 0.96)",
+    zIndex: 1,
+  },
   "& .MuiInputLabel-root.Mui-focused": {
     color: "#9fd8ff",
   },
@@ -381,7 +388,8 @@ export function PageHeaderActionRail({ actions = [], controls = [] }) {
           gap: PAGE_HEADER_ACTION_GAP,
           overflowX: "auto",
           overflowY: "hidden",
-          py: 0.25,
+          pt: normalizedControls.length ? 1 : 0.25,
+          pb: 0.25,
           "&::-webkit-scrollbar": {
             display: "none",
           },
