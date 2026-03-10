@@ -386,8 +386,9 @@ export function PageHeaderActionRail({ actions = [], controls = [] }) {
           gap: PAGE_HEADER_ACTION_GAP,
           overflowX: "auto",
           overflowY: "hidden",
-          pt: normalizedControls.length ? 1 : 0.25,
+          pt: normalizedControls.length ? 1 : 0,
           pb: 0.25,
+          mt: normalizedControls.length ? -0.75 : 0,
           "&::-webkit-scrollbar": {
             display: "none",
           },
