@@ -64,6 +64,7 @@ import {
   parseAssemblyExport,
   resolveAssemblyForComponent
 } from "../Assemblies/assemblyUtils";
+import { logScheduledJobNav } from "./jobNavDebug.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -949,6 +950,29 @@ export default function CreateJob({
   const [credentialLoading, setCredentialLoading] = useState(false);
   const [credentialError, setCredentialError] = useState("");
   const [selectedCredentialId, setSelectedCredentialId] = useState("");
+
+  useEffect(() => {
+    logScheduledJobNav("CreateJob", "mount", {
+      initialJobId: initialJob?.id ?? null,
+      quickJobDraftId: quickJobDraft?.id ?? null,
+    });
+    return () => {
+      logScheduledJobNav("CreateJob", "unmount", {
+        initialJobId: initialJob?.id ?? null,
+        quickJobDraftId: quickJobDraft?.id ?? null,
+      });
+    };
+  }, []);
+
+  useEffect(() => {
+    logScheduledJobNav("CreateJob", "props_changed", {
+      initialJobId: initialJob?.id ?? null,
+      initialJobName: initialJob?.name || "",
+      quickJobDraftId: quickJobDraft?.id ?? null,
+      componentCount: Array.isArray(initialJob?.components) ? initialJob.components.length : null,
+      targetCount: Array.isArray(initialJob?.targets) ? initialJob.targets.length : null,
+    });
+  }, [initialJob, quickJobDraft?.id]);
 
   const resolvedPageTitle = useMemo(
     () => (pageTitleJobName ? `Scheduled Job: ${pageTitleJobName}` : PAGE_TITLE),
@@ -2729,33 +2753,53 @@ export default function CreateJob({
   useEffect(() => {
     let canceled = false;
     const hydrate = async () => {
-      if (initialJob && initialJob.id) {
-        setJobName(initialJob.name || "");
-        setPageTitleJobName(typeof initialJob.name === "string" ? initialJob.name.trim() : "");
-        setTargets(normalizeTargetList(initialJob.targets || []));
-        setScheduleType(initialJob.schedule_type || initialJob.schedule?.type || "immediately");
-        setStartDateTime(initialJob.start_ts ? dayjs(Number(initialJob.start_ts) * 1000).second(0) : (initialJob.schedule?.start ? dayjs(initialJob.schedule.start).second(0) : dayjs().add(5, "minute").second(0)));
-        setStopAfterEnabled(Boolean(initialJob.duration_stop_enabled));
-        setExpiration(initialJob.expiration || "no_expire");
-        setExecContext(initialJob.execution_context || "system");
-        setSelectedCredentialId(initialJob.credential_id ? String(initialJob.credential_id) : "");
-        if ((initialJob.execution_context || "").toLowerCase() === "winrm") {
-          setUseSvcAccount(initialJob.use_service_account !== false);
-        } else {
-          setUseSvcAccount(false);
-        }
-        const comps = Array.isArray(initialJob.components) ? initialJob.components : [];
-        const hydrated = await hydrateExistingComponents(comps);
-        if (!canceled) {
-          setComponents(hydrated);
+      try {
+        if (initialJob && initialJob.id) {
+          logScheduledJobNav("CreateJob", "hydrate_from_initial_job:start", {
+            jobId: initialJob.id,
+            name: initialJob.name || "",
+            componentCount: Array.isArray(initialJob.components) ? initialJob.components.length : null,
+            targetCount: Array.isArray(initialJob.targets) ? initialJob.targets.length : null,
+          });
+          setJobName(initialJob.name || "");
+          setPageTitleJobName(typeof initialJob.name === "string" ? initialJob.name.trim() : "");
+          setTargets(normalizeTargetList(initialJob.targets || []));
+          setScheduleType(initialJob.schedule_type || initialJob.schedule?.type || "immediately");
+          setStartDateTime(initialJob.start_ts ? dayjs(Number(initialJob.start_ts) * 1000).second(0) : (initialJob.schedule?.start ? dayjs(initialJob.schedule.start).second(0) : dayjs().add(5, "minute").second(0)));
+          setStopAfterEnabled(Boolean(initialJob.duration_stop_enabled));
+          setExpiration(initialJob.expiration || "no_expire");
+          setExecContext(initialJob.execution_context || "system");
+          setSelectedCredentialId(initialJob.credential_id ? String(initialJob.credential_id) : "");
+          if ((initialJob.execution_context || "").toLowerCase() === "winrm") {
+            setUseSvcAccount(initialJob.use_service_account !== false);
+          } else {
+            setUseSvcAccount(false);
+          }
+          const comps = Array.isArray(initialJob.components) ? initialJob.components : [];
+          const hydrated = await hydrateExistingComponents(comps);
+          if (!canceled) {
+            setComponents(hydrated);
+            setComponentVarErrors({});
+          }
+          logScheduledJobNav("CreateJob", "hydrate_from_initial_job:success", {
+            jobId: initialJob.id,
+            hydratedComponentCount: Array.isArray(hydrated) ? hydrated.length : null,
+          });
+        } else if (!initialJob) {
+          logScheduledJobNav("CreateJob", "hydrate_from_initial_job:reset_create_mode", {});
+          setPageTitleJobName("");
+          setComponents([]);
           setComponentVarErrors({});
+          setSelectedCredentialId("");
+          setUseSvcAccount(true);
         }
-      } else if (!initialJob) {
-        setPageTitleJobName("");
-        setComponents([]);
-        setComponentVarErrors({});
-        setSelectedCredentialId("");
-        setUseSvcAccount(true);
+      } catch (err) {
+        logScheduledJobNav("CreateJob", "hydrate_from_initial_job:error", {
+          jobId: initialJob?.id ?? null,
+          error: err?.message || String(err),
+          stack: err?.stack || "",
+        });
+        console.error("Failed to hydrate Create Job from initial job", err);
       }
     };
     hydrate();

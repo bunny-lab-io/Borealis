@@ -29,6 +29,7 @@ import {
   parseAssembliesCollectionPayload,
   resolveAssemblyForComponent
 } from "../Assemblies/assemblyUtils";
+import { logScheduledJobNav } from "./jobNavDebug.js";
 
 // -----------------------------------------------------------------------------
 //  Register AG Grid community modules
@@ -547,8 +548,23 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       const handleClick = (event) => {
         event.preventDefault();
         event.stopPropagation();
+        logScheduledJobNav("ScheduledJobsList", "name_click", {
+          rowId: row?.id ?? null,
+          rawJobId: row?.raw?.id ?? null,
+          jobName: row?.name || "",
+          eventType: event?.type || "",
+        });
         if (typeof onEditJob === "function") {
           onEditJob(row.raw);
+          logScheduledJobNav("ScheduledJobsList", "name_click_dispatched", {
+            rawJobId: row?.raw?.id ?? null,
+            jobName: row?.name || "",
+          });
+        } else {
+          logScheduledJobNav("ScheduledJobsList", "name_click_missing_handler", {
+            rawJobId: row?.raw?.id ?? null,
+            jobName: row?.name || "",
+          });
         }
       };
       return (
