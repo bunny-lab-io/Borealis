@@ -42,7 +42,7 @@ export const PAGE_BODY_FRAME_MAIN_SX = {
 
 export const PAGE_BODY_FRAME_GRID_MAIN_SX = {
   ...PAGE_BODY_FRAME_MAIN_SX,
-  p: 2,
+  p: 0,
 };
 
 export const PAGE_BODY_FRAME_STACK_SX = {
@@ -136,9 +136,7 @@ export default function PageBodyFrame({
             sx={[
               PAGE_BODY_FRAME_MAIN_SX,
               {
-                px: 2,
-                pb: 2,
-                pt: stack ? 0 : 2,
+                p: 0,
               },
             ]}
           >
