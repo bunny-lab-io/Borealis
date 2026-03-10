@@ -114,9 +114,7 @@ export const PAGE_HEADER_CONTROL_SX = {
   },
   "& .MuiInputLabel-root.MuiInputLabel-shrink": {
     transform: "translate(16px, -6px) scale(0.76)",
-    px: 0.55,
-    borderRadius: 999,
-    background: "rgba(5, 10, 24, 0.96)",
+    px: 0,
     zIndex: 1,
   },
   "& .MuiInputLabel-root.Mui-focused": {
