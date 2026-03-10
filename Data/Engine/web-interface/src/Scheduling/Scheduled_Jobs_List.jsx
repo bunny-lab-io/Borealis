@@ -29,7 +29,6 @@ import {
   parseAssembliesCollectionPayload,
   resolveAssemblyForComponent
 } from "../Assemblies/assemblyUtils";
-import { logScheduledJobNav } from "./jobNavDebug.js";
 
 // -----------------------------------------------------------------------------
 //  Register AG Grid community modules
@@ -551,58 +550,27 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
           ? `/scheduling/job/${encodeURIComponent(String(resolvedJobId))}?tab=job_name`
           : "/scheduling/create_job?tab=job_name";
       let pointerNavigationHandled = false;
-      const dispatchEdit = (event, trigger) => {
+      const dispatchEdit = (event) => {
         event.preventDefault();
         event.stopPropagation();
-        logScheduledJobNav("ScheduledJobsList", `name_${trigger}`, {
-          rowId: row?.id ?? null,
-          rawJobId: row?.raw?.id ?? null,
-          resolvedJobId: Number.isInteger(resolvedJobId) ? resolvedJobId : null,
-          jobName: row?.name || "",
-          eventType: event?.type || "",
-          href: editorHref,
-        });
         if (typeof onEditJob === "function") {
           onEditJob(row.raw);
-          logScheduledJobNav("ScheduledJobsList", `name_${trigger}_dispatched`, {
-            rawJobId: row?.raw?.id ?? null,
-            resolvedJobId: Number.isInteger(resolvedJobId) ? resolvedJobId : null,
-            jobName: row?.name || "",
-          });
-        } else {
-          logScheduledJobNav("ScheduledJobsList", `name_${trigger}_missing_handler`, {
-            rawJobId: row?.raw?.id ?? null,
-            resolvedJobId: Number.isInteger(resolvedJobId) ? resolvedJobId : null,
-            jobName: row?.name || "",
-          });
         }
       };
       const handlePointerDown = (event) => {
         const isPrimaryPointer = event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
-        if (!isPrimaryPointer) {
-          logScheduledJobNav("ScheduledJobsList", "name_pointerdown_ignored", {
-            rawJobId: row?.raw?.id ?? null,
-            jobName: row?.name || "",
-            button: event.button,
-          });
-          return;
-        }
+        if (!isPrimaryPointer) return;
         pointerNavigationHandled = true;
-        dispatchEdit(event, "pointerdown");
+        dispatchEdit(event);
       };
       const handleClick = (event) => {
         if (pointerNavigationHandled) {
           pointerNavigationHandled = false;
           event.preventDefault();
           event.stopPropagation();
-          logScheduledJobNav("ScheduledJobsList", "name_click_skipped_after_pointerdown", {
-            rawJobId: row?.raw?.id ?? null,
-            resolvedJobId: Number.isInteger(resolvedJobId) ? resolvedJobId : null,
-            jobName: row?.name || "",
-          });
           return;
         }
-        dispatchEdit(event, "click");
+        dispatchEdit(event);
       };
       return (
         <a

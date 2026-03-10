@@ -45,7 +45,6 @@ import AssemblyList from "./Assemblies/Assembly_List";
 import AssemblyEditor from "./Assemblies/Assembly_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
 import CreateJob from "./Scheduling/Create_Job.jsx";
-import { installScheduledJobNavGlobalErrorHooks, logScheduledJobNav } from "./Scheduling/jobNavDebug.js";
 import CredentialList from "./Access_Management/Credential_List.jsx";
 import UserManagement from "./Access_Management/Users.jsx";
 import GithubAPIToken from "./Access_Management/Github_API_Token.jsx";
@@ -148,18 +147,6 @@ const EMPTY_PAGE_HEADER = {
     setUserRole(null);
     setUserDisplayName(null);
   }, []);
-
-  useEffect(() => {
-    installScheduledJobNavGlobalErrorHooks();
-  }, []);
-
-  useEffect(() => {
-    logScheduledJobNav("App", "state_changed", {
-      currentPage,
-      editingJobId: editingJob?.id ?? null,
-      hasEditingJob: Boolean(editingJob),
-    });
-  }, [currentPage, editingJob]);
 
       // Top-bar search state
       const SEARCH_CATEGORIES = [
@@ -418,13 +405,6 @@ const EMPTY_PAGE_HEADER = {
 
   const updateStateForPage = useCallback(
     (page, options = {}) => {
-      if (page === "create_job") {
-        logScheduledJobNav("App", "updateStateForPage:create_job", {
-          requestedJobId: options.jobId ?? options.job?.id ?? null,
-          hasJobObject: Boolean(options.job && typeof options.job === "object"),
-          preserveJob: Boolean(options.preserveJob),
-        });
-      }
       setCurrentPageState(page);
       if (page === "device_details") {
         if (options.device) {
@@ -493,27 +473,10 @@ const EMPTY_PAGE_HEADER = {
     (page, options = {}) => {
       const { replace = false, allowUnauthenticated = false, suppressPending = false } = options;
       const targetPath = pageToPath(page, options);
-      if (page === "create_job" || options.jobId || options.job?.id) {
-        logScheduledJobNav("App", "navigateTo:requested", {
-          page,
-          replace,
-          allowUnauthenticated,
-          suppressPending,
-          targetPath,
-          requestedJobId: options.jobId ?? options.job?.id ?? editingJob?.id ?? null,
-        });
-      }
 
       if (!allowUnauthenticated && !user && page !== "login") {
         if (!suppressPending && targetPath) {
           pendingPathRef.current = targetPath;
-        }
-        if (page === "create_job" || options.jobId || options.job?.id) {
-          logScheduledJobNav("App", "navigateTo:redirect_login", {
-            page,
-            targetPath,
-            requestedJobId: options.jobId ?? options.job?.id ?? editingJob?.id ?? null,
-          });
         }
         updateStateForPage("login", {});
         const loginPath = "/login";
@@ -544,24 +507,10 @@ const EMPTY_PAGE_HEADER = {
         const current = window.location.pathname + window.location.search;
         if (replace || current !== targetPath) {
           window.history[method]({}, "", targetPath);
-          if (page === "create_job" || options.jobId || options.job?.id) {
-            logScheduledJobNav("App", "navigateTo:history_updated", {
-              method,
-              current,
-              targetPath,
-              requestedJobId: options.jobId ?? options.job?.id ?? editingJob?.id ?? null,
-            });
-          }
-        } else if (page === "create_job" || options.jobId || options.job?.id) {
-          logScheduledJobNav("App", "navigateTo:history_skipped", {
-            current,
-            targetPath,
-            requestedJobId: options.jobId ?? options.job?.id ?? editingJob?.id ?? null,
-          });
         }
       }
     },
-    [editingJob?.id, pageToPath, updateStateForPage, user]
+    [pageToPath, updateStateForPage, user]
   );
 
   const navigateByPath = useCallback(
@@ -626,7 +575,6 @@ const EMPTY_PAGE_HEADER = {
 
     let canceled = false;
     (async () => {
-      logScheduledJobNav("App", "hydrateScheduledJob:start", { jobId: parsedId });
       try {
         const resp = await fetch(`/api/scheduled_jobs/${parsedId}`);
         const data = await resp.json().catch(() => ({}));
@@ -636,22 +584,11 @@ const EMPTY_PAGE_HEADER = {
         const hydrated = data?.job;
         if (!hydrated || typeof hydrated !== "object") return;
         if (canceled) return;
-        logScheduledJobNav("App", "hydrateScheduledJob:success", {
-          jobId: parsedId,
-          name: hydrated?.name || "",
-          componentCount: Array.isArray(hydrated?.components) ? hydrated.components.length : null,
-          targetCount: Array.isArray(hydrated?.targets) ? hydrated.targets.length : null,
-        });
         setEditingJob((prev) => {
           if (Number(prev?.id) !== parsedId) return prev;
           return hydrated;
         });
       } catch (err) {
-        logScheduledJobNav("App", "hydrateScheduledJob:error", {
-          jobId: parsedId,
-          error: err?.message || String(err),
-          stack: err?.stack || "",
-        });
         console.warn("Failed to hydrate scheduled job from URL", err);
       }
     })();
@@ -1439,17 +1376,8 @@ const EMPTY_PAGE_HEADER = {
             }}
             onEditJob={(job) => {
               const jobId = Number(job?.id);
-              logScheduledJobNav("App", "jobsList:onEditJob", {
-                rawJobId: job?.id ?? null,
-                parsedJobId: Number.isInteger(jobId) ? jobId : null,
-                name: job?.name || "",
-              });
               setQuickJobDraft(null);
               if (!Number.isInteger(jobId) || jobId <= 0) {
-                logScheduledJobNav("App", "jobsList:onEditJob_invalid_id", {
-                  rawJobId: job?.id ?? null,
-                  name: job?.name || "",
-                });
                 setEditingJob(null);
                 return;
               }
