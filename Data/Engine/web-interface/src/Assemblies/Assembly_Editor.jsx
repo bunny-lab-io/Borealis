@@ -360,10 +360,14 @@ export default function AssemblyEditor({
   const normalizedMode = mode === "ansible" ? "ansible" : "script";
   const isAnsible = normalizedMode === "ansible";
   const defaultType = isAnsible ? "ansible" : "powershell";
+  const initialRow = initialAssembly?.row || null;
+  const initialAssemblyGuid = initialRow?.assemblyGuid || initialAssembly?.assemblyGuid || null;
+  const initialDomain = (initialRow?.domain || initialAssembly?.domain || "user").toLowerCase();
+  const initialFileNameSource = initialRow?.name || initialAssembly?.name || "";
   const [assembly, setAssembly] = useState(() => defaultAssembly(defaultType));
-  const [assemblyGuid, setAssemblyGuid] = useState(initialAssembly?.row?.assemblyGuid || null);
-  const [domain, setDomain] = useState(() => (initialAssembly?.row?.domain || "user").toLowerCase());
-  const [fileName, setFileName] = useState(() => sanitizeFileName(initialAssembly?.row?.name || ""));
+  const [assemblyGuid, setAssemblyGuid] = useState(initialAssemblyGuid);
+  const [domain, setDomain] = useState(() => initialDomain);
+  const [fileName, setFileName] = useState(() => sanitizeFileName(initialFileNameSource));
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -371,14 +375,19 @@ export default function AssemblyEditor({
   const [saving, setSaving] = useState(false);
   const [siteOptions, setSiteOptions] = useState([]);
   const [siteLoading, setSiteLoading] = useState(false);
-  const [queueInfo, setQueueInfo] = useState(initialAssembly?.row?.queueEntry || null);
-  const [isDirtyQueue, setIsDirtyQueue] = useState(Boolean(initialAssembly?.row?.isDirty));
+  const [queueInfo, setQueueInfo] = useState(initialRow?.queueEntry || null);
+  const [isDirtyQueue, setIsDirtyQueue] = useState(Boolean(initialRow?.isDirty));
   const [devModeEnabled, setDevModeEnabled] = useState(false);
   const [devModeBusy, setDevModeBusy] = useState(false);
   const importInputRef = useRef(null);
   const [menuAnchorEl, setMenuAnchorEl] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
   const isAdmin = (userRole || "").toLowerCase() === "admin";
+  const consumeInitialDataRef = useRef(onConsumeInitialData);
+
+  useEffect(() => {
+    consumeInitialDataRef.current = onConsumeInitialData;
+  }, [onConsumeInitialData]);
 
   const pageTitle = useMemo(
     () => (isAnsible ? PAGE_TITLE_ANSIBLE : PAGE_TITLE_SCRIPT),
@@ -428,6 +437,12 @@ export default function AssemblyEditor({
 
   useEffect(() => {
     let canceled = false;
+    const normalizeAssemblyPath = (value = "") =>
+      String(value || "")
+        .replace(/\\/g, "/")
+        .replace(/^\/+/, "")
+        .trim()
+        .toLowerCase();
 
     const hydrateFromDocument = (document) => {
       const doc = fromServerDocument(document || {}, defaultType);
@@ -515,6 +530,43 @@ export default function AssemblyEditor({
       setFileName(sanitizeFileName(suggested));
     };
 
+    const resolveGuidFromPath = async (path) => {
+      const normalizedPath = normalizeAssemblyPath(path);
+      if (!normalizedPath) {
+        return null;
+      }
+      const resp = await fetch("/api/assemblies");
+      if (!resp.ok) {
+        const problem = await resp.text().catch(() => "");
+        throw new Error(problem || `Failed to resolve assembly path (HTTP ${resp.status})`);
+      }
+      const data = await resp.json();
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const match = items.find((item) => {
+        const candidates = [
+          item?.virtual_path,
+          item?.path,
+        ]
+          .map((candidate) => normalizeAssemblyPath(candidate))
+          .filter(Boolean);
+        return candidates.includes(normalizedPath);
+      });
+      if (!match) {
+        return null;
+      }
+      return {
+        guid: match?.assembly_guid || match?.assembly_id || null,
+        row: {
+          assemblyGuid: match?.assembly_guid || match?.assembly_id || null,
+          name: match?.display_name || "",
+          description: match?.summary || "",
+          domain: (match?.source || match?.domain || "user").toLowerCase(),
+          assemblyType: match?.assembly_subtype || defaultType,
+          sourcePath: match?.virtual_path || match?.path || path,
+        },
+      };
+    };
+
     const hydrateExisting = async (guid, row) => {
       try {
         setLoading(true);
@@ -554,16 +606,40 @@ export default function AssemblyEditor({
       } finally {
         if (!canceled) {
           setLoading(false);
-          onConsumeInitialData?.();
+          consumeInitialDataRef.current?.();
         }
       }
     };
 
-    const row = initialAssembly?.row;
+    const row = initialAssembly?.row || null;
     const context = row?.createContext || initialAssembly?.createContext;
+    const routeGuid = initialAssembly?.assemblyGuid || null;
+    const routePath = initialAssembly?.path || row?.sourcePath || row?.relPath || row?.path || "";
 
-    if (row?.assemblyGuid) {
-      hydrateExisting(row.assemblyGuid, row);
+    if (row?.assemblyGuid || routeGuid) {
+      hydrateExisting(row?.assemblyGuid || routeGuid, row);
+      return () => {
+        canceled = true;
+      };
+    }
+
+    if (routePath) {
+      (async () => {
+        try {
+          const resolved = await resolveGuidFromPath(routePath);
+          if (canceled) return;
+          if (!resolved?.guid) {
+            throw new Error(`Assembly not found for path "${routePath}"`);
+          }
+          await hydrateExisting(resolved.guid, resolved.row || row);
+        } catch (err) {
+          console.error("Failed to resolve assembly by path:", err);
+          if (!canceled) {
+            setErrorMessage(err?.message || "Failed to resolve assembly path.");
+            consumeInitialDataRef.current?.();
+          }
+        }
+      })();
       return () => {
         canceled = true;
       };
@@ -571,7 +647,7 @@ export default function AssemblyEditor({
 
     if (context) {
       hydrateNewContext(context);
-      onConsumeInitialData?.();
+      consumeInitialDataRef.current?.();
       return () => {
         canceled = true;
       };
@@ -580,7 +656,7 @@ export default function AssemblyEditor({
     return () => {
       canceled = true;
     };
-  }, [initialAssembly, defaultType, onConsumeInitialData]);
+  }, [initialAssembly, defaultType]);
 
   useEffect(() => {
     let canceled = false;

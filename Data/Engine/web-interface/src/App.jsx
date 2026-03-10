@@ -207,6 +207,20 @@ const EMPTY_PAGE_HEADER = {
     });
   }, []);
 
+  const consumeScriptInitialData = useCallback(() => {
+    setAssemblyEditorState((prev) => {
+      if (!prev) return prev;
+      return prev.mode === "script" || prev.mode === "scripts" ? null : prev;
+    });
+  }, []);
+
+  const consumeAnsibleInitialData = useCallback(() => {
+    setAssemblyEditorState((prev) => {
+      if (!prev) return prev;
+      return prev.mode === "ansible" ? null : prev;
+    });
+  }, []);
+
   const pageToPath = useCallback(
     (page, options = {}) => {
       switch (page) {
@@ -286,14 +300,19 @@ const EMPTY_PAGE_HEADER = {
           return "/assemblies";
         case "scripts":
         case "ansible_editor": {
-          const mode = page === "ansible_editor" ? "ansible" : "scripts";
+          const mode = page === "ansible_editor" ? "ansible" : "script";
           const params = new URLSearchParams();
           if (mode === "ansible") {
             params.set("mode", "ansible");
           }
           const state = options.assemblyState || assemblyEditorState;
-          if (state?.path) {
-            params.set("path", state.path);
+          const assemblyGuid = state?.assemblyGuid || state?.row?.assemblyGuid || "";
+          const assemblyPath = state?.path || state?.row?.sourcePath || state?.row?.relPath || state?.row?.path || "";
+          if (assemblyGuid) {
+            params.set("guid", assemblyGuid);
+          }
+          if (assemblyPath) {
+            params.set("path", assemblyPath);
           }
           const query = params.toString();
           return query ? `/assemblies/editor?${query}` : "/assemblies/editor";
@@ -382,12 +401,19 @@ const EMPTY_PAGE_HEADER = {
       if (path === "/assemblies") return { page: "assemblies", options: {} };
       if (path === "/assemblies/editor") {
         const mode = params.get("mode");
+        const assemblyGuid = (params.get("guid") || "").trim();
         const relPath = params.get("path") || "";
-        const state = relPath
-          ? { path: relPath, mode: mode === "ansible" ? "ansible" : "scripts", nonce: Date.now() }
+        const normalizedMode = mode === "ansible" ? "ansible" : "script";
+        const state = assemblyGuid || relPath
+          ? {
+              assemblyGuid: assemblyGuid || null,
+              path: relPath,
+              mode: normalizedMode,
+              nonce: Date.now(),
+            }
           : null;
         return {
-          page: mode === "ansible" ? "ansible_editor" : "scripts",
+          page: normalizedMode === "ansible" ? "ansible_editor" : "scripts",
           options: state ? { assemblyState: state } : {}
         };
       }
@@ -1181,6 +1207,8 @@ const EMPTY_PAGE_HEADER = {
       const nonce = Date.now();
       const state = {
         mode,
+        assemblyGuid: normalizedRow.assemblyGuid || null,
+        path: normalizedRow.sourcePath || normalizedRow.relPath || normalizedRow.path || "",
         row: normalizedRow,
         nonce,
       };
@@ -1434,10 +1462,13 @@ const EMPTY_PAGE_HEADER = {
           <AssemblyEditor
             mode="script"
             onPageMetaChange={handlePageMetaChange}
-            initialAssembly={assemblyEditorState && assemblyEditorState.mode === 'script' ? assemblyEditorState : null}
-            onConsumeInitialData={() => {
-              setAssemblyEditorState((prev) => (prev && prev.mode === 'script' ? null : prev));
-            }}
+            initialAssembly={
+              assemblyEditorState &&
+              (assemblyEditorState.mode === "script" || assemblyEditorState.mode === "scripts")
+                ? assemblyEditorState
+                : null
+            }
+            onConsumeInitialData={consumeScriptInitialData}
             onSaved={() => navigateTo('assemblies')}
             userRole={userRole || 'User'}
           />
@@ -1449,9 +1480,7 @@ const EMPTY_PAGE_HEADER = {
             mode="ansible"
             onPageMetaChange={handlePageMetaChange}
             initialAssembly={assemblyEditorState && assemblyEditorState.mode === 'ansible' ? assemblyEditorState : null}
-            onConsumeInitialData={() => {
-              setAssemblyEditorState((prev) => (prev && prev.mode === 'ansible' ? null : prev));
-            }}
+            onConsumeInitialData={consumeAnsibleInitialData}
             onSaved={() => navigateTo('assemblies')}
             userRole={userRole || 'User'}
           />
