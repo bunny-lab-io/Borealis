@@ -572,11 +572,6 @@ const EMPTY_PAGE_HEADER = {
     if (currentPage !== "create_job") return;
     const parsedId = Number(editingJob?.id);
     if (!Number.isInteger(parsedId) || parsedId <= 0) return;
-    const alreadyHydrated =
-      typeof editingJob?.name === "string" &&
-      Array.isArray(editingJob?.components) &&
-      Array.isArray(editingJob?.targets);
-    if (alreadyHydrated) return;
 
     let canceled = false;
     (async () => {
@@ -601,7 +596,7 @@ const EMPTY_PAGE_HEADER = {
     return () => {
       canceled = true;
     };
-  }, [currentPage, editingJob]);
+  }, [currentPage, editingJob?.id]);
 
   // Build breadcrumb items for current view
   const breadcrumbs = React.useMemo(() => {
@@ -1381,12 +1376,13 @@ const EMPTY_PAGE_HEADER = {
             }}
             onEditJob={(job) => {
               const jobId = Number(job?.id);
-              setEditingJob(job || null);
               setQuickJobDraft(null);
-              navigateTo("create_job", {
-                ...(Number.isInteger(jobId) && jobId > 0 ? { jobId } : {}),
-                ...(job && typeof job === "object" ? { job } : {}),
-              });
+              if (!Number.isInteger(jobId) || jobId <= 0) {
+                setEditingJob(null);
+                return;
+              }
+              setEditingJob({ id: jobId });
+              navigateTo("create_job", { jobId });
             }}
             refreshToken={jobsRefreshToken}
           />
