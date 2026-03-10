@@ -490,6 +490,14 @@ export function parseAssemblyExport(exportDoc) {
     parseObjectMaybe(exportDoc.payload_json) ||
     parseObjectMaybe(exportDoc.document) ||
     null;
+  const rawPayloadText =
+    typeof exportDoc?.payload === "string"
+      ? exportDoc.payload
+      : typeof exportDoc?.payload_json === "string"
+      ? exportDoc.payload_json
+      : typeof exportDoc?.document === "string"
+      ? exportDoc.document
+      : "";
   const looksLikeInlinePayload =
     Array.isArray(exportDoc?.nodes) ||
     Array.isArray(exportDoc?.edges) ||
@@ -514,6 +522,7 @@ export function parseAssemblyExport(exportDoc) {
   if (typeof payload.script === "string") scriptSource = payload.script;
   else if (typeof payload.content === "string") scriptSource = payload.content;
   else if (scriptLines) scriptSource = scriptLines.map((line) => (line == null ? "" : String(line))).join("\n");
+  else if (rawPayloadText) scriptSource = rawPayloadText;
 
   const encodingHint = toLowerSafe(
     payload.script_encoding || payload.scriptEncoding

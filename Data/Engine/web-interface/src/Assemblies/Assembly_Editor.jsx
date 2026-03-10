@@ -35,7 +35,8 @@ import { DomainBadge, DirtyStatePill, DOMAIN_OPTIONS } from "./Assembly_Badges";
 import {
   decodeBase64String,
   normalizeVariablesFromServer,
-  normalizeFilesFromServer
+  normalizeFilesFromServer,
+  parseAssemblyExport
 } from "./assemblyUtils";
 
 const TYPE_OPTIONS_ALL = [
@@ -459,25 +460,46 @@ export default function AssemblyEditor({
         }
         const data = await resp.json();
         if (canceled) return;
-        const payload = data?.payload && typeof data.payload === "object" ? data.payload : {};
-        const enrichedDoc = { ...payload };
+        const parsed = parseAssemblyExport(data);
         const fallbackName =
-          data?.display_name || row?.name || assembly.name || "";
-        enrichedDoc.name = enrichedDoc.name || fallbackName;
-        enrichedDoc.display_name = enrichedDoc.display_name || fallbackName;
-        enrichedDoc.description =
-          enrichedDoc.description ||
-          data?.summary ||
-          row?.description ||
+          parsed?.metadata?.display_name ||
+          data?.display_name ||
+          row?.name ||
+          assembly.name ||
           "";
-        enrichedDoc.category = enrichedDoc.category || row?.category || "";
-        enrichedDoc.type =
-          enrichedDoc.type ||
-          data?.assembly_subtype ||
-          row?.assembly_subtype ||
-          row?.assemblyType ||
-          defaultType;
-        hydrateFromDocument({ ...enrichedDoc });
+        const enrichedDoc = {
+          ...(parsed?.payload && typeof parsed.payload === "object" ? parsed.payload : {}),
+          name: fallbackName,
+          display_name: fallbackName,
+          description:
+            parsed?.metadata?.summary ||
+            data?.summary ||
+            row?.description ||
+            "",
+          category:
+            parsed?.payload?.category ||
+            row?.category ||
+            "",
+          type:
+            parsed?.type ||
+            data?.assembly_subtype ||
+            row?.assembly_subtype ||
+            row?.assemblyType ||
+            defaultType,
+          script: parsed?.script || "",
+          timeout_seconds:
+            parsed?.timeoutSeconds ||
+            parsed?.payload?.timeout_seconds ||
+            parsed?.payload?.timeout ||
+            3600,
+          sites:
+            parsed?.sites && typeof parsed.sites === "object"
+              ? parsed.sites
+              : { mode: "all", values: [] },
+          variables: Array.isArray(parsed?.rawVariables) ? parsed.rawVariables : [],
+          files: Array.isArray(parsed?.rawFiles) ? parsed.rawFiles : [],
+        };
+        hydrateFromDocument(enrichedDoc);
         setAssemblyGuid(data?.assembly_guid || guid);
         setDomain((data?.source || data?.domain || row?.domain || "user").toLowerCase());
         setQueueInfo({
