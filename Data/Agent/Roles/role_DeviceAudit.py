@@ -636,6 +636,34 @@ def _ps_json(cmd: str, timeout: int = 60):
 
 def collect_software():
     plat = platform.system().lower()
+    def _dedupe_and_sort(rows):
+        deduped = {}
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get('name') or '').strip()
+            if not name:
+                continue
+            version = str(row.get('version') or '').strip()
+            source = str(row.get('source') or 'local_installed').strip().lower() or 'local_installed'
+            payload = {
+                'name': name,
+                'version': version,
+                'source': source,
+            }
+            metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
+            if metadata:
+                payload['metadata'] = metadata
+            deduped[(name.lower(), version.lower(), source)] = payload
+        return sorted(
+            deduped.values(),
+            key=lambda item: (
+                str(item.get('name') or '').lower(),
+                str(item.get('source') or '').lower(),
+                str(item.get('version') or '').lower(),
+            ),
+        )
+
     if plat == 'linux':
         packages = []
         try:
@@ -651,7 +679,7 @@ def collect_software():
                     name = (parts[0] if parts else '').strip()
                     version = (parts[1] if len(parts) > 1 else '').strip()
                     if name:
-                        packages.append({'name': name, 'version': version})
+                        packages.append({'name': name, 'version': version, 'source': 'dpkg'})
             elif shutil.which('rpm'):
                 out = subprocess.run(
                     ['rpm', '-qa', '--qf', '%{NAME}\t%{VERSION}-%{RELEASE}\n'],
@@ -664,13 +692,11 @@ def collect_software():
                     name = (parts[0] if parts else '').strip()
                     version = (parts[1] if len(parts) > 1 else '').strip()
                     if name:
-                        packages.append({'name': name, 'version': version})
+                        packages.append({'name': name, 'version': version, 'source': 'rpm'})
         except Exception:
             packages = []
 
-        if packages:
-            packages.sort(key=lambda x: (x.get('name') or '').lower())
-        return packages
+        return _dedupe_and_sort(packages)
 
     if plat != 'windows':
         return []
@@ -686,7 +712,7 @@ $list = @()
 foreach ($p in $paths) {
   try {
     $list += Get-ItemProperty -Path $p -ErrorAction SilentlyContinue |
-      Select-Object DisplayName, DisplayVersion
+      Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation, InstallDate
   } catch {}
 }
 $list = $list | Where-Object { $_.DisplayName -and ("$($_.DisplayName)".Trim().Length -gt 0) }
@@ -701,9 +727,62 @@ $list | Sort-Object DisplayName -Unique | ConvertTo-Json -Depth 2
             if not name:
                 continue
             ver = str(it.get('DisplayVersion') or '').strip()
-            out.append({'name': name, 'version': ver})
+            metadata = {}
+            publisher = str(it.get('Publisher') or '').strip()
+            if publisher:
+                metadata['publisher'] = publisher
+            install_location = str(it.get('InstallLocation') or '').strip()
+            if install_location:
+                metadata['install_location'] = install_location
+            install_date = str(it.get('InstallDate') or '').strip()
+            if install_date:
+                metadata['install_date'] = install_date
+            payload = {'name': name, 'version': ver, 'source': 'local_installed'}
+            if metadata:
+                payload['metadata'] = metadata
+            out.append(payload)
+        try:
+            appx_ps = r"""
+$list = @()
+try {
+  $list = Get-AppxPackage -AllUsers -ErrorAction Stop |
+    Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } |
+    Select-Object Name, Version, Publisher, InstallLocation, PackageFamilyName
+} catch {
+  try {
+    $list = Get-AppxPackage -ErrorAction SilentlyContinue |
+      Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } |
+      Select-Object Name, Version, Publisher, InstallLocation, PackageFamilyName
+  } catch {}
+}
+$list | Sort-Object Name -Unique | ConvertTo-Json -Depth 3
+"""
+            appx_data = _ps_json(appx_ps, timeout=120)
+            if isinstance(appx_data, dict):
+                appx_data = [appx_data]
+            for it in (appx_data or []):
+                name = str(it.get('Name') or '').strip()
+                if not name:
+                    continue
+                ver = str(it.get('Version') or '').strip()
+                metadata = {}
+                publisher = str(it.get('Publisher') or '').strip()
+                if publisher:
+                    metadata['publisher'] = publisher
+                install_location = str(it.get('InstallLocation') or '').strip()
+                if install_location:
+                    metadata['install_location'] = install_location
+                family_name = str(it.get('PackageFamilyName') or '').strip()
+                if family_name:
+                    metadata['package_family_name'] = family_name
+                payload = {'name': name, 'version': ver, 'source': 'windows_store'}
+                if metadata:
+                    payload['metadata'] = metadata
+                out.append(payload)
+        except Exception:
+            pass
         if out:
-            return out
+            return _dedupe_and_sort(out)
     except Exception:
         pass
 
@@ -739,7 +818,27 @@ $list | Sort-Object DisplayName -Unique | ConvertTo-Json -Depth 2
                                 ver, _ = winreg.QueryValueEx(sk, 'DisplayVersion')
                             except Exception:
                                 ver = ''
-                            items.append({'name': str(name).strip(), 'version': str(ver or '').strip()})
+                            metadata = {}
+                            try:
+                                publisher, _ = winreg.QueryValueEx(sk, 'Publisher')
+                                if publisher:
+                                    metadata['publisher'] = str(publisher).strip()
+                            except Exception:
+                                pass
+                            try:
+                                install_location, _ = winreg.QueryValueEx(sk, 'InstallLocation')
+                                if install_location:
+                                    metadata['install_location'] = str(install_location).strip()
+                            except Exception:
+                                pass
+                            payload = {
+                                'name': str(name).strip(),
+                                'version': str(ver or '').strip(),
+                                'source': 'local_installed',
+                            }
+                            if metadata:
+                                payload['metadata'] = metadata
+                            items.append(payload)
                     except Exception:
                         continue
             except Exception:
@@ -759,12 +858,13 @@ $list | Sort-Object DisplayName -Unique | ConvertTo-Json -Depth 2
         merged = {}
         for root, path, flag in paths:
             for it in _enum_uninstall(root, path, flag):
-                key = (it['name'] or '').lower()
-                if not key:
+                name_key = (it.get('name') or '').lower()
+                if not name_key:
                     continue
+                key = (name_key, (it.get('version') or '').lower(), (it.get('source') or 'local_installed'))
                 if key not in merged:
                     merged[key] = it
-        return sorted(merged.values(), key=lambda x: x['name'])
+        return _dedupe_and_sort(list(merged.values()))
     except Exception:
         return []
 

@@ -17,7 +17,6 @@ import {
   ChevronRight as ChevronRightIcon,
   Devices as DevicesIcon,
   FilterAlt as FilterIcon,
-  Groups as GroupsIcon,
   Schedule as ScheduleIcon,
   PeopleOutline as CommunityIcon,
   Apps as AssembliesIcon,
@@ -82,7 +81,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
         "admin_device_approvals",
       ].includes(currentPage),
       automation: ["jobs", "assemblies", "community"].includes(currentPage),
-      filters: ["filters", "filter_editor", "groups"].includes(currentPage),
+      filters: ["filters", "filter_editor"].includes(currentPage),
       access: [
         "access_credentials",
         "access_users",
@@ -283,13 +282,6 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
             label="Filters"
             pageKey="filters"
           />
-          {/* Groups 
-            <NavItem
-            icon={<GroupsIcon fontSize="small" />}
-            label="Groups"
-            pageKey="groups"
-          />
-          */}
         </Section>
 
         {/* Access Management */}

@@ -7,7 +7,7 @@ Explain how Borealis schedules recurring jobs, targets devices, and records run 
 ## Scheduler Overview
 - Scheduler implementation lives in `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`.
 - It reads job definitions from SQLite and emits quick job payloads over Socket.IO.
-- Run history is stored in `scheduled_job_runs` and `scheduled_job_run_activity` tables.
+- Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, and `scheduled_job_run_activity` tables.
 
 ## Schedule Types
 Supported schedule types (from the scheduler core):
@@ -25,15 +25,18 @@ Supported schedule types (from the scheduler core):
 
 ## Target Resolution
 - Targets can be explicit hostnames or device filter definitions.
-- The scheduler uses `DeviceFilterMatcher` to resolve filters to live inventory snapshots.
-- Online snapshot logic is used to avoid stale targets.
+- The scheduler uses `DeviceFilterMatcher` to resolve filters to a point-in-time snapshot at occurrence start.
+- Each occurrence freezes the resolved host list in `scheduled_job_run_targets`.
+- Online snapshot logic is used only to decide when a pending target can dispatch, not to recalculate the occurrence target list.
 
 ## Execution Flow
 1) Scheduler tick loads enabled jobs.
-2) Each due occurrence creates `scheduled_job_runs` rows.
-3) Quick job payloads are emitted with `scheduled_job_id` context.
-4) Agents execute and return `quick_job_result`.
-5) The Engine updates run status and activity links.
+2) Each due occurrence resolves its targets once and creates `scheduled_job_runs` plus `scheduled_job_run_targets` rows.
+3) Pending targets dispatch when their host is online.
+4) Quick job payloads are emitted with `scheduled_job_id` context.
+5) Agents execute and return `quick_job_result`.
+6) The Engine updates run status and activity links.
+7) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
 
 ## Run History and Retention
 - Run history is retained for `BOREALIS_JOB_HISTORY_DAYS` (default 30).
@@ -63,7 +66,8 @@ Supported schedule types (from the scheduler core):
 
 ### Core tables (Engine DB)
 - `scheduled_jobs` - job definition, schedule, targets, execution context.
-- `scheduled_job_runs` - per-run status, timestamps, error fields.
+- `scheduled_job_runs` - per-run status, timestamps, error fields, skip reason.
+- `scheduled_job_run_targets` - frozen occurrence target snapshot and originating filter links.
 - `scheduled_job_run_activity` - links activity_history to scheduled runs.
 
 ### Schedule computation
@@ -72,9 +76,10 @@ Supported schedule types (from the scheduler core):
 - `once` schedules at `start_ts` only once.
 
 ### Targeting logic
-- Targets can be hostnames or device filters (criteria JSON).
+- Targets can be hostnames or device filters.
 - `DeviceFilterMatcher` loads device snapshots and resolves filter matches.
-- The scheduler can also request an online-only hostname snapshot.
+- A due occurrence is resolved once, then reused for the rest of that occurrence.
+- The scheduler can also request an online-only hostname snapshot when deciding whether a pending target can dispatch.
 
 ### Execution context
 - Payloads are emitted as quick jobs with extra context:
@@ -90,6 +95,8 @@ Supported schedule types (from the scheduler core):
 ### Failure and retry notes
 - The scheduler is designed to be resilient; it logs and continues on errors.
 - Expired runs are marked `Timed Out` when they exceed the expiration window.
+- Offline pending targets can age into `Expired`.
+- Zero-target occurrences are stored as skipped instead of success or failure.
 
 ### UI touch points
 - Scheduled job UI lives under `Data/Engine/web-interface/src/Scheduling/`.
@@ -103,4 +110,4 @@ Supported schedule types (from the scheduler core):
 ### Debug checklist
 - Jobs not running: check `Engine/Logs/engine.log` and `Engine/Logs/scheduled_jobs.log`.
 - Run history empty: verify `scheduled_job_runs` table and quick job events.
-- Filter target mismatch: inspect `device_filters.criteria_json` and matcher logic.
+- Filter target mismatch: inspect the saved filter payload, `scheduled_job_run_targets`, and matcher logic.

@@ -315,6 +315,20 @@ const JOB_RESULT_THEME = {
     border: "1px solid rgba(226,232,240,0.32)",
     dot: "#cbd5f5",
   },
+  skipped: {
+    label: "No Devices Targeted",
+    text: "#fbbf24",
+    background: "rgba(251,191,36,0.14)",
+    border: "1px solid rgba(251,191,36,0.32)",
+    dot: "#f59e0b",
+  },
+  "no devices targeted": {
+    label: "No Devices Targeted",
+    text: "#fbbf24",
+    background: "rgba(251,191,36,0.14)",
+    border: "1px solid rgba(251,191,36,0.32)",
+    dot: "#f59e0b",
+  },
   default: {
     label: "Status",
     text: "#e2e8f0",
@@ -553,9 +567,18 @@ const normalizeFilterCatalog = (raw) => {
       const idValue = item?.id ?? item?.filter_id ?? idx;
       const id = Number(idValue);
       if (!Number.isFinite(id)) return null;
-      const scopeText = String(item?.site_scope || item?.scope || item?.type || "global").trim().toLowerCase();
-      const scope = scopeText === "scoped" || scopeText === "site" ? "scoped" : "global";
-      const siteName = item?.site || item?.site_name || item?.target_site || item?.site_scope_value || null;
+      const siteMode = String(item?.site_mode || "global").trim().toLowerCase() || "global";
+      const siteNames = Array.isArray(item?.site_names)
+        ? item.site_names.filter(Boolean)
+        : Array.isArray(item?.sites)
+          ? item.sites.map((site) => site?.name || site).filter(Boolean)
+          : [];
+      const scopeLabel =
+        siteMode === "specific_sites"
+          ? "Specific Sites"
+          : siteMode === "global_exclusions"
+            ? "Global w/ Exclusions"
+            : "Global";
       const deviceCount =
         typeof item?.matching_device_count === "number" && Number.isFinite(item.matching_device_count)
           ? item.matching_device_count
@@ -563,10 +586,11 @@ const normalizeFilterCatalog = (raw) => {
       return {
         id,
         name: item?.name || `Filter ${idx + 1}`,
-        scope,
-        site_scope: scope,
-        site: siteName,
-        site_name: siteName,
+        description: item?.description || "",
+        criteria_mode: item?.criteria_mode || "basic",
+        site_mode: siteMode,
+        scope: scopeLabel,
+        siteSummary: siteNames.join(", "),
         deviceCount,
       };
     })
@@ -1251,12 +1275,6 @@ export default function CreateJob({
         if (!Number.isFinite(filterId)) return null;
         const catalogEntry =
           filterCatalogMapRef.current[filterId] || filterCatalogMapRef.current[String(filterId)] || {};
-        const scopeText = String(
-          rawTarget.site_scope || rawTarget.scope || rawTarget.type || catalogEntry.scope || "global"
-        )
-          .trim()
-          .toLowerCase();
-        const scope = scopeText === "scoped" || scopeText === "site" ? "scoped" : "global";
         const deviceCount =
           typeof rawTarget.deviceCount === "number" && Number.isFinite(rawTarget.deviceCount)
             ? rawTarget.deviceCount
@@ -1269,8 +1287,10 @@ export default function CreateJob({
           kind: "filter",
           filter_id: filterId,
           name: rawTarget.name || catalogEntry.name || `Filter #${filterId}`,
-          site_scope: scope,
-          site: rawTarget.site || rawTarget.site_name || catalogEntry.site || null,
+          site_mode: rawTarget.site_mode || catalogEntry.site_mode || "global",
+          scope: rawTarget.scope || catalogEntry.scope || "Global",
+          description: rawTarget.description || catalogEntry.description || "",
+          siteSummary: rawTarget.siteSummary || catalogEntry.siteSummary || "",
           deviceCount,
         };
       }
@@ -1313,8 +1333,6 @@ export default function CreateJob({
             kind: "filter",
             filter_id: target.filter_id,
             name: target.name,
-            site_scope: target.site_scope,
-            site: target.site,
           };
         }
         if (target.kind === "device") {
@@ -1393,11 +1411,18 @@ export default function CreateJob({
     return (filterCatalog || [])
       .filter((f) => {
         if (!query) return true;
-        return String(f?.name || "").toLowerCase().includes(query);
+        const haystack = [
+          f?.name,
+          f?.description,
+          f?.scope,
+          f?.siteSummary,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(query);
       })
       .map((f, index) => {
-        const scopeRaw = String(f.scope || f.site_scope || f.type || "").toLowerCase();
-        const scoped = scopeRaw === "scoped" || scopeRaw === "site";
         const deviceCount =
           typeof f.deviceCount === "number"
             ? f.deviceCount
@@ -1405,10 +1430,11 @@ export default function CreateJob({
         return {
           id: String(f.id ?? f.filter_id ?? index),
           name: f.name || `Filter ${index + 1}`,
+          description: f.description || "",
           deviceCount,
-          scope: scoped ? "Site" : "Global",
-          scopeKey: scoped ? "scoped" : "global",
-          site: "",
+          scope: f.scope || "Global",
+          scopeKey: f.site_mode || "global",
+          site: f.siteSummary || "",
           raw: f,
         };
       });
@@ -1479,7 +1505,13 @@ export default function CreateJob({
       const deviceCount =
         typeof target?.deviceCount === "number" && Number.isFinite(target.deviceCount) ? target.deviceCount : null;
       const detailText = isFilter
-        ? `${deviceCount != null ? deviceCount.toLocaleString() : "—"} device${deviceCount === 1 ? "" : "s"}`
+        ? [
+            `${deviceCount != null ? deviceCount.toLocaleString() : "—"} device${deviceCount === 1 ? "" : "s"}`,
+            target?.scope || "",
+            target?.description || "",
+          ]
+            .filter(Boolean)
+            .join(" • ")
         : "—";
       const osLabel = isFilter ? "—" : resolveOs(target) || "Unknown";
       return {
@@ -1656,6 +1688,7 @@ export default function CreateJob({
         cellClass: "auto-col-tight",
       },
       { field: "scope", headerName: "Scope", minWidth: 140, flex: 0.9, cellClass: "auto-col-tight" },
+      { field: "description", headerName: "Description", minWidth: 200, flex: 1.2, cellClass: "auto-col-tight" },
     ],
     []
   );
@@ -1664,7 +1697,7 @@ export default function CreateJob({
     filterPickerGridApiRef.current = params.api;
     requestAnimationFrame(() => {
       try {
-        params.api.autoSizeColumns(["name", "deviceCount", "scope"], true);
+        params.api.autoSizeColumns(["name", "deviceCount", "scope", "description"], true);
       } catch {}
     });
   }, []);
@@ -2179,7 +2212,17 @@ export default function CreateJob({
       if (!runsResp.ok) throw new Error(runs.error || `HTTP ${runsResp.status}`);
       if (!jobResp.ok) throw new Error(job.error || `HTTP ${jobResp.status}`);
       if (!devResp.ok) throw new Error(dev.error || `HTTP ${devResp.status}`);
-      setHistoryRows(Array.isArray(runs.runs) ? runs.runs : []);
+      setHistoryRows(
+        Array.isArray(runs.runs)
+          ? runs.runs.map((entry) => {
+              const skipReason = String(entry?.skip_reason || "").toLowerCase();
+              if (String(entry?.status || "").toLowerCase() === "skipped" && skipReason === "no_devices_targeted") {
+                return { ...entry, status: "No Devices Targeted" };
+              }
+              return entry;
+            })
+          : []
+      );
       setJobSummary(job.job || {});
       const devices = Array.isArray(dev.devices) ? dev.devices.map((device) => ({
         ...device,
@@ -2238,9 +2281,10 @@ export default function CreateJob({
       if (!statuses.length) return;
       const hasInFlight = statuses.some((s) => s === "running" || s === "pending" || s === "scheduled");
       if (hasInFlight) return;
+      const allSkipped = statuses.every((s) => s === "skipped" || s === "no devices targeted");
       const hasFailure = statuses.some((s) => ["failed", "failure", "expired", "timed out", "timed_out", "warning"].includes(s));
       const allSuccess = statuses.every((s) => s === "success");
-      const statusLabel = hasFailure ? "Failed" : (allSuccess ? "Success" : "Failed");
+      const statusLabel = allSkipped ? "No Devices Targeted" : (hasFailure ? "Failed" : (allSuccess ? "Success" : "Failed"));
       summaries.push({
         key: entry.key,
         scheduled_ts: entry.scheduled_ts,

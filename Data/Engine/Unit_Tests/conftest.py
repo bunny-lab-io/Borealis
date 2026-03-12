@@ -143,6 +143,81 @@ CREATE TABLE IF NOT EXISTS device_sites (
     site_id INTEGER,
     assigned_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS device_filters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    description TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    criteria_mode TEXT NOT NULL DEFAULT 'basic',
+    site_mode TEXT NOT NULL DEFAULT 'global',
+    basic_criteria_json TEXT,
+    advanced_criteria_json TEXT,
+    last_edited_by TEXT,
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS device_filter_sites (
+    filter_id INTEGER NOT NULL,
+    site_id INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS device_software_inventory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_guid TEXT NOT NULL,
+    name TEXT NOT NULL,
+    name_normalized TEXT NOT NULL,
+    version TEXT,
+    source TEXT NOT NULL,
+    captured_at INTEGER NOT NULL,
+    metadata_json TEXT
+);
+CREATE TABLE IF NOT EXISTS scheduled_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    components_json TEXT NOT NULL DEFAULT '[]',
+    targets_json TEXT NOT NULL DEFAULT '[]',
+    schedule_type TEXT NOT NULL DEFAULT 'once',
+    start_ts INTEGER,
+    duration_stop_enabled INTEGER DEFAULT 0,
+    expiration TEXT,
+    execution_context TEXT NOT NULL DEFAULT 'system',
+    credential_id INTEGER,
+    use_service_account INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER DEFAULT 1,
+    created_at INTEGER,
+    updated_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    scheduled_ts INTEGER,
+    started_ts INTEGER,
+    finished_ts INTEGER,
+    status TEXT,
+    error TEXT,
+    created_at INTEGER,
+    updated_at INTEGER,
+    target_hostname TEXT,
+    skip_reason TEXT
+);
+CREATE TABLE IF NOT EXISTS scheduled_job_run_activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    activity_id INTEGER NOT NULL,
+    component_kind TEXT,
+    script_type TEXT,
+    component_path TEXT,
+    component_name TEXT,
+    created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS scheduled_job_run_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    device_guid TEXT,
+    hostname TEXT NOT NULL,
+    site_id INTEGER,
+    resolved_from_filter_id INTEGER,
+    created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS github_token (
     id INTEGER PRIMARY KEY,
     token TEXT

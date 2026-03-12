@@ -240,6 +240,68 @@ def test_device_description_update(engine_harness: EngineTestHarness) -> None:
     assert detail["description"] == "Updated"
 
 
+def test_agent_details_syncs_normalized_software_inventory(engine_harness: EngineTestHarness) -> None:
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/details",
+        json={
+            "hostname": "test-device",
+            "agent_hash": "hash-123",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                    "last_seen": 1_700_000_800,
+                    "operating_system": "Windows 11 Pro",
+                },
+                "software": [
+                    {
+                        "name": "Google Chrome",
+                        "version": "124.0.6367.92",
+                        "source": "local_installed",
+                    },
+                    {
+                        "name": "Contoso.App",
+                        "version": "1.2.0",
+                        "source": "windows_store",
+                    },
+                ],
+            },
+        },
+        headers=_device_headers(),
+    )
+    assert response.status_code == 200
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT name, version, source
+              FROM device_software_inventory
+             WHERE device_guid = ?
+          ORDER BY name ASC
+            """,
+            ("GUID-TEST-0001",),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    assert rows == [
+        ("Contoso.App", "1.2.0", "windows_store"),
+        ("Google Chrome", "124.0.6367.92", "local_installed"),
+    ]
+
+    admin_client = _client_with_admin_session(engine_harness)
+    detail_response = admin_client.get("/api/device/details/test-device")
+    assert detail_response.status_code == 200
+    software = detail_response.get_json()["software"]
+    assert software == [
+        {"name": "Contoso.App", "version": "1.2.0", "source": "windows_store", "metadata": {}},
+        {"name": "Google Chrome", "version": "124.0.6367.92", "source": "local_installed", "metadata": {}},
+    ]
+
+
 def test_device_list_views_lifecycle(engine_harness: EngineTestHarness) -> None:
     client = _client_with_admin_session(engine_harness)
     create_resp = client.post(

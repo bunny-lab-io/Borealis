@@ -144,6 +144,19 @@ _DEVICE_JSON_LIST_FIELDS: Dict[str, Any] = {
     "storage": [],
 }
 _DEVICE_JSON_OBJECT_FIELDS: Dict[str, Any] = {"cpu": {}}
+_SOFTWARE_SOURCE_ALIASES: Dict[str, str] = {
+    "local": "local_installed",
+    "installed": "local_installed",
+    "local_installed": "local_installed",
+    "registry": "local_installed",
+    "uninstall_registry": "local_installed",
+    "appx": "windows_store",
+    "ms_store": "windows_store",
+    "windows_store": "windows_store",
+    "store": "windows_store",
+    "dpkg": "dpkg",
+    "rpm": "rpm",
+}
 
 
 def _is_empty(value: Any) -> bool:
@@ -193,6 +206,95 @@ def _clean_device_str(value: Any) -> Optional[str]:
             return None
     text = text.strip()
     return text or None
+
+
+def _normalize_software_source(value: Any) -> str:
+    text = _clean_device_str(value)
+    if not text:
+        return "local_installed"
+    return _SOFTWARE_SOURCE_ALIASES.get(text.strip().lower(), "local_installed")
+
+
+def _normalize_software_inventory(raw: Any) -> List[Dict[str, Any]]:
+    entries = raw if isinstance(raw, list) else []
+    normalized: List[Dict[str, Any]] = []
+    seen: set[Tuple[str, str, str]] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = _clean_device_str(entry.get("name"))
+        if not name:
+            continue
+        version = _clean_device_str(entry.get("version")) or ""
+        source = _normalize_software_source(entry.get("source"))
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        if not metadata:
+            metadata = {
+                str(key): value
+                for key, value in entry.items()
+                if key not in {"name", "version", "source", "metadata"} and value not in (None, "", [], {})
+            }
+        key = (name.strip().lower(), version.strip().lower(), source)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            {
+                "name": name,
+                "version": version,
+                "source": source,
+                "metadata": metadata if isinstance(metadata, dict) else {},
+            }
+        )
+    normalized.sort(
+        key=lambda item: (
+            str(item.get("name") or "").lower(),
+            str(item.get("source") or "").lower(),
+            str(item.get("version") or "").lower(),
+        )
+    )
+    return normalized
+
+
+def _sync_device_software_inventory(cur: sqlite3.Cursor, device_guid: Optional[str], software_entries: Any) -> None:
+    normalized_guid = _clean_device_str(device_guid)
+    if normalized_guid:
+        try:
+            normalized_guid = normalize_guid(normalized_guid)
+        except Exception:
+            pass
+    if not normalized_guid:
+        return
+    normalized_entries = _normalize_software_inventory(software_entries)
+    cur.execute("DELETE FROM device_software_inventory WHERE device_guid = ?", (normalized_guid,))
+    if not normalized_entries:
+        return
+    now_ts = int(time.time())
+    cur.executemany(
+        """
+        INSERT INTO device_software_inventory(
+            device_guid,
+            name,
+            name_normalized,
+            version,
+            source,
+            captured_at,
+            metadata_json
+        ) VALUES (?,?,?,?,?,?,?)
+        """,
+        [
+            (
+                normalized_guid,
+                entry["name"],
+                str(entry["name"]).strip().lower(),
+                entry["version"],
+                entry["source"],
+                now_ts,
+                json.dumps(entry.get("metadata") or {}),
+            )
+            for entry in normalized_entries
+        ],
+    )
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -485,7 +587,7 @@ class DeviceManagementService:
             "summary": summary,
             "memory": _safe_json(mapping.get("memory"), []),
             "network": _safe_json(mapping.get("network"), []),
-            "software": _safe_json(mapping.get("software"), []),
+            "software": _normalize_software_inventory(_safe_json(mapping.get("software"), [])),
             "storage": _safe_json(mapping.get("storage"), []),
             "cpu": _safe_json(mapping.get("cpu"), {}),
         }
@@ -692,6 +794,8 @@ class DeviceManagementService:
         details = payload.get("details")
         if not isinstance(details, dict):
             return {"error": "invalid payload"}, 400
+        if "software" in details:
+            details["software"] = _normalize_software_inventory(details.get("software"))
 
         hostname = _clean_device_str(payload.get("hostname"))
         if not hostname:
@@ -846,6 +950,7 @@ class DeviceManagementService:
                 agent_hash=agent_hash or existing_agent_hash,
                 guid=effective_guid,
             )
+            _sync_device_software_inventory(cur, effective_guid, merged.get("software"))
 
             if effective_guid and fingerprint:
                 now_iso = datetime.now(timezone.utc).isoformat()
@@ -902,7 +1007,7 @@ class DeviceManagementService:
                     },
                     "memory": _safe_json(mapping.get("memory"), []),
                     "network": _safe_json(mapping.get("network"), []),
-                    "software": _safe_json(mapping.get("software"), []),
+                    "software": _normalize_software_inventory(_safe_json(mapping.get("software"), [])),
                     "storage": _safe_json(mapping.get("storage"), []),
                     "cpu": _safe_json(mapping.get("cpu"), {}),
                 },
@@ -916,7 +1021,7 @@ class DeviceManagementService:
                 "agent_guid": normalize_guid(mapping.get("guid")) or "",
                 "memory": _safe_json(mapping.get("memory"), []),
                 "network": _safe_json(mapping.get("network"), []),
-                "software": _safe_json(mapping.get("software"), []),
+                "software": _normalize_software_inventory(_safe_json(mapping.get("software"), [])),
                 "storage": _safe_json(mapping.get("storage"), []),
                 "cpu": _safe_json(mapping.get("cpu"), {}),
                 "device_type": mapping.get("device_type") or "",

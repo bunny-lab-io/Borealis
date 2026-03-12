@@ -64,9 +64,16 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 
 ### Device Filters
 - `GET /api/device_filters` (Token Authenticated) - list filters.
+- `GET /api/device_filters/metadata` (Token Authenticated) - filter field/operator metadata.
+- `POST /api/device_filters/preview` (Token Authenticated) - manual filter preview against current inventory.
 - `GET /api/device_filters/<filter_id>` (Token Authenticated) - get filter.
+- `GET /api/device_filters/<filter_id>/usage` (Token Authenticated) - scheduled-job usage summary.
 - `POST /api/device_filters` (Token Authenticated) - create filter.
 - `PUT /api/device_filters/<filter_id>` (Token Authenticated) - update filter.
+- `POST /api/device_filters/<filter_id>/clone` (Token Authenticated) - clone filter.
+- `POST /api/device_filters/<filter_id>/archive` (Token Authenticated) - archive filter.
+- `POST /api/device_filters/<filter_id>/unarchive` (Token Authenticated) - unarchive filter.
+- `DELETE /api/device_filters/<filter_id>` (Token Authenticated) - delete filter.
 
 ### Assemblies and Execution
 - `GET /api/assemblies` (Token Authenticated) - list assemblies.

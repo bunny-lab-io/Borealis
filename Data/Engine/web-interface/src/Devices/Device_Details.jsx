@@ -1494,6 +1494,21 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         minWidth: 160,
         filter: "agTextColumnFilter",
       },
+      {
+        field: "source",
+        headerName: "Source",
+        width: 180,
+        minWidth: 160,
+        filter: "agTextColumnFilter",
+        valueFormatter: (params) => {
+          const value = String(params.value || "").trim().toLowerCase();
+          if (value === "local_installed") return "Locally Installed";
+          if (value === "windows_store") return "Windows Store";
+          if (value === "dpkg") return "DPKG";
+          if (value === "rpm") return "RPM";
+          return params.value || "—";
+        },
+      },
     ],
     []
   );

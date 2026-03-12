@@ -15,9 +15,10 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Site mapping is stored separately from device records and exposed via API.
 
 ## Device Filters
-- Filters are stored in the `device_filters` table as JSON criteria groups.
+- Filters are stored as typed records with separate `basic_criteria_json` and `advanced_criteria_json` payloads.
+- Site scope is explicit via `site_mode` plus `device_filter_sites` rows keyed by `site_id`.
 - The Engine computes match counts using `DeviceFilterMatcher` against the inventory snapshot.
-- Filters can be global or scoped to a site.
+- Filters can be `Global`, `Specific Sites`, or `Global w/ Exclusions`.
 
 ## Device List Views
 - Operators can save custom table views for the device list UI.
@@ -47,9 +48,16 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `POST /api/sites/assign` (Admin) - assign devices to site.
 - `POST /api/sites/rename` (Admin) - rename site.
 - `GET /api/device_filters` (Token Authenticated) - list filters.
+- `GET /api/device_filters/metadata` (Token Authenticated) - filter metadata.
+- `POST /api/device_filters/preview` (Token Authenticated) - preview filter matches.
 - `GET /api/device_filters/<filter_id>` (Token Authenticated) - get filter.
+- `GET /api/device_filters/<filter_id>/usage` (Token Authenticated) - list scheduled jobs referencing a filter.
 - `POST /api/device_filters` (Token Authenticated) - create filter.
 - `PUT /api/device_filters/<filter_id>` (Token Authenticated) - update filter.
+- `POST /api/device_filters/<filter_id>/clone` (Token Authenticated) - clone filter.
+- `POST /api/device_filters/<filter_id>/archive` (Token Authenticated) - archive filter.
+- `POST /api/device_filters/<filter_id>/unarchive` (Token Authenticated) - unarchive filter.
+- `DELETE /api/device_filters/<filter_id>` (Token Authenticated) - delete filter.
 - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
 - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
 - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
@@ -75,6 +83,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `/api/agent/heartbeat` updates `last_seen` and key metrics (last_user, OS, uptime).
 - `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu.
 - JSON blobs are serialized into SQLite text columns and rehydrated for UI.
+- Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
 
 ### Status computation
 - Online/offline is computed from `last_seen` (online if within ~300 seconds).
@@ -90,9 +99,10 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Rotating a site code updates the `sites` record only.
 
 ### Device filters (matching)
-- Filters are stored as JSON criteria groups in `device_filters.criteria_json`.
+- Filters are stored in typed basic/advanced payloads and normalized by `Data/Engine/services/filters/matcher.py`.
 - `DeviceFilterMatcher.fetch_devices()` loads a snapshot from `devices` and joins `sites`.
-- `count_filter_devices` computes match counts for UI summaries.
+- It also joins normalized software rows from `device_software_inventory`.
+- `count_filter_devices` computes match counts for UI summaries and scheduler previews.
 
 ### Approval flow detail
 - Enrollment requests create approval records (pending).
@@ -107,4 +117,4 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ### Debug checklist
 - Device missing from list: check `Engine/database.db` tables `devices` and `device_keys`.
 - Online status wrong: check `last_seen` timestamps in `devices` table.
-- Filter counts zero: validate `device_filters.criteria_json` and matcher logic.
+- Filter counts zero: validate the active criteria payload and `device_software_inventory` rows when software criteria are involved.

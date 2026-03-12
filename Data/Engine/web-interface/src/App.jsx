@@ -740,10 +740,6 @@ const EMPTY_PAGE_HEADER = {
         items.push({ label: "Filters", page: "filters" });
         items.push({ label: filterEditorState?.name ? `Edit ${filterEditorState.name}` : "Filter Editor" });
         break;
-      case "groups":
-        items.push({ label: "Filters & Groups", page: "filters" });
-        items.push({ label: "Groups", page: "groups" });
-        break;
       default:
         // Fallback to a neutral crumb if unknown
         if (currentPage) items.push({ label: String(currentPage) });
@@ -1352,6 +1348,19 @@ const EMPTY_PAGE_HEADER = {
           <DeviceFilterList
             onPageMetaChange={handlePageMetaChange}
             refreshToken={filtersRefreshToken}
+            onViewDevices={(filter) => {
+              try {
+                localStorage.setItem(
+                  "device_list_saved_filter_preview",
+                  JSON.stringify({ filter_id: filter?.id, name: filter?.name || "Saved Filter" })
+                );
+              } catch {}
+              navigateTo("devices");
+            }}
+            onOpenJob={(job) => {
+              setEditingJob(job || null);
+              navigateTo("create_job", { jobId: job?.id });
+            }}
             onCreateFilter={() => {
               setFilterEditorState(null);
               navigateTo("filter_editor");

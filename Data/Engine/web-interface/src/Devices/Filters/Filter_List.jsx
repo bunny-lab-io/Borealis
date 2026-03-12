@@ -1,18 +1,43 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Box,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  LinearProgress,
+  Stack,
+  Tab,
+  Tabs,
+  TextField,
+  Tooltip,
+  Typography,
 } from "@mui/material";
 import {
+  ArchiveRounded as ArchiveIcon,
+  CachedRounded as RefreshIcon,
+  ContentCopyRounded as CloneIcon,
+  DeleteRounded as DeleteIcon,
   FilterAlt as HeaderIcon,
-  Cached as CachedIcon,
-  Add as AddIcon,
+  LaunchRounded as LaunchIcon,
+  UnarchiveRounded as UnarchiveIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+
 import PageBodyFrame from "../../PageBodyFrame.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
+
+const PAGE_TITLE = "Device Filters";
+const PAGE_SUBTITLE =
+  "Build reusable automation targeting rules with explicit site scope, previewable criteria, and scheduler-safe lifecycle controls.";
+const PAGE_ICON = HeaderIcon;
+const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
+const iconFontFamily = "'Quartz Regular'";
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -22,93 +47,84 @@ const gridTheme = themeQuartz.withParams({
   foregroundColor: "#f4f7ff",
   headerFontSize: 13,
 });
-const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
-const iconFontFamily = "'Quartz Regular'";
 
-const PAGE_TITLE = "Device Filters";
-const PAGE_SUBTITLE =
-  "Build reusable filter definitions to target devices and assemblies without per-site duplication.";
-const PAGE_ICON = HeaderIcon;
+const TAB_LABELS = {
+  active: "Active",
+  archived: "Archived",
+};
 
-const AUTO_SIZE_COLUMNS = ["type", "deviceCount", "site", "lastEditedBy", "lastEdited"];
-const FILTER_TYPE_META = {
+const SITE_MODE_META = {
   global: {
     label: "Global",
-    textColor: "#8fdaa2",
-    backgroundColor: "rgba(56,161,105,0.16)",
-    borderColor: "rgba(56,161,105,0.4)",
+    color: "#86efac",
+    border: "rgba(74, 222, 128, 0.35)",
+    background: "rgba(74, 222, 128, 0.12)",
   },
-  site: {
-    label: "Site-Scoped",
-    textColor: "#8ab4ff",
-    backgroundColor: "rgba(125,180,255,0.16)",
-    borderColor: "rgba(125,180,255,0.42)",
+  specific_sites: {
+    label: "Specific Sites",
+    color: "#93c5fd",
+    border: "rgba(147, 197, 253, 0.35)",
+    background: "rgba(147, 197, 253, 0.12)",
+  },
+  global_exclusions: {
+    label: "Global w/ Exclusions",
+    color: "#fcd34d",
+    border: "rgba(252, 211, 77, 0.35)",
+    background: "rgba(252, 211, 77, 0.12)",
   },
 };
 
-const SAMPLE_ROWS = [
-  {
-    id: "sample-global",
-    name: "Windows Workstations",
-    type: "global",
-    site: null,
-    lastEditedBy: "System",
-    lastEdited: new Date().toISOString(),
-    deviceCount: 24,
-  },
-  {
-    id: "sample-site",
-    name: "West Campus Servers",
-    type: "site",
-    site: "West Campus",
-    lastEditedBy: "Demo User",
-    lastEdited: new Date(Date.now() - 1000 * 60 * 60 * 24 * 3).toISOString(),
-    deviceCount: 6,
-  },
-];
+const criteriaModeLabel = (value) => {
+  const normalized = String(value || "basic").trim().toLowerCase();
+  return normalized === "advanced" ? "Advanced" : "Basic";
+};
 
-function formatTimestamp(ts) {
-  if (!ts) return "";
-  const date = new Date(ts);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString();
-}
+const formatTimestamp = (value) => {
+  if (!value) return "";
+  const numeric = Number(value);
+  const direct = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric * 1000) : new Date(value);
+  if (Number.isNaN(direct.getTime())) return "";
+  return direct.toLocaleString();
+};
 
-function resolveLastEditor(filter) {
-  const candidate =
-    filter?.last_edited_by_username ||
-    filter?.last_edited_by_name ||
-    filter?.last_edited_by ||
-    filter?.lastEditedBy ||
-    filter?.last_editor ||
-    filter?.lastEditor ||
-    filter?.updated_by ||
-    filter?.updatedBy ||
-    filter?.owner ||
-    filter?.user ||
-    filter?.modified_by;
-  if (candidate && typeof candidate === "object") {
-    if (candidate.name) return candidate.name;
-    if (candidate.username) return candidate.username;
-    if (candidate.user) return candidate.user;
-  }
-  if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
-  return "Unknown";
-}
+const scopeSummary = (record) => {
+  const siteNames = Array.isArray(record?.site_names) ? record.site_names.filter(Boolean) : [];
+  const meta = SITE_MODE_META[String(record?.site_mode || "global").toLowerCase()] || SITE_MODE_META.global;
+  if (!siteNames.length) return meta.label;
+  return `${meta.label}: ${siteNames.join(", ")}`;
+};
 
-function FilterTypePill({ type }) {
-  const key = String(type || "").toLowerCase() === "site" ? "site" : "global";
-  const meta = FILTER_TYPE_META[key];
+const matchesSearch = (record, query) => {
+  if (!query) return true;
+  const haystack = [
+    record?.name,
+    record?.description,
+    scopeSummary(record),
+    record?.last_edited_by,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(query);
+};
+
+function ScopePill({ siteMode }) {
+  const meta = SITE_MODE_META[String(siteMode || "global").toLowerCase()] || SITE_MODE_META.global;
   return (
     <Box
       component="span"
       sx={{
         display: "inline-flex",
         alignItems: "center",
+        px: 1.1,
+        py: 0.25,
+        borderRadius: 999,
+        border: `1px solid ${meta.border}`,
+        background: meta.background,
+        color: meta.color,
         fontWeight: 700,
-        fontSize: "0.9rem",
+        fontSize: "0.82rem",
         letterSpacing: 0.2,
-        color: meta.textColor,
       }}
     >
       {meta.label}
@@ -116,317 +132,429 @@ function FilterTypePill({ type }) {
   );
 }
 
-function normalizeFilters(raw) {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((f, idx) => ({
-    id: f.id || f.filter_id || `filter-${idx}`,
-    name: f.name || f.title || "Unnamed Filter",
-    type: (f.site_scope || f.scope || f.type || "global") === "scoped" ? "site" : "global",
-    site: (() => {
-      if (Array.isArray(f.site_scope_values) && f.site_scope_values.length) return f.site_scope_values.join(", ");
-      if (Array.isArray(f.sites) && f.sites.length) return f.sites.join(", ");
-      if (Array.isArray(f.site_ids) && f.site_ids.length) return f.site_ids.join(", ");
-      if (Array.isArray(f.site_names) && f.site_names.length) return f.site_names.join(", ");
-      return f.site || f.site_scope || f.site_name || f.target_site || null;
-    })(),
-    lastEditedBy: resolveLastEditor(f),
-    lastEdited: f.last_edited || f.updated_at || f.updated || f.created_at || null,
-    deviceCount:
-      typeof f.matching_device_count === "number"
-        ? f.matching_device_count
-        : typeof f.devices_targeted === "number"
-        ? f.devices_targeted
-        : null,
-    raw: f,
-  }));
+function JobsDialog({ open, onClose, jobs, onOpenJob, title }) {
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>{title || "Jobs Referencing this Filter"}</DialogTitle>
+      <DialogContent dividers>
+        {!jobs?.length ? (
+          <Typography sx={{ color: "#cbd5e1" }}>No scheduled jobs reference this filter.</Typography>
+        ) : (
+          <Stack spacing={1.2}>
+            {jobs.map((job) => (
+              <Box
+                key={job.id}
+                sx={{
+                  border: "1px solid rgba(148,163,184,0.24)",
+                  borderRadius: 2,
+                  px: 1.5,
+                  py: 1.2,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 1.5,
+                }}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography sx={{ color: "#f8fafc", fontWeight: 600 }} noWrap>
+                    {job.name || `Job ${job.id}`}
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: "#94a3b8" }}>
+                    Job ID: {job.id}
+                  </Typography>
+                </Box>
+                <Button
+                  size="small"
+                  endIcon={<LaunchIcon fontSize="small" />}
+                  onClick={() => {
+                    onClose?.();
+                    onOpenJob?.(job);
+                  }}
+                  sx={{ textTransform: "none" }}
+                >
+                  Open Job
+                </Button>
+              </Box>
+            ))}
+          </Stack>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
 }
 
-export default function DeviceFilterList({ onCreateFilter, onEditFilter, refreshToken, onPageMetaChange }) {
+export default function DeviceFilterList({
+  onCreateFilter,
+  onEditFilter,
+  onViewDevices,
+  onOpenJob,
+  refreshToken,
+  onPageMetaChange,
+}) {
   const gridRef = useRef(null);
-  const [rows, setRows] = useState([]);
+  const [tab, setTab] = useState("active");
+  const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const autoSizeColumns = useCallback(
-    (api) => {
-      if (!api || loading || !rows.length) return;
-      const doSize = () => {
-        try {
-          api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
-        } catch {
-          /* ignore autosize failures */
-        }
-      };
-      if (typeof requestAnimationFrame === "function") {
-        requestAnimationFrame(doSize);
-      } else {
-        setTimeout(doSize, 0);
-      }
-    },
-    [loading, rows.length]
-  );
+  const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [jobsDialog, setJobsDialog] = useState({ open: false, jobs: [], title: "" });
 
   const loadFilters = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    setError("");
     try {
-      const resp = await fetch("/api/device_filters");
-      if (resp.status === 404) {
-        // Endpoint not available yet; surface sample data without hard failure
-        setRows(normalizeFilters(SAMPLE_ROWS));
-        setError("Device filter API not found (404)  showing sample filters.");
-      } else {
-        if (!resp.ok) {
-          throw new Error(`Failed to load filters (${resp.status})`);
-        }
-        const data = await resp.json();
-        const normalized = normalizeFilters(data?.filters || data);
-        setRows(normalized);
+      const archived = tab === "archived" ? "1" : "0";
+      const response = await fetch(`/api/device_filters?archived=${archived}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.message || data?.error || `Failed to load filters (${response.status})`);
       }
+      setFilters(Array.isArray(data?.filters) ? data.filters : []);
     } catch (err) {
-      setError(err?.message || "Unable to load filters");
-      setRows((prev) => (prev.length ? prev : normalizeFilters(SAMPLE_ROWS)));
+      setFilters([]);
+      setError(err?.message || "Unable to load filters.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tab]);
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      title: PAGE_TITLE,
+      subtitle: PAGE_SUBTITLE,
+      Icon: PAGE_ICON,
+    });
+  }, [onPageMetaChange]);
 
   useEffect(() => {
     loadFilters();
   }, [loadFilters, refreshToken]);
 
-  const handleGridReady = useCallback((params) => {
-    gridRef.current = params.api;
-    autoSizeColumns(params.api);
-  }, [autoSizeColumns]);
+  const filteredRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return filters.filter((record) => matchesSearch(record, query));
+  }, [filters, search]);
+
+  const autoSize = useCallback(() => {
+    const api = gridRef.current;
+    if (!api || !filteredRows.length) return;
+    requestAnimationFrame(() => {
+      try {
+        api.autoSizeColumns(["name", "description", "site_mode", "criteria_mode", "matching_device_count", "last_edited_by", "updated_at"], true);
+      } catch {
+        /* ignore */
+      }
+    });
+  }, [filteredRows.length]);
 
   useEffect(() => {
-    autoSizeColumns(gridRef.current);
-  }, [rows, loading, autoSizeColumns]);
+    autoSize();
+  }, [autoSize]);
 
-  const columnDefs = useMemo(() => {
-    return [
+  const performAction = useCallback(
+    async (path, options = {}) => {
+      setActionError("");
+      const response = await fetch(path, {
+        method: options.method || "POST",
+        headers: { "Content-Type": "application/json" },
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 409 && Array.isArray(data?.jobs)) {
+          setJobsDialog({
+            open: true,
+            jobs: data.jobs,
+            title: data?.message || "This filter is referenced by scheduled jobs.",
+          });
+        } else {
+          setActionError(data?.message || data?.error || `Request failed (${response.status})`);
+        }
+        return null;
+      }
+      return data;
+    },
+    []
+  );
+
+  const handleClone = useCallback(
+    async (record) => {
+      const data = await performAction(`/api/device_filters/${record.id}/clone`);
+      if (data?.filter) {
+        loadFilters();
+      }
+    },
+    [loadFilters, performAction]
+  );
+
+  const handleArchiveToggle = useCallback(
+    async (record) => {
+      const route = record?.archived ? "unarchive" : "archive";
+      const data = await performAction(`/api/device_filters/${record.id}/${route}`);
+      if (data?.filter) {
+        loadFilters();
+      }
+    },
+    [loadFilters, performAction]
+  );
+
+  const handleDelete = useCallback(
+    async (record) => {
+      if (!window.confirm(`Delete filter "${record?.name || "Unnamed Filter"}"?`)) return;
+      const data = await performAction(`/api/device_filters/${record.id}`, { method: "DELETE" });
+      if (data?.status === "ok") {
+        loadFilters();
+      }
+    },
+    [loadFilters, performAction]
+  );
+
+  const openJobs = useCallback((record) => {
+    const jobs = Array.isArray(record?.usage?.jobs) ? record.usage.jobs : [];
+    setJobsDialog({
+      open: true,
+      jobs,
+      title: jobs.length ? "Jobs Referencing this Filter" : "No Jobs Reference this Filter",
+    });
+  }, []);
+
+  const columnDefs = useMemo(
+    () => [
       {
-        headerName: "Filter Name",
         field: "name",
-        minWidth: 700,
+        headerName: "Filter",
+        minWidth: 250,
+        flex: 1.4,
+        cellRenderer: (params) => (
+          <Button
+            variant="text"
+            size="small"
+            onClick={() => onEditFilter?.(params.data)}
+            sx={{
+              px: 0,
+              minWidth: "unset",
+              textTransform: "none",
+              fontWeight: 700,
+              color: "#7dd3fc",
+            }}
+          >
+            {params.value || "Unnamed Filter"}
+          </Button>
+        ),
+      },
+      {
+        field: "description",
+        headerName: "Description",
+        minWidth: 220,
+        flex: 1.2,
+        valueFormatter: (params) => params.value || "—",
+      },
+      {
+        field: "site_mode",
+        headerName: "Scope",
+        minWidth: 210,
         flex: 1,
+        cellRenderer: (params) => (
+          <Tooltip title={scopeSummary(params.data)}>
+            <Box sx={{ display: "inline-flex", alignItems: "center" }}>
+              <ScopePill siteMode={params.value} />
+            </Box>
+          </Tooltip>
+        ),
+      },
+      {
+        field: "criteria_mode",
+        headerName: "Mode",
+        minWidth: 120,
+        flex: 0.7,
+        valueFormatter: (params) => criteriaModeLabel(params.value),
+      },
+      {
+        field: "matching_device_count",
+        headerName: "Matched Devices",
+        minWidth: 150,
+        flex: 0.8,
+        valueFormatter: (params) =>
+          typeof params.value === "number" ? params.value.toLocaleString() : "0",
+      },
+      {
+        field: "usage",
+        headerName: "Scheduler Usage",
+        minWidth: 200,
+        flex: 1,
+        sortable: false,
+        filter: false,
         cellRenderer: (params) => {
-          const value = params.value || "Unnamed Filter";
+          const count = Number(params.data?.usage?.job_count || 0);
+          if (!count) return <Typography sx={{ color: "#64748b" }}>None</Typography>;
           return (
             <Button
-              onClick={() => onEditFilter?.(params.data)}
               variant="text"
               size="small"
-              disableRipple
-              disableFocusRipple
-              disableTouchRipple
-              sx={{
-                textTransform: "none",
-                color: "#7dd3fc",
-                fontWeight: 600,
-                px: 0,
-                minWidth: "unset",
-                backgroundColor: "transparent",
-                "&:hover": {
-                  color: "#a5e7ff",
-                  textDecoration: "underline",
-                  backgroundColor: "transparent",
-                },
-              }}
+              onClick={() => openJobs(params.data)}
+              sx={{ px: 0, minWidth: "unset", textTransform: "none" }}
             >
-              {value}
+              Jobs Referencing this Filter ({count})
             </Button>
           );
         },
-        cellClass: "auto-col-tight",
       },
       {
-        headerName: "Type",
-        field: "type",
-        minWidth: 140,
-        cellRenderer: (params) => {
-          const type = String(params.value || "").toLowerCase() === "site" ? "Site" : "Global";
-          return <FilterTypePill type={type} />;
-        },
-        cellClass: "auto-col-tight",
-      },
-      {
-        headerName: "Devices Targeted",
-        field: "deviceCount",
-        minWidth: 165,
-        valueFormatter: (params) => {
-          if (typeof params.value === "number" && Number.isFinite(params.value)) {
-            return params.value.toLocaleString();
-          }
-          return "";
-        },
-        cellClass: "auto-col-tight",
-      },
-      {
-        headerName: "Sites Targeted",
-        field: "site",
-        minWidth: 150,
-        cellRenderer: (params) => {
-          const value = params.value;
-          return value ? value : "";
-        },
-        cellClass: "auto-col-tight",
-      },
-      {
+        field: "last_edited_by",
         headerName: "Last Edited By",
-        field: "lastEditedBy",
-        minWidth: 150,
-        cellClass: "auto-col-tight",
+        minWidth: 160,
+        flex: 0.9,
+        valueFormatter: (params) => params.value || "Unknown",
       },
       {
-        headerName: "Last Edited",
-        field: "lastEdited",
+        field: "updated_at",
+        headerName: "Last Updated",
         minWidth: 180,
+        flex: 1,
         valueFormatter: (params) => formatTimestamp(params.value),
-        cellClass: "auto-col-tight",
       },
-    ];
-  }, [onEditFilter]);
+      {
+        field: "actions",
+        headerName: "",
+        minWidth: 220,
+        flex: 1.2,
+        sortable: false,
+        filter: false,
+        cellRenderer: (params) => {
+          const record = params.data;
+          return (
+            <Stack direction="row" spacing={0.5} sx={{ width: "100%", justifyContent: "flex-end" }}>
+              <Tooltip title="View Devices">
+                <IconButton size="small" onClick={() => onViewDevices?.(record)}>
+                  <LaunchIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Clone">
+                <IconButton size="small" onClick={() => handleClone(record)}>
+                  <CloneIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title={record?.archived ? "Unarchive" : "Archive"}>
+                <IconButton size="small" onClick={() => handleArchiveToggle(record)}>
+                  {record?.archived ? <UnarchiveIcon fontSize="small" /> : <ArchiveIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Delete">
+                <IconButton size="small" onClick={() => handleDelete(record)} sx={{ color: "#fb7185" }}>
+                  <DeleteIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Stack>
+          );
+        },
+      },
+    ],
+    [handleArchiveToggle, handleClone, handleDelete, onEditFilter, onViewDevices, openJobs]
+  );
 
   const defaultColDef = useMemo(
     () => ({
       sortable: true,
-      filter: "agTextColumnFilter",
       resizable: true,
-      cellClass: "auto-col-tight",
-      suppressMenu: true,
+      flex: 1,
+      filter: "agTextColumnFilter",
       cellStyle: {
         display: "flex",
         alignItems: "center",
-        justifyContent: "flex-start",
-        textAlign: "left",
       },
     }),
     []
   );
 
-  const pageHeaderActions = useMemo(
-    () => [
-      {
-        id: "filter-list-refresh",
-        label: "Refresh",
-        icon: <CachedIcon />,
-        tone: "secondary",
-        loading,
-        onClick: loadFilters,
-      },
-      {
-        id: "filter-list-create",
-        label: "New Filter",
-        icon: <AddIcon />,
-        tone: "primary",
-        onClick: () => onCreateFilter?.(),
-      },
-    ],
-    [loadFilters, loading, onCreateFilter]
+  const stack = (
+    <Stack spacing={1.5}>
+      <Box sx={{ display: "flex", alignItems: { xs: "stretch", md: "center" }, gap: 1.25, flexWrap: "wrap" }}>
+        <Tabs
+          value={tab}
+          onChange={(_, next) => setTab(next)}
+          sx={{
+            minHeight: 38,
+            "& .MuiTabs-indicator": { backgroundColor: "#7dd3fc" },
+          }}
+        >
+          <Tab value="active" label={TAB_LABELS.active} sx={{ minHeight: 38, textTransform: "none" }} />
+          <Tab value="archived" label={TAB_LABELS.archived} sx={{ minHeight: 38, textTransform: "none" }} />
+        </Tabs>
+        <TextField
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search filters..."
+          size="small"
+          sx={{ minWidth: { xs: "100%", md: 280 }, ml: { md: "auto" } }}
+        />
+        <Button
+          variant="outlined"
+          startIcon={<RefreshIcon />}
+          onClick={loadFilters}
+          sx={{ textTransform: "none" }}
+        >
+          Refresh
+        </Button>
+        <Button variant="contained" onClick={() => onCreateFilter?.()} sx={{ textTransform: "none" }}>
+          Create Filter
+        </Button>
+      </Box>
+      {loading ? <LinearProgress /> : null}
+      {error ? <Alert severity="error">{error}</Alert> : null}
+      {actionError ? <Alert severity="warning">{actionError}</Alert> : null}
+    </Stack>
   );
 
-  useEffect(() => {
-    onPageMetaChange?.({
-      page_title: PAGE_TITLE,
-      page_subtitle: PAGE_SUBTITLE,
-      page_icon: PAGE_ICON,
-      page_header_actions: pageHeaderActions,
-    });
-    return () => onPageMetaChange?.(null);
-  }, [onPageMetaChange, pageHeaderActions]);
-
   return (
-    <PageBodyFrame variant="grid">
-      <Box
-        className={gridTheme.themeName}
-        sx={{
-          flexGrow: 1,
-          minHeight: 0,
-          width: "100%",
-          fontFamily: gridFontFamily,
-          "& .ag-root-wrapper": {
-            minHeight: "100%",
-            border: "none",
-            borderRadius: 0,
-            overflow: "hidden",
-            background: "transparent",
-          },
-          "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            textAlign: "left",
-            paddingTop: "8px",
-            paddingBottom: "8px",
-            paddingLeft: "18px",
-            paddingRight: "12px",
-          },
-          "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            padding: 0,
-          },
-          "& .ag-center-cols-container .ag-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell .ag-cell-value": {
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            textAlign: "left",
-          },
-          "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
-            paddingLeft: "12px",
-            paddingRight: "9px",
-          },
-          "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-wrapper": {
-            justifyContent: "flex-start",
-          },
-          "& .ag-center-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight .ag-cell-value": {
-            textAlign: "left",
-            justifyContent: "flex-start",
-          },
-          "& .ag-row-selected": {
-            backgroundColor: "rgba(125,211,252,0.2) !important",
-            boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-          },
-        }}
-        style={{
-          "--ag-icon-font-family": iconFontFamily,
-          "--ag-background-color": "#070b1a",
-          "--ag-foreground-color": "#f4f7ff",
-          "--ag-header-background-color": "#0f172a",
-          "--ag-header-foreground-color": "#cfe0ff",
-          "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-          "--ag-row-hover-color": "rgba(73,156,196,0.2)",
-          "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
-          "--ag-border-color": "rgba(125,183,255,0.18)",
-          "--ag-row-border-color": "rgba(125,183,255,0.14)",
-          "--ag-border-radius": "8px",
-          "--ag-checkbox-border-radius": "3px",
-          "--ag-checkbox-background-color": "rgba(255,255,255,0.06)",
-          "--ag-checkbox-border-color": "rgba(180,200,220,0.6)",
-          "--ag-checkbox-checked-color": "#7dd3fc",
-        }}
-      >
-        <AgGridReact
-          rowData={rows}
-          columnDefs={columnDefs}
-          defaultColDef={defaultColDef}
-          animateRows
-          rowHeight={46}
-          headerHeight={44}
-          suppressCellFocus
-          pagination
-          paginationPageSize={20}
-          paginationPageSizeSelector={[20, 50, 100]}
-          overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No device filters found.</span>"
-          onGridReady={handleGridReady}
-          theme={gridTheme}
-          style={{ width: "100%", height: "100%", flex: 1, fontFamily: gridFontFamily }}
-        />
-      </Box>
-    </PageBodyFrame>
+    <>
+      <PageBodyFrame
+        variant="grid_with_stack"
+        stack={stack}
+        main={
+          <Box
+            sx={{
+              width: "100%",
+              height: "100%",
+              minHeight: 560,
+              "& .ag-root-wrapper": { borderRadius: 0 },
+            }}
+          >
+            <AgGridReact
+              rowData={filteredRows}
+              columnDefs={columnDefs}
+              defaultColDef={defaultColDef}
+              suppressCellFocus
+              animateRows
+              pagination
+              paginationPageSize={20}
+              paginationPageSizeSelector={[20, 50, 100]}
+              onGridReady={(params) => {
+                gridRef.current = params.api;
+                autoSize();
+              }}
+              getRowId={(params) => String(params.data?.id || "")}
+              theme={gridTheme}
+              style={{
+                width: "100%",
+                height: "100%",
+                fontFamily: gridFontFamily,
+                "--ag-icon-font-family": iconFontFamily,
+              }}
+            />
+          </Box>
+        }
+      />
+      <JobsDialog
+        open={jobsDialog.open}
+        jobs={jobsDialog.jobs}
+        title={jobsDialog.title}
+        onClose={() => setJobsDialog({ open: false, jobs: [], title: "" })}
+        onOpenJob={onOpenJob}
+      />
+    </>
   );
 }

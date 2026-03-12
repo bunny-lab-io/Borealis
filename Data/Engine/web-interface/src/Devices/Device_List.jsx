@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
+  Alert,
   Paper,
   Box,
   Typography,
@@ -509,6 +510,9 @@ export default function DeviceList({
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [assignSiteId, setAssignSiteId] = useState(null);
   const [assignTargets, setAssignTargets] = useState([]); // hostnames
+  const [savedFilterPreview, setSavedFilterPreview] = useState(null);
+  const [savedFilterHostnames, setSavedFilterHostnames] = useState(null);
+  const [savedFilterPreviewError, setSavedFilterPreviewError] = useState("");
 
   const [repoHash, setRepoHash] = useState(null);
   const lastRepoFetchRef = useRef(0);
@@ -1016,6 +1020,56 @@ export default function DeviceList({
       }
     } catch {}
   }, [COL_LABELS.site, mergeFilters]);
+
+  useEffect(() => {
+    let active = true;
+    const loadSavedFilterPreview = async () => {
+      try {
+        const raw = localStorage.getItem("device_list_saved_filter_preview");
+        if (!raw) return;
+        localStorage.removeItem("device_list_saved_filter_preview");
+        const parsed = JSON.parse(raw);
+        const filterId = Number(parsed?.filter_id || parsed?.id);
+        if (!Number.isFinite(filterId)) return;
+        const response = await fetch("/api/device_filters/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filter_id: filterId }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data?.message || data?.error || "Unable to load saved filter preview.");
+        }
+        if (!active) return;
+        const hostnames = Array.isArray(data?.devices)
+          ? data.devices
+              .map((device) => String(device?.hostname || "").trim().toLowerCase())
+              .filter(Boolean)
+          : [];
+        setSavedFilterPreview({
+          filter_id: filterId,
+          name: parsed?.name || "Saved Filter",
+          matched_device_count: Number(data?.matched_device_count || hostnames.length || 0),
+        });
+        setSavedFilterHostnames(new Set(hostnames));
+        setSavedFilterPreviewError("");
+      } catch (error) {
+        if (!active) return;
+        setSavedFilterPreview(null);
+        setSavedFilterHostnames(null);
+        setSavedFilterPreviewError(error?.message || "Unable to load saved filter preview.");
+      }
+    };
+    loadSavedFilterPreview();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const displayedRows = useMemo(() => {
+    if (!(savedFilterHostnames instanceof Set)) return rows;
+    return rows.filter((row) => savedFilterHostnames.has(String(row?.hostname || "").trim().toLowerCase()));
+  }, [rows, savedFilterHostnames]);
 
   const applyView = useCallback((view) => {
     if (!view || view.id === "default") {
@@ -1723,6 +1777,26 @@ export default function DeviceList({
             <Typography sx={{ fontSize: "0.72rem", color: MAGIC_UI.textMuted, textTransform: "uppercase", letterSpacing: 0.45, mb: 0.5 }}>
               Custom View
             </Typography>
+            {savedFilterPreview ? (
+              <Alert
+                severity="info"
+                action={
+                  <Button
+                    color="inherit"
+                    size="small"
+                    onClick={() => {
+                      setSavedFilterPreview(null);
+                      setSavedFilterHostnames(null);
+                    }}
+                  >
+                    Clear
+                  </Button>
+                }
+              >
+                Viewing Saved Filter: {savedFilterPreview.name} ({savedFilterPreview.matched_device_count} matched)
+              </Alert>
+            ) : null}
+            {savedFilterPreviewError ? <Alert severity="warning">{savedFilterPreviewError}</Alert> : null}
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
               <Box sx={{ flex: "1 1 260px", minWidth: 220, display: "flex", alignItems: "center" }}>
                 <TextField
@@ -1882,9 +1956,9 @@ export default function DeviceList({
             },
           }}
         >
-          <AgGridReact
+            <AgGridReact
             ref={gridRef}
-            rowData={rows}
+            rowData={displayedRows}
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
             rowSelection="multiple"

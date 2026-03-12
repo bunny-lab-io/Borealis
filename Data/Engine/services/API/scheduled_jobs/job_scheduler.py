@@ -26,6 +26,22 @@ _WINRM_USERNAME_VAR = "__borealis_winrm_username"
 _WINRM_PASSWORD_VAR = "__borealis_winrm_password"
 _WINRM_TRANSPORT_VAR = "__borealis_winrm_transport"
 
+RUN_STATUS_PENDING = "Pending"
+RUN_STATUS_RUNNING = "Running"
+RUN_STATUS_SUCCESS = "Success"
+RUN_STATUS_FAILED = "Failed"
+RUN_STATUS_EXPIRED = "Expired"
+RUN_STATUS_TIMED_OUT = "Timed Out"
+RUN_STATUS_SKIPPED = "Skipped"
+SKIP_REASON_NO_TARGETS = "no_devices_targeted"
+TERMINAL_RUN_STATUSES = {
+    RUN_STATUS_SUCCESS,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_EXPIRED,
+    RUN_STATUS_TIMED_OUT,
+    RUN_STATUS_SKIPPED,
+}
+
 
 def _now_ts() -> int:
     return int(time.time())
@@ -1135,16 +1151,20 @@ class JobScheduler:
                 error TEXT,
                 created_at INTEGER,
                 updated_at INTEGER,
+                target_hostname TEXT,
+                skip_reason TEXT,
                 FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
             )
             """
         )
-        # Add per-target column if missing
+        # Add columns incrementally for existing databases.
         try:
             cur.execute("PRAGMA table_info(scheduled_job_runs)")
             cols = {row[1] for row in cur.fetchall()}
-            if 'target_hostname' not in cols:
+            if "target_hostname" not in cols:
                 cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN target_hostname TEXT")
+            if "skip_reason" not in cols:
+                cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN skip_reason TEXT")
         except Exception:
             pass
         # Helpful index for lookups
@@ -1173,6 +1193,26 @@ class JobScheduler:
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_activity_activity ON scheduled_job_run_activity(activity_id)")
         except Exception:
             pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scheduled_job_run_targets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    device_guid TEXT,
+                    hostname TEXT NOT NULL,
+                    site_id INTEGER,
+                    resolved_from_filter_id INTEGER,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES scheduled_job_runs(id) ON DELETE CASCADE
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_job_run_targets_run ON scheduled_job_run_targets(run_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_job_run_targets_filter ON scheduled_job_run_targets(resolved_from_filter_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_job_run_targets_host ON scheduled_job_run_targets(hostname)")
+        except Exception:
+            pass
         conn.commit()
         conn.close()
 
@@ -1195,6 +1235,341 @@ class JobScheduler:
             "finished_ts": row[3],
             "status": row[4] or "",
         }
+
+    def _is_terminal_run_status(self, status: Any) -> bool:
+        return str(status or "").strip() in TERMINAL_RUN_STATUSES
+
+    def _get_latest_occurrence_ts(self, job_id: int) -> Optional[int]:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(scheduled_ts) FROM scheduled_job_runs WHERE job_id=?", (job_id,))
+            row = cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else None
+        finally:
+            conn.close()
+
+    def _load_occurrence_runs(self, job_id: int, scheduled_ts: int) -> List[Dict[str, Any]]:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, target_hostname, scheduled_ts, started_ts, finished_ts, status, error, skip_reason
+                  FROM scheduled_job_runs
+                 WHERE job_id=? AND scheduled_ts=?
+              ORDER BY id ASC
+                """,
+                (job_id, int(scheduled_ts)),
+            )
+            return [
+                {
+                    "id": int(row[0]),
+                    "target_hostname": row[1] or "",
+                    "scheduled_ts": row[2],
+                    "started_ts": row[3],
+                    "finished_ts": row[4],
+                    "status": row[5] or "",
+                    "error": row[6] or "",
+                    "skip_reason": row[7] or "",
+                }
+                for row in cur.fetchall()
+            ]
+        finally:
+            conn.close()
+
+    def _resolve_occurrence_for_tick(
+        self,
+        *,
+        job_id: int,
+        schedule_type: str,
+        start_ts: Optional[int],
+        created_at: Optional[int],
+        now_min: int,
+    ) -> Optional[int]:
+        latest_occ = self._get_latest_occurrence_ts(job_id)
+        if latest_occ is None:
+            if (schedule_type or "").lower() == "immediately":
+                occ = _floor_minute(created_at or now_min)
+            else:
+                st_min = _floor_minute(start_ts) if start_ts else None
+                occ = st_min if st_min is not None else self._compute_next_run(schedule_type, start_ts, None, now_min)
+            if occ is None or now_min < occ:
+                return None
+            return occ
+
+        latest_runs = self._load_occurrence_runs(job_id, int(latest_occ))
+        if any(not self._is_terminal_run_status(run.get("status")) for run in latest_runs):
+            return int(latest_occ)
+
+        next_occ = self._compute_next_run(schedule_type, start_ts, int(latest_occ), now_min)
+        if next_occ is None or now_min < next_occ:
+            return None
+        return int(next_occ)
+
+    def _record_occurrence_snapshot(
+        self,
+        *,
+        job_id: int,
+        scheduled_ts: int,
+        targets: Sequence[str],
+        resolution_meta: Optional[Dict[str, Any]],
+        created_at: int,
+    ) -> None:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=?",
+                (int(job_id), int(scheduled_ts)),
+            )
+            existing_count = int(cur.fetchone()[0] or 0)
+            if existing_count > 0:
+                return
+
+            if not targets:
+                cur.execute(
+                    """
+                    INSERT INTO scheduled_job_runs(
+                        job_id,
+                        scheduled_ts,
+                        status,
+                        skip_reason,
+                        created_at,
+                        updated_at
+                    ) VALUES (?,?,?,?,?,?)
+                    """,
+                    (
+                        int(job_id),
+                        int(scheduled_ts),
+                        RUN_STATUS_SKIPPED,
+                        SKIP_REASON_NO_TARGETS,
+                        int(created_at),
+                        int(created_at),
+                    ),
+                )
+                conn.commit()
+                return
+
+            host_details = (resolution_meta or {}).get("resolved_host_details") or {}
+            for hostname in targets:
+                cur.execute(
+                    """
+                    INSERT INTO scheduled_job_runs(
+                        job_id,
+                        target_hostname,
+                        scheduled_ts,
+                        status,
+                        created_at,
+                        updated_at
+                    ) VALUES (?,?,?,?,?,?)
+                    """,
+                    (
+                        int(job_id),
+                        str(hostname),
+                        int(scheduled_ts),
+                        RUN_STATUS_PENDING,
+                        int(created_at),
+                        int(created_at),
+                    ),
+                )
+                run_id = int(cur.lastrowid or 0)
+                details = host_details.get(str(hostname).lower()) or {}
+                device_guid = str(details.get("device_guid") or "").strip()
+                site_id = details.get("site_id")
+                try:
+                    site_id = int(site_id) if site_id is not None else None
+                except Exception:
+                    site_id = None
+                resolved_filter_ids = []
+                for raw_filter_id in details.get("resolved_from_filter_ids") or []:
+                    try:
+                        resolved_filter_ids.append(int(raw_filter_id))
+                    except Exception:
+                        continue
+                if not resolved_filter_ids:
+                    cur.execute(
+                        """
+                        INSERT INTO scheduled_job_run_targets(
+                            run_id,
+                            device_guid,
+                            hostname,
+                            site_id,
+                            resolved_from_filter_id,
+                            created_at
+                        ) VALUES (?,?,?,?,?,?)
+                        """,
+                        (
+                            run_id,
+                            device_guid,
+                            str(hostname),
+                            site_id,
+                            None,
+                            int(created_at),
+                        ),
+                    )
+                    continue
+                for filter_id in sorted(set(resolved_filter_ids)):
+                    cur.execute(
+                        """
+                        INSERT INTO scheduled_job_run_targets(
+                            run_id,
+                            device_guid,
+                            hostname,
+                            site_id,
+                            resolved_from_filter_id,
+                            created_at
+                        ) VALUES (?,?,?,?,?,?)
+                        """,
+                        (
+                            run_id,
+                            device_guid,
+                            str(hostname),
+                            site_id,
+                            int(filter_id),
+                            int(created_at),
+                        ),
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _dispatch_run_activities(
+        self,
+        *,
+        job_id: int,
+        run_row_id: int,
+        scheduled_ts: int,
+        hostname: str,
+        run_mode: str,
+        script_components: Sequence[Dict[str, Any]],
+        ansible_components: Sequence[Dict[str, Any]],
+        credential_id: Optional[int],
+        use_service_account: bool,
+    ) -> None:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            ts_now = _now_ts()
+            cur.execute(
+                """
+                UPDATE scheduled_job_runs
+                   SET status=?,
+                       started_ts=COALESCE(started_ts, ?),
+                       finished_ts=NULL,
+                       error='',
+                       updated_at=?
+                 WHERE id=?
+                """,
+                (RUN_STATUS_RUNNING, ts_now, ts_now, int(run_row_id)),
+            )
+            conn.commit()
+
+            remote_requires_cred = (run_mode == "ssh") or (run_mode == "winrm" and not use_service_account)
+            if remote_requires_cred and not credential_id:
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (RUN_STATUS_FAILED, ts_now, ts_now, "Credential required for remote execution", int(run_row_id)),
+                )
+                conn.commit()
+                return
+
+            activity_links: List[Dict[str, Any]] = []
+            dispatch_errors: List[str] = []
+
+            for component in script_components:
+                try:
+                    link = self._dispatch_script(job_id, run_row_id, scheduled_ts, hostname, component, run_mode)
+                except Exception as exc:
+                    dispatch_errors.append(str(exc))
+                    link = None
+                if link and link.get("activity_id"):
+                    activity_links.append(
+                        {
+                            "run_id": int(run_row_id),
+                            "activity_id": int(link["activity_id"]),
+                            "component_kind": link.get("component_kind") or "script",
+                            "script_type": link.get("script_type") or "powershell",
+                            "component_path": link.get("component_path") or "",
+                            "component_name": link.get("component_name") or "",
+                        }
+                    )
+
+            for component in ansible_components:
+                try:
+                    link = self._dispatch_ansible(
+                        hostname,
+                        component,
+                        job_id,
+                        run_row_id,
+                        run_mode,
+                        credential_id,
+                        use_service_account,
+                    )
+                except Exception as exc:
+                    dispatch_errors.append(str(exc))
+                    link = None
+                if link and link.get("activity_id"):
+                    activity_links.append(
+                        {
+                            "run_id": int(run_row_id),
+                            "activity_id": int(link["activity_id"]),
+                            "component_kind": link.get("component_kind") or "ansible",
+                            "script_type": link.get("script_type") or "ansible",
+                            "component_path": link.get("component_path") or "",
+                            "component_name": link.get("component_name") or "",
+                        }
+                    )
+
+            if activity_links:
+                for link in activity_links:
+                    cur.execute(
+                        """
+                        INSERT OR IGNORE INTO scheduled_job_run_activity(
+                            run_id,
+                            activity_id,
+                            component_kind,
+                            script_type,
+                            component_path,
+                            component_name,
+                            created_at
+                        ) VALUES (?,?,?,?,?,?,?)
+                        """,
+                        (
+                            int(link["run_id"]),
+                            int(link["activity_id"]),
+                            link.get("component_kind") or "",
+                            link.get("script_type") or "",
+                            link.get("component_path") or "",
+                            link.get("component_name") or "",
+                            ts_now,
+                        ),
+                    )
+                conn.commit()
+                return
+
+            error_text = dispatch_errors[0] if dispatch_errors else "No runnable activities were dispatched"
+            cur.execute(
+                """
+                UPDATE scheduled_job_runs
+                   SET status=?,
+                       finished_ts=?,
+                       updated_at=?,
+                       error=?
+                 WHERE id=?
+                """,
+                (RUN_STATUS_FAILED, ts_now, ts_now, str(error_text)[:512], int(run_row_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def _compute_next_run(self, schedule_type: str, start_ts: Optional[int], last_run_ts: Optional[int], now_ts: int) -> Optional[int]:
         st = (schedule_type or "immediately").strip().lower()
@@ -1269,53 +1644,29 @@ class JobScheduler:
         return (started_ts + seconds) <= now_ts
 
     def _tick_once(self):
-        """Evaluate all enabled scheduled jobs and trigger those due.
-        Placeholder execution: mark Running then Success immediately.
-        """
         now = _now_ts()
         self._log_event("tick begin", extra={"now_ts": now})
+
         conn = self._conn()
         cur = conn.cursor()
         try:
             cur.execute(
                 """
                 SELECT r.id, r.job_id, r.target_hostname, r.started_ts, j.expiration
-                FROM scheduled_job_runs r
-                JOIN scheduled_jobs j ON j.id = r.job_id
-                WHERE r.status = 'Running'
-                """
+                  FROM scheduled_job_runs r
+                  JOIN scheduled_jobs j ON j.id = r.job_id
+                 WHERE r.status = ?
+                """,
+                (RUN_STATUS_RUNNING,),
             )
             rows = cur.fetchall()
-            self._log_event(
-                "evaluating running runs for expiration",
-                extra={"running_count": len(rows), "now_ts": now},
-            )
             for rid, row_job_id, row_host, started_ts, expiration in rows:
                 if self._should_expire(started_ts, expiration, now):
-                    try:
-                        c2 = conn.cursor()
-                        c2.execute(
-                            "UPDATE scheduled_job_runs SET status='Timed Out', updated_at=? WHERE id=?",
-                            (now, rid),
-                        )
-                        conn.commit()
-                        self._log_event(
-                            "marked run as timed out due to expiration window",
-                            level="WARNING",
-                            job_id=row_job_id,
-                            host=row_host,
-                            run_id=rid,
-                            extra={"started_ts": started_ts, "expiration": expiration},
-                        )
-                    except Exception as exc:
-                        self._log_event(
-                            "failed to mark run as timed out",
-                            job_id=row_job_id,
-                            host=row_host,
-                            run_id=rid,
-                            level="ERROR",
-                            extra={"error": str(exc)},
-                        )
+                    cur.execute(
+                        "UPDATE scheduled_job_runs SET status=?, finished_ts=?, updated_at=? WHERE id=?",
+                        (RUN_STATUS_TIMED_OUT, now, now, rid),
+                    )
+            conn.commit()
         except Exception as exc:
             self._log_event(
                 "failed to evaluate running runs for expiration",
@@ -1326,14 +1677,16 @@ class JobScheduler:
         try:
             cutoff = now - (self.RETENTION_DAYS * 86400)
             cur.execute(
-                "DELETE FROM scheduled_job_runs WHERE COALESCE(finished_ts, started_ts, scheduled_ts, 0) < ?",
-                (cutoff,)
+                "SELECT id FROM scheduled_job_runs WHERE COALESCE(finished_ts, started_ts, scheduled_ts, 0) < ?",
+                (cutoff,),
             )
-            conn.commit()
-            self._log_event(
-                "purged scheduled_job_runs history older than retention window",
-                extra={"cutoff_ts": cutoff, "retention_days": self.RETENTION_DAYS},
-            )
+            stale_run_ids = [int(row[0]) for row in cur.fetchall()]
+            if stale_run_ids:
+                placeholders = ",".join("?" for _ in stale_run_ids)
+                cur.execute(f"DELETE FROM scheduled_job_run_activity WHERE run_id IN ({placeholders})", tuple(stale_run_ids))
+                cur.execute(f"DELETE FROM scheduled_job_run_targets WHERE run_id IN ({placeholders})", tuple(stale_run_ids))
+                cur.execute(f"DELETE FROM scheduled_job_runs WHERE id IN ({placeholders})", tuple(stale_run_ids))
+                conn.commit()
         except Exception as exc:
             self._log_event(
                 "failed to purge scheduled_job_runs history",
@@ -1343,13 +1696,15 @@ class JobScheduler:
 
         try:
             cur.execute(
-                "SELECT id, components_json, targets_json, schedule_type, start_ts, expiration, execution_context, credential_id, use_service_account, created_at FROM scheduled_jobs WHERE enabled=1 ORDER BY id ASC"
+                """
+                SELECT id, components_json, targets_json, schedule_type, start_ts, expiration,
+                       execution_context, credential_id, use_service_account, created_at
+                  FROM scheduled_jobs
+                 WHERE enabled=1
+              ORDER BY id ASC
+                """
             )
             jobs = cur.fetchall()
-            self._log_event(
-                "loaded enabled scheduled jobs for tick",
-                extra={"job_count": len(jobs)},
-            )
         except Exception as exc:
             jobs = []
             self._log_event(
@@ -1363,10 +1718,10 @@ class JobScheduler:
             except Exception:
                 pass
 
-        online = set()
+        online: set[str] = set()
         try:
             if callable(self._online_lookup):
-                online = set(self._online_lookup() or [])
+                online = {str(host) for host in (self._online_lookup() or []) if str(host).strip()}
         except Exception as exc:
             self._log_event(
                 "failed to gather online host snapshot",
@@ -1374,19 +1729,6 @@ class JobScheduler:
                 extra={"error": str(exc)},
             )
             online = set()
-
-        snapshot_hosts: List[str] = []
-        try:
-            snapshot_hosts = sorted(list(online))[:20]
-        except Exception:
-            snapshot_hosts = list(online)
-        self._log_event(
-            "online host snapshot acquired",
-            extra={
-                "online_count": len(online),
-                "hosts": ",".join(snapshot_hosts),
-            },
-        )
 
         now_min = _now_minute()
         device_inventory_cache: Optional[List[Dict[str, Any]]] = None
@@ -1406,483 +1748,121 @@ class JobScheduler:
             try:
                 try:
                     raw_targets = json.loads(targets_json or "[]")
-                except Exception as exc:
+                except Exception:
                     raw_targets = []
-                    self._log_event(
-                        "failed to parse targets JSON for job",
-                        job_id=job_id,
-                        level="ERROR",
-                        extra={"error": str(exc)},
-                    )
-                include_filters = self._targets_include_filters(raw_targets)
-                if include_filters and device_inventory_cache is None:
-                    try:
-                        device_inventory_cache = self._filter_matcher.fetch_devices()
-                    except Exception as exc:
-                        device_inventory_cache = []
-                        self._log_event(
-                            "failed to load device inventory for filter targets",
-                            job_id=job_id,
-                            level="ERROR",
-                            extra={"error": str(exc)},
-                        )
                 try:
-                    targets, _meta = self._filter_matcher.resolve_target_entries(
-                        raw_targets,
-                        devices=device_inventory_cache if include_filters else None,
-                    )
-                except Exception as exc:
-                    targets = []
-                    self._log_event(
-                        "failed to resolve job targets",
-                        job_id=job_id,
-                        level="ERROR",
-                        extra={"error": str(exc)},
-                    )
-                targets = [str(t) for t in targets if isinstance(t, (str, int))]
-                total_targets = len(targets)
+                    components = json.loads(components_json or "[]")
+                except Exception:
+                    components = []
 
-                try:
-                    comps = json.loads(components_json or "[]")
-                except Exception as exc:
-                    comps = []
-                    self._log_event(
-                        "failed to parse components JSON for job",
-                        job_id=job_id,
-                        level="ERROR",
-                        extra={"error": str(exc)},
-                    )
-                script_components = []
-                ansible_components = []
-                for c in comps:
-                    try:
-                        ctype = (c or {}).get("type")
-                        if ctype == "script":
-                            p = (c.get("path") or c.get("script_path") or "").strip()
-                            if p:
-                                comp_copy = dict(c)
-                                comp_copy["path"] = p
-                                script_components.append(comp_copy)
-                        elif ctype == "ansible":
-                            p = (c.get("path") or "").strip()
-                            if p:
-                                comp_copy = dict(c)
-                                comp_copy["path"] = p
-                                ansible_components.append(comp_copy)
-                    except Exception as exc:
-                        self._log_event(
-                            "failed to normalise component entry",
-                            job_id=job_id,
-                            level="ERROR",
-                            extra={"error": str(exc), "component": str(c)},
-                        )
+                script_components: List[Dict[str, Any]] = []
+                ansible_components: List[Dict[str, Any]] = []
+                for component in components:
+                    if not isinstance(component, dict):
                         continue
+                    component_type = str(component.get("type") or "").strip().lower()
+                    if component_type == "script":
+                        script_components.append(dict(component))
+                    elif component_type == "ansible":
+                        ansible_components.append(dict(component))
+
+                if not script_components and not ansible_components:
+                    continue
+
                 run_mode = (execution_context or "system").strip().lower()
-                job_credential_id = None
-                job_use_service_account = bool(use_service_account_flag)
-                if run_mode != "winrm":
-                    job_use_service_account = False
+                job_use_service_account = bool(use_service_account_flag) if run_mode == "winrm" else False
                 try:
                     job_credential_id = int(credential_id) if credential_id is not None else None
-                except Exception as exc:
+                except Exception:
                     job_credential_id = None
-                    self._log_event(
-                        "failed to parse credential id for job",
-                        job_id=job_id,
-                        level="ERROR",
-                        extra={"error": str(exc)},
-                    )
 
-                self._log_event(
-                    "job snapshot for tick evaluation",
-                    job_id=job_id,
-                    extra={
-                        "schedule_type": schedule_type,
-                        "start_ts": start_ts,
-                        "expiration": expiration,
-                        "run_mode": run_mode,
-                        "targets": total_targets,
-                        "script_components": len(script_components),
-                        "ansible_components": len(ansible_components),
-                        "use_service_account": job_use_service_account,
-                        "credential_id": job_credential_id,
-                        "current_minute": now_min,
-                    },
+                occurrence_ts = self._resolve_occurrence_for_tick(
+                    job_id=int(job_id),
+                    schedule_type=str(schedule_type or ""),
+                    start_ts=start_ts,
+                    created_at=created_at,
+                    now_min=now_min,
                 )
+                if occurrence_ts is None:
+                    continue
 
-                if total_targets == 0:
-                    self._log_event("job skipped due to zero targets", job_id=job_id)
-                    continue
-                if not script_components and not ansible_components:
-                    self._log_event("job skipped due to no runnable components", job_id=job_id)
-                    continue
+                occurrence_runs = self._load_occurrence_runs(int(job_id), int(occurrence_ts))
+                if not occurrence_runs:
+                    include_filters = self._targets_include_filters(raw_targets)
+                    if include_filters and device_inventory_cache is None:
+                        try:
+                            device_inventory_cache = self._filter_matcher.fetch_devices()
+                        except Exception:
+                            device_inventory_cache = []
+                    try:
+                        targets, resolution_meta = self._filter_matcher.resolve_target_entries(
+                            raw_targets,
+                            devices=device_inventory_cache if include_filters else None,
+                        )
+                    except Exception as exc:
+                        self._log_event(
+                            "failed to resolve job targets",
+                            job_id=int(job_id),
+                            level="ERROR",
+                            extra={"error": str(exc), "scheduled_ts": int(occurrence_ts)},
+                        )
+                        targets = []
+                        resolution_meta = {}
+                    self._record_occurrence_snapshot(
+                        job_id=int(job_id),
+                        scheduled_ts=int(occurrence_ts),
+                        targets=[str(host) for host in targets if str(host).strip()],
+                        resolution_meta=resolution_meta,
+                        created_at=now,
+                    )
+                    occurrence_runs = self._load_occurrence_runs(int(job_id), int(occurrence_ts))
 
                 exp_seconds = _parse_expiration(expiration)
-
-                occ = None
-                occ_from_runs = None
-                conn2 = None
-                try:
-                    conn2 = self._conn()
-                    c2 = conn2.cursor()
-                    c2.execute("SELECT MAX(scheduled_ts) FROM scheduled_job_runs WHERE job_id=?", (job_id,))
-                    occ_from_runs = c2.fetchone()[0]
-                except Exception as exc:
-                    self._log_event(
-                        "failed to fetch last occurrence for job",
-                        job_id=job_id,
-                        level="ERROR",
-                        extra={"error": str(exc)},
-                    )
-                finally:
-                    try:
-                        if conn2:
-                            conn2.close()
-                    except Exception:
-                        pass
-
-                if occ_from_runs:
-                    occ = int(occ_from_runs)
-                    done_count = 0
-                    conn2 = None
-                    try:
+                for run in occurrence_runs:
+                    status = str(run.get("status") or "").strip()
+                    if self._is_terminal_run_status(status):
+                        continue
+                    host = str(run.get("target_hostname") or "").strip()
+                    if not host:
+                        continue
+                    if host in online:
+                        self._dispatch_run_activities(
+                            job_id=int(job_id),
+                            run_row_id=int(run["id"]),
+                            scheduled_ts=int(occurrence_ts),
+                            hostname=host,
+                            run_mode=run_mode,
+                            script_components=script_components,
+                            ansible_components=ansible_components,
+                            credential_id=job_credential_id,
+                            use_service_account=job_use_service_account,
+                        )
+                        continue
+                    if exp_seconds is not None and (int(occurrence_ts) + exp_seconds) <= now:
                         conn2 = self._conn()
-                        c2 = conn2.cursor()
-                        c2.execute(
-                            "SELECT COUNT(DISTINCT target_hostname) FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=? AND status IN ('Success','Expired','Timed Out')",
-                            (job_id, occ)
-                        )
-                        done_count = int(c2.fetchone()[0] or 0)
-                    except Exception as exc:
-                        self._log_event(
-                            "failed to count completed targets for occurrence",
-                            job_id=job_id,
-                            level="ERROR",
-                            extra={"error": str(exc), "occurrence_ts": occ},
-                        )
-                        done_count = 0
-                    finally:
                         try:
-                            if conn2:
-                                conn2.close()
-                        except Exception:
-                            pass
-
-                    self._log_event(
-                        "existing occurrence state evaluated",
-                        job_id=job_id,
-                        extra={
-                            "occurrence_ts": occ,
-                            "completed_targets": done_count,
-                            "total_targets": total_targets,
-                        },
-                    )
-
-                    if total_targets > 0 and done_count >= total_targets:
-                        nxt = self._compute_next_run(schedule_type, start_ts, occ, now_min)
-                        if nxt is not None and now_min >= nxt:
-                            self._log_event(
-                                "advancing to next occurrence",
-                                job_id=job_id,
-                                extra={"next_occurrence": nxt, "previous_occurrence": occ, "now_minute": now_min},
+                            cur2 = conn2.cursor()
+                            cur2.execute(
+                                """
+                                UPDATE scheduled_job_runs
+                                   SET status=?,
+                                       finished_ts=?,
+                                       updated_at=?,
+                                       error=?
+                                 WHERE id=?
+                                """,
+                                (RUN_STATUS_EXPIRED, now, now, "Device offline", int(run["id"])),
                             )
-                            occ = nxt
-                        else:
-                            self._log_event(
-                                "no action for job this tick; next occurrence not due",
-                                job_id=job_id,
-                                extra={
-                                    "candidate_occurrence": nxt,
-                                    "current_occurrence": occ,
-                                    "now_minute": now_min,
-                                },
-                            )
-                            continue
-                    else:
-                        self._log_event(
-                            "continuing current occurrence",
-                            job_id=job_id,
-                            extra={"occurrence_ts": occ, "completed_targets": done_count, "total_targets": total_targets},
-                        )
-                else:
-                    if (schedule_type or "").lower() == "immediately":
-                        occ = _floor_minute(created_at or now_min)
-                    else:
-                        st_min = _floor_minute(start_ts) if start_ts else None
-                        if st_min is None:
-                            occ = self._compute_next_run(schedule_type, start_ts, None, now_min)
-                        else:
-                            occ = st_min
-                    if occ is None:
-                        self._log_event(
-                            "unable to determine initial occurrence for job; skipping",
-                            job_id=job_id,
-                            extra={"schedule_type": schedule_type, "start_ts": start_ts},
-                        )
-                        continue
-                    if now_min < occ:
-                        self._log_event(
-                            "job occurrence scheduled in the future; waiting",
-                            job_id=job_id,
-                            extra={"scheduled_minute": occ, "current_minute": now_min},
-                        )
-                        continue
-
-                for host in targets:
-                    conn2 = None
-                    try:
-                        conn2 = self._conn()
-                        c2 = conn2.cursor()
-                        c2.execute(
-                            "SELECT id, status, started_ts FROM scheduled_job_runs WHERE job_id=? AND target_hostname=? AND scheduled_ts=? ORDER BY id DESC LIMIT 1",
-                            (job_id, host, occ)
-                        )
-                        row = c2.fetchone()
-                        if row:
-                            self._log_event(
-                                "run already exists for host and occurrence; skipping new dispatch",
-                                job_id=job_id,
-                                host=host,
-                                run_id=row[0],
-                                extra={"status": row[1], "scheduled_ts": occ},
-                            )
-                            continue
-
-                        if host in online:
-                            ts_now = _now_ts()
-                            c2.execute(
-                                "INSERT INTO scheduled_job_runs (job_id, target_hostname, scheduled_ts, started_ts, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-                                (job_id, host, occ, ts_now, "Running", ts_now, ts_now),
-                            )
-                            run_row_id = c2.lastrowid or 0
                             conn2.commit()
-                            self._log_event(
-                                "created run record for host",
-                                job_id=job_id,
-                                host=host,
-                                run_id=run_row_id,
-                                extra={
-                                    "scheduled_ts": occ,
-                                    "run_mode": run_mode,
-                                    "component_count": len(script_components) + len(ansible_components),
-                                },
-                            )
-                            activity_links = []
-                            remote_requires_cred = (run_mode == "ssh") or (run_mode == "winrm" and not job_use_service_account)
-                            if remote_requires_cred and not job_credential_id:
-                                err_msg = "Credential required for remote execution"
-                                c2.execute(
-                                    "UPDATE scheduled_job_runs SET status='Failed', finished_ts=?, updated_at=?, error=? WHERE id=?",
-                                    (ts_now, ts_now, err_msg, run_row_id),
-                                )
-                                conn2.commit()
-                                self._log_event(
-                                    "run failed immediately due to missing credential",
-                                    job_id=job_id,
-                                    host=host,
-                                    run_id=run_row_id,
-                                    level="ERROR",
-                                    extra={"run_mode": run_mode},
-                                )
-                            else:
-                                for comp in script_components:
-                                    try:
-                                        self._log_event(
-                                            "dispatching script component to host",
-                                            job_id=job_id,
-                                            host=host,
-                                            run_id=run_row_id,
-                                            extra={
-                                                "component_path": comp.get("path"),
-                                                "run_mode": run_mode,
-                                            },
-                                        )
-                                        link = self._dispatch_script(job_id, run_row_id, occ, host, comp, run_mode)
-                                        if link and link.get("activity_id"):
-                                            activity_links.append({
-                                                "run_id": run_row_id,
-                                                "activity_id": int(link["activity_id"]),
-                                                "component_kind": link.get("component_kind") or "script",
-                                                "script_type": link.get("script_type") or "powershell",
-                                                "component_path": link.get("component_path") or "",
-                                                "component_name": link.get("component_name") or "",
-                                            })
-                                            self._log_event(
-                                                "script component dispatched successfully",
-                                                job_id=job_id,
-                                                host=host,
-                                                run_id=run_row_id,
-                                                extra={
-                                                    "component_path": link.get("component_path"),
-                                                    "activity_id": link.get("activity_id"),
-                                                },
-                                            )
-                                    except Exception as exc:
-                                        self._log_event(
-                                            "script component dispatch failed",
-                                            job_id=job_id,
-                                            host=host,
-                                            run_id=run_row_id,
-                                            level="ERROR",
-                                            extra={
-                                                "component_path": comp.get("path"),
-                                                "error": str(exc),
-                                            },
-                                        )
-                                        continue
-                                for comp in ansible_components:
-                                    try:
-                                        self._log_event(
-                                            "dispatching ansible component to host",
-                                            job_id=job_id,
-                                            host=host,
-                                            run_id=run_row_id,
-                                            extra={
-                                                "component_path": comp.get("path"),
-                                                "run_mode": run_mode,
-                                            },
-                                        )
-                                        link = self._dispatch_ansible(
-                                            host,
-                                            comp,
-                                            job_id,
-                                            run_row_id,
-                                            run_mode,
-                                            job_credential_id,
-                                            job_use_service_account,
-                                        )
-                                        if link and link.get("activity_id"):
-                                            activity_links.append({
-                                                "run_id": run_row_id,
-                                                "activity_id": int(link["activity_id"]),
-                                                "component_kind": link.get("component_kind") or "ansible",
-                                                "script_type": link.get("script_type") or "ansible",
-                                                "component_path": link.get("component_path") or "",
-                                                "component_name": link.get("component_name") or "",
-                                            })
-                                            self._log_event(
-                                                "ansible component dispatched successfully",
-                                                job_id=job_id,
-                                                host=host,
-                                                run_id=run_row_id,
-                                                extra={
-                                                    "component_path": link.get("component_path"),
-                                                    "activity_id": link.get("activity_id"),
-                                                },
-                                            )
-                                    except Exception as exc:
-                                        self._log_event(
-                                            "ansible component dispatch failed",
-                                            job_id=job_id,
-                                            host=host,
-                                            run_id=run_row_id,
-                                            level="ERROR",
-                                            extra={
-                                                "component_path": comp.get("path"),
-                                                "error": str(exc),
-                                            },
-                                        )
-                                        try:
-                                            c2.execute(
-                                                "UPDATE scheduled_job_runs SET status='Failed', finished_ts=?, updated_at=?, error=? WHERE id=?",
-                                                (ts_now, ts_now, str(exc)[:512], run_row_id),
-                                            )
-                                            conn2.commit()
-                                        except Exception as inner_exc:
-                                            self._log_event(
-                                                "failed to record ansible dispatch failure on run",
-                                                job_id=job_id,
-                                                host=host,
-                                                run_id=run_row_id,
-                                                level="ERROR",
-                                                extra={"error": str(inner_exc)},
-                                            )
-                                        continue
-                                if activity_links:
-                                    try:
-                                        for link in activity_links:
-                                            c2.execute(
-                                                "INSERT OR IGNORE INTO scheduled_job_run_activity(run_id, activity_id, component_kind, script_type, component_path, component_name, created_at) VALUES (?,?,?,?,?,?,?)",
-                                                (
-                                                    int(link["run_id"]),
-                                                    int(link["activity_id"]),
-                                                    link.get("component_kind") or "",
-                                                    link.get("script_type") or "",
-                                                    link.get("component_path") or "",
-                                                    link.get("component_name") or "",
-                                                    ts_now,
-                                                ),
-                                            )
-                                        conn2.commit()
-                                        self._log_event(
-                                            "linked run to activity records",
-                                            job_id=job_id,
-                                            host=host,
-                                            run_id=run_row_id,
-                                            extra={"activity_count": len(activity_links)},
-                                        )
-                                    except Exception as exc:
-                                        self._log_event(
-                                            "failed to link run to activity records",
-                                            job_id=job_id,
-                                            host=host,
-                                            run_id=run_row_id,
-                                            level="ERROR",
-                                            extra={"error": str(exc)},
-                                        )
-                        else:
-                            if exp_seconds is not None and (occ + exp_seconds) <= now:
-                                ts_now = _now_ts()
-                                try:
-                                    c2.execute(
-                                        "INSERT INTO scheduled_job_runs (job_id, target_hostname, scheduled_ts, finished_ts, status, error, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-                                        (job_id, host, occ, ts_now, "Expired", "Device offline", ts_now, ts_now),
-                                    )
-                                    conn2.commit()
-                                    self._log_event(
-                                        "marked run as expired due to offline device",
-                                        job_id=job_id,
-                                        host=host,
-                                        level="WARNING",
-                                        extra={"scheduled_ts": occ, "expiration_seconds": exp_seconds},
-                                    )
-                                except Exception as exc:
-                                    self._log_event(
-                                        "failed to mark run as expired for offline device",
-                                        job_id=job_id,
-                                        host=host,
-                                        level="ERROR",
-                                        extra={"error": str(exc)},
-                                    )
-                            else:
-                                self._log_event(
-                                    "host offline; waiting before expiring run",
-                                    job_id=job_id,
-                                    host=host,
-                                    extra={"scheduled_ts": occ, "expiration_seconds": exp_seconds},
-                                )
-                    except Exception as exc:
-                        self._log_event(
-                            "unexpected failure while evaluating host for job",
-                            job_id=job_id,
-                            host=host,
-                            level="ERROR",
-                            extra={"error": str(exc), "scheduled_ts": occ},
-                        )
-                    finally:
-                        try:
-                            if conn2:
-                                conn2.close()
-                        except Exception:
-                            pass
+                        finally:
+                            conn2.close()
             except Exception as exc:
                 self._log_event(
                     "unhandled exception while processing job during tick",
-                    job_id=job_id,
+                    job_id=int(job_id),
                     level="ERROR",
                     extra={"error": str(exc)},
                 )
-                pass
 
         self._log_event("tick end", extra={"now_ts": now})
 
@@ -1948,6 +1928,7 @@ class JobScheduler:
                 max_occ = c.fetchone()[0]
                 summary_status = None
                 last_run_ts = None
+                total_targets = len(base.get("targets") or [])
                 result_counts = {
                     "pending": 0,
                     "running": 0,
@@ -1955,32 +1936,58 @@ class JobScheduler:
                     "failed": 0,
                     "expired": 0,
                     "timed_out": 0,
-                    "total_targets": len(base.get("targets") or []),
+                    "skipped": 0,
+                    "total_targets": total_targets,
                 }
                 if max_occ:
+                    c.execute(
+                        """
+                        SELECT COUNT(DISTINCT t.hostname)
+                          FROM scheduled_job_run_targets t
+                          JOIN scheduled_job_runs r ON r.id = t.run_id
+                         WHERE r.job_id=? AND r.scheduled_ts=?
+                        """,
+                        (base["id"], max_occ),
+                    )
+                    total_targets = int(c.fetchone()[0] or 0)
+                    if total_targets <= 0:
+                        c.execute(
+                            """
+                            SELECT COUNT(DISTINCT target_hostname)
+                              FROM scheduled_job_runs
+                             WHERE job_id=? AND scheduled_ts=? AND target_hostname IS NOT NULL AND TRIM(target_hostname) != ''
+                            """,
+                            (base["id"], max_occ),
+                        )
+                        total_targets = int(c.fetchone()[0] or 0)
+                    result_counts["total_targets"] = total_targets
                     # Summarize statuses for this occurrence
                     c.execute(
                         "SELECT status, COUNT(*) FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=? GROUP BY status",
                         (base["id"], max_occ)
                     )
                     counts = {row[0] or "": int(row[1] or 0) for row in c.fetchall()}
-                    result_counts["running"] = counts.get("Running", 0)
-                    result_counts["success"] = counts.get("Success", 0)
-                    result_counts["failed"] = counts.get("Failed", 0)
-                    result_counts["expired"] = counts.get("Expired", 0)
-                    result_counts["timed_out"] = counts.get("Timed Out", 0)
-                    computed = result_counts["running"] + result_counts["success"] + result_counts["failed"] + result_counts["expired"] + result_counts["timed_out"]
-                    pend = (result_counts["total_targets"] or 0) - computed
-                    result_counts["pending"] = pend if pend > 0 else 0
-                    # Priority: Running > Timed Out > Expired > Success
-                    if counts.get("Running"):
-                        summary_status = "Running"
-                    elif counts.get("Timed Out"):
-                        summary_status = "Timed Out"
-                    elif counts.get("Expired"):
-                        summary_status = "Expired"
-                    elif counts.get("Success"):
-                        summary_status = "Success"
+                    result_counts["pending"] = counts.get(RUN_STATUS_PENDING, 0)
+                    result_counts["running"] = counts.get(RUN_STATUS_RUNNING, 0)
+                    result_counts["success"] = counts.get(RUN_STATUS_SUCCESS, 0)
+                    result_counts["failed"] = counts.get(RUN_STATUS_FAILED, 0)
+                    result_counts["expired"] = counts.get(RUN_STATUS_EXPIRED, 0)
+                    result_counts["timed_out"] = counts.get(RUN_STATUS_TIMED_OUT, 0)
+                    result_counts["skipped"] = counts.get(RUN_STATUS_SKIPPED, 0)
+                    if counts.get(RUN_STATUS_RUNNING):
+                        summary_status = RUN_STATUS_RUNNING
+                    elif counts.get(RUN_STATUS_FAILED):
+                        summary_status = RUN_STATUS_FAILED
+                    elif counts.get(RUN_STATUS_TIMED_OUT):
+                        summary_status = RUN_STATUS_TIMED_OUT
+                    elif counts.get(RUN_STATUS_EXPIRED):
+                        summary_status = RUN_STATUS_EXPIRED
+                    elif counts.get(RUN_STATUS_SUCCESS):
+                        summary_status = RUN_STATUS_SUCCESS
+                    elif counts.get(RUN_STATUS_PENDING):
+                        summary_status = RUN_STATUS_PENDING
+                    elif counts.get(RUN_STATUS_SKIPPED):
+                        summary_status = "No Devices Targeted"
                     last_run_ts = int(max_occ)
                 conn.close()
             except Exception:
@@ -1993,6 +2000,7 @@ class JobScheduler:
                     "failed": 0,
                     "expired": 0,
                     "timed_out": 0,
+                    "skipped": 0,
                     "total_targets": len(base.get("targets") or []),
                 }
             base["last_run_ts"] = last_run_ts
@@ -2053,8 +2061,6 @@ class JobScheduler:
                             "kind": "filter",
                             "filter_id": filter_id_int,
                             "name": entry.get("name"),
-                            "site_scope": entry.get("site_scope") or entry.get("scope") or "global",
-                            "site": entry.get("site") or entry.get("site_name"),
                         }
                     )
                     continue
@@ -2068,6 +2074,29 @@ class JobScheduler:
                         seen_hosts.add(lowered)
                         normalized.append(host)
             return normalized
+
+        def _validate_targets_for_save(targets: Sequence[Any]) -> Optional[str]:
+            filter_ids: List[int] = []
+            for entry in targets:
+                if not isinstance(entry, dict):
+                    continue
+                kind = str(entry.get("kind") or entry.get("type") or "").strip().lower()
+                if kind != "filter" and entry.get("filter_id") is None:
+                    continue
+                try:
+                    filter_ids.append(int(entry.get("filter_id") or entry.get("id")))
+                except Exception:
+                    return "One or more selected filters is invalid."
+            if not filter_ids:
+                return None
+            filters = self._filter_matcher.load_filters(filter_ids, include_archived=True)
+            for filter_id in filter_ids:
+                record = filters.get(int(filter_id))
+                if not record:
+                    return f"Filter #{filter_id} does not exist."
+                if record.get("archived"):
+                    return f'Filter "{record.get("name") or filter_id}" is archived and cannot be scheduled.'
+            return None
 
         @app.route("/api/scheduled_jobs", methods=["GET"])
         def api_scheduled_jobs_list():
@@ -2111,6 +2140,9 @@ class JobScheduler:
             enabled = int(bool(data.get("enabled", True)))
             if not name or not components or not targets:
                 return json.dumps({"error": "name, components, targets required"}), 400, {"Content-Type": "application/json"}
+            target_error = _validate_targets_for_save(targets)
+            if target_error:
+                return json.dumps({"error": target_error}), 400, {"Content-Type": "application/json"}
             now = _now_ts()
             try:
                 conn = self._conn()
@@ -2186,6 +2218,9 @@ class JobScheduler:
                 normalized_targets = _normalize_targets_for_save(data.get("targets") or [])
                 if not normalized_targets:
                     return json.dumps({"error": "targets required"}), 400, {"Content-Type": "application/json"}
+                target_error = _validate_targets_for_save(normalized_targets)
+                if target_error:
+                    return json.dumps({"error": target_error}), 400, {"Content-Type": "application/json"}
                 fields["targets_json"] = json.dumps(normalized_targets)
             if "schedule" in data or "schedule_type" in data:
                 schedule_type = (data.get("schedule", {}).get("type") or data.get("schedule_type") or "immediately").strip().lower()
@@ -2292,7 +2327,7 @@ class JobScheduler:
                 cur = conn.cursor()
                 cur.execute(
                     """
-                    SELECT id, scheduled_ts, started_ts, finished_ts, status, error
+                    SELECT id, scheduled_ts, started_ts, finished_ts, status, error, skip_reason
                     FROM scheduled_job_runs
                     WHERE job_id=? AND COALESCE(finished_ts, started_ts, scheduled_ts, 0) >= ?
                     ORDER BY COALESCE(started_ts, scheduled_ts, 0) DESC, id DESC
@@ -2310,6 +2345,7 @@ class JobScheduler:
                         "finished_ts": r[3],
                         "status": r[4] or "",
                         "error": r[5] or "",
+                        "skip_reason": r[6] or "",
                     }
                     for r in rows
                 ]
@@ -2370,21 +2406,38 @@ class JobScheduler:
                 # Status per target for occurrence
                 run_by_host: Dict[str, Dict[str, Any]] = {}
                 run_ids: List[int] = []
+                snapshot_targets: List[str] = []
+                occurrence_has_snapshot = False
                 if occ is not None:
                     try:
                         cur.execute(
-                            "SELECT id, target_hostname, status, started_ts, finished_ts FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=? ORDER BY id DESC",
+                            """
+                            SELECT DISTINCT t.hostname
+                              FROM scheduled_job_run_targets t
+                              JOIN scheduled_job_runs r ON r.id = t.run_id
+                             WHERE r.job_id=? AND r.scheduled_ts=?
+                          ORDER BY LOWER(t.hostname) ASC
+                            """,
+                            (job_id, occ),
+                        )
+                        snapshot_targets = [str(row[0]) for row in cur.fetchall() if str(row[0]).strip()]
+                        cur.execute(
+                            "SELECT id, target_hostname, status, started_ts, finished_ts, skip_reason FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=? ORDER BY id DESC",
                             (job_id, occ)
                         )
                         rows = cur.fetchall()
-                        for rid, h, st, st_ts, fin_ts in rows:
-                            h = str(h)
+                        occurrence_has_snapshot = bool(rows) or bool(snapshot_targets)
+                        for rid, h, st, st_ts, fin_ts, skip_reason in rows:
+                            h = str(h or "")
+                            if not h:
+                                continue
                             if h not in run_by_host:
                                 run_by_host[h] = {
                                     "status": st or "",
                                     "started_ts": st_ts,
                                     "finished_ts": fin_ts,
                                     "run_id": int(rid),
+                                    "skip_reason": skip_reason or "",
                                 }
                                 run_ids.append(int(rid))
                     except Exception:
@@ -2437,9 +2490,12 @@ class JobScheduler:
                     online = set()
 
                 out = []
-                for host in targets:
+                effective_targets = snapshot_targets if occurrence_has_snapshot else targets
+                for host in effective_targets:
                     rec = run_by_host.get(str(host), {})
-                    job_status = rec.get("status") or "Pending"
+                    job_status = rec.get("status") or RUN_STATUS_PENDING
+                    if job_status == RUN_STATUS_SKIPPED and rec.get("skip_reason") == SKIP_REASON_NO_TARGETS:
+                        job_status = "No Devices Targeted"
                     ran_on = rec.get("started_ts") or rec.get("finished_ts")
                     activities = activities_by_run.get(rec.get("run_id", 0) or 0, [])
                     has_stdout = any(a.get("has_stdout") for a in activities)
@@ -2484,10 +2540,18 @@ class JobScheduler:
 
                 # Delete all runs for older occurrences
                 cur.execute(
-                    "DELETE FROM scheduled_job_runs WHERE job_id=? AND COALESCE(scheduled_ts, 0) < ?",
+                    "SELECT id FROM scheduled_job_runs WHERE job_id=? AND COALESCE(scheduled_ts, 0) < ?",
                     (job_id, latest),
                 )
-                cleared = cur.rowcount or 0
+                old_run_ids = [int(run_row[0]) for run_row in cur.fetchall()]
+                if old_run_ids:
+                    placeholders = ",".join(["?"] * len(old_run_ids))
+                    cur.execute(f"DELETE FROM scheduled_job_run_activity WHERE run_id IN ({placeholders})", tuple(old_run_ids))
+                    cur.execute(f"DELETE FROM scheduled_job_run_targets WHERE run_id IN ({placeholders})", tuple(old_run_ids))
+                    cur.execute(f"DELETE FROM scheduled_job_runs WHERE id IN ({placeholders})", tuple(old_run_ids))
+                    cleared = cur.rowcount or 0
+                else:
+                    cleared = 0
                 conn.commit()
                 conn.close()
                 return json.dumps({"status": "ok", "cleared": int(cleared), "kept_occurrence": latest}), 200, {"Content-Type": "application/json"}

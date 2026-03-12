@@ -10,3 +10,5 @@ qrcode
 Pillow
 requests
 websockets
+packaging
+regex

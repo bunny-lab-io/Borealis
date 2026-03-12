@@ -35,6 +35,7 @@ devices (guid) ----------------< device_approvals (guid, optional)
 
 scheduled_jobs (id) ----------< scheduled_job_runs (job_id)
 scheduled_job_runs (id) ------< scheduled_job_run_activity (run_id)
+scheduled_job_runs (id) ------< scheduled_job_run_targets (run_id)
 activity_history (id) --------< scheduled_job_run_activity (activity_id, unique)
 
 users (id/username) ----------< device_approvals.approved_by_user_id (soft relation)
@@ -182,14 +183,42 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 #### `device_filters`
 - Status: Active.
 - Purpose: Saved filter definitions for target selection and device segmentation.
-- Columns: `id`, `name`, `site_scope`, `site_name`, `criteria_json`, `last_edited_by`, `last_edited`, `created_at`, `updated_at`.
+- Columns: `id`, `name`, `description`, `archived`, `criteria_mode`, `site_mode`, `basic_criteria_json`, `advanced_criteria_json`, `last_edited_by`, `created_at`, `updated_at`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
+- `name` unique.
 - Used by:
 - `/api/device_filters*` endpoints.
 - `DeviceFilterMatcher` for match counts and scheduled-job target expansion.
 - Notes:
-- Legacy columns `scope` and `apply_to_all_sites` are auto-migrated away by table rebuild.
+- Active site membership is stored in `device_filter_sites`.
+- Archived filters are excluded from scheduler pickers and runtime resolution.
+
+#### `device_filter_sites`
+- Status: Active.
+- Purpose: Normalized site membership for saved device filters.
+- Columns: `filter_id`, `site_id`.
+- Constraints and indexes:
+- No dedicated primary key; uniqueness is maintained by filter-write paths.
+- Used by:
+- `/api/device_filters*` write paths.
+- `DeviceFilterMatcher.load_filters()` for site-mode hydration.
+
+#### `device_software_inventory`
+- Status: Active.
+- Purpose: Normalized installed-software inventory for reliable filtering.
+- Columns: `id`, `device_guid`, `name`, `name_normalized`, `version`, `source`, `captured_at`, `metadata_json`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- `idx_device_software_inventory_guid` on `device_guid`.
+- `idx_device_software_inventory_name` on `name_normalized`.
+- `idx_device_software_inventory_source` on `source`.
+- `idx_device_software_inventory_guid_name_source` on `(device_guid, name_normalized, source)`.
+- Used by:
+- `/api/agent/details` ingestion refresh.
+- `DeviceFilterMatcher` software-aware matching.
+- Notes:
+- Raw software blobs still live on `devices.software` for UI detail display, but matching uses this normalized table first.
 
 ### Scheduling and Automation
 #### `scheduled_jobs`
@@ -207,7 +236,7 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 #### `scheduled_job_runs`
 - Status: Active.
 - Purpose: Per-run/per-target execution state.
-- Columns: `id`, `job_id`, `scheduled_ts`, `started_ts`, `finished_ts`, `status`, `error`, `created_at`, `updated_at`, `target_hostname`.
+- Columns: `id`, `job_id`, `scheduled_ts`, `started_ts`, `finished_ts`, `status`, `error`, `created_at`, `updated_at`, `target_hostname`, `skip_reason`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
 - FK declared: `job_id -> scheduled_jobs(id) ON DELETE CASCADE`.
@@ -216,6 +245,8 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Scheduler dispatch and status updates.
 - WebSocket quick result handler for run state transitions.
 - Scheduled-jobs run history and device status endpoints.
+- Notes:
+- Zero-target occurrences are stored as `status = Skipped` with `skip_reason = no_devices_targeted`.
 
 #### `scheduled_job_run_activity`
 - Status: Active.
@@ -230,6 +261,22 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Used by:
 - Scheduler component dispatch bookkeeping.
 - WebSocket run status propagation and run activity lookups.
+
+#### `scheduled_job_run_targets`
+- Status: Active.
+- Purpose: Frozen point-in-time target membership for each scheduled occurrence.
+- Columns: `id`, `run_id`, `device_guid`, `hostname`, `site_id`, `resolved_from_filter_id`, `created_at`.
+- Constraints and indexes:
+- `id` autoincrement primary key.
+- FK declared: `run_id -> scheduled_job_runs(id) ON DELETE CASCADE`.
+- `idx_scheduled_job_run_targets_run` on `run_id`.
+- `idx_scheduled_job_run_targets_filter` on `resolved_from_filter_id`.
+- `idx_scheduled_job_run_targets_host` on `hostname`.
+- Used by:
+- Scheduler snapshot creation.
+- Scheduled-job device history endpoint.
+- Notes:
+- A host can produce multiple rows when more than one saved filter contributed to the same occurrence target.
 
 #### `credentials`
 - Status: Partially wired (schema active, API/service wiring incomplete).
