@@ -12,11 +12,11 @@ import {
   Stack,
   Tab,
   Tabs,
-  TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
 import {
+  AddRounded as AddIcon,
   ArchiveRounded as ArchiveIcon,
   CachedRounded as RefreshIcon,
   ContentCopyRounded as CloneIcon,
@@ -38,6 +38,16 @@ const PAGE_SUBTITLE =
 const PAGE_ICON = HeaderIcon;
 const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
 const iconFontFamily = "'Quartz Regular'";
+const NAV_TAB_HEIGHT = 32;
+const NAV_TAB_COLORS = {
+  text: "#cbd5e1",
+  textActive: "#e6f2ff",
+  icon: "#8fbfff",
+  iconActive: "#7db7ff",
+  hover: "rgba(255,255,255,0.05)",
+  activeBg:
+    "linear-gradient(to top, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+};
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -51,6 +61,124 @@ const gridTheme = themeQuartz.withParams({
 const TAB_LABELS = {
   active: "Active",
   archived: "Archived",
+};
+
+const AUTO_SIZE_COLUMNS = [
+  "name",
+  "description",
+  "site_mode",
+  "criteria_mode",
+  "matching_device_count",
+  "usage",
+  "last_edited_by",
+  "updated_at",
+];
+
+const buildNavTabsSx = (minHeight = NAV_TAB_HEIGHT) => ({
+  borderBottom: "1px solid rgba(148, 163, 184, 0.16)",
+  minHeight,
+  height: minHeight,
+  "& .MuiTabs-flexContainer": {
+    minHeight,
+    height: minHeight,
+    alignItems: "stretch",
+  },
+  "& .MuiTab-root": {
+    color: NAV_TAB_COLORS.text,
+    textTransform: "none",
+    fontWeight: 400,
+    fontFamily: "inherit",
+    fontSize: "0.8rem",
+    minHeight,
+    height: minHeight,
+    opacity: 1,
+    borderRadius: 1,
+    py: 0.35,
+    transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
+    "&:hover": {
+      background: NAV_TAB_COLORS.hover,
+    },
+    "&:active": {
+      transform: "translateY(0.5px)",
+    },
+  },
+  "& .MuiTab-root.Mui-selected": {
+    color: NAV_TAB_COLORS.textActive,
+    fontWeight: 600,
+    background: NAV_TAB_COLORS.activeBg,
+    "&:hover": {
+      background: NAV_TAB_COLORS.activeBg,
+    },
+  },
+});
+
+const GRID_WRAPPER_SX = {
+  width: "100%",
+  height: "100%",
+  minHeight: 560,
+  fontFamily: gridFontFamily,
+  "--ag-font-family": gridFontFamily,
+  "--ag-icon-font-family": iconFontFamily,
+  "& .ag-root-wrapper": {
+    minHeight: "100%",
+    border: "none",
+    borderRadius: 0,
+    background: "transparent",
+  },
+  "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+    fontFamily: gridFontFamily,
+  },
+  "& .ag-header": {
+    backgroundColor: "rgba(15,23,42,0.9)",
+    borderBottom: "1px solid rgba(148,163,184,0.25)",
+  },
+  "& .ag-header-cell-label": {
+    color: "#e2e8f0",
+    fontWeight: 600,
+    letterSpacing: 0.3,
+  },
+  "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    textAlign: "left",
+    padding: "8px 12px 8px 18px",
+    color: "#e2e8f0",
+    fontSize: "0.88rem",
+  },
+  "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+    width: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    padding: 0,
+  },
+  "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+    paddingLeft: "12px",
+    paddingRight: "9px",
+  },
+  "& .ag-row": {
+    borderColor: "rgba(255,255,255,0.04)",
+    transition: "background 0.2s ease",
+  },
+  "& .ag-row:nth-of-type(even)": {
+    backgroundColor: "rgba(15,23,42,0.45)",
+  },
+  "& .ag-row-hover": {
+    backgroundColor: "rgba(73,156,196,0.2) !important",
+  },
+  "& .ag-icon": {
+    fontFamily: iconFontFamily,
+  },
+};
+
+const DIALOG_PAPER_SX = {
+  borderRadius: 3,
+  background: "rgba(8,12,24,0.96)",
+  backdropFilter: "blur(18px)",
+  border: "1px solid rgba(148,163,184,0.3)",
+  boxShadow: "0 24px 60px rgba(2,8,23,0.72)",
+  color: "#e2e8f0",
 };
 
 const SITE_MODE_META = {
@@ -94,49 +222,39 @@ const scopeSummary = (record) => {
   return `${meta.label}: ${siteNames.join(", ")}`;
 };
 
-const matchesSearch = (record, query) => {
-  if (!query) return true;
-  const haystack = [
-    record?.name,
-    record?.description,
-    scopeSummary(record),
-    record?.last_edited_by,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  return haystack.includes(query);
-};
-
-function ScopePill({ siteMode }) {
+function ScopeText({ siteMode }) {
   const meta = SITE_MODE_META[String(siteMode || "global").toLowerCase()] || SITE_MODE_META.global;
   return (
-    <Box
+    <Typography
       component="span"
       sx={{
-        display: "inline-flex",
-        alignItems: "center",
-        px: 1.1,
-        py: 0.25,
-        borderRadius: 999,
-        border: `1px solid ${meta.border}`,
-        background: meta.background,
         color: meta.color,
-        fontWeight: 700,
+        fontWeight: 600,
         fontSize: "0.82rem",
         letterSpacing: 0.2,
       }}
     >
       {meta.label}
-    </Box>
+    </Typography>
   );
 }
 
 function JobsDialog({ open, onClose, jobs, onOpenJob, title }) {
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{title || "Jobs Referencing this Filter"}</DialogTitle>
-      <DialogContent dividers>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+      <DialogTitle
+        sx={{
+          px: 2.5,
+          py: 2,
+          borderBottom: "1px solid rgba(148,163,184,0.18)",
+          fontFamily: gridFontFamily,
+          fontWeight: 700,
+          fontSize: "1rem",
+        }}
+      >
+        {title || "Jobs Referencing this Filter"}
+      </DialogTitle>
+      <DialogContent dividers sx={{ borderColor: "rgba(148,163,184,0.18)", background: "transparent", px: 2.5, py: 2 }}>
         {!jobs?.length ? (
           <Typography sx={{ color: "#cbd5e1" }}>No scheduled jobs reference this filter.</Typography>
         ) : (
@@ -146,7 +264,8 @@ function JobsDialog({ open, onClose, jobs, onOpenJob, title }) {
                 key={job.id}
                 sx={{
                   border: "1px solid rgba(148,163,184,0.24)",
-                  borderRadius: 2,
+                  background: "rgba(15,23,42,0.66)",
+                  borderRadius: 2.5,
                   px: 1.5,
                   py: 1.2,
                   display: "flex",
@@ -164,13 +283,23 @@ function JobsDialog({ open, onClose, jobs, onOpenJob, title }) {
                   </Typography>
                 </Box>
                 <Button
+                  variant="outlined"
                   size="small"
                   endIcon={<LaunchIcon fontSize="small" />}
                   onClick={() => {
                     onClose?.();
                     onOpenJob?.(job);
                   }}
-                  sx={{ textTransform: "none" }}
+                  sx={{
+                    textTransform: "none",
+                    borderColor: "rgba(148,163,184,0.32)",
+                    color: "#e2e8f0",
+                    background: "rgba(5,10,24,0.8)",
+                    "&:hover": {
+                      borderColor: "rgba(125,211,252,0.5)",
+                      background: "rgba(8,14,30,0.92)",
+                    },
+                  }}
                 >
                   Open Job
                 </Button>
@@ -179,8 +308,19 @@ function JobsDialog({ open, onClose, jobs, onOpenJob, title }) {
           </Stack>
         )}
       </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+      <DialogActions sx={{ px: 2.5, py: 1.75, borderTop: "1px solid rgba(148,163,184,0.18)" }}>
+        <Button
+          variant="outlined"
+          onClick={onClose}
+          sx={{
+            textTransform: "none",
+            borderColor: "rgba(148,163,184,0.32)",
+            color: "#e2e8f0",
+            background: "rgba(5,10,24,0.8)",
+          }}
+        >
+          Close
+        </Button>
       </DialogActions>
     </Dialog>
   );
@@ -196,7 +336,6 @@ export default function DeviceFilterList({
 }) {
   const gridRef = useRef(null);
   const [tab, setTab] = useState("active");
-  const [search, setSearch] = useState("");
   const [filters, setFilters] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -223,33 +362,50 @@ export default function DeviceFilterList({
   }, [tab]);
 
   useEffect(() => {
-    onPageMetaChange?.({
-      title: PAGE_TITLE,
-      subtitle: PAGE_SUBTITLE,
-      Icon: PAGE_ICON,
-    });
-  }, [onPageMetaChange]);
-
-  useEffect(() => {
     loadFilters();
   }, [loadFilters, refreshToken]);
 
-  const filteredRows = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return filters.filter((record) => matchesSearch(record, query));
-  }, [filters, search]);
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "device-filters-refresh",
+        label: "Refresh",
+        icon: <RefreshIcon />,
+        tone: "secondary",
+        loading,
+        onClick: loadFilters,
+      },
+      {
+        id: "device-filters-create",
+        label: "Create Filter",
+        icon: <AddIcon />,
+        tone: "primary",
+        onClick: () => onCreateFilter?.(),
+      },
+    ],
+    [loadFilters, loading, onCreateFilter]
+  );
+
+  useEffect(() => {
+    onPageMetaChange?.({
+      page_title: PAGE_TITLE,
+      page_subtitle: PAGE_SUBTITLE,
+      page_icon: PAGE_ICON,
+      page_header_actions: pageHeaderActions,
+    });
+  }, [onPageMetaChange, pageHeaderActions]);
 
   const autoSize = useCallback(() => {
     const api = gridRef.current;
-    if (!api || !filteredRows.length) return;
+    if (!api || !filters.length) return;
     requestAnimationFrame(() => {
       try {
-        api.autoSizeColumns(["name", "description", "site_mode", "criteria_mode", "matching_device_count", "last_edited_by", "updated_at"], true);
+        api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
       } catch {
         /* ignore */
       }
     });
-  }, [filteredRows.length]);
+  }, [filters.length]);
 
   useEffect(() => {
     autoSize();
@@ -326,24 +482,31 @@ export default function DeviceFilterList({
     () => [
       {
         field: "name",
-        headerName: "Filter",
+        headerName: "Filter Name",
         minWidth: 250,
         flex: 1.4,
         cellRenderer: (params) => (
-          <Button
-            variant="text"
-            size="small"
-            onClick={() => onEditFilter?.(params.data)}
+          <Box
+            component="a"
+            href="#"
+            onClick={(event) => {
+              event.preventDefault();
+              onEditFilter?.(params.data);
+            }}
             sx={{
-              px: 0,
-              minWidth: "unset",
-              textTransform: "none",
+              display: "inline-flex",
+              alignItems: "center",
               fontWeight: 700,
               color: "#7dd3fc",
+              textDecoration: "none",
+              cursor: "pointer",
+              "&:hover": {
+                color: "#bae6fd",
+              },
             }}
           >
             {params.value || "Unnamed Filter"}
-          </Button>
+          </Box>
         ),
       },
       {
@@ -361,16 +524,16 @@ export default function DeviceFilterList({
         cellRenderer: (params) => (
           <Tooltip title={scopeSummary(params.data)}>
             <Box sx={{ display: "inline-flex", alignItems: "center" }}>
-              <ScopePill siteMode={params.value} />
+              <ScopeText siteMode={params.value} />
             </Box>
           </Tooltip>
         ),
       },
       {
         field: "criteria_mode",
-        headerName: "Mode",
-        minWidth: 120,
-        flex: 0.7,
+        headerName: "Criteria Complexity",
+        minWidth: 170,
+        flex: 0.9,
         valueFormatter: (params) => criteriaModeLabel(params.value),
       },
       {
@@ -383,8 +546,8 @@ export default function DeviceFilterList({
       },
       {
         field: "usage",
-        headerName: "Scheduler Usage",
-        minWidth: 200,
+        headerName: "Jobs Referencing this Filter",
+        minWidth: 230,
         flex: 1,
         sortable: false,
         filter: false,
@@ -392,14 +555,25 @@ export default function DeviceFilterList({
           const count = Number(params.data?.usage?.job_count || 0);
           if (!count) return <Typography sx={{ color: "#64748b" }}>None</Typography>;
           return (
-            <Button
-              variant="text"
-              size="small"
-              onClick={() => openJobs(params.data)}
-              sx={{ px: 0, minWidth: "unset", textTransform: "none" }}
+            <Box
+              component="a"
+              href="#"
+              onClick={(event) => {
+                event.preventDefault();
+                openJobs(params.data);
+              }}
+              sx={{
+                color: "#7dd3fc",
+                textDecoration: "none",
+                cursor: "pointer",
+                fontWeight: 500,
+                "&:hover": {
+                  color: "#bae6fd",
+                },
+              }}
             >
-              Jobs Referencing this Filter ({count})
-            </Button>
+              {`Scheduled Jobs (${count})`}
+            </Box>
           );
         },
       },
@@ -462,47 +636,30 @@ export default function DeviceFilterList({
       resizable: true,
       flex: 1,
       filter: "agTextColumnFilter",
-      cellStyle: {
-        display: "flex",
-        alignItems: "center",
-      },
+      cellClass: "auto-col-tight",
     }),
     []
   );
 
   const stack = (
     <Stack spacing={1.5}>
-      <Box sx={{ display: "flex", alignItems: { xs: "stretch", md: "center" }, gap: 1.25, flexWrap: "wrap" }}>
-        <Tabs
-          value={tab}
-          onChange={(_, next) => setTab(next)}
-          sx={{
-            minHeight: 38,
-            "& .MuiTabs-indicator": { backgroundColor: "#7dd3fc" },
-          }}
-        >
-          <Tab value="active" label={TAB_LABELS.active} sx={{ minHeight: 38, textTransform: "none" }} />
-          <Tab value="archived" label={TAB_LABELS.archived} sx={{ minHeight: 38, textTransform: "none" }} />
-        </Tabs>
-        <TextField
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search filters..."
-          size="small"
-          sx={{ minWidth: { xs: "100%", md: 280 }, ml: { md: "auto" } }}
-        />
-        <Button
-          variant="outlined"
-          startIcon={<RefreshIcon />}
-          onClick={loadFilters}
-          sx={{ textTransform: "none" }}
-        >
-          Refresh
-        </Button>
-        <Button variant="contained" onClick={() => onCreateFilter?.()} sx={{ textTransform: "none" }}>
-          Create Filter
-        </Button>
-      </Box>
+      <Tabs
+        value={tab}
+        onChange={(_, next) => setTab(next)}
+        variant="scrollable"
+        scrollButtons="auto"
+        TabIndicatorProps={{
+          style: {
+            height: 3,
+            borderRadius: 3,
+            background: NAV_TAB_COLORS.iconActive,
+          },
+        }}
+        sx={buildNavTabsSx()}
+      >
+        <Tab value="active" label={TAB_LABELS.active} />
+        <Tab value="archived" label={TAB_LABELS.archived} />
+      </Tabs>
       {loading ? <LinearProgress /> : null}
       {error ? <Alert severity="error">{error}</Alert> : null}
       {actionError ? <Alert severity="warning">{actionError}</Alert> : null}
@@ -515,16 +672,9 @@ export default function DeviceFilterList({
         variant="grid_with_stack"
         stack={stack}
         main={
-          <Box
-            sx={{
-              width: "100%",
-              height: "100%",
-              minHeight: 560,
-              "& .ag-root-wrapper": { borderRadius: 0 },
-            }}
-          >
+          <Box sx={GRID_WRAPPER_SX}>
             <AgGridReact
-              rowData={filteredRows}
+              rowData={filters}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
               suppressCellFocus

@@ -6,7 +6,6 @@ import {
   Button,
   Checkbox,
   Chip,
-  Divider,
   FormControlLabel,
   IconButton,
   LinearProgress,
@@ -21,6 +20,7 @@ import {
 } from "@mui/material";
 import {
   AddRounded as AddIcon,
+  CloseRounded as CancelIcon,
   DeleteRounded as DeleteIcon,
   FilterAlt as HeaderIcon,
   PreviewRounded as PreviewIcon,
@@ -36,6 +36,17 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 const PAGE_ICON = HeaderIcon;
 const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
 const iconFontFamily = "'Quartz Regular'";
+const NAV_TAB_HEIGHT = 32;
+const NAV_TAB_HEIGHT_COMPACT = 28;
+const NAV_TAB_COLORS = {
+  text: "#cbd5e1",
+  textActive: "#e6f2ff",
+  icon: "#8fbfff",
+  iconActive: "#7db7ff",
+  hover: "rgba(255,255,255,0.05)",
+  activeBg:
+    "linear-gradient(to top, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+};
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -52,6 +63,107 @@ const MAIN_TABS = [
   { value: "criteria", label: "Criteria" },
   { value: "results", label: "Results" },
 ];
+
+const PREVIEW_AUTO_SIZE_COLUMNS = ["hostname", "site_name", "status", "operating_system"];
+
+const buildNavTabsSx = (minHeight = NAV_TAB_HEIGHT) => ({
+  borderBottom: "1px solid rgba(148, 163, 184, 0.16)",
+  minHeight,
+  height: minHeight,
+  "& .MuiTabs-flexContainer": {
+    minHeight,
+    height: minHeight,
+    alignItems: "stretch",
+  },
+  "& .MuiTab-root": {
+    color: NAV_TAB_COLORS.text,
+    textTransform: "none",
+    fontWeight: 400,
+    fontFamily: "inherit",
+    fontSize: "0.8rem",
+    minHeight,
+    height: minHeight,
+    opacity: 1,
+    borderRadius: 1,
+    py: 0.35,
+    transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
+    "&:hover": {
+      background: NAV_TAB_COLORS.hover,
+    },
+    "&:active": {
+      transform: "translateY(0.5px)",
+    },
+  },
+  "& .MuiTab-root.Mui-selected": {
+    color: NAV_TAB_COLORS.textActive,
+    fontWeight: 600,
+    background: NAV_TAB_COLORS.activeBg,
+    "&:hover": {
+      background: NAV_TAB_COLORS.activeBg,
+    },
+  },
+});
+
+const GRID_WRAPPER_SX = {
+  width: "100%",
+  flexGrow: 1,
+  minHeight: 420,
+  height: "100%",
+  fontFamily: gridFontFamily,
+  "--ag-font-family": gridFontFamily,
+  "--ag-icon-font-family": iconFontFamily,
+  "& .ag-root-wrapper": {
+    minHeight: "100%",
+    border: "none",
+    borderRadius: 0,
+    background: "transparent",
+  },
+  "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+    fontFamily: gridFontFamily,
+  },
+  "& .ag-header": {
+    backgroundColor: "rgba(15,23,42,0.9)",
+    borderBottom: "1px solid rgba(148,163,184,0.25)",
+  },
+  "& .ag-header-cell-label": {
+    color: "#e2e8f0",
+    fontWeight: 600,
+    letterSpacing: 0.3,
+  },
+  "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    textAlign: "left",
+    padding: "8px 12px 8px 18px",
+    color: "#e2e8f0",
+    fontSize: "0.88rem",
+  },
+  "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+    width: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    padding: 0,
+  },
+  "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+    paddingLeft: "12px",
+    paddingRight: "9px",
+  },
+  "& .ag-row": {
+    borderColor: "rgba(255,255,255,0.04)",
+    transition: "background 0.2s ease",
+  },
+  "& .ag-row:nth-of-type(even)": {
+    backgroundColor: "rgba(15,23,42,0.45)",
+  },
+  "& .ag-row-hover": {
+    backgroundColor: "rgba(73,156,196,0.2) !important",
+  },
+  "& .ag-icon": {
+    fontFamily: iconFontFamily,
+  },
+};
 
 const makeId = (prefix) =>
   `${prefix}-${typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 10)}`;
@@ -356,16 +468,6 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
     [metadata]
   );
 
-  useEffect(() => {
-    const pageTitle = formState?.id ? `Edit Filter: ${formState.name || "Unnamed Filter"}` : "Create Device Filter";
-    onPageMetaChange?.({
-      title: pageTitle,
-      subtitle:
-        "Define scope, choose a criteria mode, and preview matching devices using the backend matcher before saving.",
-      Icon: PAGE_ICON,
-    });
-  }, [formState?.id, formState?.name, onPageMetaChange]);
-
   const hydrateFromRecord = useCallback((record) => {
     const normalized = normalizeFilterRecord(record);
     setFormState(normalized);
@@ -475,7 +577,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
       setActiveTab("results");
       requestAnimationFrame(() => {
         try {
-          previewGridRef.current?.autoSizeColumns(["hostname", "site_name", "status", "operating_system"], true);
+          previewGridRef.current?.autoSizeColumns(PREVIEW_AUTO_SIZE_COLUMNS, true);
         } catch {
           /* ignore */
         }
@@ -516,6 +618,48 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
       setSaving(false);
     }
   }, [buildPayload, formState.id, onSaved]);
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "filter-editor-cancel",
+        label: "Cancel",
+        icon: <CancelIcon />,
+        tone: "secondary",
+        onClick: () => onCancel?.(),
+      },
+      {
+        id: "filter-editor-preview",
+        label: "Preview / Apply",
+        icon: <PreviewIcon />,
+        tone: "secondary",
+        loading: previewing,
+        disabled: loading || saving,
+        onClick: runPreview,
+      },
+      {
+        id: "filter-editor-save",
+        label: "Save Filter",
+        icon: <SaveIcon />,
+        tone: "primary",
+        loading: saving,
+        disabled: loading || previewing,
+        onClick: saveFilter,
+      },
+    ],
+    [loading, onCancel, previewing, runPreview, saveFilter, saving]
+  );
+
+  useEffect(() => {
+    const pageTitle = formState?.id ? `Edit Filter: ${formState.name || "Unnamed Filter"}` : "Create Device Filter";
+    onPageMetaChange?.({
+      page_title: pageTitle,
+      page_subtitle:
+        "Define scope, choose a criteria mode, and preview matching devices using the backend matcher before saving.",
+      page_icon: PAGE_ICON,
+      page_header_actions: pageHeaderActions,
+    });
+  }, [formState?.id, formState?.name, onPageMetaChange, pageHeaderActions]);
 
   const updateBasicCriterion = useCallback((id, patch) => {
     setFormState((prev) => ({
@@ -578,7 +722,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
     if (!previewRows.length || !previewGridRef.current) return;
     requestAnimationFrame(() => {
       try {
-        previewGridRef.current.autoSizeColumns(["hostname", "site_name", "status", "operating_system"], true);
+        previewGridRef.current.autoSizeColumns(PREVIEW_AUTO_SIZE_COLUMNS, true);
       } catch {
         /* ignore */
       }
@@ -591,10 +735,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
       resizable: true,
       flex: 1,
       filter: "agTextColumnFilter",
-      cellStyle: {
-        display: "flex",
-        alignItems: "center",
-      },
+      cellClass: "auto-col-tight",
     }),
     []
   );
@@ -650,10 +791,19 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
       <Tabs
         value={formState.criteria_mode}
         onChange={(_, value) => setFormState((prev) => ({ ...prev, criteria_mode: value }))}
-        sx={{ "& .MuiTabs-indicator": { backgroundColor: "#7dd3fc" } }}
+        variant="scrollable"
+        scrollButtons="auto"
+        TabIndicatorProps={{
+          style: {
+            height: 3,
+            borderRadius: 3,
+            background: NAV_TAB_COLORS.iconActive,
+          },
+        }}
+        sx={buildNavTabsSx(NAV_TAB_HEIGHT_COMPACT)}
       >
-        <Tab value="basic" label="Basic" sx={{ textTransform: "none" }} />
-        <Tab value="advanced" label="Advanced" sx={{ textTransform: "none" }} />
+        <Tab value="basic" label="Basic" />
+        <Tab value="advanced" label="Advanced" />
       </Tabs>
       {formState.criteria_mode === "basic" ? (
         <Stack spacing={1.1}>
@@ -789,29 +939,6 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
 
   const topStack = (
     <Stack spacing={1.5}>
-      <Box sx={{ display: "flex", alignItems: { xs: "stretch", md: "center" }, gap: 1.1, flexWrap: "wrap" }}>
-        <Button
-          variant="contained"
-          startIcon={<SaveIcon />}
-          onClick={saveFilter}
-          disabled={saving || loading}
-          sx={{ textTransform: "none" }}
-        >
-          {saving ? "Saving..." : "Save Filter"}
-        </Button>
-        <Button
-          variant="outlined"
-          startIcon={<PreviewIcon />}
-          onClick={runPreview}
-          disabled={previewing || loading}
-          sx={{ textTransform: "none" }}
-        >
-          {previewing ? "Previewing..." : "Preview / Apply"}
-        </Button>
-        <Button variant="text" onClick={() => onCancel?.()} sx={{ textTransform: "none", ml: { md: "auto" } }}>
-          Cancel
-        </Button>
-      </Box>
       {loading || saving || previewing ? <LinearProgress /> : null}
       {error ? <Alert severity="error">{error}</Alert> : null}
       {validationErrors.length ? (
@@ -838,106 +965,75 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
       variant="grid_with_stack"
       stack={topStack}
       main={
-        <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2, minHeight: 0, height: "100%" }}>
+        <Box sx={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
           <Tabs
             value={activeTab}
             onChange={(_, value) => setActiveTab(value)}
-            sx={{ "& .MuiTabs-indicator": { backgroundColor: "#7dd3fc" } }}
+            variant="scrollable"
+            scrollButtons="auto"
+            TabIndicatorProps={{
+              style: {
+                height: 3,
+                borderRadius: 3,
+                background: NAV_TAB_COLORS.iconActive,
+              },
+            }}
+            sx={buildNavTabsSx()}
           >
             {MAIN_TABS.map((tab) => (
-              <Tab key={tab.value} value={tab.value} label={tab.label} sx={{ textTransform: "none" }} />
+              <Tab key={tab.value} value={tab.value} label={tab.label} />
             ))}
           </Tabs>
-          <Divider />
-          {activeTab === "name" ? (
-            <Stack spacing={2}>
-              <TextField
-                label="Filter Name"
-                value={formState.name}
-                onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))}
-                fullWidth
-              />
-              <TextField
-                label="Description"
-                value={formState.description}
-                onChange={(event) => setFormState((prev) => ({ ...prev, description: event.target.value }))}
-                fullWidth
-              />
-            </Stack>
-          ) : null}
-          {activeTab === "scope" ? scopeCards : null}
-          {activeTab === "criteria" ? criteriaTab : null}
-          {activeTab === "results" ? (
-            <Stack spacing={1.5} sx={{ minHeight: 0, flexGrow: 1, height: "100%" }}>
-              <Typography sx={{ color: "#e2e8f0", fontWeight: 700 }}>
-                {previewCount == null ? "No preview has been run yet." : `${previewCount.toLocaleString()} device(s) matched.`}
-              </Typography>
-              <Box
-                sx={{
-                  width: "100%",
-                  flexGrow: 1,
-                  minHeight: 420,
-                  height: "100%",
-                  fontFamily: gridFontFamily,
-                  "--ag-font-family": gridFontFamily,
-                  "--ag-icon-font-family": iconFontFamily,
-                  "& .ag-root-wrapper": {
-                    minHeight: "100%",
-                    border: "none",
-                    borderRadius: 0,
-                    background: "transparent",
-                  },
-                  "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
-                    fontFamily: gridFontFamily,
-                  },
-                  "& .ag-header": {
-                    backgroundColor: "rgba(15,23,42,0.9)",
-                    borderBottom: "1px solid rgba(148,163,184,0.25)",
-                  },
-                  "& .ag-header-cell-label": {
-                    color: "#e2e8f0",
-                    fontWeight: 600,
-                    letterSpacing: 0.3,
-                  },
-                  "& .ag-row": {
-                    borderColor: "rgba(255,255,255,0.04)",
-                    transition: "background 0.2s ease",
-                  },
-                  "& .ag-row:nth-of-type(even)": {
-                    backgroundColor: "rgba(15,23,42,0.45)",
-                  },
-                  "& .ag-row-hover": {
-                    backgroundColor: "rgba(73,156,196,0.2) !important",
-                  },
-                  "& .ag-icon": {
-                    fontFamily: iconFontFamily,
-                  },
-                }}
-              >
-                <AgGridReact
-                  rowData={previewRows}
-                  columnDefs={previewColumns}
-                  defaultColDef={defaultColDef}
-                  suppressCellFocus
-                  animateRows
-                  pagination
-                  paginationPageSize={20}
-                  paginationPageSizeSelector={[20, 50, 100]}
-                  onGridReady={(params) => {
-                    previewGridRef.current = params.api;
-                  }}
-                  getRowId={(params) => String(params.data?.guid || params.data?.hostname || "")}
-                  theme={gridTheme}
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    fontFamily: gridFontFamily,
-                    "--ag-icon-font-family": iconFontFamily,
-                  }}
+          <Box sx={{ flexGrow: 1, minHeight: 0, px: 3, pt: 2.5, pb: 3, display: "flex", flexDirection: "column" }}>
+            {activeTab === "name" ? (
+              <Stack spacing={2}>
+                <TextField
+                  label="Filter Name"
+                  value={formState.name}
+                  onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))}
+                  fullWidth
                 />
-              </Box>
-            </Stack>
-          ) : null}
+                <TextField
+                  label="Description"
+                  value={formState.description}
+                  onChange={(event) => setFormState((prev) => ({ ...prev, description: event.target.value }))}
+                  fullWidth
+                />
+              </Stack>
+            ) : null}
+            {activeTab === "scope" ? scopeCards : null}
+            {activeTab === "criteria" ? criteriaTab : null}
+            {activeTab === "results" ? (
+              <Stack spacing={1.5} sx={{ minHeight: 0, flexGrow: 1, height: "100%" }}>
+                <Typography sx={{ color: "#e2e8f0", fontWeight: 700 }}>
+                  {previewCount == null ? "No preview has been run yet." : `${previewCount.toLocaleString()} device(s) matched.`}
+                </Typography>
+                <Box sx={GRID_WRAPPER_SX}>
+                  <AgGridReact
+                    rowData={previewRows}
+                    columnDefs={previewColumns}
+                    defaultColDef={defaultColDef}
+                    suppressCellFocus
+                    animateRows
+                    pagination
+                    paginationPageSize={20}
+                    paginationPageSizeSelector={[20, 50, 100]}
+                    onGridReady={(params) => {
+                      previewGridRef.current = params.api;
+                    }}
+                    getRowId={(params) => String(params.data?.guid || params.data?.hostname || "")}
+                    theme={gridTheme}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      fontFamily: gridFontFamily,
+                      "--ag-icon-font-family": iconFontFamily,
+                    }}
+                  />
+                </Box>
+              </Stack>
+            ) : null}
+          </Box>
         </Box>
       }
     />
