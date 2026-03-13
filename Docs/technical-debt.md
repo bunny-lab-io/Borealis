@@ -35,6 +35,20 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
+ID: TD-20260313-01
+Status: active
+Owner: Engine
+Date Added: 2026-03-13
+Summary: Device filter fixes may require hotpatching the runtime mirror under `Engine/Data/Engine` before the next full restage.
+Impact: Source fixes in `Data/Engine` can diverge from the live Engine process until the runtime mirror is restaged and the service is restarted.
+Root Cause: The Linux Engine service runs from the staged runtime copy in `Engine/`, while active development edits land in `Data/Engine`.
+Current Mitigation: Synced updated filter matcher/API files from `Data/Engine` into `Engine/Data/Engine` and restarted `borealis-engine.service` so live validation/matching behavior reflects the latest source fix immediately.
+Removal Criteria: The deployment/restart flow always restages `Data/Engine` into `Engine/` before launch, or the service runs directly from the source tree in development.
+Files: `Data/Engine/services/filters/matcher.py`, `Data/Engine/services/API/filters/management.py`, `Engine/Data/Engine/services/filters/matcher.py`, `Engine/Data/Engine/services/API/filters/management.py`
+Evidence: Live filter preview rejected `does_not_contain` even though the source matcher accepted it, showing the runtime mirror was stale.
+Next Step: Fold runtime restaging into the standard service restart workflow so source and runtime trees cannot drift silently.
+GitHub Issue: not yet
+
 ID: TD-20260218-01
 Status: active
 Owner: Agent + WebUI

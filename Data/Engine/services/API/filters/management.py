@@ -68,12 +68,6 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
     ) -> Dict[str, Any]:
         base = existing or {}
         now_ts = int(time.time())
-        criteria_mode = str(
-            data.get("criteria_mode")
-            or data.get("criteriaMode")
-            or base.get("criteria_mode")
-            or "basic"
-        ).strip().lower()
         site_mode = str(
             data.get("site_mode")
             or data.get("siteMode")
@@ -86,7 +80,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
                 "name": _trim_single_line(data.get("name") or base.get("name")),
                 "description": _trim_single_line(data.get("description") or base.get("description")),
                 "archived": data.get("archived") if "archived" in data else base.get("archived", False),
-                "criteria_mode": criteria_mode,
+                "criteria_mode": "advanced",
                 "site_mode": site_mode,
                 "site_ids": (
                     data.get("site_ids")
@@ -95,6 +89,14 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
                     or data.get("site_scope_values")
                     or base.get("site_ids")
                     or []
+                ),
+                "criteria": (
+                    data.get("criteria")
+                    or data.get("criteria_payload")
+                    or ({"groups": data.get("groups")} if isinstance(data.get("groups"), list) else None)
+                    or base.get("criteria")
+                    or base.get("advanced_criteria")
+                    or {"groups": []}
                 ),
                 "basic_criteria": (
                     data.get("basic_criteria")
@@ -277,9 +279,9 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
                         record["name"],
                         record["description"],
                         1 if record["archived"] else 0,
-                        record["criteria_mode"],
+                        "advanced",
                         record["site_mode"],
-                        json.dumps(record["basic_criteria"] or {"criteria": []}),
+                        json.dumps({"criteria": []}),
                         json.dumps(record["advanced_criteria"] or {"groups": []}),
                         record["last_edited_by"],
                         int(record["created_at"]),
@@ -307,9 +309,9 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
                         record["name"],
                         record["description"],
                         1 if record["archived"] else 0,
-                        record["criteria_mode"],
+                        "advanced",
                         record["site_mode"],
-                        json.dumps(record["basic_criteria"] or {"criteria": []}),
+                        json.dumps({"criteria": []}),
                         json.dumps(record["advanced_criteria"] or {"groups": []}),
                         record["last_edited_by"],
                         int(record["updated_at"]),
@@ -369,7 +371,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         filter_id = data.get("filter_id") or data.get("id")
         if filter_id is not None and not any(
             key in data
-            for key in {"name", "criteria_mode", "criteriaMode", "site_mode", "siteMode", "basic_criteria", "advanced_criteria", "groups"}
+            for key in {"name", "criteria_mode", "criteriaMode", "site_mode", "siteMode", "criteria", "basic_criteria", "advanced_criteria", "groups"}
         ):
             record = _select_filter(int(filter_id))
             if not record:
@@ -385,7 +387,6 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             {
                 "matched_device_count": len(devices),
                 "devices": devices,
-                "criteria_mode": draft.get("criteria_mode"),
                 "site_mode": draft.get("site_mode"),
             }
         )

@@ -587,7 +587,6 @@ const normalizeFilterCatalog = (raw) => {
         id,
         name: item?.name || `Filter ${idx + 1}`,
         description: item?.description || "",
-        criteria_mode: item?.criteria_mode || "basic",
         site_mode: siteMode,
         scope: scopeLabel,
         siteSummary: siteNames.join(", "),

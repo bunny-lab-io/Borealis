@@ -204,26 +204,31 @@ def test_filter_preview_create_clone_and_usage_lock(engine_harness: EngineTestHa
 
     metadata_response = client.get("/api/device_filters/metadata")
     assert metadata_response.status_code == 200
-    fields = metadata_response.get_json()["fields"]
+    metadata_body = metadata_response.get_json()
+    fields = metadata_body["fields"]
     assert any(field["value"] == "installed_software" for field in fields)
+    assert any(op["value"] == "does_not_contain" for op in metadata_body["operators"]["text"])
 
     payload = {
         "name": "Chrome on Main Lab",
         "description": "Chrome software filter",
-        "criteria_mode": "basic",
         "site_mode": "specific_sites",
         "site_ids": [1],
-        "basic_criteria": {
-            "criteria": [
+        "criteria": {
+            "groups": [
                 {
-                    "field": "installed_software",
-                    "operator": "contains",
-                    "value": "chrome",
-                    "software_source": "local_installed",
+                    "join_with": "",
+                    "conditions": [
+                        {
+                            "field": "installed_software",
+                            "operator": "contains",
+                            "value": "chrome",
+                            "software_source": "local_installed",
+                        }
+                    ],
                 }
             ]
         },
-        "advanced_criteria": {"groups": []},
     }
 
     preview_response = client.post("/api/device_filters/preview", json=payload)
@@ -312,18 +317,21 @@ def test_scheduler_marks_zero_target_filter_runs_as_skipped(engine_harness: Engi
         json={
             "name": "No Match Filter",
             "description": "Matches nothing",
-            "criteria_mode": "basic",
             "site_mode": "global",
-            "basic_criteria": {
-                "criteria": [
+            "criteria": {
+                "groups": [
                     {
-                        "field": "installed_software",
-                        "operator": "contains",
-                        "value": "definitely-not-installed",
+                        "join_with": "",
+                        "conditions": [
+                            {
+                                "field": "installed_software",
+                                "operator": "contains",
+                                "value": "definitely-not-installed",
+                            }
+                        ],
                     }
                 ]
             },
-            "advanced_criteria": {"groups": []},
         },
     )
     assert create_response.status_code == 201
@@ -389,3 +397,43 @@ def test_scheduler_marks_zero_target_filter_runs_as_skipped(engine_harness: Engi
     assert row[0] == "Skipped"
     assert row[1] == "no_devices_targeted"
     assert row[2] in (None, "")
+
+
+def test_filter_preview_supports_does_not_contain(engine_harness: EngineTestHarness) -> None:
+    _seed_filter_inventory(engine_harness)
+    client = _filter_client_with_admin_session(engine_harness)
+
+    response = client.post(
+        "/api/device_filters/preview",
+        json={
+            "name": "Windows Workstations Without Server",
+            "description": "Negative string matching",
+            "site_mode": "global",
+            "criteria": {
+                "groups": [
+                    {
+                        "join_with": "",
+                        "conditions": [
+                            {
+                                "field": "operating_system",
+                                "operator": "contains",
+                                "value": "windows",
+                                "join_with": "",
+                            },
+                            {
+                                "field": "operating_system",
+                                "operator": "does_not_contain",
+                                "value": "server",
+                                "join_with": "AND",
+                            },
+                        ],
+                    }
+                ]
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["matched_device_count"] == 1
+    assert [device["hostname"] for device in body["devices"]] == ["test-device"]

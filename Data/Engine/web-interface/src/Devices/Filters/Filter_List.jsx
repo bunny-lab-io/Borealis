@@ -67,7 +67,6 @@ const AUTO_SIZE_COLUMNS = [
   "name",
   "description",
   "site_mode",
-  "criteria_mode",
   "matching_device_count",
   "usage",
   "last_edited_by",
@@ -202,11 +201,6 @@ const SITE_MODE_META = {
   },
 };
 
-const criteriaModeLabel = (value) => {
-  const normalized = String(value || "basic").trim().toLowerCase();
-  return normalized === "advanced" ? "Advanced" : "Basic";
-};
-
 const formatTimestamp = (value) => {
   if (!value) return "";
   const numeric = Number(value);
@@ -335,6 +329,7 @@ export default function DeviceFilterList({
   onPageMetaChange,
 }) {
   const gridRef = useRef(null);
+  const createFilterRef = useRef(onCreateFilter);
   const [tab, setTab] = useState("active");
   const [filters, setFilters] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -365,6 +360,10 @@ export default function DeviceFilterList({
     loadFilters();
   }, [loadFilters, refreshToken]);
 
+  useEffect(() => {
+    createFilterRef.current = onCreateFilter;
+  }, [onCreateFilter]);
+
   const pageHeaderActions = useMemo(
     () => [
       {
@@ -380,10 +379,10 @@ export default function DeviceFilterList({
         label: "Create Filter",
         icon: <AddIcon />,
         tone: "primary",
-        onClick: () => onCreateFilter?.(),
+        onClick: () => createFilterRef.current?.(),
       },
     ],
-    [loadFilters, loading, onCreateFilter]
+    [loadFilters, loading]
   );
 
   useEffect(() => {
@@ -530,16 +529,9 @@ export default function DeviceFilterList({
         ),
       },
       {
-        field: "criteria_mode",
-        headerName: "Criteria Complexity",
-        minWidth: 170,
-        flex: 0.9,
-        valueFormatter: (params) => criteriaModeLabel(params.value),
-      },
-      {
         field: "matching_device_count",
         headerName: "Matched Devices",
-        minWidth: 150,
+        minWidth: 180,
         flex: 0.8,
         valueFormatter: (params) =>
           typeof params.value === "number" ? params.value.toLocaleString() : "0",

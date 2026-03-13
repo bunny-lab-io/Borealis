@@ -42,19 +42,20 @@ CRITERIA_MODE_BASIC = "basic"
 CRITERIA_MODE_ADVANCED = "advanced"
 VALID_CRITERIA_MODES = {CRITERIA_MODE_BASIC, CRITERIA_MODE_ADVANCED}
 
-TEXT_OPERATORS = {
+TEXT_OPERATORS = [
     "contains",
+    "does_not_contain",
     "equals",
     "begins_with",
     "ends_with",
-}
-NUMERIC_OPERATORS = {
+]
+NUMERIC_OPERATORS = [
     "equals",
     "greater_than",
     "greater_than_or_equal",
     "less_than",
     "less_than_or_equal",
-}
+]
 SOFTWARE_VERSION_OPERATORS = {"matches", "older_than", "newer_than"}
 SOFTWARE_SOURCES = {
     "local_installed": "Locally Installed",
@@ -68,46 +69,36 @@ FILTER_FIELD_METADATA: List[Dict[str, Any]] = [
         "value": "hostname",
         "label": "Hostname",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "description",
         "label": "Description",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "site_name",
         "label": "Site",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "operating_system",
         "label": "Operating System",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "device_type",
         "label": "Device Type",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "status",
@@ -115,98 +106,76 @@ FILTER_FIELD_METADATA: List[Dict[str, Any]] = [
         "kind": "enum",
         "operators": ["equals"],
         "supports_regex": False,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "last_seen_age_minutes",
         "label": "Last Seen Age (Minutes)",
         "kind": "number",
-        "operators": sorted(NUMERIC_OPERATORS),
+        "operators": list(NUMERIC_OPERATORS),
         "supports_regex": False,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "last_user",
         "label": "Last User",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "internal_ip",
         "label": "Internal IP",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "external_ip",
         "label": "External IP",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "domain",
         "label": "Domain",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "total_ram_gb",
         "label": "Total RAM (GB)",
         "kind": "number",
-        "operators": sorted(NUMERIC_OPERATORS),
+        "operators": list(NUMERIC_OPERATORS),
         "supports_regex": False,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "storage_free_percent",
         "label": "Storage Free %",
         "kind": "number",
-        "operators": sorted(NUMERIC_OPERATORS),
+        "operators": list(NUMERIC_OPERATORS),
         "supports_regex": False,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "cpu_model",
         "label": "CPU Model",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "agent_version",
         "label": "Agent Version",
         "kind": "text",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
     },
     {
         "value": "installed_software",
         "label": "Installed Software",
         "kind": "software",
-        "operators": sorted(TEXT_OPERATORS),
+        "operators": list(TEXT_OPERATORS),
         "supports_regex": True,
-        "basic": True,
-        "advanced": True,
         "supports_source": True,
         "supports_version": True,
     },
@@ -215,10 +184,6 @@ FILTER_FIELD_METADATA: List[Dict[str, Any]] = [
 FILTER_FIELD_BY_ID: Dict[str, Dict[str, Any]] = {entry["value"]: entry for entry in FILTER_FIELD_METADATA}
 
 FILTER_METADATA_PAYLOAD: Dict[str, Any] = {
-    "criteria_modes": [
-        {"value": CRITERIA_MODE_BASIC, "label": "Basic"},
-        {"value": CRITERIA_MODE_ADVANCED, "label": "Advanced"},
-    ],
     "site_modes": [
         {"value": SITE_MODE_GLOBAL, "label": "Global"},
         {"value": SITE_MODE_SPECIFIC, "label": "Specific Sites"},
@@ -228,6 +193,7 @@ FILTER_METADATA_PAYLOAD: Dict[str, Any] = {
     "operators": {
         "text": [
             {"value": "contains", "label": "Contains"},
+            {"value": "does_not_contain", "label": "Does Not Contain"},
             {"value": "equals", "label": "Equals"},
             {"value": "begins_with", "label": "Begins With"},
             {"value": "ends_with", "label": "Ends With"},
@@ -450,11 +416,16 @@ def _text_match(operator: str, field_value: str, value: str, *, use_regex: bool 
     haystack = _normalize_string(field_value)
     needle = _normalize_string(value)
     if use_regex:
-        return _regex_search(needle, haystack)
+        matched = _regex_search(needle, haystack)
+        if operator == "does_not_contain":
+            return not matched
+        return matched
     haystack_lc = haystack.lower()
     needle_lc = needle.lower()
     if operator == "contains":
         return needle_lc in haystack_lc
+    if operator == "does_not_contain":
+        return needle_lc not in haystack_lc
     if operator == "equals":
         return haystack_lc == needle_lc
     if operator == "begins_with":
@@ -671,9 +642,6 @@ class DeviceFilterMatcher:
     # ---------- Filter normalization and validation ----------
     def normalize_filter_record(self, filter_record: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         record = dict(filter_record or {})
-        criteria_mode = _normalize_string(record.get("criteria_mode") or CRITERIA_MODE_BASIC).lower()
-        if criteria_mode not in VALID_CRITERIA_MODES:
-            criteria_mode = CRITERIA_MODE_BASIC
         site_mode = _normalize_string(record.get("site_mode") or SITE_MODE_GLOBAL).lower()
         if site_mode not in VALID_SITE_MODES:
             site_mode = SITE_MODE_GLOBAL
@@ -690,8 +658,9 @@ class DeviceFilterMatcher:
             basic_payload = record.get("basic_criteria_json") if isinstance(record.get("basic_criteria_json"), dict) else {}
         if not isinstance(basic_payload, dict):
             basic_payload = {"criteria": []}
+        normalized_basic_payload = self._normalize_basic_payload(basic_payload)
 
-        advanced_payload = record.get("advanced_criteria")
+        advanced_payload = record.get("criteria") if isinstance(record.get("criteria"), dict) else record.get("advanced_criteria")
         if not isinstance(advanced_payload, dict):
             advanced_payload = (
                 record.get("advanced_criteria_json") if isinstance(record.get("advanced_criteria_json"), dict) else {}
@@ -702,17 +671,20 @@ class DeviceFilterMatcher:
                 advanced_payload = {"groups": groups}
             else:
                 advanced_payload = {"groups": []}
+        normalized_advanced_payload = self._normalize_advanced_payload(advanced_payload)
+        merged_criteria_payload = self._merge_criteria_payloads(normalized_basic_payload, normalized_advanced_payload)
 
         return {
             "id": record.get("id"),
             "name": _normalize_string(record.get("name")),
             "description": _normalize_string(record.get("description")),
             "archived": _coerce_bool(record.get("archived")),
-            "criteria_mode": criteria_mode,
+            "criteria_mode": CRITERIA_MODE_ADVANCED,
             "site_mode": site_mode,
             "site_ids": site_ids,
-            "basic_criteria": self._normalize_basic_payload(basic_payload),
-            "advanced_criteria": self._normalize_advanced_payload(advanced_payload),
+            "basic_criteria": normalized_basic_payload,
+            "advanced_criteria": merged_criteria_payload,
+            "criteria": merged_criteria_payload,
             "last_edited_by": _normalize_string(record.get("last_edited_by")),
             "created_at": _coerce_int(record.get("created_at")) or 0,
             "updated_at": _coerce_int(record.get("updated_at")) or 0,
@@ -771,6 +743,28 @@ class DeviceFilterMatcher:
             )
         return {"groups": normalized_groups}
 
+    def _merge_criteria_payloads(self, basic_payload: Dict[str, Any], advanced_payload: Dict[str, Any]) -> Dict[str, Any]:
+        groups = list(advanced_payload.get("groups") or [])
+        if groups:
+            return {"groups": groups}
+        basic_criteria = list(basic_payload.get("criteria") or [])
+        if not basic_criteria:
+            return {"groups": []}
+        return {
+            "groups": [
+                {
+                    "join_with": None,
+                    "conditions": [
+                        {
+                            **criterion,
+                            "join_with": None if index == 0 else "AND",
+                        }
+                        for index, criterion in enumerate(basic_criteria)
+                    ],
+                }
+            ]
+        }
+
     def _normalize_criterion(self, item: Dict[str, Any]) -> Dict[str, Any]:
         normalized = {
             "field": _normalize_string(item.get("field")),
@@ -803,10 +797,7 @@ class DeviceFilterMatcher:
         errors: List[str] = []
         if record["site_mode"] in {SITE_MODE_SPECIFIC, SITE_MODE_EXCLUSIONS} and not record["site_ids"]:
             errors.append("Select at least one site for the chosen site mode.")
-        if record["criteria_mode"] == CRITERIA_MODE_BASIC:
-            errors.extend(self._validate_basic_payload(record["basic_criteria"]))
-        else:
-            errors.extend(self._validate_advanced_payload(record["advanced_criteria"]))
+        errors.extend(self._validate_advanced_payload(record["advanced_criteria"]))
         return errors
 
     def _validate_basic_payload(self, payload: Dict[str, Any]) -> List[str]:
@@ -925,10 +916,7 @@ class DeviceFilterMatcher:
         return True
 
     def _device_matches_active_criteria(self, filter_record: Dict[str, Any], device: Dict[str, Any]) -> bool:
-        mode = filter_record.get("criteria_mode") or CRITERIA_MODE_BASIC
-        if mode == CRITERIA_MODE_ADVANCED:
-            return self._evaluate_advanced(device, filter_record.get("advanced_criteria") or {})
-        return self._evaluate_basic(device, filter_record.get("basic_criteria") or {})
+        return self._evaluate_advanced(device, filter_record.get("advanced_criteria") or {})
 
     def _evaluate_basic(self, device: Dict[str, Any], payload: Dict[str, Any]) -> bool:
         criteria = payload.get("criteria") or []
@@ -999,6 +987,8 @@ class DeviceFilterMatcher:
         version_value = _normalize_string(criterion.get("version_value"))
         if version_value and not version_operator:
             version_operator = "matches"
+        positive_operator = "contains" if operator == "does_not_contain" else operator
+        matched = False
         for record in device.get("software_records") or []:
             if not isinstance(record, dict):
                 continue
@@ -1006,7 +996,7 @@ class DeviceFilterMatcher:
             if source and record_source != source:
                 continue
             name = _normalize_string(record.get("name"))
-            if not _text_match(operator, name, value, use_regex=use_regex):
+            if not _text_match(positive_operator, name, value, use_regex=use_regex):
                 continue
             if version_operator:
                 if not self._match_software_version(
@@ -1015,8 +1005,11 @@ class DeviceFilterMatcher:
                     version_value,
                 ):
                     continue
-            return True
-        return False
+            matched = True
+            break
+        if operator == "does_not_contain":
+            return not matched
+        return matched
 
     def _match_software_version(self, device_version: str, operator: str, value: str) -> bool:
         if operator == "matches":
@@ -1110,7 +1103,7 @@ class DeviceFilterMatcher:
                     "name": row["name"],
                     "description": row["description"] or "",
                     "archived": bool(row["archived"] or 0),
-                    "criteria_mode": row["criteria_mode"] or CRITERIA_MODE_BASIC,
+                    "criteria_mode": row["criteria_mode"] or CRITERIA_MODE_ADVANCED,
                     "site_mode": row["site_mode"] or SITE_MODE_GLOBAL,
                     "basic_criteria": _safe_json(row["basic_criteria_json"], {"criteria": []}),
                     "advanced_criteria": _safe_json(row["advanced_criteria_json"], {"groups": []}),

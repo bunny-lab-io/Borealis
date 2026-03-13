@@ -1304,6 +1304,51 @@ const EMPTY_PAGE_HEADER = {
     }
   }, [currentPage, isAdmin, navigateTo]);
 
+  const handleViewDevicesForFilter = useCallback(
+    (filter) => {
+      try {
+        localStorage.setItem(
+          "device_list_saved_filter_preview",
+          JSON.stringify({ filter_id: filter?.id, name: filter?.name || "Saved Filter" })
+        );
+      } catch {}
+      navigateTo("devices");
+    },
+    [navigateTo]
+  );
+
+  const handleOpenJobFromFilter = useCallback(
+    (job) => {
+      setEditingJob(job || null);
+      navigateTo("create_job", { jobId: job?.id });
+    },
+    [navigateTo]
+  );
+
+  const handleCreateFilter = useCallback(() => {
+    setFilterEditorState(null);
+    navigateTo("filter_editor");
+  }, [navigateTo]);
+
+  const handleEditFilter = useCallback(
+    (filter) => {
+      setFilterEditorState(filter);
+      navigateTo("filter_editor", { filterId: filter?.id });
+    },
+    [navigateTo]
+  );
+
+  const handleCancelFilterEdit = useCallback(() => {
+    setFilterEditorState(null);
+    navigateTo("filters");
+  }, [navigateTo]);
+
+  const handleFilterSaved = useCallback(() => {
+    setFilterEditorState(null);
+    setFiltersRefreshToken(Date.now());
+    navigateTo("filters");
+  }, [navigateTo]);
+
   const renderMainContent = () => {
     switch (currentPage) {
       case "sites":
@@ -1348,27 +1393,10 @@ const EMPTY_PAGE_HEADER = {
           <DeviceFilterList
             onPageMetaChange={handlePageMetaChange}
             refreshToken={filtersRefreshToken}
-            onViewDevices={(filter) => {
-              try {
-                localStorage.setItem(
-                  "device_list_saved_filter_preview",
-                  JSON.stringify({ filter_id: filter?.id, name: filter?.name || "Saved Filter" })
-                );
-              } catch {}
-              navigateTo("devices");
-            }}
-            onOpenJob={(job) => {
-              setEditingJob(job || null);
-              navigateTo("create_job", { jobId: job?.id });
-            }}
-            onCreateFilter={() => {
-              setFilterEditorState(null);
-              navigateTo("filter_editor");
-            }}
-            onEditFilter={(filter) => {
-              setFilterEditorState(filter);
-              navigateTo("filter_editor", { filterId: filter?.id });
-            }}
+            onViewDevices={handleViewDevicesForFilter}
+            onOpenJob={handleOpenJobFromFilter}
+            onCreateFilter={handleCreateFilter}
+            onEditFilter={handleEditFilter}
           />
         );
 
@@ -1377,15 +1405,8 @@ const EMPTY_PAGE_HEADER = {
           <DeviceFilterEditor
             onPageMetaChange={handlePageMetaChange}
             initialFilter={filterEditorState}
-            onCancel={() => {
-              setFilterEditorState(null);
-              navigateTo("filters");
-            }}
-            onSaved={(filter) => {
-              setFilterEditorState(null);
-              setFiltersRefreshToken(Date.now());
-              navigateTo("filters");
-            }}
+            onCancel={handleCancelFilterEdit}
+            onSaved={handleFilterSaved}
           />
         );
 

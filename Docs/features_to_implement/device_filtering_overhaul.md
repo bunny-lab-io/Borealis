@@ -15,6 +15,8 @@ This document defines the full planned overhaul of Borealis device filtering, in
 
 Implementation status:
 - Backend schema, matcher, filter API, software inventory normalization, scheduler snapshots, filter UI rebuild, device-list handoff, scheduler picker updates, targeted unit coverage, and core docs propagation have been implemented.
+- The live filter system now uses one grouped criteria model. Legacy `basic_criteria` payloads are auto-converted into grouped criteria during normalization, and the separate Basic/Advanced mode distinction is deprecated in the UI and runtime.
+- Text and software filters now support `Does Not Contain` for absence-based matching.
 - Local execution verification is partially blocked in this environment because `pytest` and `npm` are unavailable on-path; Python syntax compilation for the touched backend and test files succeeded.
 
 This plan is intended to be decision-complete so a future Codex agent can implement it directly without re-opening product questions.
@@ -39,7 +41,7 @@ The required solution is a full-stack rework, not a patch.
   - `Global w/ Exclusions`
 - Add first-class installed software filtering for Windows and Linux.
 - Add a manual preview/apply workflow rather than live matching while typing.
-- Support separate `Basic` and `Advanced` criteria modes with no shared criteria state between them.
+- Use one grouped criteria system for all saved filters and editor interactions.
 - Add archive, unarchive, clone, and delete workflows with scheduled-job safety checks.
 - Prevent archive and delete when scheduled jobs still reference a filter.
 - Add a `View Devices` action that opens the device list with ephemeral filters derived from the selected saved filter.
@@ -53,7 +55,6 @@ The required solution is a full-stack rework, not a patch.
 - Do not implement filter version history.
 - Do not merge device list saved views and device filters into one system.
 - Do not migrate site assignment from hostname to device GUID in this effort.
-- Do not add negative criteria operators in the first implementation pass.
 - Do not add software publisher/vendor as a first-class filter in the first pass.
 
 ## Locked Product Decisions
@@ -85,13 +86,11 @@ The required solution is a full-stack rework, not a patch.
 ### Description
 - Filters have a plain-text, single-line description.
 
-### Criteria modes
-- `Basic` and `Advanced` are separate criteria entities.
-- They do not translate into each other.
-- They do not hydrate from each other.
-- They do not share state.
-- The saved `criteria_mode` determines which criteria payload is active at runtime.
-- When reopening a filter, the editor should hydrate the last saved active mode automatically.
+### Criteria model
+- The separate `Basic` and `Advanced` criteria modes are deprecated.
+- The editor exposes one grouped criteria builder.
+- Runtime evaluation uses one grouped criteria payload.
+- Legacy `basic_criteria` payloads are converted into one grouped `AND` block automatically when filters are normalized or loaded.
 
 ### Preview behavior
 - The filter editor must use a manual apply model.
@@ -99,11 +98,16 @@ The required solution is a full-stack rework, not a patch.
 - Matching should only occur on explicit preview/apply and at runtime when scheduled jobs or quick jobs resolve targets.
 
 ### Regex
-- Regex support must be exposed in both Basic and Advanced modes.
+- Regex support is available per criterion in the grouped criteria builder.
 - Regex is off by default per criterion.
 - Default non-regex matching is case-insensitive.
 - Regex matching does not inherit the default case-insensitive behavior.
 - Backend regex evaluation should use a dependency that supports PCRE-style behavior as closely as practical.
+
+### Negative matching
+- Text criteria support `Does Not Contain`.
+- Software criteria support `Does Not Contain`.
+- A filter can combine positive and negative text matches inside the same condition group.
 
 ### Software filtering
 - Windows and Linux are in scope.
