@@ -838,7 +838,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
       variant="grid_with_stack"
       stack={topStack}
       main={
-        <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2, minHeight: 0 }}>
+        <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2, minHeight: 0, height: "100%" }}>
           <Tabs
             value={activeTab}
             onChange={(_, value) => setActiveTab(value)}
@@ -868,11 +868,52 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
           {activeTab === "scope" ? scopeCards : null}
           {activeTab === "criteria" ? criteriaTab : null}
           {activeTab === "results" ? (
-            <Stack spacing={1.5} sx={{ minHeight: 0, flexGrow: 1 }}>
+            <Stack spacing={1.5} sx={{ minHeight: 0, flexGrow: 1, height: "100%" }}>
               <Typography sx={{ color: "#e2e8f0", fontWeight: 700 }}>
                 {previewCount == null ? "No preview has been run yet." : `${previewCount.toLocaleString()} device(s) matched.`}
               </Typography>
-              <Box sx={{ minHeight: 420, flexGrow: 1 }}>
+              <Box
+                sx={{
+                  width: "100%",
+                  flexGrow: 1,
+                  minHeight: 420,
+                  height: "100%",
+                  fontFamily: gridFontFamily,
+                  "--ag-font-family": gridFontFamily,
+                  "--ag-icon-font-family": iconFontFamily,
+                  "& .ag-root-wrapper": {
+                    minHeight: "100%",
+                    border: "none",
+                    borderRadius: 0,
+                    background: "transparent",
+                  },
+                  "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+                    fontFamily: gridFontFamily,
+                  },
+                  "& .ag-header": {
+                    backgroundColor: "rgba(15,23,42,0.9)",
+                    borderBottom: "1px solid rgba(148,163,184,0.25)",
+                  },
+                  "& .ag-header-cell-label": {
+                    color: "#e2e8f0",
+                    fontWeight: 600,
+                    letterSpacing: 0.3,
+                  },
+                  "& .ag-row": {
+                    borderColor: "rgba(255,255,255,0.04)",
+                    transition: "background 0.2s ease",
+                  },
+                  "& .ag-row:nth-of-type(even)": {
+                    backgroundColor: "rgba(15,23,42,0.45)",
+                  },
+                  "& .ag-row-hover": {
+                    backgroundColor: "rgba(73,156,196,0.2) !important",
+                  },
+                  "& .ag-icon": {
+                    fontFamily: iconFontFamily,
+                  },
+                }}
+              >
                 <AgGridReact
                   rowData={previewRows}
                   columnDefs={previewColumns}
