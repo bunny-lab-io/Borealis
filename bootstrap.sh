@@ -201,7 +201,7 @@ sync_repo() {
   fi
 
   run_privileged git -C "${INSTALL_DIR}" fetch --depth 1 --force origin "${REPO_REF}"
-  run_privileged git -C "${INSTALL_DIR}" checkout --force -B bootstrap-deploy FETCH_HEAD
+  run_privileged git -C "${INSTALL_DIR}" checkout --force -B main FETCH_HEAD
   run_privileged git -C "${INSTALL_DIR}" reset --hard FETCH_HEAD
   run_privileged git -C "${INSTALL_DIR}" clean -fdx -e Engine -e Agent
 
