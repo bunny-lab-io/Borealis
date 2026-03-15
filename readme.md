@@ -76,26 +76,21 @@ Site List:
 ![Site List](Docs/images/repo_screenshots/Site_List.png)
 
 ## Getting Started
+### Engine Installation:
+```sh
+# Production
+curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --engine-production
 
-### Installation
-#### Local Repository
-1) Start the Engine (Linux):
-   - `./Borealis.sh --engine-production` *Production Engine @ https://localhost:5000*
-   - `./Borealis.sh --engine-dev` *Dev (Vite + Flask) @ https://localhost:5173*
-   - Default Username: `admin`
-   - Default Password: `Password`
-2) Install the Agent (Windows):
-   - `./Borealis.ps1`
-   - `./Borealis.ps1 -ServerUrl "https://192.168.3.252:5000" -EnrollmentCode "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"`
+# Development (Vite Dev File Hot-loading)
+curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --engine-dev
+```
+### Agent Installation:
+#### Windows
+```powershell
+$env:BOREALIS_SERVER_URL="https://192.168.3.252:5000"; $env:BOREALIS_ENROLLMENT_CODE="044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"; irm https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1 | iex
+```
+#### Linux
+```sh
+curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://192.168.3.252:5000" --enrollmentcode "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
+```
 
-#### One-Line Bootstrapper
-1) Start the Engine (Linux):
-   - `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --engine-production`
-   - `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --engine-dev`
-2) Install the Agent (Windows):
-   - `irm https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1 | iex`
-   - `$env:BOREALIS_SERVER_URL="https://192.168.3.252:5000"; $env:BOREALIS_ENROLLMENT_CODE="044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"; irm https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1 | iex`
-`
-3) Install the Agent (Linux):
-   - `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s --`
-   - `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://192.168.3.252:5000" --enrollmentcode "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"`
