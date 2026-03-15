@@ -56,7 +56,7 @@ const filterFieldSx = {
 };
 
 const PAGE_TITLE = "User Management";
-const PAGE_SUBTITLE = "Manage platform users, roles, MFA, and credentials.";
+const PAGE_SUBTITLE = "Manage Borealis Engine Operators, MFA, and password resets.";
 
 function formatTs(tsSec) {
   if (!tsSec) return "-";

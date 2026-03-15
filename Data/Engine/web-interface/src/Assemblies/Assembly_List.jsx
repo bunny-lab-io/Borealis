@@ -582,7 +582,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         headerName: "Type",
         valueGetter: (params) => TYPE_METADATA[params?.data?.typeKey]?.label || "",
         cellRenderer: TypeCellRenderer,
-        minWidth: 160,
+        minWidth: 100,
         flex: 0,
         sortable: true,
         filter: "agTextColumnFilter",
@@ -639,7 +639,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       {
         colId: "officialUpdate",
         field: "officialUpdateAvailable",
-        headerName: "Official",
+        headerName: "Action",
         minWidth: 112,
         maxWidth: 132,
         sortable: false,

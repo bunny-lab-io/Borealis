@@ -271,9 +271,9 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
     if (!error) return null;
     if (String(error).includes("HTTP 404")) {
       return {
-        severity: "warning",
+        severity: "info",
         message:
-          "Credential management is still using a placeholder grid shell. The backend API endpoint is not implemented yet.",
+          "Credential management does not yet exist.  This page serves as a placeholder.",
       };
     }
     return {

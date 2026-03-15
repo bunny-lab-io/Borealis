@@ -209,7 +209,7 @@ export default function GithubAPIToken({ isAdmin = false, onPageMetaChange }) {
   useEffect(() => {
     onPageMetaChange?.({
       page_title: "GitHub API Token",
-      page_subtitle: "Increase GitHub API rate limits for Borealis by storing a personal access token.",
+      page_subtitle: "Increase GitHub API rate limits for the Borealis Engine by storing a personal access token.",
       page_icon: GitHubIcon,
     });
     return () => onPageMetaChange?.(null);
@@ -232,7 +232,7 @@ export default function GithubAPIToken({ isAdmin = false, onPageMetaChange }) {
     <Paper sx={paperSx} elevation={0}>
       <Box sx={{ px: 2, py: 2, display: "flex", flexDirection: "column", gap: 1.5 }}>
         <Typography variant="body2" sx={{ color: "#ccc" }}>
-          Using a GitHub Personal Access Token raises rate limits from 60/hr to 5,000/hr. Generate one at{" "}
+          Using a GitHub Personal Access Token raises API rate limits from 60/hr to 5,000/hr. Generate one at{" "}
           <Link
             href="https://github.com/settings/tokens"
             target="_blank"

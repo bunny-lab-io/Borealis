@@ -34,7 +34,7 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_TITLE = "Device Filters";
 const PAGE_SUBTITLE =
-  "Build reusable automation targeting rules with explicit site scope, previewable criteria, and scheduler-safe lifecycle controls.";
+  "Build reusable assembly-targeting device filters with explicit site scope, criteria, and scheduler-safe lifecycle controls.";
 const PAGE_ICON = HeaderIcon;
 const gridFontFamily = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif";
 const iconFontFamily = "'Quartz Regular'";
@@ -482,7 +482,7 @@ export default function DeviceFilterList({
       {
         field: "name",
         headerName: "Filter Name",
-        minWidth: 250,
+        minWidth: 350,
         flex: 1.4,
         cellRenderer: (params) => (
           <Box
@@ -518,7 +518,7 @@ export default function DeviceFilterList({
       {
         field: "site_mode",
         headerName: "Scope",
-        minWidth: 210,
+        minWidth: 120,
         flex: 1,
         cellRenderer: (params) => (
           <Tooltip title={scopeSummary(params.data)}>
@@ -530,16 +530,16 @@ export default function DeviceFilterList({
       },
       {
         field: "matching_device_count",
-        headerName: "Matched Devices",
-        minWidth: 180,
+        headerName: "Devices",
+        minWidth: 110,
         flex: 0.8,
         valueFormatter: (params) =>
           typeof params.value === "number" ? params.value.toLocaleString() : "0",
       },
       {
         field: "usage",
-        headerName: "Jobs Referencing this Filter",
-        minWidth: 230,
+        headerName: "Jobs Using this Filter",
+        minWidth: 170,
         flex: 1,
         sortable: false,
         filter: false,
@@ -572,7 +572,7 @@ export default function DeviceFilterList({
       {
         field: "last_edited_by",
         headerName: "Last Edited By",
-        minWidth: 160,
+        minWidth: 150,
         flex: 0.9,
         valueFormatter: (params) => params.value || "Unknown",
       },
@@ -586,7 +586,7 @@ export default function DeviceFilterList({
       {
         field: "actions",
         headerName: "",
-        minWidth: 220,
+        minWidth: 150,
         flex: 1.2,
         sortable: false,
         filter: false,

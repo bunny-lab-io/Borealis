@@ -752,7 +752,7 @@ export default function DeviceFilterEditor({ initialFilter, onCancel, onSaved, o
     onPageMetaChange?.({
       page_title: pageTitle,
       page_subtitle:
-        "Define scope, build grouped criteria, and preview matching devices using the backend matcher before saving.",
+        "Define site scope, build grouped criteria, and preview matching devices.",
       page_icon: PAGE_ICON,
       page_header_actions: pageHeaderActions,
     });

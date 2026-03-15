@@ -10,6 +10,13 @@ export default function ServerInfo({ isAdmin = false, onPageMetaChange }) {
     () => [
       {
         id: "server-github",
+        label: "Aurora Repository",
+        icon: <GitHubIcon />,
+        tone: "secondary",
+        onClick: () => window.open("https://github.com/bunny-lab-io/Aurora", "_blank"),
+      },
+      {
+        id: "server-github",
         label: "GitHub Project",
         icon: <GitHubIcon />,
         tone: "secondary",
