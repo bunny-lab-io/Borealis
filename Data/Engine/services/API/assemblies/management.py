@@ -20,17 +20,31 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from flask import Blueprint, jsonify, request
 
 from ....assembly_management.models import AssemblyDomain
+from ...assemblies.official_catalog import OfficialAssemblyCatalogService
 from ...assemblies.serialization import AssemblySerializationError
 from ...assemblies.service import AssemblyRuntimeService
 from ...auth import RequestAuthContext
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
+
+
+def _coerce_refresh_seconds(value: Any, default: int = 300) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        return default
+    if parsed < 30:
+        return 30
+    if parsed > 86400:
+        return 86400
+    return parsed
 
 
 class AssemblyAPIService:
@@ -44,6 +58,30 @@ class AssemblyAPIService:
         if cache is None:
             raise RuntimeError("Assembly cache not initialised; ensure Engine bootstrap executed.")
         self.runtime = AssemblyRuntimeService(cache, logger=self.logger)
+        catalog_root_raw = adapters.config.get("official_assemblies_root") or adapters.config.get("OFFICIAL_ASSEMBLIES_ROOT")
+        bundled_root = Path(str(catalog_root_raw)).expanduser() if catalog_root_raw else None
+        self.catalog = OfficialAssemblyCatalogService(
+            cache=cache,
+            database_manager=cache.database_manager,
+            logger=self.logger,
+            github_integration=adapters.github_integration,
+            bundled_root=bundled_root,
+            repo_url=str(
+                adapters.config.get("official_assemblies_repo_url")
+                or adapters.config.get("OFFICIAL_ASSEMBLIES_REPO_URL")
+                or "https://example.com"
+            ).strip()
+            or "https://example.com",
+            manifest_url=str(
+                adapters.config.get("official_assemblies_manifest_url")
+                or adapters.config.get("OFFICIAL_ASSEMBLIES_MANIFEST_URL")
+                or ""
+            ).strip(),
+            refresh_seconds=_coerce_refresh_seconds(
+                adapters.config.get("official_assemblies_refresh_seconds")
+                or adapters.config.get("OFFICIAL_ASSEMBLIES_REFRESH_SECONDS")
+            ),
+        )
         self.service_log = adapters.service_log
         self.auth = RequestAuthContext(
             app=app,
@@ -175,8 +213,9 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
         domain = request.args.get("domain")
         assembly_type = request.args.get("type")
         items = service.runtime.list_assemblies(domain=domain, assembly_type=assembly_type)
+        items = service.catalog.annotate_collection(items)
         queue_state = service.runtime.queue_snapshot()
-        return jsonify({"items": items, "queue": queue_state}), 200
+        return jsonify({"items": items, "queue": queue_state, "official_catalog": service.catalog.catalog_status(items)}), 200
 
     # ------------------------------------------------------------------
     # Single assembly retrieval
@@ -189,6 +228,8 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
         data = service.runtime.get_assembly(assembly_guid)
         if not data:
             return jsonify({"error": "not found"}), 404
+        if str(data.get("source") or "").strip().lower() == AssemblyDomain.OFFICIAL.value:
+            data = service.catalog.annotate_collection([data])[0]
         data["queue"] = service.runtime.queue_snapshot()
         return jsonify(data), 200
 
@@ -507,6 +548,75 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "not found"}), 404
         except Exception:  # pragma: no cover
             service.logger.exception("Failed to export assembly %s.", assembly_guid)
+            return jsonify({"error": "internal server error"}), 500
+
+    # ------------------------------------------------------------------
+    # Official catalog updates
+    # ------------------------------------------------------------------
+    @blueprint.route("/<string:assembly_guid>/official-update", methods=["POST"])
+    def update_official_assembly(assembly_guid: str):
+        user, error = service.require_admin()
+        if error:
+            return jsonify(error[0]), error[1]
+        try:
+            record = service.catalog.update_official_assembly(assembly_guid)
+            annotated = service.catalog.annotate_collection([record])[0]
+            service._audit(
+                user=user,
+                action="official_update",
+                domain=AssemblyDomain.OFFICIAL,
+                assembly_guid=annotated.get("assembly_guid"),
+                status="success",
+                detail=f"source={annotated.get('official_catalog_source') or 'catalog'}",
+            )
+            return jsonify(annotated), 200
+        except ValueError as exc:
+            service._audit(
+                user=user,
+                action="official_update",
+                domain=AssemblyDomain.OFFICIAL,
+                assembly_guid=assembly_guid,
+                status="failed",
+                detail=str(exc),
+            )
+            return jsonify({"error": str(exc)}), 404
+        except Exception:  # pragma: no cover - runtime guard
+            service.logger.exception("Failed to update official assembly %s.", assembly_guid)
+            service._audit(
+                user=user,
+                action="official_update",
+                domain=AssemblyDomain.OFFICIAL,
+                assembly_guid=assembly_guid,
+                status="error",
+                detail="internal server error",
+            )
+            return jsonify({"error": "internal server error"}), 500
+
+    @blueprint.route("/official/update-all", methods=["POST"])
+    def update_all_official_assemblies():
+        user, error = service.require_admin()
+        if error:
+            return jsonify(error[0]), error[1]
+        try:
+            result = service.catalog.update_all_official_assemblies()
+            detail = f"updated={len(result.get('updated') or [])}"
+            service._audit(
+                user=user,
+                action="official_update_all",
+                domain=AssemblyDomain.OFFICIAL,
+                status="success",
+                detail=detail,
+            )
+            return jsonify(result), 200
+        except Exception:  # pragma: no cover - runtime guard
+            service.logger.exception("Failed to update all official assemblies.")
+            service._audit(
+                user=user,
+                action="official_update_all",
+                domain=AssemblyDomain.OFFICIAL,
+                status="error",
+                detail="internal server error",
+            )
             return jsonify({"error": "internal server error"}), 500
 
     # ------------------------------------------------------------------

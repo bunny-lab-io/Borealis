@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 import time
 from copy import deepcopy
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple

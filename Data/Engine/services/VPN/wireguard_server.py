@@ -70,12 +70,12 @@ class WireGuardServerManager:
     def __init__(self, config: WireGuardServerConfig) -> None:
         self.config = config
         self.logger = _build_logger(config.log_path)
+        self._is_windows = os.name == "nt"
         self._ensure_cert_dir()
         self.server_private_key, self.server_public_key = self._ensure_server_keys()
         self._service_name = "borealis-wg"
         self._service_display_name = "Borealis - WireGuard - Engine"
         self._config_dir = self._resolve_config_dir()
-        self._is_windows = os.name == "nt"
         self._interface_name = self._resolve_interface_name()
         self._wireguard_exe = self._resolve_wireguard_exe()
         self._wg_quick = shutil.which("wg-quick") or ""
@@ -92,6 +92,7 @@ class WireGuardServerManager:
         config_dir = engine_config.PROJECT_ROOT / "Engine" / "WireGuard"
         try:
             config_dir.mkdir(parents=True, exist_ok=True)
+            self._secure_path_permissions(config_dir, mode=0o700, label="WireGuard config dir")
         except Exception:
             self.logger.error("Failed to ensure WireGuard config dir at %s", config_dir, exc_info=True)
         return config_dir
@@ -123,8 +124,22 @@ class WireGuardServerManager:
     def _ensure_cert_dir(self) -> None:
         try:
             self.config.private_key_path.parent.mkdir(parents=True, exist_ok=True)
+            self._secure_path_permissions(
+                self.config.private_key_path.parent,
+                mode=0o700,
+                label="WireGuard key directory",
+            )
         except Exception:
             self.logger.warning("Failed to ensure VPN server certificate directory exists", exc_info=True)
+
+    def _secure_path_permissions(self, path: Path, *, mode: int, label: str) -> None:
+        if self._is_windows:
+            return
+        try:
+            if path.exists():
+                path.chmod(mode)
+        except Exception:
+            self.logger.warning("Failed to secure %s permissions at %s", label, path, exc_info=True)
 
     def _ensure_server_keys(self) -> Tuple[str, str]:
         priv_path = self.config.private_key_path
@@ -135,6 +150,8 @@ class WireGuardServerManager:
                 private_key = priv_path.read_text(encoding="utf-8").strip()
                 public_key = pub_path.read_text(encoding="utf-8").strip()
                 if private_key and public_key:
+                    self._secure_path_permissions(priv_path, mode=0o600, label="WireGuard private key")
+                    self._secure_path_permissions(pub_path, mode=0o600, label="WireGuard public key")
                     self.logger.info("Loaded existing WireGuard server keys from %s", priv_path.parent)
                     return private_key, public_key
             except Exception:
@@ -159,6 +176,8 @@ class WireGuardServerManager:
         try:
             priv_path.write_text(private_key, encoding="utf-8")
             pub_path.write_text(public_key, encoding="utf-8")
+            self._secure_path_permissions(priv_path, mode=0o600, label="WireGuard private key")
+            self._secure_path_permissions(pub_path, mode=0o600, label="WireGuard public key")
             self.logger.info("Generated WireGuard server keypair under %s", priv_path.parent)
         except Exception:
             self.logger.error("Failed to persist WireGuard server keys to disk", exc_info=True)
@@ -379,6 +398,20 @@ class WireGuardServerManager:
             return {
                 "healthy": False,
                 "reason": "wg_show_failed",
+                "service_state": None,
+            }
+        code, peers_out, _err = self._run_command([self._wg, "show", self._interface_name, "peers"])
+        if code != 0:
+            return {
+                "healthy": False,
+                "reason": "wg_peers_failed",
+                "service_state": None,
+            }
+        peers = [line.strip() for line in str(peers_out or "").splitlines() if line.strip()]
+        if not peers:
+            return {
+                "healthy": False,
+                "reason": "no_peers_configured",
                 "service_state": None,
             }
         return {
@@ -813,6 +846,7 @@ class WireGuardServerManager:
         config_path = self._listener_config_path()
         rendered = self.render_server_config(peers)
         config_path.write_text(rendered, encoding="utf-8")
+        self._secure_path_permissions(config_path, mode=0o600, label="WireGuard listener config")
         self.logger.info("Rendered WireGuard config to %s", config_path)
 
         if not self._is_windows:

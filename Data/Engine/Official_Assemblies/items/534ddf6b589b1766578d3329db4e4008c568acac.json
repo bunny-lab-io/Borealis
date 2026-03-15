@@ -1,0 +1,28 @@
+{
+  "assembly_guid": "534ddf6b589b1766578d3329db4e4008c568acac",
+  "assembly_subtype": "ansible",
+  "assembly_type": "ansible",
+  "created_at": "2025-11-01T07:52:43",
+  "display_name": "Query OS String [LINUX]",
+  "domain": "official",
+  "payload": {
+    "assembly_guid": "534ddf6b589b1766578d3329db4e4008c568acac",
+    "category": "application",
+    "description": "Simply returns the operating system in the output.",
+    "files": [],
+    "name": "Query OS String [LINUX]",
+    "script": "LS0tCi0gbmFtZTogR2V0IG9wZXJhdGluZyBzeXN0ZW0gaW5mb3JtYXRpb24KICBob3N0czogYWxsCiAgZ2F0aGVyX2ZhY3RzOiB5ZXMKCiAgdGFza3M6CiAgICAtIG5hbWU6IFByaW50IE9TIHN0cmluZwogICAgICBkZWJ1ZzoKICAgICAgICBtc2c6ICJ7eyBhbnNpYmxlX2Rpc3RyaWJ1dGlvbiB9fSB7eyBhbnNpYmxlX2Rpc3RyaWJ1dGlvbl92ZXJzaW9uIH19IHt7IGFuc2libGVfZGlzdHJpYnV0aW9uX3JlbGVhc2UgfCBkZWZhdWx0KCcnKSB9fSIK",
+    "script_encoding": "base64",
+    "sites": {
+      "mode": "all",
+      "values": []
+    },
+    "timeout_seconds": 3600,
+    "type": "ansible",
+    "variables": [],
+    "version": 1
+  },
+  "payload_guid": "534ddf6b589b1766578d3329db4e4008c568acac",
+  "summary": "Simply returns the operating system in the output.",
+  "updated_at": "2025-11-01T07:52:43"
+}

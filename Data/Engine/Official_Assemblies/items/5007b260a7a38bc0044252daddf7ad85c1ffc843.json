@@ -1,0 +1,288 @@
+{
+  "assembly_guid": "5007b260a7a38bc0044252daddf7ad85c1ffc843",
+  "assembly_subtype": "workflow",
+  "assembly_type": "workflow",
+  "created_at": "2025-11-01T07:52:43",
+  "display_name": "Text Recognition",
+  "domain": "official",
+  "payload": {
+    "assembly_guid": "5007b260a7a38bc0044252daddf7ad85c1ffc843",
+    "edges": [
+      {
+        "animated": true,
+        "id": "reactflow__edge-node-1754800498085provisioner-node-1754800514571",
+        "label": "Capture the Screen",
+        "labelBgStyle": {
+          "fill": "#000000"
+        },
+        "labelStyle": {
+          "fill": "#58a6ff"
+        },
+        "source": "node-1754800498085",
+        "sourceHandle": "provisioner",
+        "style": {
+          "stroke": "#58a6ff",
+          "strokeDasharray": "6 3"
+        },
+        "target": "node-1754800514571",
+        "targetHandle": null,
+        "type": "smoothstep"
+      },
+      {
+        "animated": true,
+        "id": "reactflow__edge-node-1754800514571-node-1754800556810",
+        "source": "node-1754800514571",
+        "sourceHandle": null,
+        "style": {
+          "stroke": "#58a6ff",
+          "strokeDasharray": "6 3"
+        },
+        "target": "node-1754800556810",
+        "targetHandle": null,
+        "type": "bezier"
+      },
+      {
+        "animated": true,
+        "id": "reactflow__edge-node-1754800514571-node-1754800584420",
+        "source": "node-1754800514571",
+        "sourceHandle": null,
+        "style": {
+          "stroke": "#58a6ff",
+          "strokeDasharray": "6 3"
+        },
+        "target": "node-1754800584420",
+        "targetHandle": null,
+        "type": "bezier"
+      },
+      {
+        "animated": true,
+        "id": "reactflow__edge-node-1754800584420-node-1754800597090",
+        "label": "Process Agent Screenshot into Text",
+        "labelBgStyle": {
+          "fill": "#000000"
+        },
+        "labelStyle": {
+          "fill": "#00d18c"
+        },
+        "source": "node-1754800584420",
+        "sourceHandle": null,
+        "style": {
+          "stroke": "#00d18c",
+          "strokeDasharray": "6 3"
+        },
+        "target": "node-1754800597090",
+        "targetHandle": null,
+        "type": "smoothstep"
+      },
+      {
+        "animated": true,
+        "id": "reactflow__edge-node-1754800597090-node-1754800680302",
+        "label": "Extract a Specific Line of Text",
+        "labelBgStyle": {
+          "fill": "#000000"
+        },
+        "labelStyle": {
+          "fill": "#00d18c"
+        },
+        "source": "node-1754800597090",
+        "sourceHandle": null,
+        "style": {
+          "stroke": "#00d18c",
+          "strokeDasharray": "6 3"
+        },
+        "target": "node-1754800680302",
+        "targetHandle": null,
+        "type": "straight"
+      },
+      {
+        "animated": true,
+        "id": "reactflow__edge-node-1754800680302-node-1754800736215",
+        "label": "Do something with the result",
+        "labelBgStyle": {
+          "fill": "#000000"
+        },
+        "labelStyle": {
+          "fill": "#ff8c00"
+        },
+        "source": "node-1754800680302",
+        "sourceHandle": null,
+        "style": {
+          "stroke": "#ff8c00",
+          "strokeDasharray": "6 3"
+        },
+        "target": "node-1754800736215",
+        "targetHandle": null,
+        "type": "smoothstep"
+      }
+    ],
+    "nodes": [
+      {
+        "data": {
+          "agent_id": "",
+          "content": "Select and manage an Agent with dynamic roles",
+          "label": "Borealis Agent"
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 146,
+        "id": "node-1754800498085",
+        "position": {
+          "x": 25.999999999999943,
+          "y": 24.000000000000014
+        },
+        "positionAbsolute": {
+          "x": 25.999999999999943,
+          "y": 24.000000000000014
+        },
+        "selected": false,
+        "type": "Borealis_Agent",
+        "width": 205
+      },
+      {
+        "data": {
+          "alias": "",
+          "content": "Capture screenshot region via agent",
+          "h": "200",
+          "interval": "1000",
+          "label": "Agent Role: Screenshot",
+          "visible": "true",
+          "w": "300",
+          "x": "250",
+          "y": "100"
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 115,
+        "id": "node-1754800514571",
+        "position": {
+          "x": 278,
+          "y": 24
+        },
+        "positionAbsolute": {
+          "x": 278,
+          "y": 24
+        },
+        "selected": false,
+        "type": "Agent_Role_Screenshot",
+        "width": 166
+      },
+      {
+        "data": {
+          "content": "Visual preview of base64 image with zoom overlay.",
+          "label": "Raw Image Viewer"
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 69,
+        "id": "node-1754800556810",
+        "position": {
+          "x": 507.33333333333326,
+          "y": 24
+        },
+        "positionAbsolute": {
+          "x": 507.33333333333326,
+          "y": 24
+        },
+        "selected": false,
+        "type": "Image_Viewer",
+        "width": 160
+      },
+      {
+        "data": {
+          "content": "Applies black & white threshold to base64 image input.",
+          "label": "BW Threshold"
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 96,
+        "id": "node-1754800584420",
+        "position": {
+          "x": 507.33333333333337,
+          "y": 110
+        },
+        "positionAbsolute": {
+          "x": 507.33333333333337,
+          "y": 110
+        },
+        "selected": false,
+        "type": "BWThresholdNode",
+        "width": 160
+      },
+      {
+        "data": {
+          "backend": "GPU",
+          "changeThreshold": "0",
+          "content": "Extract Multi-Line Text from Upstream Image Node",
+          "customRateEnabled": "true",
+          "customRateMs": "1000",
+          "dataType": "Mixed",
+          "engine": "EasyOCR",
+          "label": "OCR Text Extraction"
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 160,
+        "id": "node-1754800597090",
+        "position": {
+          "x": 46.800008138020814,
+          "y": 280.00000000000006
+        },
+        "positionAbsolute": {
+          "x": 46.800008138020814,
+          "y": 280.00000000000006
+        },
+        "selected": false,
+        "type": "OCR_Text_Extraction",
+        "width": 231
+      },
+      {
+        "data": {
+          "content": "Output a Specific Array Index's Value",
+          "label": "Array Index Extractor",
+          "lineNumber": "1"
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 121,
+        "id": "node-1754800680302",
+        "position": {
+          "x": 497.3333333333333,
+          "y": 280
+        },
+        "positionAbsolute": {
+          "x": 497.3333333333333,
+          "y": 280
+        },
+        "selected": false,
+        "type": "ArrayIndexExtractor",
+        "width": 210
+      },
+      {
+        "data": {
+          "content": "Store a String or Number",
+          "label": "String / Number",
+          "value": "[ERROR] No base64 image data provided."
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 67,
+        "id": "node-1754800736215",
+        "position": {
+          "x": 328.6666666666665,
+          "y": 568.6666666666666
+        },
+        "positionAbsolute": {
+          "x": 328.6666666666665,
+          "y": 568.6666666666666
+        },
+        "selected": true,
+        "type": "DataNode",
+        "width": 226
+      }
+    ],
+    "tab_name": "Text Recognition"
+  },
+  "payload_guid": "5007b260a7a38bc0044252daddf7ad85c1ffc843",
+  "summary": null,
+  "updated_at": "2025-11-01T07:52:43"
+}

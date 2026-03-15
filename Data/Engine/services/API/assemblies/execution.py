@@ -14,10 +14,8 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from flask import Blueprint, jsonify, request
@@ -29,33 +27,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
 
 from ...assemblies.service import AssemblyRuntimeService
 from ...auth import RequestAuthContext
-
-
-def _assemblies_root() -> Path:
-    base = Path(__file__).resolve()
-    search_roots = (base, *base.parents)
-    for candidate in search_roots:
-        engine_dir: Optional[Path]
-        if candidate.name.lower() == "engine":
-            engine_dir = candidate
-        else:
-            tentative = candidate / "Engine"
-            engine_dir = tentative if tentative.is_dir() else None
-        if not engine_dir:
-            continue
-        assemblies_dir = engine_dir / "Assemblies"
-        if assemblies_dir.is_dir():
-            return assemblies_dir.resolve()
-    raise RuntimeError("Engine assemblies directory not found; expected Engine/Assemblies.")
-
-
-def _scripts_root() -> Path:
-    assemblies_root = _assemblies_root()
-    scripts_dir = assemblies_root / "Scripts"
-    if not scripts_dir.is_dir():
-        raise RuntimeError("Engine scripts directory not found; expected Engine/Assemblies/Scripts.")
-    return scripts_dir.resolve()
-
 
 def _normalize_script_relpath(rel_path: Any) -> Optional[str]:
     """Return a canonical Scripts-relative path or ``None`` when invalid."""
@@ -470,37 +441,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                     if not rel_path_canonical:
                         rel_path_canonical = str(record.get("virtual_path") or "").strip() or source_identifier
         if doc is None:
-            assembly_source = "filesystem"
-            if not rel_path_canonical:
-                return jsonify({"error": "Script not found"}), 404
-            try:
-                scripts_root = _scripts_root()
-                assemblies_root = scripts_root.parent.resolve()
-                abs_path = (assemblies_root / rel_path_canonical).resolve()
-            except Exception as exc:  # pragma: no cover - defensive guard
-                service_log(
-                    "assemblies",
-                    f"quick job failed to resolve script path={rel_path_input!r} user={username}: {exc}",
-                    level="ERROR",
-                )
-                return jsonify({"error": "Failed to resolve script path"}), 500
-
-            scripts_root_str = str(scripts_root)
-            abs_path_str = str(abs_path)
-            try:
-                within_scripts = os.path.commonpath([scripts_root_str, abs_path_str]) == scripts_root_str
-            except ValueError:
-                within_scripts = False
-
-            if not within_scripts or not os.path.isfile(abs_path_str):
-                service_log(
-                    "assemblies",
-                    f"quick job requested missing or out-of-scope script input={rel_path_input!r} normalized={rel_path_canonical} user={username}",
-                    level="WARNING",
-                )
-                return jsonify({"error": "Script not found"}), 404
-
-            doc = _load_assembly_document(abs_path_str, "powershell")
+            return jsonify({"error": "Script not found"}), 404
         if not doc:
             return jsonify({"error": "Script not found"}), 404
 

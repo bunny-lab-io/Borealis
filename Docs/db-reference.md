@@ -2,18 +2,16 @@
 [Back to Docs Index](index.md) | [Index (HTML)](index.html)
 
 ## Purpose
-Describe the Borealis SQLite schema, table ownership, runtime interactions, and deprecated/legacy structures so operators and Codex agents can troubleshoot and change schema safely.
+Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, and legacy migration structures so operators and Codex agents can troubleshoot and change schema safely.
 
 ## Scope
-- Primary runtime database: `Engine/database.db` (default; set via `BOREALIS_DATABASE_PATH`).
+- Primary runtime database: PostgreSQL (set via `BOREALIS_DATABASE_URL`).
 - Source-of-truth schema code:
 - `Data/Engine/database.py`
 - `Data/Engine/database_migrations.py`
 - `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`
-- Assembly catalog databases (separate from `Engine/database.db`):
-- `Engine/Assemblies/official.db`
-- `Engine/Assemblies/community.db`
-- `Engine/Assemblies/user_created.db`
+- Assembly catalog tables live in PostgreSQL `assemblies.*`.
+- Bundled official assembly snapshot lives in `Data/Engine/Official_Assemblies/`.
 - Assembly schema source: `Data/Engine/assembly_management/databases.py`.
 
 ## API Endpoints
@@ -46,7 +44,7 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Result: foreign keys exist in table definitions, but enforcement can be connection-dependent unless explicitly enabled.
 - This is why some code paths also do explicit cleanup (example: deleting `device_sites` rows before deleting `sites`).
 
-## Engine Runtime Database Tables (`Engine/database.db`)
+## Engine Runtime Database Tables (`engine.*`)
 ### Enrollment, Identity, and Site Mapping
 #### `sites`
 - Status: Active.
@@ -343,15 +341,15 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Notes:
 - Managed by SQLite; do not edit directly.
 
-## Assembly Catalog Databases (`Engine/Assemblies/*.db`)
-### Files and Domains
-- `official.db` (`AssemblyDomain.OFFICIAL`)
-- `community.db` (`AssemblyDomain.COMMUNITY`)
-- `user_created.db` (`AssemblyDomain.USER`)
+## Assembly Catalog Tables (`assemblies.*`)
+### Domains and Tables
+- `assemblies.official_assemblies` (`AssemblyDomain.OFFICIAL`)
+- `assemblies.community_assemblies` (`AssemblyDomain.COMMUNITY`)
+- `assemblies.user_created_assemblies` (`AssemblyDomain.USER`)
 
-Each file has the same schema and currently one runtime table:
+Each table has the same schema:
 
-#### `assemblies`
+#### `assemblies.<domain>`
 - Status: Active.
 - Purpose: Assembly summary fields and inline payload JSON.
 - Columns: `assembly_guid`, `display_name`, `summary`, `assembly_type`, `assembly_subtype`, `payload_json`, `payload_size_bytes`, `created_at`, `updated_at`.
@@ -363,7 +361,7 @@ Each file has the same schema and currently one runtime table:
 - `assembly_type` is the authoritative routing discriminator for editors and execution pipelines.
 - `metadata_json` and `payload_type` are removed from the active schema.
 - Engine startup validates this schema strictly and fails fast if legacy columns are still present.
-- Staging/runtime DB files are mirrored between `Data/Engine/Assemblies/` and `Engine/Assemblies/`.
+- The bundled official snapshot is versioned under `Data/Engine/Official_Assemblies/` and synced into `assemblies.official_assemblies` on startup/update.
 
 ## Deprecated and Removed Schema
 ### Removed Tables
@@ -383,7 +381,7 @@ Each file has the same schema and currently one runtime table:
 ## Codex Agent (Detailed)
 ### Troubleshooting queries
 ```sql
--- 1) List all user tables in Engine database.db
+-- 1) Legacy SQLite: list all user tables in a pre-migration Engine DB
 SELECT name
 FROM sqlite_master
 WHERE type='table'

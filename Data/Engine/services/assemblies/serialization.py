@@ -38,6 +38,9 @@ def record_to_legacy_payload(
         payload_body = json.loads(payload_text)
     except json.JSONDecodeError:
         payload_body = payload_text
+    if isinstance(payload_body, dict):
+        payload_body = dict(payload_body)
+        payload_body.setdefault("assembly_guid", record.assembly_guid)
 
     return {
         "assembly_guid": record.assembly_guid,
@@ -66,20 +69,34 @@ def prepare_import_request(
     Returns the resolved assembly GUID plus the payload dictionary to pass into the runtime service.
     """
 
-    payload_json = _coerce_document(document)
+    document_json = _coerce_document(document)
+    payload_json = _extract_payload_document(document_json)
     _enforce_size_limit(payload_json)
-    assembly_type = _infer_assembly_type(payload_json)
+    assembly_type = _infer_assembly_type({**document_json, **payload_json})
     if assembly_type == "unknown":
         raise AssemblySerializationError("Unable to determine assembly type from JSON document.")
 
     display_name = _coerce_str(
-        payload_json.get("display_name")
+        document_json.get("display_name")
+        or document_json.get("name")
+        or document_json.get("tab_name")
+        or payload_json.get("display_name")
         or payload_json.get("name")
         or payload_json.get("tab_name")
         or "Imported Assembly"
     )
-    summary = _coerce_optional_str(payload_json.get("summary") or payload_json.get("description"))
-    assembly_subtype = _coerce_optional_str(payload_json.get("assembly_subtype") or payload_json.get("type"))
+    summary = _coerce_optional_str(
+        document_json.get("summary")
+        or document_json.get("description")
+        or payload_json.get("summary")
+        or payload_json.get("description")
+    )
+    assembly_subtype = _coerce_optional_str(
+        document_json.get("assembly_subtype")
+        or document_json.get("type")
+        or payload_json.get("assembly_subtype")
+        or payload_json.get("type")
+    )
     if not assembly_subtype:
         if assembly_type == "workflow":
             assembly_subtype = "workflow"
@@ -88,7 +105,10 @@ def prepare_import_request(
         else:
             assembly_subtype = "powershell"
 
-    resolved_guid = _coerce_guid(assembly_guid)
+    resolved_guid = _coerce_guid(assembly_guid or document_json.get("assembly_guid") or payload_json.get("assembly_guid"))
+    if resolved_guid:
+        payload_json = dict(payload_json)
+        payload_json.setdefault("assembly_guid", resolved_guid)
 
     payload = {
         "assembly_guid": resolved_guid,
@@ -118,6 +138,13 @@ def _coerce_document(document: Union[str, Mapping[str, Any]]) -> LegacyDocument:
             raise AssemblySerializationError("Import document must decode to a JSON object.")
         return dict(value)
     raise AssemblySerializationError("Import document must be a JSON object or string.")
+
+
+def _extract_payload_document(document: Mapping[str, Any]) -> LegacyDocument:
+    payload = document.get("payload")
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    return dict(document)
 
 
 def _enforce_size_limit(document: Mapping[str, Any]) -> None:

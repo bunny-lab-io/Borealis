@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import hashlib
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 from datetime import datetime, timedelta, timezone
 
 from flask.testing import FlaskClient

@@ -8,8 +8,8 @@ Explain how Borealis is structured and how the core components interact end to e
 - Engine: Flask + Socket.IO runtime that hosts APIs, scheduled jobs, VPN orchestration, and WebUI assets.
 - WebUI: React single page app served by the Engine (Vite in dev, static build in prod).
 - Agent: Python runtime that enrolls, reports inventory, executes scripts, and opens VPN tunnels.
-- SQLite database: stores devices, approvals, schedules, activity history, tokens, and configuration records.
-- Assemblies: script definitions stored in SQLite domains with payload artifacts on disk.
+- PostgreSQL database: stores devices, approvals, schedules, activity history, tokens, configuration records, and assemblies.
+- Assemblies: script definitions stored in PostgreSQL `assemblies.*` tables, with a bundled official catalog snapshot kept in the repo.
 - Remote access: WireGuard reverse VPN, remote PowerShell, and VNC via noVNC.
 
 ## How the Pieces Talk
@@ -29,7 +29,7 @@ Explain how Borealis is structured and how the core components interact end to e
 - `Agent/` - Agent runtime copy (regenerated each launch).
 - `Data/Engine/web-interface/src/` - WebUI source.
 - `Engine/Logs/` and `Agent/Logs/` - runtime logs.
-- `Data/Engine/Assemblies/` and `Engine/Assemblies/` - assemblies (staging and runtime).
+- `Data/Engine/Official_Assemblies/` - bundled official assembly catalog snapshot (manifest + JSON items).
 
 ## API Endpoints
 None on this page. See [API Reference](api-reference.md).
@@ -73,7 +73,7 @@ None on this page. See [API Reference](api-reference.md).
 ### What to read first when debugging
 - Start with logs: `Engine/Logs/engine.log` and `Agent/Logs/agent.log`.
 - Check domain-specific logs (example: `Engine/Logs/VPN_Tunnel/tunnel.log`).
-- Inspect active DB state in `Engine/database.db` for device/job metadata.
+- Inspect active DB state in PostgreSQL (`engine.*` and `assemblies.*`) for device/job metadata.
 
 ### Interaction points to remember
 - REST for inventory, enrollment, and admin actions.

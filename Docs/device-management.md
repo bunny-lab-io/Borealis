@@ -115,6 +115,6 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Route parsing and URL preservation are implemented in `Data/Engine/web-interface/src/App.jsx`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Devices/Device_Details.jsx`.
 
 ### Debug checklist
-- Device missing from list: check `Engine/database.db` tables `devices` and `device_keys`.
+- Device missing from list: check PostgreSQL `engine.devices` and `engine.device_keys`.
 - Online status wrong: check `last_seen` timestamps in `devices` table.
 - Filter counts zero: validate the active criteria payload and `device_software_inventory` rows when software criteria are involved.

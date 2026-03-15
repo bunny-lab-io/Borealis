@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64
 import os
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives import serialization

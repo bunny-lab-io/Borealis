@@ -16,6 +16,7 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
+import SyncIcon from "@mui/icons-material/Sync";
 import PolylineIcon from "@mui/icons-material/Polyline";
 import CodeIcon from "@mui/icons-material/Code";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
@@ -172,6 +173,41 @@ const SourceCellRenderer = React.memo(function SourceCellRenderer(props) {
   );
 });
 
+const OfficialUpdateCellRenderer = React.memo(function OfficialUpdateCellRenderer(props) {
+  const { data, context } = props;
+  if (!data?.officialUpdateAvailable || !context?.canOfficiallyUpdate) return null;
+
+  const handleClick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    context?.requestOfficialUpdate?.(data);
+  };
+
+  return (
+    <Button
+      size="small"
+      variant="outlined"
+      onClick={handleClick}
+      sx={{
+        minWidth: 84,
+        px: 1.4,
+        borderRadius: 999,
+        textTransform: "none",
+        fontWeight: 600,
+        color: "#7dd3fc",
+        borderColor: "rgba(125, 211, 252, 0.42)",
+        background: "rgba(10, 23, 45, 0.74)",
+        "&:hover": {
+          borderColor: "rgba(125, 211, 252, 0.62)",
+          background: "rgba(10, 27, 55, 0.92)",
+        },
+      }}
+    >
+      Update
+    </Button>
+  );
+});
+
 const normalizeRow = (item, queueEntry) => {
   if (!item) return null;
   const assemblyGuid = item.assembly_guid || item.assembly_id || "";
@@ -221,6 +257,14 @@ const normalizeRow = (item, queueEntry) => {
     payloadGuid: item.payload_guid,
     updatedAt: item.updated_at,
     createdAt: item.created_at,
+    officialManaged: Boolean(item.official_managed),
+    officialUpdateAvailable: Boolean(item.official_update_available),
+    officialRepoUrl: item.official_repo_url || "https://example.com",
+    officialSourceUrl: item.official_source_url || item.official_repo_url || "https://example.com",
+    officialCatalogSource: item.official_catalog_source || "",
+    officialSourceVersion: item.official_source_version || "",
+    officialLastAppliedSource: item.official_last_applied_source || "",
+    officialLastSyncedAt: item.official_last_synced_at || "",
     raw: item,
   };
 };
@@ -230,6 +274,13 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [catalogStatus, setCatalogStatus] = useState({
+    repoUrl: "https://example.com",
+    source: "bundled",
+    available: false,
+    updateCount: 0,
+    error: "",
+  });
 
   const [newMenuAnchor, setNewMenuAnchor] = useState(null);
   const [scriptDialog, setScriptDialog] = useState({ open: false, typeKey: null });
@@ -244,6 +295,9 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   const [renameValue, setRenameValue] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [cloneDialog, setCloneDialog] = useState({ open: false, row: null, targetDomain: "user" });
+  const [officialUpdateDialog, setOfficialUpdateDialog] = useState({ open: false, row: null, mode: "single" });
+  const [updatingOfficialGuid, setUpdatingOfficialGuid] = useState("");
+  const [updatingAllOfficial, setUpdatingAllOfficial] = useState(false);
   const isAdmin = (userRole || "").toLowerCase() === "admin";
   const sendNotification = useCallback(async (message) => {
     if (!message) return;
@@ -276,6 +330,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       const payload = await resp.json();
       const items = Array.isArray(payload?.items) ? payload.items : [];
       const queue = Array.isArray(payload?.queue) ? payload.queue : [];
+      const officialCatalog = payload?.official_catalog && typeof payload.official_catalog === "object" ? payload.official_catalog : {};
       const queueMap = queue.reduce((acc, entry) => {
         if (entry && entry.assembly_guid) {
           acc[entry.assembly_guid] = entry;
@@ -286,16 +341,32 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         .map((item) => normalizeRow(item, queueMap[item?.assembly_guid || item?.assembly_id || ""]))
         .filter(Boolean);
       setRows(processed);
+      setCatalogStatus({
+        repoUrl: officialCatalog?.repo_url || "https://example.com",
+        source: officialCatalog?.source || "bundled",
+        available: Boolean(officialCatalog?.available),
+        updateCount: Number.isFinite(Number(officialCatalog?.update_count))
+          ? Number(officialCatalog.update_count)
+          : processed.filter((row) => row.officialUpdateAvailable).length,
+        error: officialCatalog?.error || "",
+      });
       setTimeout(() => {
         const columnApi = gridRef.current?.columnApi;
         if (columnApi) {
-          const ids = ["assemblyType", "source", "name"];
+          const ids = ["assemblyType", "source", "name", "officialUpdate"];
           columnApi.autoSizeColumns(ids, false);
         }
       }, 0);
     } catch (err) {
       console.error("Failed to load assemblies:", err);
       setRows([]);
+      setCatalogStatus({
+        repoUrl: "https://example.com",
+        source: "bundled",
+        available: false,
+        updateCount: 0,
+        error: err?.message || "Failed to load assemblies",
+      });
       setError(err?.message || "Failed to load assemblies");
     } finally {
       setLoading(false);
@@ -446,6 +517,63 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     }
   };
 
+  const requestOfficialUpdate = useCallback((row) => {
+    if (!row?.assemblyGuid) return;
+    setOfficialUpdateDialog({ open: true, row, mode: "single" });
+  }, []);
+
+  const requestOfficialUpdateAll = useCallback(() => {
+    setOfficialUpdateDialog({ open: true, row: null, mode: "all" });
+  }, []);
+
+  const handleOfficialUpdateClose = useCallback(() => {
+    if (updatingOfficialGuid || updatingAllOfficial) return;
+    setOfficialUpdateDialog({ open: false, row: null, mode: "single" });
+  }, [updatingAllOfficial, updatingOfficialGuid]);
+
+  const handleOfficialUpdateConfirm = useCallback(async () => {
+    if (officialUpdateDialog.mode === "all") {
+      try {
+        setUpdatingAllOfficial(true);
+        const resp = await fetch("/api/assemblies/official/update-all", { method: "POST" });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
+        await sendNotification(`Updated ${Array.isArray(data?.updated) ? data.updated.length : 0} official assemblies.`);
+        setOfficialUpdateDialog({ open: false, row: null, mode: "single" });
+        await fetchAssemblies();
+      } catch (err) {
+        console.error("Failed to update all official assemblies:", err);
+        alert(err?.message || "Failed to update official assemblies");
+      } finally {
+        setUpdatingAllOfficial(false);
+      }
+      return;
+    }
+
+    const target = officialUpdateDialog.row;
+    if (!target?.assemblyGuid) {
+      setOfficialUpdateDialog({ open: false, row: null, mode: "single" });
+      return;
+    }
+
+    try {
+      setUpdatingOfficialGuid(target.assemblyGuid);
+      const resp = await fetch(`/api/assemblies/${encodeURIComponent(target.assemblyGuid)}/official-update`, {
+        method: "POST",
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
+      await sendNotification(`Official assembly "${target.name || target.assemblyGuid}" updated successfully.`);
+      setOfficialUpdateDialog({ open: false, row: null, mode: "single" });
+      await fetchAssemblies();
+    } catch (err) {
+      console.error("Failed to update official assembly:", err);
+      alert(err?.message || "Failed to update official assembly");
+    } finally {
+      setUpdatingOfficialGuid("");
+    }
+  }, [catalogStatus.repoUrl, fetchAssemblies, officialUpdateDialog, sendNotification]);
+
   const columnDefs = useMemo(
     () => [
       {
@@ -508,6 +636,17 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         filter: "agTextColumnFilter",
         resizable: true,
       },
+      {
+        colId: "officialUpdate",
+        field: "officialUpdateAvailable",
+        headerName: "Official",
+        minWidth: 112,
+        maxWidth: 132,
+        sortable: false,
+        filter: false,
+        resizable: true,
+        cellRenderer: OfficialUpdateCellRenderer,
+      },
     ],
     [],
   );
@@ -529,6 +668,20 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   const pageHeaderActions = useMemo(
     () => [
       {
+        id: "assemblies-update-all",
+        label: "Update All",
+        icon: <SyncIcon />,
+        tone: "secondary",
+        disabled: !isAdmin || !rows.some((row) => row.officialUpdateAvailable),
+        tooltip: !isAdmin
+          ? "Administrator access is required to update official assemblies."
+          : rows.some((row) => row.officialUpdateAvailable)
+          ? "Apply all available official assembly updates."
+          : catalogStatus.error || "No official assembly updates are available.",
+        loading: updatingAllOfficial,
+        onClick: requestOfficialUpdateAll,
+      },
+      {
         id: "assemblies-refresh",
         label: "Refresh",
         icon: <CachedIcon />,
@@ -544,7 +697,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         onClick: (event) => setNewMenuAnchor(event.currentTarget),
       },
     ],
-    [fetchAssemblies, loading]
+    [catalogStatus.error, fetchAssemblies, isAdmin, loading, requestOfficialUpdateAll, rows, updatingAllOfficial]
   );
 
   useEffect(() => {
@@ -701,7 +854,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
               rowData={rows}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
-              context={{ openRow }}
+              context={{ openRow, requestOfficialUpdate, canOfficiallyUpdate: isAdmin }}
               rowSelection="single"
               suppressCellFocus
               pagination
@@ -761,6 +914,16 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         </MenuItem>
         {activeRow?.assemblyGuid && (isAdmin || activeRow.domain === "user") ? (
           <MenuItem onClick={startClone}>Clone</MenuItem>
+        ) : null}
+        {activeRow?.officialUpdateAvailable && isAdmin ? (
+          <MenuItem
+            onClick={() => {
+              closeContextMenu();
+              requestOfficialUpdate(activeRow);
+            }}
+          >
+            Update from Official Catalog
+          </MenuItem>
         ) : null}
         <MenuItem onClick={startRename}>Rename</MenuItem>
         <MenuItem sx={{ color: "#ff8a8a" }} onClick={startDelete}>
@@ -837,6 +1000,50 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
           </Button>
           <Button onClick={handleCloneConfirm} sx={{ textTransform: "none", color: "#58a6ff" }}>
             Clone
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={officialUpdateDialog.open} onClose={handleOfficialUpdateClose}>
+        <DialogTitle>{officialUpdateDialog.mode === "all" ? "Update All Official Assemblies" : "Update Official Assembly"}</DialogTitle>
+        <DialogContent sx={{ minWidth: 420 }}>
+          <Typography variant="body2" sx={{ mt: 0.5, color: "#c6d0dd" }}>
+            {officialUpdateDialog.mode === "all"
+              ? "This will pull down the most recent version of each official assembly that has an available update from GitHub. Proceed?"
+              : "This will pull down the most recent version of this assembly from GitHub. Proceed?"}
+          </Typography>
+          <Typography variant="body2" sx={{ mt: 1.5, color: "#9ba3b4" }}>
+            Repository:
+          </Typography>
+          <MuiLink
+            href={officialUpdateDialog.row?.officialRepoUrl || catalogStatus.repoUrl || "https://example.com"}
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{
+              mt: 0.5,
+              display: "inline-block",
+              color: BOREALIS_BLUE,
+              wordBreak: "break-all",
+            }}
+          >
+            {officialUpdateDialog.row?.officialRepoUrl || catalogStatus.repoUrl || "https://example.com"}
+          </MuiLink>
+          {officialUpdateDialog.mode === "single" && officialUpdateDialog.row?.name ? (
+            <Typography variant="body2" sx={{ mt: 1.5, color: "#9ba3b4" }}>
+              Target: <Box component="span" sx={{ color: "#f5f7fa" }}>{officialUpdateDialog.row.name}</Box>
+            </Typography>
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleOfficialUpdateClose} disabled={Boolean(updatingOfficialGuid || updatingAllOfficial)} sx={{ textTransform: "none" }}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleOfficialUpdateConfirm}
+            disabled={Boolean(updatingOfficialGuid || updatingAllOfficial)}
+            sx={{ textTransform: "none", color: BOREALIS_BLUE }}
+          >
+            {officialUpdateDialog.mode === "all" ? "Update All" : "Update"}
           </Button>
         </DialogActions>
       </Dialog>

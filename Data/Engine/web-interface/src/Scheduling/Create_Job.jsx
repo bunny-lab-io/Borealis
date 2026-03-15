@@ -1134,10 +1134,10 @@ export default function CreateJob({
   }, [assemblyRowData, assemblyFilterText]);
   const assemblyColumnDefs = useMemo(
     () => [
-      { field: "name", headerName: "Name", minWidth: 200, flex: 1.1 },
-      { field: "domain", headerName: "Domain", minWidth: 140 },
-      { field: "path", headerName: "Path", minWidth: 220, flex: 1.2 },
-      { field: "summary", headerName: "Summary", minWidth: 260, flex: 1.4 }
+      { colId: "name", field: "name", headerName: "Name", minWidth: 200, flex: 1.1 },
+      { colId: "domain", field: "domain", headerName: "Domain", minWidth: 140, flex: 0.8 },
+      { colId: "path", field: "path", headerName: "Path", minWidth: 220, flex: 1.2 },
+      { colId: "summary", field: "summary", headerName: "Summary", minWidth: 260, flex: 1.4 }
     ],
     []
   );
@@ -1156,22 +1156,42 @@ export default function CreateJob({
   );
   const ASSEMBLY_AUTO_COLUMNS = useRef(["name", "domain", "path", "summary"]);
   const assemblyGridApiRef = useRef(null);
-  const handleAssemblyGridReady = useCallback((params) => {
-    assemblyGridApiRef.current = params.api;
+  const runAssemblyGridLayoutPass = useCallback((apiOverride = null) => {
+    const api = apiOverride || assemblyGridApiRef.current;
+    if (!api) return;
     requestAnimationFrame(() => {
       try {
-        params.api.autoSizeColumns(ASSEMBLY_AUTO_COLUMNS.current, false);
+        if (typeof api.resetColumnState === "function") {
+          api.resetColumnState();
+        }
+      } catch {}
+      try {
+        if (typeof api.sizeColumnsToFit === "function") {
+          api.sizeColumnsToFit();
+          return;
+        }
+      } catch {}
+      try {
+        if (typeof api.autoSizeColumns === "function") {
+          api.autoSizeColumns(ASSEMBLY_AUTO_COLUMNS.current, false);
+        }
       } catch {}
     });
   }, []);
+  const handleAssemblyGridReady = useCallback((params) => {
+    assemblyGridApiRef.current = params.api;
+    runAssemblyGridLayoutPass(params.api);
+  }, [runAssemblyGridLayoutPass]);
+  const handleAssemblyGridFirstDataRendered = useCallback((params) => {
+    runAssemblyGridLayoutPass(params.api);
+  }, [runAssemblyGridLayoutPass]);
+  const handleAssemblyDialogEntered = useCallback(() => {
+    runAssemblyGridLayoutPass();
+  }, [runAssemblyGridLayoutPass]);
   useEffect(() => {
-    if (!assemblyGridApiRef.current) return;
-    requestAnimationFrame(() => {
-      try {
-        assemblyGridApiRef.current.autoSizeColumns(ASSEMBLY_AUTO_COLUMNS.current, false);
-      } catch {}
-    });
-  }, [assemblyRowData, compTab]);
+    if (!addCompOpen || !assemblyGridApiRef.current) return;
+    runAssemblyGridLayoutPass();
+  }, [addCompOpen, assemblyRowData, compTab, filteredAssemblyRows, runAssemblyGridLayoutPass]);
 
   const remoteExec = useMemo(() => execContext === "ssh" || execContext === "winrm", [execContext]);
   const handleExecContextChange = useCallback((value) => {
@@ -3755,6 +3775,9 @@ const heroTiles = useMemo(() => {
       <Dialog
         open={addCompOpen}
         onClose={() => setAddCompOpen(false)}
+        TransitionProps={{
+          onEntered: handleAssemblyDialogEntered,
+        }}
         fullWidth
         maxWidth={false}
         PaperProps={{
@@ -3865,6 +3888,7 @@ const heroTiles = useMemo(() => {
               animateRows
               getRowId={(params) => params.data?.id || params.rowIndex}
               onGridReady={handleAssemblyGridReady}
+              onFirstDataRendered={handleAssemblyGridFirstDataRendered}
               onRowClicked={handleAssemblyRowClick}
               onRowDoubleClicked={handleAssemblyRowDoubleClick}
               onSelectionChanged={handleAssemblySelectionChanged}

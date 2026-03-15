@@ -23,8 +23,24 @@ assembled from (in precedence order):
 environment variables prefixed with ``BOREALIS_``, and finally built-in
 defaults that mirror the legacy server runtime.  Key environment variables are
 
-``BOREALIS_DATABASE_PATH``  path to the SQLite database file.  Defaults to
-``<ProjectRoot>/Engine/database.db`` so data persists across Engine redeploys.
+``BOREALIS_DATABASE_URL``   PostgreSQL connection URL used by the Engine
+                            runtime. This is required for production starts.
+``BOREALIS_DB_SSLMODE``     PostgreSQL SSL mode (default: ``prefer``).
+``BOREALIS_DB_POOL_SIZE``   SQLAlchemy pool size (default: ``10``).
+``BOREALIS_DB_MAX_OVERFLOW`` SQLAlchemy max overflow (default: ``20``).
+``BOREALIS_DB_CONNECT_TIMEOUT`` PostgreSQL connect timeout in seconds
+                                (default: ``15``).
+``BOREALIS_OFFICIAL_ASSEMBLIES_ROOT`` bundled official assembly catalog root
+                                      (default:
+                                      ``<ProjectRoot>/Data/Engine/Official_Assemblies``).
+``BOREALIS_OFFICIAL_ASSEMBLIES_REPO_URL`` repository URL shown in official
+                                          assembly update prompts (default:
+                                          ``https://example.com``).
+``BOREALIS_OFFICIAL_ASSEMBLIES_MANIFEST_URL`` optional remote manifest URL used
+                                              for on-demand official assembly
+                                              updates.
+``BOREALIS_OFFICIAL_ASSEMBLIES_REFRESH_SECONDS`` remote official catalog refresh
+                                                TTL in seconds (default: ``300``).
 ``BOREALIS_CORS_ORIGINS``   comma separated list of allowed origins for CORS.
 ``BOREALIS_ENGINE_SECRET_PATH`` path to persistent generated secret (default:
                                 ``<ProjectRoot>/Engine/engine_secret.txt``).
@@ -73,7 +89,6 @@ def _discover_project_root() -> Path:
 
 
 PROJECT_ROOT = _discover_project_root()
-ENGINE_DATABASE_PATH = PROJECT_ROOT / "Engine" / "database.db"
 LOG_ROOT = PROJECT_ROOT / "Engine" / "Logs"
 LOG_FILE_PATH = LOG_ROOT / "engine.log"
 ERROR_LOG_FILE_PATH = LOG_ROOT / "error.log"
@@ -280,7 +295,15 @@ def _discover_tls_material(config: Mapping[str, Any]) -> Sequence[Optional[str]]
 class EngineSettings:
     """Resolved configuration values for the Engine runtime."""
 
-    database_path: str
+    database_url: str
+    db_sslmode: str
+    db_pool_size: int
+    db_max_overflow: int
+    db_connect_timeout: int
+    official_assemblies_root: str
+    official_assemblies_repo_url: str
+    official_assemblies_manifest_url: str
+    official_assemblies_refresh_seconds: int
     static_folder: str
     cors_origins: Optional[List[str]]
     secret_key: str
@@ -314,6 +337,16 @@ class EngineSettings:
             "SESSION_COOKIE_SAMESITE": self.session_cookie_samesite,
             "SESSION_COOKIE_SECURE": self.session_cookie_secure,
             "PREFERRED_URL_SCHEME": "https",
+            "DATABASE_URL": self.database_url,
+            "TLS_CERT_PATH": self.tls_cert_path,
+            "TLS_KEY_PATH": self.tls_key_path,
+            "TLS_BUNDLE_PATH": self.tls_bundle_path,
+            "SECRET_KEY": self.secret_key,
+            "LOG_FILE": self.log_file,
+            "ERROR_LOG_FILE": self.error_log_file,
+            "API_LOG_FILE": self.api_log_file,
+            "VPN_TUNNEL_LOG_FILE": self.vpn_tunnel_log_file,
+            "STATIC_FOLDER": self.static_folder,
         }
         if self.session_cookie_domain:
             config["SESSION_COOKIE_DOMAIN"] = self.session_cookie_domain
@@ -361,13 +394,61 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
 
     runtime_config: MutableMapping[str, Any] = dict(overrides or {})
 
-    database_path = str(
-        runtime_config.get("DATABASE_PATH")
-        or os.environ.get("BOREALIS_DATABASE_PATH")
-        or ENGINE_DATABASE_PATH
+    database_url = str(
+        runtime_config.get("DATABASE_URL")
+        or os.environ.get("BOREALIS_DATABASE_URL")
+        or ""
+    ).strip()
+    if not database_url:
+        raise RuntimeError("BOREALIS_DATABASE_URL is required for the Borealis Engine runtime.")
+
+    db_sslmode = str(
+        runtime_config.get("DB_SSLMODE")
+        or os.environ.get("BOREALIS_DB_SSLMODE")
+        or "prefer"
+    ).strip() or "prefer"
+    db_pool_size = _parse_int(
+        runtime_config.get("DB_POOL_SIZE") or os.environ.get("BOREALIS_DB_POOL_SIZE"),
+        default=10,
+        minimum=1,
+        maximum=100,
     )
-    database_path = os.path.abspath(database_path)
-    _ensure_parent(Path(database_path))
+    db_max_overflow = _parse_int(
+        runtime_config.get("DB_MAX_OVERFLOW") or os.environ.get("BOREALIS_DB_MAX_OVERFLOW"),
+        default=20,
+        minimum=0,
+        maximum=200,
+    )
+    db_connect_timeout = _parse_int(
+        runtime_config.get("DB_CONNECT_TIMEOUT") or os.environ.get("BOREALIS_DB_CONNECT_TIMEOUT"),
+        default=15,
+        minimum=1,
+        maximum=300,
+    )
+    official_assemblies_root = str(
+        Path(
+            runtime_config.get("OFFICIAL_ASSEMBLIES_ROOT")
+            or os.environ.get("BOREALIS_OFFICIAL_ASSEMBLIES_ROOT")
+            or PROJECT_ROOT / "Data" / "Engine" / "Official_Assemblies"
+        ).expanduser()
+    )
+    official_assemblies_repo_url = str(
+        runtime_config.get("OFFICIAL_ASSEMBLIES_REPO_URL")
+        or os.environ.get("BOREALIS_OFFICIAL_ASSEMBLIES_REPO_URL")
+        or "https://example.com"
+    ).strip() or "https://example.com"
+    official_assemblies_manifest_url = str(
+        runtime_config.get("OFFICIAL_ASSEMBLIES_MANIFEST_URL")
+        or os.environ.get("BOREALIS_OFFICIAL_ASSEMBLIES_MANIFEST_URL")
+        or ""
+    ).strip()
+    official_assemblies_refresh_seconds = _parse_int(
+        runtime_config.get("OFFICIAL_ASSEMBLIES_REFRESH_SECONDS")
+        or os.environ.get("BOREALIS_OFFICIAL_ASSEMBLIES_REFRESH_SECONDS"),
+        default=300,
+        minimum=30,
+        maximum=86400,
+    )
 
     static_folder = str(runtime_config.get("STATIC_FOLDER") or _resolve_static_folder())
 
@@ -498,7 +579,15 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         )
 
     settings = EngineSettings(
-        database_path=database_path,
+        database_url=database_url,
+        db_sslmode=db_sslmode,
+        db_pool_size=db_pool_size,
+        db_max_overflow=db_max_overflow,
+        db_connect_timeout=db_connect_timeout,
+        official_assemblies_root=official_assemblies_root,
+        official_assemblies_repo_url=official_assemblies_repo_url,
+        official_assemblies_manifest_url=official_assemblies_manifest_url,
+        official_assemblies_refresh_seconds=official_assemblies_refresh_seconds,
         static_folder=static_folder,
         cors_origins=cors_origins,
         secret_key=secret_key,

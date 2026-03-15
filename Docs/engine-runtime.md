@@ -17,10 +17,11 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 ## Runtime Paths
 - Source code: `Data/Engine/` (edit here).
 - Runtime copy: `Engine/` (regenerated each launch).
-- Database: `Engine/database.db` (default; configurable).
+- Database: PostgreSQL via `BOREALIS_DATABASE_URL`.
 - Logs: `Engine/Logs/` (engine.log, error.log, api.log, service logs).
 - Certificates: `Engine/Certificates/` (TLS bundle + code signing keys).
 - WebUI build output: `Engine/web-interface/` (served as static assets).
+- Bundled official assemblies: `Data/Engine/Official_Assemblies/`.
 
 ## API Endpoints
 - `GET /health` (No Authentication) - Engine liveness probe.
@@ -53,7 +54,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Default groups live in `Data/Engine/services/API/__init__.py` (`DEFAULT_API_GROUPS`).
 - Each group has a registrar in `_GROUP_REGISTRARS`.
 - `EngineServiceAdapters` exposes:
-  - `db_conn_factory` (SQLite with WAL and busy_timeout).
+  - `db_conn_factory` (PostgreSQL-backed sqlite3-shaped compatibility wrapper during the migration period).
   - `service_log` (per-service log files with rotation).
   - `jwt_service`, `dpop_validator`, rate limiters, signing keys, GitHub integration.
 

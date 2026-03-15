@@ -169,6 +169,23 @@ function sanitizeFileName(name = "") {
   return base.endsWith(".json") ? base : `${base}.json`;
 }
 
+function generateAssemblyGuid() {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID().toUpperCase();
+    }
+  } catch {
+    // fall through to manual GUID generation
+  }
+
+  const template = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+  return template.replace(/[xy]/g, (ch) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = ch === "x" ? random : ((random & 0x3) | 0x8);
+    return value.toString(16);
+  }).toUpperCase();
+}
+
 function normalizeFolderPath(path = "") {
   if (!path) return "";
   return path
@@ -284,14 +301,18 @@ function fromServerDocument(doc = {}, defaultType = "powershell") {
   return assembly;
 }
 
-function toServerDocument(assembly) {
+function toServerDocument(assembly, assemblyGuid = null) {
   const normalizedScript = typeof assembly.script === "string"
     ? assembly.script.replace(/\r\n/g, "\n")
     : "";
   const timeoutNumeric = Number(assembly.timeoutSeconds);
   const timeoutSeconds = Number.isFinite(timeoutNumeric) ? Math.max(0, Math.round(timeoutNumeric)) : 3600;
   const encodedScript = encodeBase64String(normalizedScript);
+  const resolvedGuid = typeof assemblyGuid === "string" && assemblyGuid.trim()
+    ? assemblyGuid.trim()
+    : "";
   return {
+    assembly_guid: resolvedGuid,
     assembly_type: (assembly.type || "").toLowerCase() === "ansible" ? "ansible" : "script",
     assembly_subtype: assembly.type || "powershell",
     version: 1,
@@ -500,7 +521,7 @@ export default function AssemblyEditor({
         throw new Error(`Assembly payload was empty for ${guid}`);
       }
       hydrateFromDocument(enrichedDoc);
-      setAssemblyGuid(data?.assembly_guid || guid);
+      setAssemblyGuid(data?.assembly_guid || parsed?.metadata?.assembly_guid || guid);
       setDomain((data?.source || data?.domain || row?.domain || "user").toLowerCase());
       setQueueInfo({
         dirty_since: data?.dirty_since || row?.queueEntry?.dirty_since || null,
@@ -784,7 +805,8 @@ export default function AssemblyEditor({
       alert("Assembly Name is required.");
       return;
     }
-    const document = toServerDocument(assembly);
+    const localGuid = assemblyGuid || generateAssemblyGuid();
+    const document = toServerDocument(assembly, localGuid);
     setSaving(true);
     setErrorMessage("");
     try {
@@ -794,14 +816,14 @@ export default function AssemblyEditor({
         body: JSON.stringify({
           document,
           domain,
-          assembly_guid: assemblyGuid || undefined,
+          assembly_guid: localGuid,
         }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
       }
-      const nextGuid = data?.assembly_guid || assemblyGuid;
+      const nextGuid = data?.assembly_guid || localGuid;
       setAssemblyGuid(nextGuid || null);
       const nextDomain = (data?.source || data?.domain || domain || "user").toLowerCase();
       setDomain(nextDomain);
@@ -937,9 +959,10 @@ export default function AssemblyEditor({
         const exportName = sanitizeFileName(fileName || data?.display_name || assembly.name || assemblyGuid);
         downloadJsonFile(exportName, exportDoc);
       } else {
-        const document = toServerDocument(assembly);
+        const localGuid = generateAssemblyGuid();
+        const document = toServerDocument(assembly, localGuid);
         const exportDoc = {
-          assembly_guid: assemblyGuid,
+          assembly_guid: localGuid,
           domain,
           assembly_type: isAnsible ? "ansible" : "script",
           assembly_subtype: assembly.type,
@@ -948,6 +971,7 @@ export default function AssemblyEditor({
           category: assembly.category,
           payload: document,
         };
+        setAssemblyGuid(localGuid);
         const exportName = sanitizeFileName(fileName || assembly.name || "assembly");
         downloadJsonFile(exportName, exportDoc);
       }
@@ -969,7 +993,7 @@ export default function AssemblyEditor({
       const payload = parsed?.payload || parsed;
       const doc = fromServerDocument(payload || {}, defaultType);
       setAssembly(doc);
-      setAssemblyGuid(parsed?.assembly_guid || null);
+      setAssemblyGuid(parsed?.assembly_guid || payload?.assembly_guid || null);
       setDomain("user");
       setQueueInfo(null);
       setIsDirtyQueue(false);

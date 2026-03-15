@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import base64
 import secrets
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 import uuid
 from datetime import datetime, timezone, timedelta
 import time

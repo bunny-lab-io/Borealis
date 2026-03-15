@@ -5,8 +5,8 @@
 Explain Borealis assemblies (script definitions), how they are stored, and how quick jobs execute them.
 
 ## Assemblies at a Glance
-- Assemblies are script definitions stored in SQLite domains.
-- Domains include: `official`, `community`, and `user_created`.
+- Assemblies are script definitions stored in PostgreSQL assembly-domain tables.
+- Domains include: `official`, `community`, and `user`.
 - Payload JSON is stored inline in each `assemblies` row (`payload_json`).
 - Assemblies are cached at runtime by the Engine and served via API.
 - `assembly_type` is the canonical classifier used to route assemblies to the Script Editor, Workflow Editor, and execution paths.
@@ -44,6 +44,8 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - `POST /api/assemblies/dev-mode/write` (Admin + Dev Mode) - flush queued writes.
 - `POST /api/assemblies/import` (Domain write permissions) - import legacy JSON.
 - `GET /api/assemblies/<assembly_guid>/export` (Token Authenticated) - export legacy JSON.
+- `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official assembly from the active catalog.
+- `POST /api/assemblies/official/update-all` (Admin) - update all official assemblies with available catalog changes.
 - `POST /api/scripts/quick_run` (Token Authenticated) - quick PowerShell job.
 - `POST /api/ansible/quick_run` (Token Authenticated) - placeholder (not implemented).
 - `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history.
@@ -58,16 +60,13 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 
 ## Codex Agent (Detailed)
 ### Storage layout and caching
-- Staging assemblies live under `Data/Engine/Assemblies/`:
-  - `official.db`
-  - `community.db`
-  - `user_created.db`
-- Runtime mirror lives under `Engine/Assemblies/` and is refreshed at launch.
+- Bundled official assemblies live under `Data/Engine/Official_Assemblies/` as `manifest.json` plus one JSON file per assembly.
+- Runtime assembly data lives in PostgreSQL `assemblies.official_assemblies`, `assemblies.community_assemblies`, and `assemblies.user_created_assemblies`.
 - The Engine loads and caches assemblies via `Data/Engine/assembly_management` and `AssemblyRuntimeService`.
 
 ### Payload sizing guidance
 - Treat `500 MB` as the practical operator-facing target for a single assembly payload.
-- Runtime import limit is `950,000,000` bytes to remain below SQLite's current per-value ceiling (`1,000,000,000` bytes).
+- Runtime import limit remains `950,000,000` bytes as an application guardrail.
 
 ### Dev Mode behavior
 - User-created domain writes are allowed for authenticated operators.
@@ -97,8 +96,8 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - Use `/api/device/activity/<hostname>` to query or clear entries.
 
 ### Backup guidance
-- Back up `Data/Engine/Assemblies/`.
-- Also back up `Engine/Assemblies/` if you need runtime snapshots.
+- Back up PostgreSQL `assemblies.*` tables.
+- Back up `Data/Engine/Official_Assemblies/` if you want the bundled official catalog snapshot tracked with releases.
 
 ### Known limitations
 - Ansible quick-run is not implemented in the Engine runtime.

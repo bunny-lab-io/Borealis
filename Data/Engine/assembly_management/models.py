@@ -16,20 +16,11 @@ from typing import Any, Dict, Optional
 
 
 class AssemblyDomain(str, Enum):
-    """Logical source domains mapped to dedicated SQLite databases."""
+    """Logical source domains mapped to dedicated PostgreSQL tables."""
 
     OFFICIAL = "official"
     COMMUNITY = "community"
     USER = "user"
-
-    @property
-    def database_name(self) -> str:
-        mapping = {
-            AssemblyDomain.OFFICIAL: "official.db",
-            AssemblyDomain.COMMUNITY: "community.db",
-            AssemblyDomain.USER: "user_created.db",
-        }
-        return mapping[self]
 
 
 class PayloadType(str, Enum):

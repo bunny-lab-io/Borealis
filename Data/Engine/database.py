@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import logging
 import secrets
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
+from Data.Engine.db import get_database_manager
 import time
-from pathlib import Path
 from typing import Optional, Sequence
 
 from . import database_migrations
@@ -30,22 +30,18 @@ def _generate_install_code() -> str:
     return "-".join(raw[i : i + 4] for i in range(0, len(raw), 4))
 
 
-def initialise_engine_database(database_path: str, *, logger: Optional[logging.Logger] = None) -> None:
+def initialise_engine_database(database_url: str, *, logger: Optional[logging.Logger] = None) -> None:
     """Ensure the Engine database has the required schema and default admin account."""
 
-    path = Path(database_path or "").expanduser()
-    if not path:
+    database_url = str(database_url or "").strip()
+    if not database_url:
         if logger:
-            logger.warning("Engine database path is empty; skipping initialisation.")
+            logger.warning("Engine database URL is empty; skipping initialisation.")
         return
 
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        # Directory creation failures surface more clearly during sqlite connect.
-        pass
-
-    conn = sqlite3.connect(str(path))
+    manager = get_database_manager(database_url, logger=logger)
+    manager.ensure_schemas()
+    conn = sqlite3.connect(database_url)
     try:
         _apply_engine_migrations(conn, logger=logger)
         _ensure_activity_history(conn, logger=logger)
@@ -58,7 +54,7 @@ def initialise_engine_database(database_path: str, *, logger: Optional[logging.L
         _ensure_agent_service_accounts(conn, logger=logger)
         _ensure_credentials(conn, logger=logger)
         _ensure_github_token(conn, logger=logger)
-        _ensure_device_filters(conn, database_path=str(path), logger=logger)
+        _ensure_device_filters(conn, logger=logger)
         _ensure_device_filter_sites(conn, logger=logger)
         _ensure_device_software_inventory(conn, logger=logger)
         _ensure_scheduled_jobs(conn, logger=logger)
@@ -478,9 +474,7 @@ def _ensure_github_token(conn: sqlite3.Connection, *, logger: Optional[logging.L
         cur.close()
 
 
-def _ensure_device_filters(
-    conn: sqlite3.Connection, *, database_path: Optional[str] = None, logger: Optional[logging.Logger] = None
-) -> None:
+def _ensure_device_filters(conn: sqlite3.Connection, *, logger: Optional[logging.Logger] = None) -> None:
     cur = conn.cursor()
     try:
         cur.execute("PRAGMA table_info(device_filters)")

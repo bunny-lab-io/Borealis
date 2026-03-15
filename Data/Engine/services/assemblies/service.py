@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Union
 
 from ...assembly_management.bootstrap import AssemblyCache
 from ...assembly_management.models import AssemblyDomain, AssemblyRecord, CachedAssembly, PayloadDescriptor
+from .official_catalog import compute_record_content_hash
 from .serialization import (
     AssemblySerializationError,
     prepare_import_request,
@@ -244,6 +245,9 @@ class AssemblyRuntimeService:
             assembly_subtype = _default_assembly_subtype(assembly_type)
 
         payload_content = payload.get("payload")
+        if isinstance(payload_content, Mapping):
+            payload_content = dict(payload_content)
+            payload_content.setdefault("assembly_guid", assembly_guid)
         payload_text = _serialize_payload(payload_content) if payload_content is not None else None
 
         if existing:
@@ -302,6 +306,7 @@ class AssemblyRuntimeService:
             "virtual_path": _fallback_source_path(record),
             "created_at": record.created_at.isoformat(),
             "updated_at": record.updated_at.isoformat(),
+            "content_hash": compute_record_content_hash(record),
         }
         data["path"] = data["virtual_path"]
         data.setdefault("assembly_id", record.assembly_guid)  # legacy alias for older clients

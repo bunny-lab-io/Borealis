@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Sequence, Tuple
@@ -281,7 +281,7 @@ def _rebuild_device_approvals_table(
         now_iso = datetime.now(tz=timezone.utc).isoformat()
         insert_sql = (
             """
-            INSERT OR REPLACE INTO device_approvals (
+            INSERT INTO device_approvals (
                 id,
                 approval_reference,
                 guid,
@@ -298,6 +298,20 @@ def _rebuild_device_approvals_table(
                 approved_by_user_id
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                approval_reference = EXCLUDED.approval_reference,
+                guid = EXCLUDED.guid,
+                hostname_claimed = EXCLUDED.hostname_claimed,
+                ssl_key_fingerprint_claimed = EXCLUDED.ssl_key_fingerprint_claimed,
+                enrollment_code = EXCLUDED.enrollment_code,
+                site_id = EXCLUDED.site_id,
+                status = EXCLUDED.status,
+                client_nonce = EXCLUDED.client_nonce,
+                server_nonce = EXCLUDED.server_nonce,
+                agent_pubkey_der = EXCLUDED.agent_pubkey_der,
+                created_at = EXCLUDED.created_at,
+                updated_at = EXCLUDED.updated_at,
+                approved_by_user_id = EXCLUDED.approved_by_user_id
             """
         )
         for row in rows:
@@ -436,7 +450,7 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
 
     insert_sql = (
         """
-        INSERT OR REPLACE INTO devices (
+        INSERT INTO devices (
             guid, hostname, description, created_at, agent_hash, memory,
             network, software, storage, cpu, device_type, domain, external_ip,
             internal_ip, last_reboot, last_seen, last_user, operating_system,
@@ -444,6 +458,33 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             agent_vnc_password, ssl_key_fingerprint, token_version, status, key_added_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(guid) DO UPDATE SET
+            hostname = EXCLUDED.hostname,
+            description = EXCLUDED.description,
+            created_at = EXCLUDED.created_at,
+            agent_hash = EXCLUDED.agent_hash,
+            memory = EXCLUDED.memory,
+            network = EXCLUDED.network,
+            software = EXCLUDED.software,
+            storage = EXCLUDED.storage,
+            cpu = EXCLUDED.cpu,
+            device_type = EXCLUDED.device_type,
+            domain = EXCLUDED.domain,
+            external_ip = EXCLUDED.external_ip,
+            internal_ip = EXCLUDED.internal_ip,
+            last_reboot = EXCLUDED.last_reboot,
+            last_seen = EXCLUDED.last_seen,
+            last_user = EXCLUDED.last_user,
+            operating_system = EXCLUDED.operating_system,
+            uptime = EXCLUDED.uptime,
+            agent_id = EXCLUDED.agent_id,
+            connection_type = EXCLUDED.connection_type,
+            connection_endpoint = EXCLUDED.connection_endpoint,
+            agent_vnc_password = EXCLUDED.agent_vnc_password,
+            ssl_key_fingerprint = EXCLUDED.ssl_key_fingerprint,
+            token_version = EXCLUDED.token_version,
+            status = EXCLUDED.status,
+            key_added_at = EXCLUDED.key_added_at
         """
     )
 

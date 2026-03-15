@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import secrets
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 import time
 from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any, Dict, Optional

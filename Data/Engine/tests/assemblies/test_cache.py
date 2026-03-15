@@ -25,8 +25,14 @@ from Data.Engine.services.assemblies.service import AssemblyRuntimeService
 def assembly_runtime(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Tuple[AssemblyRuntimeService, AssemblyCache, AssemblyDatabaseManager]]:
     staging_root = tmp_path_factory.mktemp("assemblies_staging")
     runtime_root = tmp_path_factory.mktemp("assemblies_runtime")
+    db_url = f"sqlite:///{(runtime_root / 'assemblies.sqlite3').as_posix()}"
 
-    db_manager = AssemblyDatabaseManager(staging_root=staging_root, runtime_root=runtime_root, logger=logging.getLogger("test.assemblies.db"))
+    db_manager = AssemblyDatabaseManager(
+        staging_root=staging_root,
+        runtime_root=runtime_root,
+        database_url=db_url,
+        logger=logging.getLogger("test.assemblies.db"),
+    )
     db_manager.initialise()
     cache = AssemblyCache(
         database_manager=db_manager,

@@ -44,7 +44,6 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
         raise RuntimeError("Assembly cache is required to initialise the scheduled job service.")
     assembly_runtime = AssemblyRuntimeService(assembly_cache, logger=adapters.context.logger)
 
-    database_path = adapters.context.database_path
     script_signer = adapters.script_signer
 
     def _online_hostnames_snapshot() -> List[str]:
@@ -92,7 +91,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     scheduler = job_scheduler.register(
         app,
         socketio,
-        database_path,
+        adapters.db_conn_factory,
         script_signer=script_signer,
         service_logger=adapters.service_log,
         assembly_runtime=assembly_runtime,

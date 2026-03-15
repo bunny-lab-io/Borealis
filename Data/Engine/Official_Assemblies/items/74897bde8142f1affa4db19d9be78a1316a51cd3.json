@@ -1,0 +1,159 @@
+{
+  "assembly_guid": "74897bde8142f1affa4db19d9be78a1316a51cd3",
+  "assembly_subtype": "workflow",
+  "assembly_type": "workflow",
+  "created_at": "2025-11-01T07:52:43",
+  "display_name": "Math Operations",
+  "domain": "official",
+  "payload": {
+    "assembly_guid": "74897bde8142f1affa4db19d9be78a1316a51cd3",
+    "edges": [
+      {
+        "animated": true,
+        "id": "reactflow__edge-node-1754800111049-node-1754800119705a",
+        "source": "node-1754800111049",
+        "sourceHandle": null,
+        "style": {
+          "stroke": "#58a6ff",
+          "strokeDasharray": "6 3"
+        },
+        "target": "node-1754800119705",
+        "targetHandle": "a",
+        "type": "bezier"
+      },
+      {
+        "animated": true,
+        "id": "reactflow__edge-node-1754800112609-node-1754800119705b",
+        "source": "node-1754800112609",
+        "sourceHandle": null,
+        "style": {
+          "stroke": "#58a6ff",
+          "strokeDasharray": "6 3"
+        },
+        "target": "node-1754800119705",
+        "targetHandle": "b",
+        "type": "bezier"
+      },
+      {
+        "animated": true,
+        "id": "reactflow__edge-node-1754800119705-node-1754800128555",
+        "source": "node-1754800119705",
+        "sourceHandle": null,
+        "style": {
+          "stroke": "#58a6ff",
+          "strokeDasharray": "6 3"
+        },
+        "target": "node-1754800128555",
+        "targetHandle": null,
+        "type": "bezier"
+      }
+    ],
+    "nodes": [
+      {
+        "data": {
+          "content": "Store a String or Number",
+          "label": "Number Input A",
+          "value": "5"
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 67,
+        "id": "node-1754800111049",
+        "position": {
+          "x": 19.333333333333314,
+          "y": 20.666666666666657
+        },
+        "positionAbsolute": {
+          "x": 19.333333333333314,
+          "y": 20.666666666666657
+        },
+        "selected": false,
+        "type": "DataNode",
+        "width": 160
+      },
+      {
+        "data": {
+          "accentColor": "#ff8c00",
+          "content": "Store a String or Number",
+          "label": "Number Input B",
+          "value": "3"
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 67,
+        "id": "node-1754800112609",
+        "position": {
+          "x": 19.33333333333337,
+          "y": 121.33333333333337
+        },
+        "positionAbsolute": {
+          "x": 19.33333333333337,
+          "y": 121.33333333333337
+        },
+        "selected": false,
+        "style": {
+          "--borealis-accent": "#ff8c00",
+          "--borealis-accent-dark": "#b36200",
+          "--borealis-title": "#ff8c00"
+        },
+        "type": "DataNode",
+        "width": 160
+      },
+      {
+        "data": {
+          "accentColor": "#00d18c",
+          "content": "Perform Math Operations",
+          "label": "Multiply A x B",
+          "operator": "Multiply",
+          "value": "15"
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 67,
+        "id": "node-1754800119705",
+        "position": {
+          "x": 276.66666666666663,
+          "y": 69.33333333333334
+        },
+        "positionAbsolute": {
+          "x": 276.66666666666663,
+          "y": 69.33333333333334
+        },
+        "selected": false,
+        "style": {
+          "--borealis-accent": "#00d18c",
+          "--borealis-accent-dark": "#009262",
+          "--borealis-title": "#00d18c"
+        },
+        "type": "MathNode",
+        "width": 160
+      },
+      {
+        "data": {
+          "content": "Store a String or Number",
+          "label": "Usable Result",
+          "value": "15"
+        },
+        "dragHandle": ".borealis-node-header",
+        "dragging": false,
+        "height": 67,
+        "id": "node-1754800128555",
+        "position": {
+          "x": 517.3333333333334,
+          "y": 69.33333333333333
+        },
+        "positionAbsolute": {
+          "x": 517.3333333333334,
+          "y": 69.33333333333333
+        },
+        "selected": true,
+        "type": "DataNode",
+        "width": 160
+      }
+    ],
+    "tab_name": "Math Operations"
+  },
+  "payload_guid": "74897bde8142f1affa4db19d9be78a1316a51cd3",
+  "summary": null,
+  "updated_at": "2025-11-01T07:52:43"
+}

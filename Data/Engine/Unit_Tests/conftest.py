@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -405,6 +405,8 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / "server.log"
     error_log_path = logs_dir / "error.log"
+    api_log_path = logs_dir / "api.log"
+    vpn_tunnel_log_path = logs_dir / "vpn-tunnel.log"
 
     static_dir = tmp_path / "static"
     static_dir.mkdir(parents=True, exist_ok=True)
@@ -414,13 +416,15 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     (assets_dir / "example.txt").write_text("asset", encoding="utf-8")
 
     config = {
-        "DATABASE_PATH": str(db_path),
+        "DATABASE_URL": f"sqlite:///{db_path.as_posix()}",
         "TLS_CERT_PATH": str(cert_path),
         "TLS_KEY_PATH": str(key_path),
         "TLS_BUNDLE_PATH": str(bundle_path),
         "SECRET_KEY": "engine-test-secret-key-for-unit-tests-only",
         "LOG_FILE": str(log_path),
         "ERROR_LOG_FILE": str(error_log_path),
+        "API_LOG_FILE": str(api_log_path),
+        "VPN_TUNNEL_LOG_FILE": str(vpn_tunnel_log_path),
         "STATIC_FOLDER": str(static_dir),
         "API_GROUPS": ("core", "auth", "tokens", "enrollment", "devices", "assemblies"),
     }

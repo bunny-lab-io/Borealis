@@ -17,7 +17,7 @@ import hashlib
 import io
 import logging
 import os
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 import time
 import uuid
 from typing import Any, Dict, Mapping, Optional, Sequence, TYPE_CHECKING

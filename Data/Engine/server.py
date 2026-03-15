@@ -110,7 +110,7 @@ from .services.VPN import WireGuardServerConfig, WireGuardServerManager
 class EngineContext:
     """Shared handles that Engine services will consume."""
 
-    database_path: str
+    database_url: str
     logger: logging.Logger
     scheduler: Any
     socketio: Optional[Any]
@@ -143,7 +143,7 @@ __all__ = ["EngineContext", "create_app", "register_engine_api"]
 
 def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> EngineContext:
     return EngineContext(
-        database_path=settings.database_path,
+        database_url=settings.database_url,
         logger=logger,
         scheduler=None,
         socketio=None,

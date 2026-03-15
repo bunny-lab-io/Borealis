@@ -12,3 +12,6 @@ requests
 websockets
 packaging
 regex
+SQLAlchemy
+alembic
+psycopg[binary]

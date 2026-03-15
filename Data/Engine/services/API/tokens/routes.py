@@ -11,13 +11,14 @@
 from __future__ import annotations
 
 import hashlib
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Callable
 
 from flask import Blueprint, current_app, jsonify, request
 
 from ....auth.dpop import DPoPReplayError, DPoPValidator, DPoPVerificationError
+from ....auth.guid_utils import normalize_guid
 
 
 def register(
@@ -45,7 +46,7 @@ def register(
     @blueprint.route("/api/agent/token/refresh", methods=["POST"])
     def refresh():
         payload = request.get_json(force=True, silent=True) or {}
-        guid = str(payload.get("guid") or "").strip()
+        guid = normalize_guid(str(payload.get("guid") or "").strip())
         refresh_token = str(payload.get("refresh_token") or "").strip()
 
         if not guid or not refresh_token:
@@ -65,10 +66,14 @@ def register(
             )
             row = cur.fetchone()
             if not row:
+                try:
+                    current_app.logger.warning("Refresh token lookup failed for guid=%s", guid)
+                except Exception:
+                    pass
                 return jsonify({"error": "invalid_refresh_token"}), 401
 
             record_id, row_guid, _token_hash, stored_jkt, created_at, expires_at, revoked_at = row
-            if row_guid != guid:
+            if normalize_guid(row_guid) != guid:
                 return jsonify({"error": "invalid_refresh_token"}), 401
             if revoked_at:
                 return jsonify({"error": "refresh_token_revoked"}), 401

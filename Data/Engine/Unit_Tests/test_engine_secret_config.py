@@ -23,7 +23,7 @@ def _base_config(tmp_path: Path) -> dict:
     bundle_path.write_text("bundle", encoding="utf-8")
 
     return {
-        "DATABASE_PATH": str(tmp_path / "engine.sqlite3"),
+        "DATABASE_URL": f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}",
         "TLS_CERT_PATH": str(cert_path),
         "TLS_KEY_PATH": str(key_path),
         "TLS_BUNDLE_PATH": str(bundle_path),

@@ -556,7 +556,7 @@ export function parseAssemblyExport(exportDoc) {
     { mode: "all", values: [] };
 
   const metadata = {
-    assembly_guid: firstText(exportDoc.assembly_guid, exportDoc.assemblyGuid),
+    assembly_guid: firstText(exportDoc.assembly_guid, exportDoc.assemblyGuid, payload.assembly_guid, payload.assemblyGuid),
     display_name: firstText(exportDoc.display_name, exportDoc.displayName, exportDoc.name),
     summary: firstText(exportDoc.summary, exportDoc.description),
     domain: firstText(exportDoc.domain, exportDoc.source),

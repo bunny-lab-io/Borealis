@@ -8,7 +8,6 @@
 """WebSocket service registration for the Borealis Engine runtime."""
 from __future__ import annotations
 
-import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +16,7 @@ from typing import Any, Callable, Dict, Optional
 from flask import request
 from flask_socketio import SocketIO
 
+from ...db import dbapi as sqlite3
 from ...database import initialise_engine_database
 from ...security import signing
 from ...server import EngineContext
@@ -48,8 +48,15 @@ class EngineRealtimeAdapters:
     def __post_init__(self) -> None:
         from ..API import _make_db_conn_factory, _make_service_logger  # Local import to avoid circular import at module load
 
-        initialise_engine_database(self.context.database_path, logger=self.context.logger)
-        self.db_conn_factory = _make_db_conn_factory(self.context.database_path)
+        initialise_engine_database(self.context.database_url, logger=self.context.logger)
+        self.db_conn_factory = _make_db_conn_factory(
+            self.context.database_url,
+            sslmode=str(self.context.config.get("db_sslmode") or "prefer"),
+            pool_size=int(self.context.config.get("db_pool_size") or 10),
+            max_overflow=int(self.context.config.get("db_max_overflow") or 20),
+            connect_timeout=int(self.context.config.get("db_connect_timeout") or 15),
+            logger=self.context.logger,
+        )
 
         log_file = str(
             self.context.config.get("log_file")
@@ -59,7 +66,7 @@ class EngineRealtimeAdapters:
         if log_file:
             base = Path(log_file).resolve().parent
         else:
-            base = Path(self.context.database_path).resolve().parent
+            base = Path.cwd() / "Engine" / "Logs"
         self.service_log = _make_service_logger(base, self.context.logger)
 
 

@@ -35,18 +35,18 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
-ID: TD-20260313-01
+ID: TD-20260315-01
 Status: active
 Owner: Engine
-Date Added: 2026-03-13
-Summary: Device filter fixes may require hotpatching the runtime mirror under `Engine/Data/Engine` before the next full restage.
-Impact: Source fixes in `Data/Engine` can diverge from the live Engine process until the runtime mirror is restaged and the service is restarted.
-Root Cause: The Linux Engine service runs from the staged runtime copy in `Engine/`, while active development edits land in `Data/Engine`.
-Current Mitigation: Synced updated filter matcher/API files from `Data/Engine` into `Engine/Data/Engine` and restarted `borealis-engine.service` so live validation/matching behavior reflects the latest source fix immediately.
-Removal Criteria: The deployment/restart flow always restages `Data/Engine` into `Engine/` before launch, or the service runs directly from the source tree in development.
-Files: `Data/Engine/services/filters/matcher.py`, `Data/Engine/services/API/filters/management.py`, `Engine/Data/Engine/services/filters/matcher.py`, `Engine/Data/Engine/services/API/filters/management.py`
-Evidence: Live filter preview rejected `does_not_contain` even though the source matcher accepted it, showing the runtime mirror was stale.
-Next Step: Fold runtime restaging into the standard service restart workflow so source and runtime trees cannot drift silently.
+Date Added: 2026-03-15
+Summary: The new Engine DB layer still wraps SQLite for tests and migration-source reads while production is being moved to PostgreSQL.
+Impact: Production and deployment paths are PostgreSQL-only, but some local/unit-test flows can still succeed against SQLite-shaped wrappers and may not catch PostgreSQL-only behavior differences.
+Root Cause: The codebase still has broad sqlite3-shaped cursor usage, and the local test harness has not been fully converted to real PostgreSQL integration coverage yet.
+Current Mitigation: `Data/Engine/db/dbapi.py` routes PostgreSQL runtime connections through SQLAlchemy/psycopg while still allowing SQLite-backed wrappers for unit tests.
+Removal Criteria: Test harnesses run against real PostgreSQL instances end to end and the SQLite compatibility branch is no longer needed.
+Files: `Data/Engine/db/core.py`, `Data/Engine/db/dbapi.py`, `Data/Engine/Unit_Tests/conftest.py`
+Evidence: The workspace currently lacks `sqlalchemy`, `psycopg`, `flask`, and `pytest`, and no local `psql`/`postgres` binaries are present, so PostgreSQL runtime verification cannot happen here without extra bootstrap.
+Next Step: Add a real PostgreSQL-backed test harness in CI/local dev and then delete the SQLite runtime/test compatibility path.
 GitHub Issue: not yet
 
 ID: TD-20260218-01

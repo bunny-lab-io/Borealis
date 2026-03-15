@@ -27,7 +27,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Auto-manages PKI: a persistent Borealis root CA (ECDSA SECP384R1) signs leaf certificates that include localhost SANs, tightened filesystem permissions, and a combined bundle for agent identity and cert pinning.
 - Script delivery is code-signed with an Ed25519 key stored under `Engine/Certificates/Code-Signing`; agents refuse any payload whose signature does not match the pinned public key.
 - Device authentication checks GUID normalization, SSL fingerprint matches, token version counters, and quarantine flags before admitting requests; missing rows with valid tokens auto-recover into placeholder records to avoid accidental lockouts.
-- Refresh tokens are never stored in cleartext; only SHA-256 hashes plus DPoP bindings are stored in SQLite, and reuse after revocation/expiry returns explicit error codes.
+- Refresh tokens are never stored in cleartext; only SHA-256 hashes plus DPoP bindings are stored in PostgreSQL, and reuse after revocation/expiry returns explicit error codes.
 - Enrollment workflow queues approvals, detects hostname and fingerprint conflicts, offers merge/overwrite options, and records auditor identities so trust decisions are traceable.
 - Background pruning of expired enrollment codes and refresh tokens is not wired yet; a maintenance task is still needed.
 

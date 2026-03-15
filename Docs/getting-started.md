@@ -60,7 +60,8 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
   2) Environment variables prefixed with `BOREALIS_`.
   3) Defaults baked into `config.py`.
 - Key defaults to remember:
-  - Database: `Engine/database.db`
+  - Database: `BOREALIS_DATABASE_URL` (required PostgreSQL connection URL)
+  - Bundled official assemblies: `Data/Engine/Official_Assemblies/`
   - Logs: `Engine/Logs/engine.log`, `Engine/Logs/error.log`, `Engine/Logs/api.log`
   - WireGuard: UDP 30000, engine virtual IP `10.255.0.1/32`, shell port 47002
 

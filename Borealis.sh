@@ -43,6 +43,9 @@ SERVER_URL=""
 CHOICE=""
 ENGINE_MODE_CHOICE=""
 ENGINE_USE_SYSTEMD_SUPERVISION=0
+POSTGRES_VERSION="${BOREALIS_PG_VERSION:-17}"
+ENGINE_DB_ENV_FILE="${SCRIPT_DIR}/Engine/database.env"
+ENGINE_DB_PASSWORD_FILE="${SCRIPT_DIR}/Engine/.postgres-password"
 
 while (( "$#" )); do
   case "$1" in
@@ -214,6 +217,22 @@ resolve_python_bin() {
   echo ""
 }
 
+resolve_engine_database_url() {
+  if [[ -n "${BOREALIS_DATABASE_URL:-}" ]]; then
+    echo "${BOREALIS_DATABASE_URL}"
+    return 0
+  fi
+  if [[ -f "${ENGINE_DB_ENV_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    . "${ENGINE_DB_ENV_FILE}"
+    if [[ -n "${BOREALIS_DATABASE_URL:-}" ]]; then
+      echo "${BOREALIS_DATABASE_URL}"
+      return 0
+    fi
+  fi
+  echo ""
+}
+
 run_privileged() {
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     "$@"
@@ -224,6 +243,20 @@ run_privileged() {
     return $?
   fi
   echo -e "${RED}This action requires root privileges and sudo is not available.${RESET}" >&2
+  return 1
+}
+
+run_as_postgres() {
+  local command="$1"
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    su - postgres -s /bin/bash -c "${command}"
+    return $?
+  fi
+  if command_exists sudo; then
+    sudo -u postgres bash -lc "${command}"
+    return $?
+  fi
+  echo -e "${RED}PostgreSQL setup requires sudo or root access.${RESET}" >&2
   return 1
 }
 
@@ -544,6 +577,137 @@ install_shared_dependencies() {
   esac
 }
 
+postgres_service_name() {
+  detect_distro
+  case "$DISTRO_ID" in
+    ubuntu|debian|linuxmint|pop)
+      echo "postgresql"
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      echo "postgresql-${POSTGRES_VERSION}"
+      ;;
+    *)
+      echo "postgresql"
+      ;;
+  esac
+}
+
+install_postgresql_best_effort() {
+  detect_distro
+  case "$DISTRO_ID" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt update -qq
+      run_privileged apt install -y ca-certificates curl postgresql-common
+      run_privileged install -d -m 0755 /usr/share/postgresql-common/pgdg
+      run_privileged curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc
+      local codename=""
+      if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        codename="${VERSION_CODENAME:-}"
+      fi
+      [[ -n "${codename}" ]] || { echo -e "${RED}Unable to determine Debian/Ubuntu codename for PGDG setup.${RESET}" >&2; return 1; }
+      printf 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' "${codename}" | \
+        run_privileged tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+      run_privileged apt update -qq
+      if ! run_privileged apt install -y "postgresql-${POSTGRES_VERSION}" "postgresql-client-${POSTGRES_VERSION}"; then
+        echo -e "${YELLOW}PGDG versioned packages were unavailable; falling back to distro PostgreSQL packages.${RESET}"
+        run_privileged apt install -y postgresql postgresql-client
+      fi
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      local releasever=""
+      if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        releasever="${VERSION_ID%%.*}"
+      fi
+      [[ -n "${releasever}" ]] || { echo -e "${RED}Unable to determine EL release for PGDG setup.${RESET}" >&2; return 1; }
+      local arch
+      arch="$(uname -m)"
+      run_privileged rpm -Uvh --force "https://download.postgresql.org/pub/repos/yum/reporpms/EL-${releasever}-${arch}/pgdg-redhat-repo-latest.noarch.rpm"
+      if command_exists dnf; then
+        run_privileged dnf -qy module disable postgresql || true
+        run_privileged dnf install -y "postgresql${POSTGRES_VERSION}-server" "postgresql${POSTGRES_VERSION}" || \
+          run_privileged dnf install -y "postgresql${POSTGRES_VERSION//./}-server" "postgresql${POSTGRES_VERSION//./}"
+      else
+        run_privileged yum -y module disable postgresql || true
+        run_privileged yum install -y "postgresql${POSTGRES_VERSION}-server" "postgresql${POSTGRES_VERSION}" || \
+          run_privileged yum install -y "postgresql${POSTGRES_VERSION//./}-server" "postgresql${POSTGRES_VERSION//./}"
+      fi
+      ;;
+    *)
+      echo -e "${YELLOW}Unsupported distro '${DISTRO_ID}' for automated PostgreSQL install.${RESET}"
+      return 1
+      ;;
+  esac
+}
+
+ensure_engine_database_env_file() {
+  mkdir -p "$(dirname "${ENGINE_DB_ENV_FILE}")"
+  local password=""
+  if [[ -f "${ENGINE_DB_PASSWORD_FILE}" ]]; then
+    password="$(cat "${ENGINE_DB_PASSWORD_FILE}")"
+  fi
+  if [[ -z "${password}" ]]; then
+    password="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+    printf '%s' "${password}" > "${ENGINE_DB_PASSWORD_FILE}"
+    chmod 600 "${ENGINE_DB_PASSWORD_FILE}"
+  fi
+  cat > "${ENGINE_DB_ENV_FILE}" <<EOF
+export BOREALIS_DATABASE_URL="postgresql+psycopg://borealis_engine:${password}@127.0.0.1:5432/borealis"
+export BOREALIS_DB_SSLMODE="${BOREALIS_DB_SSLMODE:-prefer}"
+export BOREALIS_DB_POOL_SIZE="${BOREALIS_DB_POOL_SIZE:-10}"
+export BOREALIS_DB_MAX_OVERFLOW="${BOREALIS_DB_MAX_OVERFLOW:-20}"
+export BOREALIS_DB_CONNECT_TIMEOUT="${BOREALIS_DB_CONNECT_TIMEOUT:-15}"
+EOF
+  chmod 600 "${ENGINE_DB_ENV_FILE}"
+}
+
+ensure_engine_postgresql_ready() {
+  ensure_engine_database_env_file || return 1
+  local service_name
+  service_name="$(postgres_service_name)"
+  detect_distro
+  case "$DISTRO_ID" in
+    rhel|centos|fedora|rocky|almalinux)
+      local setup_bin="/usr/pgsql-${POSTGRES_VERSION}/bin/postgresql-${POSTGRES_VERSION}-setup"
+      if [[ -x "${setup_bin}" ]]; then
+        run_privileged "${setup_bin}" initdb >/dev/null 2>&1 || true
+      fi
+      ;;
+    *)
+      ;;
+  esac
+  if command_exists systemctl; then
+    run_privileged systemctl enable "${service_name}" || true
+    run_privileged systemctl restart "${service_name}" || true
+  fi
+
+  # shellcheck disable=SC1090
+  . "${ENGINE_DB_ENV_FILE}"
+  local engine_password="${BOREALIS_DATABASE_URL#*://borealis_engine:}"
+  engine_password="${engine_password%@127.0.0.1:5432/borealis}"
+
+  if command_exists psql; then
+    run_as_postgres "psql postgres -v ON_ERROR_STOP=1 <<'EOF'
+DO \$\$
+BEGIN
+   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'borealis_engine') THEN
+      CREATE ROLE borealis_engine LOGIN PASSWORD '${engine_password}';
+   ELSE
+      ALTER ROLE borealis_engine WITH LOGIN PASSWORD '${engine_password}';
+   END IF;
+END
+\$\$;
+EOF
+"
+    run_as_postgres "psql postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='borealis'\"" | grep -q 1 || \
+      run_as_postgres "createdb -O borealis_engine borealis"
+  fi
+}
+
 install_tesseract() {
   detect_distro
   case "$DISTRO_ID" in
@@ -592,6 +756,7 @@ ensure_node_bins() {
 
 install_server_dependencies() {
   run_step "Dependency: Python (system)" install_shared_dependencies
+  run_step "Dependency: PostgreSQL (system)" install_postgresql_best_effort
   run_step "Dependency: Tesseract-OCR (system)" install_tesseract
   run_step "Dependency: WireGuard tools (system)" install_wireguard_tools_best_effort engine
   run_step "Dependency: NodeJS (portable)" install_node_portable
@@ -932,67 +1097,15 @@ sync_engine_runtime() {
   shopt -s dotglob nullglob
   local item=""
   for item in "${source_root}"/*; do
-    local base
-    base="$(basename "$item")"
-    if [[ "$base" == "Assemblies" ]]; then
-      continue
-    fi
     cp -a "$item" "${destination_root}/"
   done
   shopt -u dotglob nullglob
 
-  sync_engine_assemblies_runtime
   verify_engine_runtime_staging
-}
-
-sync_engine_assemblies_runtime() {
-  local source_assemblies="${SCRIPT_DIR}/Data/Engine/Assemblies"
-  local runtime_assemblies="${SCRIPT_DIR}/Engine/Assemblies"
-  local db_name=""
-  mkdir -p "${runtime_assemblies}"
-
-  if [[ ! -d "${source_assemblies}" ]]; then
-    echo -e "${YELLOW}Engine assemblies source directory '${source_assemblies}' was not found. Skipping assemblies sync.${RESET}"
-    write_engine_log "Engine assemblies source directory '${source_assemblies}' missing; skipped assemblies sync."
-    return 0
-  fi
-
-  for db_name in official.db community.db; do
-    local source_db="${source_assemblies}/${db_name}"
-    local runtime_db="${runtime_assemblies}/${db_name}"
-    local suffix=""
-
-    if [[ ! -f "${source_db}" ]]; then
-      echo -e "${YELLOW}Engine assemblies source database '${source_db}' was not found. Skipping ${db_name}.${RESET}"
-      write_engine_log "Engine assemblies source database '${source_db}' missing; skipped ${db_name} sync."
-      continue
-    fi
-
-    rm -f "${runtime_db}" "${runtime_db}-wal" "${runtime_db}-shm" 2>/dev/null || true
-    cp -f "${source_db}" "${runtime_db}"
-    for suffix in -wal -shm; do
-      if [[ -f "${source_db}${suffix}" ]]; then
-        cp -f "${source_db}${suffix}" "${runtime_db}${suffix}"
-      fi
-    done
-  done
-
-  local source_user_db="${source_assemblies}/user_created.db"
-  local runtime_user_db="${runtime_assemblies}/user_created.db"
-  if [[ ! -f "${runtime_user_db}" && -f "${source_user_db}" ]]; then
-    local suffix=""
-    cp -f "${source_user_db}" "${runtime_user_db}"
-    for suffix in -wal -shm; do
-      if [[ -f "${source_user_db}${suffix}" ]]; then
-        cp -f "${source_user_db}${suffix}" "${runtime_user_db}${suffix}"
-      fi
-    done
-  fi
 }
 
 purge_engine_runtime_for_deploy() {
   local engine_root="${SCRIPT_DIR}/Engine"
-  local assemblies_root="${engine_root}/Assemblies"
   mkdir -p "${engine_root}"
 
   # Preserve only explicit runtime artifacts; purge everything else.
@@ -1002,7 +1115,7 @@ purge_engine_runtime_for_deploy() {
     local base
     base="$(basename "${entry}")"
     case "${base}" in
-      Assemblies|Auth_Tokens|Certificates|Logs|WireGuard|database.db|engine_secret.txt)
+      Auth_Tokens|Certificates|Logs|WireGuard|database.env|.postgres-password|engine_secret.txt)
         continue
         ;;
       *)
@@ -1012,26 +1125,7 @@ purge_engine_runtime_for_deploy() {
   done
   shopt -u dotglob nullglob
 
-  # Inside Assemblies, preserve only user DB artifacts.
-  if [[ -d "${assemblies_root}" ]]; then
-    shopt -s dotglob nullglob
-    local asm_entry=""
-    for asm_entry in "${assemblies_root}"/*; do
-      local asm_base
-      asm_base="$(basename "${asm_entry}")"
-      case "${asm_base}" in
-        user_created.db|user_created.db-wal|user_created.db-shm)
-          continue
-          ;;
-        *)
-          rm -rf "${asm_entry}" 2>/dev/null || true
-          ;;
-      esac
-    done
-    shopt -u dotglob nullglob
-  fi
-
-  mkdir -p "${assemblies_root}" "${engine_root}/Auth_Tokens" "${engine_root}/Certificates" "${engine_root}/Logs" "${engine_root}/WireGuard"
+  mkdir -p "${engine_root}/Auth_Tokens" "${engine_root}/Certificates" "${engine_root}/Logs" "${engine_root}/WireGuard"
 }
 
 engine_service_runner_path() {
@@ -1070,6 +1164,7 @@ ENGINE_UI_DIR="\${PROJECT_ROOT}/Engine/web-interface"
 NODE_BIN_DIR="${NODE_DIR}/bin"
 VENV_PY="${venv_py}"
 NPM_CMD="${npm_cmd}"
+ENGINE_DB_ENV_FILE="${ENGINE_DB_ENV_FILE}"
 
 mkdir -p "\${ENGINE_LOG_DIR}"
 cd "\${ENGINE_DIR}"
@@ -1082,6 +1177,10 @@ export BOREALIS_TLS_CERT="\${BOREALIS_CERT_DIR}/borealis-server-cert.pem"
 export BOREALIS_TLS_KEY="\${BOREALIS_CERT_DIR}/borealis-server-key.pem"
 export BOREALIS_TLS_BUNDLE="\${BOREALIS_CERT_DIR}/borealis-server-bundle.pem"
 export PATH="\${NODE_BIN_DIR}:\${PATH}"
+if [[ -f "\${ENGINE_DB_ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  . "\${ENGINE_DB_ENV_FILE}"
+fi
 
 if [[ ! -x "\${VENV_PY}" ]]; then
   echo "Engine python not found at \${VENV_PY}" >&2
@@ -1126,6 +1225,8 @@ ensure_engine_systemd_service() {
   local unit_path="/etc/systemd/system/${unit_name}"
   local tmp_unit
   tmp_unit="$(ensure_engine_log_dir)/${unit_name}"
+  local pg_service
+  pg_service="$(postgres_service_name)"
 
   local runner_path
   runner_path="$(ensure_engine_service_runner)"
@@ -1137,8 +1238,8 @@ ensure_engine_systemd_service() {
   cat > "${tmp_unit}" <<EOF
 [Unit]
 Description=Borealis Engine Service
-After=network-online.target
-Wants=network-online.target
+After=network-online.target ${pg_service}.service
+Wants=network-online.target ${pg_service}.service
 
 [Service]
 Type=simple
@@ -1214,23 +1315,15 @@ create_engine_venv_and_stage_data() {
   rm -rf "$data_dest" 2>/dev/null || true
   mkdir -p "$data_dest"
 
-  # Copy everything except Assemblies (handled separately)
+  # Copy the Engine source tree into the runtime venv staging area.
   shopt -s dotglob nullglob
   for item in "${engine_src}"/*; do
-    base="$(basename "$item")"
-    if [[ "$base" == "Assemblies" ]]; then continue; fi
     cp -a "$item" "$data_dest/"
   done
   shopt -u dotglob nullglob
 
-  # Assemblies runtime databases:
-  # - official/community are always refreshed from staging
-  # - user_created is seeded only when missing
-  sync_engine_assemblies_runtime
-
-  # Auth_Tokens and database
+  # Runtime directories preserved outside the staged source tree.
   mkdir -p "${SCRIPT_DIR}/Engine/Auth_Tokens"
-  # database.db will be created by the app if not present; ensure dir exists
   verify_engine_runtime_staging
 }
 
@@ -1316,6 +1409,10 @@ flask_engine_launch() {
   export BOREALIS_ENGINE_MODE="$mode"
   export BOREALIS_ENGINE_PORT="5000"
   export BOREALIS_PROJECT_ROOT="$SCRIPT_DIR"
+  if [[ -f "${ENGINE_DB_ENV_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    . "${ENGINE_DB_ENV_FILE}"
+  fi
   echo -e "\n${GREEN}Launching Borealis Engine...${RESET}"
   echo "===================================================================================="
   local start_label
@@ -1390,6 +1487,7 @@ server_menu() {
   echo -e "${INFO} Engine source path: ${SCRIPT_DIR}/Data/Engine"
   echo -e "${INFO} Engine runtime path: ${SCRIPT_DIR}/Engine/Data/Engine"
   install_server_dependencies
+  run_step "Database: Configure PostgreSQL" ensure_engine_postgresql_ready
   export PATH="${NODE_DIR}/bin:${PATH}"
   ENGINE_USE_SYSTEMD_SUPERVISION=0
   if command_exists systemctl; then
@@ -1405,6 +1503,7 @@ server_menu() {
 
   if [[ "$engine_immediate_launch" -eq 1 ]]; then
     run_step "Sync Engine runtime code from Data/Engine" sync_engine_runtime
+    run_step "Restore Engine database environment" ensure_engine_database_env_file
     if [[ "${ENGINE_USE_SYSTEMD_SUPERVISION}" -eq 1 ]]; then
       run_step "Configure Borealis Engine systemd service (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
     else
@@ -1414,6 +1513,7 @@ server_menu() {
   fi
 
   run_step "Create Borealis Engine Virtual Python Environment & Stage Data" create_engine_venv_and_stage_data
+  run_step "Restore Engine database environment" ensure_engine_database_env_file
   run_step "Install Engine Python Dependencies" install_engine_python_deps
   run_step "Copy Engine WebUI Files" ensure_engine_web_interface "$SCRIPT_DIR"
   run_step "Vite Web Frontend: Install NPM Packages" vite_web_frontend_install

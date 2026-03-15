@@ -14,12 +14,13 @@ import json
 import logging
 import os
 import re
-import sqlite3
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ...assemblies.service import AssemblyRuntimeService
+from ....db import dbapi as sqlite3
 from ...filters.matcher import DeviceFilterMatcher
 
 _WINRM_USERNAME_VAR = "__borealis_winrm_username"
@@ -343,7 +344,7 @@ class JobScheduler:
         self,
         app,
         socketio,
-        db_path: str,
+        db_conn_factory: Callable[[], sqlite3.Connection] | str,
         *,
         script_signer=None,
         service_logger: Optional[Callable[[str, str, Optional[str]], None]] = None,
@@ -351,8 +352,16 @@ class JobScheduler:
     ):
         self.app = app
         self.socketio = socketio
-        self.db_path = db_path
-        self._filter_matcher = DeviceFilterMatcher(db_path=db_path)
+        if callable(db_conn_factory):
+            self._db_conn_factory = db_conn_factory
+        else:
+            database_value = str(db_conn_factory or "")
+
+            def _legacy_conn_factory() -> sqlite3.Connection:
+                return sqlite3.connect(database_value)
+
+            self._db_conn_factory = _legacy_conn_factory
+        self._filter_matcher = DeviceFilterMatcher(db_conn_factory=self._db_conn_factory)
         self._script_signer = script_signer
         self._running = False
         self._service_log = service_logger
@@ -426,20 +435,6 @@ class JobScheduler:
             pass
 
     # ---------- Helpers for dispatching scripts ----------
-    def _scripts_root(self) -> str:
-        import os
-        # Unified Assemblies root; script paths should include top-level
-        # folder such as "Scripts" or "Ansible Playbooks".
-        return os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__),
-                "..",
-                "..",
-                "..",
-                "Assemblies",
-            )
-        )
-
     def _is_valid_scripts_relpath(self, rel_path: str) -> bool:
         try:
             p = (rel_path or "").replace("\\", "/").lstrip("/")
@@ -449,6 +444,14 @@ class JobScheduler:
             return top in ("Scripts",)
         except Exception:
             return False
+
+    def _generated_ansible_root(self) -> Path:
+        project_root_raw = os.environ.get("BOREALIS_PROJECT_ROOT")
+        if project_root_raw:
+            project_root = Path(project_root_raw).expanduser().resolve()
+        else:
+            project_root = Path(__file__).resolve().parents[5]
+        return project_root / "Engine" / "Generated" / "Ansible_Playbooks"
 
     def _resolve_runtime_document(
         self,
@@ -651,19 +654,6 @@ class JobScheduler:
             doc["script"] = ""
         return doc
 
-    def _ansible_root(self) -> str:
-        import os
-        return os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__),
-                "..",
-                "..",
-                "..",
-                "Assemblies",
-                "Ansible_Playbooks",
-            )
-        )
-
     def _dispatch_ansible(
         self,
         hostname: str,
@@ -675,8 +665,6 @@ class JobScheduler:
         use_service_account: bool = False,
     ) -> Optional[Dict[str, Any]]:
         try:
-            import os
-            ans_root = self._ansible_root()
             rel_path = ""
             overrides_map: Dict[str, Any] = {}
             assembly_guid_hint = ""
@@ -706,9 +694,6 @@ class JobScheduler:
             rel_norm = rel_norm.lstrip("/")
             if rel_norm and not rel_norm.lower().startswith("ansible_playbooks/"):
                 rel_norm = f"Ansible_Playbooks/{rel_norm}"
-            rel_join = rel_norm
-            if rel_join.lower().startswith("ansible_playbooks/"):
-                rel_join = rel_join.split("/", 1)[1] if "/" in rel_join else ""
             doc, record = self._resolve_runtime_document(rel_norm, "ansible", assembly_guid=assembly_guid_hint)
             if not doc:
                 return None
@@ -717,6 +702,18 @@ class JobScheduler:
                 rel_norm = resolved_virtual_path
             assembly_source = "runtime"
             assembly_guid = str(record.get("assembly_guid") or "").strip().lower() if isinstance(record, dict) else ""
+            stage_relative = rel_norm
+            if stage_relative.lower().startswith("ansible_playbooks/"):
+                stage_relative = stage_relative.split("/", 1)[1] if "/" in stage_relative else ""
+            stage_parts = [part for part in stage_relative.split("/") if part not in {"", ".", ".."}]
+            if not stage_parts:
+                stage_parts = [f"{assembly_guid or uuid.uuid4().hex}.yml"]
+            elif "." not in stage_parts[-1]:
+                stage_parts[-1] = f"{stage_parts[-1]}.yml"
+            generated_root = self._generated_ansible_root().resolve()
+            abs_path = (generated_root.joinpath(*stage_parts)).resolve()
+            if not str(abs_path).startswith(str(generated_root)):
+                raise RuntimeError("Resolved Ansible staging path escapes the generated runtime root.")
             friendly_name = (doc.get("name") or "").strip()
             if not friendly_name:
                 friendly_name = os.path.basename(rel_norm) if rel_norm else f"Job-{scheduled_job_id}"
@@ -788,12 +785,10 @@ class JobScheduler:
             finally:
                 conn.close()
 
-            if server_run and (not abs_path or not os.path.isfile(abs_path)):
-                if not abs_path:
-                    raise RuntimeError("Unable to stage Ansible playbook for server execution; no path resolved.")
+            if server_run and not os.path.isfile(abs_path):
                 try:
-                    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-                    with open(abs_path, "w", encoding="utf-8") as fh:
+                    abs_path.parent.mkdir(parents=True, exist_ok=True)
+                    with abs_path.open("w", encoding="utf-8") as fh:
                         fh.write(normalized_script)
                 except Exception as exc:
                     raise RuntimeError(f"Unable to stage Ansible playbook for server execution: {exc}")
@@ -806,7 +801,7 @@ class JobScheduler:
                 try:
                     self._server_ansible_runner(
                         hostname=str(hostname),
-                        playbook_abs_path=abs_path,
+                        playbook_abs_path=str(abs_path),
                         playbook_rel_path=rel_norm,
                         playbook_name=friendly_name,
                         credential_id=int(credential_id),
@@ -1011,7 +1006,7 @@ class JobScheduler:
             # Insert into activity_history for device for parity with Quick Job
             now = _now_ts()
             act_id = None
-            conn = sqlite3.connect(self.db_path)
+            conn = self._conn()
             cur = conn.cursor()
             try:
                 cur.execute(
@@ -1130,7 +1125,7 @@ class JobScheduler:
 
     # ---------- DB helpers ----------
     def _conn(self):
-        return sqlite3.connect(self.db_path)
+        return self._db_conn_factory()
 
     def set_credential_fetcher(self, fn: Optional[Callable[[int], Optional[Dict[str, Any]]]]):
         self._credential_fetcher = fn
@@ -2144,6 +2139,8 @@ class JobScheduler:
             if target_error:
                 return json.dumps({"error": target_error}), 400, {"Content-Type": "application/json"}
             now = _now_ts()
+            components_json = json.dumps(components)
+            targets_json = json.dumps(targets)
             try:
                 conn = self._conn()
                 cur = conn.cursor()
@@ -2155,8 +2152,8 @@ class JobScheduler:
                     """,
                     (
                         name,
-                        json.dumps(components),
-                        json.dumps(targets),
+                        components_json,
+                        targets_json,
                         schedule_type,
                         start_ts,
                         duration_stop_enabled,
@@ -2171,16 +2168,74 @@ class JobScheduler:
                 )
                 job_id = cur.lastrowid
                 conn.commit()
-                cur.execute(
-                    """
-                    SELECT id, name, components_json, targets_json, schedule_type, start_ts,
-                           duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
-                    FROM scheduled_jobs WHERE id=?
-                    """,
-                    (job_id,),
-                )
-                row = cur.fetchone()
+                row = None
+                if job_id not in (None, ""):
+                    cur.execute(
+                        """
+                        SELECT id, name, components_json, targets_json, schedule_type, start_ts,
+                               duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
+                        FROM scheduled_jobs WHERE id=?
+                        """,
+                        (job_id,),
+                    )
+                    row = cur.fetchone()
+                if not row:
+                    # PostgreSQL compatibility layers may not expose lastrowid for every insert path.
+                    where_clauses = [
+                        "name=?",
+                        "components_json=?",
+                        "targets_json=?",
+                        "schedule_type=?",
+                        "duration_stop_enabled=?",
+                        "expiration=?",
+                        "execution_context=?",
+                        "use_service_account=?",
+                        "enabled=?",
+                        "created_at=?",
+                        "updated_at=?",
+                    ]
+                    params = [
+                        name,
+                        components_json,
+                        targets_json,
+                        schedule_type,
+                        duration_stop_enabled,
+                        expiration,
+                        execution_context,
+                        use_service_account,
+                        enabled,
+                        now,
+                        now,
+                    ]
+                    if start_ts is None:
+                        where_clauses.append("start_ts IS NULL")
+                    else:
+                        where_clauses.append("start_ts=?")
+                        params.append(start_ts)
+                    if credential_id is None:
+                        where_clauses.append("credential_id IS NULL")
+                    else:
+                        where_clauses.append("credential_id=?")
+                        params.append(credential_id)
+                    cur.execute(
+                        f"""
+                        SELECT id, name, components_json, targets_json, schedule_type, start_ts,
+                               duration_stop_enabled, expiration, execution_context, credential_id, use_service_account, enabled, created_at, updated_at
+                          FROM scheduled_jobs
+                         WHERE {" AND ".join(where_clauses)}
+                         ORDER BY id DESC
+                         LIMIT 1
+                        """,
+                        tuple(params),
+                    )
+                    row = cur.fetchone()
                 conn.close()
+                if not row:
+                    return (
+                        json.dumps({"error": "scheduled job was created but could not be reloaded"}),
+                        500,
+                        {"Content-Type": "application/json"},
+                    )
                 return json.dumps({"job": _job_row_to_dict(row)}), 200, {"Content-Type": "application/json"}
             except Exception as e:
                 return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
@@ -2570,7 +2625,7 @@ class JobScheduler:
 def register(
     app,
     socketio,
-    db_path: str,
+    db_conn_factory: Callable[[], sqlite3.Connection],
     *,
     script_signer=None,
     service_logger: Optional[Callable[[str, str, Optional[str]], None]] = None,
@@ -2580,7 +2635,7 @@ def register(
     return JobScheduler(
         app,
         socketio,
-        db_path,
+        db_conn_factory,
         script_signer=script_signer,
         service_logger=service_logger,
         assembly_runtime=assembly_runtime,

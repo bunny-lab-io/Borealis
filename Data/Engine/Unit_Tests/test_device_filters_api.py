@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import json
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 import time
 from flask import Flask
 
@@ -29,7 +29,7 @@ def _client_with_admin_session(harness: EngineTestHarness):
 
 def _filter_client_with_admin_session(harness: EngineTestHarness):
     config = {
-        "DATABASE_PATH": str(harness.db_path),
+        "DATABASE_URL": f"sqlite:///{harness.db_path.as_posix()}",
         "TLS_CERT_PATH": harness.app.config["TLS_CERT_PATH"],
         "TLS_KEY_PATH": harness.app.config["TLS_KEY_PATH"],
         "TLS_BUNDLE_PATH": harness.app.config["TLS_BUNDLE_PATH"],

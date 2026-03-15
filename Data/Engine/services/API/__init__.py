@@ -13,7 +13,6 @@ import datetime as _dt
 import logging
 import os
 import re
-import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +24,8 @@ from ...auth import jwt_service as jwt_service_module
 from ...auth.device_auth import DeviceAuthManager
 from ...auth.dpop import DPoPValidator
 from ...auth.rate_limit import SlidingWindowRateLimiter
+from ...db import dbapi as sqlite3
+from ...db import get_database_manager
 from ...database import initialise_engine_database
 from ...security import signing
 from ...enrollment import NonceCache
@@ -155,18 +156,28 @@ def _make_service_logger(base: Path, logger: logging.Logger) -> Callable[[str, s
     return _log
 
 
-def _make_db_conn_factory(database_path: str) -> Callable[[], sqlite3.Connection]:
+def _make_db_conn_factory(
+    database_url: str,
+    *,
+    sslmode: str = "prefer",
+    pool_size: int = 10,
+    max_overflow: int = 20,
+    connect_timeout: int = 15,
+    logger: Optional[logging.Logger] = None,
+) -> Callable[[], sqlite3.Connection]:
+    manager = get_database_manager(
+        database_url,
+        sslmode=sslmode,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        connect_timeout=connect_timeout,
+        logger=logger,
+    )
+
     def _factory() -> sqlite3.Connection:
-        conn = sqlite3.connect(database_path, timeout=15)
-        try:
-            cur = conn.cursor()
-            cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA busy_timeout=5000")
-            cur.execute("PRAGMA synchronous=NORMAL")
-            conn.commit()
-        except Exception:
-            pass
-        return conn
+        if str(manager.engine.url).startswith("sqlite"):
+            return sqlite3.connect(database_url, timeout=connect_timeout)
+        return sqlite3.Connection(manager.raw_connection(), dialect="postgresql")
 
     return _factory
 
@@ -176,6 +187,7 @@ class EngineServiceAdapters:
     context: EngineContext
     config: Mapping[str, Any] = field(init=False)
     db_conn_factory: Callable[[], sqlite3.Connection] = field(init=False)
+    db_manager: Any = field(init=False)
     jwt_service: Any = field(init=False)
     dpop_validator: DPoPValidator = field(init=False)
     ip_rate_limiter: SlidingWindowRateLimiter = field(init=False)
@@ -189,8 +201,23 @@ class EngineServiceAdapters:
     dev_mode_manager: DevModeManager = field(init=False)
 
     def __post_init__(self) -> None:
-        self.db_conn_factory = _make_db_conn_factory(self.context.database_path)
-        initialise_engine_database(self.context.database_path, logger=self.context.logger)
+        self.db_manager = get_database_manager(
+            self.context.database_url,
+            sslmode=str(self.context.config.get("db_sslmode") or "prefer"),
+            pool_size=int(self.context.config.get("db_pool_size") or 10),
+            max_overflow=int(self.context.config.get("db_max_overflow") or 20),
+            connect_timeout=int(self.context.config.get("db_connect_timeout") or 15),
+            logger=self.context.logger,
+        )
+        self.db_conn_factory = _make_db_conn_factory(
+            self.context.database_url,
+            sslmode=str(self.context.config.get("db_sslmode") or "prefer"),
+            pool_size=int(self.context.config.get("db_pool_size") or 10),
+            max_overflow=int(self.context.config.get("db_max_overflow") or 20),
+            connect_timeout=int(self.context.config.get("db_connect_timeout") or 15),
+            logger=self.context.logger,
+        )
+        initialise_engine_database(self.context.database_url, logger=self.context.logger)
         self.config = dict(self.context.config or {})
         self.jwt_service = jwt_service_module.load_service()
         self.dpop_validator = DPoPValidator()
@@ -206,7 +233,7 @@ class EngineServiceAdapters:
         if log_file:
             base = Path(log_file).resolve().parent
         else:
-            base = Path(self.context.database_path).resolve().parent
+            base = Path.cwd() / "Engine" / "Logs"
         self.service_log = _make_service_logger(base, self.context.logger)
 
         self.device_rate_limiter = SlidingWindowRateLimiter()
@@ -223,7 +250,7 @@ class EngineServiceAdapters:
         if cache_root_value:
             cache_root = Path(str(cache_root_value))
         else:
-            cache_root = Path(self.context.database_path).resolve().parent / "cache"
+            cache_root = base / "cache"
         cache_file = cache_root / "repo_hash_cache.json"
 
         default_repo = config.get("default_repo") or config.get("DEFAULT_REPO")

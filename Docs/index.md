@@ -52,7 +52,7 @@ None. This index only links to other pages.
 - Start with `AGENTS.md` at the repo root.
 - Read `getting-started.md` and `architecture-overview.md` to build the global model.
 - Use `engine-runtime.md` and `agent-runtime.md` for implementation-level details.
-- Use `db-reference.md` for SQLite table ownership, relationships, and deprecated schema notes.
+- Use `db-reference.md` for PostgreSQL table ownership, relationships, and legacy migration notes.
 - Use `ui-and-notifications.md` for MagicUI, AG Grid, and toast notification rules.
 - Use `vpn-and-remote-access.md` for WireGuard and remote shell/VNC details.
 - Use `security-and-trust.md` for enrollment, tokens, and code-signing behavior.
@@ -63,7 +63,8 @@ None. This index only links to other pages.
 - Web UI source: `Data/Engine/web-interface/src/`.
 - Runtime copies: `Engine/` and `Agent/` (do not edit directly; they are regenerated).
 - Logs: `Engine/Logs/` and `Agent/Logs/` (runtime artifacts).
-- Assemblies data: `Data/Engine/Assemblies/` (staging) and `Engine/Assemblies/` (runtime mirror).
+- Official assembly snapshot: `Data/Engine/Official_Assemblies/` (bundled manifest + JSON items).
+- Runtime assembly data: PostgreSQL `assemblies.*` tables.
 
 ### Documentation authoring rules
 - Keep filenames lowercase with hyphens (example: `device-management.md`).

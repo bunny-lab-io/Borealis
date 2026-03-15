@@ -12,7 +12,7 @@ import base64
 import json
 import logging
 import os
-import sqlite3
+from Data.Engine.db import dbapi as sqlite3
 import subprocess
 import sys
 import threading

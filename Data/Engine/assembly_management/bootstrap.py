@@ -11,12 +11,18 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional
 
 from .databases import AssemblyDatabaseManager
 from .models import AssemblyDomain, AssemblyRecord, CachedAssembly
+from ..services.assemblies.official_catalog import (
+    DEFAULT_OFFICIAL_REPO_URL,
+    DEFAULT_REMOTE_REFRESH_SECONDS,
+    OfficialAssemblyCatalogService,
+)
 
 
 class AssemblyCache:
@@ -171,7 +177,7 @@ class AssemblyCache:
             self._flush_dirty_entries()
 
     def read_payload_bytes(self, assembly_guid: str) -> bytes:
-        """Return the payload bytes for the specified assembly from SQLite-backed cache."""
+        """Return the payload bytes for the specified assembly from the PostgreSQL-backed cache."""
 
         with self._lock:
             entry = self._store.get(assembly_guid)
@@ -256,19 +262,34 @@ def initialise_assembly_runtime(
 ) -> AssemblyCache:
     """Initialise assembly persistence subsystems and return the cache instance."""
 
-    staging_root = _discover_staging_root()
-    runtime_root = _discover_runtime_root()
-
-    db_manager = AssemblyDatabaseManager(staging_root=staging_root, runtime_root=runtime_root, logger=logger)
+    catalog_root = _discover_official_catalog_root(config)
+    database_url = ""
+    if config:
+        database_url = str(config.get("database_url") or config.get("DATABASE_URL") or "").strip()
+    db_manager = AssemblyDatabaseManager(
+        database_url=database_url,
+        logger=logger,
+    )
     db_manager.initialise()
 
     flush_interval = _resolve_flush_interval(config)
-
-    return AssemblyCache.initialise(
+    cache = AssemblyCache.initialise(
         database_manager=db_manager,
         flush_interval_seconds=flush_interval,
         logger=logger,
     )
+    repo_url, manifest_url, refresh_seconds = _resolve_official_catalog_config(config)
+    catalog_service = OfficialAssemblyCatalogService(
+        cache=cache,
+        database_manager=db_manager,
+        logger=logger,
+        bundled_root=catalog_root,
+        repo_url=repo_url,
+        manifest_url=manifest_url,
+        refresh_seconds=refresh_seconds,
+    )
+    catalog_service.sync_bundled_catalog()
+    return cache
 
 
 # ----------------------------------------------------------------------
@@ -287,20 +308,80 @@ def _resolve_flush_interval(config: Optional[Mapping[str, object]]) -> float:
     return 60.0
 
 
-def _discover_runtime_root() -> Path:
-    module_path = Path(__file__).resolve()
-    for candidate in (module_path, *module_path.parents):
-        engine_dir = candidate / "Engine"
-        assemblies_dir = engine_dir / "Assemblies"
-        if assemblies_dir.is_dir():
-            return assemblies_dir.resolve()
-    raise RuntimeError("Could not locate runtime assemblies directory (expected Engine/Assemblies).")
+def _resolve_official_catalog_config(config: Optional[Mapping[str, object]]) -> tuple[str, str, int]:
+    if not config:
+        return DEFAULT_OFFICIAL_REPO_URL, "", DEFAULT_REMOTE_REFRESH_SECONDS
+
+    repo_url = str(
+        config.get("official_assemblies_repo_url")
+        or config.get("OFFICIAL_ASSEMBLIES_REPO_URL")
+        or DEFAULT_OFFICIAL_REPO_URL
+    ).strip() or DEFAULT_OFFICIAL_REPO_URL
+    manifest_url = str(
+        config.get("official_assemblies_manifest_url")
+        or config.get("OFFICIAL_ASSEMBLIES_MANIFEST_URL")
+        or ""
+    ).strip()
+    refresh_raw = config.get("official_assemblies_refresh_seconds") or config.get("OFFICIAL_ASSEMBLIES_REFRESH_SECONDS")
+    try:
+        refresh_seconds = int(refresh_raw) if refresh_raw is not None else DEFAULT_REMOTE_REFRESH_SECONDS
+    except (TypeError, ValueError):
+        refresh_seconds = DEFAULT_REMOTE_REFRESH_SECONDS
+    return repo_url, manifest_url, max(30, refresh_seconds)
 
 
-def _discover_staging_root() -> Path:
+def _discover_official_catalog_root(config: Optional[Mapping[str, object]] = None) -> Path:
+    if config:
+        override = str(
+            config.get("official_assemblies_root")
+            or config.get("OFFICIAL_ASSEMBLIES_ROOT")
+            or ""
+        ).strip()
+        if override:
+            path = Path(override).expanduser().resolve()
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+
     module_path = Path(__file__).resolve()
     for candidate in (module_path, *module_path.parents):
-        data_dir = candidate / "Data" / "Engine" / "Assemblies"
+        data_dir = candidate / "Engine" / "Data" / "Engine" / "Official_Assemblies"
         if data_dir.is_dir():
             return data_dir.resolve()
-    raise RuntimeError("Could not locate staging assemblies directory (expected Data/Engine/Assemblies).")
+        data_dir = candidate / "Data" / "Engine" / "Official_Assemblies"
+        if data_dir.is_dir():
+            return data_dir.resolve()
+    for candidate in _path_discovery_roots(module_path):
+        data_dir = candidate / "Engine" / "Data" / "Engine" / "Official_Assemblies"
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            return data_dir.resolve()
+        except Exception:
+            continue
+        data_dir = candidate / "Data" / "Engine" / "Official_Assemblies"
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            return data_dir.resolve()
+        except Exception:
+            continue
+    raise RuntimeError("Could not locate bundled official assemblies directory (expected Data/Engine/Official_Assemblies).")
+
+
+def _path_discovery_roots(module_path: Path) -> List[Path]:
+    roots: List[Path] = []
+    seen: set[Path] = set()
+
+    env_root = str(os.environ.get("BOREALIS_PROJECT_ROOT") or "").strip()
+    if env_root:
+        root = Path(env_root).resolve()
+        if root not in seen:
+            seen.add(root)
+            roots.append(root)
+
+    for candidate in module_path.parents:
+        if (candidate / "Engine").is_dir() or (candidate / "Data").is_dir():
+            resolved = candidate.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                roots.append(resolved)
+
+    return roots
