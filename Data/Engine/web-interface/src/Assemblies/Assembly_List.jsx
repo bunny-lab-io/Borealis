@@ -669,6 +669,22 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     }),
     [catalogStatus.hasChecked, isAdmin, openRow, requestOfficialUpdate],
   );
+  const compareAssemblyNames = useCallback(
+    (valueA, valueB, nodeA, nodeB) => {
+      if (catalogStatus.hasChecked) {
+        const updateA = Boolean(nodeA?.data?.officialUpdateAvailable);
+        const updateB = Boolean(nodeB?.data?.officialUpdateAvailable);
+        if (updateA !== updateB) {
+          return updateA ? -1 : 1;
+        }
+      }
+      return String(valueA || "").localeCompare(String(valueB || ""), undefined, {
+        sensitivity: "base",
+        numeric: true,
+      });
+    },
+    [catalogStatus.hasChecked],
+  );
 
   const columnDefs = useMemo(
     () => [
@@ -696,6 +712,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         flex: 1,
         sort: "asc",
         sortable: true,
+        comparator: compareAssemblyNames,
         filter: "agTextColumnFilter",
         resizable: true,
       },
@@ -724,7 +741,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         cellRenderer: OfficialUpdateCellRenderer,
       },
     ],
-    [],
+    [compareAssemblyNames],
   );
 
   const defaultColDef = useMemo(
