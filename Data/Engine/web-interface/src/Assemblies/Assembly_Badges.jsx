@@ -3,7 +3,7 @@ import { Box, Typography } from "@mui/material";
 
 const DOMAIN_METADATA = {
   official: {
-    label: "Official",
+    label: "Aurora",
     textColor: "#89c2ff",
     backgroundColor: "rgba(88, 166, 255, 0.16)",
     borderColor: "rgba(88, 166, 255, 0.45)",
@@ -110,4 +110,3 @@ export const DOMAIN_OPTIONS = [
   { value: "community", label: DOMAIN_METADATA.community.label },
   { value: "official", label: DOMAIN_METADATA.official.label },
 ];
-

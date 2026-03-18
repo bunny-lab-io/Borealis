@@ -1,6 +1,6 @@
 # ======================================================
 # Data\Engine\services\assemblies\official_catalog.py
-# Description: Official assembly catalog sync helpers for bundled snapshots and optional remote updates.
+# Description: Official assembly catalog sync helpers for bundled snapshots and Aurora repository updates.
 #
 # API Endpoints (if applicable): None
 # ======================================================
@@ -14,27 +14,31 @@ import copy
 import hashlib
 import json
 import logging
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional
-from urllib.parse import urljoin
+from urllib.parse import quote, urlparse
 
-from ...assembly_management.databases import AssemblyDatabaseManager, OfficialCatalogState
+from ...assembly_management.databases import AssemblyDatabaseManager
 from ...assembly_management.models import AssemblyDomain, AssemblyRecord
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...assembly_management.bootstrap import AssemblyCache
 
-try:  # pragma: no cover - graceful fallback mirrors other integration modules
-    import requests  # type: ignore
-except ImportError:  # pragma: no cover
-    requests = None  # type: ignore
 
-
-DEFAULT_OFFICIAL_REPO_URL = "https://example.com"
+DEFAULT_OFFICIAL_REPO_URL = "https://github.com/bunny-lab-io/Aurora"
+DEFAULT_OFFICIAL_REPO_GIT_URL = "https://github.com/bunny-lab-io/Aurora.git"
+DEFAULT_OFFICIAL_REPO_REF = "main"
 DEFAULT_REMOTE_REFRESH_SECONDS = 300
 MANIFEST_FILENAME = "manifest.json"
+MAX_RECOMMENDED_PAYLOAD_BYTES = 500 * 1024 * 1024
 
 
 def _coerce_text(value: Any, default: str = "") -> str:
@@ -60,6 +64,17 @@ def _payload_from_document(document: Mapping[str, Any]) -> Any:
     if isinstance(payload, list):
         return list(payload)
     return dict(document)
+
+
+def _summary_from_document(document: Mapping[str, Any], payload: Any) -> Optional[str]:
+    payload_description = payload.get("description") if isinstance(payload, Mapping) else None
+    payload_summary = payload.get("summary") if isinstance(payload, Mapping) else None
+    return _coerce_optional_text(
+        payload_description
+        or payload_summary
+        or document.get("description")
+        or document.get("summary")
+    )
 
 
 def _infer_assembly_type(document: Mapping[str, Any], payload: Any) -> str:
@@ -117,7 +132,7 @@ def _stable_content_fields(
     payload_value = payload
     if isinstance(payload, Mapping):
         payload_value = copy.deepcopy(dict(payload))
-        payload_value.setdefault("assembly_guid", assembly_guid)
+        payload_value["assembly_guid"] = assembly_guid
     elif isinstance(payload, list):
         payload_value = copy.deepcopy(list(payload))
 
@@ -140,7 +155,9 @@ def compute_catalog_content_hash(document: Mapping[str, Any]) -> str:
     """Return a stable content hash for an assembly document or export envelope."""
 
     payload = _payload_from_document(document)
-    assembly_guid = _coerce_guid(document.get("assembly_guid") or (payload.get("assembly_guid") if isinstance(payload, Mapping) else None))
+    assembly_guid = _coerce_guid(
+        document.get("assembly_guid") or (payload.get("assembly_guid") if isinstance(payload, Mapping) else None)
+    )
     assembly_type = _infer_assembly_type(document, payload)
     assembly_subtype = _infer_assembly_subtype(document, payload, assembly_type)
     display_name = _coerce_text(
@@ -154,12 +171,7 @@ def compute_catalog_content_hash(document: Mapping[str, Any]) -> str:
         or assembly_guid
         or "Assembly"
     )
-    summary = _coerce_optional_text(
-        document.get("summary")
-        or document.get("description")
-        or (payload.get("summary") if isinstance(payload, Mapping) else None)
-        or (payload.get("description") if isinstance(payload, Mapping) else None)
-    )
+    summary = _summary_from_document(document, payload)
     return _hash_content_fields(
         _stable_content_fields(
             assembly_guid=assembly_guid,
@@ -204,11 +216,16 @@ def compute_api_item_content_hash(item: Mapping[str, Any]) -> str:
     if payload_value in (None, ""):
         payload_value = item.get("payload") or {}
 
+    summary = _summary_from_document(
+        {"summary": item.get("summary"), "description": item.get("description")},
+        payload_value,
+    )
+
     return _hash_content_fields(
         _stable_content_fields(
             assembly_guid=_coerce_guid(item.get("assembly_guid") or item.get("assembly_id")),
             display_name=_coerce_text(item.get("display_name"), item.get("assembly_guid") or "Assembly"),
-            summary=_coerce_optional_text(item.get("summary")),
+            summary=summary,
             assembly_type=_coerce_text(item.get("assembly_type"), "script").lower(),
             assembly_subtype=_coerce_optional_text(item.get("assembly_subtype")) or "powershell",
             payload=payload_value,
@@ -216,9 +233,143 @@ def compute_api_item_content_hash(item: Mapping[str, Any]) -> str:
     )
 
 
+def _normalize_relative_path(value: Any) -> str:
+    text = str(value or "").replace("\\", "/").strip()
+    if not text:
+        return ""
+    parts: List[str] = []
+    for part in text.split("/"):
+        candidate = part.strip()
+        if not candidate or candidate == ".":
+            continue
+        if candidate == "..":
+            return ""
+        parts.append(candidate)
+    return "/".join(parts)
+
+
+def _should_ignore_catalog_path(path: Path) -> bool:
+    if path.name == MANIFEST_FILENAME:
+        return True
+    for part in path.parts:
+        if part.startswith("."):
+            return True
+    return False
+
+
+def _json_size_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    except Exception:
+        return 0
+
+
+_FILENAME_SANITIZE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _slugify_filename(value: Any, fallback: str = "assembly") -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return fallback
+    sanitized = _FILENAME_SANITIZE_PATTERN.sub("-", text)
+    sanitized = sanitized.strip("-._")
+    return sanitized or fallback
+
+
+def _type_root_folder(assembly_type: Optional[str]) -> str:
+    lowered = _coerce_text(assembly_type).lower()
+    if lowered == "workflow":
+        return "workflows"
+    if lowered == "ansible":
+        return "ansible"
+    return "scripts"
+
+
+def _type_subfolder(record: AssemblyRecord) -> str:
+    if _coerce_text(record.assembly_type).lower() == "script":
+        subtype = _coerce_text(record.assembly_subtype).lower()
+        if subtype in {"powershell", "bash", "python", "shell"}:
+            return subtype
+    return "general"
+
+
+def _looks_like_legacy_seed_path(source_path: Optional[str]) -> bool:
+    normalized = _normalize_relative_path(source_path)
+    if not normalized:
+        return True
+    if normalized == MANIFEST_FILENAME:
+        return True
+    return normalized.startswith("items/")
+
+
+def _default_export_relative_path(record: AssemblyRecord) -> str:
+    existing = _normalize_relative_path(record.source_path)
+    if existing and not _looks_like_legacy_seed_path(existing):
+        return existing
+    root = _type_root_folder(record.assembly_type)
+    subfolder = _type_subfolder(record)
+    slug = _slugify_filename(record.display_name or record.assembly_guid)
+    guid_suffix = _coerce_guid(record.assembly_guid)[:8] or "assembly"
+    return f"{root}/{subfolder}/{slug}--{guid_suffix}.json"
+
+
+def _repo_default_git_url(repo_url: str) -> str:
+    if repo_url.endswith(".git"):
+        return repo_url
+    return f"{repo_url}.git"
+
+
+def _repo_checkout_name(repo_url: str, repo_git_url: str) -> str:
+    parsed = urlparse(repo_git_url or repo_url)
+    leaf = Path(parsed.path or "").name
+    leaf = leaf[:-4] if leaf.endswith(".git") else leaf
+    leaf = leaf or "Aurora"
+    safe = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in leaf)
+    return safe or "Aurora"
+
+
+def _github_blob_url(repo_url: str, source_version: Optional[str], source_path: str) -> Optional[str]:
+    if not repo_url or "github.com" not in repo_url.lower():
+        return None
+    rel_path = _normalize_relative_path(source_path)
+    if not rel_path:
+        return repo_url
+    commit = _coerce_text(source_version)
+    if commit.startswith("git:"):
+        commit = commit[4:]
+    if not commit:
+        return repo_url
+    return f"{repo_url.rstrip('/')}/blob/{quote(commit)}/{quote(rel_path, safe='/')}"
+
+
+def _utcnow_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _entry_requires_metadata_refresh(current_item: Optional[Mapping[str, Any]], entry: "OfficialCatalogEntry") -> bool:
+    if not current_item:
+        return True
+    current_source_repo = _coerce_text(current_item.get("source_repo"))
+    current_source_path = _normalize_relative_path(current_item.get("source_path"))
+    current_source_version = _coerce_text(current_item.get("source_version"))
+    current_content_hash = _coerce_text(current_item.get("content_hash"))
+
+    if not current_source_repo:
+        return True
+    if current_source_repo != entry.source_repo:
+        return True
+    if current_source_path != entry.source_path:
+        return True
+    if not current_source_version:
+        return True
+    if not current_content_hash:
+        return True
+    return False
+
+
 @dataclass(slots=True)
 class OfficialCatalogEntry:
-    """Manifest entry describing one managed official assembly."""
+    """Catalog entry describing one managed official assembly."""
 
     assembly_guid: str
     display_name: str
@@ -227,23 +378,29 @@ class OfficialCatalogEntry:
     assembly_subtype: Optional[str]
     content_hash: str
     file_path: str
-    source_url: Optional[str] = None
+    source_repo: str
+    source_path: str
     source_version: Optional[str] = None
-    download_url: Optional[str] = None
+    source_url: Optional[str] = None
+    payload_size_bytes: int = 0
 
 
 @dataclass(slots=True)
 class OfficialCatalogManifest:
-    """Loaded official catalog manifest from bundled or remote source."""
+    """Loaded official catalog snapshot from Aurora checkout or bundled seed."""
 
     source: str
     repo_url: str
+    repo_git_url: str
+    repo_ref: str
     catalog_version: Optional[str]
     generated_at: Optional[str]
     entries: Dict[str, OfficialCatalogEntry]
     base_path: Optional[Path] = None
-    base_url: Optional[str] = None
     error: Optional[str] = None
+    scanned_files: int = 0
+    skipped_files: int = 0
+    failed_files: int = 0
 
     @property
     def available(self) -> bool:
@@ -254,17 +411,20 @@ class OfficialCatalogManifest:
 
 
 class OfficialAssemblyCatalogService:
-    """Synchronise bundled and remote official assembly catalogs into PostgreSQL."""
+    """Synchronise bundled and Aurora-managed official assembly catalogs into PostgreSQL."""
 
     def __init__(
         self,
         *,
-        cache: AssemblyCache,
+        cache: "AssemblyCache",
         database_manager: AssemblyDatabaseManager,
         logger: Optional[logging.Logger] = None,
         github_integration: Optional[Any] = None,
         bundled_root: Optional[Path] = None,
+        checkout_root: Optional[Path] = None,
         repo_url: str = DEFAULT_OFFICIAL_REPO_URL,
+        repo_git_url: str = DEFAULT_OFFICIAL_REPO_GIT_URL,
+        repo_ref: str = DEFAULT_OFFICIAL_REPO_REF,
         manifest_url: str = "",
         refresh_seconds: int = DEFAULT_REMOTE_REFRESH_SECONDS,
     ) -> None:
@@ -273,11 +433,15 @@ class OfficialAssemblyCatalogService:
         self._logger = logger or logging.getLogger(__name__)
         self._github = github_integration
         self._bundled_root = bundled_root.resolve() if bundled_root else None
+        self._checkout_root = checkout_root.resolve() if checkout_root else None
         self._repo_url = _coerce_text(repo_url, DEFAULT_OFFICIAL_REPO_URL)
+        self._repo_git_url = _coerce_text(repo_git_url, _repo_default_git_url(self._repo_url))
+        self._repo_ref = _coerce_text(repo_ref, DEFAULT_OFFICIAL_REPO_REF)
         self._manifest_url = _coerce_text(manifest_url)
         self._refresh_seconds = max(30, int(refresh_seconds or DEFAULT_REMOTE_REFRESH_SECONDS))
-        self._remote_manifest_cache: Optional[OfficialCatalogManifest] = None
-        self._remote_manifest_loaded_at: float = 0.0
+        self._catalog_cache: Optional[OfficialCatalogManifest] = None
+        self._catalog_loaded_at: float = 0.0
+        self._catalog_lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Public operations
@@ -289,16 +453,29 @@ class OfficialAssemblyCatalogService:
         if not manifest.available:
             if manifest.error:
                 self._logger.debug("Bundled official catalog unavailable: %s", manifest.error)
-            return {"source": "bundled", "updated": 0, "skipped": 0, "available": False, "error": manifest.error}
+            return {
+                "source": "bundled",
+                "updated": 0,
+                "skipped": 0,
+                "available": False,
+                "error": manifest.error,
+            }
 
         state_map = self._db_manager.load_official_catalog_state()
         runtime = self._runtime_service()
+        current_items = runtime.list_assemblies(domain=AssemblyDomain.OFFICIAL.value)
+        current_items_by_guid = {
+            _coerce_guid(item.get("assembly_guid") or item.get("assembly_id")): item
+            for item in current_items
+        }
         changed = 0
         skipped = 0
 
         for entry in manifest.entries.values():
             state = state_map.get(entry.assembly_guid)
-            if state and state.bundled_hash == entry.content_hash:
+            current_item = current_items_by_guid.get(entry.assembly_guid)
+            metadata_refresh_needed = _entry_requires_metadata_refresh(current_item, entry)
+            if state and state.bundled_hash == entry.content_hash and not metadata_refresh_needed:
                 skipped += 1
                 continue
 
@@ -311,11 +488,15 @@ class OfficialAssemblyCatalogService:
             self._db_manager.upsert_official_catalog_state(
                 entry.assembly_guid,
                 bundled_hash=entry.content_hash,
+                catalog_hash=entry.content_hash,
                 applied_hash=entry.content_hash,
                 last_applied_source="bundled",
                 repo_url=manifest.repo_url,
                 source_url=entry.source_url or manifest.repo_url,
+                source_repo=entry.source_repo,
+                source_path=entry.source_path,
                 source_version=entry.source_version or manifest.catalog_version,
+                last_catalog_sync_at=_utcnow_iso(),
             )
             changed += 1
 
@@ -328,12 +509,40 @@ class OfficialAssemblyCatalogService:
             "skipped": skipped,
             "available": True,
             "repo_url": manifest.repo_url,
+            "source_version": manifest.catalog_version,
         }
 
-    def annotate_collection(self, items: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    def manifest(
+        self,
+        *,
+        force_remote: bool = False,
+        allow_remote_sync: Optional[bool] = None,
+    ) -> OfficialCatalogManifest:
+        """Return the active official catalog manifest."""
+
+        if allow_remote_sync is None:
+            allow_remote_sync = force_remote
+        return self._active_manifest(
+            force_remote=force_remote,
+            allow_remote_sync=bool(allow_remote_sync),
+        )
+
+    def annotate_collection(
+        self,
+        items: Iterable[Mapping[str, Any]],
+        *,
+        manifest: Optional[OfficialCatalogManifest] = None,
+        force_remote: bool = False,
+        allow_remote_sync: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
         """Attach official-catalog update metadata to assembly list payloads."""
 
-        manifest = self._active_manifest()
+        if allow_remote_sync is None:
+            allow_remote_sync = force_remote
+        manifest = manifest or self._active_manifest(
+            force_remote=force_remote,
+            allow_remote_sync=bool(allow_remote_sync),
+        )
         state_map = self._db_manager.load_official_catalog_state()
         annotated: List[Dict[str, Any]] = []
 
@@ -347,57 +556,94 @@ class OfficialAssemblyCatalogService:
             current_hash = _coerce_text(item.get("content_hash")) or compute_api_item_content_hash(item)
             entry = manifest.get(guid) if manifest.available else None
             state = state_map.get(guid)
-            repo_url = manifest.repo_url or self._repo_url
+            repo_url = manifest.repo_url or (state.repo_url if state else self._repo_url)
             source_url = entry.source_url if entry else (state.source_url if state else repo_url)
+            source_repo = entry.source_repo if entry else (state.source_repo if state else repo_url)
+            source_path = entry.source_path if entry else (state.source_path if state else item.get("source_path"))
+            source_version = entry.source_version if entry and entry.source_version else (
+                state.source_version if state else item.get("source_version")
+            )
             update_available = bool(entry and entry.content_hash and current_hash != entry.content_hash)
 
-            item["official_managed"] = bool(entry or state)
+            item["source_repo"] = item.get("source_repo") or source_repo
+            item["source_path"] = item.get("source_path") or source_path
+            item["source_version"] = item.get("source_version") or source_version
+            item["official_managed"] = bool(entry or state or source_path)
             item["official_repo_url"] = repo_url
             item["official_source_url"] = source_url or repo_url
             item["official_catalog_source"] = manifest.source if manifest.available else "bundled"
-            item["official_source_version"] = (
-                entry.source_version if entry and entry.source_version else (state.source_version if state else None)
-            )
+            item["official_source_version"] = source_version
+            item["official_source_path"] = source_path
             item["official_update_available"] = update_available
             item["official_last_applied_source"] = state.last_applied_source if state else None
-            item["official_last_synced_at"] = state.updated_at.isoformat() if state and state.updated_at else None
+            item["official_last_synced_at"] = (
+                state.last_catalog_sync_at.isoformat()
+                if state and state.last_catalog_sync_at
+                else (state.updated_at.isoformat() if state and state.updated_at else None)
+            )
             annotated.append(item)
 
         return annotated
 
-    def catalog_status(self, items: Optional[Iterable[Mapping[str, Any]]] = None) -> Dict[str, Any]:
+    def catalog_status(
+        self,
+        items: Optional[Iterable[Mapping[str, Any]]] = None,
+        *,
+        manifest: Optional[OfficialCatalogManifest] = None,
+        force_remote: bool = False,
+        allow_remote_sync: Optional[bool] = None,
+    ) -> Dict[str, Any]:
         """Return metadata describing the current official catalog source and update state."""
 
-        manifest = self._active_manifest()
+        if allow_remote_sync is None:
+            allow_remote_sync = force_remote
+        manifest = manifest or self._active_manifest(
+            force_remote=force_remote,
+            allow_remote_sync=bool(allow_remote_sync),
+        )
         update_count = 0
         if items is not None:
             for item in items:
                 if bool(item.get("official_update_available")):
                     update_count += 1
+        manifest_error = manifest.error or ""
 
         return {
             "repo_url": manifest.repo_url or self._repo_url,
+            "repo_git_url": manifest.repo_git_url or self._repo_git_url,
+            "repo_ref": manifest.repo_ref or self._repo_ref,
             "source": manifest.source,
             "available": manifest.available,
             "manifest_url": self._manifest_url or None,
-            "error": manifest.error,
+            "source_version": manifest.catalog_version,
+            "generated_at": manifest.generated_at,
+            "error": manifest_error if not manifest.available else "",
+            "warning": manifest_error if manifest.available else "",
             "update_count": update_count,
+            "scanned_files": manifest.scanned_files,
+            "failed_files": manifest.failed_files,
         }
 
     def update_official_assembly(self, assembly_guid: str) -> Dict[str, Any]:
-        """Update a single official assembly from the active catalog source."""
+        """Update a single official assembly from the active Aurora or bundled source."""
 
         guid = _coerce_guid(assembly_guid)
         if not guid:
             raise ValueError("assembly_guid is required")
-        manifest = self._active_manifest(force_remote=True)
+        manifest = self._active_manifest(
+            force_remote=True,
+            allow_existing_checkout_fallback=False,
+            allow_bundled_fallback=False,
+        )
+        if not manifest.available:
+            raise RuntimeError(manifest.error or "Official Aurora catalog is unavailable.")
         entry = manifest.get(guid)
         if entry is None:
             raise ValueError(f"Assembly '{guid}' not found in the official catalog.")
 
         document = self._load_entry_document(manifest, entry)
         runtime = self._runtime_service()
-        record = runtime.import_assembly(
+        runtime.import_assembly(
             domain=AssemblyDomain.OFFICIAL,
             document=document,
             assembly_guid=entry.assembly_guid,
@@ -406,69 +652,128 @@ class OfficialAssemblyCatalogService:
         self._db_manager.upsert_official_catalog_state(
             entry.assembly_guid,
             bundled_hash=entry.content_hash if manifest.source == "bundled" else None,
-            remote_hash=entry.content_hash if manifest.source == "remote" else None,
+            remote_hash=entry.content_hash if manifest.source != "bundled" else None,
+            catalog_hash=entry.content_hash,
             applied_hash=entry.content_hash,
             last_applied_source=manifest.source,
             repo_url=manifest.repo_url,
             source_url=entry.source_url or manifest.repo_url,
+            source_repo=entry.source_repo,
+            source_path=entry.source_path,
             source_version=entry.source_version or manifest.catalog_version,
+            last_catalog_sync_at=_utcnow_iso(),
         )
-        return record
+        return runtime.get_assembly(entry.assembly_guid) or {}
 
     def update_all_official_assemblies(self) -> Dict[str, Any]:
-        """Update every official assembly that differs from the active catalog source."""
+        """Update every official assembly that differs from the active Aurora or bundled source."""
 
-        manifest = self._active_manifest(force_remote=True)
+        manifest = self._active_manifest(
+            force_remote=True,
+            allow_existing_checkout_fallback=False,
+            allow_bundled_fallback=False,
+        )
         if not manifest.available:
-            return {"updated": [], "skipped": 0, "source": manifest.source, "repo_url": manifest.repo_url, "error": manifest.error}
+            return {
+                "updated": [],
+                "updated_items": [],
+                "skipped": 0,
+                "failed": [],
+                "source": manifest.source,
+                "repo_url": manifest.repo_url,
+                "warning": "",
+                "error": manifest.error,
+            }
 
         runtime = self._runtime_service()
         current_items = runtime.list_assemblies(domain=AssemblyDomain.OFFICIAL.value)
         current_hashes = {
-            _coerce_guid(item.get("assembly_guid") or item.get("assembly_id")): _coerce_text(item.get("content_hash"))
+            _coerce_guid(item.get("assembly_guid") or item.get("assembly_id")): (
+                _coerce_text(item.get("content_hash")) or compute_api_item_content_hash(item)
+            )
+            for item in current_items
+        }
+        current_items_by_guid = {
+            _coerce_guid(item.get("assembly_guid") or item.get("assembly_id")): item
             for item in current_items
         }
 
         updated: List[str] = []
+        updated_items: List[Dict[str, Any]] = []
+        failed: List[Dict[str, str]] = []
         skipped = 0
         for entry in manifest.entries.values():
             current_hash = current_hashes.get(entry.assembly_guid)
-            if current_hash and current_hash == entry.content_hash:
+            current_item = current_items_by_guid.get(entry.assembly_guid)
+            metadata_refresh_needed = _entry_requires_metadata_refresh(current_item, entry)
+            if current_hash and current_hash == entry.content_hash and not metadata_refresh_needed:
                 skipped += 1
                 continue
-            document = self._load_entry_document(manifest, entry)
-            runtime.import_assembly(
-                domain=AssemblyDomain.OFFICIAL,
-                document=document,
-                assembly_guid=entry.assembly_guid,
-            )
-            self._db_manager.upsert_official_catalog_state(
-                entry.assembly_guid,
-                bundled_hash=entry.content_hash if manifest.source == "bundled" else None,
-                remote_hash=entry.content_hash if manifest.source == "remote" else None,
-                applied_hash=entry.content_hash,
-                last_applied_source=manifest.source,
-                repo_url=manifest.repo_url,
-                source_url=entry.source_url or manifest.repo_url,
-                source_version=entry.source_version or manifest.catalog_version,
-            )
-            updated.append(entry.assembly_guid)
+            try:
+                document = self._load_entry_document(manifest, entry)
+                runtime.import_assembly(
+                    domain=AssemblyDomain.OFFICIAL,
+                    document=document,
+                    assembly_guid=entry.assembly_guid,
+                )
+                self._db_manager.upsert_official_catalog_state(
+                    entry.assembly_guid,
+                    bundled_hash=entry.content_hash if manifest.source == "bundled" else None,
+                    remote_hash=entry.content_hash if manifest.source != "bundled" else None,
+                    catalog_hash=entry.content_hash,
+                    applied_hash=entry.content_hash,
+                    last_applied_source=manifest.source,
+                    repo_url=manifest.repo_url,
+                    source_url=entry.source_url or manifest.repo_url,
+                    source_repo=entry.source_repo,
+                    source_path=entry.source_path,
+                    source_version=entry.source_version or manifest.catalog_version,
+                    last_catalog_sync_at=_utcnow_iso(),
+                )
+                updated.append(entry.assembly_guid)
+                refreshed = runtime.get_assembly(entry.assembly_guid) or {}
+                updated_items.append(
+                    {
+                        "assembly_guid": entry.assembly_guid,
+                        "display_name": _coerce_text(
+                            refreshed.get("display_name"),
+                            entry.display_name,
+                        ),
+                        "source_path": _normalize_relative_path(
+                            refreshed.get("source_path") or entry.source_path
+                        ),
+                        "source_version": _coerce_optional_text(entry.source_version or manifest.catalog_version),
+                    }
+                )
+            except Exception as exc:
+                failed.append({"assembly_guid": entry.assembly_guid, "error": str(exc)})
+                self._logger.exception("Failed to update official assembly %s from %s", entry.assembly_guid, manifest.source)
 
         if updated:
             runtime.flush_writes()
 
         return {
             "updated": updated,
+            "updated_items": updated_items,
             "skipped": skipped,
+            "failed": failed,
             "source": manifest.source,
             "repo_url": manifest.repo_url,
-            "error": manifest.error,
+            "source_version": manifest.catalog_version,
+            "warning": manifest.error if manifest.available else "",
+            "error": manifest.error if not manifest.available else "",
         }
 
     # ------------------------------------------------------------------
     # CLI/export helpers
     # ------------------------------------------------------------------
-    def write_bundled_snapshot(self, output_root: Path, *, repo_url: Optional[str] = None, source_version: Optional[str] = None) -> Path:
+    def write_bundled_snapshot(
+        self,
+        output_root: Path,
+        *,
+        repo_url: Optional[str] = None,
+        source_version: Optional[str] = None,
+    ) -> Path:
         """Write the current official table into a bundled manifest + JSON item files."""
 
         from .serialization import record_to_legacy_payload
@@ -488,11 +793,6 @@ class OfficialAssemblyCatalogService:
                 domain=AssemblyDomain.OFFICIAL,
                 payload_text=record.payload_json,
             )
-            payload = document.get("payload")
-            if isinstance(payload, Mapping):
-                payload = dict(payload)
-                payload.setdefault("assembly_guid", record.assembly_guid)
-                document["payload"] = payload
 
             relative_path = Path("items") / f"{record.assembly_guid}.json"
             target_path = output_root / relative_path
@@ -508,20 +808,56 @@ class OfficialAssemblyCatalogService:
                     "assembly_subtype": record.assembly_subtype,
                     "content_hash": compute_catalog_content_hash(document),
                     "file": relative_path.as_posix(),
-                    "source_url": resolved_repo_url,
-                    "source_version": source_version or record.updated_at.isoformat(),
+                    "source_url": _github_blob_url(
+                        resolved_repo_url,
+                        source_version or record.source_version or record.updated_at.isoformat(),
+                        record.source_path or relative_path.as_posix(),
+                    )
+                    or resolved_repo_url,
+                    "source_version": source_version or record.source_version or record.updated_at.isoformat(),
                 }
             )
 
         manifest = {
             "catalog_version": source_version or str(int(time.time())),
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "generated_at": _utcnow_iso(),
             "repo_url": resolved_repo_url,
             "assemblies": manifest_entries,
         }
         manifest_path = output_root / MANIFEST_FILENAME
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
         return manifest_path
+
+    def write_aurora_snapshot(
+        self,
+        output_root: Path,
+        *,
+        repo_url: Optional[str] = None,
+        source_version: Optional[str] = None,
+    ) -> Path:
+        """Write the current official table into a human-readable Aurora-style folder tree."""
+
+        from .serialization import record_to_legacy_payload
+
+        output_root = output_root.resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        records = self._db_manager.load_all(AssemblyDomain.OFFICIAL)
+        resolved_repo_url = _coerce_text(repo_url, self._repo_url)
+
+        for record in records:
+            relative_path = _default_export_relative_path(record)
+            target_path = output_root / Path(relative_path)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            document = record_to_legacy_payload(
+                record,
+                domain=AssemblyDomain.OFFICIAL,
+                payload_text=record.payload_json,
+            )
+
+            target_path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
+
+        return output_root
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -531,15 +867,43 @@ class OfficialAssemblyCatalogService:
 
         return AssemblyRuntimeService(self._cache, logger=self._logger)
 
-    def _active_manifest(self, *, force_remote: bool = False) -> OfficialCatalogManifest:
-        remote = self._load_remote_manifest(force=force_remote)
-        if remote.available:
-            return remote
+    def _active_manifest(
+        self,
+        *,
+        force_remote: bool = False,
+        allow_remote_sync: bool = True,
+        allow_existing_checkout_fallback: bool = True,
+        allow_bundled_fallback: bool = True,
+    ) -> OfficialCatalogManifest:
+        repo_manifest = self._load_repo_manifest(
+            force=force_remote,
+            allow_remote_sync=allow_remote_sync,
+            allow_existing_checkout_fallback=allow_existing_checkout_fallback,
+        )
+        if repo_manifest.available:
+            return repo_manifest
+
+        if not allow_bundled_fallback:
+            if repo_manifest.error:
+                return repo_manifest
+            return OfficialCatalogManifest(
+                source="aurora",
+                repo_url=self._repo_url,
+                repo_git_url=self._repo_git_url,
+                repo_ref=self._repo_ref,
+                catalog_version=None,
+                generated_at=None,
+                entries={},
+                error="Aurora official catalog is unavailable.",
+            )
+
         bundled = self._load_bundled_manifest()
         if bundled.available:
+            if repo_manifest.error and not bundled.error:
+                bundled.error = repo_manifest.error
             return bundled
-        if remote.error:
-            return remote
+        if repo_manifest.error:
+            return repo_manifest
         return bundled
 
     def _load_bundled_manifest(self) -> OfficialCatalogManifest:
@@ -547,176 +911,414 @@ class OfficialAssemblyCatalogService:
             return OfficialCatalogManifest(
                 source="bundled",
                 repo_url=self._repo_url,
+                repo_git_url=self._repo_git_url,
+                repo_ref=self._repo_ref,
                 catalog_version=None,
                 generated_at=None,
                 entries={},
                 error="Bundled official catalog root not configured.",
             )
-        manifest_path = self._bundled_root / MANIFEST_FILENAME
-        if not manifest_path.is_file():
-            return OfficialCatalogManifest(
-                source="bundled",
-                repo_url=self._repo_url,
-                catalog_version=None,
-                generated_at=None,
-                entries={},
-                base_path=self._bundled_root,
-                error=f"Bundled official catalog manifest not found at {manifest_path}",
-            )
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            return OfficialCatalogManifest(
-                source="bundled",
-                repo_url=self._repo_url,
-                catalog_version=None,
-                generated_at=None,
-                entries={},
-                base_path=self._bundled_root,
-                error=f"Failed to read bundled manifest: {exc}",
-            )
-        return self._manifest_from_payload(payload, source="bundled", base_path=self._bundled_root)
+        return self._crawl_catalog_root(
+            self._bundled_root,
+            source="bundled",
+            repo_url=self._repo_url,
+            repo_git_url=self._repo_git_url,
+            repo_ref=self._repo_ref,
+        )
 
-    def _load_remote_manifest(self, *, force: bool = False) -> OfficialCatalogManifest:
-        if not self._manifest_url:
+    def _load_repo_manifest(
+        self,
+        *,
+        force: bool = False,
+        allow_remote_sync: bool = True,
+        allow_existing_checkout_fallback: bool = True,
+    ) -> OfficialCatalogManifest:
+        if self._checkout_root is None:
             return OfficialCatalogManifest(
-                source="remote",
+                source="aurora",
                 repo_url=self._repo_url,
+                repo_git_url=self._repo_git_url,
+                repo_ref=self._repo_ref,
                 catalog_version=None,
                 generated_at=None,
                 entries={},
-                error="Remote official catalog manifest URL is not configured.",
+                error="Official assembly checkout root is not configured.",
             )
 
         now = time.time()
-        if (
-            not force
-            and self._remote_manifest_cache is not None
-            and now - self._remote_manifest_loaded_at < self._refresh_seconds
-        ):
-            return self._remote_manifest_cache
+        with self._catalog_lock:
+            if not force and self._catalog_cache is not None:
+                if not allow_remote_sync or now - self._catalog_loaded_at < self._refresh_seconds:
+                    return self._catalog_cache
 
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": "Borealis-Engine",
-        }
-        token = None
-        if self._github is not None:
+            if not force and not allow_remote_sync:
+                fallback = self._load_existing_checkout_manifest(error="")
+                if fallback is not None:
+                    fallback.error = None
+                    self._catalog_cache = fallback
+                    self._catalog_loaded_at = now
+                    return fallback
+                return OfficialCatalogManifest(
+                    source="aurora",
+                    repo_url=self._repo_url,
+                    repo_git_url=self._repo_git_url,
+                    repo_ref=self._repo_ref,
+                    catalog_version=None,
+                    generated_at=None,
+                    entries={},
+                )
+
+            if (
+                not force
+                and self._catalog_cache is not None
+                and now - self._catalog_loaded_at < self._refresh_seconds
+            ):
+                return self._catalog_cache
+
             try:
-                token = self._github.load_token(force_refresh=force)
-            except Exception:
-                token = None
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+                checkout_path, commit_sha = self._refresh_repo_checkout()
+                manifest = self._crawl_catalog_root(
+                    checkout_path,
+                    source="aurora",
+                    repo_url=self._repo_url,
+                    repo_git_url=self._repo_git_url,
+                    repo_ref=self._repo_ref,
+                    source_version=f"git:{commit_sha}",
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    "Official assembly repo sync failed repo=%s ref=%s error=%s",
+                    self._repo_git_url,
+                    self._repo_ref,
+                    exc,
+                )
+                fallback = None
+                if allow_existing_checkout_fallback:
+                    fallback = self._load_existing_checkout_manifest(error=str(exc))
+                manifest = fallback or OfficialCatalogManifest(
+                    source="aurora",
+                    repo_url=self._repo_url,
+                    repo_git_url=self._repo_git_url,
+                    repo_ref=self._repo_ref,
+                    catalog_version=None,
+                    generated_at=None,
+                    entries={},
+                    error=f"Failed to sync Aurora repository: {exc}",
+                )
 
-        if requests is None:
-            manifest = OfficialCatalogManifest(
-                source="remote",
-                repo_url=self._repo_url,
-                catalog_version=None,
-                generated_at=None,
-                entries={},
-                base_url=self._manifest_url,
-                error="The 'requests' package is required for remote official catalog updates.",
-            )
-            self._remote_manifest_cache = manifest
-            self._remote_manifest_loaded_at = now
+            if manifest.available or not force or allow_existing_checkout_fallback:
+                self._catalog_cache = manifest
+                self._catalog_loaded_at = now
             return manifest
 
+    def _load_existing_checkout_manifest(self, *, error: str) -> Optional[OfficialCatalogManifest]:
+        active_checkout = self._active_checkout_dir()
+        if not active_checkout.is_dir():
+            return None
+        commit_sha: Optional[str] = None
         try:
-            response = requests.get(self._manifest_url, headers=headers, timeout=20)
-            response.raise_for_status()
-            payload = response.json()
-            manifest = self._manifest_from_payload(payload, source="remote", base_url=self._manifest_url)
-        except Exception as exc:
-            manifest = OfficialCatalogManifest(
-                source="remote",
-                repo_url=self._repo_url,
-                catalog_version=None,
-                generated_at=None,
-                entries={},
-                base_url=self._manifest_url,
-                error=f"Failed to fetch remote official catalog manifest: {exc}",
-            )
-
-        self._remote_manifest_cache = manifest
-        self._remote_manifest_loaded_at = now
+            completed = self._run_git(["rev-parse", "HEAD"], cwd=active_checkout, force_refresh=False)
+            commit_sha = completed.stdout.strip() or None
+        except Exception:
+            commit_sha = None
+        manifest = self._crawl_catalog_root(
+            active_checkout,
+            source="aurora",
+            repo_url=self._repo_url,
+            repo_git_url=self._repo_git_url,
+            repo_ref=self._repo_ref,
+            source_version=f"git:{commit_sha}" if commit_sha else None,
+        )
+        manifest.error = f"Failed to sync Aurora repository: {error}"
         return manifest
 
-    def _manifest_from_payload(
+    def _crawl_catalog_root(
         self,
-        payload: Mapping[str, Any],
+        root: Path,
         *,
         source: str,
-        base_path: Optional[Path] = None,
-        base_url: Optional[str] = None,
+        repo_url: str,
+        repo_git_url: str,
+        repo_ref: str,
+        source_version: Optional[str] = None,
     ) -> OfficialCatalogManifest:
-        repo_url = _coerce_text(payload.get("repo_url"), self._repo_url)
-        entries_payload = payload.get("assemblies")
+        root = root.resolve()
+        if not root.is_dir():
+            return OfficialCatalogManifest(
+                source=source,
+                repo_url=repo_url,
+                repo_git_url=repo_git_url,
+                repo_ref=repo_ref,
+                catalog_version=source_version,
+                generated_at=None,
+                entries={},
+                base_path=root,
+                error=f"Official catalog root not found at {root}",
+            )
+
         entries: Dict[str, OfficialCatalogEntry] = {}
-        if isinstance(entries_payload, list):
-            for entry_payload in entries_payload:
-                if not isinstance(entry_payload, Mapping):
-                    continue
-                guid = _coerce_guid(entry_payload.get("assembly_guid"))
-                file_path = _coerce_text(entry_payload.get("file"))
-                content_hash = _coerce_text(entry_payload.get("content_hash"))
-                if not guid or not file_path or not content_hash:
-                    continue
-                entries[guid] = OfficialCatalogEntry(
-                    assembly_guid=guid,
-                    display_name=_coerce_text(entry_payload.get("display_name"), guid),
-                    summary=_coerce_optional_text(entry_payload.get("summary")),
-                    assembly_type=_coerce_text(entry_payload.get("assembly_type"), "script").lower(),
-                    assembly_subtype=_coerce_optional_text(entry_payload.get("assembly_subtype")) or "powershell",
-                    content_hash=content_hash,
-                    file_path=file_path,
-                    source_url=_coerce_optional_text(entry_payload.get("source_url")) or repo_url,
-                    source_version=_coerce_optional_text(entry_payload.get("source_version")),
-                    download_url=_coerce_optional_text(entry_payload.get("download_url")),
+        scanned_files = 0
+        skipped_files = 0
+        failed_files = 0
+
+        for path in sorted(root.rglob("*.json")):
+            rel_path = path.relative_to(root)
+            if _should_ignore_catalog_path(rel_path):
+                skipped_files += 1
+                continue
+            scanned_files += 1
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(payload, Mapping):
+                    raise ValueError("assembly document must decode to a JSON object")
+                normalized = self._normalize_catalog_document(
+                    payload,
+                    source_repo=repo_url,
+                    source_path=rel_path.as_posix(),
+                    source_version=source_version,
                 )
+                guid = _coerce_guid(normalized.get("assembly_guid"))
+                if guid in entries:
+                    raise ValueError(f"duplicate assembly_guid '{guid}' detected in official catalog")
+                payload_size = _json_size_bytes(normalized.get("payload"))
+                if payload_size > MAX_RECOMMENDED_PAYLOAD_BYTES:
+                    self._logger.warning(
+                        "Official assembly payload exceeds recommended size limit; guid=%s path=%s bytes=%s",
+                        guid,
+                        rel_path.as_posix(),
+                        payload_size,
+                    )
+                entry = OfficialCatalogEntry(
+                    assembly_guid=guid,
+                    display_name=_coerce_text(normalized.get("display_name"), guid),
+                    summary=_coerce_optional_text(normalized.get("summary")),
+                    assembly_type=_coerce_text(normalized.get("assembly_type"), "script").lower(),
+                    assembly_subtype=_coerce_optional_text(normalized.get("assembly_subtype")) or "powershell",
+                    content_hash=_coerce_text(normalized.get("content_hash")),
+                    file_path=rel_path.as_posix(),
+                    source_repo=_coerce_text(normalized.get("source_repo"), repo_url),
+                    source_path=_normalize_relative_path(normalized.get("source_path")) or rel_path.as_posix(),
+                    source_version=_coerce_optional_text(normalized.get("source_version")) or source_version,
+                    source_url=_coerce_optional_text(normalized.get("source_url"))
+                    or _github_blob_url(
+                        repo_url,
+                        _coerce_optional_text(normalized.get("source_version")) or source_version,
+                        _normalize_relative_path(normalized.get("source_path")) or rel_path.as_posix(),
+                    )
+                    or repo_url,
+                    payload_size_bytes=payload_size,
+                )
+                entries[guid] = entry
+            except Exception as exc:
+                failed_files += 1
+                self._logger.warning("Skipping official assembly file %s: %s", rel_path.as_posix(), exc)
+
+        error: Optional[str] = None
+        if not entries:
+            error = f"No official assembly JSON documents were found in {root}"
 
         return OfficialCatalogManifest(
             source=source,
             repo_url=repo_url,
-            catalog_version=_coerce_optional_text(payload.get("catalog_version")),
-            generated_at=_coerce_optional_text(payload.get("generated_at")),
+            repo_git_url=repo_git_url,
+            repo_ref=repo_ref,
+            catalog_version=source_version,
+            generated_at=_utcnow_iso(),
             entries=entries,
-            base_path=base_path,
-            base_url=base_url,
+            base_path=root,
+            error=error,
+            scanned_files=scanned_files,
+            skipped_files=skipped_files,
+            failed_files=failed_files,
         )
 
-    def _load_entry_document(self, manifest: OfficialCatalogManifest, entry: OfficialCatalogEntry) -> Mapping[str, Any]:
-        if manifest.source == "bundled":
-            if manifest.base_path is None:
-                raise RuntimeError("Bundled catalog root is unavailable.")
-            source_path = (manifest.base_path / entry.file_path).resolve()
-            return json.loads(source_path.read_text(encoding="utf-8"))
+    def _normalize_catalog_document(
+        self,
+        document: Mapping[str, Any],
+        *,
+        source_repo: str,
+        source_path: str,
+        source_version: Optional[str],
+    ) -> Dict[str, Any]:
+        payload = _payload_from_document(document)
+        if not isinstance(payload, (Mapping, list)):
+            raise ValueError("official assembly payload must be a JSON object or array")
 
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": "Borealis-Engine",
+        assembly_guid = _coerce_guid(
+            document.get("assembly_guid") or (payload.get("assembly_guid") if isinstance(payload, Mapping) else None)
+        )
+        if not assembly_guid:
+            raise ValueError("official assembly document is missing assembly_guid")
+
+        display_name = _coerce_text(
+            document.get("display_name")
+            or document.get("name")
+            or document.get("tab_name")
+            or (payload.get("display_name") if isinstance(payload, Mapping) else None)
+            or (payload.get("name") if isinstance(payload, Mapping) else None)
+            or (payload.get("tab_name") if isinstance(payload, Mapping) else None)
+            or assembly_guid
+        )
+        if not display_name:
+            raise ValueError("official assembly document is missing display_name/name")
+
+        summary = _summary_from_document(document, payload)
+        assembly_type = _infer_assembly_type(document, payload)
+        assembly_subtype = _infer_assembly_subtype(document, payload, assembly_type)
+
+        normalized_payload = payload
+        if isinstance(payload, Mapping):
+            normalized_payload = dict(payload)
+            normalized_payload["assembly_guid"] = assembly_guid
+
+        normalized_path = _normalize_relative_path(source_path) or source_path
+        resolved_source_version = source_version or _coerce_optional_text(
+            document.get("source_version") or (payload.get("source_version") if isinstance(payload, Mapping) else None)
+        )
+
+        normalized_document: Dict[str, Any] = {
+            "assembly_guid": assembly_guid,
+            "display_name": display_name,
+            "summary": summary,
+            "assembly_type": assembly_type,
+            "assembly_subtype": assembly_subtype,
+            "source_repo": source_repo,
+            "source_path": normalized_path,
+            "source_version": resolved_source_version,
+            "payload": normalized_payload,
         }
+        normalized_document["source_url"] = (
+            _coerce_optional_text(document.get("source_url"))
+            or _github_blob_url(source_repo, resolved_source_version, normalized_path)
+            or source_repo
+        )
+        normalized_document["content_hash"] = compute_catalog_content_hash(normalized_document)
+        return normalized_document
+
+    def _load_entry_document(self, manifest: OfficialCatalogManifest, entry: OfficialCatalogEntry) -> Mapping[str, Any]:
+        if manifest.base_path is None:
+            raise RuntimeError("Official catalog root is unavailable.")
+        source_path = (manifest.base_path / entry.file_path).resolve()
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, Mapping):
+            raise RuntimeError(f"Official catalog entry {entry.file_path} did not decode to an object.")
+        return self._normalize_catalog_document(
+            payload,
+            source_repo=entry.source_repo,
+            source_path=entry.file_path,
+            source_version=entry.source_version or manifest.catalog_version,
+        )
+
+    def _active_checkout_dir(self) -> Path:
+        checkout_root = self._checkout_root or Path.cwd()
+        return checkout_root / _repo_checkout_name(self._repo_url, self._repo_git_url)
+
+    def _refresh_repo_checkout(self) -> tuple[Path, str]:
+        if self._checkout_root is None:
+            raise RuntimeError("Official assembly checkout root is not configured.")
+
+        checkout_root = self._checkout_root
+        checkout_root.mkdir(parents=True, exist_ok=True)
+        active_checkout = self._active_checkout_dir()
+        self._logger.info(
+            "Official assembly repo sync start repo=%s ref=%s checkout=%s",
+            self._repo_git_url,
+            self._repo_ref,
+            active_checkout,
+        )
+
+        temp_checkout = Path(tempfile.mkdtemp(prefix="aurora-sync-", dir=str(checkout_root)))
+        backup_checkout = active_checkout.with_name(f"{active_checkout.name}.previous")
+        try:
+            self._run_git(["init"], cwd=temp_checkout, force_refresh=True)
+            self._run_git(["remote", "add", "origin", self._repo_git_url], cwd=temp_checkout, force_refresh=True)
+            self._run_git(["fetch", "--depth", "1", "origin", self._repo_ref], cwd=temp_checkout, force_refresh=True)
+            self._run_git(["checkout", "--detach", "FETCH_HEAD"], cwd=temp_checkout, force_refresh=True)
+            commit_sha = self._run_git(["rev-parse", "HEAD"], cwd=temp_checkout, force_refresh=False).stdout.strip()
+            if not commit_sha:
+                raise RuntimeError("Git checkout completed without a resolved commit SHA.")
+
+            if backup_checkout.exists():
+                shutil.rmtree(backup_checkout, ignore_errors=True)
+            if active_checkout.exists():
+                active_checkout.rename(backup_checkout)
+            temp_checkout.rename(active_checkout)
+            if backup_checkout.exists():
+                shutil.rmtree(backup_checkout, ignore_errors=True)
+
+            self._logger.info(
+                "Official assembly repo sync complete repo=%s ref=%s commit=%s",
+                self._repo_git_url,
+                self._repo_ref,
+                commit_sha,
+            )
+            return active_checkout, commit_sha
+        except Exception:
+            shutil.rmtree(temp_checkout, ignore_errors=True)
+            raise
+
+    def _run_git(
+        self,
+        args: List[str],
+        *,
+        cwd: Path,
+        force_refresh: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        def _base_env() -> Dict[str, str]:
+            env = os.environ.copy()
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            env["GIT_ASKPASS"] = "true"
+            return env
+
+        def _run_once(env: Dict[str, str]) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(cwd),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        env = _base_env()
         token = None
         if self._github is not None:
             try:
-                token = self._github.load_token(force_refresh=False)
+                token = self._github.load_token(force_refresh=force_refresh)
             except Exception:
                 token = None
         if token:
-            headers["Authorization"] = f"Bearer {token}"
+            git_config_count = int(env.get("GIT_CONFIG_COUNT", "0") or "0")
+            env["GIT_CONFIG_COUNT"] = str(git_config_count + 1)
+            env[f"GIT_CONFIG_KEY_{git_config_count}"] = "http.extraHeader"
+            env[f"GIT_CONFIG_VALUE_{git_config_count}"] = f"AUTHORIZATION: bearer {token}"
 
-        if requests is None:
-            raise RuntimeError("The 'requests' package is required for remote official catalog updates.")
-
-        download_url = entry.download_url
-        if not download_url:
-            if manifest.base_url is None:
-                raise RuntimeError("Remote manifest base URL is unavailable.")
-            download_url = urljoin(manifest.base_url, entry.file_path)
-        response = requests.get(download_url, headers=headers, timeout=20)
-        response.raise_for_status()
-        return response.json()
+        completed = _run_once(env)
+        if completed.returncode != 0:
+            error_text = (completed.stderr or completed.stdout or "").strip() or f"git {' '.join(args)} failed"
+            lowered = error_text.lower()
+            if "could not read username for 'https://github.com'" in lowered or "authentication failed" in lowered:
+                if token:
+                    anonymous_retry = _run_once(_base_env())
+                    if anonymous_retry.returncode == 0:
+                        self._logger.info(
+                            "Official assembly repo sync succeeded without GitHub token after token auth failed; repo=%s ref=%s",
+                            self._repo_git_url,
+                            self._repo_ref,
+                        )
+                        return anonymous_retry
+                    raise RuntimeError(
+                        "Failed to fetch Aurora from GitHub using the configured token. "
+                        "Verify the token, repo URL/ref, and outbound network path, or remove the stored token so "
+                        "public Aurora access can proceed anonymously."
+                    )
+                raise RuntimeError(
+                    "Failed to fetch Aurora from GitHub over HTTPS. "
+                    "Verify the repo URL/ref, outbound network or proxy settings, and any cached Git credentials. "
+                    "If Aurora is private, configure /api/github/token."
+                )
+            raise RuntimeError(error_text)
+        return completed
 
 
 def export_bundled_snapshot(
@@ -739,19 +1341,57 @@ def export_bundled_snapshot(
         database_manager=db_manager,
         logger=logger,
         repo_url=repo_url,
+        repo_git_url=_repo_default_git_url(repo_url),
     )
     return service.write_bundled_snapshot(output_root, repo_url=repo_url, source_version=source_version)
+
+
+def export_aurora_snapshot(
+    *,
+    database_url: str,
+    output_root: Path,
+    repo_url: str = DEFAULT_OFFICIAL_REPO_URL,
+    source_version: Optional[str] = None,
+    logger: Optional[logging.Logger] = None,
+) -> Path:
+    """Export the current official table into an Aurora-style folder tree."""
+
+    from ...assembly_management.bootstrap import AssemblyCache
+
+    db_manager = AssemblyDatabaseManager(database_url=database_url, logger=logger)
+    db_manager.initialise()
+    cache = AssemblyCache.initialise(database_manager=db_manager, flush_interval_seconds=60.0, logger=logger)
+    service = OfficialAssemblyCatalogService(
+        cache=cache,
+        database_manager=db_manager,
+        logger=logger,
+        repo_url=repo_url,
+        repo_git_url=_repo_default_git_url(repo_url),
+    )
+    return service.write_aurora_snapshot(output_root, repo_url=repo_url, source_version=source_version)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Official Borealis assembly catalog utilities.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    export_parser = subparsers.add_parser("export-bundled", help="Write the official assemblies table into a bundled catalog snapshot.")
+    export_parser = subparsers.add_parser(
+        "export-bundled",
+        help="Write the official assemblies table into a bundled catalog snapshot.",
+    )
     export_parser.add_argument("--database-url", required=True, help="Engine PostgreSQL URL")
     export_parser.add_argument("--output-root", required=True, help="Bundled catalog output root")
     export_parser.add_argument("--repo-url", default=DEFAULT_OFFICIAL_REPO_URL, help="Official catalog repository URL")
     export_parser.add_argument("--source-version", default="", help="Optional version string recorded in the manifest")
+
+    aurora_parser = subparsers.add_parser(
+        "export-aurora",
+        help="Write the official assemblies table into a human-readable Aurora folder tree.",
+    )
+    aurora_parser.add_argument("--database-url", required=True, help="Engine PostgreSQL URL")
+    aurora_parser.add_argument("--output-root", required=True, help="Aurora-style output root")
+    aurora_parser.add_argument("--repo-url", default=DEFAULT_OFFICIAL_REPO_URL, help="Official catalog repository URL")
+    aurora_parser.add_argument("--source-version", default="", help="Optional source version string")
     return parser
 
 
@@ -769,6 +1409,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             logger=logger,
         )
         print(manifest_path)
+        return 0
+    if args.command == "export-aurora":
+        output_root = export_aurora_snapshot(
+            database_url=str(args.database_url),
+            output_root=Path(str(args.output_root)),
+            repo_url=str(args.repo_url),
+            source_version=str(args.source_version or "") or None,
+            logger=logger,
+        )
+        print(output_root)
         return 0
 
     parser.error(f"Unsupported command: {args.command}")

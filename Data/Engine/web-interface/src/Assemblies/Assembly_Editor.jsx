@@ -15,7 +15,6 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  ListItemText
 } from "@mui/material";
 import {
   Add as AddIcon,
@@ -24,6 +23,7 @@ import {
   Code as CodeIcon,
 } from "@mui/icons-material";
 import Prism from "prismjs";
+import "prismjs/components/prism-json";
 import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-bash";
 import "prismjs/components/prism-powershell";
@@ -44,11 +44,6 @@ const TYPE_OPTIONS_ALL = [
   { key: "powershell", label: "PowerShell Script", prism: "powershell" },
   { key: "batch", label: "Batch Script", prism: "batch" },
   { key: "bash", label: "Bash Script", prism: "bash" }
-];
-
-const CATEGORY_OPTIONS = [
-  { key: "script", label: "Script" },
-  { key: "application", label: "Application" }
 ];
 
 const VARIABLE_TYPE_OPTIONS = [
@@ -154,6 +149,22 @@ function keyBy(arr) {
 const TYPE_MAP = keyBy(TYPE_OPTIONS_ALL);
 
 const PAGE_BACKGROUND = "#0d1117"; /* Color of Void Space Between Sidebar and Page */
+const CODE_EDITOR_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+const CODE_EDITOR_STYLE = {
+  fontFamily: CODE_EDITOR_FONT_FAMILY,
+  fontSize: 14,
+  color: "#e6edf3",
+  background: BACKGROUND_COLORS.field,
+  outline: "none",
+  minHeight: 320,
+  lineHeight: 1.45,
+  caretColor: "#58a6ff"
+};
+const CODE_EDITOR_CONTAINER_SX = {
+  border: "1px solid #2b3544",
+  borderRadius: 1,
+  background: BACKGROUND_COLORS.field
+};
 
 function highlightedHtml(code, prismLang) {
   try {
@@ -225,11 +236,9 @@ function defaultAssembly(defaultType = "powershell") {
   return {
     name: "",
     description: "",
-    category: defaultType === "ansible" ? "application" : "script",
     type: defaultType,
     script: "",
     timeoutSeconds: 3600,
-    sites: { mode: "all", values: [] },
     variables: [],
     files: []
   };
@@ -265,8 +274,7 @@ function fromServerDocument(doc = {}, defaultType = "powershell") {
   const assembly = defaultAssembly(defaultType);
   if (doc && typeof doc === "object") {
     assembly.name = doc.name || doc.display_name || assembly.name;
-    assembly.description = doc.description || "";
-    assembly.category = doc.category || assembly.category;
+    assembly.description = doc.description || doc.summary || "";
     assembly.type = doc.type || assembly.type;
     const legacyScript = Array.isArray(doc.script_lines)
       ? doc.script_lines.map((line) => (line == null ? "" : String(line))).join("\n")
@@ -290,11 +298,6 @@ function fromServerDocument(doc = {}, defaultType = "powershell") {
     assembly.timeoutSeconds = Number.isFinite(Number(timeout))
       ? Number(timeout)
       : assembly.timeoutSeconds;
-    const sites = doc.sites || {};
-    assembly.sites = {
-      mode: sites.mode || (Array.isArray(sites.values) && sites.values.length ? "specific" : "all"),
-      values: Array.isArray(sites.values) ? sites.values : []
-    };
     assembly.variables = normalizeVariablesFromServer(doc.variables);
     assembly.files = normalizeFilesFromServer(doc.files);
   }
@@ -313,22 +316,11 @@ function toServerDocument(assembly, assemblyGuid = null) {
     : "";
   return {
     assembly_guid: resolvedGuid,
-    assembly_type: (assembly.type || "").toLowerCase() === "ansible" ? "ansible" : "script",
-    assembly_subtype: assembly.type || "powershell",
-    version: 1,
     name: assembly.name?.trim() || "",
     description: assembly.description || "",
-    category: assembly.category || "script",
     type: assembly.type || "powershell",
     script: encodedScript,
-    script_encoding: "base64",
     timeout_seconds: timeoutSeconds,
-    sites: {
-      mode: assembly.sites?.mode === "specific" ? "specific" : "all",
-      values: Array.isArray(assembly.sites?.values)
-        ? assembly.sites.values.filter((v) => v && v.trim()).map((v) => v.trim())
-        : []
-    },
     variables: (assembly.variables || []).map((v) => ({
       name: v.name?.trim() || "",
       label: v.label || "",
@@ -394,8 +386,6 @@ export default function AssemblyEditor({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [siteOptions, setSiteOptions] = useState([]);
-  const [siteLoading, setSiteLoading] = useState(false);
   const [queueInfo, setQueueInfo] = useState(initialRow?.queueEntry || null);
   const [isDirtyQueue, setIsDirtyQueue] = useState(Boolean(initialRow?.isDirty));
   const [devModeEnabled, setDevModeEnabled] = useState(false);
@@ -403,6 +393,8 @@ export default function AssemblyEditor({
   const importInputRef = useRef(null);
   const [menuAnchorEl, setMenuAnchorEl] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [jsonPreviewOpen, setJsonPreviewOpen] = useState(false);
+  const [jsonPreviewText, setJsonPreviewText] = useState("");
   const isAdmin = (userRole || "").toLowerCase() === "admin";
   const consumeInitialDataRef = useRef(onConsumeInitialData);
 
@@ -445,17 +437,6 @@ export default function AssemblyEditor({
     [isAnsible]
   );
 
-  const siteOptionMap = useMemo(() => {
-    const map = new Map();
-    siteOptions.forEach((site) => {
-      if (!site) return;
-      const id = site.id != null ? String(site.id) : "";
-      if (!id) return;
-      map.set(id, site);
-    });
-    return map;
-  }, [siteOptions]);
-
   useEffect(() => {
     let canceled = false;
     const normalizeAssemblyPath = (value = "") =>
@@ -483,13 +464,11 @@ export default function AssemblyEditor({
         name: fallbackName,
         display_name: fallbackName,
         description:
+          parsed?.payload?.description ||
+          parsed?.payload?.summary ||
           parsed?.metadata?.summary ||
           data?.summary ||
           row?.description ||
-          "",
-        category:
-          parsed?.payload?.category ||
-          row?.category ||
           "",
         type:
           parsed?.type ||
@@ -503,10 +482,6 @@ export default function AssemblyEditor({
           parsed?.payload?.timeout_seconds ||
           parsed?.payload?.timeout ||
           3600,
-        sites:
-          parsed?.sites && typeof parsed.sites === "object"
-            ? parsed.sites
-            : { mode: "all", values: [] },
         variables: Array.isArray(parsed?.rawVariables) ? parsed.rawVariables : [],
         files: Array.isArray(parsed?.rawFiles) ? parsed.rawFiles : [],
       };
@@ -540,7 +515,6 @@ export default function AssemblyEditor({
       const doc = defaultAssembly(ctx?.defaultType || defaultType);
       if (ctx?.name) doc.name = ctx.name;
       if (ctx?.description) doc.description = ctx.description;
-      if (ctx?.category) doc.category = ctx.category;
       if (ctx?.type) doc.type = ctx.type;
       hydrateFromDocument(doc);
       setAssemblyGuid(null);
@@ -579,8 +553,8 @@ export default function AssemblyEditor({
         guid: match?.assembly_guid || match?.assembly_id || null,
         row: {
           assemblyGuid: match?.assembly_guid || match?.assembly_id || null,
-          name: match?.display_name || "",
-          description: match?.summary || "",
+          name: match?.name || match?.display_name || "",
+          description: match?.description || match?.summary || "",
           domain: (match?.source || match?.domain || "user").toLowerCase(),
           assemblyType: match?.assembly_subtype || defaultType,
           sourcePath: match?.virtual_path || match?.path || path,
@@ -679,62 +653,19 @@ export default function AssemblyEditor({
     };
   }, [initialAssembly, defaultType]);
 
-  useEffect(() => {
-    let canceled = false;
-    const loadSites = async () => {
-      try {
-        setSiteLoading(true);
-        const resp = await fetch("/api/sites");
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-        if (canceled) return;
-        const items = Array.isArray(data?.sites) ? data.sites : [];
-        setSiteOptions(items.map((s) => ({ ...s, id: s?.id != null ? String(s.id) : "" })).filter((s) => s.id));
-      } catch (err) {
-        if (!canceled) {
-          console.error("Failed to load sites:", err);
-          setSiteOptions([]);
-        }
-      } finally {
-        if (!canceled) setSiteLoading(false);
-      }
-    };
-    loadSites();
-    return () => {
-      canceled = true;
-    };
-  }, []);
-
   const prismLanguage = TYPE_MAP[assembly.type]?.prism || "powershell";
 
   const updateAssembly = (partial) => {
     setAssembly((prev) => ({ ...prev, ...partial }));
   };
 
-  const updateSitesMode = (modeValue) => {
-    setAssembly((prev) => ({
-      ...prev,
-      sites: {
-        mode: modeValue,
-        values: modeValue === "specific" ? prev.sites.values || [] : []
-      }
-    }));
-  };
-
-  const updateSelectedSites = (values) => {
-    const arr = Array.isArray(values)
-      ? values
-      : typeof values === "string"
-        ? values.split(",").map((v) => v.trim()).filter(Boolean)
-        : [];
-    setAssembly((prev) => ({
-      ...prev,
-      sites: {
-        mode: "specific",
-        values: arr.map((v) => String(v))
-      }
-    }));
-  };
+  const buildCurrentExportDocument = useCallback(() => {
+    const resolvedGuid = assemblyGuid || generateAssemblyGuid();
+    if (!assemblyGuid) {
+      setAssemblyGuid(resolvedGuid);
+    }
+    return toServerDocument(assembly, resolvedGuid);
+  }, [assembly, assemblyGuid]);
 
   const addVariable = () => {
     setAssembly((prev) => ({
@@ -832,9 +763,10 @@ export default function AssemblyEditor({
         last_persisted: data?.last_persisted || null,
       });
       setIsDirtyQueue(Boolean(data?.is_dirty));
-      if (data?.display_name) {
-        setAssembly((prev) => ({ ...prev, name: data.display_name }));
-        setFileName(sanitizeFileName(data.display_name));
+      if (data?.name || data?.display_name) {
+        const resolvedName = data?.name || data?.display_name;
+        setAssembly((prev) => ({ ...prev, name: resolvedName }));
+        setFileName(sanitizeFileName(resolvedName));
       } else {
         setFileName((prev) => prev || sanitizeFileName(assembly.name));
       }
@@ -944,40 +876,48 @@ export default function AssemblyEditor({
     }
   };
 
-  const handleExportAssembly = async () => {
+  const handleExportAssembly = () => {
     handleMenuClose();
     setErrorMessage("");
     try {
-      if (assemblyGuid) {
-        const resp = await fetch(`/api/assemblies/${encodeURIComponent(assemblyGuid)}/export`);
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
-        }
-        const exportDoc = { ...data };
-        delete exportDoc.queue;
-        const exportName = sanitizeFileName(fileName || data?.display_name || assembly.name || assemblyGuid);
-        downloadJsonFile(exportName, exportDoc);
-      } else {
-        const localGuid = generateAssemblyGuid();
-        const document = toServerDocument(assembly, localGuid);
-        const exportDoc = {
-          assembly_guid: localGuid,
-          domain,
-          assembly_type: isAnsible ? "ansible" : "script",
-          assembly_subtype: assembly.type,
-          display_name: assembly.name,
-          summary: assembly.description,
-          category: assembly.category,
-          payload: document,
-        };
-        setAssemblyGuid(localGuid);
-        const exportName = sanitizeFileName(fileName || assembly.name || "assembly");
-        downloadJsonFile(exportName, exportDoc);
-      }
+      const exportDoc = buildCurrentExportDocument();
+      const exportName = sanitizeFileName(fileName || assembly.name || exportDoc.name || "assembly");
+      downloadJsonFile(exportName, exportDoc);
     } catch (err) {
       console.error("Failed to export assembly:", err);
       const message = err?.message || "Failed to export assembly.";
+      setErrorMessage(message);
+      alert(message);
+    }
+  };
+
+  const handleViewJson = () => {
+    handleMenuClose();
+    setErrorMessage("");
+    try {
+      const exportDoc = buildCurrentExportDocument();
+      setJsonPreviewText(JSON.stringify(exportDoc, null, 2));
+      setJsonPreviewOpen(true);
+    } catch (err) {
+      console.error("Failed to render assembly JSON preview:", err);
+      const message = err?.message || "Failed to render assembly JSON preview.";
+      setErrorMessage(message);
+      alert(message);
+    }
+  };
+
+  const handleCopyJson = async () => {
+    if (!jsonPreviewText) return;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(jsonPreviewText);
+        sendNotification({ message: "Assembly JSON copied to clipboard.", variant: "success" });
+        return;
+      }
+      throw new Error("Clipboard API unavailable");
+    } catch (err) {
+      console.error("Failed to copy assembly JSON:", err);
+      const message = "Failed to copy assembly JSON to clipboard.";
       setErrorMessage(message);
       alert(message);
     }
@@ -997,7 +937,7 @@ export default function AssemblyEditor({
       setDomain("user");
       setQueueInfo(null);
       setIsDirtyQueue(false);
-      const baseName = parsed?.display_name || parsed?.name || file.name.replace(/\.[^.]+$/, "") || "assembly";
+      const baseName = parsed?.name || parsed?.display_name || file.name.replace(/\.[^.]+$/, "") || "assembly";
       setFileName(sanitizeFileName(baseName));
       alert("Assembly imported. Review details before saving.");
     } catch (err) {
@@ -1127,11 +1067,6 @@ export default function AssemblyEditor({
     return () => onPageMetaChange?.(null);
   }, [onPageMetaChange, pageHeaderActions, pageSubtitle, pageTitle]);
 
-  const siteScopeValue = assembly.sites?.mode === "specific" ? "specific" : "all";
-  const selectedSiteValues = Array.isArray(assembly.sites?.values)
-    ? assembly.sites.values.map((v) => String(v))
-    : [];
-
   return (
     <Box
       sx={{
@@ -1154,6 +1089,7 @@ export default function AssemblyEditor({
         PaperProps={{ sx: { bgcolor: BACKGROUND_COLORS.dialog, color: "#fff" } }}
       >
         <MenuItem onClick={triggerExport}>Export JSON</MenuItem>
+        {devModeEnabled ? <MenuItem onClick={handleViewJson}>View JSON</MenuItem> : null}
         <MenuItem onClick={triggerImport}>Import JSON</MenuItem>
       </Menu>
       <input
@@ -1283,20 +1219,6 @@ export default function AssemblyEditor({
               <TextField
                 select
                 fullWidth
-                label="Category"
-                value={assembly.category}
-                onChange={(e) => updateAssembly({ category: e.target.value })}
-                sx={{ ...SELECT_BASE_SX, mb: 2 }}
-                SelectProps={{ MenuProps: MENU_PROPS }}
-              >
-                {CATEGORY_OPTIONS.map((o) => (
-                  <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
-                ))}
-              </TextField>
-
-              <TextField
-                select
-                fullWidth
                 label="Type"
                 value={assembly.type}
                 onChange={(e) => updateAssembly({ type: e.target.value })}
@@ -1314,29 +1236,20 @@ export default function AssemblyEditor({
             <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
               Script Content
             </Typography>
-            <Box sx={{ border: "1px solid #2b3544", borderRadius: 1, background: BACKGROUND_COLORS.field }}>
+            <Box sx={CODE_EDITOR_CONTAINER_SX}>
               <Editor
                 value={assembly.script}
                 onValueChange={(value) => updateAssembly({ script: value })}
                 highlight={(src) => highlightedHtml(src, prismLanguage)}
                 padding={12}
                 placeholder={assemblyGuid ? `Editing assembly: ${assemblyGuid}` : "Start typing your script..."}
-                style={{
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                  fontSize: 14,
-                  color: "#e6edf3",
-                  background: BACKGROUND_COLORS.field, /* Color of Script Box */
-                  outline: "none",
-                  minHeight: 320,
-                  lineHeight: 1.45,
-                  caretColor: "#58a6ff"
-                }}
+                style={CODE_EDITOR_STYLE}
               />
             </Box>
           </Box>
 
           <Grid container spacing={2} sx={{ mt: 4 }}>
-            <Grid item xs={12} md={6}>
+            <Grid item xs={12} md={12}>
               <TextField
                 label="Timeout (seconds)"
                 type="text"
@@ -1351,82 +1264,6 @@ export default function AssemblyEditor({
                 sx={INPUT_BASE_SX}
                 helperText="Timeout this script if not completed within X seconds"
               />
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Box
-                sx={{
-                  display: "flex",
-                  flexDirection: { xs: "column", sm: "row" },
-                  gap: 2,
-                  alignItems: "flex-start"
-                }}
-              >
-                <TextField
-                  select
-                  fullWidth
-                  label="Site Scope"
-                  value={siteScopeValue}
-                  onChange={(e) => updateSitesMode(e.target.value)}
-                  sx={{
-                    ...SELECT_BASE_SX,
-                    width: { xs: "100%", sm: 320, lg: 360 }
-                  }}
-                  SelectProps={{ MenuProps: MENU_PROPS }}
-                >
-                  <MenuItem value="all">All Sites</MenuItem>
-                  <MenuItem value="specific">Specific Sites</MenuItem>
-                </TextField>
-                {siteScopeValue === "specific" ? (
-                  <TextField
-                    select
-                    fullWidth
-                    label="Allowed Sites"
-                    value={selectedSiteValues}
-                    onChange={(e) => updateSelectedSites(Array.isArray(e.target.value) ? e.target.value : [])}
-                    sx={{
-                      ...SELECT_BASE_SX,
-                      width: { xs: "100%", sm: 360, lg: 420 }
-                    }}
-                    SelectProps={{
-                      multiple: true,
-                      renderValue: (selected) => {
-                        if (!selected || selected.length === 0) {
-                          return <Typography sx={{ color: "#6b7687" }}>Select sites</Typography>;
-                        }
-                        const names = selected.map((val) => siteOptionMap.get(String(val))?.name || String(val));
-                        return names.join(", ");
-                      },
-                      MenuProps: MENU_PROPS
-                    }}
-                  >
-                    {siteLoading ? (
-                      <MenuItem disabled>
-                        <ListItemText primary="Loading sites..." />
-                      </MenuItem>
-                    ) : siteOptions.length ? (
-                      siteOptions.map((site) => {
-                        const value = String(site.id);
-                        const checked = selectedSiteValues.includes(value);
-                        return (
-                          <MenuItem key={value} value={value} sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
-                            <Checkbox checked={checked} sx={{ color: "#58a6ff", mr: 1 }} />
-                            <ListItemText
-                              primary={site.name}
-                              secondary={site.description ? site.description : undefined}
-                              primaryTypographyProps={{ sx: { color: "#e6edf3" } }}
-                              secondaryTypographyProps={{ sx: { color: "#7f8794" } }}
-                            />
-                          </MenuItem>
-                        );
-                      })
-                    ) : (
-                      <MenuItem disabled>
-                        <ListItemText primary="No sites available" />
-                      </MenuItem>
-                    )}
-                  </TextField>
-                ) : null}
-              </Box>
             </Grid>
           </Grid>
 
@@ -1702,6 +1539,46 @@ export default function AssemblyEditor({
         onCancel={() => setDeleteOpen(false)}
         onConfirm={handleDeleteAssembly}
       />
+      <Dialog
+        open={jsonPreviewOpen}
+        onClose={() => setJsonPreviewOpen(false)}
+        maxWidth="lg"
+        fullWidth
+        PaperProps={{
+          sx: {
+            bgcolor: BACKGROUND_COLORS.dialog,
+            color: "#fff",
+            border: "1px solid #2b3544",
+          }
+        }}
+      >
+        <DialogTitle>Assembly JSON Preview</DialogTitle>
+        <DialogContent dividers sx={{ borderColor: "#2b3544" }}>
+          <Box sx={CODE_EDITOR_CONTAINER_SX}>
+            <Editor
+              value={jsonPreviewText}
+              onValueChange={() => {}}
+              highlight={(src) => highlightedHtml(src, "json")}
+              padding={12}
+              readOnly
+              textareaId="assembly-json-preview"
+              style={{
+                ...CODE_EDITOR_STYLE,
+                minHeight: 440,
+                whiteSpace: "pre",
+              }}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button onClick={handleCopyJson} sx={{ color: "#58a6ff" }}>
+            Copy JSON
+          </Button>
+          <Button onClick={() => setJsonPreviewOpen(false)} sx={{ color: "#58a6ff" }}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

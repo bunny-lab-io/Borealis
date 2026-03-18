@@ -19,7 +19,9 @@ from typing import Dict, List, Mapping, Optional
 from .databases import AssemblyDatabaseManager
 from .models import AssemblyDomain, AssemblyRecord, CachedAssembly
 from ..services.assemblies.official_catalog import (
+    DEFAULT_OFFICIAL_REPO_GIT_URL,
     DEFAULT_OFFICIAL_REPO_URL,
+    DEFAULT_OFFICIAL_REPO_REF,
     DEFAULT_REMOTE_REFRESH_SECONDS,
     OfficialAssemblyCatalogService,
 )
@@ -278,17 +280,25 @@ def initialise_assembly_runtime(
         flush_interval_seconds=flush_interval,
         logger=logger,
     )
-    repo_url, manifest_url, refresh_seconds = _resolve_official_catalog_config(config)
+    repo_url, repo_git_url, repo_ref, manifest_url, refresh_seconds, checkout_root = _resolve_official_catalog_config(config)
     catalog_service = OfficialAssemblyCatalogService(
         cache=cache,
         database_manager=db_manager,
         logger=logger,
         bundled_root=catalog_root,
+        checkout_root=checkout_root,
         repo_url=repo_url,
+        repo_git_url=repo_git_url,
+        repo_ref=repo_ref,
         manifest_url=manifest_url,
         refresh_seconds=refresh_seconds,
     )
     catalog_service.sync_bundled_catalog()
+    try:
+        catalog_service.update_all_official_assemblies()
+    except Exception as exc:
+        if logger is not None:
+            logger.warning("Aurora startup sync skipped: %s", exc)
     return cache
 
 
@@ -308,15 +318,34 @@ def _resolve_flush_interval(config: Optional[Mapping[str, object]]) -> float:
     return 60.0
 
 
-def _resolve_official_catalog_config(config: Optional[Mapping[str, object]]) -> tuple[str, str, int]:
+def _resolve_official_catalog_config(
+    config: Optional[Mapping[str, object]],
+) -> tuple[str, str, str, str, int, Optional[Path]]:
     if not config:
-        return DEFAULT_OFFICIAL_REPO_URL, "", DEFAULT_REMOTE_REFRESH_SECONDS
+        return (
+            DEFAULT_OFFICIAL_REPO_URL,
+            DEFAULT_OFFICIAL_REPO_GIT_URL,
+            DEFAULT_OFFICIAL_REPO_REF,
+            "",
+            DEFAULT_REMOTE_REFRESH_SECONDS,
+            None,
+        )
 
     repo_url = str(
         config.get("official_assemblies_repo_url")
         or config.get("OFFICIAL_ASSEMBLIES_REPO_URL")
         or DEFAULT_OFFICIAL_REPO_URL
     ).strip() or DEFAULT_OFFICIAL_REPO_URL
+    repo_git_url = str(
+        config.get("official_assemblies_repo_git_url")
+        or config.get("OFFICIAL_ASSEMBLIES_REPO_GIT_URL")
+        or DEFAULT_OFFICIAL_REPO_GIT_URL
+    ).strip() or DEFAULT_OFFICIAL_REPO_GIT_URL
+    repo_ref = str(
+        config.get("official_assemblies_repo_ref")
+        or config.get("OFFICIAL_ASSEMBLIES_REPO_REF")
+        or DEFAULT_OFFICIAL_REPO_REF
+    ).strip() or DEFAULT_OFFICIAL_REPO_REF
     manifest_url = str(
         config.get("official_assemblies_manifest_url")
         or config.get("OFFICIAL_ASSEMBLIES_MANIFEST_URL")
@@ -327,7 +356,15 @@ def _resolve_official_catalog_config(config: Optional[Mapping[str, object]]) -> 
         refresh_seconds = int(refresh_raw) if refresh_raw is not None else DEFAULT_REMOTE_REFRESH_SECONDS
     except (TypeError, ValueError):
         refresh_seconds = DEFAULT_REMOTE_REFRESH_SECONDS
-    return repo_url, manifest_url, max(30, refresh_seconds)
+    checkout_raw = str(
+        config.get("official_assemblies_checkout_root")
+        or config.get("OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT")
+        or ""
+    ).strip()
+    checkout_root = Path(checkout_raw).expanduser().resolve() if checkout_raw else None
+    if checkout_root is not None:
+        checkout_root.mkdir(parents=True, exist_ok=True)
+    return repo_url, repo_git_url, repo_ref, manifest_url, max(30, refresh_seconds), checkout_root
 
 
 def _discover_official_catalog_root(config: Optional[Mapping[str, object]] = None) -> Path:

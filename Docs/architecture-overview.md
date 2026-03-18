@@ -9,7 +9,7 @@ Explain how Borealis is structured and how the core components interact end to e
 - WebUI: React single page app served by the Engine (Vite in dev, static build in prod).
 - Agent: Python runtime that enrolls, reports inventory, executes scripts, and opens VPN tunnels.
 - PostgreSQL database: stores devices, approvals, schedules, activity history, tokens, configuration records, and assemblies.
-- Assemblies: script definitions stored in PostgreSQL `assemblies.*` tables, with a bundled official catalog snapshot kept in the repo.
+- Assemblies: script definitions stored in PostgreSQL `assemblies.*` tables, with Aurora as the official authoring repo and a bundled seed snapshot kept in the Borealis repo.
 - Remote access: WireGuard reverse VPN, remote PowerShell, and VNC via noVNC.
 
 ## How the Pieces Talk
@@ -29,7 +29,7 @@ Explain how Borealis is structured and how the core components interact end to e
 - `Agent/` - Agent runtime copy (regenerated each launch).
 - `Data/Engine/web-interface/src/` - WebUI source.
 - `Engine/Logs/` and `Agent/Logs/` - runtime logs.
-- `Data/Engine/Official_Assemblies/` - bundled official assembly catalog snapshot (manifest + JSON items).
+- `Data/Engine/Official_Assemblies/` - bundled official assembly seed snapshot.
 
 ## API Endpoints
 None on this page. See [API Reference](api-reference.md).

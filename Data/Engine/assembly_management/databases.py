@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS {qualified_table_name} (
     assembly_type TEXT NOT NULL,
     assembly_subtype TEXT,
     payload_json TEXT NOT NULL,
+    source_repo TEXT,
+    source_path TEXT,
+    source_version TEXT,
+    content_hash TEXT,
     payload_size_bytes BIGINT NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -41,16 +45,20 @@ CREATE INDEX IF NOT EXISTS idx_{table_name}_assembly_type
 
 _OFFICIAL_CATALOG_STATE_TABLE = "official_catalog_state"
 
-_OFFICIAL_CATALOG_STATE_SCHEMA = f"""
-CREATE TABLE IF NOT EXISTS assemblies.{_OFFICIAL_CATALOG_STATE_TABLE} (
+_OFFICIAL_CATALOG_STATE_SCHEMA_TEMPLATE = """
+CREATE TABLE IF NOT EXISTS {qualified_table_name} (
     assembly_guid TEXT PRIMARY KEY,
     bundled_hash TEXT,
     remote_hash TEXT,
+    catalog_hash TEXT,
     applied_hash TEXT,
     last_applied_source TEXT,
     repo_url TEXT,
     source_url TEXT,
+    source_repo TEXT,
+    source_path TEXT,
     source_version TEXT,
+    last_catalog_sync_at TEXT,
     updated_at TEXT NOT NULL
 )
 """
@@ -62,10 +70,62 @@ _ASSEMBLIES_COLUMNS: tuple[str, ...] = (
     "assembly_type",
     "assembly_subtype",
     "payload_json",
+    "source_repo",
+    "source_path",
+    "source_version",
+    "content_hash",
     "payload_size_bytes",
     "created_at",
     "updated_at",
 )
+
+_ASSEMBLY_COLUMN_DEFINITIONS: Dict[str, str] = {
+    "assembly_guid": "TEXT PRIMARY KEY",
+    "display_name": "TEXT NOT NULL",
+    "summary": "TEXT",
+    "assembly_type": "TEXT NOT NULL",
+    "assembly_subtype": "TEXT",
+    "payload_json": "TEXT NOT NULL",
+    "source_repo": "TEXT",
+    "source_path": "TEXT",
+    "source_version": "TEXT",
+    "content_hash": "TEXT",
+    "payload_size_bytes": "BIGINT NOT NULL DEFAULT 0",
+    "created_at": "TEXT NOT NULL",
+    "updated_at": "TEXT NOT NULL",
+}
+
+_OFFICIAL_CATALOG_STATE_COLUMNS: tuple[str, ...] = (
+    "assembly_guid",
+    "bundled_hash",
+    "remote_hash",
+    "catalog_hash",
+    "applied_hash",
+    "last_applied_source",
+    "repo_url",
+    "source_url",
+    "source_repo",
+    "source_path",
+    "source_version",
+    "last_catalog_sync_at",
+    "updated_at",
+)
+
+_OFFICIAL_CATALOG_STATE_COLUMN_DEFINITIONS: Dict[str, str] = {
+    "assembly_guid": "TEXT PRIMARY KEY",
+    "bundled_hash": "TEXT",
+    "remote_hash": "TEXT",
+    "catalog_hash": "TEXT",
+    "applied_hash": "TEXT",
+    "last_applied_source": "TEXT",
+    "repo_url": "TEXT",
+    "source_url": "TEXT",
+    "source_repo": "TEXT",
+    "source_path": "TEXT",
+    "source_version": "TEXT",
+    "last_catalog_sync_at": "TEXT",
+    "updated_at": "TEXT NOT NULL",
+}
 
 
 def _parse_datetime(value: str) -> _dt.datetime:
@@ -91,11 +151,15 @@ class OfficialCatalogState:
     assembly_guid: str
     bundled_hash: Optional[str] = None
     remote_hash: Optional[str] = None
+    catalog_hash: Optional[str] = None
     applied_hash: Optional[str] = None
     last_applied_source: Optional[str] = None
     repo_url: Optional[str] = None
     source_url: Optional[str] = None
+    source_repo: Optional[str] = None
+    source_path: Optional[str] = None
     source_version: Optional[str] = None
+    last_catalog_sync_at: Optional[_dt.datetime] = None
     updated_at: Optional[_dt.datetime] = None
 
 
@@ -121,6 +185,11 @@ class AssemblyDatabaseManager:
             return f"assemblies.{table_name}"
         return table_name
 
+    def _qualified_official_catalog_state_table(self) -> str:
+        if str(self._manager.engine.url).startswith("postgresql+psycopg://"):
+            return f"assemblies.{_OFFICIAL_CATALOG_STATE_TABLE}"
+        return _OFFICIAL_CATALOG_STATE_TABLE
+
     def initialise(self) -> None:
         """Ensure all assembly tables exist."""
 
@@ -128,7 +197,16 @@ class AssemblyDatabaseManager:
         bootstrap_conn = self._open_connection(AssemblyDomain.OFFICIAL)
         try:
             bootstrap_cur = bootstrap_conn.cursor()
-            bootstrap_cur.execute(_OFFICIAL_CATALOG_STATE_SCHEMA)
+            bootstrap_cur.execute(
+                _OFFICIAL_CATALOG_STATE_SCHEMA_TEMPLATE.format(
+                    qualified_table_name=self._qualified_official_catalog_state_table(),
+                )
+            )
+            self._ensure_columns(
+                bootstrap_cur,
+                self._qualified_official_catalog_state_table(),
+                _OFFICIAL_CATALOG_STATE_COLUMN_DEFINITIONS,
+            )
             bootstrap_conn.commit()
         finally:
             bootstrap_conn.close()
@@ -169,6 +247,10 @@ class AssemblyDatabaseManager:
                     assembly_type,
                     assembly_subtype,
                     payload_json,
+                    source_repo,
+                    source_path,
+                    source_version,
+                    content_hash,
                     payload_size_bytes,
                     created_at,
                     updated_at
@@ -210,6 +292,10 @@ class AssemblyDatabaseManager:
                         assembly_subtype=assembly_subtype,
                         payload=payload,
                         payload_json=payload_json,
+                        source_repo=row["source_repo"],
+                        source_path=row["source_path"],
+                        source_version=row["source_version"],
+                        content_hash=row["content_hash"],
                         created_at=row_created,
                         updated_at=row_updated,
                     )
@@ -231,13 +317,17 @@ class AssemblyDatabaseManager:
                     assembly_guid,
                     bundled_hash,
                     remote_hash,
+                    catalog_hash,
                     applied_hash,
                     last_applied_source,
                     repo_url,
                     source_url,
+                    source_repo,
+                    source_path,
                     source_version,
+                    last_catalog_sync_at,
                     updated_at
-                FROM assemblies.{_OFFICIAL_CATALOG_STATE_TABLE}
+                FROM {self._qualified_official_catalog_state_table()}
                 """
             )
             state: Dict[str, OfficialCatalogState] = {}
@@ -249,11 +339,15 @@ class AssemblyDatabaseManager:
                     assembly_guid=guid,
                     bundled_hash=row["bundled_hash"],
                     remote_hash=row["remote_hash"],
+                    catalog_hash=row["catalog_hash"],
                     applied_hash=row["applied_hash"],
                     last_applied_source=row["last_applied_source"],
                     repo_url=row["repo_url"],
                     source_url=row["source_url"],
+                    source_repo=row["source_repo"],
+                    source_path=row["source_path"],
                     source_version=row["source_version"],
+                    last_catalog_sync_at=_parse_datetime(row["last_catalog_sync_at"]) if row["last_catalog_sync_at"] else None,
                     updated_at=_parse_datetime(row["updated_at"]) if row["updated_at"] else None,
                 )
             return state
@@ -266,11 +360,15 @@ class AssemblyDatabaseManager:
         *,
         bundled_hash: Optional[str] = None,
         remote_hash: Optional[str] = None,
+        catalog_hash: Optional[str] = None,
         applied_hash: Optional[str] = None,
         last_applied_source: Optional[str] = None,
         repo_url: Optional[str] = None,
         source_url: Optional[str] = None,
+        source_repo: Optional[str] = None,
+        source_path: Optional[str] = None,
         source_version: Optional[str] = None,
+        last_catalog_sync_at: Optional[str] = None,
     ) -> None:
         """Persist the latest bundled/remote hash metadata for an official assembly."""
 
@@ -285,41 +383,59 @@ class AssemblyDatabaseManager:
             cur = conn.cursor()
             cur.execute(
                 f"""
-                INSERT INTO assemblies.{_OFFICIAL_CATALOG_STATE_TABLE} (
+                INSERT INTO {self._qualified_official_catalog_state_table()} (
                     assembly_guid,
                     bundled_hash,
                     remote_hash,
+                    catalog_hash,
                     applied_hash,
                     last_applied_source,
                     repo_url,
                     source_url,
+                    source_repo,
+                    source_path,
                     source_version,
+                    last_catalog_sync_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(assembly_guid) DO UPDATE SET
                     bundled_hash = EXCLUDED.bundled_hash,
                     remote_hash = EXCLUDED.remote_hash,
+                    catalog_hash = EXCLUDED.catalog_hash,
                     applied_hash = EXCLUDED.applied_hash,
                     last_applied_source = EXCLUDED.last_applied_source,
                     repo_url = EXCLUDED.repo_url,
                     source_url = EXCLUDED.source_url,
+                    source_repo = EXCLUDED.source_repo,
+                    source_path = EXCLUDED.source_path,
                     source_version = EXCLUDED.source_version,
+                    last_catalog_sync_at = EXCLUDED.last_catalog_sync_at,
                     updated_at = EXCLUDED.updated_at
                 """,
                 (
                     guid,
                     bundled_hash if bundled_hash is not None else (existing.bundled_hash if existing else None),
                     remote_hash if remote_hash is not None else (existing.remote_hash if existing else None),
+                    catalog_hash if catalog_hash is not None else (existing.catalog_hash if existing else None),
                     applied_hash if applied_hash is not None else (existing.applied_hash if existing else None),
                     last_applied_source
                     if last_applied_source is not None
                     else (existing.last_applied_source if existing else None),
                     repo_url if repo_url is not None else (existing.repo_url if existing else None),
                     source_url if source_url is not None else (existing.source_url if existing else None),
+                    source_repo if source_repo is not None else (existing.source_repo if existing else None),
+                    source_path if source_path is not None else (existing.source_path if existing else None),
                     source_version
                     if source_version is not None
                     else (existing.source_version if existing else None),
+                    last_catalog_sync_at
+                    if last_catalog_sync_at is not None
+                    else (
+                        existing.last_catalog_sync_at.isoformat()
+                        if existing and existing.last_catalog_sync_at
+                        else None
+                    ),
                     now,
                 ),
             )
@@ -348,17 +464,25 @@ class AssemblyDatabaseManager:
                     assembly_type,
                     assembly_subtype,
                     payload_json,
+                    source_repo,
+                    source_path,
+                    source_version,
+                    content_hash,
                     payload_size_bytes,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(assembly_guid) DO UPDATE SET
                     display_name = EXCLUDED.display_name,
                     summary = EXCLUDED.summary,
                     assembly_type = EXCLUDED.assembly_type,
                     assembly_subtype = EXCLUDED.assembly_subtype,
                     payload_json = EXCLUDED.payload_json,
+                    source_repo = EXCLUDED.source_repo,
+                    source_path = EXCLUDED.source_path,
+                    source_version = EXCLUDED.source_version,
+                    content_hash = EXCLUDED.content_hash,
                     payload_size_bytes = EXCLUDED.payload_size_bytes,
                     updated_at = EXCLUDED.updated_at
                 """,
@@ -369,6 +493,10 @@ class AssemblyDatabaseManager:
                     record.assembly_type,
                     record.assembly_subtype,
                     record.payload_json,
+                    record.source_repo,
+                    record.source_path,
+                    record.source_version,
+                    record.content_hash,
                     payload_size,
                     record.created_at.isoformat(),
                     record.updated_at.isoformat(),
@@ -408,6 +536,7 @@ class AssemblyDatabaseManager:
                 qualified_table_name=qualified_table_name,
             )
         )
+        self._ensure_columns(cur, qualified_table_name, _ASSEMBLY_COLUMN_DEFINITIONS)
         cur.execute(
             _INDEX_STATEMENT_TEMPLATE.format(
                 table_name=table_name,
@@ -416,6 +545,19 @@ class AssemblyDatabaseManager:
         )
         self._validate_schema(cur, domain)
         conn.commit()
+
+    def _ensure_columns(
+        self,
+        cur: sqlite3.Cursor,
+        table_name: str,
+        column_definitions: Dict[str, str],
+    ) -> None:
+        cur.execute(f"PRAGMA table_info({table_name})")
+        existing_columns = {row[1] for row in cur.fetchall()}
+        for column_name, definition in column_definitions.items():
+            if column_name in existing_columns:
+                continue
+            cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
 
     def _validate_schema(self, cur: sqlite3.Cursor, domain: AssemblyDomain) -> None:
         cur.execute(f"PRAGMA table_info({self._qualified_table_name(domain)})")

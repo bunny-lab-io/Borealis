@@ -97,6 +97,9 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
         assembly_runtime=assembly_runtime,
     )
     job_scheduler.set_online_lookup(scheduler, _online_hostnames_snapshot)
+    emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
+    if callable(emit_host_service_event):
+        job_scheduler.set_host_service_emitter(scheduler, emit_host_service_event)
     scheduler.start()
     adapters.context.scheduler = scheduler
     adapters.service_log("scheduled_jobs", "engine scheduler initialised", level="INFO")

@@ -8,6 +8,7 @@
 """WebSocket service registration for the Borealis Engine runtime."""
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +38,38 @@ def _normalize_text(value: Any) -> str:
         except Exception:
             return value.decode("utf-8", errors="replace")
     return str(value)
+
+
+def _normalize_host_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _normalize_service_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"system", "sys"}:
+        return "system"
+    if normalized in {"currentuser", "current_user", "interactive", "user"}:
+        return "currentuser"
+    return ""
+
+
+_AGENT_ID_HOST_PATTERN = re.compile(
+    r"^(?P<hostname>.+)_(?P<guid>[0-9A-F-]+)_(?P<context>[A-Z0-9_-]+)$",
+    re.IGNORECASE,
+)
+
+
+def _infer_hostname_from_agent_id(agent_id: Any) -> str:
+    raw = str(agent_id or "").strip()
+    if not raw:
+        return ""
+    match = _AGENT_ID_HOST_PATTERN.match(raw)
+    if match:
+        return str(match.group("hostname") or "").strip()
+    parts = raw.rsplit("_", 2)
+    if len(parts) == 3:
+        return str(parts[0] or "").strip()
+    return ""
 
 
 @dataclass
@@ -76,24 +109,51 @@ class AgentSocketRegistry:
         self.logger = logger
         self._sid_by_agent: Dict[str, str] = {}
         self._agent_by_sid: Dict[str, str] = {}
+        self._sid_by_host_mode: Dict[tuple[str, str], str] = {}
+        self._host_mode_by_sid: Dict[str, tuple[str, str]] = {}
 
-    def register(self, agent_id: str, sid: str) -> None:
+    def register(self, agent_id: str, sid: str, *, service_mode: str = "", hostname: str = "") -> None:
         if not agent_id or not sid:
             return
         previous = self._sid_by_agent.get(agent_id)
         if previous and previous != sid:
             self._agent_by_sid.pop(previous, None)
+            route = self._host_mode_by_sid.pop(previous, None)
+            if route and self._sid_by_host_mode.get(route) == previous:
+                self._sid_by_host_mode.pop(route, None)
         self._sid_by_agent[agent_id] = sid
         self._agent_by_sid[sid] = agent_id
+        host_key = _normalize_host_key(hostname or _infer_hostname_from_agent_id(agent_id))
+        mode_key = _normalize_service_mode(service_mode)
+        previous_route = self._host_mode_by_sid.pop(sid, None)
+        if previous_route and self._sid_by_host_mode.get(previous_route) == sid:
+            self._sid_by_host_mode.pop(previous_route, None)
+        if host_key and mode_key:
+            route = (host_key, mode_key)
+            prior_sid = self._sid_by_host_mode.get(route)
+            if prior_sid and prior_sid != sid:
+                self._host_mode_by_sid.pop(prior_sid, None)
+            self._sid_by_host_mode[route] = sid
+            self._host_mode_by_sid[sid] = route
 
     def unregister(self, sid: str) -> Optional[str]:
         agent_id = self._agent_by_sid.pop(sid, None)
         if agent_id and self._sid_by_agent.get(agent_id) == sid:
             self._sid_by_agent.pop(agent_id, None)
+        route = self._host_mode_by_sid.pop(sid, None)
+        if route and self._sid_by_host_mode.get(route) == sid:
+            self._sid_by_host_mode.pop(route, None)
         return agent_id
 
     def is_registered(self, agent_id: str) -> bool:
         return bool(self._sid_by_agent.get(agent_id))
+
+    def is_host_mode_registered(self, hostname: str, service_mode: str) -> bool:
+        host_key = _normalize_host_key(hostname)
+        mode_key = _normalize_service_mode(service_mode)
+        if not host_key or not mode_key:
+            return False
+        return bool(self._sid_by_host_mode.get((host_key, mode_key)))
 
     def emit(self, agent_id: str, event: str, payload: Any) -> bool:
         sid = self._sid_by_agent.get(agent_id)
@@ -104,6 +164,27 @@ class AgentSocketRegistry:
             return True
         except Exception:
             self.logger.debug("Failed to emit %s to agent_id=%s", event, agent_id, exc_info=True)
+            return False
+
+    def emit_to_host(self, hostname: str, service_mode: str, event: str, payload: Any) -> bool:
+        host_key = _normalize_host_key(hostname)
+        mode_key = _normalize_service_mode(service_mode)
+        if not host_key or not mode_key:
+            return False
+        sid = self._sid_by_host_mode.get((host_key, mode_key))
+        if not sid:
+            return False
+        try:
+            self.socketio.emit(event, payload, to=sid)
+            return True
+        except Exception:
+            self.logger.debug(
+                "Failed to emit %s to hostname=%s service_mode=%s",
+                event,
+                hostname,
+                service_mode,
+                exc_info=True,
+            )
             return False
 
 
@@ -121,6 +202,8 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         return agent_registry.emit(agent_id, event, payload)
 
     setattr(context, "emit_agent_event", _emit_agent_event)
+    setattr(context, "emit_host_service_event", agent_registry.emit_to_host)
+    setattr(context, "has_host_service_socket", agent_registry.is_host_mode_registered)
 
     def _get_tunnel_service() -> Optional[VpnTunnelService]:
         service = getattr(context, "vpn_tunnel_service", None)
@@ -420,9 +503,11 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     def _connect_agent(data: Any) -> Dict[str, Any]:
         agent_id = ""
         service_mode = ""
+        hostname = ""
         if isinstance(data, dict):
             agent_id = str(data.get("agent_id") or "").strip()
             service_mode = str(data.get("service_mode") or "").strip().lower()
+            hostname = str(data.get("hostname") or "").strip()
         elif isinstance(data, str):
             agent_id = data.strip()
         if not agent_id:
@@ -435,11 +520,24 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
             )
             return {"error": "agent_id_required"}
 
-        agent_registry.register(agent_id, request.sid)
-        agent_logger.info("Agent socket registered agent_id=%s service_mode=%s sid=%s", agent_id, service_mode, request.sid)
+        inferred_hostname = hostname or _infer_hostname_from_agent_id(agent_id)
+        agent_registry.register(
+            agent_id,
+            request.sid,
+            service_mode=service_mode,
+            hostname=inferred_hostname,
+        )
+        agent_logger.info(
+            "Agent socket registered agent_id=%s hostname=%s service_mode=%s sid=%s",
+            agent_id,
+            inferred_hostname,
+            service_mode,
+            request.sid,
+        )
         _tunnel_log(
-            "vpn_agent_socket_register agent_id={0} service_mode={1} sid={2} remote={3}".format(
+            "vpn_agent_socket_register agent_id={0} hostname={1} service_mode={2} sid={3} remote={4}".format(
                 agent_id,
+                inferred_hostname or "-",
                 service_mode or "-",
                 request.sid,
                 _remote_addr() or "-",

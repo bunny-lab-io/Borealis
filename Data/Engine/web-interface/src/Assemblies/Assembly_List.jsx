@@ -111,21 +111,6 @@ const TYPE_METADATA = {
   },
 };
 
-const TypeCellRenderer = React.memo(function TypeCellRenderer(props) {
-  const typeKey = props?.data?.typeKey;
-  const meta = typeKey ? TYPE_METADATA[typeKey] : null;
-  if (!meta) return null;
-  const { Icon, label } = meta;
-  return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-      <Icon sx={{ fontSize: 20, color: BOREALIS_BLUE }} />
-      <Typography component="span" sx={{ fontSize: 14, color: "#f5f7fa" }}>
-        {label}
-      </Typography>
-    </Box>
-  );
-});
-
 // Clickable name that opens the corresponding editor, styled in Borealis blue
 const NameCellRenderer = React.memo(function NameCellRenderer(props) {
   const { data, context } = props;
@@ -175,7 +160,9 @@ const SourceCellRenderer = React.memo(function SourceCellRenderer(props) {
 
 const OfficialUpdateCellRenderer = React.memo(function OfficialUpdateCellRenderer(props) {
   const { data, context } = props;
-  if (!data?.officialUpdateAvailable || !context?.canOfficiallyUpdate) return null;
+  if (!data?.officialUpdateAvailable || !context?.canOfficiallyUpdate || !context?.hasCheckedForUpdates) {
+    return null;
+  }
 
   const handleClick = (event) => {
     event.preventDefault();
@@ -184,29 +171,69 @@ const OfficialUpdateCellRenderer = React.memo(function OfficialUpdateCellRendere
   };
 
   return (
-    <Button
-      size="small"
-      variant="outlined"
-      onClick={handleClick}
-      sx={{
-        minWidth: 84,
-        px: 1.4,
-        borderRadius: 999,
-        textTransform: "none",
-        fontWeight: 600,
-        color: "#7dd3fc",
-        borderColor: "rgba(125, 211, 252, 0.42)",
-        background: "rgba(10, 23, 45, 0.74)",
-        "&:hover": {
-          borderColor: "rgba(125, 211, 252, 0.62)",
-          background: "rgba(10, 27, 55, 0.92)",
-        },
-      }}
-    >
-      Update
-    </Button>
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+      <Button
+        size="small"
+        variant="outlined"
+        onClick={handleClick}
+        sx={{
+          minWidth: 84,
+          px: 1.5,
+          borderRadius: 999,
+          textTransform: "none",
+          fontWeight: 600,
+          color: "#7dd3fc",
+          borderColor: "rgba(125, 211, 252, 0.42)",
+          background: "rgba(10, 23, 45, 0.74)",
+          "&:hover": {
+            borderColor: "rgba(125, 211, 252, 0.62)",
+            background: "rgba(10, 27, 55, 0.92)",
+          },
+        }}
+      >
+        Update
+      </Button>
+    </Box>
   );
 });
+
+const PathCellRenderer = React.memo(function PathCellRenderer(props) {
+  const { data } = props;
+  if (!data) return null;
+  const meta = data.typeKey ? TYPE_METADATA[data.typeKey] : null;
+  const Icon = meta?.Icon;
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1.1, minWidth: 0 }}>
+      {Icon ? <Icon sx={{ fontSize: 19, color: BOREALIS_BLUE, flexShrink: 0 }} /> : null}
+      <Typography
+        component="span"
+        sx={{
+          fontSize: 13,
+          color: DARKER_GRAY,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {data.pathDisplay || ""}
+      </Typography>
+    </Box>
+  );
+});
+
+const formatPathSegment = (segment) => {
+  const value = String(segment || "").trim();
+  if (!value) return "";
+  return value.charAt(0).toUpperCase() + value.slice(1);
+};
+
+const formatPathDisplay = (folderPath) => {
+  const segments = String(folderPath || "")
+    .split("/")
+    .map((segment) => formatPathSegment(segment))
+    .filter(Boolean);
+  return segments.join(" \u203A ");
+};
 
 const normalizeRow = (item, queueEntry) => {
   if (!item) return null;
@@ -228,13 +255,26 @@ const normalizeRow = (item, queueEntry) => {
   const domain = String(item.source || "user").toLowerCase();
   const domainMeta = resolveDomainMeta(domain);
   const displayName =
+    item.name ||
     item.display_name ||
     fileName.replace(/\.[^.]+$/, "") ||
     fileName ||
     "Assembly";
-  const summary = item.summary || "";
+  const payloadDocument =
+    item?.payload_json && typeof item.payload_json === "object"
+      ? item.payload_json
+      : item?.payload && typeof item.payload === "object"
+      ? item.payload
+      : null;
+  const summary =
+    payloadDocument?.description ||
+    payloadDocument?.summary ||
+    item.description ||
+    item.summary ||
+    "";
   const queueRecord = queueEntry || null;
   const isDirty = Boolean(item.is_dirty);
+  const pathDisplay = formatPathDisplay(folder);
 
   return {
     id: assemblyGuid || `${typeKey}:${displayName}`,
@@ -248,6 +288,7 @@ const normalizeRow = (item, queueEntry) => {
     sourcePath,
     fileName,
     folder,
+    pathDisplay,
     domain,
     domainLabel: domainMeta.label,
     isDirty,
@@ -259,8 +300,8 @@ const normalizeRow = (item, queueEntry) => {
     createdAt: item.created_at,
     officialManaged: Boolean(item.official_managed),
     officialUpdateAvailable: Boolean(item.official_update_available),
-    officialRepoUrl: item.official_repo_url || "https://example.com",
-    officialSourceUrl: item.official_source_url || item.official_repo_url || "https://example.com",
+    officialRepoUrl: item.official_repo_url || "https://github.com/bunny-lab-io/Aurora",
+    officialSourceUrl: item.official_source_url || item.official_repo_url || "https://github.com/bunny-lab-io/Aurora",
     officialCatalogSource: item.official_catalog_source || "",
     officialSourceVersion: item.official_source_version || "",
     officialLastAppliedSource: item.official_last_applied_source || "",
@@ -269,17 +310,37 @@ const normalizeRow = (item, queueEntry) => {
   };
 };
 
+const formatOfficialUpdateAllMessage = (payload) => {
+  const updatedItems = Array.isArray(payload?.updated_items) ? payload.updated_items : [];
+  if (!updatedItems.length) {
+    return "No Aurora assemblies needed updating.";
+  }
+  const labels = updatedItems
+    .map((item) => item?.name || item?.display_name || item?.assembly_guid || "")
+    .filter(Boolean);
+  if (!labels.length) {
+    return `Updated ${updatedItems.length} Aurora assemblies.`;
+  }
+  const preview = labels.slice(0, 5).join(", ");
+  if (labels.length > 5) {
+    return `Updated ${labels.length} Aurora assemblies: ${preview}, and ${labels.length - 5} more.`;
+  }
+  return `Updated ${labels.length} Aurora assemblies: ${preview}.`;
+};
+
 export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = "User", onPageMetaChange }) {
   const gridRef = useRef(null);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [catalogStatus, setCatalogStatus] = useState({
-    repoUrl: "https://example.com",
+    repoUrl: "https://github.com/bunny-lab-io/Aurora",
     source: "bundled",
     available: false,
     updateCount: 0,
     error: "",
+    warning: "",
+    hasChecked: false,
   });
 
   const [newMenuAnchor, setNewMenuAnchor] = useState(null);
@@ -298,6 +359,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   const [officialUpdateDialog, setOfficialUpdateDialog] = useState({ open: false, row: null, mode: "single" });
   const [updatingOfficialGuid, setUpdatingOfficialGuid] = useState("");
   const [updatingAllOfficial, setUpdatingAllOfficial] = useState(false);
+  const [checkingForAuroraUpdates, setCheckingForAuroraUpdates] = useState(false);
   const isAdmin = (userRole || "").toLowerCase() === "admin";
   const sendNotification = useCallback(async (message) => {
     if (!message) return;
@@ -318,11 +380,15 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     }
   }, []);
 
-  const fetchAssemblies = useCallback(async () => {
+  const fetchAssemblies = useCallback(async ({ forceCatalogRefresh = false } = {}) => {
     setLoading(true);
     setError("");
+    if (forceCatalogRefresh) {
+      setCheckingForAuroraUpdates(true);
+    }
     try {
-      const resp = await fetch("/api/assemblies");
+      const url = forceCatalogRefresh ? "/api/assemblies?refresh_catalog=1" : "/api/assemblies";
+      const resp = await fetch(url);
       if (!resp.ok) {
         const problem = await resp.text();
         throw new Error(problem || `Failed to load assemblies (HTTP ${resp.status})`);
@@ -341,34 +407,42 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         .map((item) => normalizeRow(item, queueMap[item?.assembly_guid || item?.assembly_id || ""]))
         .filter(Boolean);
       setRows(processed);
-      setCatalogStatus({
-        repoUrl: officialCatalog?.repo_url || "https://example.com",
-        source: officialCatalog?.source || "bundled",
-        available: Boolean(officialCatalog?.available),
-        updateCount: Number.isFinite(Number(officialCatalog?.update_count))
-          ? Number(officialCatalog.update_count)
-          : processed.filter((row) => row.officialUpdateAvailable).length,
-        error: officialCatalog?.error || "",
+      setCatalogStatus((prev) => {
+        const hasChecked = forceCatalogRefresh || Boolean(prev?.hasChecked);
+        return {
+          repoUrl: officialCatalog?.repo_url || "https://github.com/bunny-lab-io/Aurora",
+          source: officialCatalog?.source || "bundled",
+          available: hasChecked ? Boolean(officialCatalog?.available) : false,
+          updateCount: hasChecked
+            ? Number.isFinite(Number(officialCatalog?.update_count))
+              ? Number(officialCatalog.update_count)
+              : processed.filter((row) => row.officialUpdateAvailable).length
+            : 0,
+          error: hasChecked ? officialCatalog?.error || "" : "",
+          warning: hasChecked ? officialCatalog?.warning || "" : "",
+          hasChecked,
+        };
       });
-      setTimeout(() => {
-        const columnApi = gridRef.current?.columnApi;
-        if (columnApi) {
-          const ids = ["assemblyType", "source", "name", "officialUpdate"];
-          columnApi.autoSizeColumns(ids, false);
-        }
-      }, 0);
     } catch (err) {
       console.error("Failed to load assemblies:", err);
       setRows([]);
-      setCatalogStatus({
-        repoUrl: "https://example.com",
-        source: "bundled",
-        available: false,
-        updateCount: 0,
-        error: err?.message || "Failed to load assemblies",
+      setCatalogStatus((prev) => {
+        const hasChecked = forceCatalogRefresh || Boolean(prev?.hasChecked);
+        return {
+          repoUrl: prev?.repoUrl || "https://github.com/bunny-lab-io/Aurora",
+          source: prev?.source || "bundled",
+          available: false,
+          updateCount: 0,
+          error: hasChecked ? err?.message || "Failed to load assemblies" : "",
+          warning: "",
+          hasChecked,
+        };
       });
       setError(err?.message || "Failed to load assemblies");
     } finally {
+      if (forceCatalogRefresh) {
+        setCheckingForAuroraUpdates(false);
+      }
       setLoading(false);
     }
   }, []);
@@ -395,6 +469,19 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     },
     [openRow],
   );
+
+  useEffect(() => {
+    const api = gridRef.current?.api;
+    if (!api) return undefined;
+    const handle = requestAnimationFrame(() => {
+      try {
+        api.refreshCells({ columns: ["officialUpdate"], force: true });
+      } catch {
+        /* grid may not be ready during initial mount/unmount */
+      }
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [catalogStatus.hasChecked, isAdmin, rows]);
 
   const handleCellContextMenu = useCallback((params) => {
     params.event?.preventDefault();
@@ -538,12 +625,12 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         const resp = await fetch("/api/assemblies/official/update-all", { method: "POST" });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
-        await sendNotification(`Updated ${Array.isArray(data?.updated) ? data.updated.length : 0} official assemblies.`);
+        await sendNotification(formatOfficialUpdateAllMessage(data));
         setOfficialUpdateDialog({ open: false, row: null, mode: "single" });
-        await fetchAssemblies();
+        await fetchAssemblies({ forceCatalogRefresh: true });
       } catch (err) {
-        console.error("Failed to update all official assemblies:", err);
-        alert(err?.message || "Failed to update official assemblies");
+        console.error("Failed to update all Aurora assemblies:", err);
+        alert(err?.message || "Failed to update Aurora assemblies");
       } finally {
         setUpdatingAllOfficial(false);
       }
@@ -563,31 +650,28 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
-      await sendNotification(`Official assembly "${target.name || target.assemblyGuid}" updated successfully.`);
+      await sendNotification(`Aurora assembly "${target.name || target.assemblyGuid}" updated successfully.`);
       setOfficialUpdateDialog({ open: false, row: null, mode: "single" });
-      await fetchAssemblies();
+      await fetchAssemblies({ forceCatalogRefresh: true });
     } catch (err) {
-      console.error("Failed to update official assembly:", err);
-      alert(err?.message || "Failed to update official assembly");
+      console.error("Failed to update Aurora assembly:", err);
+      alert(err?.message || "Failed to update Aurora assembly");
     } finally {
       setUpdatingOfficialGuid("");
     }
   }, [catalogStatus.repoUrl, fetchAssemblies, officialUpdateDialog, sendNotification]);
+  const gridContext = useMemo(
+    () => ({
+      openRow,
+      requestOfficialUpdate,
+      canOfficiallyUpdate: isAdmin,
+      hasCheckedForUpdates: catalogStatus.hasChecked,
+    }),
+    [catalogStatus.hasChecked, isAdmin, openRow, requestOfficialUpdate],
+  );
 
   const columnDefs = useMemo(
     () => [
-      {
-        colId: "assemblyType",
-        field: "assemblyType",
-        headerName: "Type",
-        valueGetter: (params) => TYPE_METADATA[params?.data?.typeKey]?.label || "",
-        cellRenderer: TypeCellRenderer,
-        minWidth: 100,
-        flex: 0,
-        sortable: true,
-        filter: "agTextColumnFilter",
-        resizable: true,
-      },
       {
         colId: "source",
         field: "domain",
@@ -596,21 +680,10 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         valueFormatter: (params) => resolveDomainMeta(params?.value).label,
         filter: "agTextColumnFilter",
         cellRenderer: SourceCellRenderer,
-        minWidth: 170,
+        minWidth: 110,
+        width: 110,
         flex: 0,
         sortable: true,
-        resizable: true,
-      },
-      {
-        colId: "path",
-        field: "path",
-        headerName: "Path",
-        valueGetter: (params) => params?.data?.folder || "",
-        cellStyle: { color: DARKER_GRAY, fontSize: 13 },
-        minWidth: 200,
-        flex: 0,
-        sortable: true,
-        filter: "agTextColumnFilter",
         resizable: true,
       },
       {
@@ -619,19 +692,22 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         headerName: "Name",
         valueGetter: (params) => params?.data?.name || "",
         cellRenderer: NameCellRenderer,
-        minWidth: 220,
-        flex: 0,
+        minWidth: 450,
+        flex: 1,
+        sort: "asc",
         sortable: true,
         filter: "agTextColumnFilter",
         resizable: true,
       },
       {
-        colId: "description",
-        field: "description",
-        headerName: "Description",
-        valueGetter: (params) => params?.data?.description || "",
-        flex: 1, // Only Description flexes to take remaining width
+        colId: "path",
+        field: "path",
+        headerName: "Path",
+        valueGetter: (params) => params?.data?.pathDisplay || "",
+        cellRenderer: PathCellRenderer,
         minWidth: 300,
+        width: 300,
+        flex: 0,
         sortable: true,
         filter: "agTextColumnFilter",
         resizable: true,
@@ -639,9 +715,9 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       {
         colId: "officialUpdate",
         field: "officialUpdateAvailable",
-        headerName: "Action",
-        minWidth: 112,
-        maxWidth: 132,
+        headerName: "Update Available",
+        minWidth: 160,
+        width: 160,
         sortable: false,
         filter: false,
         resizable: true,
@@ -664,30 +740,28 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   );
 
   const gridWrapperClass = themeClassName;
+  const hasAuroraUpdates = catalogStatus.hasChecked && catalogStatus.updateCount > 0;
+  const handleCheckForAuroraUpdates = useCallback(() => {
+    fetchAssemblies({ forceCatalogRefresh: true });
+  }, [fetchAssemblies]);
 
   const pageHeaderActions = useMemo(
     () => [
       {
-        id: "assemblies-update-all",
-        label: "Update All",
-        icon: <SyncIcon />,
+        id: "assemblies-aurora-sync",
+        label: hasAuroraUpdates ? "Update All" : "Check for Updates",
+        icon: hasAuroraUpdates ? <SyncIcon /> : <CachedIcon />,
         tone: "secondary",
-        disabled: !isAdmin || !rows.some((row) => row.officialUpdateAvailable),
-        tooltip: !isAdmin
-          ? "Administrator access is required to update official assemblies."
-          : rows.some((row) => row.officialUpdateAvailable)
-          ? "Apply all available official assembly updates."
-          : catalogStatus.error || "No official assembly updates are available.",
-        loading: updatingAllOfficial,
-        onClick: requestOfficialUpdateAll,
-      },
-      {
-        id: "assemblies-refresh",
-        label: "Refresh",
-        icon: <CachedIcon />,
-        tone: "secondary",
-        loading,
-        onClick: fetchAssemblies,
+        disabled: hasAuroraUpdates ? !isAdmin || updatingAllOfficial : checkingForAuroraUpdates,
+        tooltip: hasAuroraUpdates
+          ? !isAdmin
+            ? "Administrator access is required to apply Aurora assembly updates."
+            : "Apply all available Aurora assembly updates."
+          : catalogStatus.hasChecked
+          ? catalogStatus.error || catalogStatus.warning || "No Aurora assembly updates are available."
+          : "Check Aurora for available assembly updates.",
+        loading: hasAuroraUpdates ? updatingAllOfficial : checkingForAuroraUpdates,
+        onClick: hasAuroraUpdates ? requestOfficialUpdateAll : handleCheckForAuroraUpdates,
       },
       {
         id: "assemblies-new",
@@ -697,7 +771,17 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         onClick: (event) => setNewMenuAnchor(event.currentTarget),
       },
     ],
-    [catalogStatus.error, fetchAssemblies, isAdmin, loading, requestOfficialUpdateAll, rows, updatingAllOfficial]
+    [
+      catalogStatus.error,
+      catalogStatus.hasChecked,
+      catalogStatus.warning,
+      handleCheckForAuroraUpdates,
+      hasAuroraUpdates,
+      isAdmin,
+      checkingForAuroraUpdates,
+      requestOfficialUpdateAll,
+      updatingAllOfficial,
+    ],
   );
 
   useEffect(() => {
@@ -731,7 +815,6 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       name: trimmed,
       defaultType: isAnsible ? "ansible" : "powershell",
       type: isAnsible ? "ansible" : "powershell",
-      category: isAnsible ? "application" : "script",
     };
     const newRow = {
       assemblyGuid: null,
@@ -854,7 +937,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
               rowData={rows}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
-              context={{ openRow, requestOfficialUpdate, canOfficiallyUpdate: isAdmin }}
+              context={gridContext}
               rowSelection="single"
               suppressCellFocus
               pagination
@@ -915,14 +998,14 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         {activeRow?.assemblyGuid && (isAdmin || activeRow.domain === "user") ? (
           <MenuItem onClick={startClone}>Clone</MenuItem>
         ) : null}
-        {activeRow?.officialUpdateAvailable && isAdmin ? (
+        {catalogStatus.hasChecked && activeRow?.officialUpdateAvailable && isAdmin ? (
           <MenuItem
             onClick={() => {
               closeContextMenu();
               requestOfficialUpdate(activeRow);
             }}
           >
-            Update from Official Catalog
+            Update from Aurora
           </MenuItem>
         ) : null}
         <MenuItem onClick={startRename}>Rename</MenuItem>
@@ -1005,18 +1088,18 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       </Dialog>
 
       <Dialog open={officialUpdateDialog.open} onClose={handleOfficialUpdateClose}>
-        <DialogTitle>{officialUpdateDialog.mode === "all" ? "Update All Official Assemblies" : "Update Official Assembly"}</DialogTitle>
+        <DialogTitle>{officialUpdateDialog.mode === "all" ? "Update All Aurora Assemblies" : "Update Aurora Assembly"}</DialogTitle>
         <DialogContent sx={{ minWidth: 420 }}>
           <Typography variant="body2" sx={{ mt: 0.5, color: "#c6d0dd" }}>
             {officialUpdateDialog.mode === "all"
-              ? "This will pull down the most recent version of each official assembly that has an available update from GitHub. Proceed?"
-              : "This will pull down the most recent version of this assembly from GitHub. Proceed?"}
+              ? "This will pull down the most recent version of each Aurora assembly that has an available update from GitHub and overwrite the current Aurora versions in Borealis. Proceed?"
+              : "This will pull down the most recent version of this Aurora assembly from GitHub and overwrite the current Aurora version in Borealis. Proceed?"}
           </Typography>
           <Typography variant="body2" sx={{ mt: 1.5, color: "#9ba3b4" }}>
             Repository:
           </Typography>
           <MuiLink
-            href={officialUpdateDialog.row?.officialRepoUrl || catalogStatus.repoUrl || "https://example.com"}
+            href={officialUpdateDialog.row?.officialRepoUrl || catalogStatus.repoUrl || "https://github.com/bunny-lab-io/Aurora"}
             target="_blank"
             rel="noopener noreferrer"
             sx={{
@@ -1026,7 +1109,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
               wordBreak: "break-all",
             }}
           >
-            {officialUpdateDialog.row?.officialRepoUrl || catalogStatus.repoUrl || "https://example.com"}
+            {officialUpdateDialog.row?.officialRepoUrl || catalogStatus.repoUrl || "https://github.com/bunny-lab-io/Aurora"}
           </MuiLink>
           {officialUpdateDialog.mode === "single" && officialUpdateDialog.row?.name ? (
             <Typography variant="body2" sx={{ mt: 1.5, color: "#9ba3b4" }}>

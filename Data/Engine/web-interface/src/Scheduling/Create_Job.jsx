@@ -1136,8 +1136,7 @@ export default function CreateJob({
     () => [
       { colId: "name", field: "name", headerName: "Name", minWidth: 200, flex: 1.1 },
       { colId: "domain", field: "domain", headerName: "Domain", minWidth: 140, flex: 0.8 },
-      { colId: "path", field: "path", headerName: "Path", minWidth: 220, flex: 1.2 },
-      { colId: "summary", field: "summary", headerName: "Summary", minWidth: 260, flex: 1.4 }
+      { colId: "path", field: "path", headerName: "Path", minWidth: 220, flex: 1.2 }
     ],
     []
   );
@@ -2220,16 +2219,21 @@ export default function CreateJob({
   const loadHistory = useCallback(async () => {
     if (!editing) return;
     try {
-      const [runsResp, jobResp, devResp] = await Promise.all([
+      const [runsResp, jobResp] = await Promise.all([
         fetch(`/api/scheduled_jobs/${initialJob.id}/runs?days=30`),
-        fetch(`/api/scheduled_jobs/${initialJob.id}`),
-        fetch(`/api/scheduled_jobs/${initialJob.id}/devices`)
+        fetch(`/api/scheduled_jobs/${initialJob.id}`)
       ]);
       const runs = await runsResp.json();
       const job = await jobResp.json();
-      const dev = await devResp.json();
       if (!runsResp.ok) throw new Error(runs.error || `HTTP ${runsResp.status}`);
       if (!jobResp.ok) throw new Error(job.error || `HTTP ${jobResp.status}`);
+      const jobPayload = job.job || {};
+      const occurrence = Number(jobPayload?.latest_occurrence || jobPayload?.last_run_ts || 0);
+      const devicesUrl = occurrence
+        ? `/api/scheduled_jobs/${initialJob.id}/devices?occurrence=${occurrence}`
+        : `/api/scheduled_jobs/${initialJob.id}/devices`;
+      const devResp = await fetch(devicesUrl);
+      const dev = await devResp.json();
       if (!devResp.ok) throw new Error(dev.error || `HTTP ${devResp.status}`);
       setHistoryRows(
         Array.isArray(runs.runs)
@@ -2242,7 +2246,7 @@ export default function CreateJob({
             })
           : []
       );
-      setJobSummary(job.job || {});
+      setJobSummary(jobPayload);
       const devices = Array.isArray(dev.devices) ? dev.devices.map((device) => ({
         ...device,
         activities: Array.isArray(device.activities) ? device.activities : [],
@@ -2413,13 +2417,20 @@ export default function CreateJob({
   }, [deviceRows]);
 
   const statusCounts = useMemo(() => {
-    const merged = { pending: 0, running: 0, success: 0, failed: 0, expired: 0 };
-    Object.keys(merged).forEach((key) => {
-      const summaryVal = Number((counts || {})[key] ?? 0);
-      const fallback = deviceStatusCounts[key] ?? 0;
-      merged[key] = summaryVal > 0 ? summaryVal : fallback;
-    });
-    return merged;
+    const summaryKeys = ["pending", "running", "success", "failed", "expired", "timed_out", "skipped"];
+    const hasSummaryCounts =
+      Number((counts || {}).total_targets ?? 0) > 0 ||
+      summaryKeys.some((key) => Number((counts || {})[key] ?? 0) > 0);
+    if (hasSummaryCounts) {
+      return {
+        pending: Number((counts || {}).pending ?? 0),
+        running: Number((counts || {}).running ?? 0),
+        success: Number((counts || {}).success ?? 0),
+        failed: Number((counts || {}).failed ?? 0),
+        expired: Number((counts || {}).expired ?? 0),
+      };
+    }
+    return deviceStatusCounts;
   }, [counts, deviceStatusCounts]);
 
   const statusNodeTypes = useMemo(() => ({ statusNode: StatusNode }), []);

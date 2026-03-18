@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.server import create_app
 
@@ -98,3 +100,339 @@ def test_scheduled_job_create_recovers_when_lastrowid_is_missing(
     assert payload["job"]["id"] is not None
     assert payload["job"]["name"] == "Nightly Inventory"
     assert payload["job"]["targets"] == ["test-device"]
+
+
+def test_scheduled_job_device_status_prefers_terminal_host_state_and_preserves_output(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client, _scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname TEXT,
+                script_path TEXT,
+                script_name TEXT,
+                script_type TEXT,
+                ran_at INTEGER,
+                status TEXT,
+                stdout TEXT,
+                stderr TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                created_at,
+                updated_at,
+                enabled
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                1,
+                "Install 7-Zip",
+                json.dumps([]),
+                json.dumps(["test-device"]),
+                "once",
+                1_773_780_000,
+                1_773_780_000,
+                1,
+            ),
+        )
+        cur.executemany(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                target_hostname,
+                scheduled_ts,
+                started_ts,
+                finished_ts,
+                status,
+                created_at,
+                updated_at,
+                skip_reason
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                (10, 1, "TEST-DEVICE", 1_773_782_700, 1_773_782_760, None, "Pending", 1_773_782_700, 1_773_782_760, ""),
+                (11, 1, "test-device", 1_773_782_700, 1_773_782_760, 1_773_782_767, "Success", 1_773_782_700, 1_773_782_767, ""),
+            ),
+        )
+        cur.executemany(
+            """
+            INSERT INTO scheduled_job_run_targets(run_id, device_guid, hostname, site_id, resolved_from_filter_id, created_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (
+                (10, "GUID-TEST-0001", "test-device", None, None, 1_773_782_700),
+                (11, "GUID-TEST-0001", "test-device", None, None, 1_773_782_700),
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO activity_history(id, hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                500,
+                "test-device",
+                "Scripts/7zip.ps1",
+                "7-Zip [WIN]",
+                "powershell",
+                1_773_782_767,
+                "Success",
+                "Installed 7-Zip",
+                "",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_run_activity(run_id, activity_id, component_kind, script_type, component_path, component_name, created_at)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (11, 500, "script", "powershell", "Scripts/7zip.ps1", "7-Zip [WIN]", 1_773_782_767),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    job_response = client.get("/api/scheduled_jobs/1")
+    assert job_response.status_code == 200
+    job_payload = job_response.get_json()["job"]
+    assert job_payload["last_status"] == "Success"
+    assert job_payload["result_counts"]["success"] == 1
+    assert job_payload["result_counts"]["pending"] == 0
+
+    devices_response = client.get("/api/scheduled_jobs/1/devices")
+    assert devices_response.status_code == 200
+    devices_payload = devices_response.get_json()
+    assert len(devices_payload["devices"]) == 1
+    device_row = devices_payload["devices"][0]
+    assert device_row["hostname"] == "test-device"
+    assert device_row["job_status"] == "Success"
+    assert device_row["has_stdout"] is True
+
+
+def test_scheduled_job_summary_stays_pending_until_all_hosts_finish(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client, _scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                created_at,
+                updated_at,
+                enabled
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                2,
+                "Mixed Host State",
+                json.dumps([]),
+                json.dumps(["test-device", "other-device"]),
+                "once",
+                1_773_780_000,
+                1_773_780_000,
+                1,
+            ),
+        )
+        cur.executemany(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                target_hostname,
+                scheduled_ts,
+                started_ts,
+                finished_ts,
+                status,
+                created_at,
+                updated_at,
+                skip_reason
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                (20, 2, "test-device", 1_773_782_700, 1_773_782_760, 1_773_782_767, "Success", 1_773_782_700, 1_773_782_767, ""),
+                (21, 2, "other-device", 1_773_782_700, 1_773_782_760, None, "Pending", 1_773_782_700, 1_773_782_760, ""),
+            ),
+        )
+        cur.executemany(
+            """
+            INSERT INTO scheduled_job_run_targets(run_id, device_guid, hostname, site_id, resolved_from_filter_id, created_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (
+                (20, "GUID-TEST-0001", "test-device", None, None, 1_773_782_700),
+                (21, "GUID-TEST-0002", "other-device", None, None, 1_773_782_700),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.get("/api/scheduled_jobs/2")
+    assert response.status_code == 200
+    payload = response.get_json()["job"]
+    assert payload["last_status"] == "Pending"
+    assert payload["result_counts"]["success"] == 1
+    assert payload["result_counts"]["pending"] == 1
+
+
+class _FakeSigner:
+    def sign(self, payload: bytes) -> bytes:
+        return b"signature"
+
+    def public_base64_spki(self) -> str:
+        return "public-key"
+
+
+def test_scheduled_job_dispatch_fails_cleanly_when_system_socket_is_missing(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname TEXT,
+                script_path TEXT,
+                script_name TEXT,
+                script_type TEXT,
+                ran_at INTEGER,
+                status TEXT,
+                stdout TEXT,
+                stderr TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                created_at,
+                updated_at,
+                enabled
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                3,
+                "System Context Run",
+                json.dumps([]),
+                json.dumps(["LAB-AIO-01"]),
+                "once",
+                1_773_780_000,
+                1_773_780_000,
+                1,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                target_hostname,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                30,
+                3,
+                "LAB-AIO-01",
+                1_773_782_700,
+                "Pending",
+                1_773_782_700,
+                1_773_782_700,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        scheduler,
+        "_resolve_runtime_document",
+        lambda rel_path, default_type, assembly_guid=None: (
+            {
+                "type": "powershell",
+                "script": "Write-Host 'hello'",
+                "variables": [],
+                "timeout_seconds": 60,
+                "files": [],
+                "name": "Hello Script",
+            },
+            {
+                "assembly_guid": "GUID-HELLO-0001",
+                "virtual_path": "Scripts/hello.ps1",
+            },
+        ),
+    )
+    scheduler._script_signer = _FakeSigner()
+    scheduler._emit_host_service_event = lambda hostname, service_mode, event, payload: False
+    emitted_events = []
+    monkeypatch.setattr(
+        scheduler.socketio,
+        "emit",
+        lambda event, payload, to=None: emitted_events.append((event, payload, to)),
+    )
+
+    link = scheduler._dispatch_script(
+        3,
+        30,
+        1_773_782_700,
+        "LAB-AIO-01",
+        {"path": "hello.ps1"},
+        "system",
+    )
+
+    assert link is not None
+    assert link["component_name"] == "Hello Script"
+    assert all(event_name != "quick_job_run" for event_name, _payload, _to in emitted_events)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT status, finished_ts, error FROM scheduled_job_runs WHERE id=?", (30,))
+        run_row = cur.fetchone()
+        assert run_row[0] == "Failed"
+        assert int(run_row[1] or 0) > 0
+        assert "No system agent socket is registered" in (run_row[2] or "")
+
+        cur.execute("SELECT status, stdout, stderr FROM activity_history ORDER BY id DESC LIMIT 1")
+        activity_row = cur.fetchone()
+        assert activity_row[0] == "Failed"
+        assert activity_row[1] == ""
+        assert "No system agent socket is registered" in (activity_row[2] or "")
+    finally:
+        conn.close()

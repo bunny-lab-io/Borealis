@@ -107,11 +107,7 @@ class AssemblyRuntimeService:
         if not entry:
             raise ValueError(f"Assembly '{assembly_guid}' not found")
         payload_text = self._read_payload_text(assembly_guid)
-        export_payload = record_to_legacy_payload(entry.record, domain=entry.domain, payload_text=payload_text)
-        export_payload["is_dirty"] = entry.is_dirty
-        export_payload["dirty_since"] = entry.dirty_since.isoformat() if entry.dirty_since else None
-        export_payload["last_persisted"] = entry.last_persisted.isoformat() if entry.last_persisted else None
-        return export_payload
+        return record_to_legacy_payload(entry.record, domain=entry.domain, payload_text=payload_text)
 
     def get_cached_entry(self, assembly_guid: str) -> Optional[CachedAssembly]:
         return self._cache.get_entry(assembly_guid)
@@ -236,6 +232,14 @@ class AssemblyRuntimeService:
         )
         display_name = payload.get("display_name") or (existing.record.display_name if existing else None)
         summary = payload.get("summary")
+
+        payload_content = payload.get("payload")
+        if isinstance(payload_content, Mapping):
+            payload_content = dict(payload_content)
+            payload_content["assembly_guid"] = assembly_guid
+
+        if summary is None and isinstance(payload_content, Mapping):
+            summary = _coerce_optional_text(payload_content.get("description") or payload_content.get("summary"))
         if summary is None and existing:
             summary = existing.record.summary
         assembly_subtype = _normalize_optional_text(
@@ -244,10 +248,15 @@ class AssemblyRuntimeService:
         if not assembly_subtype:
             assembly_subtype = _default_assembly_subtype(assembly_type)
 
-        payload_content = payload.get("payload")
-        if isinstance(payload_content, Mapping):
-            payload_content = dict(payload_content)
-            payload_content.setdefault("assembly_guid", assembly_guid)
+        source_repo = _coerce_optional_text(payload.get("source_repo"))
+        if source_repo is None and existing:
+            source_repo = existing.record.source_repo
+        source_path = _coerce_optional_text(payload.get("source_path"))
+        if source_path is None and existing:
+            source_path = existing.record.source_path
+        source_version = _coerce_optional_text(payload.get("source_version"))
+        if source_version is None and existing:
+            source_version = existing.record.source_version
         payload_text = _serialize_payload(payload_content) if payload_content is not None else None
 
         if existing:
@@ -279,9 +288,13 @@ class AssemblyRuntimeService:
             assembly_subtype=assembly_subtype,
             payload=descriptor,
             payload_json=payload_text,
+            source_repo=source_repo,
+            source_path=source_path,
+            source_version=source_version,
             created_at=existing.record.created_at if existing else now,
             updated_at=now,
         )
+        record.content_hash = compute_record_content_hash(record)
         return record
 
     def _serialize_entry(
@@ -292,10 +305,13 @@ class AssemblyRuntimeService:
         payload_text: Optional[str] = None,
     ) -> Dict[str, Any]:
         record = entry.record
+        canonical_summary = _canonical_summary(record.summary, payload_text or record.payload_json)
         data: Dict[str, Any] = {
             "assembly_guid": record.assembly_guid,
+            "name": record.display_name,
+            "description": canonical_summary,
             "display_name": record.display_name,
-            "summary": record.summary,
+            "summary": canonical_summary,
             "assembly_type": record.assembly_type,
             "assembly_subtype": record.assembly_subtype,
             "source": entry.domain.value,
@@ -303,10 +319,13 @@ class AssemblyRuntimeService:
             "dirty_since": entry.dirty_since.isoformat() if entry.dirty_since else None,
             "last_persisted": entry.last_persisted.isoformat() if entry.last_persisted else None,
             "payload_guid": record.payload.assembly_guid,
-            "virtual_path": _fallback_source_path(record),
+            "source_repo": record.source_repo,
+            "source_path": record.source_path,
+            "source_version": record.source_version,
+            "virtual_path": record.source_path or _fallback_source_path(record),
             "created_at": record.created_at.isoformat(),
             "updated_at": record.updated_at.isoformat(),
-            "content_hash": compute_record_content_hash(record),
+            "content_hash": record.content_hash or compute_record_content_hash(record),
         }
         data["path"] = data["virtual_path"]
         data.setdefault("assembly_id", record.assembly_guid)  # legacy alias for older clients
@@ -378,6 +397,12 @@ def _iter_virtual_paths(record: AssemblyRecord) -> Iterable[str]:
     """Yield canonical virtual paths for the provided assembly record."""
 
     seen: Set[str] = set()
+    canonical_source_path = _normalize_source_path(record.source_path)
+    if canonical_source_path:
+        lowered_source = canonical_source_path.lower()
+        if lowered_source not in seen:
+            seen.add(lowered_source)
+            yield canonical_source_path
     fallback = _fallback_source_path(record)
     if fallback:
         lowered = fallback.lower()
@@ -455,6 +480,25 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
         return None
     text = str(value).strip().lower()
     return text or None
+
+
+def _coerce_optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _canonical_summary(summary: Any, payload_text: Optional[str]) -> Optional[str]:
+    payload_summary = None
+    if payload_text:
+        try:
+            payload = json.loads(payload_text)
+        except Exception:
+            payload = None
+        if isinstance(payload, Mapping):
+            payload_summary = _coerce_optional_text(payload.get("description") or payload.get("summary"))
+    return payload_summary or _coerce_optional_text(summary)
 
 
 def _utcnow() -> _dt.datetime:

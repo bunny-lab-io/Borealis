@@ -49,6 +49,15 @@ const parseObjectMaybe = (value) => {
   }
 };
 
+const resolveAssemblySummary = (item = {}, payload = null) =>
+  firstText(
+    payload?.description,
+    payload?.summary,
+    item.summary,
+    item.description,
+    item.desc
+  );
+
 const normalizeKindFromHints = (kindHint, subtypeHint, payload = null) => {
   const kind = toLowerSafe(kindHint);
   const subtype = toLowerSafe(subtypeHint);
@@ -264,16 +273,17 @@ export function normalizeAssemblyRecord(item, queueEntry = null) {
 
   const displayName =
     firstText(
+      item.name,
       item.display_name,
       item.displayName,
-      item.name,
       item.tab_name,
       item.tabName,
       item.title,
+      item.description,
       item.summary
     ) ||
     sanitizeNameForPath(assemblyGuid);
-  const summary = firstText(item.summary, item.description, item.desc);
+  const summary = resolveAssemblySummary(item, payloadFromItem);
 
   const rawPath = firstText(
     item.virtual_path,
@@ -557,8 +567,8 @@ export function parseAssemblyExport(exportDoc) {
 
   const metadata = {
     assembly_guid: firstText(exportDoc.assembly_guid, exportDoc.assemblyGuid, payload.assembly_guid, payload.assemblyGuid),
-    display_name: firstText(exportDoc.display_name, exportDoc.displayName, exportDoc.name),
-    summary: firstText(exportDoc.summary, exportDoc.description),
+    display_name: firstText(exportDoc.name, exportDoc.display_name, exportDoc.displayName, exportDoc.tab_name),
+    summary: resolveAssemblySummary(exportDoc, payload),
     domain: firstText(exportDoc.domain, exportDoc.source),
     assembly_type: kind,
     assembly_subtype: type

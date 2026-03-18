@@ -31,7 +31,7 @@ def record_to_legacy_payload(
     domain: AssemblyDomain,
     payload_text: str,
 ) -> Dict[str, Any]:
-    """Convert an assembly record into an export-friendly legacy JSON payload."""
+    """Convert an assembly record into a clean authoring-friendly JSON document."""
 
     payload_body: Union[LegacyDocument, str]
     try:
@@ -39,20 +39,17 @@ def record_to_legacy_payload(
     except json.JSONDecodeError:
         payload_body = payload_text
     if isinstance(payload_body, dict):
-        payload_body = dict(payload_body)
-        payload_body.setdefault("assembly_guid", record.assembly_guid)
+        return _authoring_document_from_payload(record, payload_body)
 
+    fallback_name = _coerce_str(record.display_name, "Assembly")
+    fallback_description = _coerce_optional_str(record.summary) or ""
+    fallback_type = _coerce_optional_str(record.assembly_subtype) or "powershell"
     return {
         "assembly_guid": record.assembly_guid,
-        "domain": domain.value,
-        "assembly_type": record.assembly_type,
-        "assembly_subtype": record.assembly_subtype,
-        "display_name": record.display_name,
-        "summary": record.summary,
-        "payload": payload_body,
-        "payload_guid": record.payload.assembly_guid,
-        "created_at": record.created_at.isoformat(),
-        "updated_at": record.updated_at.isoformat(),
+        "name": fallback_name,
+        "description": fallback_description,
+        "type": fallback_type,
+        "content": payload_body,
     }
 
 
@@ -85,12 +82,7 @@ def prepare_import_request(
         or payload_json.get("tab_name")
         or "Imported Assembly"
     )
-    summary = _coerce_optional_str(
-        document_json.get("summary")
-        or document_json.get("description")
-        or payload_json.get("summary")
-        or payload_json.get("description")
-    )
+    summary = _resolve_summary(document_json, payload_json)
     assembly_subtype = _coerce_optional_str(
         document_json.get("assembly_subtype")
         or document_json.get("type")
@@ -108,7 +100,7 @@ def prepare_import_request(
     resolved_guid = _coerce_guid(assembly_guid or document_json.get("assembly_guid") or payload_json.get("assembly_guid"))
     if resolved_guid:
         payload_json = dict(payload_json)
-        payload_json.setdefault("assembly_guid", resolved_guid)
+        payload_json["assembly_guid"] = resolved_guid
 
     payload = {
         "assembly_guid": resolved_guid,
@@ -117,6 +109,9 @@ def prepare_import_request(
         "display_name": display_name,
         "summary": summary,
         "assembly_subtype": assembly_subtype,
+        "source_repo": _coerce_optional_str(document_json.get("source_repo") or payload_json.get("source_repo")),
+        "source_path": _coerce_optional_str(document_json.get("source_path") or payload_json.get("source_path")),
+        "source_version": _coerce_optional_str(document_json.get("source_version") or payload_json.get("source_version")),
         "payload": payload_json,
     }
 
@@ -145,6 +140,63 @@ def _extract_payload_document(document: Mapping[str, Any]) -> LegacyDocument:
     if isinstance(payload, Mapping):
         return dict(payload)
     return dict(document)
+
+
+def _resolve_summary(document: Mapping[str, Any], payload: Mapping[str, Any]) -> Optional[str]:
+    return _coerce_optional_str(
+        _payload_summary(payload)
+        or document.get("description")
+        or document.get("summary")
+    )
+
+
+def _payload_summary(payload: Any) -> Optional[str]:
+    if isinstance(payload, Mapping):
+        return payload.get("description") or payload.get("summary")
+    return None
+
+
+def _authoring_document_from_payload(record: AssemblyRecord, payload_body: LegacyDocument) -> LegacyDocument:
+    document = dict(payload_body)
+    document["assembly_guid"] = record.assembly_guid
+
+    if record.assembly_type == "workflow":
+        if not _coerce_optional_str(document.get("tab_name") or document.get("name")) and record.display_name:
+            document["tab_name"] = record.display_name
+    elif not _coerce_optional_str(document.get("name") or document.get("tab_name")) and record.display_name:
+        document["name"] = record.display_name
+
+    if not _coerce_optional_str(document.get("description")) and record.summary:
+        document["description"] = record.summary
+
+    if not _coerce_optional_str(document.get("type")) and record.assembly_subtype:
+        document["type"] = record.assembly_subtype
+
+    for field in (
+        "assembly_type",
+        "assembly_subtype",
+        "display_name",
+        "summary",
+        "domain",
+        "payload_guid",
+        "source_repo",
+        "source_path",
+        "source_version",
+        "content_hash",
+        "created_at",
+        "updated_at",
+        "is_dirty",
+        "dirty_since",
+        "last_persisted",
+        "version",
+        "category",
+        "sites",
+        "script_encoding",
+        "scriptEncoding",
+    ):
+        document.pop(field, None)
+
+    return document
 
 
 def _enforce_size_limit(document: Mapping[str, Any]) -> None:

@@ -47,6 +47,13 @@ def _coerce_refresh_seconds(value: Any, default: int = 300) -> int:
     return parsed
 
 
+def _coerce_bool(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "on", "refresh", "force"}
+
+
 class AssemblyAPIService:
     """Facilitates assembly API routes with authentication and permission checks."""
 
@@ -60,18 +67,36 @@ class AssemblyAPIService:
         self.runtime = AssemblyRuntimeService(cache, logger=self.logger)
         catalog_root_raw = adapters.config.get("official_assemblies_root") or adapters.config.get("OFFICIAL_ASSEMBLIES_ROOT")
         bundled_root = Path(str(catalog_root_raw)).expanduser() if catalog_root_raw else None
+        checkout_root_raw = (
+            adapters.config.get("official_assemblies_checkout_root")
+            or adapters.config.get("OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT")
+        )
+        checkout_root = Path(str(checkout_root_raw)).expanduser() if checkout_root_raw else None
         self.catalog = OfficialAssemblyCatalogService(
             cache=cache,
             database_manager=cache.database_manager,
             logger=self.logger,
             github_integration=adapters.github_integration,
             bundled_root=bundled_root,
+            checkout_root=checkout_root,
             repo_url=str(
                 adapters.config.get("official_assemblies_repo_url")
                 or adapters.config.get("OFFICIAL_ASSEMBLIES_REPO_URL")
-                or "https://example.com"
+                or "https://github.com/bunny-lab-io/Aurora"
             ).strip()
-            or "https://example.com",
+            or "https://github.com/bunny-lab-io/Aurora",
+            repo_git_url=str(
+                adapters.config.get("official_assemblies_repo_git_url")
+                or adapters.config.get("OFFICIAL_ASSEMBLIES_REPO_GIT_URL")
+                or "https://github.com/bunny-lab-io/Aurora.git"
+            ).strip()
+            or "https://github.com/bunny-lab-io/Aurora.git",
+            repo_ref=str(
+                adapters.config.get("official_assemblies_repo_ref")
+                or adapters.config.get("OFFICIAL_ASSEMBLIES_REPO_REF")
+                or "main"
+            ).strip()
+            or "main",
             manifest_url=str(
                 adapters.config.get("official_assemblies_manifest_url")
                 or adapters.config.get("OFFICIAL_ASSEMBLIES_MANIFEST_URL")
@@ -212,10 +237,20 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
 
         domain = request.args.get("domain")
         assembly_type = request.args.get("type")
+        force_catalog_refresh = _coerce_bool(
+            request.args.get("refresh_catalog") or request.args.get("force_catalog_refresh")
+        )
         items = service.runtime.list_assemblies(domain=domain, assembly_type=assembly_type)
-        items = service.catalog.annotate_collection(items)
+        manifest = service.catalog.manifest(force_remote=force_catalog_refresh)
+        items = service.catalog.annotate_collection(items, manifest=manifest)
         queue_state = service.runtime.queue_snapshot()
-        return jsonify({"items": items, "queue": queue_state, "official_catalog": service.catalog.catalog_status(items)}), 200
+        return jsonify(
+            {
+                "items": items,
+                "queue": queue_state,
+                "official_catalog": service.catalog.catalog_status(items, manifest=manifest),
+            }
+        ), 200
 
     # ------------------------------------------------------------------
     # Single assembly retrieval
@@ -525,7 +560,7 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "internal server error"}), 500
 
     # ------------------------------------------------------------------
-    # Export legacy assembly JSON
+    # Export assembly authoring JSON
     # ------------------------------------------------------------------
     @blueprint.route("/<string:assembly_guid>/export", methods=["GET"])
     def export_assembly(assembly_guid: str):
@@ -534,14 +569,13 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify(error[0]), error[1]
         try:
             data = service.runtime.export_assembly(assembly_guid)
-            data["queue"] = service.runtime.queue_snapshot()
             service._audit(
                 user=user,
                 action="export",
                 domain=AssemblyAPIService.parse_domain(data.get("domain")),
                 assembly_guid=assembly_guid,
                 status="success",
-                detail="legacy export",
+                detail="authoring export",
             )
             return jsonify(data), 200
         except ValueError:
@@ -570,6 +604,16 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
                 detail=f"source={annotated.get('official_catalog_source') or 'catalog'}",
             )
             return jsonify(annotated), 200
+        except RuntimeError as exc:
+            service._audit(
+                user=user,
+                action="official_update",
+                domain=AssemblyDomain.OFFICIAL,
+                assembly_guid=assembly_guid,
+                status="failed",
+                detail=str(exc),
+            )
+            return jsonify({"error": str(exc)}), 502
         except ValueError as exc:
             service._audit(
                 user=user,
@@ -599,7 +643,21 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify(error[0]), error[1]
         try:
             result = service.catalog.update_all_official_assemblies()
-            detail = f"updated={len(result.get('updated') or [])}"
+            if result.get("error"):
+                detail = str(result.get("error"))
+                service._audit(
+                    user=user,
+                    action="official_update_all",
+                    domain=AssemblyDomain.OFFICIAL,
+                    status="failed",
+                    detail=detail,
+                )
+                return jsonify(result), 502
+            detail_parts = [f"updated={len(result.get('updated') or [])}"]
+            failed_count = len(result.get("failed") or [])
+            if failed_count:
+                detail_parts.append(f"failed={failed_count}")
+            detail = " ".join(detail_parts)
             service._audit(
                 user=user,
                 action="official_update_all",

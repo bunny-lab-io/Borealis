@@ -184,7 +184,7 @@ Example shape:
 ### Local checkout strategy
 Recommended runtime strategy:
 - Clone to a dedicated Engine-managed cache path such as:
-  - `Engine/Cache/Official_Assemblies/`
+  - `Engine/Aurora/`
 - Use shallow fetch where practical.
 - Record the active commit SHA after each sync.
 

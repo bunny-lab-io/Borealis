@@ -21,7 +21,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Logs: `Engine/Logs/` (engine.log, error.log, api.log, service logs).
 - Certificates: `Engine/Certificates/` (TLS bundle + code signing keys).
 - WebUI build output: `Engine/web-interface/` (served as static assets).
-- Bundled official assemblies: `Data/Engine/Official_Assemblies/`.
+- Bundled official assemblies: `Data/Engine/Official_Assemblies/` (generated seed snapshot).
+- Aurora checkout: `Engine/Aurora/`.
 
 ## API Endpoints
 - `GET /health` (No Authentication) - Engine liveness probe.

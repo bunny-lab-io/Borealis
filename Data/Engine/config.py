@@ -35,7 +35,17 @@ defaults that mirror the legacy server runtime.  Key environment variables are
                                       ``<ProjectRoot>/Data/Engine/Official_Assemblies``).
 ``BOREALIS_OFFICIAL_ASSEMBLIES_REPO_URL`` repository URL shown in official
                                           assembly update prompts (default:
-                                          ``https://example.com``).
+                                          ``https://github.com/bunny-lab-io/Aurora``).
+``BOREALIS_OFFICIAL_ASSEMBLIES_REPO_GIT_URL`` Git URL used for the managed
+                                              Aurora checkout (default:
+                                              ``https://github.com/bunny-lab-io/Aurora.git``).
+``BOREALIS_OFFICIAL_ASSEMBLIES_REPO_REF`` Aurora branch/tag/ref to fetch for
+                                          official updates (default: ``main``).
+``BOREALIS_OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT`` Engine-managed Aurora checkout
+                                               root (default:
+                                               ``<ProjectRoot>/Engine`` which
+                                               resolves to
+                                               ``<ProjectRoot>/Engine/Aurora``).
 ``BOREALIS_OFFICIAL_ASSEMBLIES_MANIFEST_URL`` optional remote manifest URL used
                                               for on-demand official assembly
                                               updates.
@@ -302,6 +312,9 @@ class EngineSettings:
     db_connect_timeout: int
     official_assemblies_root: str
     official_assemblies_repo_url: str
+    official_assemblies_repo_git_url: str
+    official_assemblies_repo_ref: str
+    official_assemblies_checkout_root: str
     official_assemblies_manifest_url: str
     official_assemblies_refresh_seconds: int
     static_folder: str
@@ -435,8 +448,25 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
     official_assemblies_repo_url = str(
         runtime_config.get("OFFICIAL_ASSEMBLIES_REPO_URL")
         or os.environ.get("BOREALIS_OFFICIAL_ASSEMBLIES_REPO_URL")
-        or "https://example.com"
-    ).strip() or "https://example.com"
+        or "https://github.com/bunny-lab-io/Aurora"
+    ).strip() or "https://github.com/bunny-lab-io/Aurora"
+    official_assemblies_repo_git_url = str(
+        runtime_config.get("OFFICIAL_ASSEMBLIES_REPO_GIT_URL")
+        or os.environ.get("BOREALIS_OFFICIAL_ASSEMBLIES_REPO_GIT_URL")
+        or "https://github.com/bunny-lab-io/Aurora.git"
+    ).strip() or "https://github.com/bunny-lab-io/Aurora.git"
+    official_assemblies_repo_ref = str(
+        runtime_config.get("OFFICIAL_ASSEMBLIES_REPO_REF")
+        or os.environ.get("BOREALIS_OFFICIAL_ASSEMBLIES_REPO_REF")
+        or "main"
+    ).strip() or "main"
+    official_assemblies_checkout_root = str(
+        Path(
+            runtime_config.get("OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT")
+            or os.environ.get("BOREALIS_OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT")
+            or PROJECT_ROOT / "Engine"
+        ).expanduser()
+    )
     official_assemblies_manifest_url = str(
         runtime_config.get("OFFICIAL_ASSEMBLIES_MANIFEST_URL")
         or os.environ.get("BOREALIS_OFFICIAL_ASSEMBLIES_MANIFEST_URL")
@@ -586,6 +616,9 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         db_connect_timeout=db_connect_timeout,
         official_assemblies_root=official_assemblies_root,
         official_assemblies_repo_url=official_assemblies_repo_url,
+        official_assemblies_repo_git_url=official_assemblies_repo_git_url,
+        official_assemblies_repo_ref=official_assemblies_repo_ref,
+        official_assemblies_checkout_root=official_assemblies_checkout_root,
         official_assemblies_manifest_url=official_assemblies_manifest_url,
         official_assemblies_refresh_seconds=official_assemblies_refresh_seconds,
         static_folder=static_folder,

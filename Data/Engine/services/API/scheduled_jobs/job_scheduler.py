@@ -339,6 +339,97 @@ def _to_dt_tuple(ts: int) -> Tuple[int, int, int, int, int, int]:
     return (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
 
 
+def _normalize_host_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _status_bucket_for_run(status: Any) -> Optional[str]:
+    normalized = str(status or "").strip()
+    if normalized == RUN_STATUS_PENDING:
+        return "pending"
+    if normalized == RUN_STATUS_RUNNING:
+        return "running"
+    if normalized == RUN_STATUS_SUCCESS:
+        return "success"
+    if normalized == RUN_STATUS_FAILED:
+        return "failed"
+    if normalized == RUN_STATUS_EXPIRED:
+        return "expired"
+    if normalized == RUN_STATUS_TIMED_OUT:
+        return "timed_out"
+    if normalized == RUN_STATUS_SKIPPED:
+        return "skipped"
+    return None
+
+
+def _normalize_target_service_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == "current_user":
+        return "currentuser"
+    if normalized in {"system", "currentuser"}:
+        return normalized
+    return ""
+
+
+def _host_run_priority(run: Mapping[str, Any]) -> Tuple[int, int, int, int]:
+    status = str(run.get("status") or "").strip()
+    priority_map = {
+        RUN_STATUS_RUNNING: 70,
+        RUN_STATUS_FAILED: 60,
+        RUN_STATUS_TIMED_OUT: 50,
+        RUN_STATUS_EXPIRED: 40,
+        RUN_STATUS_SUCCESS: 30,
+        RUN_STATUS_PENDING: 20,
+        RUN_STATUS_SKIPPED: 10,
+    }
+    return (
+        priority_map.get(status, 0),
+        1 if run.get("finished_ts") is not None else 0,
+        int(run.get("finished_ts") or run.get("started_ts") or run.get("scheduled_ts") or 0),
+        int(run.get("id") or 0),
+    )
+
+
+def _aggregate_occurrence_runs(
+    rows: Sequence[Mapping[str, Any]],
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, int], bool]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    has_no_targets_skip = False
+
+    for row in rows:
+        run = dict(row or {})
+        host_key = _normalize_host_key(run.get("target_hostname"))
+        if not host_key:
+            if (
+                str(run.get("status") or "").strip() == RUN_STATUS_SKIPPED
+                and str(run.get("skip_reason") or "").strip().lower() == SKIP_REASON_NO_TARGETS
+            ):
+                has_no_targets_skip = True
+            continue
+        grouped.setdefault(host_key, []).append(run)
+
+    aggregated: Dict[str, Dict[str, Any]] = {}
+    counts = {
+        "pending": 0,
+        "running": 0,
+        "success": 0,
+        "failed": 0,
+        "expired": 0,
+        "timed_out": 0,
+        "skipped": 0,
+        "total_targets": len(grouped),
+    }
+
+    for host_key, host_runs in grouped.items():
+        preferred = max(host_runs, key=_host_run_priority)
+        aggregated[host_key] = preferred
+        bucket = _status_bucket_for_run(preferred.get("status"))
+        if bucket and bucket in counts:
+            counts[bucket] += 1
+
+    return aggregated, counts, has_no_targets_skip
+
+
 class JobScheduler:
     def __init__(
         self,
@@ -370,6 +461,8 @@ class JobScheduler:
         self.RETENTION_DAYS = int(os.environ.get("BOREALIS_JOB_HISTORY_DAYS", "30"))
         # Callback to retrieve current set of online hostnames
         self._online_lookup: Optional[Callable[[], List[str]]] = None
+        # Optional callback to emit directly to a host + service-mode Socket.IO route.
+        self._emit_host_service_event: Optional[Callable[[str, str, str, Any], bool]] = None
         # Optional callback to execute Ansible directly from the server
         self._server_ansible_runner: Optional[Callable[..., str]] = None
         # Optional callback to fetch stored credentials (with decrypted secrets)
@@ -1003,6 +1096,8 @@ class JobScheduler:
                 friendly_name = os.path.basename(path_norm) if path_norm else f"Job-{job_id}"
             if not friendly_name:
                 friendly_name = f"Job-{job_id}"
+            normalized_run_mode = (run_mode or "system").strip().lower()
+            target_service_mode = _normalize_target_service_mode(normalized_run_mode)
             # Insert into activity_history for device for parity with Quick Job
             now = _now_ts()
             act_id = None
@@ -1042,7 +1137,7 @@ class JobScheduler:
                 "variables": variables,
                 "timeout_seconds": timeout_seconds,
                 "files": doc.get("files") or [],
-                "run_mode": (run_mode or "system").strip().lower(),
+                "run_mode": normalized_run_mode,
                 "admin_user": "",
                 "admin_pass": "",
             }
@@ -1061,7 +1156,91 @@ class JobScheduler:
             if assembly_guid:
                 payload["context"]["assembly_guid"] = assembly_guid
             try:
-                self.socketio.emit("quick_job_run", payload)
+                emitted = False
+                delivery_mode = "broadcast"
+                if target_service_mode and callable(self._emit_host_service_event):
+                    emitted = bool(
+                        self._emit_host_service_event(
+                            str(hostname),
+                            target_service_mode,
+                            "quick_job_run",
+                            payload,
+                        )
+                    )
+                    delivery_mode = f"targeted:{target_service_mode}"
+                else:
+                    delivery_mode = "broadcast"
+
+                if not emitted and target_service_mode and callable(self._emit_host_service_event):
+                    failure_text = (
+                        f"No {target_service_mode} agent socket is registered for host {hostname}; "
+                        f"unable to dispatch scheduled job."
+                    )
+                    fail_conn = self._conn()
+                    try:
+                        fail_cur = fail_conn.cursor()
+                        fail_cur.execute(
+                            "UPDATE activity_history SET status=?, stderr=? WHERE id=?",
+                            (RUN_STATUS_FAILED, failure_text, int(act_id)),
+                        )
+                        fail_cur.execute(
+                            """
+                            UPDATE scheduled_job_runs
+                               SET status=?,
+                                   finished_ts=?,
+                                   updated_at=?,
+                                   error=?
+                             WHERE id=?
+                            """,
+                            (
+                                RUN_STATUS_FAILED,
+                                now,
+                                now,
+                                failure_text,
+                                int(run_row_id),
+                            ),
+                        )
+                        fail_conn.commit()
+                    finally:
+                        fail_conn.close()
+                    try:
+                        self.socketio.emit(
+                            "device_activity_changed",
+                            {
+                                "hostname": str(hostname),
+                                "activity_id": int(act_id),
+                                "change": "updated",
+                                "source": "scheduled_job",
+                            },
+                        )
+                    except Exception:
+                        pass
+                    self._log_event(
+                        "quick job dispatch failed",
+                        job_id=int(job_id),
+                        host=str(hostname),
+                        run_id=run_row_id,
+                        level="ERROR",
+                        extra={
+                            "error": failure_text,
+                            "script_path": path_norm,
+                            "scheduled_ts": int(scheduled_ts or 0),
+                            "assembly_source": assembly_source,
+                            "delivery_mode": delivery_mode,
+                        },
+                    )
+                    return {
+                        "activity_id": int(act_id),
+                        "component_kind": "script",
+                        "script_type": stype,
+                        "component_path": path_norm,
+                        "component_name": friendly_name,
+                    }
+
+                if not emitted:
+                    self.socketio.emit("quick_job_run", payload)
+                    delivery_mode = "broadcast"
+
                 if act_id:
                     try:
                         self.socketio.emit(
@@ -1082,10 +1261,11 @@ class JobScheduler:
                     run_id=run_row_id,
                     extra={
                         "has_signature": bool(signature_b64),
-                        "run_mode": (run_mode or "system").strip().lower(),
+                        "run_mode": normalized_run_mode,
                         "scheduled_ts": int(scheduled_ts or 0),
                         "assembly_source": assembly_source,
                         "assembly_guid": assembly_guid or "",
+                        "delivery_mode": delivery_mode,
                     },
                 )
             except Exception as exc:
@@ -1126,6 +1306,9 @@ class JobScheduler:
     # ---------- DB helpers ----------
     def _conn(self):
         return self._db_conn_factory()
+
+    def set_host_service_emitter(self, fn: Optional[Callable[[str, str, str, Any], bool]]):
+        self._emit_host_service_event = fn
 
     def set_credential_fetcher(self, fn: Optional[Callable[[int], Optional[Dict[str, Any]]]]):
         self._credential_fetcher = fn
@@ -1955,33 +2138,51 @@ class JobScheduler:
                             (base["id"], max_occ),
                         )
                         total_targets = int(c.fetchone()[0] or 0)
-                    result_counts["total_targets"] = total_targets
-                    # Summarize statuses for this occurrence
                     c.execute(
-                        "SELECT status, COUNT(*) FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=? GROUP BY status",
-                        (base["id"], max_occ)
+                        """
+                        SELECT id, target_hostname, scheduled_ts, started_ts, finished_ts, status, error, skip_reason
+                          FROM scheduled_job_runs
+                         WHERE job_id=? AND scheduled_ts=?
+                        """,
+                        (base["id"], max_occ),
                     )
-                    counts = {row[0] or "": int(row[1] or 0) for row in c.fetchall()}
-                    result_counts["pending"] = counts.get(RUN_STATUS_PENDING, 0)
-                    result_counts["running"] = counts.get(RUN_STATUS_RUNNING, 0)
-                    result_counts["success"] = counts.get(RUN_STATUS_SUCCESS, 0)
-                    result_counts["failed"] = counts.get(RUN_STATUS_FAILED, 0)
-                    result_counts["expired"] = counts.get(RUN_STATUS_EXPIRED, 0)
-                    result_counts["timed_out"] = counts.get(RUN_STATUS_TIMED_OUT, 0)
-                    result_counts["skipped"] = counts.get(RUN_STATUS_SKIPPED, 0)
-                    if counts.get(RUN_STATUS_RUNNING):
+                    occurrence_rows = [
+                        {
+                            "id": int(row[0]),
+                            "target_hostname": row[1] or "",
+                            "scheduled_ts": row[2],
+                            "started_ts": row[3],
+                            "finished_ts": row[4],
+                            "status": row[5] or "",
+                            "error": row[6] or "",
+                            "skip_reason": row[7] or "",
+                        }
+                        for row in c.fetchall()
+                    ]
+                    _aggregated_by_host, aggregated_counts, has_no_targets_skip = _aggregate_occurrence_runs(occurrence_rows)
+                    if total_targets <= 0:
+                        total_targets = int(aggregated_counts.get("total_targets") or 0)
+                    result_counts["total_targets"] = total_targets
+                    result_counts["pending"] = int(aggregated_counts.get("pending") or 0)
+                    result_counts["running"] = int(aggregated_counts.get("running") or 0)
+                    result_counts["success"] = int(aggregated_counts.get("success") or 0)
+                    result_counts["failed"] = int(aggregated_counts.get("failed") or 0)
+                    result_counts["expired"] = int(aggregated_counts.get("expired") or 0)
+                    result_counts["timed_out"] = int(aggregated_counts.get("timed_out") or 0)
+                    result_counts["skipped"] = int(aggregated_counts.get("skipped") or 0)
+                    if result_counts["running"]:
                         summary_status = RUN_STATUS_RUNNING
-                    elif counts.get(RUN_STATUS_FAILED):
+                    elif result_counts["failed"]:
                         summary_status = RUN_STATUS_FAILED
-                    elif counts.get(RUN_STATUS_TIMED_OUT):
+                    elif result_counts["timed_out"]:
                         summary_status = RUN_STATUS_TIMED_OUT
-                    elif counts.get(RUN_STATUS_EXPIRED):
+                    elif result_counts["expired"]:
                         summary_status = RUN_STATUS_EXPIRED
-                    elif counts.get(RUN_STATUS_SUCCESS):
-                        summary_status = RUN_STATUS_SUCCESS
-                    elif counts.get(RUN_STATUS_PENDING):
+                    elif result_counts["pending"]:
                         summary_status = RUN_STATUS_PENDING
-                    elif counts.get(RUN_STATUS_SKIPPED):
+                    elif result_counts["success"]:
+                        summary_status = RUN_STATUS_SUCCESS
+                    elif result_counts["skipped"] or has_no_targets_skip:
                         summary_status = "No Devices Targeted"
                     last_run_ts = int(max_occ)
                 conn.close()
@@ -2454,12 +2655,12 @@ class JobScheduler:
                         "SELECT device_hostname, sites.name FROM device_sites JOIN sites ON sites.id = device_sites.site_id"
                     )
                     for h, n in cur.fetchall():
-                        site_by_host[str(h)] = n or ""
+                        site_by_host[_normalize_host_key(h)] = n or ""
                 except Exception:
                     pass
 
                 # Status per target for occurrence
-                run_by_host: Dict[str, Dict[str, Any]] = {}
+                run_groups_by_host: Dict[str, List[Dict[str, Any]]] = {}
                 run_ids: List[int] = []
                 snapshot_targets: List[str] = []
                 occurrence_has_snapshot = False
@@ -2471,11 +2672,13 @@ class JobScheduler:
                               FROM scheduled_job_run_targets t
                               JOIN scheduled_job_runs r ON r.id = t.run_id
                              WHERE r.job_id=? AND r.scheduled_ts=?
-                          ORDER BY LOWER(t.hostname) ASC
                             """,
                             (job_id, occ),
                         )
-                        snapshot_targets = [str(row[0]) for row in cur.fetchall() if str(row[0]).strip()]
+                        snapshot_targets = sorted(
+                            [str(row[0]) for row in cur.fetchall() if str(row[0]).strip()],
+                            key=lambda value: value.lower(),
+                        )
                         cur.execute(
                             "SELECT id, target_hostname, status, started_ts, finished_ts, skip_reason FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=? ORDER BY id DESC",
                             (job_id, occ)
@@ -2483,20 +2686,29 @@ class JobScheduler:
                         rows = cur.fetchall()
                         occurrence_has_snapshot = bool(rows) or bool(snapshot_targets)
                         for rid, h, st, st_ts, fin_ts, skip_reason in rows:
-                            h = str(h or "")
-                            if not h:
+                            host_name = str(h or "").strip()
+                            host_key = _normalize_host_key(host_name)
+                            if not host_key:
                                 continue
-                            if h not in run_by_host:
-                                run_by_host[h] = {
+                            run_ids.append(int(rid))
+                            run_groups_by_host.setdefault(host_key, []).append(
+                                {
+                                    "id": int(rid),
+                                    "target_hostname": host_name,
                                     "status": st or "",
                                     "started_ts": st_ts,
                                     "finished_ts": fin_ts,
                                     "run_id": int(rid),
                                     "skip_reason": skip_reason or "",
                                 }
-                                run_ids.append(int(rid))
-                    except Exception:
-                        pass
+                            )
+                    except Exception as exc:
+                        self._log_event(
+                            "failed to load scheduled job device snapshot",
+                            job_id=job_id,
+                            level="ERROR",
+                            extra={"occurrence": occ, "error": str(exc)},
+                        )
 
                 activities_by_run: Dict[int, List[Dict[str, Any]]] = {}
                 if run_ids:
@@ -2531,8 +2743,30 @@ class JobScheduler:
                                 "has_stderr": bool(se_len),
                             }
                             activities_by_run.setdefault(rid, []).append(entry)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        self._log_event(
+                            "failed to load scheduled job activity links",
+                            job_id=job_id,
+                            level="ERROR",
+                            extra={"occurrence": occ, "error": str(exc)},
+                        )
+
+                aggregated_run_by_host, _aggregated_counts, _has_no_targets_skip = _aggregate_occurrence_runs(
+                    [run for group in run_groups_by_host.values() for run in group]
+                )
+                activities_by_host: Dict[str, List[Dict[str, Any]]] = {}
+                for host_key, grouped_runs in run_groups_by_host.items():
+                    seen_activity_ids = set()
+                    merged_activities: List[Dict[str, Any]] = []
+                    for run in grouped_runs:
+                        for activity in activities_by_run.get(int(run.get("run_id") or 0), []):
+                            activity_id = int(activity.get("activity_id") or 0)
+                            dedupe_key = activity_id if activity_id else f"{activity.get('component_path')}::{activity.get('component_name')}"
+                            if dedupe_key in seen_activity_ids:
+                                continue
+                            seen_activity_ids.add(dedupe_key)
+                            merged_activities.append(activity)
+                    activities_by_host[host_key] = merged_activities
 
                 conn.close()
 
@@ -2540,25 +2774,37 @@ class JobScheduler:
                 online = set()
                 try:
                     if callable(self._online_lookup):
-                        online = set(self._online_lookup() or [])
+                        online = {_normalize_host_key(host) for host in (self._online_lookup() or [])}
                 except Exception:
                     online = set()
 
                 out = []
                 effective_targets = snapshot_targets if occurrence_has_snapshot else targets
+                seen_hosts = set()
+                normalized_targets: List[Tuple[str, str]] = []
                 for host in effective_targets:
-                    rec = run_by_host.get(str(host), {})
+                    display_host = str(host or "").strip()
+                    host_key = _normalize_host_key(display_host)
+                    if not host_key or host_key in seen_hosts:
+                        continue
+                    seen_hosts.add(host_key)
+                    normalized_targets.append((host_key, display_host))
+                if not normalized_targets and aggregated_run_by_host:
+                    for host_key, rec in aggregated_run_by_host.items():
+                        normalized_targets.append((host_key, str(rec.get("target_hostname") or host_key)))
+                for host_key, display_host in normalized_targets:
+                    rec = aggregated_run_by_host.get(host_key, {})
                     job_status = rec.get("status") or RUN_STATUS_PENDING
                     if job_status == RUN_STATUS_SKIPPED and rec.get("skip_reason") == SKIP_REASON_NO_TARGETS:
                         job_status = "No Devices Targeted"
-                    ran_on = rec.get("started_ts") or rec.get("finished_ts")
-                    activities = activities_by_run.get(rec.get("run_id", 0) or 0, [])
+                    ran_on = rec.get("finished_ts") or rec.get("started_ts")
+                    activities = activities_by_host.get(host_key, [])
                     has_stdout = any(a.get("has_stdout") for a in activities)
                     has_stderr = any(a.get("has_stderr") for a in activities)
                     out.append({
-                        "hostname": str(host),
-                        "online": str(host) in online,
-                        "site": site_by_host.get(str(host), ""),
+                        "hostname": display_host,
+                        "online": host_key in online,
+                        "site": site_by_host.get(host_key, ""),
                         "ran_on": ran_on,
                         "job_status": job_status,
                         "has_stdout": has_stdout,
@@ -2644,6 +2890,10 @@ def register(
 
 def set_online_lookup(scheduler: JobScheduler, fn: Callable[[], List[str]]):
     scheduler._online_lookup = fn
+
+
+def set_host_service_emitter(scheduler: JobScheduler, fn: Callable[[str, str, str, Any], bool]):
+    scheduler._emit_host_service_event = fn
 
 
 def set_server_ansible_runner(scheduler: JobScheduler, fn: Callable[..., str]):

@@ -63,7 +63,7 @@ None. This index only links to other pages.
 - Web UI source: `Data/Engine/web-interface/src/`.
 - Runtime copies: `Engine/` and `Agent/` (do not edit directly; they are regenerated).
 - Logs: `Engine/Logs/` and `Agent/Logs/` (runtime artifacts).
-- Official assembly snapshot: `Data/Engine/Official_Assemblies/` (bundled manifest + JSON items).
+- Official assembly snapshot: `Data/Engine/Official_Assemblies/` (generated bundled seed snapshot).
 - Runtime assembly data: PostgreSQL `assemblies.*` tables.
 
 ### Documentation authoring rules

@@ -14,6 +14,18 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - The assembly table does not use `metadata_json` or `payload_type`.
 - Engine startup enforces the compact `assemblies` schema exactly; legacy extra columns are rejected instead of auto-migrated.
 
+## Authoring JSON
+- Exported assembly JSON is now a clean authoring document, not a runtime metadata envelope.
+- Borealis import accepts both wrapped legacy documents and direct authoring documents, but export now prefers the direct shape.
+- For script assemblies, the intended authoring shape is:
+  - `assembly_guid`
+  - `name`
+  - `description`
+  - `type`
+  - `script`
+  - optional: `timeout_seconds`, `variables`, `files`
+- Borealis no longer needs authoring exports to carry `display_name`, `summary`, `category`, `sites`, `script_encoding`, `version`, `payload_guid`, `source_repo`, `source_version`, `content_hash`, or dirty/persisted queue metadata.
+
 ## Quick Jobs
 - Quick jobs are immediate executions of a script assembly.
 - The Engine resolves the script, signs it, and emits a Socket.IO `quick_job_run` event.
@@ -60,9 +72,13 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 
 ## Codex Agent (Detailed)
 ### Storage layout and caching
-- Bundled official assemblies live under `Data/Engine/Official_Assemblies/` as `manifest.json` plus one JSON file per assembly.
+- Aurora (`https://github.com/bunny-lab-io/Aurora`) is the official assembly authoring source of truth.
+- Engine keeps a managed Aurora checkout under `Engine/Aurora/` for update checks and imports.
+- Bundled official assemblies live under `Data/Engine/Official_Assemblies/` as a generated seed snapshot for fresh installs and release packaging.
+- Startup seeds from the bundled snapshot and then attempts an Aurora git sync so official assemblies can be refreshed without relying on the bundled files alone.
 - Runtime assembly data lives in PostgreSQL `assemblies.official_assemblies`, `assemblies.community_assemblies`, and `assemblies.user_created_assemblies`.
 - The Engine loads and caches assemblies via `Data/Engine/assembly_management` and `AssemblyRuntimeService`.
+- Official rows persist `source_repo`, `source_path`, `source_version`, and `content_hash` so GUID-based Aurora updates can be tracked without mirroring repo folders into PostgreSQL.
 
 ### Payload sizing guidance
 - Treat `500 MB` as the practical operator-facing target for a single assembly payload.
@@ -97,7 +113,63 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 
 ### Backup guidance
 - Back up PostgreSQL `assemblies.*` tables.
-- Back up `Data/Engine/Official_Assemblies/` if you want the bundled official catalog snapshot tracked with releases.
+- Back up `Data/Engine/Official_Assemblies/` if you want the bundled official seed snapshot tracked with releases.
+
+### PostgreSQL dump commands
+- Use these commands when you want a raw database export of all assemblies before reorganizing them into Aurora-friendly folders.
+
+```bash
+. /opt/Borealis/Engine/database.env
+mkdir -p /opt/Borealis/Aurora/_db_exports
+psql "$BOREALIS_DATABASE_URL" -c "\copy (
+  SELECT jsonb_build_object(
+    'domain', domain,
+    'assembly_guid', assembly_guid,
+    'display_name', display_name,
+    'summary', summary,
+    'assembly_type', assembly_type,
+    'assembly_subtype', assembly_subtype,
+    'source_repo', source_repo,
+    'source_path', source_path,
+    'source_version', source_version,
+    'content_hash', content_hash,
+    'payload_json', payload_json::jsonb,
+    'created_at', created_at,
+    'updated_at', updated_at
+  )::text
+  FROM (
+    SELECT 'official' AS domain, assembly_guid, display_name, summary, assembly_type, assembly_subtype, source_repo, source_path, source_version, content_hash, payload_json, created_at, updated_at
+    FROM assemblies.official_assemblies
+    UNION ALL
+    SELECT 'community' AS domain, assembly_guid, display_name, summary, assembly_type, assembly_subtype, source_repo, source_path, source_version, content_hash, payload_json, created_at, updated_at
+    FROM assemblies.community_assemblies
+    UNION ALL
+    SELECT 'user' AS domain, assembly_guid, display_name, summary, assembly_type, assembly_subtype, source_repo, source_path, source_version, content_hash, payload_json, created_at, updated_at
+    FROM assemblies.user_created_assemblies
+  ) AS assemblies_export
+  ORDER BY domain, assembly_type, lower(coalesce(display_name, '')), assembly_guid
+) TO '/opt/Borealis/Aurora/_db_exports/all_assemblies.jsonl'"
+```
+
+```bash
+. /opt/Borealis/Engine/database.env
+mkdir -p /opt/Borealis/Aurora/_db_exports
+psql "$BOREALIS_DATABASE_URL" -c "\copy (
+  SELECT *
+  FROM assemblies.official_assemblies
+  ORDER BY assembly_type, lower(coalesce(display_name, '')), assembly_guid
+) TO '/opt/Borealis/Aurora/_db_exports/official_assemblies.csv' CSV HEADER"
+psql "$BOREALIS_DATABASE_URL" -c "\copy (
+  SELECT *
+  FROM assemblies.community_assemblies
+  ORDER BY assembly_type, lower(coalesce(display_name, '')), assembly_guid
+) TO '/opt/Borealis/Aurora/_db_exports/community_assemblies.csv' CSV HEADER"
+psql "$BOREALIS_DATABASE_URL" -c "\copy (
+  SELECT *
+  FROM assemblies.user_created_assemblies
+  ORDER BY assembly_type, lower(coalesce(display_name, '')), assembly_guid
+) TO '/opt/Borealis/Aurora/_db_exports/user_created_assemblies.csv' CSV HEADER"
+```
 
 ### Known limitations
 - Ansible quick-run is not implemented in the Engine runtime.

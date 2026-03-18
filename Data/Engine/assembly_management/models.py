@@ -71,6 +71,10 @@ class AssemblyRecord:
     assembly_subtype: Optional[str]
     payload: PayloadDescriptor
     payload_json: str
+    source_repo: Optional[str] = None
+    source_path: Optional[str] = None
+    source_version: Optional[str] = None
+    content_hash: Optional[str] = None
     created_at: _dt.datetime = field(default_factory=_dt.datetime.utcnow)
     updated_at: _dt.datetime = field(default_factory=_dt.datetime.utcnow)
 

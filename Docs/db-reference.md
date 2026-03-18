@@ -352,7 +352,7 @@ Each table has the same schema:
 #### `assemblies.<domain>`
 - Status: Active.
 - Purpose: Assembly summary fields and inline payload JSON.
-- Columns: `assembly_guid`, `display_name`, `summary`, `assembly_type`, `assembly_subtype`, `payload_json`, `payload_size_bytes`, `created_at`, `updated_at`.
+- Columns: `assembly_guid`, `display_name`, `summary`, `assembly_type`, `assembly_subtype`, `payload_json`, `source_repo`, `source_path`, `source_version`, `content_hash`, `payload_size_bytes`, `created_at`, `updated_at`.
 - Constraints and indexes:
 - `assembly_guid` primary key.
 - `idx_assemblies_type` on `assembly_type`.
@@ -361,7 +361,20 @@ Each table has the same schema:
 - `assembly_type` is the authoritative routing discriminator for editors and execution pipelines.
 - `metadata_json` and `payload_type` are removed from the active schema.
 - Engine startup validates this schema strictly and fails fast if legacy columns are still present.
-- The bundled official snapshot is versioned under `Data/Engine/Official_Assemblies/` and synced into `assemblies.official_assemblies` on startup/update.
+- `source_repo`, `source_path`, and `source_version` track Aurora provenance for official assemblies.
+- `content_hash` stores the Engine-computed canonical SHA-256 used for update detection.
+- The bundled official snapshot is versioned under `Data/Engine/Official_Assemblies/` as a seed snapshot and synced into `assemblies.official_assemblies` on startup.
+
+### `assemblies.official_catalog_state`
+- Status: Active.
+- Purpose: Tracks bundled seed state plus the latest Aurora catalog metadata applied to each official assembly GUID.
+- Columns: `assembly_guid`, `bundled_hash`, `remote_hash`, `catalog_hash`, `applied_hash`, `last_applied_source`, `repo_url`, `source_url`, `source_repo`, `source_path`, `source_version`, `last_catalog_sync_at`, `updated_at`.
+- Constraints and indexes:
+- `assembly_guid` primary key.
+- Notes:
+- `catalog_hash` reflects the latest hash seen in the active official catalog source.
+- `applied_hash` reflects the version currently written into `assemblies.official_assemblies`.
+- `last_catalog_sync_at` captures when Borealis last synced catalog metadata for that GUID.
 
 ## Deprecated and Removed Schema
 ### Removed Tables
