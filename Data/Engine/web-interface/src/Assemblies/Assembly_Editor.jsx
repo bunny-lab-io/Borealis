@@ -1,13 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
-  Paper,
   Typography,
   Button,
   TextField,
-  Menu, MenuItem,
+  Menu,
+  MenuItem,
   Grid,
-  FormControlLabel,
   Checkbox,
   IconButton,
   Tooltip,
@@ -15,12 +14,17 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Tabs,
+  Tab,
 } from "@mui/material";
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
   UploadFile as UploadFileIcon,
   Code as CodeIcon,
+  DatasetLinkedRounded as DatasetLinkedRoundedIcon,
+  FolderZipRounded as FolderZipRoundedIcon,
+  TerminalRounded as TerminalRoundedIcon,
 } from "@mui/icons-material";
 import Prism from "prismjs";
 import "prismjs/components/prism-json";
@@ -31,93 +35,243 @@ import "prismjs/components/prism-batch";
 import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
 import { ConfirmDeleteDialog } from "../Dialogs";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 import { DomainBadge, DirtyStatePill, DOMAIN_OPTIONS } from "./Assembly_Badges";
 import {
   decodeBase64String,
   normalizeVariablesFromServer,
   normalizeFilesFromServer,
-  parseAssemblyExport
+  parseAssemblyExport,
 } from "./assemblyUtils";
 
 const TYPE_OPTIONS_ALL = [
   { key: "ansible", label: "Ansible Playbook", prism: "yaml" },
   { key: "powershell", label: "PowerShell Script", prism: "powershell" },
   { key: "batch", label: "Batch Script", prism: "batch" },
-  { key: "bash", label: "Bash Script", prism: "bash" }
+  { key: "bash", label: "Bash Script", prism: "bash" },
 ];
 
 const VARIABLE_TYPE_OPTIONS = [
   { key: "string", label: "String" },
   { key: "number", label: "Number" },
   { key: "boolean", label: "Boolean" },
-  { key: "credential", label: "Credential" }
+  { key: "credential", label: "Credential" },
 ];
 
-const BACKGROUND_COLORS = {
-  field: "#1C1C1C", /* Shared surface color for text fields, dropdown inputs, and script editors */
-  sectionCard: "#2E2E2E", /* Background for section container cards */
-  menuSelected: "rgba(88,166,255,0.16)", /* Background for selected dropdown items */
-  menuSelectedHover: "rgba(88,166,255,0.24)", /* Background for hovered selected dropdown items */
-  primaryActionSaving: "rgba(88,166,255,0.12)", /* Background for primary action button while saving */
-  primaryActionHover: "rgba(88,166,255,0.18)", /* Background for primary action button hover state */
-  dialog: "#1a1f27" /* Background for modal dialogs */
+const MAGIC_UI = {
+  panelBg: "rgba(7,10,24,0.84)",
+  panelBgSoft: "rgba(6,10,24,0.74)",
+  inputBg: "rgba(5,10,24,0.88)",
+  panelBorder: "rgba(148, 163, 184, 0.28)",
+  panelBorderStrong: "rgba(125, 211, 252, 0.24)",
+  textMuted: "#94a3b8",
+  textBright: "#e2e8f0",
+  accentA: "#7dd3fc",
+  accentB: "#c084fc",
+  accentC: "#34d399",
+  warning: "#f8d47a",
+  danger: "#ff8c98",
+  glow: "0 14px 30px rgba(2,6,23,0.34)",
 };
 
 const INPUT_BASE_SX = {
   "& .MuiOutlinedInput-root": {
-    bgcolor: BACKGROUND_COLORS.field,
-    color: "#e6edf3", /* Text Color */
-    borderRadius: 1, /* Roundness of UI Elements */
-    minHeight: 40,
-    "& fieldset": { borderColor: "#2b3544" },
-    "&:hover fieldset": { borderColor: "#3a4657" },
-    "&.Mui-focused fieldset": { borderColor: "#58a6ff" }
+    background: MAGIC_UI.inputBg,
+    color: MAGIC_UI.textBright,
+    borderRadius: 2.5,
+    minHeight: 42,
+    transition: "border-color 160ms ease, box-shadow 160ms ease, background 160ms ease",
+    "& fieldset": {
+      borderColor: "rgba(148,163,184,0.28)",
+    },
+    "&:hover fieldset": {
+      borderColor: "rgba(125,211,252,0.48)",
+    },
+    "&.Mui-focused fieldset": {
+      borderColor: MAGIC_UI.accentB,
+      boxShadow: "0 0 0 1px rgba(192,132,252,0.28)",
+    },
   },
-
-  "& .MuiOutlinedInput-input": {
-    padding: "9px 12px",
+  "& .MuiOutlinedInput-input, & .MuiInputBase-input": {
+    padding: "11px 13px",
     fontSize: "0.95rem",
-    lineHeight: 1.4
+    lineHeight: 1.4,
   },
-
   "& .MuiOutlinedInput-inputMultiline": {
-    padding: "9px 12px"
+    padding: "11px 13px",
   },
-
   "& .MuiInputLabel-root": {
-    color: "#9ba3b4",
-    transform: "translate(12px, 11px) scale(0.8)"        // label at rest (inside field)
+    color: MAGIC_UI.textMuted,
   },
-  "& .MuiInputLabel-root.Mui-focused": { color: "#58a6ff" },
-  "& .MuiInputLabel-root.MuiInputLabel-shrink": {
-    transform: "translate(12px, -6px) scale(0.75)"      // floated label position
+  "& .MuiInputLabel-root.Mui-focused": {
+    color: MAGIC_UI.accentA,
   },
-
+  "& .MuiFormHelperText-root": {
+    color: MAGIC_UI.textMuted,
+    mx: 0.5,
+    mt: 0.8,
+  },
   "& input[type=number]": { MozAppearance: "textfield" },
   "& input[type=number]::-webkit-outer-spin-button": { WebkitAppearance: "none", margin: 0 },
-  "& input[type=number]::-webkit-inner-spin-button": { WebkitAppearance: "none", margin: 0 }
+  "& input[type=number]::-webkit-inner-spin-button": { WebkitAppearance: "none", margin: 0 },
 };
 
 const SELECT_BASE_SX = {
   ...INPUT_BASE_SX,
   "& .MuiSelect-select": {
-    padding: "10px 12px !important",
+    minHeight: "42px",
+    padding: "10px 13px !important",
     display: "flex",
-    alignItems: "center"
-  }
+    alignItems: "center",
+  },
 };
 
-const SECTION_TITLE_SX = {
-  color: "#58a6ff",
-  fontWeight: 400,
-  fontSize: "14px",
-  letterSpacing: 0.2
+const SECTION_EYEBROW_SX = {
+  color: MAGIC_UI.accentA,
+  fontWeight: 700,
+  fontSize: "0.72rem",
+  letterSpacing: 0.8,
+  textTransform: "uppercase",
 };
 
-const SECTION_CARD_SX = {
-  bgcolor: BACKGROUND_COLORS.sectionCard,
-  borderRadius: 2,
-  border: "1px solid #262f3d",
+const GLASS_PANEL_SX = {
+  background: MAGIC_UI.panelBg,
+  borderRadius: 3,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  boxShadow: MAGIC_UI.glow,
+  p: { xs: 2, md: 2.5 },
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  minWidth: 0,
+};
+
+const GLASS_PANEL_SOFT_SX = {
+  ...GLASS_PANEL_SX,
+  background: MAGIC_UI.panelBgSoft,
+  boxShadow: "0 10px 20px rgba(2,6,23,0.22)",
+};
+
+const MINI_CARD_SX = {
+  borderRadius: 2.25,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  background: "rgba(4,9,22,0.56)",
+  p: 1.5,
+  minWidth: 0,
+};
+
+const INLINE_PRIMARY_BUTTON_SX = {
+  alignSelf: "flex-start",
+  borderRadius: 999,
+  px: 2.1,
+  py: 0.9,
+  textTransform: "none",
+  fontWeight: 600,
+  color: "#06101d",
+  backgroundImage: "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)",
+  boxShadow: "0 16px 34px rgba(125, 211, 252, 0.16)",
+  "&:hover": {
+    backgroundImage: "linear-gradient(135deg, #91dcff 0%, #cfa0ff 100%)",
+  },
+};
+
+const INLINE_SECONDARY_BUTTON_SX = {
+  alignSelf: "flex-start",
+  borderRadius: 999,
+  px: 2,
+  py: 0.85,
+  textTransform: "none",
+  fontWeight: 600,
+  color: MAGIC_UI.textBright,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  background: "rgba(5,10,24,0.84)",
+  "&:hover": {
+    borderColor: "rgba(125,211,252,0.5)",
+    background: "rgba(8,13,30,0.94)",
+  },
+};
+
+const DELETE_ICON_BUTTON_SX = {
+  color: MAGIC_UI.danger,
+  border: "1px solid rgba(244,63,94,0.22)",
+  background: "rgba(44,8,22,0.38)",
+  borderRadius: 999,
+  "&:hover": {
+    background: "rgba(58,10,28,0.68)",
+    borderColor: "rgba(251,113,133,0.42)",
+  },
+};
+
+const TAB_SECTION_SX = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 1.75,
+};
+
+const SUMMARY_FIELDS_GRID_SX = {
+  display: "grid",
+  gridTemplateColumns: {
+    xs: "1fr",
+    sm: "repeat(2, minmax(0, 1fr))",
+    lg: "repeat(5, minmax(0, 1fr))",
+  },
+  gap: 1.5,
+  alignItems: "start",
+};
+
+const VARIABLE_FIELDS_GRID_SX = {
+  display: "grid",
+  gridTemplateColumns: {
+    xs: "1fr",
+    sm: "repeat(2, minmax(0, 1fr))",
+    lg: "repeat(6, minmax(0, 1fr))",
+  },
+  gap: 1.5,
+  alignItems: "start",
+};
+
+const INLINE_CHECKBOX_FIELD_SX = {
+  borderRadius: 2.5,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  background: MAGIC_UI.inputBg,
+  minHeight: 56,
+  px: 1.5,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 1,
+};
+
+const VARIABLE_CARD_SX = {
+  ...GLASS_PANEL_SOFT_SX,
+  p: { xs: 1.75, md: 2 },
+  display: "grid",
+  gridTemplateColumns: {
+    xs: "1fr",
+    lg: "minmax(0, 1fr) auto",
+  },
+  alignItems: "stretch",
+  gap: 1.5,
+};
+
+const FILE_ROW_SX = {
+  borderRadius: 2.25,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  background: "rgba(5,10,24,0.74)",
+  px: { xs: 1.4, md: 1.8 },
+  py: 1.35,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 1.5,
+  flexWrap: "wrap",
+};
+
+const EMPTY_STATE_SX = {
+  borderRadius: 2.5,
+  border: `1px dashed ${MAGIC_UI.panelBorderStrong}`,
+  background: "rgba(5,10,24,0.46)",
+  p: { xs: 2, md: 2.5 },
 };
 
 const PAGE_ICON = CodeIcon;
@@ -126,20 +280,58 @@ const PAGE_TITLE_ANSIBLE = "Ansible Assembly Editor";
 const PAGE_SUBTITLE_SCRIPT = "Edit Borealis script assemblies, variables, and payloads before scheduling.";
 const PAGE_SUBTITLE_ANSIBLE = "Author Ansible playbooks with Borealis variables, inventory, and credential bindings.";
 
+const NAV_TAB_HEIGHT = 32;
+const NAV_TAB_COLORS = {
+  text: "#cbd5e1",
+  textActive: "#e6f2ff",
+  icon: "#8fbfff",
+  iconActive: "#7db7ff",
+  hover: "rgba(255,255,255,0.05)",
+  activeBg:
+    "linear-gradient(to top, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+};
+
+const ASSEMBLY_EDITOR_TAB_URL_BY_KEY = Object.freeze({
+  summary: "summary",
+  script: "script",
+  variables: "variables",
+  files: "files",
+});
+
+const ASSEMBLY_EDITOR_TAB_KEY_BY_URL = Object.freeze({
+  summary: "summary",
+  overview: "summary",
+  details: "summary",
+  script: "script",
+  source: "script",
+  variables: "variables",
+  environment_variables: "variables",
+  files: "files",
+  payloads: "files",
+});
+
 const MENU_PROPS = {
   PaperProps: {
     sx: {
-      bgcolor: BACKGROUND_COLORS.field,
-      color: "#e6edf3",
-      border: "1px solid #2b3544",
+      background: MAGIC_UI.panelBg,
+      color: MAGIC_UI.textBright,
+      borderRadius: 2.5,
+      border: `1px solid ${MAGIC_UI.panelBorder}`,
+      boxShadow: MAGIC_UI.glow,
+      "& .MuiMenuItem-root": {
+        fontSize: "0.92rem",
+      },
       "& .MuiMenuItem-root.Mui-selected": {
-        bgcolor: BACKGROUND_COLORS.menuSelected
+        bgcolor: "rgba(125,211,252,0.14)",
       },
       "& .MuiMenuItem-root.Mui-selected:hover": {
-        bgcolor: BACKGROUND_COLORS.menuSelectedHover
-      }
-    }
-  }
+        bgcolor: "rgba(125,211,252,0.22)",
+      },
+      "& .MuiMenuItem-root:hover": {
+        bgcolor: "rgba(255,255,255,0.04)",
+      },
+    },
+  },
 };
 
 function keyBy(arr) {
@@ -147,24 +339,166 @@ function keyBy(arr) {
 }
 
 const TYPE_MAP = keyBy(TYPE_OPTIONS_ALL);
+const VARIABLE_REFERENCE_EXAMPLE_BY_TYPE = Object.freeze({
+  ansible: "{{ variableName }}",
+  powershell: "$env:variableName",
+  batch: "%variableName%",
+  bash: "$variableName",
+});
 
-const PAGE_BACKGROUND = "#0d1117"; /* Color of Void Space Between Sidebar and Page */
 const CODE_EDITOR_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
 const CODE_EDITOR_STYLE = {
   fontFamily: CODE_EDITOR_FONT_FAMILY,
   fontSize: 14,
-  color: "#e6edf3",
-  background: BACKGROUND_COLORS.field,
+  color: MAGIC_UI.textBright,
+  background: "transparent",
   outline: "none",
   minHeight: 320,
   lineHeight: 1.45,
-  caretColor: "#58a6ff"
+  caretColor: MAGIC_UI.accentA,
 };
+
 const CODE_EDITOR_CONTAINER_SX = {
-  border: "1px solid #2b3544",
-  borderRadius: 1,
-  background: BACKGROUND_COLORS.field
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  borderRadius: 2.5,
+  background: "rgba(3,7,18,0.9)",
+  overflow: "hidden",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
 };
+
+const DIALOG_PAPER_SX = {
+  background: MAGIC_UI.panelBg,
+  color: MAGIC_UI.textBright,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  boxShadow: MAGIC_UI.glow,
+};
+
+const DIALOG_BUTTON_SX = {
+  borderRadius: 999,
+  textTransform: "none",
+  px: 2,
+  fontWeight: 600,
+  color: MAGIC_UI.textBright,
+};
+
+const DIALOG_PRIMARY_BUTTON_SX = {
+  ...DIALOG_BUTTON_SX,
+  color: "#06101d",
+  backgroundImage: "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)",
+  "&:hover": {
+    backgroundImage: "linear-gradient(135deg, #91dcff 0%, #cfa0ff 100%)",
+  },
+};
+
+function buildNavTabsSx(minHeight = NAV_TAB_HEIGHT) {
+  return {
+    borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+    minHeight,
+    height: minHeight,
+    "& .MuiTabs-flexContainer": {
+      minHeight,
+      height: minHeight,
+      alignItems: "stretch",
+    },
+    "& .MuiTab-root": {
+      color: NAV_TAB_COLORS.text,
+      textTransform: "none",
+      fontWeight: 400,
+      fontFamily: "inherit",
+      fontSize: "0.8rem",
+      minHeight,
+      height: minHeight,
+      opacity: 1,
+      borderRadius: 1,
+      py: 0.35,
+      transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
+      "& .MuiTab-iconWrapper": {
+        color: NAV_TAB_COLORS.icon,
+      },
+      "&:hover": {
+        background: NAV_TAB_COLORS.hover,
+      },
+      "&:active": {
+        transform: "translateY(0.5px)",
+      },
+    },
+    "& .MuiTab-root.Mui-selected": {
+      color: NAV_TAB_COLORS.textActive,
+      fontWeight: 600,
+      background: NAV_TAB_COLORS.activeBg,
+      "& .MuiTab-iconWrapper": {
+        color: NAV_TAB_COLORS.iconActive,
+      },
+      "&:hover": {
+        background: NAV_TAB_COLORS.activeBg,
+      },
+    },
+  };
+}
+
+function readAssemblyEditorTabFromUrl() {
+  if (typeof window === "undefined") {
+    return "summary";
+  }
+  const params = new URLSearchParams(window.location.search || "");
+  const rawTab = String(params.get("tab") || "").toLowerCase();
+  return ASSEMBLY_EDITOR_TAB_KEY_BY_URL[rawTab] || "summary";
+}
+
+function writeAssemblyEditorTabToUrl(tabKey) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const params = new URLSearchParams(window.location.search || "");
+  params.set("tab", ASSEMBLY_EDITOR_TAB_URL_BY_KEY[tabKey] || ASSEMBLY_EDITOR_TAB_URL_BY_KEY.summary);
+  const search = params.toString();
+  const nextLocation = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash || ""}`;
+  window.history.replaceState(window.history.state, "", nextLocation);
+}
+
+function GlassPanel({ children, sx }) {
+  return <Box sx={[GLASS_PANEL_SX, sx]}>{children}</Box>;
+}
+
+function SectionHeader({ eyebrow, title, detail, action }) {
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        gap: 1.5,
+        flexWrap: "wrap",
+      }}
+    >
+      <Box sx={{ minWidth: 0, flex: "1 1 320px" }}>
+        {eyebrow ? (
+          <Typography variant="caption" sx={SECTION_EYEBROW_SX}>
+            {eyebrow}
+          </Typography>
+        ) : null}
+        <Typography
+          variant="h6"
+          sx={{
+            color: MAGIC_UI.textBright,
+            fontWeight: 600,
+            fontSize: "1.02rem",
+            mt: eyebrow ? 0.45 : 0,
+          }}
+        >
+          {title}
+        </Typography>
+        {detail ? (
+          <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mt: 0.7, maxWidth: 760 }}>
+            {detail}
+          </Typography>
+        ) : null}
+      </Box>
+      {action ? <Box sx={{ flexShrink: 0 }}>{action}</Box> : null}
+    </Box>
+  );
+}
 
 function highlightedHtml(code, prismLang) {
   try {
@@ -195,14 +529,6 @@ function generateAssemblyGuid() {
     const value = ch === "x" ? random : ((random & 0x3) | 0x8);
     return value.toString(16);
   }).toUpperCase();
-}
-
-function normalizeFolderPath(path = "") {
-  if (!path) return "";
-  return path
-    .replace(/\\/g, "/")
-    .replace(/^\/+|\/+$/g, "")
-    .replace(/\/+/g, "/");
 }
 
 function formatBytes(size) {
@@ -240,7 +566,7 @@ function defaultAssembly(defaultType = "powershell") {
     script: "",
     timeoutSeconds: 3600,
     variables: [],
-    files: []
+    files: [],
   };
 }
 
@@ -257,14 +583,14 @@ function encodeBase64String(text = "") {
       bytes.forEach((b) => { binary += String.fromCharCode(b); });
       return window.btoa(binary);
     }
-  } catch (err) {
+  } catch {
     // fall through to Buffer fallback
   }
   try {
     if (typeof Buffer !== "undefined") {
       return Buffer.from(text, "utf-8").toString("base64");
     }
-  } catch (err) {
+  } catch {
     // ignore
   }
   return "";
@@ -327,22 +653,22 @@ function toServerDocument(assembly, assemblyGuid = null) {
       type: v.type || "string",
       default: v.defaultValue ?? "",
       required: Boolean(v.required),
-      description: v.description || ""
+      description: v.description || "",
     })),
     files: (assembly.files || []).map((f) => ({
       file_name: f.fileName || "file.bin",
       size: f.size || 0,
       mime_type: f.mimeType || "",
-      data: f.data || ""
-    }))
+      data: f.data || "",
+    })),
   };
 }
 
 function RenameFileDialog({ open, value, onChange, onCancel, onSave }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: BACKGROUND_COLORS.dialog, color: "#fff" } }}>
-      <DialogTitle>Rename Assembly</DialogTitle>
-      <DialogContent>
+    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: DIALOG_PAPER_SX }}>
+      <DialogTitle sx={{ borderBottom: `1px solid ${MAGIC_UI.panelBorder}` }}>Rename Assembly</DialogTitle>
+      <DialogContent sx={{ pt: 2.5 }}>
         <TextField
           autoFocus
           margin="dense"
@@ -354,9 +680,9 @@ function RenameFileDialog({ open, value, onChange, onCancel, onSave }) {
           sx={INPUT_BASE_SX}
         />
       </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
+      <DialogActions sx={{ px: 3, py: 2, borderTop: `1px solid ${MAGIC_UI.panelBorder}` }}>
+        <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+        <Button onClick={onSave} sx={DIALOG_PRIMARY_BUTTON_SX}>Save</Button>
       </DialogActions>
     </Dialog>
   );
@@ -395,6 +721,7 @@ export default function AssemblyEditor({
   const [errorMessage, setErrorMessage] = useState("");
   const [jsonPreviewOpen, setJsonPreviewOpen] = useState(false);
   const [jsonPreviewText, setJsonPreviewText] = useState("");
+  const [activeTab, setActiveTab] = useState(() => readAssemblyEditorTabFromUrl());
   const isAdmin = (userRole || "").toLowerCase() === "admin";
   const consumeInitialDataRef = useRef(onConsumeInitialData);
 
@@ -406,10 +733,12 @@ export default function AssemblyEditor({
     () => (isAnsible ? PAGE_TITLE_ANSIBLE : PAGE_TITLE_SCRIPT),
     [isAnsible]
   );
+
   const pageSubtitle = useMemo(
     () => (isAnsible ? PAGE_SUBTITLE_ANSIBLE : PAGE_SUBTITLE_SCRIPT),
     [isAnsible]
   );
+
   const sendNotification = useCallback(
     async ({ message, variant = "info" }) => {
       if (!message) return;
@@ -426,19 +755,24 @@ export default function AssemblyEditor({
           }),
         });
       } catch {
-        /* notifications are best-effort */
+        // notifications are best-effort
       }
     },
     [pageTitle]
   );
 
   const TYPE_OPTIONS = useMemo(
-    () => (isAnsible ? TYPE_OPTIONS_ALL.filter((o) => o.key === "ansible") : TYPE_OPTIONS_ALL.filter((o) => o.key !== "ansible")),
+    () => (
+      isAnsible
+        ? TYPE_OPTIONS_ALL.filter((option) => option.key === "ansible")
+        : TYPE_OPTIONS_ALL.filter((option) => option.key !== "ansible")
+    ),
     [isAnsible]
   );
 
   useEffect(() => {
     let canceled = false;
+
     const normalizeAssemblyPath = (value = "") =>
       String(value || "")
         .replace(/\\/g, "/")
@@ -459,6 +793,7 @@ export default function AssemblyEditor({
         data?.display_name ||
         row?.name ||
         "";
+
       const enrichedDoc = {
         ...(parsed?.payload && typeof parsed.payload === "object" ? parsed.payload : {}),
         name: fallbackName,
@@ -485,6 +820,7 @@ export default function AssemblyEditor({
         variables: Array.isArray(parsed?.rawVariables) ? parsed.rawVariables : [],
         files: Array.isArray(parsed?.rawFiles) ? parsed.rawFiles : [],
       };
+
       const hasMeaningfulContent =
         Boolean(fallbackName) ||
         Boolean(enrichedDoc.description) ||
@@ -492,9 +828,11 @@ export default function AssemblyEditor({
         (Array.isArray(enrichedDoc.variables) && enrichedDoc.variables.length > 0) ||
         (Array.isArray(enrichedDoc.files) && enrichedDoc.files.length > 0) ||
         (parsed?.payload && typeof parsed.payload === "object" && Object.keys(parsed.payload).length > 0);
+
       if (!hasMeaningfulContent) {
         throw new Error(`Assembly payload was empty for ${guid}`);
       }
+
       hydrateFromDocument(enrichedDoc);
       setAssemblyGuid(data?.assembly_guid || parsed?.metadata?.assembly_guid || guid);
       setDomain((data?.source || data?.domain || row?.domain || "user").toLowerCase());
@@ -503,10 +841,7 @@ export default function AssemblyEditor({
         last_persisted: data?.last_persisted || row?.queueEntry?.last_persisted || null,
       });
       setIsDirtyQueue(Boolean(data?.is_dirty));
-      const exportName = sanitizeFileName(
-        fallbackName || guid
-      );
-      setFileName(exportName);
+      setFileName(sanitizeFileName(fallbackName || guid));
       setErrorMessage("");
       return true;
     };
@@ -530,11 +865,13 @@ export default function AssemblyEditor({
       if (!normalizedPath) {
         return null;
       }
+
       const resp = await fetch("/api/assemblies");
       if (!resp.ok) {
         const problem = await resp.text().catch(() => "");
         throw new Error(problem || `Failed to resolve assembly path (HTTP ${resp.status})`);
       }
+
       const data = await resp.json();
       const items = Array.isArray(data?.items) ? data.items : [];
       const match = items.find((item) => {
@@ -546,9 +883,11 @@ export default function AssemblyEditor({
           .filter(Boolean);
         return candidates.includes(normalizedPath);
       });
+
       if (!match) {
         return null;
       }
+
       return {
         guid: match?.assembly_guid || match?.assembly_id || null,
         row: {
@@ -575,7 +914,7 @@ export default function AssemblyEditor({
               hydrateFromApiPayload(detailData, row, guid);
               return;
             } catch {
-              /* fall back to legacy export response */
+              // fall back to legacy export response
             }
           }
         }
@@ -590,6 +929,7 @@ export default function AssemblyEditor({
               `Failed to load assembly (detail HTTP ${detailResp.status}, export HTTP ${exportResp.status})`
           );
         }
+
         const exportData = await exportResp.json();
         if (canceled) return;
         hydrateFromApiPayload(exportData, row, guid);
@@ -653,11 +993,15 @@ export default function AssemblyEditor({
     };
   }, [initialAssembly, defaultType]);
 
+  useEffect(() => {
+    writeAssemblyEditorTabToUrl(activeTab);
+  }, [activeTab]);
+
   const prismLanguage = TYPE_MAP[assembly.type]?.prism || "powershell";
 
-  const updateAssembly = (partial) => {
+  const updateAssembly = useCallback((partial) => {
     setAssembly((prev) => ({ ...prev, ...partial }));
-  };
+  }, []);
 
   const buildCurrentExportDocument = useCallback(() => {
     const resolvedGuid = assemblyGuid || generateAssemblyGuid();
@@ -667,7 +1011,7 @@ export default function AssemblyEditor({
     return toServerDocument(assembly, resolvedGuid);
   }, [assembly, assemblyGuid]);
 
-  const addVariable = () => {
+  const addVariable = useCallback(() => {
     setAssembly((prev) => ({
       ...prev,
       variables: [
@@ -679,29 +1023,30 @@ export default function AssemblyEditor({
           type: "string",
           defaultValue: "",
           required: false,
-          description: ""
-        }
-      ]
+          description: "",
+        },
+      ],
     }));
-  };
+  }, []);
 
-  const updateVariable = (id, partial) => {
+  const updateVariable = useCallback((id, partial) => {
     setAssembly((prev) => ({
       ...prev,
-      variables: prev.variables.map((v) => (v.id === id ? { ...v, ...partial } : v))
+      variables: prev.variables.map((variable) => (variable.id === id ? { ...variable, ...partial } : variable)),
     }));
-  };
+  }, []);
 
-  const removeVariable = (id) => {
+  const removeVariable = useCallback((id) => {
     setAssembly((prev) => ({
       ...prev,
-      variables: prev.variables.filter((v) => v.id !== id)
+      variables: prev.variables.filter((variable) => variable.id !== id),
     }));
-  };
+  }, []);
 
   const handleFileUpload = async (event) => {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
+
     const reads = files.map((file) => new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = () => {
@@ -712,34 +1057,38 @@ export default function AssemblyEditor({
           fileName: file.name,
           size: file.size,
           mimeType: file.type,
-          data: base64
+          data: base64,
         });
       };
       reader.onerror = () => resolve(null);
       reader.readAsDataURL(file);
     }));
+
     const uploaded = (await Promise.all(reads)).filter(Boolean);
     if (uploaded.length) {
       setAssembly((prev) => ({ ...prev, files: [...prev.files, ...uploaded] }));
     }
+
     event.target.value = "";
   };
 
-  const removeFile = (id) => {
-    setAssembly((prev) => ({ ...prev, files: prev.files.filter((f) => f.id !== id) }));
-  };
+  const removeFile = useCallback((id) => {
+    setAssembly((prev) => ({ ...prev, files: prev.files.filter((file) => file.id !== id) }));
+  }, []);
 
   const canWriteToDomain = domain === "user" || (isAdmin && devModeEnabled);
 
-  const handleSaveAssembly = async () => {
+  const handleSaveAssembly = useCallback(async () => {
     if (!assembly.name.trim()) {
       alert("Assembly Name is required.");
       return;
     }
+
     const localGuid = assemblyGuid || generateAssemblyGuid();
     const document = toServerDocument(assembly, localGuid);
     setSaving(true);
     setErrorMessage("");
+
     try {
       const resp = await fetch("/api/assemblies/import", {
         method: "POST",
@@ -750,10 +1099,12 @@ export default function AssemblyEditor({
           assembly_guid: localGuid,
         }),
       });
+
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
       }
+
       const nextGuid = data?.assembly_guid || localGuid;
       setAssemblyGuid(nextGuid || null);
       const nextDomain = (data?.source || data?.domain || domain || "user").toLowerCase();
@@ -763,6 +1114,7 @@ export default function AssemblyEditor({
         last_persisted: data?.last_persisted || null,
       });
       setIsDirtyQueue(Boolean(data?.is_dirty));
+
       if (data?.name || data?.display_name) {
         const resolvedName = data?.name || data?.display_name;
         setAssembly((prev) => ({ ...prev, name: resolvedName }));
@@ -770,6 +1122,7 @@ export default function AssemblyEditor({
       } else {
         setFileName((prev) => prev || sanitizeFileName(assembly.name));
       }
+
       onSaved?.();
     } catch (err) {
       console.error("Failed to save assembly:", err);
@@ -779,9 +1132,9 @@ export default function AssemblyEditor({
     } finally {
       setSaving(false);
     }
-  };
+  }, [assembly, assemblyGuid, domain, onSaved]);
 
-  const handleRenameConfirm = () => {
+  const handleRenameConfirm = useCallback(() => {
     const trimmed = (renameValue || assembly.name || "").trim();
     if (!trimmed) {
       setRenameOpen(false);
@@ -790,13 +1143,14 @@ export default function AssemblyEditor({
     setAssembly((prev) => ({ ...prev, name: trimmed }));
     setFileName(sanitizeFileName(trimmed));
     setRenameOpen(false);
-  };
+  }, [assembly.name, renameValue]);
 
-  const handleDeleteAssembly = async () => {
+  const handleDeleteAssembly = useCallback(async () => {
     if (!assemblyGuid) {
       setDeleteOpen(false);
       return;
     }
+
     setSaving(true);
     setErrorMessage("");
     try {
@@ -817,9 +1171,9 @@ export default function AssemblyEditor({
     } finally {
       setSaving(false);
     }
-  };
+  }, [assemblyGuid, onSaved]);
 
-  const handleDevModeToggle = async (enabled) => {
+  const handleDevModeToggle = useCallback(async (enabled) => {
     setDevModeBusy(true);
     setErrorMessage("");
     try {
@@ -846,9 +1200,9 @@ export default function AssemblyEditor({
     } finally {
       setDevModeBusy(false);
     }
-  };
+  }, [sendNotification]);
 
-  const handleFlushQueue = async () => {
+  const handleFlushQueue = useCallback(async () => {
     setDevModeBusy(true);
     setErrorMessage("");
     try {
@@ -874,10 +1228,10 @@ export default function AssemblyEditor({
     } finally {
       setDevModeBusy(false);
     }
-  };
+  }, []);
 
-  const handleExportAssembly = () => {
-    handleMenuClose();
+  const handleExportAssembly = useCallback(() => {
+    setMenuAnchorEl(null);
     setErrorMessage("");
     try {
       const exportDoc = buildCurrentExportDocument();
@@ -889,10 +1243,10 @@ export default function AssemblyEditor({
       setErrorMessage(message);
       alert(message);
     }
-  };
+  }, [assembly.name, buildCurrentExportDocument, fileName]);
 
-  const handleViewJson = () => {
-    handleMenuClose();
+  const handleViewJson = useCallback(() => {
+    setMenuAnchorEl(null);
     setErrorMessage("");
     try {
       const exportDoc = buildCurrentExportDocument();
@@ -904,14 +1258,14 @@ export default function AssemblyEditor({
       setErrorMessage(message);
       alert(message);
     }
-  };
+  }, [buildCurrentExportDocument]);
 
-  const handleCopyJson = async () => {
+  const handleCopyJson = useCallback(async () => {
     if (!jsonPreviewText) return;
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(jsonPreviewText);
-        sendNotification({ message: "Assembly JSON copied to clipboard.", variant: "success" });
+        sendNotification({ message: "Assembly JSON copied to clipboard.", variant: "info" });
         return;
       }
       throw new Error("Clipboard API unavailable");
@@ -921,11 +1275,12 @@ export default function AssemblyEditor({
       setErrorMessage(message);
       alert(message);
     }
-  };
+  }, [jsonPreviewText, sendNotification]);
 
-  const handleImportAssembly = async (event) => {
+  const handleImportAssembly = useCallback(async (event) => {
     const file = event.target.files && event.target.files[0];
     if (!file) return;
+
     setErrorMessage("");
     try {
       const text = await file.text();
@@ -948,40 +1303,61 @@ export default function AssemblyEditor({
     } finally {
       event.target.value = "";
     }
-  };
+  }, [defaultType]);
 
-  const handleMenuOpen = (event) => {
+  const handleMenuOpen = useCallback((event) => {
     setMenuAnchorEl(event.currentTarget);
-  };
+  }, []);
 
-  const handleMenuClose = () => {
+  const handleMenuClose = useCallback(() => {
     setMenuAnchorEl(null);
-  };
+  }, []);
 
-  const triggerImport = () => {
+  const triggerImport = useCallback(() => {
     handleMenuClose();
     importInputRef.current?.click();
-  };
+  }, [handleMenuClose]);
 
-  const triggerExport = () => {
-    handleExportAssembly();
-  };
-
-  const triggerFlushQueue = () => {
+  const triggerFlushQueue = useCallback(() => {
     handleMenuClose();
     handleFlushQueue();
-  };
+  }, [handleFlushQueue, handleMenuClose]);
 
   const saveDisabled = saving || loading || !canWriteToDomain;
   const deleteDisabled = !assemblyGuid || saving || loading;
   const renameDisabled = saving || loading;
   const dirtyPillVisible = Boolean(isDirtyQueue);
-  const lastPersistedDisplay = queueInfo?.last_persisted
-    ? new Date(queueInfo.last_persisted).toLocaleString()
-    : null;
   const dirtySinceDisplay = queueInfo?.dirty_since
     ? new Date(queueInfo.dirty_since).toLocaleString()
     : null;
+  const variableCount = assembly.variables?.length || 0;
+  const fileCount = assembly.files?.length || 0;
+
+  const totalFileBytes = useMemo(
+    () => (assembly.files || []).reduce((sum, file) => sum + Number(file?.size || 0), 0),
+    [assembly.files]
+  );
+
+  const editorEyebrow = isAnsible ? "Playbook Editor" : "Script Editor";
+  const editorDetail = isAnsible
+    ? "Write the playbook in the text editor below."
+    : "Write the script in the text editor below.";
+  const variableReferenceExample = VARIABLE_REFERENCE_EXAMPLE_BY_TYPE[assembly.type] || "$variableName";
+  const tabDefs = useMemo(
+    () => [
+      { key: "summary", label: "Summary" },
+      { key: "script", label: isAnsible ? "Playbook" : "Script", Icon: TerminalRoundedIcon },
+      { key: "variables", label: "Variables", Icon: DatasetLinkedRoundedIcon },
+      { key: "files", label: "Files", Icon: FolderZipRoundedIcon },
+    ],
+    [isAnsible]
+  );
+
+  useEffect(() => {
+    if (!tabDefs.some((tab) => tab.key === activeTab)) {
+      setActiveTab("summary");
+    }
+  }, [activeTab, tabDefs]);
 
   const pageHeaderActions = useMemo(() => {
     const actions = [];
@@ -1048,6 +1424,7 @@ export default function AssemblyEditor({
     devModeBusy,
     devModeEnabled,
     dirtyPillVisible,
+    handleDevModeToggle,
     handleMenuOpen,
     handleSaveAssembly,
     isAdmin,
@@ -1068,30 +1445,18 @@ export default function AssemblyEditor({
   }, [onPageMetaChange, pageHeaderActions, pageSubtitle, pageTitle]);
 
   return (
-    <Box
-      sx={{
-        display: "flex",
-        flexDirection: "column",
-        flex: 1,
-        height: "100%",
-        overflow: "hidden",
-        ml: -0.95,
-        mt: -0.95,
-        bgcolor: PAGE_BACKGROUND
-      }}
-    >
-      <Box sx={{ flex: 1, overflow: "auto", p: { xs: 2, md: 3 } }}>
-        <Paper sx={{ p: { xs: 2.5, md: 3 }, ...SECTION_CARD_SX, minHeight: "100%" }} elevation={0}>
+    <>
       <Menu
         anchorEl={menuAnchorEl}
         open={Boolean(menuAnchorEl)}
         onClose={handleMenuClose}
-        PaperProps={{ sx: { bgcolor: BACKGROUND_COLORS.dialog, color: "#fff" } }}
+        PaperProps={MENU_PROPS.PaperProps}
       >
-        <MenuItem onClick={triggerExport}>Export JSON</MenuItem>
+        <MenuItem onClick={handleExportAssembly}>Export JSON</MenuItem>
         {devModeEnabled ? <MenuItem onClick={handleViewJson}>View JSON</MenuItem> : null}
         <MenuItem onClick={triggerImport}>Import JSON</MenuItem>
       </Menu>
+
       <input
         ref={importInputRef}
         type="file"
@@ -1100,200 +1465,261 @@ export default function AssemblyEditor({
         onChange={handleImportAssembly}
       />
 
-      <Box
-        sx={{
-          mt: 2,
-          mb: 2,
-          display: "flex",
-          alignItems: "center",
-          gap: 2,
-          flexWrap: "wrap",
-        }}
-        >
-        <TextField
-          select
-          label="Domain"
-          value={domain}
-          onChange={(e) => setDomain(String(e.target.value || "").toLowerCase())}
-          disabled={loading}
-          sx={{ ...SELECT_BASE_SX, width: 220 }}
-          SelectProps={{ MenuProps: MENU_PROPS }}
-        >
-          {DOMAIN_OPTIONS.map((option) => (
-            <MenuItem key={option.value} value={option.value}>
-              {option.label}
-            </MenuItem>
-          ))}
-        </TextField>
-        <DomainBadge domain={domain} size="small" />
-        {dirtyPillVisible ? <DirtyStatePill compact /> : null}
-        {dirtySinceDisplay ? (
-          <Typography variant="caption" sx={{ color: "#9ba3b4" }}>
-            Dirty since: {dirtySinceDisplay}
-          </Typography>
-        ) : null}
-        {lastPersistedDisplay ? (
-          <Typography variant="caption" sx={{ color: "#9ba3b4" }}>
-            Last persisted: {lastPersistedDisplay}
-          </Typography>
-        ) : null}
-      </Box>
-
-      {!canWriteToDomain ? (
+      <PageBodyFrame variant="grid">
         <Box
           sx={{
-            mb: 2,
-            p: 1.5,
-            borderRadius: 1,
-            border: "1px solid rgba(248, 212, 122, 0.4)",
-            backgroundColor: "rgba(248, 212, 122, 0.12)",
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+            height: "100%",
           }}
         >
-          <Typography variant="body2" sx={{ color: "#f8d47a" }}>
-            This domain is read-only. Enable Dev Mode as an administrator to edit or switch to the User domain.
-          </Typography>
-        </Box>
-      ) : null}
+          {!canWriteToDomain || errorMessage ? (
+            <Box
+              sx={{
+                px: { xs: 2, md: 2.5 },
+                pt: { xs: 2, md: 2.25 },
+                pb: 1.5,
+                display: "flex",
+                flexDirection: "column",
+                gap: 1.25,
+              }}
+            >
+              {!canWriteToDomain ? (
+                <Box
+                  sx={{
+                    borderRadius: 2.5,
+                    border: "1px solid rgba(248, 212, 122, 0.34)",
+                    background: "rgba(53, 39, 10, 0.35)",
+                    px: 1.6,
+                    py: 1.3,
+                  }}
+                >
+                  <Typography variant="body2" sx={{ color: MAGIC_UI.warning }}>
+                    This domain is read-only. Enable Dev Mode as an administrator to edit here, or switch the assembly back to the User domain.
+                  </Typography>
+                </Box>
+              ) : null}
 
-      {errorMessage ? (
-        <Box
-          sx={{
-            mb: 2,
-            p: 1.5,
-            borderRadius: 1,
-            border: "1px solid rgba(255, 138, 138, 0.4)",
-            backgroundColor: "rgba(255, 138, 138, 0.12)",
-          }}
-        >
-          <Typography variant="body2" sx={{ color: "#ff8a8a" }}>{errorMessage}</Typography>
-        </Box>
-      ) : null}
+              {errorMessage ? (
+                <Box
+                  sx={{
+                    borderRadius: 2.5,
+                    border: "1px solid rgba(244, 63, 94, 0.28)",
+                    background: "rgba(52, 10, 20, 0.42)",
+                    px: 1.6,
+                    py: 1.3,
+                  }}
+                >
+                  <Typography variant="body2" sx={{ color: MAGIC_UI.danger }}>
+                    {errorMessage}
+                  </Typography>
+                </Box>
+              ) : null}
+            </Box>
+          ) : null}
 
+          <Tabs
+            value={activeTab}
+            onChange={(_, nextTab) => setActiveTab(nextTab)}
+            variant="scrollable"
+            scrollButtons="auto"
+            aria-label="Assembly editor sections"
+            TabIndicatorProps={{
+              style: {
+                height: 3,
+                borderRadius: 3,
+                background: NAV_TAB_COLORS.iconActive,
+              },
+            }}
+            sx={buildNavTabsSx()}
+          >
+            {tabDefs.map((tabDef) => {
+              const TabIcon = tabDef.Icon;
+              return (
+                <Tab
+                  key={tabDef.key}
+                  value={tabDef.key}
+                  label={tabDef.label}
+                  icon={TabIcon ? <TabIcon sx={{ fontSize: 18 }} /> : undefined}
+                  iconPosition="start"
+                />
+              );
+            })}
+          </Tabs>
 
           <Box
             sx={{
+              flexGrow: 1,
+              minHeight: 0,
+              overflow: "auto",
+              px: { xs: 2, md: 2.5 },
+              pt: { xs: 2, md: 2.25 },
+              pb: { xs: 2, md: 2.5 },
               display: "flex",
-              alignItems: "flex-start",
-              justifyContent: "space-between",
-              gap: 2,
-              mb: 0,
-              flexWrap: "wrap"
+              flexDirection: "column",
+              gap: 2.25,
             }}
           >
-            <Box sx={{ flex: "1 1 auto", minWidth: 120 }}>
-              <Typography variant="caption" sx={SECTION_TITLE_SX}>
-                Overview
-              </Typography>
+          {activeTab === "summary" ? (
+            <Box sx={TAB_SECTION_SX}>
+              <SectionHeader
+                eyebrow="Summary"
+                title="Assembly details"
+                detail="Configure the core identity and runtime defaults here, then use the other tabs to edit source, variables, and files."
+              />
+
+              <Box sx={SUMMARY_FIELDS_GRID_SX}>
+                <Box>
+                  <TextField
+                    label="Assembly Name"
+                    value={assembly.name}
+                    onChange={(e) => updateAssembly({ name: e.target.value })}
+                    fullWidth
+                    variant="outlined"
+                    sx={INPUT_BASE_SX}
+                  />
+                  <DomainBadge domain={domain} size="small" sx={{ mt: 1 }} />
+                </Box>
+
+                <TextField
+                  select
+                  label="Domain"
+                  value={domain}
+                  onChange={(e) => setDomain(String(e.target.value || "").toLowerCase())}
+                  disabled={loading}
+                  fullWidth
+                  sx={SELECT_BASE_SX}
+                  SelectProps={{ MenuProps: MENU_PROPS }}
+                >
+                  {DOMAIN_OPTIONS.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                <TextField
+                  select
+                  fullWidth
+                  label="Type"
+                  value={assembly.type}
+                  onChange={(e) => updateAssembly({ type: e.target.value })}
+                  sx={SELECT_BASE_SX}
+                  SelectProps={{ MenuProps: MENU_PROPS }}
+                >
+                  {TYPE_OPTIONS.map((option) => (
+                    <MenuItem key={option.key} value={option.key}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                <Box>
+                  <TextField
+                    label="Timeout (seconds)"
+                    type="text"
+                    inputMode="numeric"
+                    value={assembly.timeoutSeconds}
+                    onChange={(e) => {
+                      const nextValue = e.target.value.replace(/[^0-9]/g, "");
+                      updateAssembly({ timeoutSeconds: nextValue ? Number(nextValue) : 0 });
+                    }}
+                    fullWidth
+                    variant="outlined"
+                    sx={INPUT_BASE_SX}
+                  />
+                  <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted, mt: 0.8, display: "block", px: 0.5 }}>
+                    How long to run the assembly before assuming it failed.
+                  </Typography>
+                </Box>
+
+                <TextField
+                  label="Description"
+                  value={assembly.description}
+                  onChange={(e) => updateAssembly({ description: e.target.value })}
+                  fullWidth
+                  variant="outlined"
+                  sx={INPUT_BASE_SX}
+                />
+              </Box>
+
+              {dirtyPillVisible || loading || dirtySinceDisplay ? (
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+                  {dirtyPillVisible ? <DirtyStatePill compact /> : null}
+                  {loading ? (
+                    <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
+                      Loading assembly data...
+                    </Typography>
+                  ) : null}
+                  {dirtySinceDisplay ? (
+                    <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
+                      Dirty since: {dirtySinceDisplay}
+                    </Typography>
+                  ) : null}
+                </Box>
+              ) : null}
             </Box>
-          </Box>
+          ) : null}
 
-          <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
-              <TextField
-                label="Assembly Name"
-                value={assembly.name}
-                onChange={(e) => updateAssembly({ name: e.target.value })}
-                fullWidth
-                variant="outlined"
-                sx={{ ...INPUT_BASE_SX, mb: 2 }}
-              />
-              <TextField
-                label="Description"
-                value={assembly.description}
-                onChange={(e) => updateAssembly({ description: e.target.value })}
-                multiline
-                minRows={2}
-                maxRows={8}
-                fullWidth
-                variant="outlined"
-                sx={{
-                  ...INPUT_BASE_SX,
-                  "& .MuiOutlinedInput-inputMultiline": {
-                    padding: "6px 12px",
-                    lineHeight: 1.4
-                  }
-                }}
-              />
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <TextField
-                select
-                fullWidth
-                label="Type"
-                value={assembly.type}
-                onChange={(e) => updateAssembly({ type: e.target.value })}
-                sx={SELECT_BASE_SX}
-                SelectProps={{ MenuProps: MENU_PROPS }}
-              >
-                {TYPE_OPTIONS.map((o) => (
-                  <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
-                ))}
-              </TextField>
-            </Grid>
-          </Grid>
+          {activeTab === "script" ? (
+            <Box sx={TAB_SECTION_SX}>
+              <Box>
+                <Typography variant="caption" sx={SECTION_EYEBROW_SX}>
+                  {editorEyebrow}
+                </Typography>
+                <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mt: 0.45 }}>
+                  {editorDetail}
+                </Typography>
+              </Box>
 
-          <Box sx={{ mt: 3 }}>
-            <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
-              Script Content
-            </Typography>
-            <Box sx={CODE_EDITOR_CONTAINER_SX}>
-              <Editor
-                value={assembly.script}
-                onValueChange={(value) => updateAssembly({ script: value })}
-                highlight={(src) => highlightedHtml(src, prismLanguage)}
-                padding={12}
-                placeholder={assemblyGuid ? `Editing assembly: ${assemblyGuid}` : "Start typing your script..."}
-                style={CODE_EDITOR_STYLE}
-              />
+              <Box sx={CODE_EDITOR_CONTAINER_SX}>
+                <Editor
+                  value={assembly.script}
+                  onValueChange={(value) => updateAssembly({ script: value })}
+                  highlight={(src) => highlightedHtml(src, prismLanguage)}
+                  padding={16}
+                  placeholder={isAnsible ? "Start authoring your playbook..." : "Start typing your script..."}
+                  style={{
+                    ...CODE_EDITOR_STYLE,
+                    minHeight: 620,
+                  }}
+                />
+              </Box>
             </Box>
-          </Box>
+          ) : null}
 
-          <Grid container spacing={2} sx={{ mt: 4 }}>
-            <Grid item xs={12} md={12}>
-              <TextField
-                label="Timeout (seconds)"
-                type="text"
-                inputMode="numeric"
-                value={assembly.timeoutSeconds}
-                onChange={(e) => {
-                  const nextValue = e.target.value.replace(/[^0-9]/g, "");
-                  updateAssembly({ timeoutSeconds: nextValue ? Number(nextValue) : 0 });
-                }}
-                fullWidth
-                variant="outlined"
-                sx={INPUT_BASE_SX}
-                helperText="Timeout this script if not completed within X seconds"
+          {activeTab === "variables" ? (
+            <Box sx={TAB_SECTION_SX}>
+              <SectionHeader
+                eyebrow="Runtime inputs"
+                title="Environment variables"
+                detail="Define the inputs that operators will see when this assembly is launched. Keep the names script-friendly and the labels human-friendly."
+                action={
+                  <Button startIcon={<AddIcon />} onClick={addVariable} sx={INLINE_PRIMARY_BUTTON_SX}>
+                    Add Variable
+                  </Button>
+                }
               />
-            </Grid>
-          </Grid>
 
-          <Box sx={{ mt: 3 }}>
-            <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
-              Environment Variables
-            </Typography>
-            <Typography variant="body2" sx={{ color: "#9ba3b4", mb: 2 }}>
-              Variables are dynamically passed into the script as environment variables at runtime.  They are written like <b>$env:variableName</b> in the script editor.
-            </Typography>
-            {(assembly.variables || []).length ? (
-              <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                {assembly.variables.map((variable) => (
-                  <Paper
-                    key={variable.id}
-                    sx={{ p: 2, bgcolor: BACKGROUND_COLORS.field, border: "1px solid #2b3544", borderRadius: 1 }}
-                  >
-                    <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 2, lg: 1.5 } }}>
-                      <Box
-                        sx={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          alignItems: "center",
-                          gap: { xs: 2, lg: 1.5 },
-                          pt: 0.5
-                        }}
-                      >
-                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 28%" }, minWidth: { lg: 220 } }}>
+              {variableCount ? (
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  {(assembly.variables || []).map((variable, index) => (
+                    <Box key={variable.id} sx={VARIABLE_CARD_SX}>
+                      <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, minWidth: 0 }}>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body1" sx={{ color: MAGIC_UI.textBright, fontWeight: 600 }}>
+                            {variable.label || variable.name || `Variable ${index + 1}`}
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted, mt: 0.35, display: "block" }}>
+                            {(VARIABLE_TYPE_OPTIONS.find((option) => option.key === variable.type)?.label || variable.type || "String")}
+                            {variable.required ? " • Required at launch" : " • Optional input"}
+                          </Typography>
+                        </Box>
+
+                        <Box sx={VARIABLE_FIELDS_GRID_SX}>
                           <Tooltip
-                            title="This is the name of the variable you will be referencing inside of the script via $env:<variable>."
+                            title={`This name is used inside the assembly when the value is referenced at runtime. (e.g. ${variableReferenceExample})`}
                             arrow
                             placement="top-start"
                           >
@@ -1306,10 +1732,9 @@ export default function AssemblyEditor({
                               sx={INPUT_BASE_SX}
                             />
                           </Tooltip>
-                        </Box>
-                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 22%" }, minWidth: { lg: 180 } }}>
+
                           <Tooltip
-                            title="This is the name that will be given to the variable and seen by Borealis server operators."
+                            title="This is the operator-facing label shown in Borealis when the assembly is launched."
                             arrow
                             placement="top-start"
                           >
@@ -1322,11 +1747,9 @@ export default function AssemblyEditor({
                               sx={INPUT_BASE_SX}
                             />
                           </Tooltip>
-                        </Box>
 
-                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 18%" }, minWidth: { lg: 160 } }}>
                           <Tooltip
-                            title="This defines the type of variable data the script should expect."
+                            title="Choose the kind of value Borealis should expect for this runtime input."
                             arrow
                             placement="top-start"
                           >
@@ -1339,45 +1762,39 @@ export default function AssemblyEditor({
                               sx={SELECT_BASE_SX}
                               SelectProps={{ MenuProps: MENU_PROPS }}
                             >
-                              {VARIABLE_TYPE_OPTIONS.map((opt) => (
-                                <MenuItem key={opt.key} value={opt.key}>{opt.label}</MenuItem>
+                              {VARIABLE_TYPE_OPTIONS.map((option) => (
+                                <MenuItem key={option.key} value={option.key}>
+                                  {option.label}
+                                </MenuItem>
                               ))}
                             </TextField>
                           </Tooltip>
-                        </Box>
-                        <Box
-                          sx={{
-                            flex: { xs: "1 1 100%", lg: "0 1 24%" },
-                            minWidth: { lg: 220 },
-                            display: "flex",
-                            alignItems: "center"
-                          }}
-                        >
+
                           {variable.type === "boolean" ? (
                             <Tooltip
-                              title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
+                              title="Sets the initial checked state operators will see when launching the assembly."
                               arrow
                               placement="top-start"
                             >
-                              <FormControlLabel
-                                control={
-                                  <Checkbox
-                                    checked={Boolean(variable.defaultValue)}
-                                    onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.checked })}
-                                    sx={{ color: "#58a6ff" }}
-                                  />
-                                }
-                                label="Default Value"
-                                sx={{
-                                  color: "#9ba3b4",
-                                  m: 0,
-                                  "& .MuiFormControlLabel-label": { fontSize: "0.95rem" }
-                                }}
-                              />
+                              <Box sx={INLINE_CHECKBOX_FIELD_SX}>
+                                <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, fontWeight: 500 }}>
+                                  Default Checked
+                                </Typography>
+                                <Checkbox
+                                  checked={Boolean(variable.defaultValue)}
+                                  onChange={(e) => updateVariable(variable.id, { defaultValue: e.target.checked })}
+                                  sx={{
+                                    color: MAGIC_UI.accentA,
+                                    "&.Mui-checked": {
+                                      color: MAGIC_UI.accentA,
+                                    },
+                                  }}
+                                />
+                              </Box>
                             </Tooltip>
                           ) : (
                             <Tooltip
-                              title="This is the value that will be pre-populated in the assembly when ran.  Use a sensible default value."
+                              title="Provide a sensible starter value for operators when they open the assembly."
                               arrow
                               placement="top-start"
                             >
@@ -1391,10 +1808,9 @@ export default function AssemblyEditor({
                               />
                             </Tooltip>
                           )}
-                        </Box>
-                        <Box sx={{ flex: { xs: "1 1 100%", lg: "0 1 28%" }, minWidth: { lg: 220 } }}>
+
                           <Tooltip
-                            title="Instruct the operator in why this variable exists and how to set it appropriately."
+                            title="Explain why this variable exists so operators know what to enter."
                             arrow
                             placement="top-start"
                           >
@@ -1407,124 +1823,167 @@ export default function AssemblyEditor({
                               sx={INPUT_BASE_SX}
                             />
                           </Tooltip>
+
+                          <Box sx={INLINE_CHECKBOX_FIELD_SX}>
+                            <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, fontWeight: 500 }}>
+                              Required
+                            </Typography>
+                            <Checkbox
+                              checked={Boolean(variable.required)}
+                              onChange={(e) => updateVariable(variable.id, { required: e.target.checked })}
+                              sx={{
+                                color: MAGIC_UI.accentA,
+                                "&.Mui-checked": {
+                                  color: MAGIC_UI.accentA,
+                                },
+                              }}
+                              inputProps={{ "aria-label": "Required at launch" }}
+                            />
+                          </Box>
                         </Box>
-                        <Box
-                          sx={{
-                            flex: { xs: "1 1 100%", lg: "0 0 auto" },
-                            display: "flex",
-                            justifyContent: "flex-end",
-                            alignItems: "center",
-                            ml: { lg: "auto" }
-                          }}
-                        >
-                          <Tooltip title="Remove this Variable." arrow>
-                            <IconButton onClick={() => removeVariable(variable.id)} sx={{ color: "#ff6b6b" }}>
-                              <DeleteIcon />
+                      </Box>
+
+                      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Tooltip title="Remove this variable." arrow>
+                          <IconButton
+                            aria-label="Remove variable"
+                            onClick={() => removeVariable(variable.id)}
+                            sx={DELETE_ICON_BUTTON_SX}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    </Box>
+                  ))}
+                </Box>
+              ) : (
+                <Box sx={EMPTY_STATE_SX}>
+                  <Typography variant="body1" sx={{ color: MAGIC_UI.textBright, fontWeight: 600 }}>
+                    No variables defined yet
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mt: 0.8, maxWidth: 620 }}>
+                    Add variables when the assembly needs operator-supplied values, credentials, toggles, or runtime hints.
+                  </Typography>
+                  <Button startIcon={<AddIcon />} onClick={addVariable} sx={{ ...INLINE_SECONDARY_BUTTON_SX, mt: 1.5 }}>
+                    Create First Variable
+                  </Button>
+                </Box>
+              )}
+            </Box>
+          ) : null}
+
+          {activeTab === "files" ? (
+            <Grid container spacing={2.25}>
+              <Grid item xs={12} lg={4}>
+                <GlassPanel sx={{ height: "100%" }}>
+                  <SectionHeader
+                    eyebrow="Payloads"
+                    title="Support files"
+                    detail="Attach binaries, or other supporting files that should travel with the assembly to targeted devices."
+                  />
+
+                  <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1 }}>
+                    <Box sx={MINI_CARD_SX}>
+                      <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted, textTransform: "uppercase", letterSpacing: 0.65 }}>
+                        Files
+                      </Typography>
+                      <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, mt: 0.55, fontWeight: 600 }}>
+                        {fileCount}
+                      </Typography>
+                    </Box>
+                    <Box sx={MINI_CARD_SX}>
+                      <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted, textTransform: "uppercase", letterSpacing: 0.65 }}>
+                        Total size
+                      </Typography>
+                      <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, mt: 0.55, fontWeight: 600 }}>
+                        {formatBytes(totalFileBytes)}
+                      </Typography>
+                    </Box>
+                  </Box>
+
+                  <Button component="label" startIcon={<UploadFileIcon />} sx={INLINE_PRIMARY_BUTTON_SX}>
+                    Upload Files
+                    <input type="file" hidden multiple onChange={handleFileUpload} />
+                  </Button>
+                </GlassPanel>
+              </Grid>
+
+              <Grid item xs={12} lg={8}>
+                <GlassPanel sx={{ height: "100%" }}>
+                  <SectionHeader
+                    eyebrow="Attached files"
+                    title="Assembly Runtime Bundle"
+                    detail="Review every payload that will be embedded into the assembly so the exported package stays clear and predictable."
+                  />
+
+                  {fileCount ? (
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1.2 }}>
+                      {(assembly.files || []).map((file) => (
+                        <Box key={file.id} sx={FILE_ROW_SX}>
+                          <Box sx={{ display: "flex", alignItems: "center", gap: 1.3, minWidth: 0, flex: "1 1 280px" }}>
+                            <Box
+                              sx={{
+                                width: 38,
+                                height: 38,
+                                borderRadius: 2,
+                                display: "grid",
+                                placeItems: "center",
+                                background: "rgba(125,211,252,0.12)",
+                                border: "1px solid rgba(125,211,252,0.22)",
+                                flexShrink: 0,
+                              }}
+                            >
+                              <UploadFileIcon sx={{ fontSize: 18, color: MAGIC_UI.accentA }} />
+                            </Box>
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  color: MAGIC_UI.textBright,
+                                  fontWeight: 600,
+                                  whiteSpace: "nowrap",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                }}
+                              >
+                                {file.fileName}
+                              </Typography>
+                              <Typography variant="caption" sx={{ color: MAGIC_UI.textMuted }}>
+                                {formatBytes(file.size)}
+                                {file.mimeType ? ` • ${file.mimeType}` : ""}
+                              </Typography>
+                            </Box>
+                          </Box>
+                          <Tooltip title="Remove this file." arrow>
+                            <IconButton
+                              aria-label={`Remove ${file.fileName}`}
+                              onClick={() => removeFile(file.id)}
+                              sx={DELETE_ICON_BUTTON_SX}
+                            >
+                              <DeleteIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
                         </Box>
-                      </Box>
-                      <Box
-                        sx={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: { xs: 2, lg: 1.5 }
-                        }}
-                      >
-                      <Box
-                        sx={{
-                          flex: { xs: "1 1 100%", lg: "0 1 50%" },
-                          minWidth: { lg: 220 },
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 1.5
-                        }}
-                      >
-                        <Typography
-                          variant="caption"
-                          sx={{ color: "#9ba3b4", fontSize: "0.75rem", ml: 0.5}} /* Left-Hand Spacing for the "Required" label to the left of the checkbox */
-                        >
-                          Required
-                        </Typography>
-                        <Checkbox
-                          checked={Boolean(variable.required)}
-                          onChange={(e) =>
-                            updateVariable(variable.id, { required: e.target.checked })
-                          }
-                          sx={{
-                            color: "#58a6ff",
-                            p: 0.5,
-                          }}
-                          inputProps={{ "aria-label": "Required" }}
-                        />
-                      </Box>
-                      </Box>
+                      ))}
                     </Box>
-                  </Paper>
-                ))}
-              </Box>
-            ) : (
-              <Typography variant="body2" sx={{ color: "#787f8b", mb: 1 }}>
-                No variables have been defined.
-              </Typography>
-            )}
-            <Button
-              startIcon={<AddIcon />}
-              onClick={addVariable}
-              sx={{ mt: 2, color: "#58a6ff", textTransform: "none" }}
-            >
-              Add Variable
-            </Button>
-          </Box>
-
-          <Box sx={{ mt: 4 }}>
-            <Typography variant="caption" sx={{ ...SECTION_TITLE_SX, mb: 1 }}>
-              Files
-            </Typography>
-            <Typography variant="body2" sx={{ color: "#9ba3b4", mb: 2 }}>
-              Upload supporting files. They will be embedded as Base64 and available to the assembly at runtime.
-            </Typography>
-            {(assembly.files || []).length ? (
-              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
-                {assembly.files.map((file) => (
-                  <Paper
-                    key={file.id}
-                    sx={{
-                      p: 1.5,
-                      bgcolor: BACKGROUND_COLORS.field,
-                      border: "1px solid #2b3544",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between"
-                    }}
-                  >
-                    <Box>
-                      <Typography variant="body2" sx={{ color: "#e6edf3" }}>{file.fileName}</Typography>
-                      <Typography variant="caption" sx={{ color: "#7f8794" }}>{formatBytes(file.size)}{file.mimeType ? ` • ${file.mimeType}` : ""}</Typography>
+                  ) : (
+                    <Box sx={EMPTY_STATE_SX}>
+                      <Typography variant="body1" sx={{ color: MAGIC_UI.textBright, fontWeight: 600 }}>
+                        No files uploaded yet
+                      </Typography>
+                      <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mt: 0.8, maxWidth: 620 }}>
+                        Attach a file when the assembly needs bundled templates, archives, installers, or other runtime payloads.
+                      </Typography>
                     </Box>
-                    <IconButton onClick={() => removeFile(file.id)} sx={{ color: "#ff6b6b" }}>
-                      <DeleteIcon />
-                    </IconButton>
-                  </Paper>
-                ))}
-              </Box>
-            ) : (
-              <Typography variant="body2" sx={{ color: "#787f8b", mb: 1 }}>
-                No files uploaded yet.
-              </Typography>
-            )}
-            
-            <Button
-              component="label"
-              startIcon={<UploadFileIcon />}
-              sx={{ mt: 2, color: "#58a6ff", textTransform: "none" }}
-            >
-              Upload File
-              <input type="file" hidden multiple onChange={handleFileUpload} />
-            </Button>
-          </Box>
-        </Paper>
+                  )}
+                </GlassPanel>
+              </Grid>
+            </Grid>
+          ) : null}
+        </Box>
       </Box>
+      </PageBodyFrame>
 
       <RenameFileDialog
         open={renameOpen}
@@ -1533,27 +1992,23 @@ export default function AssemblyEditor({
         onCancel={() => setRenameOpen(false)}
         onSave={handleRenameConfirm}
       />
+
       <ConfirmDeleteDialog
         open={deleteOpen}
         message="Deleting this assembly cannot be undone. Continue?"
         onCancel={() => setDeleteOpen(false)}
         onConfirm={handleDeleteAssembly}
       />
+
       <Dialog
         open={jsonPreviewOpen}
         onClose={() => setJsonPreviewOpen(false)}
         maxWidth="lg"
         fullWidth
-        PaperProps={{
-          sx: {
-            bgcolor: BACKGROUND_COLORS.dialog,
-            color: "#fff",
-            border: "1px solid #2b3544",
-          }
-        }}
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle>Assembly JSON Preview</DialogTitle>
-        <DialogContent dividers sx={{ borderColor: "#2b3544" }}>
+        <DialogTitle sx={{ borderBottom: `1px solid ${MAGIC_UI.panelBorder}` }}>Assembly JSON Preview</DialogTitle>
+        <DialogContent dividers sx={{ borderColor: MAGIC_UI.panelBorder }}>
           <Box sx={CODE_EDITOR_CONTAINER_SX}>
             <Editor
               value={jsonPreviewText}
@@ -1570,15 +2025,15 @@ export default function AssemblyEditor({
             />
           </Box>
         </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2 }}>
-          <Button onClick={handleCopyJson} sx={{ color: "#58a6ff" }}>
+        <DialogActions sx={{ px: 3, py: 2, borderTop: `1px solid ${MAGIC_UI.panelBorder}` }}>
+          <Button onClick={handleCopyJson} sx={DIALOG_PRIMARY_BUTTON_SX}>
             Copy JSON
           </Button>
-          <Button onClick={() => setJsonPreviewOpen(false)} sx={{ color: "#58a6ff" }}>
+          <Button onClick={() => setJsonPreviewOpen(false)} sx={DIALOG_BUTTON_SX}>
             Close
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </>
   );
 }
