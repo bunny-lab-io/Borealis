@@ -62,7 +62,7 @@ Log Management:
 Log Management (Raw):
 ![Log Management (Raw)](Docs/images/repo_screenshots/Log_Management_Raw.png)
 
-## Misc Management Sections
+## Job Scheduling
 Scheduled Job List:
 ![Scheduled Job List](Docs/images/repo_screenshots/Scheduled_Job_List.png)
 
@@ -72,8 +72,19 @@ Scheduled Job Editor:
 Scheduled Job History:
 ![Scheduled Job History](Docs/images/repo_screenshots/Scheduled_Job_History.png)
 
+Ansible Playbook Recap:
+![Ansible Playbook Recap](Docs/images/repo_screenshots/Ansible_Playbook_Recap.png)
+
+## Misc Management
+
 Site List:
 ![Site List](Docs/images/repo_screenshots/Site_List.png)
+
+Credential Management List:
+![Credential Management](Docs/images/repo_screenshots/Credential_Management.png)
+
+Credential Management Editor:
+![Credential Management Editor](Docs/images/repo_screenshots/Credential_Management_Editor.png)
 
 ## Getting Started
 ### Engine Installation:
