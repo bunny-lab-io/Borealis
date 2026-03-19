@@ -9,6 +9,7 @@ I'm the sole maintainer and still learning as I go, while working a full-time IT
 - Human-friendly docs live in `Docs/` with a top-level index at `Docs/index.md`.
 - The same files also contain **Codex Agent** sections with deep, agent-focused implementation details.
 - Start with `Docs/getting-started.md` and `Docs/architecture-overview.md`, then jump to the domain pages.
+- Dependency and third-party license inventory lives in `SBOM.md`.
 
 ## Features
 - **Device Inventory**: OS, hardware, and status posted on connect and periodically.
@@ -104,4 +105,3 @@ $env:BOREALIS_SERVER_URL="https://192.168.3.252:5000"; $env:BOREALIS_ENROLLMENT_
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://192.168.3.252:5000" --enrollmentcode "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
 ```
-
