@@ -59,7 +59,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - `POST /api/assemblies/import` (Domain write permissions) - import legacy JSON.
 - `GET /api/assemblies/<assembly_guid>/export` (Token Authenticated) - export legacy JSON.
 - `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official assembly from the active catalog.
-- `POST /api/assemblies/official/update-all` (Admin) - update all official assemblies with available catalog changes.
+- `POST /api/assemblies/official/update-all` (Admin) - sync official assemblies from the active catalog, including brand-new Aurora entries that are not yet installed locally.
 - `POST /api/scripts/quick_run` (Token Authenticated) - quick PowerShell job.
 - `POST /api/ansible/quick_run` (Token Authenticated) - placeholder (not implemented).
 - `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history.

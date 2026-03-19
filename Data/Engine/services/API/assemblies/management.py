@@ -13,6 +13,8 @@
 # - POST /api/assemblies/dev-mode/write (Token Authenticated (Admin+Dev Mode)) - Flushes queued assembly writes immediately.
 # - POST /api/assemblies/import (Token Authenticated (Domain write permissions)) - Imports a legacy assembly JSON document into the selected domain.
 # - GET /api/assemblies/<assembly_guid>/export (Token Authenticated) - Exports an assembly as JSON.
+# - POST /api/assemblies/<assembly_guid>/official-update (Token Authenticated (Admin)) - Updates one official Aurora assembly.
+# - POST /api/assemblies/official/update-all (Token Authenticated (Admin)) - Syncs official Aurora assemblies, including newly added catalog items.
 # ======================================================
 
 """Assembly CRUD REST endpoints backed by AssemblyCache."""
@@ -654,6 +656,9 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
                 )
                 return jsonify(result), 502
             detail_parts = [f"updated={len(result.get('updated') or [])}"]
+            installed_count = int(result.get("installed_count") or 0)
+            if installed_count:
+                detail_parts.append(f"installed={installed_count}")
             failed_count = len(result.get("failed") or [])
             if failed_count:
                 detail_parts.append(f"failed={failed_count}")

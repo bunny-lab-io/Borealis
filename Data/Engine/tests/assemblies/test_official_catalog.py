@@ -27,20 +27,26 @@ def _encoded_script(body: str) -> str:
     return base64.b64encode(body.encode("utf-8")).decode("ascii")
 
 
-def _official_document(*, summary: str, script_body: str) -> dict:
-    assembly_guid = "aurora-official-guid"
+def _official_document(
+    *,
+    summary: str,
+    script_body: str,
+    assembly_guid: str = "aurora-official-guid",
+    display_name: str = "Aurora Script",
+    source_path: str = "scripts/windows/aurora-script.json",
+) -> dict:
     return {
         "assembly_guid": assembly_guid,
-        "display_name": "Aurora Script",
+        "display_name": display_name,
         "summary": summary,
         "assembly_type": "script",
         "assembly_subtype": "powershell",
         "source_repo": "https://github.com/bunny-lab-io/Aurora",
-        "source_path": "scripts/windows/aurora-script.json",
+        "source_path": source_path,
         "source_version": "git:seeded",
         "payload": {
             "assembly_guid": assembly_guid,
-            "name": "Aurora Script",
+            "name": display_name,
             "description": summary,
             "type": "powershell",
             "category": "script",
@@ -109,9 +115,18 @@ def test_official_catalog_detects_and_applies_aurora_updates(tmp_path: Path) -> 
         assert initial["source_path"] == "items/aurora-official-guid.json"
         assert initial["payload_json"]["assembly_guid"] == "aurora-official-guid"
 
-        annotated = service.annotate_collection(runtime.list_assemblies(domain=AssemblyDomain.OFFICIAL.value))
+        remote_manifest = service.manifest(force_remote=True)
+        annotated = service.annotate_collection(
+            runtime.list_assemblies(domain=AssemblyDomain.OFFICIAL.value),
+            manifest=remote_manifest,
+        )
         assert annotated[0]["official_update_available"] is True
         assert annotated[0]["official_source_path"] == "scripts/windows/aurora-script.json"
+        status = service.catalog_status(manifest=remote_manifest)
+        assert status["update_count"] == 1
+        assert status["new_assembly_count"] == 0
+        assert status["metadata_refresh_count"] == 0
+        assert status["actionable_count"] == 1
 
         update_result = service.update_all_official_assemblies()
         assert update_result["updated"] == ["aurora-official-guid"]
@@ -123,6 +138,10 @@ def test_official_catalog_detects_and_applies_aurora_updates(tmp_path: Path) -> 
                 "source_version": update_result["source_version"],
             }
         ]
+        assert update_result["installed"] == []
+        assert update_result["installed_items"] == []
+        assert update_result["installed_count"] == 0
+        assert update_result["updated_existing_count"] == 1
         assert update_result["failed"] == []
 
         updated = runtime.get_assembly("aurora-official-guid")
@@ -227,10 +246,70 @@ def test_official_catalog_prefers_nested_payload_description_for_summary(tmp_pat
     try:
         update_result = service.update_all_official_assemblies()
         assert update_result["updated"] == ["aurora-official-guid"]
+        assert update_result["installed"] == ["aurora-official-guid"]
+        assert update_result["installed_items"] == [
+            {
+                "assembly_guid": "aurora-official-guid",
+                "display_name": "Aurora Script",
+                "source_path": "scripts/windows/aurora-script.json",
+                "source_version": update_result["source_version"],
+            }
+        ]
+        assert update_result["installed_count"] == 1
+        assert update_result["updated_existing_count"] == 0
 
         updated = runtime.get_assembly("aurora-official-guid")
         assert updated is not None
         assert updated["summary"] == "Fresh nested description"
         assert updated["payload_json"]["description"] == "Fresh nested description"
+    finally:
+        cache.shutdown(flush=True)
+
+
+def test_official_catalog_status_reports_new_assemblies_missing_locally(tmp_path: Path) -> None:
+    aurora_repo = tmp_path / "Aurora"
+    aurora_repo.mkdir(parents=True, exist_ok=True)
+    _run_git(aurora_repo, "init")
+    _run_git(aurora_repo, "config", "user.email", "tests@example.com")
+    _run_git(aurora_repo, "config", "user.name", "Borealis Tests")
+    _run_git(aurora_repo, "checkout", "-b", "main")
+
+    aurora_doc = _official_document(
+        summary="Brand new Aurora assembly",
+        script_body='Write-Host "fresh"',
+        assembly_guid="aurora-new-guid",
+        display_name="Aurora New Script",
+        source_path="scripts/windows/aurora-new-script.json",
+    )
+    _write_json(aurora_repo / "scripts" / "windows" / "aurora-new-script.json", aurora_doc)
+    _run_git(aurora_repo, "add", ".")
+    _run_git(aurora_repo, "commit", "-m", "Add new Aurora assembly")
+
+    db_url = f"sqlite:///{(tmp_path / 'assemblies.sqlite3').as_posix()}"
+    db_manager = AssemblyDatabaseManager(database_url=db_url, logger=LOGGER)
+    db_manager.initialise()
+    cache = AssemblyCache(
+        database_manager=db_manager,
+        flush_interval_seconds=5.0,
+        logger=LOGGER,
+    )
+    service = OfficialAssemblyCatalogService(
+        cache=cache,
+        database_manager=db_manager,
+        logger=LOGGER,
+        bundled_root=tmp_path / "missing-bundled",
+        checkout_root=tmp_path / "checkout",
+        repo_url="https://github.com/bunny-lab-io/Aurora",
+        repo_git_url=aurora_repo.as_posix(),
+        repo_ref="main",
+        refresh_seconds=30,
+    )
+
+    try:
+        status = service.catalog_status(manifest=service.manifest(force_remote=True))
+        assert status["update_count"] == 0
+        assert status["new_assembly_count"] == 1
+        assert status["metadata_refresh_count"] == 0
+        assert status["actionable_count"] == 1
     finally:
         cache.shutdown(flush=True)

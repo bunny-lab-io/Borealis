@@ -247,6 +247,12 @@ const formatPathDisplay = (folderPath) => {
   return segments.join(" \u203A ");
 };
 
+const toCount = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return parsed;
+};
+
 const normalizeRow = (item, queueEntry) => {
   if (!item) return null;
   const assemblyGuid = item.assembly_guid || item.assembly_id || "";
@@ -324,20 +330,30 @@ const normalizeRow = (item, queueEntry) => {
 
 const formatOfficialUpdateAllMessage = (payload) => {
   const updatedItems = Array.isArray(payload?.updated_items) ? payload.updated_items : [];
-  if (!updatedItems.length) {
-    return "No Aurora assemblies needed updating.";
+  const installedCount = toCount(payload?.installed_count || payload?.installed?.length);
+  const updatedExistingCount = toCount(payload?.updated_existing_count);
+  const failedCount = Array.isArray(payload?.failed) ? payload.failed.length : 0;
+
+  const fragments = [];
+  if (installedCount > 0) {
+    fragments.push(`installed ${installedCount} new Aurora ${installedCount === 1 ? "assembly" : "assemblies"}`);
   }
-  const labels = updatedItems
-    .map((item) => item?.name || item?.display_name || item?.assembly_guid || "")
-    .filter(Boolean);
-  if (!labels.length) {
-    return `Updated ${updatedItems.length} Aurora assemblies.`;
+  if (updatedExistingCount > 0) {
+    fragments.push(`updated ${updatedExistingCount} Aurora ${updatedExistingCount === 1 ? "assembly" : "assemblies"}`);
   }
-  const preview = labels.slice(0, 5).join(", ");
-  if (labels.length > 5) {
-    return `Updated ${labels.length} Aurora assemblies: ${preview}, and ${labels.length - 5} more.`;
+  if (!fragments.length && updatedItems.length > 0) {
+    fragments.push(`updated ${updatedItems.length} Aurora ${updatedItems.length === 1 ? "assembly" : "assemblies"}`);
   }
-  return `Updated ${labels.length} Aurora assemblies: ${preview}.`;
+  if (!fragments.length) {
+    return failedCount > 0
+      ? `Aurora sync completed with ${failedCount} ${failedCount === 1 ? "failure" : "failures"}.`
+      : "No Aurora assemblies needed installation or updating.";
+  }
+  if (failedCount > 0) {
+    return `${fragments.join(" and ")}; ${failedCount} ${failedCount === 1 ? "item failed" : "items failed"}.`;
+  }
+  const message = fragments.join(" and ");
+  return `${message.charAt(0).toUpperCase()}${message.slice(1)}.`;
 };
 
 export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = "User", onPageMetaChange }) {
@@ -350,6 +366,9 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     source: "bundled",
     available: false,
     updateCount: 0,
+    newAssemblyCount: 0,
+    metadataRefreshCount: 0,
+    actionableCount: 0,
     error: "",
     warning: "",
     hasChecked: false,
@@ -418,6 +437,13 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       const processed = items
         .map((item) => normalizeRow(item, queueMap[item?.assembly_guid || item?.assembly_id || ""]))
         .filter(Boolean);
+      const updateCount = toCount(officialCatalog?.update_count);
+      const newAssemblyCount = toCount(officialCatalog?.new_assembly_count);
+      const metadataRefreshCount = toCount(officialCatalog?.metadata_refresh_count);
+      const fallbackExistingUpdates = processed.filter((row) => row.officialUpdateAvailable).length;
+      const effectiveUpdateCount = updateCount || fallbackExistingUpdates;
+      const actionableCount =
+        toCount(officialCatalog?.actionable_count) || effectiveUpdateCount + newAssemblyCount + metadataRefreshCount;
       setRows(processed);
       setCatalogStatus((prev) => {
         const hasChecked = forceCatalogRefresh || Boolean(prev?.hasChecked);
@@ -425,11 +451,10 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
           repoUrl: officialCatalog?.repo_url || "https://github.com/bunny-lab-io/Aurora",
           source: officialCatalog?.source || "bundled",
           available: hasChecked ? Boolean(officialCatalog?.available) : false,
-          updateCount: hasChecked
-            ? Number.isFinite(Number(officialCatalog?.update_count))
-              ? Number(officialCatalog.update_count)
-              : processed.filter((row) => row.officialUpdateAvailable).length
-            : 0,
+          updateCount: hasChecked ? effectiveUpdateCount : 0,
+          newAssemblyCount: hasChecked ? newAssemblyCount : 0,
+          metadataRefreshCount: hasChecked ? metadataRefreshCount : 0,
+          actionableCount: hasChecked ? actionableCount : 0,
           error: hasChecked ? officialCatalog?.error || "" : "",
           warning: hasChecked ? officialCatalog?.warning || "" : "",
           hasChecked,
@@ -445,6 +470,9 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
           source: prev?.source || "bundled",
           available: false,
           updateCount: 0,
+          newAssemblyCount: 0,
+          metadataRefreshCount: 0,
+          actionableCount: 0,
           error: hasChecked ? err?.message || "Failed to load assemblies" : "",
           warning: "",
           hasChecked,
@@ -769,7 +797,12 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   );
 
   const gridWrapperClass = themeClassName;
-  const hasAuroraUpdates = catalogStatus.hasChecked && catalogStatus.updateCount > 0;
+  const newAuroraAssemblies = toCount(catalogStatus.newAssemblyCount);
+  const existingAuroraUpdates = toCount(catalogStatus.updateCount);
+  const auroraMetadataRefreshes = toCount(catalogStatus.metadataRefreshCount);
+  const auroraActionableCount = toCount(catalogStatus.actionableCount);
+  const hasAuroraActions = catalogStatus.hasChecked && auroraActionableCount > 0;
+  const shouldInstallNewAuroraAssemblies = hasAuroraActions && newAuroraAssemblies > 0;
   const handleCheckForAuroraUpdates = useCallback(() => {
     fetchAssemblies({ forceCatalogRefresh: true });
   }, [fetchAssemblies]);
@@ -778,19 +811,29 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     () => [
       {
         id: "assemblies-aurora-sync",
-        label: hasAuroraUpdates ? "Update All" : "Check for Updates",
-        icon: hasAuroraUpdates ? <SyncIcon /> : <CachedIcon />,
+        label: shouldInstallNewAuroraAssemblies
+          ? "Install New Assemblies"
+          : hasAuroraActions
+          ? "Update All"
+          : "Check for Updates",
+        icon: hasAuroraActions ? <SyncIcon /> : <CachedIcon />,
         tone: "secondary",
-        disabled: hasAuroraUpdates ? !isAdmin || updatingAllOfficial : checkingForAuroraUpdates,
-        tooltip: hasAuroraUpdates
+        disabled: hasAuroraActions ? !isAdmin || updatingAllOfficial : checkingForAuroraUpdates,
+        tooltip: hasAuroraActions
           ? !isAdmin
-            ? "Administrator access is required to apply Aurora assembly updates."
+            ? shouldInstallNewAuroraAssemblies
+              ? "Administrator access is required to install new Aurora assemblies."
+              : "Administrator access is required to apply Aurora assembly updates."
+            : shouldInstallNewAuroraAssemblies
+            ? existingAuroraUpdates > 0 || auroraMetadataRefreshes > 0
+              ? "Install new Aurora assemblies and sync existing official assemblies to the latest catalog."
+              : "Install new Aurora assemblies from Aurora without restarting the Engine."
             : "Apply all available Aurora assembly updates."
           : catalogStatus.hasChecked
-          ? catalogStatus.error || catalogStatus.warning || "No Aurora assembly updates are available."
+          ? catalogStatus.error || catalogStatus.warning || "No new Aurora assemblies or updates are available."
           : "Check Aurora for available assembly updates.",
-        loading: hasAuroraUpdates ? updatingAllOfficial : checkingForAuroraUpdates,
-        onClick: hasAuroraUpdates ? requestOfficialUpdateAll : handleCheckForAuroraUpdates,
+        loading: hasAuroraActions ? updatingAllOfficial : checkingForAuroraUpdates,
+        onClick: hasAuroraActions ? requestOfficialUpdateAll : handleCheckForAuroraUpdates,
       },
       {
         id: "assemblies-new",
@@ -805,8 +848,11 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       catalogStatus.hasChecked,
       catalogStatus.warning,
       handleCheckForAuroraUpdates,
-      hasAuroraUpdates,
+      hasAuroraActions,
       isAdmin,
+      auroraMetadataRefreshes,
+      existingAuroraUpdates,
+      shouldInstallNewAuroraAssemblies,
       checkingForAuroraUpdates,
       requestOfficialUpdateAll,
       updatingAllOfficial,
@@ -1118,14 +1164,30 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       <Dialog open={officialUpdateDialog.open} onClose={handleOfficialUpdateClose} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
         <DialogTitle sx={DIALOG_TITLE_SX}>
           <DialogHeaderBlock
-            title={officialUpdateDialog.mode === "all" ? "Update All Aurora Assemblies" : "Update Aurora Assembly"}
+            title={
+              officialUpdateDialog.mode === "all"
+                ? shouldInstallNewAuroraAssemblies
+                  ? "Install New Aurora Assemblies"
+                  : "Update All Aurora Assemblies"
+                : "Update Aurora Assembly"
+            }
             subtitle="Pull the latest published Aurora assembly definitions from GitHub."
           />
         </DialogTitle>
         <DialogContent sx={{ ...DIALOG_CONTENT_SX, minWidth: 420 }}>
           <Typography variant="body2" sx={{ mt: 0.5, color: "#c6d0dd", lineHeight: 1.6 }}>
             {officialUpdateDialog.mode === "all"
-              ? "This will pull down the most recent version of each Aurora assembly that has an available update from GitHub and overwrite the current Aurora versions in Borealis. Proceed?"
+              ? shouldInstallNewAuroraAssemblies
+                ? existingAuroraUpdates > 0 || auroraMetadataRefreshes > 0
+                  ? `This will download and ingest ${newAuroraAssemblies} new Aurora ${
+                      newAuroraAssemblies === 1 ? "assembly" : "assemblies"
+                    } and sync ${existingAuroraUpdates + auroraMetadataRefreshes} existing official ${
+                      existingAuroraUpdates + auroraMetadataRefreshes === 1 ? "assembly" : "assemblies"
+                    } in Borealis. Proceed?`
+                  : `This will download and ingest ${newAuroraAssemblies} new Aurora ${
+                      newAuroraAssemblies === 1 ? "assembly" : "assemblies"
+                    } so ${newAuroraAssemblies === 1 ? "it appears" : "they appear"} in the assembly list without restarting the Engine. Proceed?`
+                : "This will pull down the most recent version of each Aurora assembly that has an available update from GitHub and overwrite the current Aurora versions in Borealis. Proceed?"
               : "This will pull down the most recent version of this Aurora assembly from GitHub and overwrite the current Aurora version in Borealis. Proceed?"}
           </Typography>
           <Typography variant="body2" sx={{ mt: 1.5, color: "#9ba3b4" }}>
@@ -1159,7 +1221,11 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
             disabled={Boolean(updatingOfficialGuid || updatingAllOfficial)}
             sx={DIALOG_PRIMARY_BUTTON_SX}
           >
-            {officialUpdateDialog.mode === "all" ? "Update All" : "Update"}
+            {officialUpdateDialog.mode === "all"
+              ? shouldInstallNewAuroraAssemblies
+                ? "Install Assemblies"
+                : "Update All"
+              : "Update"}
           </Button>
         </DialogActions>
       </Dialog>

@@ -601,12 +601,31 @@ class OfficialAssemblyCatalogService:
             force_remote=force_remote,
             allow_remote_sync=bool(allow_remote_sync),
         )
+        runtime = self._runtime_service()
+        current_items = runtime.list_assemblies(domain=AssemblyDomain.OFFICIAL.value)
+        current_items_by_guid = {
+            _coerce_guid(item.get("assembly_guid") or item.get("assembly_id")): item
+            for item in current_items
+            if _coerce_guid(item.get("assembly_guid") or item.get("assembly_id"))
+        }
         update_count = 0
-        if items is not None:
-            for item in items:
-                if bool(item.get("official_update_available")):
+        new_assembly_count = 0
+        metadata_refresh_count = 0
+        if manifest.available:
+            for entry in manifest.entries.values():
+                current_item = current_items_by_guid.get(entry.assembly_guid)
+                if current_item is None:
+                    new_assembly_count += 1
+                    continue
+                current_hash = _coerce_text(current_item.get("content_hash")) or compute_api_item_content_hash(current_item)
+                metadata_refresh_needed = _entry_requires_metadata_refresh(current_item, entry)
+                if current_hash and entry.content_hash and current_hash != entry.content_hash:
                     update_count += 1
+                    continue
+                if metadata_refresh_needed:
+                    metadata_refresh_count += 1
         manifest_error = manifest.error or ""
+        actionable_count = update_count + new_assembly_count + metadata_refresh_count
 
         return {
             "repo_url": manifest.repo_url or self._repo_url,
@@ -620,6 +639,9 @@ class OfficialAssemblyCatalogService:
             "error": manifest_error if not manifest.available else "",
             "warning": manifest_error if manifest.available else "",
             "update_count": update_count,
+            "new_assembly_count": new_assembly_count,
+            "metadata_refresh_count": metadata_refresh_count,
+            "actionable_count": actionable_count,
             "scanned_files": manifest.scanned_files,
             "failed_files": manifest.failed_files,
         }
@@ -700,11 +722,14 @@ class OfficialAssemblyCatalogService:
 
         updated: List[str] = []
         updated_items: List[Dict[str, Any]] = []
+        installed: List[str] = []
+        installed_items: List[Dict[str, Any]] = []
         failed: List[Dict[str, str]] = []
         skipped = 0
         for entry in manifest.entries.values():
             current_hash = current_hashes.get(entry.assembly_guid)
             current_item = current_items_by_guid.get(entry.assembly_guid)
+            is_new_install = current_item is None
             metadata_refresh_needed = _entry_requires_metadata_refresh(current_item, entry)
             if current_hash and current_hash == entry.content_hash and not metadata_refresh_needed:
                 skipped += 1
@@ -732,19 +757,21 @@ class OfficialAssemblyCatalogService:
                 )
                 updated.append(entry.assembly_guid)
                 refreshed = runtime.get_assembly(entry.assembly_guid) or {}
-                updated_items.append(
-                    {
-                        "assembly_guid": entry.assembly_guid,
-                        "display_name": _coerce_text(
-                            refreshed.get("display_name"),
-                            entry.display_name,
-                        ),
-                        "source_path": _normalize_relative_path(
-                            refreshed.get("source_path") or entry.source_path
-                        ),
-                        "source_version": _coerce_optional_text(entry.source_version or manifest.catalog_version),
-                    }
-                )
+                refreshed_item = {
+                    "assembly_guid": entry.assembly_guid,
+                    "display_name": _coerce_text(
+                        refreshed.get("display_name"),
+                        entry.display_name,
+                    ),
+                    "source_path": _normalize_relative_path(
+                        refreshed.get("source_path") or entry.source_path
+                    ),
+                    "source_version": _coerce_optional_text(entry.source_version or manifest.catalog_version),
+                }
+                updated_items.append(refreshed_item)
+                if is_new_install:
+                    installed.append(entry.assembly_guid)
+                    installed_items.append(refreshed_item)
             except Exception as exc:
                 failed.append({"assembly_guid": entry.assembly_guid, "error": str(exc)})
                 self._logger.exception("Failed to update official assembly %s from %s", entry.assembly_guid, manifest.source)
@@ -755,6 +782,10 @@ class OfficialAssemblyCatalogService:
         return {
             "updated": updated,
             "updated_items": updated_items,
+            "installed": installed,
+            "installed_items": installed_items,
+            "installed_count": len(installed),
+            "updated_existing_count": max(len(updated) - len(installed), 0),
             "skipped": skipped,
             "failed": failed,
             "source": manifest.source,

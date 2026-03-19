@@ -91,6 +91,8 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/assemblies/dev-mode/write` (Admin + Dev Mode) - flush queued writes.
 - `POST /api/assemblies/import` (Domain write permission) - import legacy JSON assembly.
 - `GET /api/assemblies/<assembly_guid>/export` (Token Authenticated) - export legacy JSON.
+- `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official Aurora assembly from the active catalog.
+- `POST /api/assemblies/official/update-all` (Admin) - sync all official Aurora assemblies, including newly added catalog entries.
 - `POST /api/scripts/quick_run` (Token Authenticated) - quick job (PowerShell).
 - `POST /api/ansible/quick_run` (Token Authenticated) - placeholder (not implemented).
 - `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history.
