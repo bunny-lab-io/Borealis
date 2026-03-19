@@ -3558,17 +3558,3 @@ if __name__=='__main__':
         except Exception:
             pass
         print("[FATAL] Agent exited unexpectedly.")
-
-# (moved earlier so async tasks can log immediately)
-# ---- Ansible log helpers (Agent) ----
-def _ansible_log_agent(msg: str):
-    try:
-        d = _agent_logs_root()
-        os.makedirs(d, exist_ok=True)
-        path = os.path.join(d, 'ansible.log')
-        _rotate_daily(path)
-        ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        with open(path, 'a', encoding='utf-8') as fh:
-            fh.write(f'[{ts}] {msg}\n')
-    except Exception:
-        pass

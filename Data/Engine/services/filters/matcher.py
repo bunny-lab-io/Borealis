@@ -1160,40 +1160,136 @@ class DeviceFilterMatcher:
         filters_by_id: Optional[Dict[int, Dict[str, Any]]] = None,
     ) -> Tuple[List[str], Dict[str, Any]]:
         dataset = list(devices) if devices is not None else self.fetch_devices()
-        device_by_host: Dict[str, Dict[str, Any]] = {}
+        device_by_guid: Dict[str, Dict[str, Any]] = {}
+        devices_by_host: Dict[str, List[Dict[str, Any]]] = {}
+        devices_by_site_host: Dict[Tuple[int, str], List[Dict[str, Any]]] = {}
         for device in dataset:
+            device_guid = _normalize_string(device.get("device_guid") or device.get("guid"))
+            if device_guid:
+                device_by_guid[device_guid.lower()] = device
             hostname = _normalize_string(device.get("hostname"))
             if hostname:
-                device_by_host[hostname.lower()] = device
+                lowered = hostname.lower()
+                devices_by_host.setdefault(lowered, []).append(device)
+                site_id = _coerce_int(device.get("site_id"))
+                if site_id is not None:
+                    devices_by_site_host.setdefault((site_id, lowered), []).append(device)
 
         target_hosts: List[str] = []
-        host_set: set[str] = set()
+        target_records: List[Dict[str, Any]] = []
         filter_ids: List[int] = []
-        explicit_hosts: List[str] = []
+        explicit_targets: List[Dict[str, Any]] = []
         for entry in raw_targets or []:
             parsed = self._normalize_target_entry(entry)
             if parsed["kind"] == "device":
-                hostname = parsed.get("hostname")
-                if hostname:
-                    explicit_hosts.append(hostname)
+                explicit_targets.append(parsed)
             elif parsed["kind"] == "filter" and parsed.get("filter_id") is not None:
                 filter_ids.append(int(parsed["filter_id"]))
 
         host_details: Dict[str, Dict[str, Any]] = {}
-        for hostname in explicit_hosts:
-            lowered = hostname.lower()
-            if lowered in host_set:
-                continue
-            host_set.add(lowered)
-            target_hosts.append(hostname)
-            device = device_by_host.get(lowered)
-            host_details[lowered] = {
-                "hostname": hostname,
-                "device_guid": device.get("device_guid") if device else "",
-                "site_id": device.get("site_id") if device else None,
-                "site_name": device.get("site_name") if device else "",
+        target_identity_map: Dict[str, Dict[str, Any]] = {}
+
+        def _identity_for_target(record: Dict[str, Any]) -> str:
+            guid_value = _normalize_string(record.get("device_guid") or record.get("guid")).lower()
+            if guid_value:
+                return f"guid:{guid_value}"
+            hostname_value = _normalize_string(record.get("hostname")).lower()
+            site_id_value = _coerce_int(record.get("site_id"))
+            if hostname_value and site_id_value is not None:
+                return f"site:{site_id_value}:{hostname_value}"
+            if hostname_value:
+                return f"host:{hostname_value}"
+            return ""
+
+        def _build_target_record(
+            device: Optional[Dict[str, Any]],
+            *,
+            hostname_override: str = "",
+            site_id_override: Optional[int] = None,
+            site_name_override: str = "",
+        ) -> Dict[str, Any]:
+            hostname_value = _normalize_string(hostname_override) or _normalize_string((device or {}).get("hostname"))
+            site_id_value = site_id_override if site_id_override is not None else _coerce_int((device or {}).get("site_id"))
+            site_name_value = _normalize_string(site_name_override) or _normalize_string((device or {}).get("site_name"))
+            return {
+                "hostname": hostname_value,
+                "device_guid": _normalize_string((device or {}).get("device_guid") or (device or {}).get("guid")),
+                "site_id": site_id_value,
+                "site_name": site_name_value,
+                "agent_id": _normalize_string((device or {}).get("agent_id")),
+                "connection_type": _normalize_string((device or {}).get("connection_type")),
+                "connection_endpoint": _normalize_string((device or {}).get("connection_endpoint")),
+                "operating_system": _normalize_string((device or {}).get("operating_system")),
                 "resolved_from_filter_ids": [],
             }
+
+        def _append_target_record(record: Dict[str, Any]) -> Dict[str, Any]:
+            identity = _identity_for_target(record)
+            if identity and identity in target_identity_map:
+                existing = target_identity_map[identity]
+                for field in (
+                    "hostname",
+                    "device_guid",
+                    "site_name",
+                    "agent_id",
+                    "connection_type",
+                    "connection_endpoint",
+                    "operating_system",
+                ):
+                    if not existing.get(field) and record.get(field):
+                        existing[field] = record.get(field)
+                if existing.get("site_id") is None and record.get("site_id") is not None:
+                    existing["site_id"] = record.get("site_id")
+                return existing
+
+            if identity:
+                target_identity_map[identity] = record
+            target_records.append(record)
+            if record.get("hostname"):
+                target_hosts.append(str(record["hostname"]))
+                details_key = str(record["hostname"]).lower()
+                if details_key in host_details:
+                    site_fragment = record.get("site_id")
+                    guid_fragment = record.get("device_guid") or ""
+                    details_key = f"{details_key}:{site_fragment if site_fragment is not None else guid_fragment}"
+                host_details[details_key] = record
+            return record
+
+        for explicit_target in explicit_targets:
+            hostname = _normalize_string(explicit_target.get("hostname"))
+            site_id = _coerce_int(explicit_target.get("site_id"))
+            site_name = _normalize_string(explicit_target.get("site_name"))
+            device_guid = _normalize_string(explicit_target.get("device_guid"))
+            matches: List[Dict[str, Any]] = []
+            if device_guid:
+                match = device_by_guid.get(device_guid.lower())
+                if match:
+                    matches = [match]
+            elif hostname and site_id is not None:
+                matches = list(devices_by_site_host.get((site_id, hostname.lower()), []))
+            elif hostname:
+                matches = list(devices_by_host.get(hostname.lower(), []))
+
+            if not matches:
+                _append_target_record(
+                    _build_target_record(
+                        None,
+                        hostname_override=hostname,
+                        site_id_override=site_id,
+                        site_name_override=site_name,
+                    )
+                )
+                continue
+
+            for match in matches:
+                _append_target_record(
+                    _build_target_record(
+                        match,
+                        hostname_override=hostname,
+                        site_id_override=site_id if site_id is not None else _coerce_int(match.get("site_id")),
+                        site_name_override=site_name or _normalize_string(match.get("site_name")),
+                    )
+                )
 
         filter_matches: Dict[int, List[str]] = {}
         if filter_ids:
@@ -1205,34 +1301,19 @@ class DeviceFilterMatcher:
                 matches = self.match_filter_devices(record, devices=dataset)
                 resolved_hosts: List[str] = []
                 for device in matches:
-                    hostname = _normalize_string(device.get("hostname"))
+                    details = _append_target_record(_build_target_record(device))
+                    hostname = _normalize_string(details.get("hostname"))
                     if not hostname:
                         continue
-                    lowered = hostname.lower()
-                    details = host_details.setdefault(
-                        lowered,
-                        {
-                            "hostname": hostname,
-                            "device_guid": device.get("device_guid") or "",
-                            "site_id": device.get("site_id"),
-                            "site_name": device.get("site_name") or "",
-                            "resolved_from_filter_ids": [],
-                        },
-                    )
-                    details["device_guid"] = details.get("device_guid") or device.get("device_guid") or ""
-                    details["site_id"] = details.get("site_id") if details.get("site_id") is not None else device.get("site_id")
-                    details["site_name"] = details.get("site_name") or device.get("site_name") or ""
                     if int(filter_id) not in details["resolved_from_filter_ids"]:
                         details["resolved_from_filter_ids"].append(int(filter_id))
-                    if lowered not in host_set:
-                        host_set.add(lowered)
-                        target_hosts.append(hostname)
                     resolved_hosts.append(hostname)
                 filter_matches[int(filter_id)] = resolved_hosts
 
         metadata = {
             "filters_resolved": filter_matches,
             "resolved_host_details": host_details,
+            "resolved_targets": target_records,
             "total_hosts": len(target_hosts),
         }
         return target_hosts, metadata
@@ -1253,7 +1334,13 @@ class DeviceFilterMatcher:
                 }
             hostname = _normalize_string(entry.get("hostname"))
             if hostname:
-                return {"kind": "device", "hostname": hostname}
+                return {
+                    "kind": "device",
+                    "hostname": hostname,
+                    "device_guid": _normalize_string(entry.get("device_guid") or entry.get("guid")),
+                    "site_id": _coerce_int(entry.get("site_id")),
+                    "site_name": _normalize_string(entry.get("site_name") or entry.get("site")),
+                }
         return {"kind": "unknown"}
 
 

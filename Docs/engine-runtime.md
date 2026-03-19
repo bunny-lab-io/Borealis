@@ -19,6 +19,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Runtime copy: `Engine/` (regenerated each launch).
 - Database: PostgreSQL via `BOREALIS_DATABASE_URL`.
 - Logs: `Engine/Logs/` (engine.log, error.log, api.log, service logs).
+- Ansible runtime: `Engine/Ansible/` (staged manifest, installed collections, generated execution workspaces).
 - Certificates: `Engine/Certificates/` (TLS bundle + code signing keys).
 - WebUI build output: `Engine/web-interface/` (served as static assets).
 - Bundled official assemblies: `Data/Engine/Official_Assemblies/` (generated seed snapshot).
@@ -130,4 +131,8 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Linux is the Engine target platform. Keep Engine tooling aligned with Linux packaging and runtime behavior.
 
 #### Ansible support (shared state)
-- Mirrors the agent's unfinished story: treat orchestration as experimental until packaging, connection management, and logging mature.
+- The Linux Engine now packages an Ansible control-node runtime inside the Engine venv and installs Borealis-managed collections into `Engine/Ansible/collections`.
+- Scheduled jobs support Engine-side shared Ansible execution for `local`, `ssh`, and `winrm` contexts.
+- Remote SSH/WinRM runs synthesize ephemeral inventories from Borealis device/filter state and active WireGuard sessions, using site-qualified inventory aliases for duplicate-hostname safety.
+- Shared remote Ansible transport follows the scheduled job execution context; device `connection_type` metadata does not override the operator-selected `ssh` or `winrm` mode.
+- The credentials API now backs stored SSH/WinRM credentials for scheduler selection, while quick-run, cancel, PSRP, and richer recap UX remain in progress.

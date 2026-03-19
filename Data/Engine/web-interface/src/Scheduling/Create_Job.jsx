@@ -524,6 +524,7 @@ const GlassPanel = ({ children, sx }) => (
 const EXEC_CONTEXT_COPY = {
   system: { title: "Windows (System)", detail: "Runs on device as SYSTEM" },
   current_user: { title: "Windows (Logged-In User)", detail: "Runs on device as user session" },
+  local: { title: "Engine Localhost", detail: "Runs on the Linux Engine via Ansible local connection" },
   ssh: { title: "Remote SSH", detail: "Executes from engine host" },
   winrm: { title: "Remote WinRM", detail: "Executes from engine host" },
 };
@@ -1236,7 +1237,7 @@ export default function CreateJob({
   }, [remoteExec, filteredCredentials, selectedCredentialId, execContext, useSvcAccount]);
 
   const [addTargetOpen, setAddTargetOpen] = useState(false);
-  const [availableDevices, setAvailableDevices] = useState([]); // [{hostname, display, online}]
+  const [availableDevices, setAvailableDevices] = useState([]); // [{hostname, display, online, deviceGuid, siteId, site}]
   const [selectedDeviceTargets, setSelectedDeviceTargets] = useState({});
   const [selectedFilterTargets, setSelectedFilterTargets] = useState({});
   const [selectedFilterRows, setSelectedFilterRows] = useState([]);
@@ -1272,6 +1273,18 @@ export default function CreateJob({
   const devicePickerGridApiRef = useRef(null);
   const filterPickerGridApiRef = useRef(null);
 
+  const deviceIdentityKey = useCallback((value) => {
+    if (!value || typeof value !== "object") return "";
+    const guid = String(value.device_guid || value.deviceGuid || value.guid || value.agent_guid || "").trim().toLowerCase();
+    if (guid) return `guid:${guid}`;
+    const hostname = String(value.hostname || value.agent_hostname || value.display || "").trim().toLowerCase();
+    if (!hostname) return "";
+    const rawSiteId = value.site_id ?? value.siteId ?? value.siteID ?? "";
+    const siteId = rawSiteId === "" || rawSiteId == null ? "" : String(rawSiteId).trim();
+    if (siteId) return `site:${siteId}:${hostname}`;
+    return `host:${hostname}`;
+  }, []);
+
   const normalizeTarget = useCallback((rawTarget) => {
     if (!rawTarget) return null;
     if (typeof rawTarget === "string") {
@@ -1294,7 +1307,22 @@ export default function CreateJob({
           (rawTarget.summary && (rawTarget.summary.os || rawTarget.summary.operating_system)) ||
           "";
         const siteValue = rawTarget.site || rawTarget.site_name || rawTarget.site_scope || rawTarget.siteScope || "";
-        return { kind: "device", hostname: host, os: osValue, site: siteValue };
+        const siteIdValue = rawTarget.site_id ?? rawTarget.siteId ?? null;
+        const deviceGuidValue =
+          rawTarget.device_guid ||
+          rawTarget.deviceGuid ||
+          rawTarget.guid ||
+          rawTarget.agent_guid ||
+          "";
+        return {
+          kind: "device",
+          hostname: host,
+          os: osValue,
+          site: siteValue,
+          site_name: siteValue,
+          site_id: siteIdValue,
+          device_guid: deviceGuidValue,
+        };
       }
       if (rawKind === "filter" || rawTarget.filter_id != null || rawTarget.id != null) {
         const idValue = rawTarget.filter_id ?? rawTarget.id;
@@ -1328,9 +1356,9 @@ export default function CreateJob({
   const targetKey = useCallback((target) => {
     if (!target) return "";
     if (target.kind === "filter") return `filter-${target.filter_id}`;
-    if (target.kind === "device") return `device-${(target.hostname || "").toLowerCase()}`;
+    if (target.kind === "device") return `device-${deviceIdentityKey(target)}`;
     return "";
-  }, []);
+  }, [deviceIdentityKey]);
 
   const normalizeTargetList = useCallback(
     (list) => {
@@ -1363,7 +1391,13 @@ export default function CreateJob({
           };
         }
         if (target.kind === "device") {
-          return target.hostname;
+          return {
+            kind: "device",
+            device_guid: target.device_guid || "",
+            hostname: target.hostname,
+            site_id: target.site_id ?? null,
+            site_name: target.site_name || target.site || "",
+          };
         }
         return null;
       })
@@ -1402,12 +1436,12 @@ export default function CreateJob({
   const availableDeviceMap = useMemo(() => {
     const map = new Map();
     availableDevices.forEach((device) => {
-      const key = String(device?.hostname || "").toLowerCase();
+      const key = deviceIdentityKey(device);
       if (!key) return;
       map.set(key, device);
     });
     return map;
-  }, [availableDevices]);
+  }, [availableDevices, deviceIdentityKey]);
   const devicePickerRows = useMemo(() => {
     const query = deviceSearch.trim().toLowerCase();
     if (query.length < 3) return [];
@@ -1417,14 +1451,14 @@ export default function CreateJob({
         return display.includes(query);
       })
       .map((device, index) => ({
-        id: String(device?.hostname || device?.display || `device-${index}`).toLowerCase(),
+        id: deviceIdentityKey(device) || String(device?.hostname || device?.display || `device-${index}`).toLowerCase(),
         name: device?.display || device?.hostname || "Device",
         status: device?.online ? "Online" : "Offline",
         os: device?.os || "",
         site: device?.site || "",
         raw: device,
       }));
-  }, [availableDevices, deviceSearch]);
+  }, [availableDevices, deviceIdentityKey, deviceSearch]);
   const devicePickerOverlay = useMemo(
     () =>
       deviceSearch.trim().length < 3
@@ -1483,7 +1517,7 @@ export default function CreateJob({
   const deviceRowsMap = useMemo(() => {
     const map = new Map();
     deviceRows.forEach((device) => {
-      const key = String(device?.hostname || device?.agent_hostname || device?.id || "").toLowerCase();
+      const key = deviceIdentityKey(device);
       if (!key) return;
       const osValue =
         device?.os ||
@@ -1497,7 +1531,7 @@ export default function CreateJob({
       map.set(key, { ...device, os: osValue, site: siteValue });
     });
     return map;
-  }, [deviceRows]);
+  }, [deviceIdentityKey, deviceRows]);
   const targetGridRows = useMemo(() => {
     const resolveOs = (target) => {
       if (!target || target.kind !== "device") return "";
@@ -1510,7 +1544,7 @@ export default function CreateJob({
         target.system ||
         target.os_name;
       if (explicit) return explicit;
-      const key = String(target.hostname || "").toLowerCase();
+      const key = deviceIdentityKey(target);
       if (!key) return "";
       const fromAvailable = availableDeviceMap.get(key);
       if (fromAvailable?.os) return fromAvailable.os;
@@ -1526,7 +1560,7 @@ export default function CreateJob({
         : target?.site ||
           target?.site_name ||
           (() => {
-            const key = String(target.hostname || "").toLowerCase();
+            const key = deviceIdentityKey(target);
             return availableDeviceMap.get(key)?.site || deviceRowsMap.get(key)?.site || "";
           })();
       const deviceCount =
@@ -1551,7 +1585,7 @@ export default function CreateJob({
         rawTarget: target,
       };
     });
-  }, [targets, targetKey, availableDeviceMap, deviceRowsMap]);
+  }, [targets, targetKey, availableDeviceMap, deviceIdentityKey, deviceRowsMap]);
   const targetGridColumnDefs = useMemo(
     () => [
       { field: "typeLabel", headerName: "Type", minWidth: 120, flex: 0.9, filter: "agTextColumnFilter" },
@@ -2943,14 +2977,21 @@ export default function CreateJob({
     setSelectedFilterRows([]);
     loadFilterCatalog();
     try {
-      const resp = await fetch("/api/agents");
+      const resp = await fetch("/api/devices");
       if (resp.ok) {
         const data = await resp.json();
-        const list = Object.values(data || {}).map((a) => ({
+        const rawDevices = Array.isArray(data?.devices) ? data.devices : [];
+        const list = rawDevices.map((a) => ({
           hostname: a.hostname || a.agent_hostname || a.id || "unknown",
           display: a.hostname || a.agent_hostname || a.id || "unknown",
-          online: !!a.collector_active,
+          online: String(a.status || "").trim().toLowerCase() === "online" || String(a.status || "").trim().toLowerCase() === "active",
           site: a.site || a.site_name || a.site_scope || a.group || "",
+          siteId: a.site_id ?? null,
+          site_id: a.site_id ?? null,
+          site_name: a.site_name || a.site || "",
+          deviceGuid: a.device_guid || a.guid || a.agent_guid || "",
+          device_guid: a.device_guid || a.guid || a.agent_guid || "",
+          connection_type: a.connection_type || "",
           os:
             a.os ||
             a.operating_system ||
@@ -2972,6 +3013,26 @@ export default function CreateJob({
   };
 
   const handleCreate = async () => {
+    const requiresAnsibleOnly = execContext === "local" || execContext === "ssh" || execContext === "winrm";
+    if (requiresAnsibleOnly) {
+      const hasNonAnsibleComponent = components.some((component) => {
+        const rawValues = [
+          component?.type,
+          component?.component_type,
+          component?.assembly_type,
+          component?.assemblyType,
+          component?.assembly_subtype,
+          component?.assemblySubtype,
+          component?.script_type,
+        ];
+        const normalized = rawValues.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+        return !(normalized.includes("ansible") || normalized.includes("playbook"));
+      });
+      if (hasNonAnsibleComponent) {
+        alert("Jobs using local, SSH, or WinRM execution contexts must contain only Ansible playbook assemblies.");
+        return;
+      }
+    }
     if (remoteExec && !(execContext === "winrm" && useSvcAccount) && !selectedCredentialId) {
       alert("Please select a credential for this execution context.");
       return;
@@ -3508,6 +3569,7 @@ const heroTiles = useMemo(() => {
             >
               <MenuItem value="system">Run on agent as SYSTEM (device-local)</MenuItem>
               <MenuItem value="current_user">Run on agent as logged-in user (device-local)</MenuItem>
+              <MenuItem value="local">Run on Engine via Ansible localhost (testing)</MenuItem>
               <MenuItem value="ssh">Run from server via SSH (remote)</MenuItem>
               <MenuItem value="winrm">Run from server via WinRM (remote)</MenuItem>
             </TextField>
@@ -3756,6 +3818,24 @@ const heroTiles = useMemo(() => {
                       border: `1px solid ${MAGIC_UI.panelBorder}`,
                       borderRadius: 2,
                       bgcolor: "rgba(4,7,17,0.65)",
+                      maxHeight: "56vh",
+                      overflowY: "auto",
+                      overflowX: "auto",
+                      overscrollBehavior: "contain",
+                      scrollbarGutter: "stable both-edges",
+                      "&::-webkit-scrollbar": {
+                        width: 10,
+                        height: 10,
+                      },
+                      "&::-webkit-scrollbar-track": {
+                        background: "rgba(15,23,42,0.45)",
+                        borderRadius: 999,
+                      },
+                      "&::-webkit-scrollbar-thumb": {
+                        background: "rgba(125,183,255,0.35)",
+                        borderRadius: 999,
+                        border: "2px solid rgba(15,23,42,0.45)",
+                      },
                     }}
                   >
                     <Editor
@@ -3769,8 +3849,11 @@ const heroTiles = useMemo(() => {
                         fontSize: 12,
                         color: "#e6edf3",
                         minHeight: 160,
+                        whiteSpace: "pre",
+                        overflowWrap: "normal",
+                        wordBreak: "normal",
                       }}
-                      textareaProps={{ readOnly: true }}
+                      textareaProps={{ readOnly: true, wrap: "off", spellCheck: false }}
                     />
                   </Box>
                 </Box>
@@ -4148,16 +4231,23 @@ const heroTiles = useMemo(() => {
                 }
               } else {
                 const chosenDevices = Object.keys(selectedDeviceTargets)
-                  .filter((hostname) => selectedDeviceTargets[hostname])
-                  .map((hostname) => {
-                    const normalized = String(hostname || "").toLowerCase();
-                    const lookup = availableDeviceMap.get(normalized);
+                  .filter((deviceKey) => selectedDeviceTargets[deviceKey])
+                  .map((deviceKey) => {
+                    const lookup = availableDeviceMap.get(deviceKey);
                     if (lookup) {
-                      return { kind: "device", hostname: lookup.hostname, os: lookup.os, site: lookup.site };
+                      return {
+                        kind: "device",
+                        hostname: lookup.hostname,
+                        os: lookup.os,
+                        site: lookup.site,
+                        site_name: lookup.site_name || lookup.site,
+                        site_id: lookup.site_id ?? lookup.siteId ?? null,
+                        device_guid: lookup.device_guid || lookup.deviceGuid || "",
+                      };
                     }
-                    return { kind: "device", hostname };
+                    return null;
                   });
-                if (chosenDevices.length) addTargets(chosenDevices);
+                if (chosenDevices.filter(Boolean).length) addTargets(chosenDevices.filter(Boolean));
               }
               setAddTargetOpen(false);
             }}

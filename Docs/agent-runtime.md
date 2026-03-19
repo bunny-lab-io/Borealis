@@ -14,7 +14,6 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 ## Role Catalog (Current)
 - `role_DeviceAudit.py` (ROLE_NAME: `device_audit`) - inventory and audit data capture.
 - `role_Macro.py` (ROLE_NAME: `macro`) - macro automation.
-- `role_PlaybookExec_SYSTEM.py` (ROLE_NAME: `playbook_exec_system`) - Ansible playbook runner (unfinished).
 - `role_VNC.py` (ROLE_NAME: `VNC`) - always-on UltraVNC server lifecycle.
 - `role_RemotePowershell.py` (ROLE_NAME: `RemotePowershell`) - TCP PowerShell server over WireGuard.
 - `role_Screenshot.py` (ROLE_NAME: `screenshot`) - screenshot capture.
@@ -107,7 +106,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 #### Logging
 - Primary log: `Agent/Logs/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
 - Subsystems: log to `Agent/Logs/<service>.log` with the same rotation policy.
-- Install/diagnostics: `Agent/Logs/install.log`; keep ad-hoc traces (for example, `system_last.ps1`, ansible) under `Agent/Logs/` to keep runtime state self-contained.
+- Install/diagnostics: `Agent/Logs/install.log`; keep ad-hoc traces (for example, `system_last.ps1`) under `Agent/Logs/` to keep runtime state self-contained.
 - Troubleshooting: prefix lines with `<timestamp>-<service-name>-<log-data>`; ask operators whether verbose logging should stay after resolution.
 
 #### Security
@@ -133,7 +132,10 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 #### Platform parity
 - Windows is the reference. Linux (`Borealis.sh`) lags in venv setup, supervision, and role loading; align Linux before macOS work continues.
 
-#### Ansible support (unfinished)
-- Agent and Engine scaffolding exists but is unreliable: expect stalled or silent failures, inconsistent recap, missing collections.
-- Windows blockers: `ansible.windows.*` usually needs PSRP/WinRM; SYSTEM context lacks loopback remoting guarantees; interpreter paths vary.
-- Treat Ansible features as disabled until packaging/controller story is complete. Future direction: credential management, selectable connections, reliable live output/cancel, packaged collections.
+#### Ansible support
+- The agent no longer hosts an Ansible playbook execution role.
+- Borealis Ansible control-node execution is Engine-side and should target devices over the Engine-managed WireGuard paths.
+- Agent responsibilities for the Ansible architecture are limited to:
+  - maintaining device identity and inventory in the Engine
+  - sustaining the reverse WireGuard tunnel and related remote-access services
+  - exposing the device to Engine-driven automation over the VPN path

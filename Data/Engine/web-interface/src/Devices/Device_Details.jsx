@@ -605,21 +605,9 @@ const StatusPillCell = React.memo(function StatusPillCell(props) {
 const HistoryActionsCell = React.memo(function HistoryActionsCell(props) {
   const row = props.data || {};
   const onViewOutput = props.context?.onViewOutput;
-  const onCancelAnsible = props.context?.onCancelAnsible;
-  const scriptType = String(row.script_type || "").toLowerCase();
-  const isRunningAnsible = scriptType === "ansible" && String(row.status || "").toLowerCase() === "running";
 
   return (
     <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-      {isRunningAnsible ? (
-        <Button
-          size="small"
-          sx={{ color: "#ff7b89", textTransform: "none", minWidth: 0, p: 0 }}
-          onClick={() => onCancelAnsible && onCancelAnsible(row)}
-        >
-          Cancel
-        </Button>
-      ) : null}
       {row.has_stdout ? (
         <Button
           size="small"
@@ -2644,28 +2632,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     }
   }, [resolveAssemblyName]);
 
-  const handleCancelAnsibleRun = useCallback(async (row) => {
-    if (!row?.id) return;
-    try {
-      const resp = await fetch(`/api/ansible/run_for_activity/${encodeURIComponent(row.id)}`);
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      const runId = data.run_id;
-      if (runId) {
-        try {
-          const socket = window.BorealisSocket;
-          socket && socket.emit("ansible_playbook_cancel", { run_id: runId });
-        } catch {
-          /* ignore socket errors */
-        }
-      } else {
-        alert("Unable to locate run id for this playbook run.");
-      }
-    } catch (e) {
-      alert(String(e.message || e));
-    }
-  }, []);
-
   const historyDisplayRows = useMemo(() => {
     return (historyRows || []).map((row) => ({
       ...row,
@@ -2678,9 +2644,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const historyGridContext = useMemo(
     () => ({
       onViewOutput: handleViewOutput,
-      onCancelAnsible: handleCancelAnsibleRun,
     }),
-    [handleViewOutput, handleCancelAnsibleRun]
+    [handleViewOutput]
   );
 
 
@@ -2939,8 +2904,24 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
               border: `1px solid ${MAGIC_UI.panelBorder}`,
               borderRadius: 2,
               bgcolor: "rgba(4,7,17,0.65)",
-              maxHeight: 500,
-              overflow: "auto",
+              maxHeight: "56vh",
+              overflowY: "auto",
+              overflowX: "auto",
+              overscrollBehavior: "contain",
+              scrollbarGutter: "stable both-edges",
+              "&::-webkit-scrollbar": {
+                width: 10,
+                height: 10,
+              },
+              "&::-webkit-scrollbar-track": {
+                background: "rgba(15,23,42,0.45)",
+                borderRadius: 999,
+              },
+              "&::-webkit-scrollbar-thumb": {
+                background: "rgba(125,183,255,0.35)",
+                borderRadius: 999,
+                border: "2px solid rgba(15,23,42,0.45)",
+              },
             }}
           >
             <Editor
@@ -2954,8 +2935,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                 fontSize: 12,
                 color: "#e6edf3",
                 minHeight: 200,
+                whiteSpace: "pre",
+                overflowWrap: "normal",
+                wordBreak: "normal",
               }}
-              textareaProps={{ readOnly: true }}
+              textareaProps={{ readOnly: true, wrap: "off", spellCheck: false }}
             />
           </Box>
         </DialogContent>

@@ -27,12 +27,4 @@ pywinauto # Windows-based Macro Automation Library
 sounddevice
 numpy
 pywin32; platform_system == "Windows"
-
-# Ansible Libraries
-ansible-core
-ansible-runner
-pywinrm
-requests-credssp
-requests-ntlm
-pypsrp
 psutil

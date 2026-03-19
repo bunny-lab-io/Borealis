@@ -1,0 +1,8 @@
+---
+collections:
+  - name: ansible.windows
+  - name: ansible.posix
+  - name: community.general
+  # Optional. Only install this when Borealis needs to manage an external
+  # AWX / Automation Controller instance from playbooks.
+  # - name: awx.awx

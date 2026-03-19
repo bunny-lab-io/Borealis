@@ -14,10 +14,11 @@ import json
 import logging
 import os
 import re
+import socket
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ...assemblies.service import AssemblyRuntimeService
 from ....db import dbapi as sqlite3
@@ -26,6 +27,14 @@ from ...filters.matcher import DeviceFilterMatcher
 _WINRM_USERNAME_VAR = "__borealis_winrm_username"
 _WINRM_PASSWORD_VAR = "__borealis_winrm_password"
 _WINRM_TRANSPORT_VAR = "__borealis_winrm_transport"
+_PREPARED_REMOTE_PREFLIGHT_ATTEMPTS_ENV = "BOREALIS_SHARED_ANSIBLE_PREPARED_PREFLIGHT_ATTEMPTS"
+_PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_ENV = "BOREALIS_SHARED_ANSIBLE_PREPARED_PREFLIGHT_RETRY_DELAY_SECONDS"
+_SHARED_ANSIBLE_SSH_RETRIES_ENV = "BOREALIS_SHARED_ANSIBLE_SSH_RETRIES"
+_SHARED_ANSIBLE_SSH_TIMEOUT_ENV = "BOREALIS_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS"
+_DEFAULT_PREPARED_REMOTE_PREFLIGHT_ATTEMPTS = 5
+_DEFAULT_PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_SECONDS = 1.0
+_DEFAULT_SHARED_ANSIBLE_SSH_RETRIES = 30
+_DEFAULT_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS = 5
 
 RUN_STATUS_PENDING = "Pending"
 RUN_STATUS_RUNNING = "Running"
@@ -35,6 +44,7 @@ RUN_STATUS_EXPIRED = "Expired"
 RUN_STATUS_TIMED_OUT = "Timed Out"
 RUN_STATUS_SKIPPED = "Skipped"
 SKIP_REASON_NO_TARGETS = "no_devices_targeted"
+SKIP_REASON_NO_ELIGIBLE_TARGETS = "no_eligible_targets"
 TERMINAL_RUN_STATUSES = {
     RUN_STATUS_SUCCESS,
     RUN_STATUS_FAILED,
@@ -42,6 +52,12 @@ TERMINAL_RUN_STATUSES = {
     RUN_STATUS_TIMED_OUT,
     RUN_STATUS_SKIPPED,
 }
+
+RESOLUTION_STATUS_PENDING = "pending"
+RESOLUTION_STATUS_ELIGIBLE = "eligible"
+RESOLUTION_STATUS_SKIPPED = "skipped"
+RESOLUTION_STATUS_UNRESOLVED = "unresolved"
+ENGINE_LOCAL_ALIAS = "borealis-engine-01"
 
 
 def _now_ts() -> int:
@@ -54,6 +70,102 @@ def _env_string(value: Any) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw_value = str(os.getenv(name, "") or "").strip()
+    if not raw_value:
+        return default
+    try:
+        return max(1, int(raw_value))
+    except Exception:
+        return default
+
+
+def _env_non_negative_float(name: str, default: float) -> float:
+    raw_value = str(os.getenv(name, "") or "").strip()
+    if not raw_value:
+        return default
+    try:
+        return max(0.0, float(raw_value))
+    except Exception:
+        return default
+
+
+def _safe_inventory_slug(value: Any, *, fallback: str) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return fallback
+    cleaned = re.sub(r"[^a-z0-9]+", "_", raw)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned or fallback
+
+
+def _safe_inventory_host_label(value: Any, *, fallback: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return fallback
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "-" for ch in raw)
+    cleaned = cleaned.strip(".-")
+    return cleaned or fallback
+
+
+def _inventory_hostname_for_target(
+    hostname: Any,
+    *,
+    site_name: Any,
+    site_id: Any,
+    connection: str,
+) -> str:
+    host_slug = _safe_inventory_slug(hostname, fallback="host")
+    if str(connection or "").strip().lower() == "local":
+        return _safe_inventory_host_label(hostname or ENGINE_LOCAL_ALIAS, fallback=ENGINE_LOCAL_ALIAS)
+    site_slug = _safe_inventory_slug(site_name, fallback="")
+    if site_slug:
+        return f"{site_slug}__{host_slug}"
+    try:
+        if site_id is not None:
+            return f"site_{int(site_id)}__{host_slug}"
+    except Exception:
+        pass
+    return f"unassigned__{host_slug}"
+
+
+def _site_group_name(site_name: Any, site_id: Any) -> str:
+    site_slug = _safe_inventory_slug(site_name, fallback="")
+    if site_slug:
+        return f"site_{site_slug}"
+    try:
+        if site_id is not None:
+            return f"site_{int(site_id)}"
+    except Exception:
+        pass
+    return "site_unassigned"
+
+
+def _extract_endpoint_port(value: Any) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.isdigit():
+            parsed = int(text)
+            return parsed if 1 <= parsed <= 65535 else None
+        if "://" in text:
+            from urllib.parse import urlsplit
+
+            parsed = urlsplit(text)
+            if parsed.port:
+                return int(parsed.port)
+            return None
+        if text.count(":") == 1:
+            host_part, port_part = text.rsplit(":", 1)
+            if host_part and port_part.isdigit():
+                parsed = int(port_part)
+                return parsed if 1 <= parsed <= 65535 else None
+    except Exception:
+        return None
+    return None
 
 
 def _decode_base64_text(value: Any) -> Optional[str]:
@@ -74,6 +186,16 @@ def _decode_base64_text(value: Any) -> Optional[str]:
         return decoded.decode("utf-8")
     except Exception:
         return decoded.decode("utf-8", errors="replace")
+
+
+def _normalize_ssh_private_key_text(value: Any) -> str:
+    text = "" if value is None else str(value)
+    if not text:
+        return ""
+    normalized = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    if normalized and not normalized.endswith("\n"):
+        normalized += "\n"
+    return normalized
 
 
 def _inject_winrm_credential(
@@ -430,6 +552,27 @@ def _aggregate_occurrence_runs(
     return aggregated, counts, has_no_targets_skip
 
 
+def _aggregate_statuses(statuses: Sequence[Any]) -> str:
+    normalized = {str(item or "").strip() for item in statuses if str(item or "").strip()}
+    if not normalized:
+        return RUN_STATUS_PENDING
+    if RUN_STATUS_RUNNING in normalized:
+        return RUN_STATUS_RUNNING
+    if RUN_STATUS_FAILED in normalized:
+        return RUN_STATUS_FAILED
+    if RUN_STATUS_TIMED_OUT in normalized:
+        return RUN_STATUS_TIMED_OUT
+    if RUN_STATUS_EXPIRED in normalized:
+        return RUN_STATUS_EXPIRED
+    if RUN_STATUS_PENDING in normalized:
+        return RUN_STATUS_PENDING
+    if RUN_STATUS_SUCCESS in normalized:
+        return RUN_STATUS_SUCCESS
+    if RUN_STATUS_SKIPPED in normalized:
+        return RUN_STATUS_SKIPPED
+    return next(iter(normalized))
+
+
 class JobScheduler:
     def __init__(
         self,
@@ -467,6 +610,10 @@ class JobScheduler:
         self._server_ansible_runner: Optional[Callable[..., str]] = None
         # Optional callback to fetch stored credentials (with decrypted secrets)
         self._credential_fetcher: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None
+        # Optional callback to fetch active WireGuard sessions keyed by agent_id.
+        self._vpn_session_lookup: Optional[Callable[[], Dict[str, Dict[str, Any]]]] = None
+        # Optional callback to re-prime existing WireGuard sessions for selected agents.
+        self._vpn_session_prepare: Optional[Callable[[Sequence[str]], Dict[str, Dict[str, Any]]]] = None
 
         # Ensure run-history table exists
         self._init_tables()
@@ -537,14 +684,6 @@ class JobScheduler:
             return top in ("Scripts",)
         except Exception:
             return False
-
-    def _generated_ansible_root(self) -> Path:
-        project_root_raw = os.environ.get("BOREALIS_PROJECT_ROOT")
-        if project_root_raw:
-            project_root = Path(project_root_raw).expanduser().resolve()
-        else:
-            project_root = Path(__file__).resolve().parents[5]
-        return project_root / "Engine" / "Generated" / "Ansible_Playbooks"
 
     def _resolve_runtime_document(
         self,
@@ -795,18 +934,6 @@ class JobScheduler:
                 rel_norm = resolved_virtual_path
             assembly_source = "runtime"
             assembly_guid = str(record.get("assembly_guid") or "").strip().lower() if isinstance(record, dict) else ""
-            stage_relative = rel_norm
-            if stage_relative.lower().startswith("ansible_playbooks/"):
-                stage_relative = stage_relative.split("/", 1)[1] if "/" in stage_relative else ""
-            stage_parts = [part for part in stage_relative.split("/") if part not in {"", ".", ".."}]
-            if not stage_parts:
-                stage_parts = [f"{assembly_guid or uuid.uuid4().hex}.yml"]
-            elif "." not in stage_parts[-1]:
-                stage_parts[-1] = f"{stage_parts[-1]}.yml"
-            generated_root = self._generated_ansible_root().resolve()
-            abs_path = (generated_root.joinpath(*stage_parts)).resolve()
-            if not str(abs_path).startswith(str(generated_root)):
-                raise RuntimeError("Resolved Ansible staging path escapes the generated runtime root.")
             friendly_name = (doc.get("name") or "").strip()
             if not friendly_name:
                 friendly_name = os.path.basename(rel_norm) if rel_norm else f"Job-{scheduled_job_id}"
@@ -832,24 +959,17 @@ class JobScheduler:
             variables = doc.get("variables") or []
             files = doc.get("files") or []
             run_mode_norm = (run_mode or "system").strip().lower()
-            server_run = run_mode_norm == "ssh"
-            agent_winrm = run_mode_norm == "winrm"
-
-            if agent_winrm and not use_service_account:
-                if not credential_id:
-                    raise RuntimeError("WinRM execution requires a credential_id")
-                if not callable(self._credential_fetcher):
-                    raise RuntimeError("Credential fetcher is not configured")
-                cred_detail = self._credential_fetcher(int(credential_id))
-                if not cred_detail:
-                    raise RuntimeError("Credential not found")
-                try:
-                    overrides_map = _inject_winrm_credential(overrides_map, cred_detail)
-                finally:
-                    try:
-                        cred_detail.clear()  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
+            if run_mode_norm in {"ssh", "winrm"}:
+                raise RuntimeError(
+                    "Remote Engine-side Ansible targeting over WireGuard is not implemented yet. "
+                    "Use execution_context='local' for Engine localhost testing for now."
+                )
+            if run_mode_norm != "local":
+                raise RuntimeError(
+                    f"Unsupported Ansible execution context '{run_mode_norm}'. "
+                    "Use execution_context='local' for the current Engine-side implementation."
+                )
+            server_run = True
 
             # Record in activity_history for UI parity
             now = _now_ts()
@@ -878,32 +998,24 @@ class JobScheduler:
             finally:
                 conn.close()
 
-            if server_run and not os.path.isfile(abs_path):
-                try:
-                    abs_path.parent.mkdir(parents=True, exist_ok=True)
-                    with abs_path.open("w", encoding="utf-8") as fh:
-                        fh.write(normalized_script)
-                except Exception as exc:
-                    raise RuntimeError(f"Unable to stage Ansible playbook for server execution: {exc}")
-
             if server_run:
-                if not credential_id:
-                    raise RuntimeError("Remote execution requires a credential_id")
                 if not callable(self._server_ansible_runner):
                     raise RuntimeError("Server-side Ansible runner is not configured")
                 try:
                     self._server_ansible_runner(
                         hostname=str(hostname),
-                        playbook_abs_path=str(abs_path),
                         playbook_rel_path=rel_norm,
                         playbook_name=friendly_name,
-                        credential_id=int(credential_id),
+                        playbook_content=normalized_script,
+                        credential_id=None,
                         variable_values=overrides_map,
+                        payload_files=files,
                         source="scheduled_job",
                         activity_id=act_id,
                         scheduled_job_id=scheduled_job_id,
                         scheduled_run_id=scheduled_run_row_id,
                         scheduled_job_run_row_id=scheduled_run_row_id,
+                        connection=run_mode_norm,
                     )
                     self._log_event(
                         "queued server ansible execution",
@@ -940,40 +1052,6 @@ class JobScheduler:
                         except Exception:
                             pass
                     raise
-            else:
-                payload = {
-                    "run_id": uuid.uuid4().hex,
-                    "target_hostname": str(hostname),
-                    "playbook_name": friendly_name,
-                    "playbook_content": encoded_content,
-                    "playbook_encoding": "base64",
-                    "activity_job_id": act_id,
-                    "scheduled_job_id": int(scheduled_job_id),
-                    "scheduled_run_id": int(scheduled_run_row_id),
-                    "connection": "winrm",
-                    "variables": variables,
-                    "files": files,
-                    "variable_values": overrides_map,
-                    "context": {
-                        "scheduled_job_id": int(scheduled_job_id),
-                        "scheduled_job_run_id": int(scheduled_run_row_id),
-                    },
-                }
-                try:
-                    self.socketio.emit("ansible_playbook_run", payload)
-                    self._log_event(
-                        "emitted ansible payload",
-                        job_id=int(scheduled_job_id),
-                        host=str(hostname),
-                        run_id=scheduled_run_row_id,
-                        extra={
-                            "run_mode": run_mode_norm,
-                            "assembly_source": assembly_source,
-                            "assembly_guid": assembly_guid or "",
-                        },
-                    )
-                except Exception:
-                    pass
             if act_id:
                 return {
                     "activity_id": int(act_id),
@@ -1313,6 +1391,12 @@ class JobScheduler:
     def set_credential_fetcher(self, fn: Optional[Callable[[int], Optional[Dict[str, Any]]]]):
         self._credential_fetcher = fn
 
+    def set_vpn_session_lookup(self, fn: Optional[Callable[[], Dict[str, Dict[str, Any]]]]):
+        self._vpn_session_lookup = fn
+
+    def set_vpn_session_prepare(self, fn: Optional[Callable[[Sequence[str]], Dict[str, Dict[str, Any]]]]):
+        self._vpn_session_prepare = fn
+
     def _init_tables(self):
         conn = self._conn()
         cur = conn.cursor()
@@ -1331,6 +1415,10 @@ class JobScheduler:
                 updated_at INTEGER,
                 target_hostname TEXT,
                 skip_reason TEXT,
+                shared_execution INTEGER NOT NULL DEFAULT 0,
+                component_index INTEGER,
+                component_kind TEXT,
+                component_name TEXT,
                 FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
             )
             """
@@ -1343,6 +1431,14 @@ class JobScheduler:
                 cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN target_hostname TEXT")
             if "skip_reason" not in cols:
                 cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN skip_reason TEXT")
+            if "shared_execution" not in cols:
+                cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN shared_execution INTEGER NOT NULL DEFAULT 0")
+            if "component_index" not in cols:
+                cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN component_index INTEGER")
+            if "component_kind" not in cols:
+                cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN component_kind TEXT")
+            if "component_name" not in cols:
+                cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN component_name TEXT")
         except Exception:
             pass
         # Helpful index for lookups
@@ -1381,11 +1477,31 @@ class JobScheduler:
                     hostname TEXT NOT NULL,
                     site_id INTEGER,
                     resolved_from_filter_id INTEGER,
+                    inventory_hostname TEXT,
+                    wireguard_peer_ip TEXT,
+                    resolved_connection TEXT,
+                    resolution_status TEXT,
+                    resolution_reason TEXT,
+                    resolved_from_filter_ids_json TEXT,
                     created_at INTEGER NOT NULL,
                     FOREIGN KEY(run_id) REFERENCES scheduled_job_runs(id) ON DELETE CASCADE
                 )
                 """
             )
+            cur.execute("PRAGMA table_info(scheduled_job_run_targets)")
+            target_cols = {row[1] for row in cur.fetchall()}
+            if "inventory_hostname" not in target_cols:
+                cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN inventory_hostname TEXT")
+            if "wireguard_peer_ip" not in target_cols:
+                cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN wireguard_peer_ip TEXT")
+            if "resolved_connection" not in target_cols:
+                cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN resolved_connection TEXT")
+            if "resolution_status" not in target_cols:
+                cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN resolution_status TEXT")
+            if "resolution_reason" not in target_cols:
+                cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN resolution_reason TEXT")
+            if "resolved_from_filter_ids_json" not in target_cols:
+                cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN resolved_from_filter_ids_json TEXT")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_job_run_targets_run ON scheduled_job_run_targets(run_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_job_run_targets_filter ON scheduled_job_run_targets(resolved_from_filter_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_job_run_targets_host ON scheduled_job_run_targets(hostname)")
@@ -1393,6 +1509,625 @@ class JobScheduler:
             pass
         conn.commit()
         conn.close()
+
+    def _decode_secret_blob(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, memoryview):
+            value = value.tobytes()
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8")
+            except Exception:
+                return value.decode("utf-8", errors="replace")
+        return str(value)
+
+    def _load_credential(self, credential_id: Optional[int]) -> Optional[Dict[str, Any]]:
+        if credential_id is None:
+            return None
+        if callable(self._credential_fetcher):
+            try:
+                return self._credential_fetcher(int(credential_id))
+            except Exception as exc:
+                self._log_event(
+                    "credential fetcher failed",
+                    level="ERROR",
+                    extra={"credential_id": credential_id, "error": str(exc)},
+                )
+                return None
+
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    name,
+                    site_id,
+                    credential_type,
+                    connection_type,
+                    username,
+                    password_encrypted,
+                    private_key_encrypted,
+                    private_key_passphrase_encrypted,
+                    become_method,
+                    become_username,
+                    become_password_encrypted,
+                    metadata_json
+                  FROM credentials
+                 WHERE id=?
+                """,
+                (int(credential_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            metadata = {}
+            try:
+                metadata = json.loads(row[12] or "{}")
+            except Exception:
+                metadata = {}
+            return {
+                "id": int(row[0]),
+                "name": row[1] or "",
+                "site_id": row[2],
+                "credential_type": row[3] or "",
+                "connection_type": row[4] or "",
+                "username": row[5] or "",
+                "password": self._decode_secret_blob(row[6]),
+                "private_key": self._decode_secret_blob(row[7]),
+                "private_key_passphrase": self._decode_secret_blob(row[8]),
+                "become_method": row[9] or "",
+                "become_username": row[10] or "",
+                "become_password": self._decode_secret_blob(row[11]),
+                "metadata": metadata if isinstance(metadata, dict) else {},
+            }
+        except Exception as exc:
+            self._log_event(
+                "failed to load credential from database",
+                level="ERROR",
+                extra={"credential_id": credential_id, "error": str(exc)},
+            )
+            return None
+        finally:
+            conn.close()
+
+    def _load_service_account(self, agent_id: str) -> Optional[Dict[str, Any]]:
+        agent_key = str(agent_id or "").strip()
+        if not agent_key:
+            return None
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT agent_id, username, password_encrypted
+                  FROM agent_service_account
+                 WHERE agent_id=?
+                """,
+                (agent_key,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "agent_id": row[0] or "",
+                "username": row[1] or "",
+                "password": self._decode_secret_blob(row[2]),
+            }
+        except Exception as exc:
+            self._log_event(
+                "failed to load agent service account",
+                level="ERROR",
+                extra={"agent_id": agent_key, "error": str(exc)},
+            )
+            return None
+        finally:
+            conn.close()
+
+    def _active_vpn_sessions(self) -> Dict[str, Dict[str, Any]]:
+        if not callable(self._vpn_session_lookup):
+            return {}
+        try:
+            sessions = self._vpn_session_lookup() or {}
+        except Exception as exc:
+            self._log_event(
+                "failed to gather active vpn sessions",
+                level="ERROR",
+                extra={"error": str(exc)},
+            )
+            return {}
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for agent_id, payload in sessions.items():
+            key = str(agent_id or "").strip()
+            if not key or not isinstance(payload, dict):
+                continue
+            normalized[key] = payload
+        return normalized
+
+    def _prepare_vpn_sessions(self, agent_ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+        normalized_agent_ids = sorted({str(agent_id or "").strip() for agent_id in agent_ids if str(agent_id or "").strip()})
+        if not normalized_agent_ids:
+            return self._active_vpn_sessions()
+        if not callable(self._vpn_session_prepare):
+            return self._active_vpn_sessions()
+        try:
+            sessions = self._vpn_session_prepare(normalized_agent_ids) or {}
+        except Exception as exc:
+            self._log_event(
+                "failed to prepare vpn sessions for shared ansible run",
+                level="ERROR",
+                extra={"agent_count": len(normalized_agent_ids), "error": str(exc)},
+            )
+            return self._active_vpn_sessions()
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for agent_id, payload in sessions.items():
+            key = str(agent_id or "").strip()
+            if not key or not isinstance(payload, dict):
+                continue
+            normalized[key] = payload
+        return normalized
+
+    def _device_lookup_key_for_target(self, target: Mapping[str, Any]) -> str:
+        hostname = str(target.get("hostname") or "").strip()
+        site_id = target.get("site_id")
+        device_guid = str(target.get("device_guid") or "").strip().lower()
+        if device_guid:
+            return f"guid:{device_guid}"
+        if hostname:
+            try:
+                if site_id is not None:
+                    return f"site:{int(site_id)}:{hostname.lower()}"
+            except Exception:
+                pass
+            return f"host:{hostname.lower()}"
+        return ""
+
+    def _preflight_remote_port(
+        self,
+        *,
+        host: str,
+        port: int,
+        attempts: int = 3,
+        timeout_seconds: float = 1.25,
+        retry_delay_seconds: float = 0.5,
+    ) -> str:
+        normalized_host = str(host or "").strip()
+        if not normalized_host:
+            return "missing_host"
+        normalized_port = int(port)
+        last_error = ""
+        for attempt in range(max(1, int(attempts))):
+            sock = None
+            try:
+                sock = socket.create_connection((normalized_host, normalized_port), timeout=timeout_seconds)
+                return ""
+            except Exception as exc:
+                last_error = str(exc).strip() or exc.__class__.__name__
+            finally:
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+            if attempt + 1 < max(1, int(attempts)):
+                time.sleep(max(0.0, float(retry_delay_seconds)))
+        return last_error or "connection_failed"
+
+    def _resolved_targets_from_meta(self, resolution_meta: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        entries = []
+        if isinstance(resolution_meta, dict):
+            raw_entries = resolution_meta.get("resolved_targets")
+            if isinstance(raw_entries, list):
+                entries = raw_entries
+        results: List[Dict[str, Any]] = []
+        for item in entries or []:
+            if not isinstance(item, dict):
+                continue
+            hostname = str(item.get("hostname") or "").strip()
+            if not hostname:
+                continue
+            results.append(
+                {
+                    "hostname": hostname,
+                    "device_guid": str(item.get("device_guid") or "").strip(),
+                    "site_id": item.get("site_id"),
+                    "site_name": str(item.get("site_name") or "").strip(),
+                    "agent_id": str(item.get("agent_id") or "").strip(),
+                    "connection_type": str(item.get("connection_type") or "").strip().lower(),
+                    "connection_endpoint": str(item.get("connection_endpoint") or "").strip(),
+                    "operating_system": str(item.get("operating_system") or "").strip(),
+                    "resolved_from_filter_ids": [
+                        int(value)
+                        for value in (item.get("resolved_from_filter_ids") or [])
+                        if str(value).strip().isdigit()
+                    ],
+                }
+            )
+        return results
+
+    def _component_name_for_display(self, component: Dict[str, Any], *, fallback: str) -> str:
+        if not isinstance(component, dict):
+            return fallback
+        for key in ("name", "component_name", "displayName", "script_name", "script_path", "path"):
+            value = str(component.get(key) or "").strip()
+            if value:
+                return value
+        return fallback
+
+    def _should_use_shared_ansible_runs(
+        self,
+        *,
+        run_mode: str,
+        script_components: Sequence[Dict[str, Any]],
+        ansible_components: Sequence[Dict[str, Any]],
+    ) -> bool:
+        return bool(ansible_components) and not bool(script_components) and str(run_mode or "").strip().lower() in {
+            "local",
+            "ssh",
+            "winrm",
+        }
+
+    def _load_run_targets(self, run_id: int) -> List[Dict[str, Any]]:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    run_id,
+                    device_guid,
+                    hostname,
+                    site_id,
+                    resolved_from_filter_id,
+                    inventory_hostname,
+                    wireguard_peer_ip,
+                    resolved_connection,
+                    resolution_status,
+                    resolution_reason,
+                    resolved_from_filter_ids_json,
+                    created_at
+                  FROM scheduled_job_run_targets
+                 WHERE run_id=?
+              ORDER BY id ASC
+                """,
+                (int(run_id),),
+            )
+            rows = []
+            for row in cur.fetchall():
+                try:
+                    filter_ids = json.loads(row[11] or "[]")
+                except Exception:
+                    filter_ids = []
+                rows.append(
+                    {
+                        "id": int(row[0]),
+                        "run_id": int(row[1]),
+                        "device_guid": row[2] or "",
+                        "hostname": row[3] or "",
+                        "site_id": row[4],
+                        "resolved_from_filter_id": row[5],
+                        "inventory_hostname": row[6] or "",
+                        "wireguard_peer_ip": row[7] or "",
+                        "resolved_connection": row[8] or "",
+                        "resolution_status": row[9] or "",
+                        "resolution_reason": row[10] or "",
+                        "resolved_from_filter_ids": filter_ids if isinstance(filter_ids, list) else [],
+                        "created_at": row[12],
+                    }
+                )
+            return rows
+        finally:
+            conn.close()
+
+    def _lookup_devices_for_targets(self, run_targets: Sequence[Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        dataset = self._filter_matcher.fetch_devices()
+        lookup: Dict[str, Dict[str, Any]] = {}
+        for device in dataset:
+            guid_value = str(device.get("device_guid") or device.get("guid") or "").strip().lower()
+            hostname_value = str(device.get("hostname") or "").strip().lower()
+            site_id = device.get("site_id")
+            try:
+                site_id = int(site_id) if site_id is not None else None
+            except Exception:
+                site_id = None
+            if guid_value:
+                lookup[f"guid:{guid_value}"] = device
+            if hostname_value and site_id is not None:
+                lookup[f"site:{site_id}:{hostname_value}"] = device
+            if hostname_value and f"host:{hostname_value}" not in lookup:
+                lookup[f"host:{hostname_value}"] = device
+        return lookup
+
+    def _record_shared_ansible_occurrence_snapshot(
+        self,
+        *,
+        job_id: int,
+        scheduled_ts: int,
+        run_mode: str,
+        ansible_components: Sequence[Dict[str, Any]],
+        resolved_targets: Sequence[Dict[str, Any]],
+        created_at: int,
+    ) -> None:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=?",
+                (int(job_id), int(scheduled_ts)),
+            )
+            existing_count = int(cur.fetchone()[0] or 0)
+            if existing_count > 0:
+                return
+
+            for component_index, component in enumerate(ansible_components):
+                component_name = self._component_name_for_display(
+                    dict(component or {}),
+                    fallback=f"Ansible Playbook {component_index + 1}",
+                )
+                initial_status = RUN_STATUS_PENDING if resolved_targets else RUN_STATUS_SKIPPED
+                initial_skip_reason = "" if resolved_targets else SKIP_REASON_NO_TARGETS
+                cur.execute(
+                    """
+                    INSERT INTO scheduled_job_runs(
+                        job_id,
+                        scheduled_ts,
+                        status,
+                        skip_reason,
+                        created_at,
+                        updated_at,
+                        shared_execution,
+                        component_index,
+                        component_kind,
+                        component_name
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        int(job_id),
+                        int(scheduled_ts),
+                        initial_status,
+                        initial_skip_reason,
+                        int(created_at),
+                        int(created_at),
+                        1,
+                        int(component_index),
+                        "ansible",
+                        component_name,
+                    ),
+                )
+                run_id = int(cur.lastrowid or 0)
+                for target in resolved_targets:
+                    filter_ids = []
+                    for raw_filter_id in target.get("resolved_from_filter_ids") or []:
+                        try:
+                            filter_ids.append(int(raw_filter_id))
+                        except Exception:
+                            continue
+                    site_id = target.get("site_id")
+                    try:
+                        site_id = int(site_id) if site_id is not None else None
+                    except Exception:
+                        site_id = None
+                    inventory_hostname = _inventory_hostname_for_target(
+                        target.get("hostname"),
+                        site_name=target.get("site_name"),
+                        site_id=site_id,
+                        connection=run_mode,
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO scheduled_job_run_targets(
+                            run_id,
+                            device_guid,
+                            hostname,
+                            site_id,
+                            resolved_from_filter_id,
+                            inventory_hostname,
+                            wireguard_peer_ip,
+                            resolved_connection,
+                            resolution_status,
+                            resolution_reason,
+                            resolved_from_filter_ids_json,
+                            created_at
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            run_id,
+                            str(target.get("device_guid") or "").strip(),
+                            str(target.get("hostname") or "").strip(),
+                            site_id,
+                            (filter_ids[0] if filter_ids else None),
+                            inventory_hostname,
+                            "",
+                            str(run_mode or "").strip().lower(),
+                            RESOLUTION_STATUS_PENDING if resolved_targets else RESOLUTION_STATUS_UNRESOLVED,
+                            "",
+                            json.dumps(filter_ids),
+                            int(created_at),
+                        ),
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _load_occurrence_target_rows(self, job_id: int, scheduled_ts: int) -> List[Dict[str, Any]]:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    t.id,
+                    t.run_id,
+                    t.device_guid,
+                    t.hostname,
+                    t.site_id,
+                    s.name,
+                    t.inventory_hostname,
+                    t.wireguard_peer_ip,
+                    t.resolved_connection,
+                    t.resolution_status,
+                    t.resolution_reason,
+                    t.resolved_from_filter_ids_json,
+                    r.status,
+                    r.started_ts,
+                    r.finished_ts,
+                    r.skip_reason,
+                    r.shared_execution,
+                    r.component_name
+                  FROM scheduled_job_run_targets t
+                  JOIN scheduled_job_runs r ON r.id = t.run_id
+             LEFT JOIN sites s ON s.id = t.site_id
+                 WHERE r.job_id=? AND r.scheduled_ts=?
+              ORDER BY t.id ASC
+                """,
+                (int(job_id), int(scheduled_ts)),
+            )
+            rows: List[Dict[str, Any]] = []
+            for row in cur.fetchall():
+                try:
+                    resolved_filter_ids = json.loads(row[11] or "[]")
+                except Exception:
+                    resolved_filter_ids = []
+                rows.append(
+                    {
+                        "id": int(row[0]),
+                        "run_id": int(row[1]),
+                        "device_guid": row[2] or "",
+                        "hostname": row[3] or "",
+                        "site_id": row[4],
+                        "site_name": row[5] or "",
+                        "inventory_hostname": row[6] or "",
+                        "wireguard_peer_ip": row[7] or "",
+                        "resolved_connection": row[8] or "",
+                        "resolution_status": row[9] or "",
+                        "resolution_reason": row[10] or "",
+                        "resolved_from_filter_ids": resolved_filter_ids if isinstance(resolved_filter_ids, list) else [],
+                        "run_status": row[12] or "",
+                        "started_ts": row[13],
+                        "finished_ts": row[14],
+                        "skip_reason": row[15] or "",
+                        "shared_execution": bool(row[16] or 0),
+                        "component_name": row[17] or "",
+                    }
+                )
+            return rows
+        finally:
+            conn.close()
+
+    def _aggregate_occurrence_targets(
+        self,
+        occurrence_runs: Sequence[Mapping[str, Any]],
+        occurrence_target_rows: Sequence[Mapping[str, Any]],
+    ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, int], bool]:
+        if occurrence_target_rows:
+            grouped: Dict[str, Dict[str, Any]] = {}
+            for row in occurrence_target_rows:
+                hostname = str(row.get("hostname") or "").strip()
+                if not hostname:
+                    continue
+                device_guid = str(row.get("device_guid") or "").strip().lower()
+                site_id = row.get("site_id")
+                try:
+                    site_id = int(site_id) if site_id is not None else None
+                except Exception:
+                    site_id = None
+                if device_guid:
+                    group_key = f"guid:{device_guid}"
+                elif site_id is not None:
+                    group_key = f"site:{site_id}:{hostname.lower()}"
+                else:
+                    group_key = f"host:{hostname.lower()}"
+                group = grouped.setdefault(
+                    group_key,
+                    {
+                        "hostname": hostname,
+                        "site_id": site_id,
+                        "site_name": str(row.get("site_name") or "").strip(),
+                        "inventory_hostname": str(row.get("inventory_hostname") or "").strip(),
+                        "wireguard_peer_ip": str(row.get("wireguard_peer_ip") or "").strip(),
+                        "resolved_connection": str(row.get("resolved_connection") or "").strip(),
+                        "resolution_status": "",
+                        "resolution_reason": "",
+                        "eligible_statuses": [],
+                        "run_ids": set(),
+                        "started_ts": [],
+                        "finished_ts": [],
+                    },
+                )
+                group["run_ids"].add(int(row.get("run_id") or 0))
+                if row.get("started_ts") is not None:
+                    group["started_ts"].append(int(row.get("started_ts") or 0))
+                if row.get("finished_ts") is not None:
+                    group["finished_ts"].append(int(row.get("finished_ts") or 0))
+                if not group.get("site_name") and row.get("site_name"):
+                    group["site_name"] = str(row.get("site_name") or "").strip()
+                if not group.get("inventory_hostname") and row.get("inventory_hostname"):
+                    group["inventory_hostname"] = str(row.get("inventory_hostname") or "").strip()
+                if not group.get("wireguard_peer_ip") and row.get("wireguard_peer_ip"):
+                    group["wireguard_peer_ip"] = str(row.get("wireguard_peer_ip") or "").strip()
+                if not group.get("resolved_connection") and row.get("resolved_connection"):
+                    group["resolved_connection"] = str(row.get("resolved_connection") or "").strip()
+
+                resolution_status = str(row.get("resolution_status") or "").strip().lower()
+                if resolution_status not in {"", RESOLUTION_STATUS_PENDING, RESOLUTION_STATUS_ELIGIBLE}:
+                    if not group.get("resolution_status"):
+                        group["resolution_status"] = resolution_status
+                        group["resolution_reason"] = str(row.get("resolution_reason") or "").strip()
+                    continue
+                group["eligible_statuses"].append(str(row.get("run_status") or "").strip())
+                if not group.get("resolution_status"):
+                    group["resolution_status"] = RESOLUTION_STATUS_ELIGIBLE
+                    group["resolution_reason"] = ""
+
+            aggregated: Dict[str, Dict[str, Any]] = {}
+            counts = {
+                "pending": 0,
+                "running": 0,
+                "success": 0,
+                "failed": 0,
+                "expired": 0,
+                "timed_out": 0,
+                "skipped": 0,
+                "total_targets": len(grouped),
+            }
+            for group_key, group in grouped.items():
+                if group["eligible_statuses"]:
+                    status = _aggregate_statuses(group["eligible_statuses"])
+                elif group.get("resolution_status") in {RESOLUTION_STATUS_SKIPPED, RESOLUTION_STATUS_UNRESOLVED}:
+                    status = RUN_STATUS_SKIPPED
+                else:
+                    status = RUN_STATUS_PENDING
+                aggregated[group_key] = {
+                    "target_hostname": group["hostname"],
+                    "hostname": group["hostname"],
+                    "site_id": group["site_id"],
+                    "site_name": group["site_name"],
+                    "inventory_hostname": group["inventory_hostname"],
+                    "wireguard_peer_ip": group["wireguard_peer_ip"],
+                    "resolved_connection": group["resolved_connection"],
+                    "resolution_status": group.get("resolution_status") or "",
+                    "resolution_reason": group.get("resolution_reason") or "",
+                    "status": status,
+                    "started_ts": max(group["started_ts"]) if group["started_ts"] else None,
+                    "finished_ts": max(group["finished_ts"]) if group["finished_ts"] else None,
+                    "run_ids": sorted([rid for rid in group["run_ids"] if rid]),
+                }
+                bucket = _status_bucket_for_run(status)
+                if bucket and bucket in counts:
+                    counts[bucket] += 1
+            has_no_targets_skip = False
+            if not aggregated:
+                has_no_targets_skip = any(
+                    str(run.get("status") or "").strip() == RUN_STATUS_SKIPPED
+                    and str(run.get("skip_reason") or "").strip().lower() == SKIP_REASON_NO_TARGETS
+                    for run in occurrence_runs
+                )
+            return aggregated, counts, has_no_targets_skip
+
+        return _aggregate_occurrence_runs(occurrence_runs)
 
     # ---------- Scheduling core ----------
     def _get_last_run(self, job_id: int) -> Optional[Dict[str, Any]]:
@@ -1433,7 +2168,19 @@ class JobScheduler:
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT id, target_hostname, scheduled_ts, started_ts, finished_ts, status, error, skip_reason
+                SELECT
+                    id,
+                    target_hostname,
+                    scheduled_ts,
+                    started_ts,
+                    finished_ts,
+                    status,
+                    error,
+                    skip_reason,
+                    shared_execution,
+                    component_index,
+                    component_kind,
+                    component_name
                   FROM scheduled_job_runs
                  WHERE job_id=? AND scheduled_ts=?
               ORDER BY id ASC
@@ -1450,6 +2197,10 @@ class JobScheduler:
                     "status": row[5] or "",
                     "error": row[6] or "",
                     "skip_reason": row[7] or "",
+                    "shared_execution": bool(row[8] or 0),
+                    "component_index": row[9],
+                    "component_kind": row[10] or "",
+                    "component_name": row[11] or "",
                 }
                 for row in cur.fetchall()
             ]
@@ -1612,6 +2363,706 @@ class JobScheduler:
         finally:
             conn.close()
 
+    def _dispatch_shared_ansible(
+        self,
+        *,
+        job_id: int,
+        run_row_id: int,
+        scheduled_ts: int,
+        run_mode: str,
+        component: Dict[str, Any],
+        credential_id: Optional[int],
+        use_service_account: bool,
+    ) -> Optional[Dict[str, Any]]:
+        run_mode_norm = str(run_mode or "local").strip().lower() or "local"
+        ts_now = _now_ts()
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE scheduled_job_runs
+                   SET status=?,
+                       started_ts=COALESCE(started_ts, ?),
+                       finished_ts=NULL,
+                       error='',
+                       updated_at=?
+                 WHERE id=?
+                """,
+                (RUN_STATUS_RUNNING, ts_now, ts_now, int(run_row_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        run_targets = self._load_run_targets(run_row_id)
+        if not run_targets:
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           skip_reason=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_SKIPPED,
+                        ts_now,
+                        ts_now,
+                        SKIP_REASON_NO_TARGETS,
+                        "No devices were targeted for this Ansible run.",
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+
+        remote_requires_cred = (run_mode_norm == "ssh") or (run_mode_norm == "winrm" and not use_service_account)
+        if remote_requires_cred and not credential_id:
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_FAILED,
+                        ts_now,
+                        ts_now,
+                        "Credential required for remote execution",
+                        int(run_row_id),
+                    ),
+                )
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_run_targets
+                       SET resolution_status=?,
+                           resolution_reason=?,
+                           resolved_connection=?
+                     WHERE run_id=?
+                    """,
+                    (
+                        RESOLUTION_STATUS_UNRESOLVED,
+                        "credential_missing",
+                        run_mode_norm,
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+
+        credential = self._load_credential(credential_id) if credential_id is not None else None
+        if remote_requires_cred and not credential:
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_FAILED,
+                        ts_now,
+                        ts_now,
+                        "Selected credential is unavailable.",
+                        int(run_row_id),
+                    ),
+                )
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_run_targets
+                       SET resolution_status=?,
+                           resolution_reason=?,
+                           resolved_connection=?
+                     WHERE run_id=?
+                    """,
+                    (
+                        RESOLUTION_STATUS_UNRESOLVED,
+                        "credential_unavailable",
+                        run_mode_norm,
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+
+        if credential and str(credential.get("connection_type") or "").strip().lower() not in {"", run_mode_norm}:
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_FAILED,
+                        ts_now,
+                        ts_now,
+                        "Selected credential does not match the execution context.",
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+
+        try:
+            device_lookup = self._lookup_devices_for_targets(run_targets)
+        except Exception as exc:
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_FAILED,
+                        ts_now,
+                        ts_now,
+                        f"Unable to load device state: {exc}",
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+
+        normalized_private_key = ""
+        private_key_passphrase = ""
+        credential_password = ""
+        if credential:
+            credential_password = str(credential.get("password") or "").strip()
+        if run_mode_norm == "ssh" and credential:
+            normalized_private_key = _normalize_ssh_private_key_text(credential.get("private_key") or "")
+            private_key_passphrase = str(credential.get("private_key_passphrase") or "").strip()
+            if normalized_private_key and private_key_passphrase:
+                if credential_password:
+                    self._log_event(
+                        "ssh credential includes passphrase-protected private key; falling back to password auth",
+                        job_id=int(job_id),
+                        run_id=int(run_row_id),
+                        level="WARNING",
+                        extra={
+                            "credential_id": int(credential_id or 0),
+                            "run_mode": run_mode_norm,
+                        },
+                    )
+                    normalized_private_key = ""
+                else:
+                    conn = self._conn()
+                    try:
+                        cur = conn.cursor()
+                        cur.execute(
+                            """
+                            UPDATE scheduled_job_runs
+                               SET status=?,
+                                   finished_ts=?,
+                                   updated_at=?,
+                                   error=?
+                             WHERE id=?
+                            """,
+                            (
+                                RUN_STATUS_FAILED,
+                                ts_now,
+                                ts_now,
+                                "Passphrase-protected SSH private keys are not yet supported for Engine Ansible runs. "
+                                "Use an unencrypted test key or add a password to the selected credential.",
+                                int(run_row_id),
+                            ),
+                        )
+                        cur.execute(
+                            """
+                            UPDATE scheduled_job_run_targets
+                               SET resolution_status=?,
+                                   resolution_reason=?,
+                                   resolved_connection=?
+                             WHERE run_id=?
+                            """,
+                            (
+                                RESOLUTION_STATUS_UNRESOLVED,
+                                "credential_private_key_passphrase_unsupported",
+                                run_mode_norm,
+                                int(run_row_id),
+                            ),
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
+                    return None
+
+        vpn_sessions: Dict[str, Dict[str, Any]] = {}
+        runtime_files: List[Dict[str, Any]] = []
+        private_key_path = ""
+        if run_mode_norm == "ssh" and normalized_private_key:
+            private_key_path = "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
+            runtime_files.append(
+                {
+                    "relative_path": "auth/id_borealis_ssh",
+                    "content": normalized_private_key,
+                    "mode": 0o600,
+                }
+            )
+
+        if run_mode_norm in {"ssh", "winrm"}:
+            candidate_agent_ids: List[str] = []
+            for target in run_targets:
+                device = device_lookup.get(self._device_lookup_key_for_target(target)) or {}
+                agent_id = str(device.get("agent_id") or target.get("agent_id") or "").strip()
+                if agent_id:
+                    candidate_agent_ids.append(agent_id)
+            vpn_sessions = self._prepare_vpn_sessions(candidate_agent_ids)
+
+        target_specifications: List[Dict[str, Any]] = []
+        target_updates: List[Tuple[str, str, str, str, str, int]] = []
+        skipped_targets_for_log: List[Dict[str, Any]] = []
+        preflight_warning_targets_for_log: List[Dict[str, Any]] = []
+        local_allowed = {"localhost", "127.0.0.1", "::1", ENGINE_LOCAL_ALIAS}
+        for target in run_targets:
+            hostname = str(target.get("hostname") or "").strip()
+            inventory_hostname = str(target.get("inventory_hostname") or "").strip()
+            site_id = target.get("site_id")
+            device_key = self._device_lookup_key_for_target(target)
+            device = device_lookup.get(device_key) or {}
+            site_name = str(device.get("site_name") or target.get("site_name") or "").strip()
+            agent_id = str(device.get("agent_id") or target.get("agent_id") or "").strip()
+            operating_system = str(device.get("operating_system") or target.get("operating_system") or "").strip()
+            device_connection_type = str(device.get("connection_type") or target.get("connection_type") or "").strip().lower()
+            connection_endpoint = str(device.get("connection_endpoint") or target.get("connection_endpoint") or "").strip()
+            if not inventory_hostname:
+                inventory_hostname = _inventory_hostname_for_target(
+                    hostname,
+                    site_name=site_name,
+                    site_id=site_id,
+                    connection=run_mode_norm,
+                )
+            resolution_status = RESOLUTION_STATUS_ELIGIBLE
+            resolution_reason = ""
+            wireguard_peer_ip = ""
+            preflight_error = ""
+            host_vars: Dict[str, Any] = {}
+
+            if run_mode_norm == "local":
+                if hostname.lower() not in local_allowed:
+                    resolution_status = RESOLUTION_STATUS_SKIPPED
+                    resolution_reason = "local_target_not_engine"
+                else:
+                    host_vars = {
+                        "ansible_connection": "local",
+                    }
+            elif run_mode_norm == "ssh":
+                session = vpn_sessions.get(agent_id) or {}
+                wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]
+                if not wireguard_peer_ip:
+                    resolution_status = RESOLUTION_STATUS_SKIPPED
+                    resolution_reason = "wireguard_unavailable"
+                else:
+                    ssh_port = _extract_endpoint_port(connection_endpoint) or 22
+                    preflight_kwargs: Dict[str, Any] = {}
+                    if bool(session.get("_requested_start")):
+                        preflight_kwargs["attempts"] = _env_positive_int(
+                            _PREPARED_REMOTE_PREFLIGHT_ATTEMPTS_ENV,
+                            _DEFAULT_PREPARED_REMOTE_PREFLIGHT_ATTEMPTS,
+                        )
+                        preflight_kwargs["retry_delay_seconds"] = _env_non_negative_float(
+                            _PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_ENV,
+                            _DEFAULT_PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_SECONDS,
+                        )
+                    preflight_error = self._preflight_remote_port(
+                        host=wireguard_peer_ip,
+                        port=ssh_port,
+                        **preflight_kwargs,
+                    )
+                    host_vars = {
+                        "ansible_host": wireguard_peer_ip,
+                        "ansible_connection": "ssh",
+                        "ansible_ssh_retries": _env_positive_int(
+                            _SHARED_ANSIBLE_SSH_RETRIES_ENV,
+                            _DEFAULT_SHARED_ANSIBLE_SSH_RETRIES,
+                        ),
+                        "ansible_ssh_timeout": _env_positive_int(
+                            _SHARED_ANSIBLE_SSH_TIMEOUT_ENV,
+                            _DEFAULT_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS,
+                        ),
+                    }
+                    if ssh_port != 22:
+                        host_vars["ansible_port"] = ssh_port
+                    if credential:
+                        username = str(credential.get("username") or "").strip()
+                        password = str(credential.get("password") or "").strip()
+                        become_method = str(credential.get("become_method") or "").strip()
+                        become_username = str(credential.get("become_username") or "").strip()
+                        become_password = str(credential.get("become_password") or "").strip()
+                        if username:
+                            host_vars["ansible_user"] = username
+                        if password:
+                            host_vars["ansible_password"] = password
+                        if private_key_path:
+                            host_vars["ansible_ssh_private_key_file"] = private_key_path
+                        if become_method:
+                            host_vars["ansible_become"] = True
+                            host_vars["ansible_become_method"] = become_method
+                            if become_username:
+                                host_vars["ansible_become_user"] = become_username
+                            if become_password:
+                                host_vars["ansible_become_password"] = become_password
+                    if preflight_error:
+                        preflight_warning_targets_for_log.append(
+                            {
+                                "hostname": hostname,
+                                "inventory_hostname": inventory_hostname,
+                                "site_name": site_name,
+                                "agent_id": agent_id,
+                                "wireguard_peer_ip": wireguard_peer_ip,
+                                "connection_endpoint": connection_endpoint,
+                                "preflight_error": preflight_error,
+                            }
+                        )
+            elif run_mode_norm == "winrm":
+                session = vpn_sessions.get(agent_id) or {}
+                wireguard_peer_ip = str(session.get("virtual_ip") or "").split("/", 1)[0]
+                if not wireguard_peer_ip:
+                    resolution_status = RESOLUTION_STATUS_SKIPPED
+                    resolution_reason = "wireguard_unavailable"
+                else:
+                    username = ""
+                    password = ""
+                    transport = "ntlm"
+                    if use_service_account:
+                        service_account = self._load_service_account(agent_id)
+                        username = str((service_account or {}).get("username") or "").strip()
+                        password = str((service_account or {}).get("password") or "").strip()
+                        if not username or not password:
+                            resolution_status = RESOLUTION_STATUS_SKIPPED
+                            resolution_reason = "service_account_unavailable"
+                    elif credential:
+                        username = str(credential.get("username") or "").strip()
+                        password = str(credential.get("password") or "").strip()
+                        metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
+                        transport = str(metadata.get("winrm_transport") or "ntlm").strip().lower() or "ntlm"
+                        if not username or not password:
+                            resolution_status = RESOLUTION_STATUS_SKIPPED
+                            resolution_reason = "credential_incomplete"
+                    if resolution_status == RESOLUTION_STATUS_ELIGIBLE:
+                        winrm_port = _extract_endpoint_port(connection_endpoint) or 5985
+                        preflight_kwargs = {}
+                        if bool(session.get("_requested_start")):
+                            preflight_kwargs["attempts"] = _env_positive_int(
+                                _PREPARED_REMOTE_PREFLIGHT_ATTEMPTS_ENV,
+                                _DEFAULT_PREPARED_REMOTE_PREFLIGHT_ATTEMPTS,
+                            )
+                            preflight_kwargs["retry_delay_seconds"] = _env_non_negative_float(
+                                _PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_ENV,
+                                _DEFAULT_PREPARED_REMOTE_PREFLIGHT_RETRY_DELAY_SECONDS,
+                            )
+                        preflight_error = self._preflight_remote_port(
+                            host=wireguard_peer_ip,
+                            port=winrm_port,
+                            **preflight_kwargs,
+                        )
+                        host_vars = {
+                            "ansible_host": wireguard_peer_ip,
+                            "ansible_connection": "winrm",
+                            "ansible_user": username,
+                            "ansible_password": password,
+                            "ansible_winrm_transport": transport,
+                            "ansible_winrm_server_cert_validation": "ignore",
+                        }
+                        if winrm_port:
+                            host_vars["ansible_port"] = winrm_port
+                        if preflight_error:
+                            preflight_warning_targets_for_log.append(
+                                {
+                                    "hostname": hostname,
+                                    "inventory_hostname": inventory_hostname,
+                                    "site_name": site_name,
+                                    "agent_id": agent_id,
+                                    "wireguard_peer_ip": wireguard_peer_ip,
+                                    "connection_endpoint": connection_endpoint,
+                                    "preflight_error": preflight_error,
+                                }
+                            )
+
+            target_updates.append(
+                (
+                    inventory_hostname,
+                    wireguard_peer_ip,
+                    run_mode_norm,
+                    resolution_status,
+                    resolution_reason,
+                    int(target["id"]),
+                )
+            )
+            if resolution_status != RESOLUTION_STATUS_ELIGIBLE:
+                skipped_targets_for_log.append(
+                    {
+                        "hostname": hostname,
+                        "inventory_hostname": inventory_hostname,
+                        "site_name": site_name,
+                        "agent_id": agent_id,
+                        "device_connection_type": device_connection_type,
+                        "operating_system": operating_system,
+                        "wireguard_peer_ip": wireguard_peer_ip,
+                        "reason": resolution_reason or "unknown",
+                        "connection_endpoint": connection_endpoint,
+                        "preflight_error": preflight_error,
+                    }
+                )
+                continue
+            target_specifications.append(
+                {
+                    "hostname": hostname,
+                    "inventory_hostname": inventory_hostname,
+                    "site_group": _site_group_name(site_name, site_id),
+                    "host_vars": host_vars,
+                }
+            )
+
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.executemany(
+                """
+                UPDATE scheduled_job_run_targets
+                   SET inventory_hostname=?,
+                       wireguard_peer_ip=?,
+                       resolved_connection=?,
+                       resolution_status=?,
+                       resolution_reason=?
+                 WHERE id=?
+                """,
+                target_updates,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        if preflight_warning_targets_for_log:
+            self._log_event(
+                "shared ansible run continuing despite remote preflight warnings",
+                job_id=int(job_id),
+                run_id=int(run_row_id),
+                level="WARNING",
+                extra={
+                    "run_mode": run_mode_norm,
+                    "scheduled_ts": int(scheduled_ts or 0),
+                    "component_name": self._component_name_for_display(
+                        dict(component or {}),
+                        fallback=f"Ansible Playbook {int(run_row_id)}",
+                    ),
+                    "warning_count": len(preflight_warning_targets_for_log),
+                    "warning_details": json.dumps(preflight_warning_targets_for_log, sort_keys=True),
+                },
+            )
+
+        if not target_specifications:
+            self._log_event(
+                "shared ansible run resolved no eligible targets",
+                job_id=int(job_id),
+                run_id=int(run_row_id),
+                level="WARNING",
+                extra={
+                    "run_mode": run_mode_norm,
+                    "scheduled_ts": int(scheduled_ts or 0),
+                    "component_name": self._component_name_for_display(
+                        dict(component or {}),
+                        fallback=f"Ansible Playbook {int(run_row_id)}",
+                    ),
+                    "target_count": len(run_targets),
+                    "resolution_details": json.dumps(skipped_targets_for_log, sort_keys=True),
+                },
+            )
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           skip_reason=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_SKIPPED,
+                        ts_now,
+                        ts_now,
+                        SKIP_REASON_NO_ELIGIBLE_TARGETS,
+                        "No eligible devices were available for this Ansible run.",
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+
+        try:
+            rel_path = ""
+            overrides_map: Dict[str, Any] = {}
+            assembly_guid_hint = ""
+            if isinstance(component, dict):
+                assembly_guid_hint = str(component.get("assembly_guid") or component.get("assemblyGuid") or "").strip().lower()
+                rel_path = component.get("path") or component.get("playbook_path") or component.get("script_path") or ""
+                raw_overrides = component.get("variable_values")
+                if isinstance(raw_overrides, dict):
+                    for key, val in raw_overrides.items():
+                        name = str(key or "").strip()
+                        if not name:
+                            continue
+                        overrides_map[name] = val
+                comp_vars = component.get("variables")
+                if isinstance(comp_vars, list):
+                    for var in comp_vars:
+                        if not isinstance(var, dict):
+                            continue
+                        name = str(var.get("name") or "").strip()
+                        if not name or name in overrides_map:
+                            continue
+                        if "value" in var:
+                            overrides_map[name] = var.get("value")
+            else:
+                rel_path = str(component or "")
+            rel_norm = (rel_path or "").replace("\\", "/").strip().lstrip("/")
+            if rel_norm and not rel_norm.lower().startswith("ansible_playbooks/"):
+                rel_norm = f"Ansible_Playbooks/{rel_norm}"
+            doc, record = self._resolve_runtime_document(rel_norm, "ansible", assembly_guid=assembly_guid_hint)
+            if not doc:
+                return None
+            resolved_virtual_path = str(record.get("virtual_path") or "").strip() if isinstance(record, dict) else ""
+            if not rel_norm:
+                rel_norm = resolved_virtual_path
+            friendly_name = (doc.get("name") or "").strip() or self._component_name_for_display(component, fallback=f"Job-{job_id}")
+            if not friendly_name:
+                friendly_name = f"Job-{job_id}"
+            normalized_script = (doc.get("script") or "").replace("\r\n", "\n")
+            doc_variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
+            files = doc.get("files") or []
+            if run_mode_norm == "winrm" and credential and not use_service_account:
+                overrides_map = _inject_winrm_credential(overrides_map, credential)
+
+            now = _now_ts()
+            act_id = None
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO activity_history(hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr)
+                    VALUES(?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        ENGINE_LOCAL_ALIAS,
+                        rel_norm,
+                        friendly_name,
+                        "ansible",
+                        now,
+                        "Running",
+                        "",
+                        "",
+                    ),
+                )
+                act_id = cur.lastrowid
+                conn.commit()
+            finally:
+                conn.close()
+
+            if not callable(self._server_ansible_runner):
+                raise RuntimeError("Server-side Ansible runner is not configured")
+
+            self._server_ansible_runner(
+                hostname=ENGINE_LOCAL_ALIAS,
+                playbook_rel_path=rel_norm,
+                playbook_name=friendly_name,
+                playbook_content=normalized_script,
+                credential_id=credential_id,
+                variable_values=overrides_map,
+                payload_files=files,
+                target_specifications=target_specifications,
+                runtime_files=runtime_files,
+                source="scheduled_job",
+                activity_id=act_id,
+                scheduled_job_id=job_id,
+                scheduled_run_id=run_row_id,
+                scheduled_job_run_row_id=run_row_id,
+                connection=run_mode_norm,
+            )
+            return {
+                "activity_id": int(act_id) if act_id is not None else None,
+                "component_kind": "ansible",
+                "script_type": "ansible",
+                "component_path": rel_norm,
+                "component_name": friendly_name,
+            }
+        except Exception as exc:
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_FAILED,
+                        _now_ts(),
+                        _now_ts(),
+                        str(exc)[:512],
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            self._log_event(
+                "shared ansible dispatch failed",
+                job_id=int(job_id),
+                run_id=int(run_row_id),
+                level="ERROR",
+                extra={"error": str(exc), "scheduled_ts": int(scheduled_ts or 0)},
+            )
+            return None
+
     def _dispatch_run_activities(
         self,
         *,
@@ -1668,17 +3119,14 @@ class JobScheduler:
                 except Exception as exc:
                     dispatch_errors.append(str(exc))
                     link = None
-                if link and link.get("activity_id"):
-                    activity_links.append(
-                        {
-                            "run_id": int(run_row_id),
-                            "activity_id": int(link["activity_id"]),
-                            "component_kind": link.get("component_kind") or "script",
-                            "script_type": link.get("script_type") or "powershell",
-                            "component_path": link.get("component_path") or "",
-                            "component_name": link.get("component_name") or "",
-                        }
-                    )
+                normalized_link = self._normalize_run_activity_link(
+                    run_row_id=int(run_row_id),
+                    link=link,
+                    default_component_kind="script",
+                    default_script_type="powershell",
+                )
+                if normalized_link:
+                    activity_links.append(normalized_link)
 
             for component in ansible_components:
                 try:
@@ -1694,43 +3142,19 @@ class JobScheduler:
                 except Exception as exc:
                     dispatch_errors.append(str(exc))
                     link = None
-                if link and link.get("activity_id"):
-                    activity_links.append(
-                        {
-                            "run_id": int(run_row_id),
-                            "activity_id": int(link["activity_id"]),
-                            "component_kind": link.get("component_kind") or "ansible",
-                            "script_type": link.get("script_type") or "ansible",
-                            "component_path": link.get("component_path") or "",
-                            "component_name": link.get("component_name") or "",
-                        }
-                    )
+                normalized_link = self._normalize_run_activity_link(
+                    run_row_id=int(run_row_id),
+                    link=link,
+                    default_component_kind="ansible",
+                    default_script_type="ansible",
+                )
+                if normalized_link:
+                    activity_links.append(normalized_link)
 
             if activity_links:
-                for link in activity_links:
-                    cur.execute(
-                        """
-                        INSERT OR IGNORE INTO scheduled_job_run_activity(
-                            run_id,
-                            activity_id,
-                            component_kind,
-                            script_type,
-                            component_path,
-                            component_name,
-                            created_at
-                        ) VALUES (?,?,?,?,?,?,?)
-                        """,
-                        (
-                            int(link["run_id"]),
-                            int(link["activity_id"]),
-                            link.get("component_kind") or "",
-                            link.get("script_type") or "",
-                            link.get("component_path") or "",
-                            link.get("component_name") or "",
-                            ts_now,
-                        ),
-                    )
-                conn.commit()
+                conn.close()
+                conn = None
+                self._persist_run_activity_links(activity_links, created_at=ts_now)
                 return
 
             error_text = dispatch_errors[0] if dispatch_errors else "No runnable activities were dispatched"
@@ -1745,6 +3169,92 @@ class JobScheduler:
                 """,
                 (RUN_STATUS_FAILED, ts_now, ts_now, str(error_text)[:512], int(run_row_id)),
             )
+            conn.commit()
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def _normalize_run_activity_link(
+        self,
+        *,
+        run_row_id: int,
+        link: Optional[Mapping[str, Any]],
+        default_component_kind: str,
+        default_script_type: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(link, Mapping):
+            return None
+        activity_id = link.get("activity_id")
+        if activity_id is None:
+            return None
+        try:
+            normalized_activity_id = int(activity_id)
+        except Exception:
+            return None
+        return {
+            "run_id": int(run_row_id),
+            "activity_id": normalized_activity_id,
+            "component_kind": str(link.get("component_kind") or default_component_kind),
+            "script_type": str(link.get("script_type") or default_script_type),
+            "component_path": str(link.get("component_path") or ""),
+            "component_name": str(link.get("component_name") or ""),
+        }
+
+    def _persist_run_activity_links(
+        self,
+        activity_links: Sequence[Mapping[str, Any]],
+        *,
+        created_at: Optional[int] = None,
+    ) -> None:
+        rows: List[Tuple[int, int, str, str, str, str]] = []
+        for raw_link in activity_links:
+            if not isinstance(raw_link, Mapping):
+                continue
+            try:
+                run_id = int(raw_link.get("run_id"))
+                activity_id = int(raw_link.get("activity_id"))
+            except Exception:
+                continue
+            rows.append(
+                (
+                    run_id,
+                    activity_id,
+                    str(raw_link.get("component_kind") or ""),
+                    str(raw_link.get("script_type") or ""),
+                    str(raw_link.get("component_path") or ""),
+                    str(raw_link.get("component_name") or ""),
+                )
+            )
+        if not rows:
+            return
+
+        ts_now = int(created_at) if created_at is not None else _now_ts()
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            for run_id, activity_id, component_kind, script_type, component_path, component_name in rows:
+                cur.execute(
+                    """
+                    INSERT OR IGNORE INTO scheduled_job_run_activity(
+                        run_id,
+                        activity_id,
+                        component_kind,
+                        script_type,
+                        component_path,
+                        component_name,
+                        created_at
+                    ) VALUES (?,?,?,?,?,?,?)
+                    """,
+                    (
+                        run_id,
+                        activity_id,
+                        component_kind,
+                        script_type,
+                        component_path,
+                        component_name,
+                        ts_now,
+                    ),
+                )
             conn.commit()
         finally:
             conn.close()
@@ -1948,6 +3458,11 @@ class JobScheduler:
                     continue
 
                 run_mode = (execution_context or "system").strip().lower()
+                shared_ansible_mode = self._should_use_shared_ansible_runs(
+                    run_mode=run_mode,
+                    script_components=script_components,
+                    ansible_components=ansible_components,
+                )
                 job_use_service_account = bool(use_service_account_flag) if run_mode == "winrm" else False
                 try:
                     job_credential_id = int(credential_id) if credential_id is not None else None
@@ -1986,19 +3501,81 @@ class JobScheduler:
                         )
                         targets = []
                         resolution_meta = {}
-                    self._record_occurrence_snapshot(
-                        job_id=int(job_id),
-                        scheduled_ts=int(occurrence_ts),
-                        targets=[str(host) for host in targets if str(host).strip()],
-                        resolution_meta=resolution_meta,
-                        created_at=now,
-                    )
+                    if shared_ansible_mode:
+                        self._record_shared_ansible_occurrence_snapshot(
+                            job_id=int(job_id),
+                            scheduled_ts=int(occurrence_ts),
+                            run_mode=run_mode,
+                            ansible_components=ansible_components,
+                            resolved_targets=self._resolved_targets_from_meta(resolution_meta),
+                            created_at=now,
+                        )
+                    else:
+                        self._record_occurrence_snapshot(
+                            job_id=int(job_id),
+                            scheduled_ts=int(occurrence_ts),
+                            targets=[str(host) for host in targets if str(host).strip()],
+                            resolution_meta=resolution_meta,
+                            created_at=now,
+                        )
                     occurrence_runs = self._load_occurrence_runs(int(job_id), int(occurrence_ts))
 
                 exp_seconds = _parse_expiration(expiration)
                 for run in occurrence_runs:
                     status = str(run.get("status") or "").strip()
                     if self._is_terminal_run_status(status):
+                        continue
+                    if status == RUN_STATUS_RUNNING:
+                        continue
+                    if shared_ansible_mode and bool(run.get("shared_execution")):
+                        component_index = run.get("component_index")
+                        try:
+                            component_index = int(component_index) if component_index is not None else 0
+                        except Exception:
+                            component_index = 0
+                        component = ansible_components[component_index] if 0 <= component_index < len(ansible_components) else None
+                        if not isinstance(component, dict):
+                            conn2 = self._conn()
+                            try:
+                                cur2 = conn2.cursor()
+                                cur2.execute(
+                                    """
+                                    UPDATE scheduled_job_runs
+                                       SET status=?,
+                                           finished_ts=?,
+                                           updated_at=?,
+                                           error=?
+                                     WHERE id=?
+                                    """,
+                                    (
+                                        RUN_STATUS_FAILED,
+                                        now,
+                                        now,
+                                        "Unable to resolve Ansible component for shared execution.",
+                                        int(run["id"]),
+                                    ),
+                                )
+                                conn2.commit()
+                            finally:
+                                conn2.close()
+                            continue
+                        link = self._dispatch_shared_ansible(
+                            job_id=int(job_id),
+                            run_row_id=int(run["id"]),
+                            scheduled_ts=int(occurrence_ts),
+                            run_mode=run_mode,
+                            component=component,
+                            credential_id=job_credential_id,
+                            use_service_account=job_use_service_account,
+                        )
+                        normalized_link = self._normalize_run_activity_link(
+                            run_row_id=int(run["id"]),
+                            link=link,
+                            default_component_kind="ansible",
+                            default_script_type="ansible",
+                        )
+                        if normalized_link:
+                            self._persist_run_activity_links([normalized_link], created_at=now)
                         continue
                     host = str(run.get("target_hostname") or "").strip()
                     if not host:
@@ -2140,7 +3717,8 @@ class JobScheduler:
                         total_targets = int(c.fetchone()[0] or 0)
                     c.execute(
                         """
-                        SELECT id, target_hostname, scheduled_ts, started_ts, finished_ts, status, error, skip_reason
+                        SELECT id, target_hostname, scheduled_ts, started_ts, finished_ts, status, error, skip_reason,
+                               shared_execution, component_index, component_kind, component_name
                           FROM scheduled_job_runs
                          WHERE job_id=? AND scheduled_ts=?
                         """,
@@ -2156,12 +3734,19 @@ class JobScheduler:
                             "status": row[5] or "",
                             "error": row[6] or "",
                             "skip_reason": row[7] or "",
+                            "shared_execution": bool(row[8] or 0),
+                            "component_index": row[9],
+                            "component_kind": row[10] or "",
+                            "component_name": row[11] or "",
                         }
                         for row in c.fetchall()
                     ]
-                    _aggregated_by_host, aggregated_counts, has_no_targets_skip = _aggregate_occurrence_runs(occurrence_rows)
-                    if total_targets <= 0:
-                        total_targets = int(aggregated_counts.get("total_targets") or 0)
+                    occurrence_target_rows = self._load_occurrence_target_rows(base["id"], int(max_occ))
+                    _aggregated_by_host, aggregated_counts, has_no_targets_skip = self._aggregate_occurrence_targets(
+                        occurrence_rows,
+                        occurrence_target_rows,
+                    )
+                    total_targets = int(aggregated_counts.get("total_targets") or total_targets or 0)
                     result_counts["total_targets"] = total_targets
                     result_counts["pending"] = int(aggregated_counts.get("pending") or 0)
                     result_counts["running"] = int(aggregated_counts.get("running") or 0)
@@ -2182,8 +3767,10 @@ class JobScheduler:
                         summary_status = RUN_STATUS_PENDING
                     elif result_counts["success"]:
                         summary_status = RUN_STATUS_SUCCESS
-                    elif result_counts["skipped"] or has_no_targets_skip:
+                    elif has_no_targets_skip:
                         summary_status = "No Devices Targeted"
+                    elif result_counts["skipped"]:
+                        summary_status = RUN_STATUS_SKIPPED
                     last_run_ts = int(max_occ)
                 conn.close()
             except Exception:
@@ -2217,7 +3804,7 @@ class JobScheduler:
                 raw_list = [raw_targets]
             else:
                 raw_list = raw_targets
-            seen_hosts: set[str] = set()
+            seen_devices: set[str] = set()
             seen_filters: set[int] = set()
             for entry in raw_list:
                 if isinstance(entry, str):
@@ -2225,9 +3812,9 @@ class JobScheduler:
                     if not host:
                         continue
                     lowered = host.lower()
-                    if lowered in seen_hosts:
+                    if lowered in seen_devices:
                         continue
-                    seen_hosts.add(lowered)
+                    seen_devices.add(lowered)
                     normalized.append(host)
                     continue
                 if isinstance(entry, (int, float)):
@@ -2235,9 +3822,9 @@ class JobScheduler:
                     if not host:
                         continue
                     lowered = host.lower()
-                    if lowered in seen_hosts:
+                    if lowered in seen_devices:
                         continue
-                    seen_hosts.add(lowered)
+                    seen_devices.add(lowered)
                     normalized.append(host)
                     continue
                 if not isinstance(entry, dict):
@@ -2264,11 +3851,30 @@ class JobScheduler:
                 if hostname:
                     host = str(hostname).strip()
                     if host:
-                        lowered = host.lower()
-                        if lowered in seen_hosts:
+                        device_guid = str(entry.get("device_guid") or entry.get("guid") or "").strip().lower()
+                        site_id_value = entry.get("site_id")
+                        try:
+                            site_id_value = int(site_id_value) if site_id_value not in (None, "", "null") else None
+                        except Exception:
+                            site_id_value = None
+                        if device_guid:
+                            dedupe_key = f"guid:{device_guid}"
+                        elif site_id_value is not None:
+                            dedupe_key = f"site:{site_id_value}:{host.lower()}"
+                        else:
+                            dedupe_key = host.lower()
+                        if dedupe_key in seen_devices:
                             continue
-                        seen_hosts.add(lowered)
-                        normalized.append(host)
+                        seen_devices.add(dedupe_key)
+                        normalized.append(
+                            {
+                                "kind": "device",
+                                "device_guid": device_guid,
+                                "hostname": host,
+                                "site_id": site_id_value,
+                                "site_name": entry.get("site_name") or entry.get("site") or "",
+                            }
+                        )
             return normalized
 
         def _validate_targets_for_save(targets: Sequence[Any]) -> Optional[str]:
@@ -2292,6 +3898,34 @@ class JobScheduler:
                     return f"Filter #{filter_id} does not exist."
                 if record.get("archived"):
                     return f'Filter "{record.get("name") or filter_id}" is archived and cannot be scheduled.'
+            return None
+
+        def _is_ansible_component(component: Any) -> bool:
+            if not isinstance(component, dict):
+                return False
+            raw_values = [
+                component.get("type"),
+                component.get("component_type"),
+                component.get("assembly_type"),
+                component.get("assemblyType"),
+                component.get("assembly_subtype"),
+                component.get("assemblySubtype"),
+                component.get("script_type"),
+            ]
+            normalized = {str(value or "").strip().lower() for value in raw_values if str(value or "").strip()}
+            return "ansible" in normalized or "playbook" in normalized
+
+        def _validate_components_for_context(components: Sequence[Any], execution_context: str) -> Optional[str]:
+            context_value = str(execution_context or "").strip().lower()
+            if context_value not in {"local", "ssh", "winrm"}:
+                return None
+            if not isinstance(components, (list, tuple)) or not components:
+                return "At least one Ansible component is required."
+            if any(not _is_ansible_component(component) for component in components):
+                return (
+                    "Jobs using local, ssh, or winrm execution contexts must contain only Ansible components "
+                    "so Borealis can execute them as one shared Engine-side playbook run."
+                )
             return None
 
         @app.route("/api/scheduled_jobs", methods=["GET"])
@@ -2339,6 +3973,9 @@ class JobScheduler:
             target_error = _validate_targets_for_save(targets)
             if target_error:
                 return json.dumps({"error": target_error}), 400, {"Content-Type": "application/json"}
+            component_error = _validate_components_for_context(components, execution_context)
+            if component_error:
+                return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
             now = _now_ts()
             components_json = json.dumps(components)
             targets_json = json.dumps(targets)
@@ -2466,10 +4103,12 @@ class JobScheduler:
         def api_scheduled_jobs_update(job_id: int):
             data = self._json_body()
             fields: Dict[str, Any] = {}
+            next_components: Optional[List[Any]] = None
             if "name" in data:
                 fields["name"] = (data.get("name") or "").strip()
             if "components" in data:
-                fields["components_json"] = json.dumps(data.get("components") or [])
+                next_components = list(data.get("components") or [])
+                fields["components_json"] = json.dumps(next_components)
             if "targets" in data:
                 normalized_targets = _normalize_targets_for_save(data.get("targets") or [])
                 if not normalized_targets:
@@ -2510,6 +4149,22 @@ class JobScheduler:
             try:
                 conn = self._conn()
                 cur = conn.cursor()
+                if "execution_context" in fields or next_components is not None:
+                    cur.execute("SELECT components_json, execution_context FROM scheduled_jobs WHERE id=?", (job_id,))
+                    existing_row = cur.fetchone()
+                    if not existing_row:
+                        conn.close()
+                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                    if next_components is None:
+                        try:
+                            next_components = json.loads(existing_row[0] or "[]")
+                        except Exception:
+                            next_components = []
+                    effective_context = fields.get("execution_context") or existing_row[1] or "system"
+                    component_error = _validate_components_for_context(next_components or [], str(effective_context))
+                    if component_error:
+                        conn.close()
+                        return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
                 sets = ", ".join([f"{k}=?" for k in fields.keys()])
                 params = list(fields.values()) + [_now_ts(), job_id]
                 cur.execute(f"UPDATE scheduled_jobs SET {sets}, updated_at=? WHERE id=?", params)
@@ -2583,7 +4238,19 @@ class JobScheduler:
                 cur = conn.cursor()
                 cur.execute(
                     """
-                    SELECT id, scheduled_ts, started_ts, finished_ts, status, error, skip_reason
+                    SELECT
+                        id,
+                        scheduled_ts,
+                        started_ts,
+                        finished_ts,
+                        status,
+                        error,
+                        skip_reason,
+                        target_hostname,
+                        shared_execution,
+                        component_index,
+                        component_kind,
+                        component_name
                     FROM scheduled_job_runs
                     WHERE job_id=? AND COALESCE(finished_ts, started_ts, scheduled_ts, 0) >= ?
                     ORDER BY COALESCE(started_ts, scheduled_ts, 0) DESC, id DESC
@@ -2602,6 +4269,11 @@ class JobScheduler:
                         "status": r[4] or "",
                         "error": r[5] or "",
                         "skip_reason": r[6] or "",
+                        "target_hostname": r[7] or "",
+                        "shared_execution": bool(r[8] or 0),
+                        "component_index": r[9],
+                        "component_kind": r[10] or "",
+                        "component_name": r[11] or "",
                     }
                     for r in rows
                 ]
@@ -2620,7 +4292,7 @@ class JobScheduler:
                 conn = self._conn()
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT targets_json FROM scheduled_jobs WHERE id=?",
+                    "SELECT targets_json, execution_context FROM scheduled_jobs WHERE id=?",
                     (job_id,)
                 )
                 row = cur.fetchone()
@@ -2631,6 +4303,7 @@ class JobScheduler:
                     raw_targets = json.loads(row[0] or "[]")
                 except Exception:
                     raw_targets = []
+                execution_context_value = str(row[1] or "").strip().lower()
                 try:
                     targets, target_meta = self._filter_matcher.resolve_target_entries(raw_targets)
                 except Exception as exc:
@@ -2641,6 +4314,7 @@ class JobScheduler:
                         extra={"error": str(exc)},
                     )
                     targets = [str(t) for t in raw_targets if isinstance(t, (str, int))]
+                    target_meta = {"resolved_targets": []}
 
                 # Determine occurrence if not provided
                 if occ is None:
@@ -2648,60 +4322,19 @@ class JobScheduler:
                     occ_row = cur.fetchone()
                     occ = int(occ_row[0]) if occ_row and occ_row[0] else None
 
-                # Sites lookup
-                site_by_host: Dict[str, str] = {}
-                try:
-                    cur.execute(
-                        "SELECT device_hostname, sites.name FROM device_sites JOIN sites ON sites.id = device_sites.site_id"
-                    )
-                    for h, n in cur.fetchall():
-                        site_by_host[_normalize_host_key(h)] = n or ""
-                except Exception:
-                    pass
-
-                # Status per target for occurrence
-                run_groups_by_host: Dict[str, List[Dict[str, Any]]] = {}
+                occurrence_runs: List[Dict[str, Any]] = []
+                occurrence_target_rows: List[Dict[str, Any]] = []
+                aggregated_devices: Dict[str, Dict[str, Any]] = {}
                 run_ids: List[int] = []
-                snapshot_targets: List[str] = []
-                occurrence_has_snapshot = False
                 if occ is not None:
                     try:
-                        cur.execute(
-                            """
-                            SELECT DISTINCT t.hostname
-                              FROM scheduled_job_run_targets t
-                              JOIN scheduled_job_runs r ON r.id = t.run_id
-                             WHERE r.job_id=? AND r.scheduled_ts=?
-                            """,
-                            (job_id, occ),
+                        occurrence_runs = self._load_occurrence_runs(int(job_id), int(occ))
+                        occurrence_target_rows = self._load_occurrence_target_rows(int(job_id), int(occ))
+                        aggregated_devices, _aggregated_counts, _has_no_targets_skip = self._aggregate_occurrence_targets(
+                            occurrence_runs,
+                            occurrence_target_rows,
                         )
-                        snapshot_targets = sorted(
-                            [str(row[0]) for row in cur.fetchall() if str(row[0]).strip()],
-                            key=lambda value: value.lower(),
-                        )
-                        cur.execute(
-                            "SELECT id, target_hostname, status, started_ts, finished_ts, skip_reason FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=? ORDER BY id DESC",
-                            (job_id, occ)
-                        )
-                        rows = cur.fetchall()
-                        occurrence_has_snapshot = bool(rows) or bool(snapshot_targets)
-                        for rid, h, st, st_ts, fin_ts, skip_reason in rows:
-                            host_name = str(h or "").strip()
-                            host_key = _normalize_host_key(host_name)
-                            if not host_key:
-                                continue
-                            run_ids.append(int(rid))
-                            run_groups_by_host.setdefault(host_key, []).append(
-                                {
-                                    "id": int(rid),
-                                    "target_hostname": host_name,
-                                    "status": st or "",
-                                    "started_ts": st_ts,
-                                    "finished_ts": fin_ts,
-                                    "run_id": int(rid),
-                                    "skip_reason": skip_reason or "",
-                                }
-                            )
+                        run_ids = sorted({int(run.get("id") or 0) for run in occurrence_runs if int(run.get("id") or 0)})
                     except Exception as exc:
                         self._log_event(
                             "failed to load scheduled job device snapshot",
@@ -2751,23 +4384,6 @@ class JobScheduler:
                             extra={"occurrence": occ, "error": str(exc)},
                         )
 
-                aggregated_run_by_host, _aggregated_counts, _has_no_targets_skip = _aggregate_occurrence_runs(
-                    [run for group in run_groups_by_host.values() for run in group]
-                )
-                activities_by_host: Dict[str, List[Dict[str, Any]]] = {}
-                for host_key, grouped_runs in run_groups_by_host.items():
-                    seen_activity_ids = set()
-                    merged_activities: List[Dict[str, Any]] = []
-                    for run in grouped_runs:
-                        for activity in activities_by_run.get(int(run.get("run_id") or 0), []):
-                            activity_id = int(activity.get("activity_id") or 0)
-                            dedupe_key = activity_id if activity_id else f"{activity.get('component_path')}::{activity.get('component_name')}"
-                            if dedupe_key in seen_activity_ids:
-                                continue
-                            seen_activity_ids.add(dedupe_key)
-                            merged_activities.append(activity)
-                    activities_by_host[host_key] = merged_activities
-
                 conn.close()
 
                 # Online snapshot
@@ -2779,33 +4395,76 @@ class JobScheduler:
                     online = set()
 
                 out = []
-                effective_targets = snapshot_targets if occurrence_has_snapshot else targets
-                seen_hosts = set()
-                normalized_targets: List[Tuple[str, str]] = []
-                for host in effective_targets:
-                    display_host = str(host or "").strip()
-                    host_key = _normalize_host_key(display_host)
-                    if not host_key or host_key in seen_hosts:
-                        continue
-                    seen_hosts.add(host_key)
-                    normalized_targets.append((host_key, display_host))
-                if not normalized_targets and aggregated_run_by_host:
-                    for host_key, rec in aggregated_run_by_host.items():
-                        normalized_targets.append((host_key, str(rec.get("target_hostname") or host_key)))
-                for host_key, display_host in normalized_targets:
-                    rec = aggregated_run_by_host.get(host_key, {})
+                effective_records: List[Dict[str, Any]] = []
+                if aggregated_devices:
+                    effective_records = list(aggregated_devices.values())
+                else:
+                    for target in self._resolved_targets_from_meta(target_meta):
+                        hostname = str(target.get("hostname") or "").strip()
+                        if not hostname:
+                            continue
+                        effective_records.append(
+                            {
+                                "hostname": hostname,
+                                "site_name": str(target.get("site_name") or "").strip(),
+                                "inventory_hostname": _inventory_hostname_for_target(
+                                    hostname,
+                                    site_name=target.get("site_name"),
+                                    site_id=target.get("site_id"),
+                                    connection=execution_context_value,
+                                ),
+                                "resolution_status": "",
+                                "resolution_reason": "",
+                                "status": RUN_STATUS_PENDING,
+                                "started_ts": None,
+                                "finished_ts": None,
+                                "run_ids": [],
+                            }
+                        )
+                    if not effective_records:
+                        for host in targets:
+                            display_host = str(host or "").strip()
+                            if not display_host:
+                                continue
+                            effective_records.append(
+                                {
+                                    "hostname": display_host,
+                                    "site_name": "",
+                                    "inventory_hostname": "",
+                                    "resolution_status": "",
+                                    "resolution_reason": "",
+                                    "status": RUN_STATUS_PENDING,
+                                    "started_ts": None,
+                                    "finished_ts": None,
+                                    "run_ids": [],
+                                }
+                            )
+
+                for rec in effective_records:
+                    host_key = _normalize_host_key(rec.get("hostname"))
+                    seen_activity_ids = set()
+                    activities: List[Dict[str, Any]] = []
+                    for run_id in rec.get("run_ids") or []:
+                        for activity in activities_by_run.get(int(run_id or 0), []):
+                            activity_id = int(activity.get("activity_id") or 0)
+                            dedupe_key = activity_id if activity_id else f"{activity.get('component_path')}::{activity.get('component_name')}"
+                            if dedupe_key in seen_activity_ids:
+                                continue
+                            seen_activity_ids.add(dedupe_key)
+                            activities.append(activity)
                     job_status = rec.get("status") or RUN_STATUS_PENDING
-                    if job_status == RUN_STATUS_SKIPPED and rec.get("skip_reason") == SKIP_REASON_NO_TARGETS:
-                        job_status = "No Devices Targeted"
-                    ran_on = rec.get("finished_ts") or rec.get("started_ts")
-                    activities = activities_by_host.get(host_key, [])
                     has_stdout = any(a.get("has_stdout") for a in activities)
                     has_stderr = any(a.get("has_stderr") for a in activities)
                     out.append({
-                        "hostname": display_host,
+                        "hostname": rec.get("hostname") or "",
                         "online": host_key in online,
-                        "site": site_by_host.get(host_key, ""),
-                        "ran_on": ran_on,
+                        "site": rec.get("site_name") or "",
+                        "inventory_hostname": rec.get("inventory_hostname") or "",
+                        "wireguard_peer_ip": rec.get("wireguard_peer_ip") or "",
+                        "resolved_connection": rec.get("resolved_connection") or "",
+                        "resolution_status": rec.get("resolution_status") or "",
+                        "resolution_reason": rec.get("resolution_reason") or "",
+                        "ran_on": rec.get("finished_ts") or rec.get("started_ts"),
                         "job_status": job_status,
                         "has_stdout": has_stdout,
                         "has_stderr": has_stderr,
@@ -2902,3 +4561,14 @@ def set_server_ansible_runner(scheduler: JobScheduler, fn: Callable[..., str]):
 
 def set_credential_fetcher(scheduler: JobScheduler, fn: Callable[[int], Optional[Dict[str, Any]]]):
     scheduler._credential_fetcher = fn
+
+
+def set_vpn_session_lookup(scheduler: JobScheduler, fn: Callable[[], Dict[str, Dict[str, Any]]]):
+    scheduler._vpn_session_lookup = fn
+
+
+def set_vpn_session_prepare(
+    scheduler: JobScheduler,
+    fn: Callable[[Sequence[str]], Dict[str, Dict[str, Any]]],
+):
+    scheduler._vpn_session_prepare = fn

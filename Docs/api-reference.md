@@ -14,6 +14,11 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/auth/logout` (Token Authenticated) - operator logout.
 - `POST /api/auth/mfa/verify` (Token Authenticated, MFA pending) - verify MFA.
 - `GET /api/auth/me` (Token Authenticated) - current operator profile.
+- `GET /api/credentials` (Token Authenticated) - list stored remote-execution credentials.
+- `GET /api/credentials/<int:credential_id>` (Token Authenticated) - get one stored credential without secret material.
+- `POST /api/credentials` (Admin) - create a stored credential.
+- `PUT /api/credentials/<int:credential_id>` (Admin) - update a stored credential.
+- `DELETE /api/credentials/<int:credential_id>` (Admin) - delete a stored credential.
 - `GET /api/users` (Admin) - list operator accounts.
 - `POST /api/users` (Admin) - create operator account.
 - `DELETE /api/users/<username>` (Admin) - delete operator account.

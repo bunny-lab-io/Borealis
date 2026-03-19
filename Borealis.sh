@@ -1042,6 +1042,181 @@ engine_python_bin() {
   fi
 }
 
+engine_ansible_root_dir() {
+  echo "${SCRIPT_DIR}/Engine/Ansible"
+}
+
+engine_ansible_source_dir() {
+  echo "${SCRIPT_DIR}/Data/Engine/Ansible"
+}
+
+engine_ansible_collections_dir() {
+  echo "$(engine_ansible_root_dir)/collections"
+}
+
+engine_ansible_requirements_path() {
+  echo "$(engine_ansible_root_dir)/collections.yml"
+}
+
+migrate_engine_ansible_layout() {
+  local ansible_root
+  ansible_root="$(engine_ansible_root_dir)"
+  mkdir -p "${ansible_root}"
+
+  local legacy_collections="${SCRIPT_DIR}/Engine/collections"
+  local target_collections
+  target_collections="$(engine_ansible_collections_dir)"
+  if [[ -d "${legacy_collections}" ]]; then
+    mkdir -p "${target_collections}"
+    cp -a "${legacy_collections}/." "${target_collections}/"
+    rm -rf "${legacy_collections}"
+  fi
+
+  local legacy_generated="${SCRIPT_DIR}/Engine/Generated/Ansible_Runtime"
+  local target_generated="${ansible_root}/Generated/Runtime"
+  if [[ -d "${legacy_generated}" ]]; then
+    mkdir -p "${target_generated}"
+    cp -a "${legacy_generated}/." "${target_generated}/"
+    rm -rf "${legacy_generated}"
+  fi
+}
+
+stage_engine_ansible_assets() {
+  local source_dir
+  source_dir="$(engine_ansible_source_dir)"
+  local runtime_dir
+  runtime_dir="$(engine_ansible_root_dir)"
+  local runtime_manifest
+  runtime_manifest="$(engine_ansible_requirements_path)"
+  mkdir -p "${runtime_dir}"
+
+  if [[ -d "${source_dir}" ]]; then
+    shopt -s dotglob nullglob
+    local item=""
+    for item in "${source_dir}"/*; do
+      cp -a "${item}" "${runtime_dir}/"
+    done
+    shopt -u dotglob nullglob
+  fi
+
+  local legacy_manifest="${SCRIPT_DIR}/Data/Engine/ansible-collections.yml"
+  if [[ -f "${legacy_manifest}" && ! -f "${runtime_manifest}" ]]; then
+    cp -a "${legacy_manifest}" "${runtime_manifest}"
+  fi
+}
+
+prepare_engine_ansible_layout() {
+  migrate_engine_ansible_layout || return 1
+  stage_engine_ansible_assets || return 1
+}
+
+engine_site_packages_dir() {
+  local venv_py
+  venv_py="$(engine_python_bin)"
+  [[ -n "${venv_py}" ]] || {
+    echo ""
+    return 0
+  }
+  "${venv_py}" - <<'PY'
+import sysconfig
+print(sysconfig.get_path("purelib") or "")
+PY
+}
+
+verify_engine_venv_writable() {
+  local site_packages_dir
+  site_packages_dir="$(engine_site_packages_dir)"
+  [[ -n "${site_packages_dir}" ]] || return 1
+  if [[ -w "${site_packages_dir}" ]]; then
+    return 0
+  fi
+  echo -e "${RED}Engine virtual environment is not writable at '${site_packages_dir}'.${RESET}" >&2
+  echo -e "${YELLOW}Re-run Borealis.sh as root or repair ownership of the Engine venv before installing Python packages.${RESET}" >&2
+  return 1
+}
+
+engine_ansible_galaxy_bin() {
+  if [[ -x "${SCRIPT_DIR}/Engine/bin/ansible-galaxy" ]]; then
+    echo "${SCRIPT_DIR}/Engine/bin/ansible-galaxy"
+  else
+    echo ""
+  fi
+}
+
+engine_ansible_playbook_bin() {
+  if [[ -x "${SCRIPT_DIR}/Engine/bin/ansible-playbook" ]]; then
+    echo "${SCRIPT_DIR}/Engine/bin/ansible-playbook"
+  else
+    echo ""
+  fi
+}
+
+install_engine_ansible_collections() {
+  local venv_py
+  venv_py="$(engine_python_bin)"
+  [[ -n "$venv_py" ]] || {
+    echo -e "${RED}Engine virtual environment is missing Python.${RESET}" >&2
+    return 1
+  }
+  verify_engine_venv_writable || return 1
+  prepare_engine_ansible_layout || return 1
+
+  local collections_req
+  collections_req="$(engine_ansible_requirements_path)"
+  [[ -f "${collections_req}" ]] || return 0
+
+  local collections_dir
+  collections_dir="$(engine_ansible_collections_dir)"
+  mkdir -p "${collections_dir}"
+
+  local galaxy_bin
+  galaxy_bin="$(engine_ansible_galaxy_bin)"
+  local -a cmd
+  if [[ -n "${galaxy_bin}" ]]; then
+    cmd=("${galaxy_bin}" collection install -r "${collections_req}" -p "${collections_dir}" --upgrade)
+  else
+    cmd=("${venv_py}" -m ansible.cli.galaxy collection install -r "${collections_req}" -p "${collections_dir}" --upgrade)
+  fi
+
+  ANSIBLE_COLLECTIONS_PATH="${collections_dir}" \
+  ANSIBLE_COLLECTIONS_PATHS="${collections_dir}" \
+    "${cmd[@]}"
+}
+
+verify_engine_ansible_runtime() {
+  local venv_py
+  venv_py="$(engine_python_bin)"
+  [[ -n "$venv_py" ]] || return 1
+  prepare_engine_ansible_layout || return 1
+
+  local playbook_bin
+  playbook_bin="$(engine_ansible_playbook_bin)"
+  local collections_dir
+  collections_dir="$(engine_ansible_collections_dir)"
+  local collections_req
+  collections_req="$(engine_ansible_requirements_path)"
+  local -a version_cmd
+  if [[ -n "${playbook_bin}" ]]; then
+    version_cmd=("${playbook_bin}" --version)
+  else
+    version_cmd=("${venv_py}" -m ansible.cli.playbook --version)
+  fi
+
+  "${venv_py}" - <<'PY'
+import importlib
+required = ("ansible", "ansible_runner", "winrm", "pypsrp")
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+if missing:
+    raise SystemExit("Missing Python modules: " + ", ".join(missing))
+PY
+
+  if [[ -f "${collections_req}" ]]; then
+    ANSIBLE_COLLECTIONS_PATH="${collections_dir}" \
+    ANSIBLE_COLLECTIONS_PATHS="${collections_dir}" \
+      "${version_cmd[@]}" >/dev/null
+  fi
+}
+
 # ---- Engine TLS material (parity with Ensure-EngineTlsMaterial) ----
 ensure_engine_tls_material() {
   local py="$1" # engine venv python
@@ -1101,6 +1276,7 @@ sync_engine_runtime() {
   done
   shopt -u dotglob nullglob
 
+  prepare_engine_ansible_layout || return 1
   verify_engine_runtime_staging
 }
 
@@ -1115,7 +1291,7 @@ purge_engine_runtime_for_deploy() {
     local base
     base="$(basename "${entry}")"
     case "${base}" in
-      Auth_Tokens|Certificates|Logs|WireGuard|database.env|.postgres-password|engine_secret.txt)
+      Auth_Tokens|Certificates|Logs|WireGuard|database.env|.postgres-password|engine_secret.txt|Ansible|collections)
         continue
         ;;
       *)
@@ -1125,7 +1301,7 @@ purge_engine_runtime_for_deploy() {
   done
   shopt -u dotglob nullglob
 
-  mkdir -p "${engine_root}/Auth_Tokens" "${engine_root}/Certificates" "${engine_root}/Logs" "${engine_root}/WireGuard"
+  mkdir -p "${engine_root}/Auth_Tokens" "${engine_root}/Certificates" "${engine_root}/Logs" "${engine_root}/WireGuard" "$(engine_ansible_root_dir)"
 }
 
 engine_service_runner_path() {
@@ -1176,6 +1352,8 @@ export BOREALIS_CERT_DIR="\${PROJECT_ROOT}/Engine/Certificates"
 export BOREALIS_TLS_CERT="\${BOREALIS_CERT_DIR}/borealis-server-cert.pem"
 export BOREALIS_TLS_KEY="\${BOREALIS_CERT_DIR}/borealis-server-key.pem"
 export BOREALIS_TLS_BUNDLE="\${BOREALIS_CERT_DIR}/borealis-server-bundle.pem"
+export ANSIBLE_COLLECTIONS_PATH="\${PROJECT_ROOT}/Engine/Ansible/collections"
+export ANSIBLE_COLLECTIONS_PATHS="\${ANSIBLE_COLLECTIONS_PATH}"
 export PATH="\${NODE_BIN_DIR}:\${PATH}"
 if [[ -f "\${ENGINE_DB_ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
@@ -1324,6 +1502,7 @@ create_engine_venv_and_stage_data() {
 
   # Runtime directories preserved outside the staged source tree.
   mkdir -p "${SCRIPT_DIR}/Engine/Auth_Tokens"
+  prepare_engine_ansible_layout || return 1
   verify_engine_runtime_staging
 }
 
@@ -1339,6 +1518,7 @@ install_engine_python_deps() {
     fi
     venv_py="$(engine_python_bin)"
   fi
+  verify_engine_venv_writable || return 1
   local engine_src="${SCRIPT_DIR}/Data/Engine"
   local reqs=( "${engine_src}/engine-requirements.txt" "${engine_src}/requirements.txt" )
   for r in "${reqs[@]}"; do
@@ -1409,6 +1589,8 @@ flask_engine_launch() {
   export BOREALIS_ENGINE_MODE="$mode"
   export BOREALIS_ENGINE_PORT="5000"
   export BOREALIS_PROJECT_ROOT="$SCRIPT_DIR"
+  export ANSIBLE_COLLECTIONS_PATH="${SCRIPT_DIR}/Engine/Ansible/collections"
+  export ANSIBLE_COLLECTIONS_PATHS="${ANSIBLE_COLLECTIONS_PATH}"
   if [[ -f "${ENGINE_DB_ENV_FILE}" ]]; then
     # shellcheck disable=SC1090
     . "${ENGINE_DB_ENV_FILE}"
@@ -1504,6 +1686,7 @@ server_menu() {
   if [[ "$engine_immediate_launch" -eq 1 ]]; then
     run_step "Sync Engine runtime code from Data/Engine" sync_engine_runtime
     run_step "Restore Engine database environment" ensure_engine_database_env_file
+    run_step "Verify Engine Ansible Runtime" verify_engine_ansible_runtime
     if [[ "${ENGINE_USE_SYSTEMD_SUPERVISION}" -eq 1 ]]; then
       run_step "Configure Borealis Engine systemd service (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
     else
@@ -1515,6 +1698,8 @@ server_menu() {
   run_step "Create Borealis Engine Virtual Python Environment & Stage Data" create_engine_venv_and_stage_data
   run_step "Restore Engine database environment" ensure_engine_database_env_file
   run_step "Install Engine Python Dependencies" install_engine_python_deps
+  run_step "Install Engine Ansible Collections" install_engine_ansible_collections
+  run_step "Verify Engine Ansible Runtime" verify_engine_ansible_runtime
   run_step "Copy Engine WebUI Files" ensure_engine_web_interface "$SCRIPT_DIR"
   run_step "Vite Web Frontend: Install NPM Packages" vite_web_frontend_install
   run_step "Vite Web Frontend: Start (${borealis_operation_mode})" vite_web_frontend_start "$borealis_operation_mode"

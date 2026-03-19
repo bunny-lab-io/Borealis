@@ -15,3 +15,8 @@ regex
 SQLAlchemy
 alembic
 psycopg[binary]
+ansible-core
+ansible-runner
+jmespath
+pywinrm[credssp]>=0.4.0
+pypsrp[credssp]>=0.4.0,<1.0.0

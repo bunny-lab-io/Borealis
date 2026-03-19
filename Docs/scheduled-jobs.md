@@ -28,15 +28,25 @@ Supported schedule types (from the scheduler core):
 - The scheduler uses `DeviceFilterMatcher` to resolve filters to a point-in-time snapshot at occurrence start.
 - Each occurrence freezes the resolved host list in `scheduled_job_run_targets`.
 - Online snapshot logic is used only to decide when a pending target can dispatch, not to recalculate the occurrence target list.
+- Engine-side Ansible jobs persist structured device targets with `device_guid`, `hostname`, and site context so duplicate hostnames across sites can be targeted safely.
 
 ## Execution Flow
 1) Scheduler tick loads enabled jobs.
 2) Each due occurrence resolves its targets once and creates `scheduled_job_runs` plus `scheduled_job_run_targets` rows.
 3) Pending targets dispatch when their host is online.
-4) Quick job payloads are emitted with `scheduled_job_id` context.
-5) Agents execute and return `quick_job_result`.
-6) The Engine updates run status and activity links.
-7) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
+4) Device-local script runs emit quick job payloads with `scheduled_job_id` context.
+5) Engine-side Ansible jobs using `local`, `ssh`, or `winrm` create one shared run row per playbook component, synthesize an ephemeral inventory, and execute directly on the Linux Engine.
+6) Remote Ansible runs map Borealis inventory aliases to active WireGuard peer IPs and exclude devices that are not currently eligible.
+7) The Engine updates run status, activity links, and Ansible recap rows as results arrive.
+8) If zero devices are resolved, the occurrence is recorded as `Skipped` with `skip_reason = no_devices_targeted`.
+
+## Execution Contexts
+- `system` - runs on the agent as SYSTEM.
+- `current_user` - runs on the agent in the logged-in user context.
+- `local` - runs on the Linux Engine through the Engine-side Ansible runner and targets the Engine host alias directly.
+- `ssh` - runs on the Linux Engine, synthesizes an ephemeral inventory, and targets SSH devices over the managed WireGuard network.
+- `winrm` - runs on the Linux Engine, synthesizes an ephemeral inventory, and targets WinRM devices over the managed WireGuard network.
+- For shared Ansible runs, the selected execution context is the transport source of truth. Borealis uses `ssh` or `winrm` based on that operator choice and gates targets on WireGuard reachability plus credential/service-account readiness, not on the device row's stored `connection_type`.
 
 ## Run History and Retention
 - Run history is retained for `BOREALIS_JOB_HISTORY_DAYS` (default 30).
@@ -57,6 +67,7 @@ Supported schedule types (from the scheduler core):
 - [Assemblies and Quick Jobs](assemblies.md)
 - [Device Management](device-management.md)
 - [API Reference](api-reference.md)
+- [Ansible Playbooks](features_to_implement/ansible_playbooks.md)
 
 ## Codex Agent (Detailed)
 ### Scheduler entry points
@@ -87,6 +98,9 @@ Supported schedule types (from the scheduler core):
   - `scheduled_job_run_id`
   - `scheduled_ts`
 - `quick_job_result` updates `scheduled_job_runs` and `activity_history`.
+- `execution_context = local` is Engine-side only and currently intended for localhost Ansible validation on the Linux Engine.
+- `execution_context = ssh` and `execution_context = winrm` now run from the Linux Engine, synthesize per-run inventories, and target remote devices over the managed WireGuard network.
+- Shared Ansible occurrences write one `scheduled_job_runs` row per playbook component and freeze one deduplicated target snapshot per resolved device in `scheduled_job_run_targets`.
 
 ### Retention and cleanup
 - Retention defaults to 30 days and is configured by `BOREALIS_JOB_HISTORY_DAYS`.

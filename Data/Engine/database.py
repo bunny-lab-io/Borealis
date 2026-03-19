@@ -693,10 +693,24 @@ def _ensure_scheduled_job_support_tables(conn: sqlite3.Connection, *, logger: Op
                 updated_at INTEGER,
                 target_hostname TEXT,
                 skip_reason TEXT,
+                shared_execution INTEGER NOT NULL DEFAULT 0,
+                component_index INTEGER,
+                component_kind TEXT,
+                component_name TEXT,
                 FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
             )
             """
         )
+        cur.execute("PRAGMA table_info(scheduled_job_runs)")
+        run_columns = {row[1] for row in cur.fetchall()}
+        if "shared_execution" not in run_columns:
+            cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN shared_execution INTEGER NOT NULL DEFAULT 0")
+        if "component_index" not in run_columns:
+            cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN component_index INTEGER")
+        if "component_kind" not in run_columns:
+            cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN component_kind TEXT")
+        if "component_name" not in run_columns:
+            cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN component_name TEXT")
         cur.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_runs_job_sched_target
@@ -740,12 +754,32 @@ def _ensure_scheduled_job_support_tables(conn: sqlite3.Connection, *, logger: Op
                 hostname TEXT NOT NULL,
                 site_id INTEGER,
                 resolved_from_filter_id INTEGER,
+                inventory_hostname TEXT,
+                wireguard_peer_ip TEXT,
+                resolved_connection TEXT,
+                resolution_status TEXT,
+                resolution_reason TEXT,
+                resolved_from_filter_ids_json TEXT,
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY(run_id) REFERENCES scheduled_job_runs(id) ON DELETE CASCADE,
                 FOREIGN KEY(resolved_from_filter_id) REFERENCES device_filters(id) ON DELETE SET NULL
             )
             """
         )
+        cur.execute("PRAGMA table_info(scheduled_job_run_targets)")
+        target_columns = {row[1] for row in cur.fetchall()}
+        if "inventory_hostname" not in target_columns:
+            cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN inventory_hostname TEXT")
+        if "wireguard_peer_ip" not in target_columns:
+            cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN wireguard_peer_ip TEXT")
+        if "resolved_connection" not in target_columns:
+            cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN resolved_connection TEXT")
+        if "resolution_status" not in target_columns:
+            cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN resolution_status TEXT")
+        if "resolution_reason" not in target_columns:
+            cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN resolution_reason TEXT")
+        if "resolved_from_filter_ids_json" not in target_columns:
+            cur.execute("ALTER TABLE scheduled_job_run_targets ADD COLUMN resolved_from_filter_ids_json TEXT")
         cur.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_scheduled_job_run_targets_run

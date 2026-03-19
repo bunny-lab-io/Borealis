@@ -233,8 +233,8 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 
 #### `scheduled_job_runs`
 - Status: Active.
-- Purpose: Per-run/per-target execution state.
-- Columns: `id`, `job_id`, `scheduled_ts`, `started_ts`, `finished_ts`, `status`, `error`, `created_at`, `updated_at`, `target_hostname`, `skip_reason`.
+- Purpose: Execution state for scheduled occurrences. Legacy script jobs still use per-target rows; Engine-side Ansible jobs can now use shared rows per playbook component.
+- Columns: `id`, `job_id`, `scheduled_ts`, `started_ts`, `finished_ts`, `status`, `error`, `created_at`, `updated_at`, `target_hostname`, `skip_reason`, `shared_execution`, `component_index`, `component_kind`, `component_name`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
 - FK declared: `job_id -> scheduled_jobs(id) ON DELETE CASCADE`.
@@ -245,6 +245,7 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Scheduled-jobs run history and device status endpoints.
 - Notes:
 - Zero-target occurrences are stored as `status = Skipped` with `skip_reason = no_devices_targeted`.
+- Shared Ansible rows leave `target_hostname` empty and use `shared_execution = 1`.
 
 #### `scheduled_job_run_activity`
 - Status: Active.
@@ -262,8 +263,8 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 
 #### `scheduled_job_run_targets`
 - Status: Active.
-- Purpose: Frozen point-in-time target membership for each scheduled occurrence.
-- Columns: `id`, `run_id`, `device_guid`, `hostname`, `site_id`, `resolved_from_filter_id`, `created_at`.
+- Purpose: Frozen point-in-time target membership for each scheduled occurrence or shared Ansible playbook run.
+- Columns: `id`, `run_id`, `device_guid`, `hostname`, `site_id`, `resolved_from_filter_id`, `inventory_hostname`, `wireguard_peer_ip`, `resolved_connection`, `resolution_status`, `resolution_reason`, `resolved_from_filter_ids_json`, `created_at`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
 - FK declared: `run_id -> scheduled_job_runs(id) ON DELETE CASCADE`.
@@ -274,10 +275,11 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Scheduler snapshot creation.
 - Scheduled-job device history endpoint.
 - Notes:
-- A host can produce multiple rows when more than one saved filter contributed to the same occurrence target.
+- Legacy rows may still repeat a host when more than one saved filter contributed to the same occurrence target.
+- Shared Ansible rows store the generated inventory alias and target-resolution outcome per device.
 
 #### `credentials`
-- Status: Partially wired (schema active, API/service wiring incomplete).
+- Status: Active for scheduler and WebUI credential selection; secret-at-rest handling still needs hardening.
 - Purpose: Stored credential materials for remote execution contexts.
 - Columns: `id`, `name`, `description`, `site_id`, `credential_type`, `connection_type`, `username`, `password_encrypted`, `private_key_encrypted`, `private_key_passphrase_encrypted`, `become_method`, `become_username`, `become_password_encrypted`, `metadata_json`, `created_at`, `updated_at`.
 - Constraints and indexes:
@@ -285,12 +287,13 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - `name` unique.
 - FK declared: `site_id -> sites(id) ON DELETE SET NULL`.
 - Used by:
-- Scheduler schema supports `credential_id`, but no active credential-management API is implemented yet.
+- `/api/credentials` CRUD endpoints.
+- Scheduled Ansible job resolution for `ssh` and `winrm` execution contexts.
 - Notes:
-- `Data/Engine/services/API/access_management/credentials.py` is currently a placeholder.
+- Secret fields are currently stored as UTF-8 blobs in the `*_encrypted` columns until Borealis grows a dedicated secret-encryption layer.
 
 #### `ansible_play_recaps`
-- Status: Dormant (schema present, no active read/write paths in current Engine source).
+- Status: Active for Engine-local scheduled Ansible execution; broader API/UI surfacing is still incomplete.
 - Purpose: Intended run recap storage for Ansible executions.
 - Columns: `id`, `run_id`, `hostname`, `agent_id`, `playbook_path`, `playbook_name`, `scheduled_job_id`, `scheduled_run_id`, `activity_job_id`, `status`, `recap_text`, `recap_json`, `started_ts`, `finished_ts`, `created_at`, `updated_at`.
 - Constraints and indexes:
@@ -298,6 +301,9 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - `run_id` unique.
 - `idx_ansible_recaps_host_created` on `(hostname, created_at)`.
 - `idx_ansible_recaps_status` on `status`.
+- Used by:
+- Engine-local scheduled Ansible runs executed from the Linux Engine.
+- Future recap/report APIs and UI views.
 
 #### `agent_service_account`
 - Status: Dormant (schema present, no active read/write paths in current Engine source).
