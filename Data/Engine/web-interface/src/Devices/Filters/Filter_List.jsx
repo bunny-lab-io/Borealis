@@ -29,6 +29,14 @@ import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 
 import PageBodyFrame from "../../PageBodyFrame.jsx";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../../DialogStyles.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -171,15 +179,6 @@ const GRID_WRAPPER_SX = {
   },
 };
 
-const DIALOG_PAPER_SX = {
-  borderRadius: 3,
-  background: "rgba(8,12,24,0.96)",
-  backdropFilter: "blur(18px)",
-  border: "1px solid rgba(148,163,184,0.3)",
-  boxShadow: "0 24px 60px rgba(2,8,23,0.72)",
-  color: "#e2e8f0",
-};
-
 const SITE_MODE_META = {
   global: {
     label: "Global",
@@ -236,19 +235,13 @@ function ScopeText({ siteMode }) {
 function JobsDialog({ open, onClose, jobs, onOpenJob, title }) {
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
-      <DialogTitle
-        sx={{
-          px: 2.5,
-          py: 2,
-          borderBottom: "1px solid rgba(148,163,184,0.18)",
-          fontFamily: gridFontFamily,
-          fontWeight: 700,
-          fontSize: "1rem",
-        }}
-      >
-        {title || "Jobs Referencing this Filter"}
+      <DialogTitle sx={DIALOG_TITLE_SX}>
+        <DialogHeaderBlock
+          title={title || "Jobs Referencing this Filter"}
+          subtitle="Review the scheduled jobs that currently reference this filter."
+        />
       </DialogTitle>
-      <DialogContent dividers sx={{ borderColor: "rgba(148,163,184,0.18)", background: "transparent", px: 2.5, py: 2 }}>
+      <DialogContent sx={{ ...DIALOG_CONTENT_SX, pt: 1.5 }}>
         {!jobs?.length ? (
           <Typography sx={{ color: "#cbd5e1" }}>No scheduled jobs reference this filter.</Typography>
         ) : (
@@ -302,16 +295,10 @@ function JobsDialog({ open, onClose, jobs, onOpenJob, title }) {
           </Stack>
         )}
       </DialogContent>
-      <DialogActions sx={{ px: 2.5, py: 1.75, borderTop: "1px solid rgba(148,163,184,0.18)" }}>
+      <DialogActions sx={DIALOG_ACTIONS_SX}>
         <Button
-          variant="outlined"
           onClick={onClose}
-          sx={{
-            textTransform: "none",
-            borderColor: "rgba(148,163,184,0.32)",
-            color: "#e2e8f0",
-            background: "rgba(5,10,24,0.8)",
-          }}
+          sx={DIALOG_BUTTON_SX}
         >
           Close
         </Button>

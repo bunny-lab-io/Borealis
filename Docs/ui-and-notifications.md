@@ -85,6 +85,20 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - Default grid cell padding: keep roughly 18px on the left edge and 12px on the right for standard cells (12px/9px for `auto-col-tight`) so text never hugs a column edge. Target the center + pinned containers so both regions stay aligned.
 - Overlays/menus: `rgba(8,12,24,0.96)` canvas, blurred backdrops, thin steel borders; bright typography; deep blue glass inputs; cyan confirm, mauve destructive accents.
 
+#### Dialog Boxes and Confirmation Modals
+- Treat dialogs as compact glass overlays, not miniature pages. Use the same dark glass canvas as other overlays: blurred backdrop, thin steel border, rounded corners, and bright typography on a navy-violet surface.
+- Keep dialog chrome quiet. Do not add horizontal separator lines between title, body, and actions unless a specific workflow truly needs one.
+- Default header pattern: plain title first, optional single concise subtitle beneath it. Do not place a decorative glyph to the left of the title by default.
+- Keep the body direct and task-focused. Form dialogs should move immediately into the fields instead of leading with large explainer cards or stacked warning blocks.
+- Field order should follow operator intent. For example, create/edit dialogs should place the primary name field first, then secondary fields such as description.
+- Dialog text fields use the same deep blue glass treatment as other MagicUI inputs. Ensure the idle label sits visually centered within the field, and ensure the floating/shrunken label has enough top clearance so it is never clipped when focused.
+- Leave a little extra top spacing above the first dialog field so floating labels do not collide with the title area.
+- Dialog actions use the same pill sizing and typography as the shared page action rail: about `38px` tall, radius `999`, IBM Plex Sans, `fontWeight: 600`, mixed case labels.
+- Dialog primary actions keep the Borealis cyan-to-violet gradient, but do not add a glow behind the button. Confirm buttons should feel crisp rather than luminous.
+- Dialog secondary actions should be soft outline buttons on the dark surface. Dialog destructive confirms should use a red/mauve outline treatment instead of a filled bright red block.
+- Use explicit action labels for destructive dialogs when helpful. `Delete Site(s)` is preferred over a vague `Confirm` when the object type is known.
+- Confirmation dialogs should be simplified to the minimum information needed to make a safe decision. Prefer a short subtitle plus the selected-object preview instead of repeating multiple warning paragraphs.
+
 #### Page-Level Tabs
 - Header ownership: `Data/Engine/web-interface/src/App.jsx` owns the page title, subtitle, icon, and the page action rail. Pages publish header metadata through `onPageMetaChange`; they do not position their own page-header buttons.
 - Header action contract:

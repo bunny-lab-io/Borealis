@@ -18,7 +18,17 @@ import {
 } from "@mui/material";
 import UploadIcon from "@mui/icons-material/UploadFile";
 import ClearIcon from "@mui/icons-material/Clear";
-import VpnKeyIcon from "@mui/icons-material/VpnKey";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_INPUT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_SELECT_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 
 const MAGIC_UI = {
   panelBg: "rgba(8,12,24,0.96)",
@@ -30,41 +40,24 @@ const MAGIC_UI = {
   danger: "#ff8a8a",
 };
 
-const GRADIENT_BUTTON_SX = {
-  backgroundImage: "linear-gradient(135deg,#7dd3fc,#c084fc)",
-  color: "#041224",
-  borderRadius: 999,
-  textTransform: "none",
-  fontWeight: 700,
-  boxShadow: "0 12px 30px rgba(124,58,237,0.32)",
+const OUTLINE_BUTTON_SX = {
+  ...DIALOG_BUTTON_SX,
+  borderColor: MAGIC_UI.panelBorder,
+  color: MAGIC_UI.textBright,
   "&:hover": {
-    backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
-    boxShadow: "0 14px 38px rgba(124,58,237,0.42)",
+    ...DIALOG_BUTTON_SX["&:hover"],
+    borderColor: MAGIC_UI.accentA,
   },
 };
 
-const OUTLINE_BUTTON_SX = {
-  textTransform: "none",
-  borderRadius: 2,
-  borderColor: MAGIC_UI.panelBorder,
-  color: MAGIC_UI.textBright,
-  "&:hover": { borderColor: MAGIC_UI.accentA },
-};
-
 const INPUT_SX = {
-  "& .MuiOutlinedInput-root": {
-    backgroundColor: "rgba(12,18,35,0.75)",
-    color: MAGIC_UI.textBright,
+  ...DIALOG_INPUT_SX,
+  "& .MuiOutlinedInput-root, & .MuiInputBase-root": {
+    ...DIALOG_INPUT_SX["& .MuiOutlinedInput-root, & .MuiInputBase-root"],
     borderRadius: 2,
     "& fieldset": { borderColor: MAGIC_UI.panelBorder },
     "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
     "&.Mui-focused fieldset": { borderColor: MAGIC_UI.accentA },
-  },
-  "& .MuiOutlinedInput-input": {
-    padding: "10px 12px",
-  },
-  "& .MuiInputLabel-root": {
-    color: MAGIC_UI.textMuted,
   },
 };
 
@@ -337,23 +330,16 @@ export default function CredentialEditor({
       onClose={handleCancel}
       maxWidth="md"
       fullWidth
-      PaperProps={{
-        sx: {
-          bgcolor: MAGIC_UI.panelBg,
-          color: MAGIC_UI.textBright,
-          border: `1px solid ${MAGIC_UI.panelBorder}`,
-          boxShadow: "0 22px 60px rgba(2,6,23,0.75)",
-          backdropFilter: "blur(14px)",
-        },
-      }}
+      PaperProps={{ sx: DIALOG_PAPER_SX }}
     >
-      <DialogTitle sx={{ pb: 1, display: "flex", alignItems: "center", gap: 1.2 }}>
-        <VpnKeyIcon sx={{ color: MAGIC_UI.accentA }} />
-        {title}
+      <DialogTitle sx={DIALOG_TITLE_SX}>
+        <DialogHeaderBlock
+          title={title}
+          subtitle={isEdit ? "Update stored authentication details and connection defaults." : "Create a reusable authentication record for Borealis connections."}
+        />
       </DialogTitle>
       <DialogContent
-        dividers
-        sx={{ display: "flex", flexDirection: "column", gap: 2, borderColor: MAGIC_UI.panelBorder }}
+        sx={{ ...DIALOG_CONTENT_SX, display: "flex", flexDirection: "column", gap: 2 }}
       >
         {fetchingDetail && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: MAGIC_UI.textMuted }}>
@@ -391,7 +377,7 @@ export default function CredentialEditor({
           sx={INPUT_SX}
         />
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-          <FormControl sx={{ minWidth: 220 }} size="small" disabled={disableSave}>
+          <FormControl sx={{ minWidth: 220, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
             <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Site</InputLabel>
             <Select
               value={form.site_id}
@@ -407,7 +393,7 @@ export default function CredentialEditor({
               ))}
             </Select>
           </FormControl>
-          <FormControl sx={{ minWidth: 180 }} size="small" disabled={disableSave}>
+          <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
             <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Credential Type</InputLabel>
             <Select
               value={form.credential_type}
@@ -420,7 +406,7 @@ export default function CredentialEditor({
               ))}
             </Select>
           </FormControl>
-          <FormControl sx={{ minWidth: 180 }} size="small" disabled={disableSave}>
+          <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
             <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Connection</InputLabel>
             <Select
               value={form.connection_type}
@@ -530,7 +516,7 @@ export default function CredentialEditor({
         )}
 
         <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-          <FormControl sx={{ minWidth: 180 }} size="small" disabled={disableSave}>
+          <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
             <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Privilege Escalation</InputLabel>
             <Select
               value={form.become_method}
@@ -575,14 +561,14 @@ export default function CredentialEditor({
           <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Escalation password will be removed when saving.</Typography>
         )}
       </DialogContent>
-      <DialogActions sx={{ px: 3, py: 2 }}>
+      <DialogActions sx={DIALOG_ACTIONS_SX}>
         <Button onClick={handleCancel} sx={OUTLINE_BUTTON_SX} disabled={loading}>
           Cancel
         </Button>
         <Button
           onClick={handleSave}
           variant="contained"
-          sx={GRADIENT_BUTTON_SX}
+          sx={DIALOG_PRIMARY_BUTTON_SX}
           disabled={disableSave}
         >
           {loading ? <CircularProgress size={18} sx={{ color: "#041224" }} /> : "Save"}

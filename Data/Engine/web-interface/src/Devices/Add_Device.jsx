@@ -9,6 +9,17 @@ import {
   MenuItem,
   Typography
 } from "@mui/material";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_INPUT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_SELECT_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 
 const TYPE_OPTIONS = [
   { value: "ssh", label: "SSH" },
@@ -105,26 +116,22 @@ export default function AddDevice({
       onClose={handleClose}
       fullWidth
       maxWidth="sm"
-      PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+      PaperProps={{ sx: DIALOG_PAPER_SX }}
     >
-      <DialogTitle>{dialogTitle}</DialogTitle>
-      <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
+      <DialogTitle sx={DIALOG_TITLE_SX}>
+        <DialogHeaderBlock
+          title={dialogTitle}
+          subtitle="Add a device record Borealis can target and manage."
+        />
+      </DialogTitle>
+      <DialogContent sx={{ ...DIALOG_CONTENT_SX, display: "flex", flexDirection: "column" }}>
         {!defaultType && (
           <TextField
             select
             label="Device Type"
-            size="small"
             value={type}
             onChange={(e) => setType(e.target.value)}
-            sx={{
-              "& .MuiOutlinedInput-root": {
-                backgroundColor: "#1f1f1f",
-                color: "#fff",
-                "& fieldset": { borderColor: "#555" },
-                "&:hover fieldset": { borderColor: "#888" }
-              },
-              "& .MuiInputLabel-root": { color: "#aaa" }
-            }}
+            sx={{ ...DIALOG_SELECT_SX, mt: 1.25 }}
           >
             {TYPE_OPTIONS.map((opt) => (
               <MenuItem key={opt.value} value={opt.value}>
@@ -137,78 +144,41 @@ export default function AddDevice({
           label="Hostname"
           value={form.hostname}
           onChange={handleChange("hostname")}
-          size="small"
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#1f1f1f",
-              color: "#fff",
-              "& fieldset": { borderColor: "#555" },
-              "&:hover fieldset": { borderColor: "#888" }
-            },
-            "& .MuiInputLabel-root": { color: "#aaa" }
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: defaultType ? 1.25 : 2.1 }}
           helperText="Name used inside Borealis."
         />
         <TextField
           label={`${typeLabel} Address`}
           value={form.address}
           onChange={handleChange("address")}
-          size="small"
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#1f1f1f",
-              color: "#fff",
-              "& fieldset": { borderColor: "#555" },
-              "&:hover fieldset": { borderColor: "#888" }
-            },
-            "& .MuiInputLabel-root": { color: "#aaa" }
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 2.1 }}
           helperText="IP or FQDN reachable from the Borealis server."
         />
         <TextField
           label="Description"
           value={form.description}
           onChange={handleChange("description")}
-          size="small"
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#1f1f1f",
-              color: "#fff",
-              "& fieldset": { borderColor: "#555" },
-              "&:hover fieldset": { borderColor: "#888" }
-            },
-            "& .MuiInputLabel-root": { color: "#aaa" }
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 2.1 }}
         />
         <TextField
           label="Operating System"
           value={form.operating_system}
           onChange={handleChange("operating_system")}
-          size="small"
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#1f1f1f",
-              color: "#fff",
-              "& fieldset": { borderColor: "#555" },
-              "&:hover fieldset": { borderColor: "#888" }
-            },
-            "& .MuiInputLabel-root": { color: "#aaa" }
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 2.1 }}
         />
         {error && (
-          <Typography variant="body2" sx={{ color: "#ff8080" }}>
+          <Typography variant="body2" sx={{ color: "#ff8080", mt: 1.5 }}>
             {error}
           </Typography>
         )}
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
-        <Button onClick={handleClose} sx={{ color: "#58a6ff" }} disabled={submitting}>
+      <DialogActions sx={DIALOG_ACTIONS_SX}>
+        <Button onClick={handleClose} sx={DIALOG_BUTTON_SX} disabled={submitting}>
           Cancel
         </Button>
         <Button
           onClick={handleSubmit}
-          variant="outlined"
-          sx={{ color: "#58a6ff", borderColor: "#58a6ff" }}
+          sx={DIALOG_PRIMARY_BUTTON_SX}
           disabled={submitting}
         >
           {submitting ? "Saving..." : "Save"}

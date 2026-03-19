@@ -13,6 +13,7 @@ import {
   Switch,
   Dialog,
   DialogTitle,
+  DialogContent,
   DialogActions,
   CircularProgress,
 } from "@mui/material";
@@ -30,6 +31,16 @@ import {
   resolveAssemblyForComponent
 } from "../Assemblies/assemblyUtils";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BODY_TEXT_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_DANGER_BUTTON_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 
 // -----------------------------------------------------------------------------
 //  Register AG Grid community modules
@@ -1008,11 +1019,23 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
       <Dialog
         open={bulkDeleteOpen}
         onClose={() => setBulkDeleteOpen(false)}
-        PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle>Are you sure you want to delete this job(s)?</DialogTitle>
-        <DialogActions>
-          <Button onClick={() => setBulkDeleteOpen(false)} sx={{ color: "#58a6ff" }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Delete Job(s)"
+            subtitle="Permanently remove the selected scheduled jobs from Borealis."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Typography sx={DIALOG_BODY_TEXT_SX}>
+            Delete the currently selected scheduled job records.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={() => setBulkDeleteOpen(false)} sx={DIALOG_BUTTON_SX}>
             Cancel
           </Button>
           <Button
@@ -1044,10 +1067,9 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
               setBulkDeleteOpen(false);
               await loadJobs({ showLoading: true });
             }}
-            variant="outlined"
-            sx={{ color: "#58a6ff", borderColor: "#58a6ff" }}
+            sx={DIALOG_DANGER_BUTTON_SX}
           >
-            Confirm
+            Delete Job(s)
           </Button>
         </DialogActions>
       </Dialog>

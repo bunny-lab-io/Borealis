@@ -28,6 +28,14 @@ import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import { ClearDeviceActivityDialog } from "../Dialogs.jsx";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 import Prism from "prismjs";
 import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-bash";
@@ -2920,17 +2928,12 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         onClose={() => setOutputOpen(false)}
         fullWidth
         maxWidth="md"
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.96)",
-            color: "#fff",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            boxShadow: "0 25px 80px rgba(2,6,23,0.85)",
-          },
-        }}
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle>{outputTitle}</DialogTitle>
-        <DialogContent>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock title={outputTitle} subtitle="Review command output and captured response data." />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
           <Box
             sx={{
               border: `1px solid ${MAGIC_UI.panelBorder}`,
@@ -2956,10 +2959,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             />
           </Box>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
           <Button
             onClick={() => setOutputOpen(false)}
-            sx={{ color: MAGIC_UI.accentA, textTransform: "none" }}
+            sx={DIALOG_BUTTON_SX}
           >
             Close
           </Button>

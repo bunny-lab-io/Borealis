@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Paper,
   Typography,
   IconButton,
@@ -14,7 +19,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
-import { CreateSiteDialog, ConfirmDeleteDialog, RenameSiteDialog } from "../Dialogs.jsx";
+import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -47,6 +52,155 @@ const MAGIC_UI = {
   accentB: "#c084fc",
   success: "#34d399",
 };
+
+const SITE_DIALOG_PAPER_SX = {
+  borderRadius: 3,
+  background:
+    "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
+    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), rgba(8,12,24,0.96)",
+  backdropFilter: "blur(18px)",
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  boxShadow: "0 24px 60px rgba(2,8,23,0.72)",
+  color: MAGIC_UI.textBright,
+  overflow: "hidden",
+};
+
+const SITE_DIALOG_TITLE_SX = {
+  px: 3,
+  pt: 3,
+  pb: 0.75,
+  background: "transparent",
+};
+
+const SITE_DIALOG_CONTENT_SX = {
+  px: 3,
+  pt: 1,
+  pb: 2.5,
+  background: "transparent",
+};
+
+const SITE_DIALOG_ACTIONS_SX = {
+  px: 3,
+  pt: 0.5,
+  pb: 2.5,
+  gap: 1,
+  background: "transparent",
+};
+
+const SITE_DIALOG_BUTTON_SX = {
+  borderRadius: 999,
+  px: 2,
+  minHeight: 38,
+  textTransform: "none",
+  fontWeight: 600,
+  fontSize: "0.92rem",
+  color: MAGIC_UI.textBright,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  background: "rgba(5,10,24,0.84)",
+  transition: "background 160ms ease, border-color 160ms ease, color 160ms ease, transform 120ms ease",
+  "&:hover": {
+    background: "rgba(8,14,30,0.92)",
+    borderColor: "rgba(125,211,252,0.46)",
+  },
+  "&:active": {
+    transform: "translateY(0.5px)",
+  },
+};
+
+const SITE_DIALOG_DANGER_BUTTON_SX = {
+  ...SITE_DIALOG_BUTTON_SX,
+  color: "#ff9aa5",
+  borderColor: "rgba(244,63,94,0.38)",
+  background: "rgba(44,8,22,0.6)",
+  "&:hover": {
+    background: "rgba(58,10,28,0.76)",
+    borderColor: "rgba(251,113,133,0.58)",
+  },
+  "&.Mui-disabled": {
+    color: "rgba(255,154,165,0.48)",
+    borderColor: "rgba(244,63,94,0.16)",
+    background: "rgba(44,8,22,0.24)",
+  },
+};
+
+function SiteDeleteDialog({ open, onCancel, onConfirm, sites }) {
+  const siteNames = Array.isArray(sites) ? sites.map((site) => site?.name).filter(Boolean) : [];
+  const previewNames = siteNames.slice(0, 4);
+  const remainingCount = Math.max(siteNames.length - previewNames.length, 0);
+  const deleteLabel = "Delete Site(s)";
+
+  return (
+    <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth PaperProps={{ sx: SITE_DIALOG_PAPER_SX }}>
+      <DialogTitle sx={SITE_DIALOG_TITLE_SX}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontWeight: 700, fontSize: "1rem", lineHeight: 1.2, color: MAGIC_UI.textBright }}>
+            {deleteLabel}
+          </Typography>
+          <Typography sx={{ mt: 0.55, fontSize: "0.84rem", lineHeight: 1.45, color: MAGIC_UI.textMuted }}>
+            Permanently remove the selected site records from Borealis.
+          </Typography>
+        </Box>
+      </DialogTitle>
+      <DialogContent sx={SITE_DIALOG_CONTENT_SX}>
+        {previewNames.length ? (
+          <Box
+            sx={{
+              mt: 0.5,
+              borderRadius: 2.5,
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              background: "rgba(7,12,24,0.82)",
+              px: 1.5,
+              py: 1.35,
+            }}
+          >
+            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.78rem", fontWeight: 700, letterSpacing: 0.75, textTransform: "uppercase" }}>
+              Selected Sites
+            </Typography>
+            <Box sx={{ mt: 1.2, display: "flex", flexWrap: "wrap", gap: 0.9 }}>
+              {previewNames.map((name) => (
+                <Box
+                  key={name}
+                  sx={{
+                    borderRadius: 999,
+                    border: "1px solid rgba(148,163,184,0.26)",
+                    background: "rgba(15,23,42,0.76)",
+                    px: 1.2,
+                    py: 0.55,
+                  }}
+                >
+                  <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.84rem", fontWeight: 500 }}>
+                    {name}
+                  </Typography>
+                </Box>
+              ))}
+              {remainingCount > 0 ? (
+                <Box
+                  sx={{
+                    borderRadius: 999,
+                    border: "1px solid rgba(244,63,94,0.26)",
+                    background: "rgba(44,8,22,0.38)",
+                    px: 1.2,
+                    py: 0.55,
+                  }}
+                >
+                  <Typography sx={{ color: "#ffb1b9", fontSize: "0.84rem", fontWeight: 600 }}>
+                    +{remainingCount} more
+                  </Typography>
+                </Box>
+              ) : null}
+            </Box>
+          </Box>
+        ) : null}
+      </DialogContent>
+      <DialogActions sx={SITE_DIALOG_ACTIONS_SX}>
+        <Button onClick={onCancel} sx={SITE_DIALOG_BUTTON_SX}>Cancel</Button>
+        <Button onClick={onConfirm} disabled={!siteNames.length} sx={SITE_DIALOG_DANGER_BUTTON_SX}>
+          {deleteLabel}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
 
 const PAGE_TITLE = "Sites";
 const PAGE_SUBTITLE = "Manage site enrollment codes and open device inventories by site.";
@@ -206,11 +360,12 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
     minWidth: 160,
   }), []);
 
-  const heroStats = useMemo(() => ({
-    totalSites: rows.length,
-    totalDevices: rows.reduce((acc, r) => acc + (r.device_count || 0), 0),
-    selected: selectedIds.size,
-  }), [rows, selectedIds]);
+  const selectedSiteRows = useMemo(
+    () => rows.filter((row) => row?.id != null && selectedIds.has(row.id)),
+    [rows, selectedIds]
+  );
+
+  const selectedCount = selectedIds.size;
 
   const pageHeaderActions = useMemo(
     () => [
@@ -271,10 +426,10 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
     >
       <PageBodyFrame variant="grid">
         <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
-          {heroStats.selected > 0 ? (
+          {selectedCount > 0 ? (
             <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1.25 }}>
               <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, fontWeight: 600 }}>
-                {heroStats.selected} selected
+                {selectedCount} selected
               </Typography>
             </Box>
           ) : null}
@@ -365,17 +520,14 @@ export default function SiteList({ onOpenDevicesForSite, onPageMetaChange }) {
         }}
       />
 
-      <ConfirmDeleteDialog
+      <SiteDeleteDialog
         open={deleteOpen}
-        message={`Delete ${selectedIds.size} selected site(s)? This cannot be undone.`}
         onCancel={() => setDeleteOpen(false)}
+        sites={selectedSiteRows}
         onConfirm={async () => {
           try {
-            const ids = Array.from(selectedIds);
-            const selectedNames = rows
-              .filter((row) => ids.includes(row.id))
-              .map((row) => row?.name)
-              .filter(Boolean);
+            const ids = selectedSiteRows.map((row) => row.id);
+            const selectedNames = selectedSiteRows.map((row) => row?.name).filter(Boolean);
             const resp = await fetch("/api/sites/delete", {
               method: "POST",
               headers: { "Content-Type": "application/json" },

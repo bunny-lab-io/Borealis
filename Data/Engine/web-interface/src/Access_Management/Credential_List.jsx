@@ -458,9 +458,11 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
 
       <ConfirmDeleteDialog
         open={Boolean(deleteTarget)}
+        title="Delete Credential"
         onCancel={() => setDeleteTarget(null)}
         onConfirm={doDelete}
         confirmDisabled={deleteBusy}
+        confirmLabel="Delete Credential"
         message={
           deleteTarget
             ? `Delete credential '${deleteTarget.name || ""}'? Any jobs referencing it will require an update.`

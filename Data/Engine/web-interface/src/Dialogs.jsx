@@ -2,6 +2,7 @@
 
 import React from "react";
 import {
+  Box,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -10,57 +11,82 @@ import {
   Button,
   Menu,
   MenuItem,
-  TextField
+  TextField,
+  Typography,
 } from "@mui/material";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BODY_TEXT_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_DANGER_BUTTON_SX,
+  DIALOG_INPUT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "./DialogStyles.jsx";
+
+function DialogFrame({ open, onClose, title, subtitle, maxWidth = "xs", fullWidth = true, children, actions, contentSx }) {
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth={maxWidth} fullWidth={fullWidth} PaperProps={{ sx: DIALOG_PAPER_SX }}>
+      <DialogTitle sx={DIALOG_TITLE_SX}>
+        <DialogHeaderBlock title={title} subtitle={subtitle} />
+      </DialogTitle>
+      <DialogContent sx={{ ...DIALOG_CONTENT_SX, ...contentSx }}>
+        {children}
+      </DialogContent>
+      {actions ? <DialogActions sx={DIALOG_ACTIONS_SX}>{actions}</DialogActions> : null}
+    </Dialog>
+  );
+}
 
 export function CloseAllDialog({ open, onClose, onConfirm }) {
   return (
-    <Dialog open={open} onClose={onClose} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Close All Flow Tabs?</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ color: "#ccc" }}>
+    <DialogFrame
+      open={open}
+      onClose={onClose}
+      title="Close All Flow Tabs?"
+      actions={
+        <>
+          <Button onClick={onClose} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={onConfirm} sx={DIALOG_DANGER_BUTTON_SX}>Close All</Button>
+        </>
+      }
+    >
+      <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
           This will remove all existing flow tabs and create a fresh tab named Flow 1.
-        </DialogContentText>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onConfirm} sx={{ color: "#ff4f4f" }}>Close All</Button>
-      </DialogActions>
-    </Dialog>
+      </DialogContentText>
+    </DialogFrame>
   );
 }
 
 export function NotAuthorizedDialog({ open, onClose }) {
   return (
-    <Dialog
+    <DialogFrame
       open={open}
       onClose={onClose}
-      PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}
+      title="Not Authorized"
+      actions={<Button onClick={onClose} sx={DIALOG_BUTTON_SX}>OK</Button>}
     >
-      <DialogTitle>Not Authorized</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ color: "#ccc" }}>
+      <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
           You are not authorized to access this section.
-        </DialogContentText>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose} sx={{ color: "#58a6ff" }}>OK</Button>
-      </DialogActions>
-    </Dialog>
+      </DialogContentText>
+    </DialogFrame>
   );
 }
 
 export function CreditsDialog({ open, onClose }) {
   return (
-    <Dialog open={open} onClose={onClose} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogContent sx={{ textAlign: "center", pt: 3 }}>
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+      <DialogContent sx={{ ...DIALOG_CONTENT_SX, textAlign: "center", pt: 3 }}>
         <img
           src="/Borealis_Logo.png"
           alt="Borealis Logo"
           style={{ width: "120px", marginBottom: "12px" }}
         />
-        <DialogTitle sx={{ p: 0, mb: 1 }}>Borealis - Automation Platform</DialogTitle>
-        <DialogContentText sx={{ color: "#ccc" }}>
+        <DialogTitle sx={{ p: 0, mb: 1, color: "#e2e8f0" }}>Borealis - Automation Platform</DialogTitle>
+        <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
           Designed by Nicole Rappe @{" "}
           <a
             href="https://bunny-lab.io"
@@ -72,8 +98,8 @@ export function CreditsDialog({ open, onClose }) {
           </a>
         </DialogContentText>
       </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose} sx={{ color: "#58a6ff" }}>Close</Button>
+      <DialogActions sx={DIALOG_ACTIONS_SX}>
+        <Button onClick={onClose} sx={DIALOG_BUTTON_SX}>Close</Button>
       </DialogActions>
     </Dialog>
   );
@@ -81,75 +107,53 @@ export function CreditsDialog({ open, onClose }) {
 
 export function RenameTabDialog({ open, value, onChange, onCancel, onSave }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Rename Tab</DialogTitle>
-      <DialogContent>
+    <DialogFrame
+      open={open}
+      onClose={onCancel}
+      title="Rename Tab"
+      actions={
+        <>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={onSave} sx={DIALOG_PRIMARY_BUTTON_SX}>Save</Button>
+        </>
+      }
+    >
         <TextField
           autoFocus
-          margin="dense"
           label="Tab Name"
           fullWidth
           variant="outlined"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#2a2a2a",
-              color: "#ccc",
-              "& fieldset": {
-                borderColor: "#444"
-              },
-              "&:hover fieldset": {
-                borderColor: "#666"
-              }
-            },
-            label: { color: "#aaa" },
-            mt: 1
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
         />
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
-      </DialogActions>
-    </Dialog>
+    </DialogFrame>
   );
 }
 
 export function RenameWorkflowDialog({ open, value, onChange, onCancel, onSave }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Rename Workflow</DialogTitle>
-      <DialogContent>
+    <DialogFrame
+      open={open}
+      onClose={onCancel}
+      title="Rename Workflow"
+      actions={
+        <>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={onSave} sx={DIALOG_PRIMARY_BUTTON_SX}>Save</Button>
+        </>
+      }
+    >
         <TextField
           autoFocus
-          margin="dense"
           label="Workflow Name"
           fullWidth
           variant="outlined"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#2a2a2a",
-              color: "#ccc",
-              "& fieldset": {
-                borderColor: "#444"
-              },
-              "&:hover fieldset": {
-                borderColor: "#666"
-              }
-            },
-            label: { color: "#aaa" },
-            mt: 1
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
         />
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
-      </DialogActions>
-    </Dialog>
+    </DialogFrame>
   );
 }
 
@@ -163,154 +167,152 @@ export function RenameFolderDialog({
   confirmText = "Save"
 }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>{title}</DialogTitle>
-      <DialogContent>
+    <DialogFrame
+      open={open}
+      onClose={onCancel}
+      title={title}
+      actions={
+        <>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={onSave} sx={DIALOG_PRIMARY_BUTTON_SX}>{confirmText}</Button>
+        </>
+      }
+    >
         <TextField
           autoFocus
-          margin="dense"
           label="Folder Name"
           fullWidth
           variant="outlined"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#2a2a2a",
-              color: "#ccc",
-              "& fieldset": { borderColor: "#444" },
-              "&:hover fieldset": { borderColor: "#666" }
-            },
-            label: { color: "#aaa" },
-            mt: 1
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
         />
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>{confirmText}</Button>
-      </DialogActions>
-    </Dialog>
+    </DialogFrame>
   );
 }
 
 export function NewWorkflowDialog({ open, value, onChange, onCancel, onCreate }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>New Workflow</DialogTitle>
-      <DialogContent>
+    <DialogFrame
+      open={open}
+      onClose={onCancel}
+      title="New Workflow"
+      actions={
+        <>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={onCreate} sx={DIALOG_PRIMARY_BUTTON_SX}>Create</Button>
+        </>
+      }
+    >
         <TextField
           autoFocus
-          margin="dense"
           label="Workflow Name"
           fullWidth
           variant="outlined"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#2a2a2a",
-              color: "#ccc",
-              "& fieldset": { borderColor: "#444" },
-              "&:hover fieldset": { borderColor: "#666" }
-            },
-            label: { color: "#aaa" },
-            mt: 1
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
         />
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onCreate} sx={{ color: "#58a6ff" }}>Create</Button>
-      </DialogActions>
-    </Dialog>
+    </DialogFrame>
   );
 }
 
 export function ClearDeviceActivityDialog({ open, onCancel, onConfirm }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Clear Device Activity</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ color: "#ccc" }}>
+    <DialogFrame
+      open={open}
+      onClose={onCancel}
+      title="Clear Device Activity"
+      actions={
+        <>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={onConfirm} sx={DIALOG_DANGER_BUTTON_SX}>Clear</Button>
+        </>
+      }
+    >
+      <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
           All device activity history will be cleared, are you sure?
-        </DialogContentText>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onConfirm} sx={{ color: "#ff4f4f" }}>Clear</Button>
-      </DialogActions>
-    </Dialog>
+      </DialogContentText>
+    </DialogFrame>
   );
 }
 
 export function SaveWorkflowDialog({ open, value, onChange, onCancel, onSave }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Save Workflow</DialogTitle>
-      <DialogContent>
+    <DialogFrame
+      open={open}
+      onClose={onCancel}
+      title="Save Workflow"
+      actions={
+        <>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={onSave} sx={DIALOG_PRIMARY_BUTTON_SX}>Save</Button>
+        </>
+      }
+    >
         <TextField
           autoFocus
-          margin="dense"
           label="Workflow Name"
           fullWidth
           variant="outlined"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#2a2a2a",
-              color: "#ccc",
-              "& fieldset": { borderColor: "#444" },
-              "&:hover fieldset": { borderColor: "#666" }
-            },
-            label: { color: "#aaa" },
-            mt: 1
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
         />
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
-      </DialogActions>
-    </Dialog>
+    </DialogFrame>
   );
 }
 
-export function ConfirmDeleteDialog({ open, message, onCancel, onConfirm }) {
+export function ConfirmDeleteDialog({
+  open,
+  message,
+  onCancel,
+  onConfirm,
+  title = "Confirm Delete",
+  confirmLabel = "Confirm",
+  confirmDisabled = false,
+  confirmTone = "danger",
+}) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Confirm Delete</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ color: "#ccc" }}>{message}</DialogContentText>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onConfirm} sx={{ color: "#58a6ff" }}>Confirm</Button>
-      </DialogActions>
-    </Dialog>
+    <DialogFrame
+      open={open}
+      onClose={onCancel}
+      title={title}
+      actions={
+        <>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button
+            onClick={onConfirm}
+            disabled={confirmDisabled}
+            sx={confirmTone === "danger" ? DIALOG_DANGER_BUTTON_SX : DIALOG_PRIMARY_BUTTON_SX}
+          >
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <DialogContentText sx={DIALOG_BODY_TEXT_SX}>{message}</DialogContentText>
+    </DialogFrame>
   );
 }
 
 export function DeleteDeviceDialog({ open, onCancel, onConfirm }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Remove Device</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ color: "#ccc" }}>
+    <DialogFrame
+      open={open}
+      onClose={onCancel}
+      title="Remove Device"
+      actions={
+        <>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={onConfirm} sx={DIALOG_DANGER_BUTTON_SX}>Remove</Button>
+        </>
+      }
+    >
+      <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
           Are you sure you want to remove this device?  If the agent is still running, it will automatically re-enroll the device.
-        </DialogContentText>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button
-          onClick={onConfirm}
-          sx={{ bgcolor: "#ff4f4f", color: "#fff", "&:hover": { bgcolor: "#e04444" } }}
-        >
-          Remove
-        </Button>
-      </DialogActions>
-    </Dialog>
+      </DialogContentText>
+    </DialogFrame>
   );
 }
 
@@ -337,77 +339,64 @@ export function TabContextMenu({ anchor, onClose, onRename, onCloseTab }) {
 
 export function CreateCustomViewDialog({ open, value, onChange, onCancel, onSave }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Create a New Custom View</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ color: "#ccc", mb: 1 }}>
+    <DialogFrame
+      open={open}
+      onClose={onCancel}
+      title="Create a New Custom View"
+      actions={
+        <>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={onSave} sx={DIALOG_PRIMARY_BUTTON_SX}>Save</Button>
+        </>
+      }
+    >
+        <DialogContentText sx={{ ...DIALOG_BODY_TEXT_SX, mb: 1 }}>
           Saving a view will save column order, visibility, and filters.
         </DialogContentText>
         <TextField
           autoFocus
           fullWidth
-          margin="dense"
           label="View Name"
           variant="outlined"
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Add a name for this custom view"
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#2a2a2a",
-              color: "#ccc",
-              "& fieldset": { borderColor: "#444" },
-              "&:hover fieldset": { borderColor: "#666" }
-            },
-            label: { color: "#aaa" },
-            mt: 1
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
         />
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
-      </DialogActions>
-    </Dialog>
+    </DialogFrame>
   );
 }
 
 export function RenameCustomViewDialog({ open, value, onChange, onCancel, onSave }) {
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Rename Custom View</DialogTitle>
-      <DialogContent>
+    <DialogFrame
+      open={open}
+      onClose={onCancel}
+      title="Rename Custom View"
+      actions={
+        <>
+          <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={onSave} sx={DIALOG_PRIMARY_BUTTON_SX}>Save</Button>
+        </>
+      }
+    >
         <TextField
           autoFocus
           fullWidth
-          margin="dense"
           label="View Name"
           variant="outlined"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#2a2a2a",
-              color: "#ccc",
-              "& fieldset": { borderColor: "#444" },
-              "&:hover fieldset": { borderColor: "#666" }
-            },
-            label: { color: "#aaa" },
-            mt: 1
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
         />
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
-      </DialogActions>
-    </Dialog>
+    </DialogFrame>
   );
 }
 
 export function CreateSiteDialog({ open, onCancel, onCreate }) {
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
+  const trimmedName = (name || "").trim();
 
   React.useEffect(() => {
     if (open) {
@@ -417,61 +406,43 @@ export function CreateSiteDialog({ open, onCancel, onCreate }) {
   }, [open]);
 
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Create Site</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ color: "#ccc", mb: 1 }}>
-          Create a new site and optionally add a description.
-        </DialogContentText>
+    <Dialog open={open} onClose={onCancel} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+      <DialogTitle sx={DIALOG_TITLE_SX}>
+        <DialogHeaderBlock
+          title="Create Site"
+          subtitle="Provision a new site profile for device enrollment, filtering, and operator workflows."
+        />
+      </DialogTitle>
+      <DialogContent sx={DIALOG_CONTENT_SX}>
         <TextField
           autoFocus
           fullWidth
-          margin="dense"
           label="Site Name"
           variant="outlined"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#2a2a2a",
-              color: "#ccc",
-              "& fieldset": { borderColor: "#444" },
-              "&:hover fieldset": { borderColor: "#666" }
-            },
-            label: { color: "#aaa" },
-            mt: 1
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
         />
         <TextField
           fullWidth
           multiline
           minRows={3}
-          margin="dense"
           label="Description"
           variant="outlined"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#2a2a2a",
-              color: "#ccc",
-              "& fieldset": { borderColor: "#444" },
-              "&:hover fieldset": { borderColor: "#666" }
-            },
-            label: { color: "#aaa" },
-            mt: 2
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 2.75 }}
         />
       </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
+      <DialogActions sx={DIALOG_ACTIONS_SX}>
+        <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
         <Button
           onClick={() => {
-            const nm = (name || '').trim();
-            if (!nm) return;
-            onCreate && onCreate(nm, description || '');
+            if (!trimmedName) return;
+            onCreate && onCreate(trimmedName, description || "");
           }}
-          sx={{ color: "#58a6ff" }}
+          disabled={!trimmedName}
+          sx={DIALOG_PRIMARY_BUTTON_SX}
         >
           Create
         </Button>
@@ -481,33 +452,29 @@ export function CreateSiteDialog({ open, onCancel, onCreate }) {
 }
 
 export function RenameSiteDialog({ open, value, onChange, onCancel, onSave }) {
+  const trimmedValue = (value || "").trim();
+
   return (
-    <Dialog open={open} onClose={onCancel} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-      <DialogTitle>Rename Site</DialogTitle>
-      <DialogContent>
+    <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+      <DialogTitle sx={DIALOG_TITLE_SX}>
+        <DialogHeaderBlock
+          title="Rename Site"
+        />
+      </DialogTitle>
+      <DialogContent sx={DIALOG_CONTENT_SX}>
         <TextField
           autoFocus
           fullWidth
-          margin="dense"
           label="Site Name"
           variant="outlined"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "#2a2a2a",
-              color: "#ccc",
-              "& fieldset": { borderColor: "#444" },
-              "&:hover fieldset": { borderColor: "#666" }
-            },
-            label: { color: "#aaa" },
-            mt: 1
-          }}
+          sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
         />
       </DialogContent>
-      <DialogActions>
-        <Button onClick={onCancel} sx={{ color: "#58a6ff" }}>Cancel</Button>
-        <Button onClick={onSave} sx={{ color: "#58a6ff" }}>Save</Button>
+      <DialogActions sx={DIALOG_ACTIONS_SX}>
+        <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+        <Button onClick={onSave} disabled={!trimmedValue} sx={DIALOG_PRIMARY_BUTTON_SX}>Save</Button>
       </DialogActions>
     </Dialog>
   );

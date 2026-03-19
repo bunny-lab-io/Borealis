@@ -23,6 +23,18 @@ import MenuBookIcon from "@mui/icons-material/MenuBook";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { ConfirmDeleteDialog, NewWorkflowDialog } from "../Dialogs";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BODY_TEXT_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_INPUT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_SELECT_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 import { DomainBadge, DirtyStatePill, resolveDomainMeta, DOMAIN_OPTIONS } from "./Assembly_Badges";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 
@@ -1030,10 +1042,11 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
           Delete
         </MenuItem>
       </Menu>
-
-      <Dialog open={renameDialogOpen} onClose={() => setRenameDialogOpen(false)}>
-        <DialogTitle>Rename Assembly</DialogTitle>
-        <DialogContent>
+      <Dialog open={renameDialogOpen} onClose={() => setRenameDialogOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock title="Rename Assembly" />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
           <TextField
             autoFocus
             fullWidth
@@ -1041,20 +1054,14 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
             variant="outlined"
             value={renameValue}
             onChange={(event) => setRenameValue(event.target.value)}
-            sx={{
-              mt: 1,
-              "& .MuiOutlinedInput-root": {
-                "& fieldset": { borderColor: "#444" },
-                "&:hover fieldset": { borderColor: "#666" },
-              },
-            }}
+            sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
           />
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRenameDialogOpen(false)} sx={{ textTransform: "none" }}>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={() => setRenameDialogOpen(false)} sx={DIALOG_BUTTON_SX}>
             Cancel
           </Button>
-          <Button onClick={handleRenameSave} disabled={!renameValue.trim()} sx={{ textTransform: "none", color: BOREALIS_BLUE }}>
+          <Button onClick={handleRenameSave} disabled={!renameValue.trim()} sx={DIALOG_PRIMARY_BUTTON_SX}>
             Save
           </Button>
         </DialogActions>
@@ -1062,14 +1069,18 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
 
       <ConfirmDeleteDialog
         open={deleteDialogOpen}
+        title="Delete Assembly"
         message="If you delete this assembly, there is no undo. Are you sure you want to proceed?"
         onCancel={() => setDeleteDialogOpen(false)}
         onConfirm={handleDeleteConfirm}
+        confirmLabel="Delete Assembly"
       />
 
-      <Dialog open={cloneDialog.open} onClose={handleCloneClose}>
-        <DialogTitle>Clone Assembly</DialogTitle>
-        <DialogContent sx={{ minWidth: 280 }}>
+      <Dialog open={cloneDialog.open} onClose={handleCloneClose} maxWidth="xs" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock title="Clone Assembly" subtitle="Create a copy of this assembly in another domain." />
+        </DialogTitle>
+        <DialogContent sx={{ ...DIALOG_CONTENT_SX, minWidth: 280 }}>
           <TextField
             select
             fullWidth
@@ -1081,7 +1092,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
                 targetDomain: String(e.target.value || "").toLowerCase(),
               }))
             }
-            sx={{ ...SELECT_BASE_SX, mt: 1 }}
+            sx={{ ...DIALOG_SELECT_SX, mt: 1.25 }}
             SelectProps={{ MenuProps: MENU_PROPS }}
           >
             {DOMAIN_OPTIONS.filter((option) => option.value !== cloneDialog.row?.domain).map((option) => (
@@ -1090,24 +1101,29 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
               </MenuItem>
             ))}
           </TextField>
-          <Typography variant="body2" sx={{ mt: 1, color: "#9ba3b4" }}>
+          <Typography variant="body2" sx={{ mt: 1.2, ...DIALOG_BODY_TEXT_SX }}>
             Cloning creates a copy of the assembly in the selected domain.
           </Typography>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloneClose} sx={{ textTransform: "none", color: "#58a6ff" }}>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={handleCloneClose} sx={DIALOG_BUTTON_SX}>
             Cancel
           </Button>
-          <Button onClick={handleCloneConfirm} sx={{ textTransform: "none", color: "#58a6ff" }}>
+          <Button onClick={handleCloneConfirm} sx={DIALOG_PRIMARY_BUTTON_SX}>
             Clone
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Dialog open={officialUpdateDialog.open} onClose={handleOfficialUpdateClose}>
-        <DialogTitle>{officialUpdateDialog.mode === "all" ? "Update All Aurora Assemblies" : "Update Aurora Assembly"}</DialogTitle>
-        <DialogContent sx={{ minWidth: 420 }}>
-          <Typography variant="body2" sx={{ mt: 0.5, color: "#c6d0dd" }}>
+      <Dialog open={officialUpdateDialog.open} onClose={handleOfficialUpdateClose} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title={officialUpdateDialog.mode === "all" ? "Update All Aurora Assemblies" : "Update Aurora Assembly"}
+            subtitle="Pull the latest published Aurora assembly definitions from GitHub."
+          />
+        </DialogTitle>
+        <DialogContent sx={{ ...DIALOG_CONTENT_SX, minWidth: 420 }}>
+          <Typography variant="body2" sx={{ mt: 0.5, color: "#c6d0dd", lineHeight: 1.6 }}>
             {officialUpdateDialog.mode === "all"
               ? "This will pull down the most recent version of each Aurora assembly that has an available update from GitHub and overwrite the current Aurora versions in Borealis. Proceed?"
               : "This will pull down the most recent version of this Aurora assembly from GitHub and overwrite the current Aurora version in Borealis. Proceed?"}
@@ -1134,14 +1150,14 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
             </Typography>
           ) : null}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={handleOfficialUpdateClose} disabled={Boolean(updatingOfficialGuid || updatingAllOfficial)} sx={{ textTransform: "none" }}>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={handleOfficialUpdateClose} disabled={Boolean(updatingOfficialGuid || updatingAllOfficial)} sx={DIALOG_BUTTON_SX}>
             Cancel
           </Button>
           <Button
             onClick={handleOfficialUpdateConfirm}
             disabled={Boolean(updatingOfficialGuid || updatingAllOfficial)}
-            sx={{ textTransform: "none", color: BOREALIS_BLUE }}
+            sx={DIALOG_PRIMARY_BUTTON_SX}
           >
             {officialUpdateDialog.mode === "all" ? "Update All" : "Update"}
           </Button>
@@ -1154,9 +1170,16 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
           setScriptDialog({ open: false, typeKey: null });
           setScriptName("");
         }}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle>{scriptDialog.typeKey === "ansible" ? "New Ansible Playbook" : "New Script"}</DialogTitle>
-        <DialogContent>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title={scriptDialog.typeKey === "ansible" ? "New Ansible Playbook" : "New Script"}
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
           <TextField
             autoFocus
             fullWidth
@@ -1164,26 +1187,20 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
             variant="outlined"
             value={scriptName}
             onChange={(event) => setScriptName(event.target.value)}
-            sx={{
-              mt: 1,
-              "& .MuiOutlinedInput-root": {
-                "& fieldset": { borderColor: "#444" },
-                "&:hover fieldset": { borderColor: "#666" },
-              },
-            }}
+            sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
           />
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
           <Button
             onClick={() => {
               setScriptDialog({ open: false, typeKey: null });
               setScriptName("");
             }}
-            sx={{ textTransform: "none" }}
+            sx={DIALOG_BUTTON_SX}
           >
             Cancel
           </Button>
-          <Button onClick={handleCreateScript} disabled={!scriptName.trim()} sx={{ textTransform: "none", color: BOREALIS_BLUE }}>
+          <Button onClick={handleCreateScript} disabled={!scriptName.trim()} sx={DIALOG_PRIMARY_BUTTON_SX}>
             Create
           </Button>
         </DialogActions>

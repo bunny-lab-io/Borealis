@@ -41,6 +41,15 @@ import {
   MenuBookRounded as MenuBookRoundedIcon,
   AccountTreeRounded as AccountTreeRoundedIcon
 } from "@mui/icons-material";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
@@ -3715,17 +3724,12 @@ const heroTiles = useMemo(() => {
         onClose={() => setOutputOpen(false)}
         fullWidth
         maxWidth="md"
-        PaperProps={{
-          sx: {
-            background: MAGIC_UI.panelBg,
-            color: MAGIC_UI.textBright,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            boxShadow: MAGIC_UI.glow,
-          },
-        }}
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle>{outputTitle}</DialogTitle>
-        <DialogContent dividers sx={{ borderColor: MAGIC_UI.panelBorder }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock title={outputTitle} subtitle="Review generated output, logs, and command results." />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
           {outputLoading ? (
             <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
               Loading output…
@@ -3773,8 +3777,8 @@ const heroTiles = useMemo(() => {
               ))
             : null}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOutputOpen(false)} sx={{ color: MAGIC_UI.accentA, textTransform: "none" }}>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={() => setOutputOpen(false)} sx={DIALOG_BUTTON_SX}>
             Close
           </Button>
         </DialogActions>
@@ -3793,10 +3797,7 @@ const heroTiles = useMemo(() => {
         maxWidth={false}
         PaperProps={{
           sx: {
-            background: MAGIC_UI.panelBg,
-            color: MAGIC_UI.textBright,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            boxShadow: MAGIC_UI.glow,
+            ...DIALOG_PAPER_SX,
             width: "95vw",
             maxWidth: "95vw",
             height: "95vh",
@@ -3804,8 +3805,10 @@ const heroTiles = useMemo(() => {
           },
         }}
       >
-        <DialogTitle>Select an Assembly</DialogTitle>
-        <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, height: "100%", pb: 0.5, pt: 2 }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock title="Select an Assembly" subtitle="Choose the script, playbook, or workflow to add to this job." />
+        </DialogTitle>
+        <DialogContent sx={{ ...DIALOG_CONTENT_SX, display: "flex", flexDirection: "column", gap: 2, height: "100%", pb: 0.5, pt: 1.5 }}>
           <Box
             sx={{
               display: "flex",
@@ -3906,8 +3909,8 @@ const heroTiles = useMemo(() => {
             />
           </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAddCompOpen(false)} sx={{ color: MAGIC_UI.textMuted, textTransform: "none" }}>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={() => setAddCompOpen(false)} sx={DIALOG_BUTTON_SX}>
             Close
           </Button>
           <Button
@@ -3915,7 +3918,7 @@ const heroTiles = useMemo(() => {
               const ok = await addSelectedComponent();
               if (ok) setAddCompOpen(false);
             }}
-            sx={{ color: MAGIC_UI.accentA, textTransform: "none" }}
+            sx={DIALOG_PRIMARY_BUTTON_SX}
             disabled={!selectedAssemblyRecord}
           >
             Add
@@ -3929,17 +3932,12 @@ const heroTiles = useMemo(() => {
         onClose={() => setAddTargetOpen(false)}
         fullWidth
         maxWidth="md"
-        PaperProps={{
-          sx: {
-            background: MAGIC_UI.panelBg,
-            color: MAGIC_UI.textBright,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            boxShadow: MAGIC_UI.glow,
-          },
-        }}
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle>Select Targets</DialogTitle>
-        <DialogContent>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock title="Select Targets" subtitle="Pick devices or filters that this scheduled job should run against." />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
           <Tabs
             value={targetPickerTab}
             onChange={(_, value) => setTargetPickerTab(value)}
@@ -4055,8 +4053,8 @@ const heroTiles = useMemo(() => {
             </>
           )}
         </DialogContent>
-              <DialogActions>
-                <Button onClick={() => setAddTargetOpen(false)} sx={{ color: MAGIC_UI.textMuted, textTransform: "none" }}>
+              <DialogActions sx={DIALOG_ACTIONS_SX}>
+                <Button onClick={() => setAddTargetOpen(false)} sx={DIALOG_BUTTON_SX}>
                   Cancel
                 </Button>
                 <Button
@@ -4163,7 +4161,7 @@ const heroTiles = useMemo(() => {
               }
               setAddTargetOpen(false);
             }}
-            sx={{ color: MAGIC_UI.accentA, textTransform: "none" }}
+            sx={DIALOG_PRIMARY_BUTTON_SX}
           >
             Add Selected
           </Button>
@@ -4174,20 +4172,18 @@ const heroTiles = useMemo(() => {
       <Dialog
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
-        PaperProps={{
-          sx: {
-            background: MAGIC_UI.panelBg,
-            color: MAGIC_UI.textBright,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            boxShadow: MAGIC_UI.glow,
-          },
-        }}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle sx={{ pb: 0 }}>
-          {initialJob && initialJob.id ? "Are you sure you wish to save changes?" : "Are you sure you wish to create this Job?"}
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title={initialJob && initialJob.id ? "Save Job Changes" : "Create Job"}
+            subtitle={initialJob && initialJob.id ? "Confirm the changes before updating this scheduled job." : "Confirm the job configuration before creating it."}
+          />
         </DialogTitle>
-        <DialogActions sx={{ p: 2 }}>
-          <Button onClick={() => setConfirmOpen(false)} sx={{ color: MAGIC_UI.textMuted, textTransform: "none" }}>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={() => setConfirmOpen(false)} sx={DIALOG_BUTTON_SX}>
             Cancel
           </Button>
           <Button
@@ -4195,8 +4191,7 @@ const heroTiles = useMemo(() => {
               setConfirmOpen(false);
               handleCreate();
             }}
-            variant="outlined"
-            sx={{ ...OUTLINE_BUTTON_SX, borderColor: MAGIC_UI.accentA, color: MAGIC_UI.accentA }}
+            sx={DIALOG_PRIMARY_BUTTON_SX}
           >
             Confirm
           </Button>

@@ -27,6 +27,16 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import LanIcon from "@mui/icons-material/Lan";
 import DesktopWindowsIcon from "@mui/icons-material/DesktopWindows";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_INPUT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 import AddDevice from "./Add_Device.jsx";
 
 const MAGIC_UI = {
@@ -494,35 +504,22 @@ export default function SSHDevices({ type = "ssh", onPageMetaChange, onQuickJobL
         onClose={handleDialogClose}
         fullWidth
         maxWidth="sm"
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.95)",
-            color: MAGIC_UI.textBright,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            boxShadow: MAGIC_UI.glow,
-            backdropFilter: "blur(14px)",
-          },
-        }}
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle>{isEdit ? editDialogTitle : newDialogTitle}</DialogTitle>
-        <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title={isEdit ? editDialogTitle : newDialogTitle}
+            subtitle={`Configure the ${typeLabel} endpoint Borealis should track.`}
+          />
+        </DialogTitle>
+        <DialogContent sx={{ ...DIALOG_CONTENT_SX, display: "flex", flexDirection: "column" }}>
           <TextField
             label="Hostname"
             value={form.hostname}
             disabled={isEdit}
             onChange={(e) => setForm((prev) => ({ ...prev, hostname: e.target.value }))}
             fullWidth
-            size="small"
-            sx={{
-              "& .MuiOutlinedInput-root": {
-                backgroundColor: "rgba(12,18,35,0.75)",
-                color: MAGIC_UI.textBright,
-                "& fieldset": { borderColor: MAGIC_UI.panelBorder },
-                "&:hover fieldset": { borderColor: accentColor },
-                "&.Mui-focused fieldset": { borderColor: accentColor },
-              },
-              "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
-            }}
+            sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
             helperText="Hostname used within Borealis (unique)."
           />
           <TextField
@@ -530,16 +527,14 @@ export default function SSHDevices({ type = "ssh", onPageMetaChange, onQuickJobL
             value={form.address}
             onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))}
             fullWidth
-            size="small"
             sx={{
-              "& .MuiOutlinedInput-root": {
-                backgroundColor: "rgba(12,18,35,0.75)",
-                color: MAGIC_UI.textBright,
-                "& fieldset": { borderColor: MAGIC_UI.panelBorder },
+              ...DIALOG_INPUT_SX,
+              mt: 2.1,
+              "& .MuiOutlinedInput-root, & .MuiInputBase-root": {
+                ...DIALOG_INPUT_SX["& .MuiOutlinedInput-root, & .MuiInputBase-root"],
                 "&:hover fieldset": { borderColor: accentColor },
                 "&.Mui-focused fieldset": { borderColor: accentColor },
               },
-              "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
             }}
             helperText={`IP or FQDN Borealis can reach over ${typeLabel}.`}
           />
@@ -548,16 +543,14 @@ export default function SSHDevices({ type = "ssh", onPageMetaChange, onQuickJobL
             value={form.description}
             onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
             fullWidth
-            size="small"
             sx={{
-              "& .MuiOutlinedInput-root": {
-                backgroundColor: "rgba(12,18,35,0.75)",
-                color: MAGIC_UI.textBright,
-                "& fieldset": { borderColor: MAGIC_UI.panelBorder },
+              ...DIALOG_INPUT_SX,
+              mt: 2.1,
+              "& .MuiOutlinedInput-root, & .MuiInputBase-root": {
+                ...DIALOG_INPUT_SX["& .MuiOutlinedInput-root, & .MuiInputBase-root"],
                 "&:hover fieldset": { borderColor: accentColor },
                 "&.Mui-focused fieldset": { borderColor: accentColor },
               },
-              "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
             }}
           />
           <TextField
@@ -565,36 +558,33 @@ export default function SSHDevices({ type = "ssh", onPageMetaChange, onQuickJobL
             value={form.operating_system}
             onChange={(e) => setForm((prev) => ({ ...prev, operating_system: e.target.value }))}
             fullWidth
-            size="small"
             sx={{
-              "& .MuiOutlinedInput-root": {
-                backgroundColor: "rgba(12,18,35,0.75)",
-                color: MAGIC_UI.textBright,
-                "& fieldset": { borderColor: MAGIC_UI.panelBorder },
+              ...DIALOG_INPUT_SX,
+              mt: 2.1,
+              "& .MuiOutlinedInput-root, & .MuiInputBase-root": {
+                ...DIALOG_INPUT_SX["& .MuiOutlinedInput-root, & .MuiInputBase-root"],
                 "&:hover fieldset": { borderColor: accentColor },
                 "&.Mui-focused fieldset": { borderColor: accentColor },
               },
-              "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
             }}
           />
           {error && (
-            <Typography variant="body2" sx={{ color: "#ffb4b4" }}>
+            <Typography variant="body2" sx={{ color: "#ffb4b4", mt: 1.5 }}>
               {error}
             </Typography>
           )}
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
           <Button
             onClick={handleDialogClose}
-            sx={{ color: MAGIC_UI.textMuted, textTransform: "none" }}
+            sx={DIALOG_BUTTON_SX}
             disabled={submitting}
           >
             Cancel
           </Button>
           <Button
             onClick={handleSubmit}
-            variant="contained"
-            sx={gradientButtonSx}
+            sx={DIALOG_PRIMARY_BUTTON_SX}
             disabled={submitting}
           >
             {submitting ? "Saving..." : "Save"}
@@ -604,6 +594,7 @@ export default function SSHDevices({ type = "ssh", onPageMetaChange, onQuickJobL
 
       <ConfirmDeleteDialog
         open={Boolean(deleteTarget)}
+        title={`Delete ${typeLabel} Device`}
         message={
           deleteTarget
             ? `Remove ${typeLabel} device '${deleteTarget.hostname}' from inventory?`
@@ -612,6 +603,7 @@ export default function SSHDevices({ type = "ssh", onPageMetaChange, onQuickJobL
         onCancel={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
         confirmDisabled={deleteBusy}
+        confirmLabel={`Delete ${typeLabel} Device`}
       />
       <AddDevice
         open={addDeviceOpen}

@@ -30,6 +30,16 @@ import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { PAGE_HEADER_CONTROL_SX, PageHeaderActionRail } from "../Page_Header_Actions.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BODY_TEXT_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 // NOTE: Do NOT import global AG Grid CSS to avoid affecting other pages.
 // We rely on the Quartz theme class name + scoped CSS vars like the rest of MagicUI.
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -561,34 +571,39 @@ export default function DeviceApprovals({ onPageMetaChange }) {
       </PageBodyFrame>
 
       {/* Conflict Dialog (unchanged logic) */}
-      <Dialog open={Boolean(conflictPrompt)} onClose={handleConflictCancel} maxWidth="sm" fullWidth>
-        <DialogTitle>Hostname Conflict</DialogTitle>
-        <DialogContent dividers>
+      <Dialog open={Boolean(conflictPrompt)} onClose={handleConflictCancel} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Hostname Conflict"
+            subtitle="Choose whether this incoming device should overwrite the existing record or coexist beside it."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
           <Stack spacing={2}>
-            <DialogContentText>
+            <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
               {conflictHostname
                 ? `Device ${conflictHostname} already exists in the database ${conflictSiteDescriptor}.`
                 : `A device with this hostname already exists in the database ${conflictSiteDescriptor}.`}
             </DialogContentText>
-            <DialogContentText>
+            <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
               Do you want this device to overwrite the existing device, or allow both to co-exist?
             </DialogContentText>
-            <DialogContentText>
+            <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
               {`Device will be renamed ${conflictAlternate} if you choose to allow both to co-exist.`}
             </DialogContentText>
             {conflictGuidDisplay ? (
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
                 Existing device GUID: {conflictGuidDisplay}
               </Typography>
             ) : null}
           </Stack>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={handleConflictCancel}>Cancel</Button>
-          <Button onClick={handleConflictCoexist} color="info" variant="outlined">
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={handleConflictCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+          <Button onClick={handleConflictCoexist} sx={DIALOG_BUTTON_SX}>
             Allow Both
           </Button>
-          <Button onClick={handleConflictOverwrite} color="primary" variant="contained" disabled={!conflictGuidDisplay}>
+          <Button onClick={handleConflictOverwrite} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={!conflictGuidDisplay}>
             Overwrite Existing
           </Button>
         </DialogActions>

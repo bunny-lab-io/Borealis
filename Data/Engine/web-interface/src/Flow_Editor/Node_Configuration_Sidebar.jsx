@@ -6,6 +6,16 @@ import ReactMarkdown from "react-markdown"; // Used for Node Usage Documentation
 import EditIcon from "@mui/icons-material/Edit";
 import PaletteIcon from "@mui/icons-material/Palette";
 import { SketchPicker } from "react-color";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_INPUT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 
 // ---- NEW: Brightness utility for gradient ----
 function darkenColor(hex, percent = 0.7) {
@@ -366,10 +376,14 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
       <Dialog
         open={renameOpen}
         onClose={() => setRenameOpen(false)}
-        PaperProps={{ sx: { bgcolor: "#232323" } }}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle>Rename Node</DialogTitle>
-        <DialogContent>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock title="Rename Node" />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
           <TextField
             autoFocus
             fullWidth
@@ -377,24 +391,15 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
             label="Node Title"
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
-            sx={{
-              mt: 1,
-              bgcolor: "#1e1e1e",
-              "& .MuiOutlinedInput-root": {
-                color: "#ccc",
-                backgroundColor: "#1e1e1e",
-                "& fieldset": { borderColor: "#444" }
-              },
-              label: { color: "#aaa" }
-            }}
+            sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
           />
         </DialogContent>
-        <DialogActions>
-          <Button sx={{ color: "#aaa" }} onClick={() => setRenameOpen(false)}>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button sx={DIALOG_BUTTON_SX} onClick={() => setRenameOpen(false)}>
             Cancel
           </Button>
           <Button
-            sx={{ color: "#58a6ff" }}
+            sx={DIALOG_PRIMARY_BUTTON_SX}
             onClick={() => {
               // Use selectedNode (passed as prop) or nodeData?.nodeId as fallback
               const nodeId = selectedNode?.id || nodeData?.nodeId;
@@ -421,10 +426,15 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
       <Dialog
         open={colorDialogOpen}
         onClose={() => setColorDialogOpen(false)}
-        PaperProps={{ sx: { bgcolor: "#232323" } }}
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle>Pick Node Header/Accent Color</DialogTitle>
-        <DialogContent>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Pick Node Header/Accent Color"
+            subtitle="Choose the accent color used for the node header and gradient treatment."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
           <SketchPicker
             color={accentColor}
             onChangeComplete={(color) => {
@@ -456,7 +466,7 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
             ]}
           />
           <Box sx={{ mt: 2 }}>
-            <Typography variant="body2">
+            <Typography variant="body2" sx={{ color: "#cbd5e1" }}>
               The node's header text and accent gradient will use your selected color.<br />
               The accent gradient fades to a slightly darker version.
             </Typography>
@@ -475,8 +485,8 @@ export default function NodeConfigurationSidebar({ drawerOpen, setDrawerOpen, ti
             </Box>
           </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setColorDialogOpen(false)} sx={{ color: "#aaa" }}>Close</Button>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={() => setColorDialogOpen(false)} sx={DIALOG_BUTTON_SX}>Close</Button>
         </DialogActions>
       </Dialog>
       {/* ---- END ACCENT COLOR PICKER DIALOG ---- */}

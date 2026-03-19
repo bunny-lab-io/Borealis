@@ -43,6 +43,15 @@ import {
   normalizeFilesFromServer,
   parseAssemblyExport,
 } from "./assemblyUtils";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BUTTON_SX as SHARED_DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_PAPER_SX as SHARED_DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX as SHARED_DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 
 const TYPE_OPTIONS_ALL = [
   { key: "ansible", label: "Ansible Playbook", prism: "yaml" },
@@ -368,27 +377,19 @@ const CODE_EDITOR_CONTAINER_SX = {
 };
 
 const DIALOG_PAPER_SX = {
+  ...SHARED_DIALOG_PAPER_SX,
   background: MAGIC_UI.panelBg,
-  color: MAGIC_UI.textBright,
   border: `1px solid ${MAGIC_UI.panelBorder}`,
   boxShadow: MAGIC_UI.glow,
 };
 
 const DIALOG_BUTTON_SX = {
-  borderRadius: 999,
-  textTransform: "none",
-  px: 2,
-  fontWeight: 600,
+  ...SHARED_DIALOG_BUTTON_SX,
   color: MAGIC_UI.textBright,
 };
 
 const DIALOG_PRIMARY_BUTTON_SX = {
-  ...DIALOG_BUTTON_SX,
-  color: "#06101d",
-  backgroundImage: "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)",
-  "&:hover": {
-    backgroundImage: "linear-gradient(135deg, #91dcff 0%, #cfa0ff 100%)",
-  },
+  ...SHARED_DIALOG_PRIMARY_BUTTON_SX,
 };
 
 function buildNavTabsSx(minHeight = NAV_TAB_HEIGHT) {
@@ -667,20 +668,21 @@ function toServerDocument(assembly, assemblyGuid = null) {
 function RenameFileDialog({ open, value, onChange, onCancel, onSave }) {
   return (
     <Dialog open={open} onClose={onCancel} PaperProps={{ sx: DIALOG_PAPER_SX }}>
-      <DialogTitle sx={{ borderBottom: `1px solid ${MAGIC_UI.panelBorder}` }}>Rename Assembly</DialogTitle>
-      <DialogContent sx={{ pt: 2.5 }}>
+      <DialogTitle sx={DIALOG_TITLE_SX}>
+        <DialogHeaderBlock title="Rename Assembly" />
+      </DialogTitle>
+      <DialogContent sx={DIALOG_CONTENT_SX}>
         <TextField
           autoFocus
-          margin="dense"
           label="Assembly Name"
           fullWidth
           variant="outlined"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          sx={INPUT_BASE_SX}
+          sx={{ ...INPUT_BASE_SX, mt: 1.25 }}
         />
       </DialogContent>
-      <DialogActions sx={{ px: 3, py: 2, borderTop: `1px solid ${MAGIC_UI.panelBorder}` }}>
+      <DialogActions sx={DIALOG_ACTIONS_SX}>
         <Button onClick={onCancel} sx={DIALOG_BUTTON_SX}>Cancel</Button>
         <Button onClick={onSave} sx={DIALOG_PRIMARY_BUTTON_SX}>Save</Button>
       </DialogActions>
@@ -1995,9 +1997,11 @@ export default function AssemblyEditor({
 
       <ConfirmDeleteDialog
         open={deleteOpen}
+        title="Delete Assembly"
         message="Deleting this assembly cannot be undone. Continue?"
         onCancel={() => setDeleteOpen(false)}
         onConfirm={handleDeleteAssembly}
+        confirmLabel="Delete Assembly"
       />
 
       <Dialog
@@ -2007,8 +2011,10 @@ export default function AssemblyEditor({
         fullWidth
         PaperProps={{ sx: DIALOG_PAPER_SX }}
       >
-        <DialogTitle sx={{ borderBottom: `1px solid ${MAGIC_UI.panelBorder}` }}>Assembly JSON Preview</DialogTitle>
-        <DialogContent dividers sx={{ borderColor: MAGIC_UI.panelBorder }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock title="Assembly JSON Preview" subtitle="Review the generated assembly payload before copying or exporting it." />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
           <Box sx={CODE_EDITOR_CONTAINER_SX}>
             <Editor
               value={jsonPreviewText}
@@ -2025,7 +2031,7 @@ export default function AssemblyEditor({
             />
           </Box>
         </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2, borderTop: `1px solid ${MAGIC_UI.panelBorder}` }}>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
           <Button onClick={handleCopyJson} sx={DIALOG_PRIMARY_BUTTON_SX}>
             Copy JSON
           </Button>

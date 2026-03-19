@@ -19,9 +19,6 @@ import {
   DialogContentText,
   DialogActions,
   TextField,
-  Select,
-  FormControl,
-  InputLabel,
   Checkbox,
   Popover,
   Stack
@@ -31,6 +28,18 @@ import FilterListIcon from "@mui/icons-material/FilterList";
 import GroupIcon from "@mui/icons-material/Group";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
 import { PageHeaderActionRail } from "../Page_Header_Actions.jsx";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BODY_TEXT_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_INPUT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_SELECT_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "../DialogStyles.jsx";
 
 /* ---------- Formatting helpers to keep this page in lockstep with Device_List ---------- */
 const tablePaperSx = { m: 0, p: 0, bgcolor: "transparent", border: "none", boxShadow: "none" };
@@ -624,127 +633,121 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
           </MenuItem>
         </Menu>
 
-        <Dialog open={resetOpen} onClose={() => setResetOpen(false)} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-          <DialogTitle>Reset Password</DialogTitle>
-          <DialogContent>
-            <DialogContentText sx={{ color: "#ccc" }}>
+        <Dialog open={resetOpen} onClose={() => setResetOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+          <DialogTitle sx={DIALOG_TITLE_SX}>
+            <DialogHeaderBlock
+              title="Reset Password"
+              subtitle={resetTarget?.username ? `Set a new password for ${resetTarget.username}.` : undefined}
+            />
+          </DialogTitle>
+          <DialogContent sx={DIALOG_CONTENT_SX}>
+            <DialogContentText sx={DIALOG_BODY_TEXT_SX}>
               Enter a new password for {resetTarget?.username}.
             </DialogContentText>
             <TextField
               autoFocus
-              margin="dense"
               fullWidth
               label="New Password"
               type="password"
               variant="outlined"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              sx={{
-                "& .MuiOutlinedInput-root": {
-                  backgroundColor: "#2a2a2a",
-                  color: "#ccc",
-                  "& fieldset": { borderColor: "#444" },
-                  "&:hover fieldset": { borderColor: "#666" }
-                },
-                label: { color: "#aaa" },
-                mt: 1
-              }}
+              sx={{ ...DIALOG_INPUT_SX, mt: 1.5 }}
             />
           </DialogContent>
-          <DialogActions>
-            <Button onClick={() => { setResetOpen(false); setResetTarget(null); }} sx={{ color: "#58a6ff" }}>Cancel</Button>
-            <Button onClick={doResetPassword} sx={{ color: "#58a6ff" }}>OK</Button>
+          <DialogActions sx={DIALOG_ACTIONS_SX}>
+            <Button onClick={() => { setResetOpen(false); setResetTarget(null); }} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+            <Button onClick={doResetPassword} sx={DIALOG_PRIMARY_BUTTON_SX}>Save Password</Button>
           </DialogActions>
         </Dialog>
 
-        <Dialog open={createOpen} onClose={() => setCreateOpen(false)} PaperProps={{ sx: { bgcolor: "#121212", color: "#fff" } }}>
-          <DialogTitle>Create User</DialogTitle>
-          <DialogContent>
+        <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
+          <DialogTitle sx={DIALOG_TITLE_SX}>
+            <DialogHeaderBlock
+              title="Create User"
+              subtitle="Add a new Borealis operator account and assign an initial role."
+            />
+          </DialogTitle>
+          <DialogContent sx={DIALOG_CONTENT_SX}>
             <TextField
               autoFocus
-              margin="dense"
               fullWidth
               label="Username"
               variant="outlined"
               value={createForm.username}
               onChange={(e) => setCreateForm((p) => ({ ...p, username: e.target.value }))}
-              sx={{
-                "& .MuiOutlinedInput-root": { backgroundColor: "#2a2a2a", color: "#ccc", "& fieldset": { borderColor: "#444" }, "&:hover fieldset": { borderColor: "#666" } },
-                label: { color: "#aaa" }, mt: 1
-              }}
+              sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
             />
             <TextField
-              margin="dense"
               fullWidth
               label="Display Name (optional)"
               variant="outlined"
               value={createForm.display_name}
               onChange={(e) => setCreateForm((p) => ({ ...p, display_name: e.target.value }))}
-              sx={{
-                "& .MuiOutlinedInput-root": { backgroundColor: "#2a2a2a", color: "#ccc", "& fieldset": { borderColor: "#444" }, "&:hover fieldset": { borderColor: "#666" } },
-                label: { color: "#aaa" }, mt: 1
-              }}
+              sx={{ ...DIALOG_INPUT_SX, mt: 2.1 }}
             />
             <TextField
-              margin="dense"
               fullWidth
               label="Password"
               type="password"
               variant="outlined"
               value={createForm.password}
               onChange={(e) => setCreateForm((p) => ({ ...p, password: e.target.value }))}
-              sx={{
-                "& .MuiOutlinedInput-root": { backgroundColor: "#2a2a2a", color: "#ccc", "& fieldset": { borderColor: "#444" }, "&:hover fieldset": { borderColor: "#666" } },
-                label: { color: "#aaa" }, mt: 1
-              }}
+              sx={{ ...DIALOG_INPUT_SX, mt: 2.1 }}
             />
-            <FormControl fullWidth sx={{ mt: 2 }}>
-              <InputLabel sx={{ color: "#aaa" }}>Role</InputLabel>
-              <Select
-                native
-                value={createForm.role}
-                onChange={(e) => setCreateForm((p) => ({ ...p, role: e.target.value }))}
-                sx={{
-                  backgroundColor: "#2a2a2a",
-                  color: "#ccc",
-                  borderColor: "#444"
-                }}
-              >
-                <option value="User">User</option>
-                <option value="Admin">Admin</option>
-              </Select>
-            </FormControl>
+            <TextField
+              select
+              fullWidth
+              label="Role"
+              value={createForm.role}
+              onChange={(e) => setCreateForm((p) => ({ ...p, role: e.target.value }))}
+              sx={{ ...DIALOG_SELECT_SX, mt: 2.1 }}
+            >
+                <MenuItem value="User">User</MenuItem>
+                <MenuItem value="Admin">Admin</MenuItem>
+            </TextField>
           </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setCreateOpen(false)} sx={{ color: "#58a6ff" }}>Cancel</Button>
-            <Button onClick={doCreate} sx={{ color: "#58a6ff" }}>Create</Button>
+          <DialogActions sx={DIALOG_ACTIONS_SX}>
+            <Button onClick={() => setCreateOpen(false)} sx={DIALOG_BUTTON_SX}>Cancel</Button>
+            <Button onClick={doCreate} sx={DIALOG_PRIMARY_BUTTON_SX}>Create</Button>
           </DialogActions>
         </Dialog>
       </Paper>
 
       <ConfirmDeleteDialog
         open={confirmDeleteOpen}
+        title="Delete User"
         message={`Are you sure you want to delete user '${deleteTarget?.username || ""}'?`}
         onCancel={() => setConfirmDeleteOpen(false)}
         onConfirm={doDelete}
+        confirmLabel="Delete User"
       />
       <ConfirmDeleteDialog
         open={confirmChangeRoleOpen}
+        title="Change User Role"
         message={changeRoleTarget ? `Change role for '${changeRoleTarget.username}' to ${changeRoleNext}?` : ""}
         onCancel={() => setConfirmChangeRoleOpen(false)}
         onConfirm={doChangeRole}
+        confirmLabel="Change Role"
+        confirmTone="primary"
       />
       <ConfirmDeleteDialog
         open={resetMfaOpen}
+        title="Reset MFA"
         message={resetMfaTarget ? `Reset MFA enrollment for '${resetMfaTarget.username}'? This clears their existing authenticator.` : ""}
         onCancel={() => { setResetMfaOpen(false); setResetMfaTarget(null); }}
         onConfirm={doResetMfa}
+        confirmLabel="Reset MFA"
+        confirmTone="primary"
       />
       <ConfirmDeleteDialog
         open={warnOpen}
+        title="Attention"
         message={warnMessage}
         onCancel={() => setWarnOpen(false)}
         onConfirm={() => setWarnOpen(false)}
+        confirmLabel="OK"
+        confirmTone="primary"
       />
     </>
   );
