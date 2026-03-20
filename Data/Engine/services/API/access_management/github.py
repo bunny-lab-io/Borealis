@@ -21,6 +21,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
 
 from ...auth.secrets import require_app_secret
+from ...aegis_cipher import (
+    AegisCipherServiceError,
+    AegisDataCorruptionError,
+    AegisLockedError,
+    AegisNotConfiguredError,
+)
 
 def _now_ts() -> int:
     return int(time.time())
@@ -34,6 +40,7 @@ class GitHubTokenService:
         self.adapters = adapters
         self.github = adapters.github_integration
         self.logger = adapters.context.logger
+        self.aegis = adapters.aegis_cipher_service
 
     def _token_serializer(self) -> URLSafeTimedSerializer:
         secret = require_app_secret(self.app)
@@ -80,6 +87,22 @@ class GitHubTokenService:
             payload, status = requirement
             return jsonify(payload), status
 
+        aegis_status = self.aegis.status()
+        if aegis_status["configured"] and aegis_status["locked"]:
+            payload = {
+                "token": "",
+                "has_token": False,
+                "valid": False,
+                "message": "Aegis Cipher is locked. Enter it from Access Management > Credentials to manage the GitHub token.",
+                "status": "locked",
+                "rate_limit": None,
+                "error": None,
+                "checked_at": _now_ts(),
+                "configured": aegis_status["configured"],
+                "locked": aegis_status["locked"],
+            }
+            return jsonify(payload)
+
         token = self.github.load_token(force_refresh=True)
         verification = self.github.verify_token(token)
         message = verification.get("message") or ("API Token Invalid" if token else "API Token Not Configured")
@@ -92,6 +115,8 @@ class GitHubTokenService:
             "rate_limit": verification.get("rate_limit"),
             "error": verification.get("error"),
             "checked_at": _now_ts(),
+            "configured": aegis_status["configured"],
+            "locked": aegis_status["locked"],
         }
         return jsonify(payload)
 
@@ -100,6 +125,17 @@ class GitHubTokenService:
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
+
+        try:
+            self.aegis.require_secret_storage_ready()
+        except AegisNotConfiguredError as exc:
+            return jsonify({"error": "aegis_not_configured", "message": str(exc)}), 409
+        except AegisLockedError as exc:
+            return jsonify({"error": "aegis_locked", "message": str(exc)}), 423
+        except AegisDataCorruptionError as exc:
+            return jsonify({"error": "corrupt_secret_store", "message": str(exc)}), 500
+        except AegisCipherServiceError as exc:
+            return jsonify({"error": "aegis_error", "message": str(exc)}), 500
 
         data = request.get_json(silent=True) or {}
         token = str(data.get("token") or "").strip()
@@ -126,6 +162,8 @@ class GitHubTokenService:
             "rate_limit": verification.get("rate_limit"),
             "error": verification.get("error"),
             "checked_at": _now_ts(),
+            "configured": True,
+            "locked": False,
         }
         return jsonify(payload)
 

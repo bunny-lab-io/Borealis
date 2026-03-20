@@ -279,7 +279,7 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Shared Ansible rows store the generated inventory alias and target-resolution outcome per device.
 
 #### `credentials`
-- Status: Active for scheduler and WebUI credential selection; secret-at-rest handling still needs hardening.
+- Status: Active for scheduler and WebUI credential selection; protected at rest after Aegis Cipher setup.
 - Purpose: Stored credential materials for remote execution contexts.
 - Columns: `id`, `name`, `description`, `site_id`, `credential_type`, `connection_type`, `username`, `password_encrypted`, `private_key_encrypted`, `private_key_passphrase_encrypted`, `become_method`, `become_username`, `become_password_encrypted`, `metadata_json`, `created_at`, `updated_at`.
 - Constraints and indexes:
@@ -290,7 +290,23 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - `/api/credentials` CRUD endpoints.
 - Scheduled Ansible job resolution for `ssh` and `winrm` execution contexts.
 - Notes:
-- Secret fields are currently stored as UTF-8 blobs in the `*_encrypted` columns until Borealis grows a dedicated secret-encryption layer.
+- Before Aegis setup, legacy plaintext values may still exist in the `*_encrypted` columns as migration input.
+- After Aegis setup, secret columns store ASCII `aegis:v1:` envelopes even though the schema type remains `BLOB`.
+- The runtime decrypts credential secrets on demand through `Data/Engine/services/aegis_cipher.py`; metadata-only reads stay available while the Engine is locked.
+
+#### `aegis_cipher_state`
+- Status: Active after the first Aegis Cipher setup.
+- Purpose: Singleton state row for the Engine-global Aegis KDF parameters and verification token.
+- Columns: `id`, `kdf_name`, `kdf_params_json`, `verification_token`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `id` primary key, with Borealis using `id = 1`.
+- Used by:
+- `Data/Engine/services/aegis_cipher.py` setup, unlock, and rotation flows.
+- `/api/aegis/status`, `/api/aegis/setup`, `/api/aegis/unlock`, and `/api/aegis/rotate`.
+- Notes:
+- `kdf_params_json` stores the per-install `scrypt` parameters and Base64 salt.
+- `verification_token` stores an Aegis-encrypted constant plaintext that validates the entered cipher without persisting the derived key.
+- The derived key is never stored in the database; it lives only in Engine memory for the process lifetime.
 
 #### `ansible_play_recaps`
 - Status: Active for Engine-local scheduled Ansible execution; broader API/UI surfacing is still incomplete.
@@ -311,6 +327,8 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Columns: `agent_id`, `username`, `password_hash`, `password_encrypted`, `last_rotated_utc`, `version`.
 - Constraints and indexes:
 - `agent_id` primary key.
+- Notes:
+- `password_encrypted` remains outside Aegis Cipher v1 scope because the table has no active runtime read or write paths today.
 
 ### Access Management
 #### `users`
@@ -339,6 +357,8 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Notes:
 - Service writes token by deleting all rows then inserting one row.
 - Reads use `SELECT token FROM github_token LIMIT 1`.
+- Before Aegis setup, a legacy plaintext token may exist and is migrated during setup.
+- After Aegis setup, `token` stores an ASCII `aegis:v1:` envelope, and a locked Engine treats it as unavailable until unlock.
 
 ### SQLite Internal Table
 #### `sqlite_sequence`
@@ -467,3 +487,4 @@ WHERE name = 'enrollment_code_id';
 - [Device Management](device-management.md)
 - [Scheduled Jobs](scheduled-jobs.md)
 - [Assemblies and Quick Jobs](assemblies.md)
+- [Aegis Cipher](features_to_implement/aegis_cipher.md)

@@ -35,6 +35,20 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
+ID: TD-20260319-05
+Status: active
+Owner: Engine
+Date Added: 2026-03-19
+Summary: `agent_service_account.password_encrypted` remains outside Aegis Cipher v1 scope.
+Impact: The dormant `agent_service_account` table still uses a legacy encrypted-password column name and would not get Aegis protection automatically if future runtime code started using it without additional migration work.
+Root Cause: Aegis Cipher v1 intentionally scopes protected-secret storage to shared credentials and the GitHub token, while `agent_service_account` currently has no active read/write paths.
+Current Mitigation: Borealis documents the table as dormant, keeps Aegis-protected storage limited to active secret paths, and records the out-of-scope column in `Docs/db-reference.md`.
+Removal Criteria: Either the `agent_service_account` table is removed as dead schema or any future runtime use migrates `password_encrypted` to Aegis or another supported secret-management path.
+Files: `Data/Engine/database.py`, `Docs/db-reference.md`
+Evidence: `Data/Engine/database.py` still defines `agent_service_account.password_encrypted`, while the active Aegis service only migrates `credentials.*_encrypted` and `github_token.token`.
+Next Step: If Borealis activates agent service-account storage, add an explicit secret-management design instead of reusing the dormant column implicitly.
+GitHub Issue: not yet
+
 ID: TD-20260319-04
 Status: active
 Owner: Engine
@@ -78,17 +92,17 @@ Next Step: Update the agent/device detail pipeline to send and persist explicit 
 GitHub Issue: not yet
 
 ID: TD-20260319-01
-Status: active
+Status: resolved
 Owner: Engine
 Date Added: 2026-03-19
-Summary: Credential secrets are currently stored as raw UTF-8 blobs inside `credentials.*_encrypted` columns.
-Impact: Scheduler and Access Management can now create and use SSH/WinRM credentials, but those secret fields are not actually encrypted at rest despite the schema naming.
-Root Cause: Borealis does not yet have a dedicated Engine secret-management layer or envelope-encryption utility for credential storage.
-Current Mitigation: `Data/Engine/services/API/access_management/credentials.py` writes secrets as UTF-8 blobs and `Data/Engine/services/API/scheduled_jobs/job_scheduler.py` decodes them directly for Engine-side Ansible execution.
-Removal Criteria: Credential CRUD and scheduler execution both use a real secret-encryption service with key management, rotation, and explicit decrypt-on-use behavior.
-Files: `Data/Engine/services/API/access_management/credentials.py`, `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`, `Docs/db-reference.md`
-Evidence: The `credentials` schema uses `*_encrypted` BLOB columns, but no encryption helper exists elsewhere in `Data/Engine` for these fields.
-Next Step: Introduce a Borealis Engine secret-storage abstraction, migrate existing credential rows, and remove direct UTF-8 blob decoding from the scheduler.
+Summary: Aegis Cipher now replaces raw UTF-8 credential storage with encrypted-at-rest secret envelopes.
+Impact: Stored credentials and the GitHub token now use a real Engine-managed secret layer with restart relock, unlock verification, rotation, and decrypt-on-use behavior.
+Root Cause: Borealis previously lacked a dedicated secret-management layer for Engine-side protected values.
+Current Mitigation: `Data/Engine/services/aegis_cipher.py` now derives an Engine-global in-memory key from the operator-entered cipher, migrates legacy plaintext rows during setup, and decrypts credentials only when needed by active services.
+Removal Criteria: Satisfied by the Aegis Cipher implementation in this branch.
+Files: `Data/Engine/services/aegis_cipher.py`, `Data/Engine/services/API/access_management/credentials.py`, `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`, `Docs/db-reference.md`
+Evidence: Protected secret storage now uses `aegis:v1:` envelopes, and the scheduler consumes credentials through the Aegis-backed fetcher instead of direct UTF-8 blob decoding.
+Next Step: Monitor the narrower follow-up debt item for dormant `agent_service_account.password_encrypted` scope.
 GitHub Issue: not yet
 
 ID: TD-20260315-01

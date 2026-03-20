@@ -136,6 +136,7 @@ class EngineContext:
     assembly_cache: Optional[Any] = None
     vnc_proxy: Optional[Any] = None
     vnc_registry: Optional[Any] = None
+    aegis_cipher_service: Optional[Any] = None
 
 
 __all__ = ["EngineContext", "create_app", "register_engine_api"]
@@ -166,6 +167,7 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         vnc_ws_port=settings.vnc_ws_port,
         vnc_session_ttl_seconds=settings.vnc_session_ttl_seconds,
         assembly_cache=None,
+        aegis_cipher_service=None,
     )
 
 

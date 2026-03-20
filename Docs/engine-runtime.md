@@ -37,6 +37,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - [Logging and Operations](logging-and-operations.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [Technical Debt](technical-debt.md)
+- [Aegis Cipher](features_to_implement/aegis_cipher.md)
 
 ## Codex Agent (Detailed)
 ### Source vs runtime
@@ -116,6 +117,14 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Enrollment: operator approvals, conflict detection, auditor recording, pruning of expired codes/refresh tokens.
 - Background jobs and service adapters maintain compatibility with legacy DB schemas while enabling gradual API takeover.
 
+#### Protected secret storage
+- The Engine now exposes an Engine-global Aegis Cipher lifecycle through `Data/Engine/services/aegis_cipher.py` and `Data/Engine/services/API/access_management/aegis.py`.
+- Aegis v1 protects stored credentials and the GitHub API token at rest using `scrypt` plus `AES-256-GCM`.
+- Setup migrates any legacy plaintext credential or GitHub token rows into Aegis envelopes and stores KDF metadata plus a verification token in `aegis_cipher_state`.
+- The derived key is cached only in Engine memory. Restarting the Engine relocks protected secrets until an admin re-enters the cipher.
+- While locked, metadata-only credential reads remain available, but credential writes, GitHub token writes, and credential-backed remote SSH or WinRM execution stay blocked.
+- The WebUI auto-prompts authenticated admins after login when Aegis is configured but locked, and Access Management exposes manual unlock and rotation actions from the Credentials page.
+
 #### Reverse VPN tunnels
 - WireGuard reverse VPN design and lifecycle are documented in `vpn-and-remote-access.md`.
 - The original references were `REVERSE_TUNNELS.md` and `Reverse_VPN_Tunnel_Deployment.md` (now consolidated into this knowledgebase).
@@ -136,3 +145,4 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Remote SSH/WinRM runs synthesize ephemeral inventories from Borealis device/filter state and active WireGuard sessions, using site-qualified inventory aliases for duplicate-hostname safety.
 - Shared remote Ansible transport follows the scheduled job execution context; device `connection_type` metadata does not override the operator-selected `ssh` or `winrm` mode.
 - The credentials API now backs stored SSH/WinRM credentials for scheduler selection, while quick-run, cancel, PSRP, and richer recap UX remain in progress.
+- When Aegis is locked, credential-backed shared Ansible runs fail with an explicit `credential_locked` resolution reason instead of being reported as missing credentials.

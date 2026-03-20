@@ -24,7 +24,6 @@ import {
   Dns as ServerInfoIcon,
   VpnKey as CredentialIcon,
   PersonOutline as UserIcon,
-  GitHub as GitHubIcon,
   Dashboard as PageTemplateIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
   ReceiptLong as LogsIcon,
@@ -85,7 +84,6 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
       access: [
         "access_credentials",
         "access_users",
-        "access_github_token",
       ].includes(currentPage),
       admin: ["server_info", "log_management"].includes(currentPage),
       developer: ["page_template"].includes(currentPage),
@@ -291,11 +289,6 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
               icon={<CredentialIcon fontSize="small" />}
               label="Credentials"
               pageKey="access_credentials"
-            />
-            <NavItem
-              icon={<GitHubIcon fontSize="small" />}
-              label="GitHub API Token"
-              pageKey="access_github_token"
             />
             <NavItem
               icon={<UserIcon fontSize="small" />}

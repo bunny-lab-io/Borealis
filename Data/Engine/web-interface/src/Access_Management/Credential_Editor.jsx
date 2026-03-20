@@ -8,6 +8,7 @@ import {
   DialogTitle,
   FormControl,
   InputLabel,
+  Link,
   MenuItem,
   Select,
   TextField,
@@ -112,6 +113,7 @@ export default function CredentialEditor({
   onSaved
 }) {
   const isEdit = mode === "edit" && credential && credential.id;
+  const isGitHubToken = credential?.row_kind === "github_token";
   const [form, setForm] = useState(emptyForm);
   const [sites, setSites] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -127,9 +129,13 @@ export default function CredentialEditor({
   const [fetchingDetail, setFetchingDetail] = useState(false);
 
   const credentialId = credential?.id;
+  const helperStyle = { fontSize: 12, color: MAGIC_UI.textMuted, mt: 0.5 };
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || isGitHubToken) {
+      setSites([]);
+      return;
+    }
     let canceled = false;
     (async () => {
       try {
@@ -154,7 +160,7 @@ export default function CredentialEditor({
     return () => {
       canceled = true;
     };
-  }, [open]);
+  }, [open, isGitHubToken]);
 
   useEffect(() => {
     if (!open) return;
@@ -167,6 +173,19 @@ export default function CredentialEditor({
     setClearPrivateKey(false);
     setClearPassphrase(false);
     setClearBecomePassword(false);
+    if (isGitHubToken) {
+      const next = emptyForm();
+      next.name = credential?.name || "GitHub API Token";
+      next.description =
+        credential?.description || "Significantly increases GitHub API rate limits for both the Borealis Repository and the Aurora Assembly Repository.";
+      next.credential_type = "token";
+      next.connection_type = "github";
+      next.username = "";
+      next.password = credential?.token || "";
+      setForm(next);
+      setFetchingDetail(false);
+      return;
+    }
     if (isEdit && credentialId) {
       const applyData = (detail) => {
         const next = emptyForm();
@@ -202,14 +221,14 @@ export default function CredentialEditor({
     } else {
       setForm(emptyForm());
     }
-  }, [open, isEdit, credentialId, credential]);
+  }, [open, isEdit, credentialId, credential, isGitHubToken]);
 
   const currentCredentialFlags = useMemo(() => ({
-    hasPassword: Boolean(credential?.has_password),
-    hasPrivateKey: Boolean(credential?.has_private_key),
-    hasPrivateKeyPassphrase: Boolean(credential?.has_private_key_passphrase),
-    hasBecomePassword: Boolean(credential?.has_become_password)
-  }), [credential]);
+    hasPassword: isGitHubToken ? Boolean(credential?.token) : Boolean(credential?.has_password),
+    hasPrivateKey: isGitHubToken ? false : Boolean(credential?.has_private_key),
+    hasPrivateKeyPassphrase: isGitHubToken ? false : Boolean(credential?.has_private_key_passphrase),
+    hasBecomePassword: isGitHubToken ? false : Boolean(credential?.has_become_password)
+  }), [credential, isGitHubToken]);
 
   const disableSave = loading || fetchingDetail;
 
@@ -252,6 +271,10 @@ export default function CredentialEditor({
   };
 
   const validate = () => {
+    if (isGitHubToken) {
+      setError("");
+      return true;
+    }
     if (!form.name.trim()) {
       setError("Credential name is required.");
       return false;
@@ -299,21 +322,20 @@ export default function CredentialEditor({
     if (!validate()) return;
     setLoading(true);
     setError("");
-    const payload = buildPayload();
     try {
       const resp = await fetch(
-        isEdit ? `/api/credentials/${credentialId}` : "/api/credentials",
+        isGitHubToken ? "/api/github/token" : isEdit ? `/api/credentials/${credentialId}` : "/api/credentials",
         {
-          method: isEdit ? "PUT" : "POST",
+          method: isGitHubToken ? "POST" : isEdit ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(isGitHubToken ? { token: form.password } : buildPayload())
         }
       );
       const data = await resp.json();
       if (!resp.ok) {
-        throw new Error(data?.error || `Request failed (${resp.status})`);
+        throw new Error(data?.message || data?.error || `Request failed (${resp.status})`);
       }
-      onSaved && onSaved(data?.credential || null);
+      onSaved && onSaved(isGitHubToken ? data || null : data?.credential || null);
     } catch (err) {
       setError(String(err.message || err));
     } finally {
@@ -321,8 +343,20 @@ export default function CredentialEditor({
     }
   };
 
-  const title = isEdit ? "Edit Credential" : "Create Credential";
-  const helperStyle = { fontSize: 12, color: MAGIC_UI.textMuted, mt: 0.5 };
+  const title = isGitHubToken ? "Edit GitHub API Token" : isEdit ? "Edit Credential" : "Create Credential";
+  const subtitle = isGitHubToken
+    ? "Update the GitHub Personal Access Token used for Borealis repository lookups and elevated API rate limits."
+    : isEdit
+    ? "Update stored authentication details and connection defaults."
+    : "Create a reusable authentication record for Borealis connections.";
+  const tokenFieldLabel = isGitHubToken ? "Token" : "Password";
+  const saveLabel = isGitHubToken ? "Save Token" : "Save";
+  const githubHintStyle = {
+    bgcolor: "rgba(125,211,252,0.08)",
+    border: `1px solid ${MAGIC_UI.panelBorder}`,
+    borderRadius: 2,
+    p: 1.5,
+  };
 
   return (
     <Dialog
@@ -333,10 +367,7 @@ export default function CredentialEditor({
       PaperProps={{ sx: DIALOG_PAPER_SX }}
     >
       <DialogTitle sx={DIALOG_TITLE_SX}>
-        <DialogHeaderBlock
-          title={title}
-          subtitle={isEdit ? "Update stored authentication details and connection defaults." : "Create a reusable authentication record for Borealis connections."}
-        />
+        <DialogHeaderBlock title={title} subtitle={subtitle} />
       </DialogTitle>
       <DialogContent
         sx={{ ...DIALOG_CONTENT_SX, display: "flex", flexDirection: "column", gap: 2 }}
@@ -359,206 +390,263 @@ export default function CredentialEditor({
             <Typography variant="body2" sx={{ color: MAGIC_UI.danger }}>{error}</Typography>
           </Box>
         )}
-        <TextField
-          label="Name"
-          value={form.name}
-          onChange={updateField("name")}
-          required
-          disabled={disableSave}
-          sx={INPUT_SX}
-        />
-        <TextField
-          label="Description"
-          value={form.description}
-          onChange={updateField("description")}
-          disabled={disableSave}
-          multiline
-          minRows={2}
-          sx={INPUT_SX}
-        />
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-          <FormControl sx={{ minWidth: 220, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
-            <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Site</InputLabel>
-            <Select
-              value={form.site_id}
-              label="Site"
-              onChange={updateField("site_id")}
-              sx={INPUT_SX}
-            >
-              <MenuItem value="">(None)</MenuItem>
-              {sites.map((site) => (
-                <MenuItem key={site.id} value={String(site.id)}>
-                  {site.name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
-            <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Credential Type</InputLabel>
-            <Select
-              value={form.credential_type}
-              label="Credential Type"
-              onChange={updateField("credential_type")}
-              sx={INPUT_SX}
-            >
-              {CREDENTIAL_TYPES.map((opt) => (
-                <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
-            <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Connection</InputLabel>
-            <Select
-              value={form.connection_type}
-              label="Connection"
-              onChange={updateField("connection_type")}
-              sx={INPUT_SX}
-            >
-              {CONNECTION_TYPES.map((opt) => (
-                <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        </Box>
-        <TextField
-          label="Username"
-          value={form.username}
-          onChange={updateField("username")}
-          disabled={disableSave}
-          sx={INPUT_SX}
-        />
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <TextField
-            label="Password"
-            type="password"
-            value={form.password}
-            onChange={updateField("password")}
-            disabled={disableSave}
-            sx={{ flex: 1, ...INPUT_SX }}
-          />
-          {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
-            <Tooltip title="Clear stored password">
-              <IconButton size="small" onClick={() => setClearPassword(true)} sx={{ color: MAGIC_UI.danger }}>
-                <ClearIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          )}
-        </Box>
-        {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
-          <Typography sx={helperStyle}>Stored password will remain unless you change or clear it.</Typography>
+        {isGitHubToken && (
+          <Box sx={githubHintStyle}>
+            <Typography variant="body2" sx={{ color: MAGIC_UI.textBright, fontWeight: 600, mb: 0.6 }}>
+              GitHub Personal Access Token
+            </Typography>
+            <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, lineHeight: 1.55 }}>
+              Using a GitHub Personal Access Token raises API rate limits from 60/hr to 5,000/hr. Generate one at{" "}
+              <Link
+                href="https://github.com/settings/tokens"
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={{ color: "#7db7ff" }}
+              >
+                github.com/settings/tokens
+              </Link>{" "}
+              under <Box component="span" sx={{ color: MAGIC_UI.textBright }}>Personal Access Tokens -> Tokens (Classic)</Box>.
+            </Typography>
+            <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, lineHeight: 1.55, mt: 1 }}>
+              <Box component="span" sx={{ fontWeight: 600, color: MAGIC_UI.textBright }}>Note:</Box>{" "}
+              <Box component="code" sx={{ fontSize: "0.84rem", mx: 0.35 }}>Borealis Automation Platform</Box>
+              <Box component="span" sx={{ fontWeight: 600, color: MAGIC_UI.textBright, ml: 1.25 }}>Scope:</Box>{" "}
+              <Box component="code" sx={{ fontSize: "0.84rem", mx: 0.35 }}>public_repo</Box>
+              <Box component="span" sx={{ fontWeight: 600, color: MAGIC_UI.textBright, ml: 1.25 }}>Expiration:</Box>{" "}
+              <Box component="code" sx={{ fontSize: "0.84rem", mx: 0.35 }}>No Expiration</Box>
+            </Typography>
+          </Box>
         )}
-        {clearPassword && (
-          <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Password will be removed when saving.</Typography>
-        )}
+        {isGitHubToken ? (
+          <>
+            <TextField
+              label="Name"
+              value={form.name}
+              required
+              InputProps={{ readOnly: true }}
+              sx={INPUT_SX}
+            />
+            <TextField
+              label="Description"
+              value={form.description}
+              multiline
+              minRows={2}
+              InputProps={{ readOnly: true }}
+              sx={INPUT_SX}
+            />
+            <TextField
+              label="Personal Access Token"
+              type="password"
+              value={form.password}
+              onChange={updateField("password")}
+              disabled={disableSave}
+              sx={INPUT_SX}
+            />
+          </>
+        ) : (
+          <>
+            <TextField
+              label="Name"
+              value={form.name}
+              onChange={updateField("name")}
+              required
+              disabled={disableSave}
+              sx={INPUT_SX}
+            />
+            <TextField
+              label="Description"
+              value={form.description}
+              onChange={updateField("description")}
+              disabled={disableSave}
+              multiline
+              minRows={2}
+              sx={INPUT_SX}
+            />
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
+              <FormControl sx={{ minWidth: 220, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
+                <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Site</InputLabel>
+                <Select
+                  value={form.site_id}
+                  label="Site"
+                  onChange={updateField("site_id")}
+                  sx={INPUT_SX}
+                >
+                  <MenuItem value="">Global</MenuItem>
+                  {sites.map((site) => (
+                    <MenuItem key={site.id} value={String(site.id)}>
+                      {site.name}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
+                <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Credential Type</InputLabel>
+                <Select
+                  value={form.credential_type}
+                  label="Credential Type"
+                  onChange={updateField("credential_type")}
+                  sx={INPUT_SX}
+                >
+                  {CREDENTIAL_TYPES.map((opt) => (
+                    <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
+                <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Connection</InputLabel>
+                <Select
+                  value={form.connection_type}
+                  label="Connection"
+                  onChange={updateField("connection_type")}
+                  sx={INPUT_SX}
+                >
+                  {CONNECTION_TYPES.map((opt) => (
+                    <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
+            <TextField
+              label="Username"
+              value={form.username}
+              onChange={updateField("username")}
+              disabled={disableSave}
+              sx={INPUT_SX}
+            />
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <TextField
+                label={tokenFieldLabel}
+                type="password"
+                value={form.password}
+                onChange={updateField("password")}
+                disabled={disableSave}
+                sx={{ flex: 1, ...INPUT_SX }}
+              />
+              {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
+                <Tooltip title="Clear stored password">
+                  <IconButton size="small" onClick={() => setClearPassword(true)} sx={{ color: MAGIC_UI.danger }}>
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
+            {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
+              <Typography sx={helperStyle}>Stored password will remain unless you change or clear it.</Typography>
+            )}
+            {clearPassword && (
+              <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Password will be removed when saving.</Typography>
+            )}
 
-        <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
-          <TextField
-            label="SSH Private Key"
-            value={form.private_key}
-            onChange={updateField("private_key")}
-            disabled={disableSave}
-            multiline
-            minRows={4}
-            maxRows={12}
-            sx={{
-              flex: 1,
-              ...INPUT_SX,
-              "& .MuiOutlinedInput-input": { fontFamily: "monospace" },
-            }}
-          />
-          <Button
-            variant="outlined"
-            component="label"
-            startIcon={<UploadIcon />}
-            disabled={disableSave}
-            sx={{ alignSelf: "center", ...OUTLINE_BUTTON_SX }}
-          >
-            Upload
-            <input type="file" hidden accept=".pem,.key,.txt" onChange={handlePrivateKeyUpload} />
-          </Button>
-          {isEdit && currentCredentialFlags.hasPrivateKey && !privateKeyDirty && !clearPrivateKey && (
-            <Tooltip title="Clear stored private key">
-              <IconButton size="small" onClick={() => setClearPrivateKey(true)} sx={{ color: MAGIC_UI.danger }}>
-                <ClearIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          )}
-        </Box>
-        {isEdit && currentCredentialFlags.hasPrivateKey && !privateKeyDirty && !clearPrivateKey && (
-          <Typography sx={helperStyle}>Private key is stored. Upload or paste a new one to replace, or clear it.</Typography>
-        )}
-        {clearPrivateKey && (
-          <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Private key will be removed when saving.</Typography>
-        )}
+            <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
+              <TextField
+                label="SSH Private Key"
+                value={form.private_key}
+                onChange={updateField("private_key")}
+                disabled={disableSave}
+                multiline
+                minRows={4}
+                maxRows={12}
+                sx={{
+                  flex: 1,
+                  ...INPUT_SX,
+                  "& .MuiOutlinedInput-input": { fontFamily: "monospace" },
+                }}
+              />
+              <Button
+                variant="outlined"
+                component="label"
+                startIcon={<UploadIcon />}
+                disabled={disableSave}
+                sx={{ alignSelf: "center", ...OUTLINE_BUTTON_SX }}
+              >
+                Upload
+                <input type="file" hidden accept=".pem,.key,.txt" onChange={handlePrivateKeyUpload} />
+              </Button>
+              {isEdit && currentCredentialFlags.hasPrivateKey && !privateKeyDirty && !clearPrivateKey && (
+                <Tooltip title="Clear stored private key">
+                  <IconButton size="small" onClick={() => setClearPrivateKey(true)} sx={{ color: MAGIC_UI.danger }}>
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
+            {isEdit && currentCredentialFlags.hasPrivateKey && !privateKeyDirty && !clearPrivateKey ? (
+              <Typography sx={helperStyle}>Private key is stored. Upload or paste a new one to replace, or clear it.</Typography>
+            ) : null}
+            {clearPrivateKey && (
+              <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Private key will be removed when saving.</Typography>
+            )}
 
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <TextField
-            label="Private Key Passphrase"
-            type="password"
-            value={form.private_key_passphrase}
-            onChange={updateField("private_key_passphrase")}
-            disabled={disableSave}
-            sx={{ flex: 1, ...INPUT_SX }}
-          />
-          {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase && (
-            <Tooltip title="Clear stored passphrase">
-              <IconButton size="small" onClick={() => setClearPassphrase(true)} sx={{ color: MAGIC_UI.danger }}>
-                <ClearIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          )}
-        </Box>
-        {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase && (
-          <Typography sx={helperStyle}>A passphrase is stored for this key.</Typography>
-        )}
-        {clearPassphrase && (
-          <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Key passphrase will be removed when saving.</Typography>
-        )}
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <TextField
+                label="Private Key Passphrase"
+                type="password"
+                value={form.private_key_passphrase}
+                onChange={updateField("private_key_passphrase")}
+                disabled={disableSave}
+                sx={{ flex: 1, ...INPUT_SX }}
+              />
+              {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase && (
+                <Tooltip title="Clear stored passphrase">
+                  <IconButton size="small" onClick={() => setClearPassphrase(true)} sx={{ color: MAGIC_UI.danger }}>
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
+            {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase ? (
+              <Typography sx={helperStyle}>A passphrase is stored for this key.</Typography>
+            ) : null}
+            {clearPassphrase && (
+              <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Key passphrase will be removed when saving.</Typography>
+            )}
 
-        <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-          <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
-            <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Privilege Escalation</InputLabel>
-            <Select
-              value={form.become_method}
-              label="Privilege Escalation"
-              onChange={updateField("become_method")}
-              sx={INPUT_SX}
-            >
-              {BECOME_METHODS.map((opt) => (
-                <MenuItem key={opt.value || "none"} value={opt.value}>{opt.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <TextField
-            label="Escalation Username"
-            value={form.become_username}
-            onChange={updateField("become_username")}
-            disabled={disableSave}
-            sx={{ flex: 1, minWidth: 200, ...INPUT_SX }}
-          />
-        </Box>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <TextField
-            label="Escalation Password"
-            type="password"
-            value={form.become_password}
-            onChange={updateField("become_password")}
-            disabled={disableSave}
-            sx={{ flex: 1, ...INPUT_SX }}
-          />
-          {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword && (
-            <Tooltip title="Clear stored escalation password">
-              <IconButton size="small" onClick={() => setClearBecomePassword(true)} sx={{ color: MAGIC_UI.danger }}>
-                <ClearIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          )}
-        </Box>
-        {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword && (
-          <Typography sx={helperStyle}>Escalation password is stored.</Typography>
-        )}
-        {clearBecomePassword && (
-          <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Escalation password will be removed when saving.</Typography>
+            <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+              <FormControl sx={{ minWidth: 180, ...DIALOG_SELECT_SX }} size="small" disabled={disableSave}>
+                <InputLabel sx={{ color: MAGIC_UI.textMuted }}>Privilege Escalation</InputLabel>
+                <Select
+                  value={form.become_method}
+                  label="Privilege Escalation"
+                  onChange={updateField("become_method")}
+                  sx={INPUT_SX}
+                >
+                  {BECOME_METHODS.map((opt) => (
+                    <MenuItem key={opt.value || "none"} value={opt.value}>{opt.label}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <TextField
+                label="Escalation Username"
+                value={form.become_username}
+                onChange={updateField("become_username")}
+                disabled={disableSave}
+                sx={{ flex: 1, minWidth: 200, ...INPUT_SX }}
+              />
+            </Box>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <TextField
+                label="Escalation Password"
+                type="password"
+                value={form.become_password}
+                onChange={updateField("become_password")}
+                disabled={disableSave}
+                sx={{ flex: 1, ...INPUT_SX }}
+              />
+              {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword && (
+                <Tooltip title="Clear stored escalation password">
+                  <IconButton size="small" onClick={() => setClearBecomePassword(true)} sx={{ color: MAGIC_UI.danger }}>
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
+            {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword ? (
+              <Typography sx={helperStyle}>Escalation password is stored.</Typography>
+            ) : null}
+            {clearBecomePassword && (
+              <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Escalation password will be removed when saving.</Typography>
+            )}
+          </>
         )}
       </DialogContent>
       <DialogActions sx={DIALOG_ACTIONS_SX}>
@@ -571,7 +659,7 @@ export default function CredentialEditor({
           sx={DIALOG_PRIMARY_BUTTON_SX}
           disabled={disableSave}
         >
-          {loading ? <CircularProgress size={18} sx={{ color: "#041224" }} /> : "Save"}
+          {loading ? <CircularProgress size={18} sx={{ color: "#041224" }} /> : saveLabel}
         </Button>
       </DialogActions>
     </Dialog>

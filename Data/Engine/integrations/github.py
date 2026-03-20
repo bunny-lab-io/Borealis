@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple
 
 from flask import has_request_context, request
 
@@ -44,7 +44,12 @@ try:  # pragma: no cover - optional dependency for retrieving original modules
 except Exception:  # pragma: no cover - optional dependency
     _eventlet_patcher = None  # type: ignore
 
+from Data.Engine.services.aegis_cipher import AegisDataCorruptionError, AegisLockedError
+
 __all__ = ["GitHubIntegration"]
+
+if TYPE_CHECKING:  # pragma: no cover - typing helper
+    from Data.Engine.services.aegis_cipher import AegisCipherService
 
 
 class GitHubIntegration:
@@ -66,12 +71,14 @@ class GitHubIntegration:
         default_repo: Optional[str] = None,
         default_branch: Optional[str] = None,
         default_ttl_seconds: Optional[int] = None,
+        aegis_cipher_service: Optional["AegisCipherService"] = None,
     ) -> None:
         self._cache_file = cache_file
         self._cache_file.parent.mkdir(parents=True, exist_ok=True)
         self._db_conn_factory = db_conn_factory
         self._service_log = service_log
         self._logger = logger or logging.getLogger(__name__)
+        self._aegis_cipher_service = aegis_cipher_service
 
         self._lock = threading.Lock()
         self._token_lock = threading.Lock()
@@ -365,13 +372,16 @@ class GitHubIntegration:
         return token
 
     def store_token(self, token: Optional[str]) -> None:
+        stored_token = token if token else None
+        if stored_token is not None and self._aegis_cipher_service is not None:
+            stored_token = self._aegis_cipher_service.encrypt_secret_for_text(stored_token)
         conn: Optional[sqlite3.Connection] = None
         try:
             conn = self._db_conn_factory()
             cur = conn.cursor()
             cur.execute("DELETE FROM github_token")
-            if token:
-                cur.execute("INSERT INTO github_token (token) VALUES (?)", (token,))
+            if stored_token:
+                cur.execute("INSERT INTO github_token (token) VALUES (?)", (stored_token,))
             conn.commit()
         except Exception as exc:
             if conn is not None:
@@ -590,6 +600,19 @@ except Exception as exc:
             row = cursor.fetchone()
             if row and row[0]:
                 candidate = str(row[0]).strip()
+                if not candidate:
+                    return None
+                if self._aegis_cipher_service is not None:
+                    try:
+                        return self._aegis_cipher_service.decrypt_secret_text(candidate) or None
+                    except AegisLockedError:
+                        return None
+                    except AegisDataCorruptionError as exc:
+                        self._service_log("server", f"github token decrypt failed: {exc}", level="WARNING")
+                        return None
+                    except Exception as exc:
+                        self._service_log("server", f"github token decrypt failed: {exc}", level="WARNING")
+                        return None
                 return candidate or None
             return None
         except sqlite3.OperationalError:

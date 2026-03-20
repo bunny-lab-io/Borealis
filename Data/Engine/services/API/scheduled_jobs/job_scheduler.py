@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ...assemblies.service import AssemblyRuntimeService
+from ...aegis_cipher import AegisDataCorruptionError, AegisLockedError
 from ....db import dbapi as sqlite3
 from ...filters.matcher import DeviceFilterMatcher
 
@@ -1528,6 +1529,8 @@ class JobScheduler:
         if callable(self._credential_fetcher):
             try:
                 return self._credential_fetcher(int(credential_id))
+            except (AegisLockedError, AegisDataCorruptionError):
+                raise
             except Exception as exc:
                 self._log_event(
                     "credential fetcher failed",
@@ -2466,7 +2469,88 @@ class JobScheduler:
                 conn.close()
             return None
 
-        credential = self._load_credential(credential_id) if credential_id is not None else None
+        try:
+            credential = self._load_credential(credential_id) if credential_id is not None else None
+        except AegisLockedError:
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_FAILED,
+                        ts_now,
+                        ts_now,
+                        "Aegis Cipher has not been entered; credential-backed execution is disabled.",
+                        int(run_row_id),
+                    ),
+                )
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_run_targets
+                       SET resolution_status=?,
+                           resolution_reason=?,
+                           resolved_connection=?
+                     WHERE run_id=?
+                    """,
+                    (
+                        RESOLUTION_STATUS_UNRESOLVED,
+                        "credential_locked",
+                        run_mode_norm,
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+        except AegisDataCorruptionError as exc:
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_FAILED,
+                        ts_now,
+                        ts_now,
+                        str(exc)[:512],
+                        int(run_row_id),
+                    ),
+                )
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_run_targets
+                       SET resolution_status=?,
+                           resolution_reason=?,
+                           resolved_connection=?
+                     WHERE run_id=?
+                    """,
+                    (
+                        RESOLUTION_STATUS_UNRESOLVED,
+                        "credential_corrupt",
+                        run_mode_norm,
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
         if remote_requires_cred and not credential:
             conn = self._conn()
             try:

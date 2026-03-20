@@ -30,6 +30,7 @@ from ...database import initialise_engine_database
 from ...security import signing
 from ...enrollment import NonceCache
 from ...integrations import GitHubIntegration
+from ..aegis_cipher import AegisCipherService
 from ..auth import DevModeManager
 from .enrollment import routes as enrollment_routes
 from .tokens import routes as token_routes
@@ -199,6 +200,7 @@ class EngineServiceAdapters:
     device_auth_manager: DeviceAuthManager = field(init=False)
     github_integration: GitHubIntegration = field(init=False)
     dev_mode_manager: DevModeManager = field(init=False)
+    aegis_cipher_service: AegisCipherService = field(init=False)
 
     def __post_init__(self) -> None:
         self.db_manager = get_database_manager(
@@ -235,6 +237,12 @@ class EngineServiceAdapters:
         else:
             base = Path.cwd() / "Engine" / "Logs"
         self.service_log = _make_service_logger(base, self.context.logger)
+        self.aegis_cipher_service = AegisCipherService(
+            db_conn_factory=self.db_conn_factory,
+            logger=self.context.logger,
+            service_log=self.service_log,
+        )
+        self.context.aegis_cipher_service = self.aegis_cipher_service
 
         self.device_rate_limiter = SlidingWindowRateLimiter()
         self.device_auth_manager = DeviceAuthManager(
@@ -269,6 +277,7 @@ class EngineServiceAdapters:
             default_repo=default_repo,
             default_branch=default_branch,
             default_ttl_seconds=default_ttl_seconds,
+            aegis_cipher_service=self.aegis_cipher_service,
         )
 
         env_ttl_raw = os.environ.get("BOREALIS_DEV_MODE_TTL_SECONDS")

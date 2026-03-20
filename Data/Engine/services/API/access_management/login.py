@@ -39,6 +39,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
     from Data.Engine.services.API import EngineServiceAdapters
 
 from ...auth.secrets import require_app_secret
+from .aegis import register_aegis_cipher_management
 from .credentials import register_credential_management
 from .github import register_github_token_management
 from .multi_factor_authentication import register_mfa_management
@@ -437,5 +438,6 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     app.register_blueprint(blueprint)
     register_user_management(app, adapters)
     register_mfa_management(app, adapters)
+    register_aegis_cipher_management(app, adapters)
     register_github_token_management(app, adapters)
     register_credential_management(app, adapters)

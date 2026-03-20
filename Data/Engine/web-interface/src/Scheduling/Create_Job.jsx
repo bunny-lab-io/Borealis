@@ -936,6 +936,7 @@ export default function CreateJob({
   quickJobDraft = null,
   onConsumeQuickJobDraft,
   onPageMetaChange,
+  aegisStatus,
 }) {
   const [tab, setTab] = useState(0);
   const [jobName, setJobName] = useState("");
@@ -982,6 +983,7 @@ export default function CreateJob({
   const [credentialLoading, setCredentialLoading] = useState(false);
   const [credentialError, setCredentialError] = useState("");
   const [selectedCredentialId, setSelectedCredentialId] = useState("");
+  const aegisLocked = Boolean(aegisStatus?.configured && aegisStatus?.locked);
 
   const resolvedPageTitle = useMemo(
     () => (pageTitleJobName ? `Scheduled Job: ${pageTitleJobName}` : PAGE_TITLE),
@@ -1035,8 +1037,8 @@ export default function CreateJob({
     setCredentialError("");
     try {
       const resp = await fetch("/api/credentials");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
+      if (!resp.ok) throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
       const list = Array.isArray(data?.credentials) ? data.credentials : [];
       list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
       setCredentials(list);
@@ -3633,6 +3635,11 @@ const heroTiles = useMemo(() => {
                 {execContext === "winrm" && useSvcAccount && (
                   <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted }}>
                     Runs with the agent&apos;s svcBorealis account.
+                  </Typography>
+                )}
+                {aegisLocked && remoteExec && !(execContext === "winrm" && useSvcAccount) && (
+                  <Typography variant="body2" sx={{ color: "#f0c36d" }}>
+                    Aegis Cipher is locked. Remote jobs can still be saved, but credential-backed execution will remain disabled until the cipher is entered from Access Management &gt; Credentials.
                   </Typography>
                 )}
                 {!credentialLoading &&

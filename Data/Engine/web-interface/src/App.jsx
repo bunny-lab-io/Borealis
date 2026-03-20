@@ -46,8 +46,8 @@ import AssemblyEditor from "./Assemblies/Assembly_Editor";
 import ScheduledJobsList from "./Scheduling/Scheduled_Jobs_List";
 import CreateJob from "./Scheduling/Create_Job.jsx";
 import CredentialList from "./Access_Management/Credential_List.jsx";
+import AegisCipherDialog from "./Access_Management/Aegis_Cipher_Dialog.jsx";
 import UserManagement from "./Access_Management/Users.jsx";
-import GithubAPIToken from "./Access_Management/Github_API_Token.jsx";
 import ServerInfo from "./Admin/Server_Info.jsx";
 import PageTemplate from "./Admin/Page_Template.jsx";
 import LogManagement from "./Admin/Log_Management.jsx";
@@ -110,6 +110,23 @@ const EMPTY_PAGE_HEADER = {
   actions: [],
   controls: [],
 };
+const EMPTY_AEGIS_STATUS = {
+  configured: false,
+  locked: false,
+  unlock_scope: "engine_global",
+  secret_scope: ["credentials", "github_token"],
+  updated_at: 0,
+};
+
+function normalizeAegisStatus(payload) {
+  return {
+    configured: Boolean(payload?.configured),
+    locked: Boolean(payload?.locked),
+    unlock_scope: payload?.unlock_scope || EMPTY_AEGIS_STATUS.unlock_scope,
+    secret_scope: Array.isArray(payload?.secret_scope) ? payload.secret_scope : EMPTY_AEGIS_STATUS.secret_scope,
+    updated_at: Number(payload?.updated_at) || 0,
+  };
+}
 
   export default function App() {
   const [tabs, setTabs] = useState([{ id: "flow_1", tab_name: "Flow 1", nodes: [], edges: [] }]);
@@ -140,12 +157,74 @@ const EMPTY_PAGE_HEADER = {
   const quickJobSeedRef = useRef(0);
       const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
   const [pageHeader, setPageHeader] = useState(EMPTY_PAGE_HEADER);
+  const [aegisStatus, setAegisStatus] = useState(EMPTY_AEGIS_STATUS);
+  const [aegisDialog, setAegisDialog] = useState(null);
+  const [aegisPromptDismissed, setAegisPromptDismissed] = useState(false);
 
   const clearClientSession = useCallback(() => {
     try { localStorage.removeItem("borealis_session"); } catch {}
     setUser(null);
     setUserRole(null);
     setUserDisplayName(null);
+    setAegisStatus(EMPTY_AEGIS_STATUS);
+    setAegisDialog(null);
+    setAegisPromptDismissed(false);
+  }, []);
+
+  const fetchAegisStatus = useCallback(async () => {
+    try {
+      const resp = await fetch("/api/aegis/status", { credentials: "include" });
+      if (!resp.ok) {
+        if (resp.status === 401 || resp.status === 403) {
+          setAegisStatus(EMPTY_AEGIS_STATUS);
+        }
+        return EMPTY_AEGIS_STATUS;
+      }
+      const data = await resp.json();
+      const normalized = normalizeAegisStatus(data);
+      setAegisStatus(normalized);
+      return normalized;
+    } catch {
+      return EMPTY_AEGIS_STATUS;
+    }
+  }, []);
+
+  const notifyAegisDeferred = useCallback(async () => {
+    try {
+      await fetch("/api/notifications/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title: "Aegis Cipher",
+          message:
+            "Aegis Cipher not entered. Credential-backed jobs and other protected-secret workflows remain disabled until it is entered.",
+          icon: "pendingactions",
+          variant: "warning",
+        }),
+      });
+    } catch {
+      /* notifications are best-effort */
+    }
+  }, []);
+
+  const openAegisDialog = useCallback((mode, source = "credentials") => {
+    setAegisDialog({ mode, source });
+  }, []);
+
+  const handleAegisDialogClose = useCallback((reason) => {
+    const shouldWarn = reason === "cancel" && aegisDialog?.source === "login";
+    setAegisDialog(null);
+    if (shouldWarn) {
+      setAegisPromptDismissed(true);
+      notifyAegisDeferred();
+    }
+  }, [aegisDialog, notifyAegisDeferred]);
+
+  const handleAegisDialogCompleted = useCallback((payload) => {
+    setAegisDialog(null);
+    setAegisPromptDismissed(false);
+    setAegisStatus(normalizeAegisStatus(payload));
   }, []);
 
       // Top-bar search state
@@ -319,8 +398,6 @@ const EMPTY_PAGE_HEADER = {
         }
         case "access_credentials":
           return "/access_management/credentials";
-      case "access_github_token":
-        return "/access_management/github_token";
       case "access_users":
         return "/access_management/users";
       case "server_info":
@@ -418,7 +495,7 @@ const EMPTY_PAGE_HEADER = {
         };
       }
       if (path === "/access_management/users") return { page: "access_users", options: {} };
-      if (path === "/access_management/github_token") return { page: "access_github_token", options: {} };
+      if (path === "/access_management/github_token") return { page: "access_credentials", options: {} };
       if (path === "/access_management/credentials") return { page: "access_credentials", options: {} };
       if (path === "/admin/server_info") return { page: "server_info", options: {} };
       if (path === "/admin/page_template") return { page: "page_template", options: {} };
@@ -707,10 +784,6 @@ const EMPTY_PAGE_HEADER = {
         items.push({ label: "Access Management", page: "access_credentials" });
         items.push({ label: "Credentials", page: "access_credentials" });
         break;
-      case "access_github_token":
-        items.push({ label: "Access Management", page: "access_credentials" });
-        items.push({ label: "GitHub API Token", page: "access_github_token" });
-        break;
       case "access_users":
         items.push({ label: "Access Management", page: "access_credentials" });
         items.push({ label: "Users", page: "access_users" });
@@ -800,6 +873,14 @@ const EMPTY_PAGE_HEADER = {
   }, [clearClientSession]);
 
   useEffect(() => {
+    if (!sessionResolved || !user) {
+      setAegisStatus(EMPTY_AEGIS_STATUS);
+      return;
+    }
+    fetchAegisStatus();
+  }, [fetchAegisStatus, sessionResolved, user]);
+
+  useEffect(() => {
     if (!sessionResolved || !user) return;
 
     let canceled = false;
@@ -808,6 +889,9 @@ const EMPTY_PAGE_HEADER = {
         const resp = await fetch('/api/auth/me', { credentials: 'include' });
         if ((resp.status === 401 || resp.status === 403) && !canceled) {
           clearClientSession();
+          setAegisStatus(EMPTY_AEGIS_STATUS);
+        } else if (resp.ok && !canceled) {
+          fetchAegisStatus();
         }
       } catch {}
     };
@@ -825,7 +909,7 @@ const EMPTY_PAGE_HEADER = {
       window.clearInterval(intervalId);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [clearClientSession, sessionResolved, user]);
+  }, [clearClientSession, fetchAegisStatus, sessionResolved, user]);
 
   useEffect(() => {
     if (!sessionResolved) return;
@@ -990,6 +1074,9 @@ const EMPTY_PAGE_HEADER = {
           );
         }
       } catch {}
+      try {
+        await fetchAegisStatus();
+      } catch {}
     })();
     if (pendingPathRef.current) {
       navigateByPath(pendingPathRef.current, { replace: true, allowUnauthenticated: true });
@@ -998,6 +1085,13 @@ const EMPTY_PAGE_HEADER = {
       navigateTo('devices', { replace: true, allowUnauthenticated: true });
     }
   };
+
+  useEffect(() => {
+    const isAdminUser = String(userRole || "").toLowerCase() === "admin";
+    if (!sessionResolved || !user || !isAdminUser) return;
+    if (!aegisStatus.configured || !aegisStatus.locked || aegisPromptDismissed) return;
+    setAegisDialog((prev) => prev || { mode: "unlock", source: "login" });
+  }, [aegisPromptDismissed, aegisStatus, sessionResolved, user, userRole]);
 
   useEffect(() => {
     const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -1291,7 +1385,6 @@ const EMPTY_PAGE_HEADER = {
     const requiresAdmin = currentPage === 'server_info'
       || currentPage === 'admin_device_approvals'
       || currentPage === 'access_credentials'
-      || currentPage === 'access_github_token'
       || currentPage === 'access_users'
       || currentPage === 'log_management'
       || currentPage === 'ssh_devices'
@@ -1453,6 +1546,7 @@ const EMPTY_PAGE_HEADER = {
             initialJob={editingJob}
             quickJobDraft={quickJobDraft}
             onConsumeQuickJobDraft={handleConsumeQuickJobDraft}
+            aegisStatus={aegisStatus}
             onCancel={() => {
               navigateTo("jobs");
               setEditingJob(null);
@@ -1517,10 +1611,14 @@ const EMPTY_PAGE_HEADER = {
         );
 
       case "access_credentials":
-        return <CredentialList isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
-
-      case "access_github_token":
-        return <GithubAPIToken isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
+        return (
+          <CredentialList
+            isAdmin={isAdmin}
+            onPageMetaChange={handlePageMetaChange}
+            aegisStatus={aegisStatus}
+            onAegisAction={openAegisDialog}
+          />
+        );
 
       case "access_users":
         return <UserManagement isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
@@ -1620,6 +1718,13 @@ const EMPTY_PAGE_HEADER = {
     <ThemeProvider theme={darkTheme}>
       <CssBaseline />
       <Notifications socket={window.BorealisSocket} currentUser={user} />
+      <AegisCipherDialog
+        open={Boolean(aegisDialog)}
+        mode={aegisDialog?.mode || "unlock"}
+        source={aegisDialog?.source || "credentials"}
+        onClose={handleAegisDialogClose}
+        onCompleted={handleAegisDialogCompleted}
+      />
       <Box
         sx={{
           width: "100vw",

@@ -38,6 +38,7 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 - [Integrations](integrations.md)
 
 ### Features To Implement
+- [Aegis Cipher](features_to_implement/aegis_cipher.md)
 - [Assembly Repository Redesign](features_to_implement/assembly_repo_redesign.md)
 - [Ansible Playbooks](features_to_implement/ansible_playbooks.md)
 - [Device Filtering Overhaul](features_to_implement/device_filtering_overhaul.md)

@@ -11,7 +11,7 @@ import json
 from Data.Engine.db import dbapi as sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
 from flask import Flask
@@ -222,6 +222,14 @@ CREATE TABLE IF NOT EXISTS github_token (
     id INTEGER PRIMARY KEY,
     token TEXT
 );
+CREATE TABLE IF NOT EXISTS aegis_cipher_state (
+    id INTEGER PRIMARY KEY,
+    kdf_name TEXT NOT NULL,
+    kdf_params_json TEXT NOT NULL,
+    verification_token TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
@@ -240,6 +248,7 @@ class EngineTestHarness:
     app: Flask
     db_path: Path
     bundle_contents: str
+    context: Any
 
 
 def _initialise_legacy_schema(db_path: Path) -> None:
@@ -429,7 +438,7 @@ def engine_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         "API_GROUPS": ("core", "auth", "tokens", "enrollment", "devices", "assemblies"),
     }
 
-    app, _socketio, _context = create_app(config)
+    app, _socketio, context = create_app(config)
     app.config.update(TESTING=True)
 
-    yield EngineTestHarness(app=app, db_path=db_path, bundle_contents=bundle_contents)
+    yield EngineTestHarness(app=app, db_path=db_path, bundle_contents=bundle_contents, context=context)

@@ -17,6 +17,7 @@
 """Scheduled job management integration for the Borealis Engine runtime."""
 from __future__ import annotations
 
+import json
 import os
 import time
 from urllib.parse import urlsplit
@@ -279,6 +280,63 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
                 payload["_requested_start"] = True
         return snapshot
 
+    def _load_decrypted_credential(credential_id: int):
+        conn = None
+        try:
+            conn = adapters.db_conn_factory()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    name,
+                    site_id,
+                    credential_type,
+                    connection_type,
+                    username,
+                    password_encrypted,
+                    private_key_encrypted,
+                    private_key_passphrase_encrypted,
+                    become_method,
+                    become_username,
+                    become_password_encrypted,
+                    metadata_json
+                  FROM credentials
+                 WHERE id=?
+                """,
+                (int(credential_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            metadata = {}
+            try:
+                metadata = json.loads(row[12] or "{}")
+            except Exception:
+                metadata = {}
+            aegis = adapters.aegis_cipher_service
+            return {
+                "id": int(row[0]),
+                "name": row[1] or "",
+                "site_id": row[2],
+                "credential_type": row[3] or "",
+                "connection_type": row[4] or "",
+                "username": row[5] or "",
+                "password": aegis.decrypt_secret_blob(row[6]),
+                "private_key": aegis.decrypt_secret_blob(row[7]),
+                "private_key_passphrase": aegis.decrypt_secret_blob(row[8]),
+                "become_method": row[9] or "",
+                "become_username": row[10] or "",
+                "become_password": aegis.decrypt_secret_blob(row[11]),
+                "metadata": metadata if isinstance(metadata, dict) else {},
+            }
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
     scheduler = job_scheduler.register(
         app,
         socketio,
@@ -291,6 +349,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     job_scheduler.set_vpn_session_lookup(scheduler, _active_vpn_session_snapshot)
     job_scheduler.set_vpn_session_prepare(scheduler, _prepare_vpn_session_snapshot)
     job_scheduler.set_server_ansible_runner(scheduler, ansible_runner.queue_run)
+    job_scheduler.set_credential_fetcher(scheduler, _load_decrypted_credential)
     emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
     if callable(emit_host_service_event):
         job_scheduler.set_host_service_emitter(scheduler, emit_host_service_event)

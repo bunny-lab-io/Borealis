@@ -12,6 +12,9 @@ import MoreVertIcon from "@mui/icons-material/MoreVert";
 import AddIcon from "@mui/icons-material/Add";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import LockIcon from "@mui/icons-material/Lock";
+import LockOpenIcon from "@mui/icons-material/LockOpenRounded";
+import VpnKeyIcon from "@mui/icons-material/VpnKeyRounded";
+import GitHubIcon from "@mui/icons-material/GitHub";
 import WifiIcon from "@mui/icons-material/Wifi";
 import ComputerIcon from "@mui/icons-material/Computer";
 import { AgGridReact } from "ag-grid-react";
@@ -42,9 +45,8 @@ const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 const MAGIC_UI = {
-  panelBorder: "rgba(148, 163, 184, 0.35)",
   textBright: "#e2e8f0",
-  textMuted: "#94a3b8",
+  textMuted: "#9aa3ad",
 };
 
 function formatTs(ts) {
@@ -60,15 +62,84 @@ function titleCase(value) {
   return lower.replace(/(^|\s)\w/g, (c) => c.toUpperCase());
 }
 
+function formatConnectionLabel(connectionType) {
+  const value = String(connectionType || "").toLowerCase();
+  if (!value) return "-";
+  if (value === "ssh") return "SSH";
+  if (value === "winrm") return "WinRM";
+  if (value === "github") return "GitHub";
+  return titleCase(value);
+}
+
+function formatCredentialConnectionLabel(row) {
+  const baseLabel = formatConnectionLabel(row?.connection_type);
+  if (String(row?.connection_type || "").toLowerCase() === "ssh" && Boolean(row?.has_private_key)) {
+    return "SSH w/ Stored Private Key";
+  }
+  return baseLabel;
+}
+
 function connectionIcon(connection) {
   const val = (connection || "").toLowerCase();
+  if (val === "aegis_pending") return <VpnKeyIcon fontSize="small" sx={{ mr: 0.6, color: "#c084fc" }} />;
+  if (val === "aegis_locked") return <LockIcon fontSize="small" sx={{ mr: 0.6, color: "#f0c36d" }} />;
+  if (val === "aegis_unlocked") return <LockOpenIcon fontSize="small" sx={{ mr: 0.6, color: "#7dffac" }} />;
+  if (val === "github_verified") return <GitHubIcon fontSize="small" sx={{ mr: 0.6, color: "#7dffac" }} />;
+  if (val === "github_invalid") return <GitHubIcon fontSize="small" sx={{ mr: 0.6, color: "#ff8080" }} />;
   if (val === "ssh") return <LockIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
   if (val === "winrm") return <WifiIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
   return <ComputerIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
 }
 
-export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
+function aegisRowFromStatus(aegisStatus) {
+  const configured = Boolean(aegisStatus?.configured);
+  const locked = Boolean(aegisStatus?.locked);
+  return {
+    id: "__aegis_cipher__",
+    row_kind: "aegis",
+    name: "Aegis Cipher",
+    credential_type: "protected secrets",
+    connection_type: !configured ? "aegis_pending" : locked ? "aegis_locked" : "aegis_unlocked",
+    site_name: "Credentials + GitHub Token",
+    username: "",
+    updated_at: aegisStatus?.updated_at || 0,
+    aegis_status_label: !configured ? "Not configured" : locked ? "Locked" : "Unlocked",
+  };
+}
+
+function githubTokenRowFromStatus(githubTokenState, aegisStatus) {
+  const verified = Boolean(githubTokenState?.valid) && String(githubTokenState?.status || "").toLowerCase() === "ok";
+  const rateLimit = verified ? 5000 : 60;
+  return {
+    id: "__github_api_token__",
+    row_kind: "github_token",
+    name: "GitHub API Token",
+    description:
+      githubTokenState?.message ||
+      "Significantly increases GitHub API rate limits for both the Borealis Repository and the Aurora Assembly Repository.",
+    credential_type: "token",
+    connection_type: verified ? "github_verified" : "github_invalid",
+    github_rate_label: `Hourly Request Rate Limit: ${rateLimit}`,
+    github_connection_color: verified ? "#7dffac" : "#ff8080",
+    site_name: "GitHub",
+    username: "",
+    updated_at: githubTokenState?.checked_at || aegisStatus?.updated_at || 0,
+    token: typeof githubTokenState?.token === "string" ? githubTokenState.token : "",
+    github_status: githubTokenState?.status || "",
+    github_valid: verified,
+    github_message: githubTokenState?.message || "",
+    github_rate_limit: rateLimit,
+  };
+}
+
+export default function CredentialList({
+  isAdmin = false,
+  onPageMetaChange,
+  aegisStatus,
+  onAegisAction,
+}) {
   const [rows, setRows] = useState([]);
+  const [githubTokenState, setGithubTokenState] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [menuAnchor, setMenuAnchor] = useState(null);
@@ -79,6 +150,14 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const gridApiRef = useRef(null);
+
+  const canMutateCredentials = Boolean(aegisStatus?.configured) && !Boolean(aegisStatus?.locked);
+  const aegisRow = useMemo(() => aegisRowFromStatus(aegisStatus), [aegisStatus]);
+  const githubTokenRow = useMemo(
+    () => githubTokenRowFromStatus(githubTokenState, aegisStatus),
+    [githubTokenState, aegisStatus]
+  );
+  const gridRows = useMemo(() => [aegisRow, githubTokenRow, ...rows], [aegisRow, githubTokenRow, rows]);
 
   const openMenu = useCallback((event, row) => {
     setMenuAnchor(event.currentTarget);
@@ -92,13 +171,33 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
 
   const connectionCellRenderer = useCallback((params) => {
     const row = params.data || {};
-    const label = titleCase(row.connection_type);
+    const label = row.row_kind === "aegis"
+      ? row.aegis_status_label || "Not configured"
+      : row.row_kind === "github_token"
+      ? row.github_rate_label || "Hourly Request Rate Limit: 60"
+      : formatCredentialConnectionLabel(row);
+    const hasStoredPrivateKey =
+      row.row_kind !== "aegis" &&
+      row.row_kind !== "github_token" &&
+      String(row.connection_type || "").toLowerCase() === "ssh" &&
+      Boolean(row.has_private_key);
     return (
       <Box sx={{ display: "flex", alignItems: "center", fontFamily: gridFontFamily }}>
         {connectionIcon(row.connection_type)}
-        <Box component="span" sx={{ color: "#f5f7fa" }}>
-          {label}
-        </Box>
+        {hasStoredPrivateKey ? (
+          <Box component="span">
+            <Box component="span" sx={{ color: "#f5f7fa" }}>
+              SSH
+            </Box>
+            <Box component="span" sx={{ color: MAGIC_UI.textMuted }}>
+              {" "}w/ Stored Private Key
+            </Box>
+          </Box>
+        ) : (
+          <Box component="span" sx={{ color: "#f5f7fa" }}>
+            {label}
+          </Box>
+        )}
       </Box>
     );
   }, []);
@@ -121,18 +220,63 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
     [openMenu]
   );
 
+  const nameComparator = useCallback((valueA, valueB, nodeA, nodeB) => {
+    const sortWeight = (rowKind) => {
+      if (rowKind === "aegis") return 0;
+      if (rowKind === "github_token") return 1;
+      return 2;
+    };
+    const aWeight = sortWeight(nodeA?.data?.row_kind);
+    const bWeight = sortWeight(nodeB?.data?.row_kind);
+    if (aWeight !== bWeight) return aWeight - bWeight;
+    return String(valueA || "").localeCompare(String(valueB || ""));
+  }, []);
+
   const columnDefs = useMemo(
     () => [
       {
         headerName: "Name",
         field: "name",
         sort: "asc",
-        cellRenderer: (params) => params.value || "-"
+        comparator: nameComparator,
+        cellRenderer: (params) => {
+          const row = params.data || {};
+          if (row.row_kind === "aegis") {
+            return (
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.9, fontWeight: 600 }}>
+                <VpnKeyIcon fontSize="small" sx={{ color: "#7db7ff" }} />
+                <Box component="span">{row.name || "Aegis Cipher"}</Box>
+              </Box>
+            );
+          }
+          if (row.row_kind === "github_token") {
+            return (
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.9, fontWeight: 600 }}>
+                <GitHubIcon fontSize="small" sx={{ color: "#7db7ff" }} />
+                <Box component="span">{row.name || "GitHub API Token"}</Box>
+              </Box>
+            );
+          }
+          if (String(row.credential_type || "").toLowerCase() === "machine") {
+            return (
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.9 }}>
+                <ComputerIcon fontSize="small" sx={{ color: "#7db7ff" }} />
+                <Box component="span">{row.name || "-"}</Box>
+              </Box>
+            );
+          }
+          return params.value || "-";
+        }
       },
       {
         headerName: "Credential Type",
         field: "credential_type",
-        valueGetter: (params) => titleCase(params.data?.credential_type)
+        valueGetter: (params) =>
+          params.data?.row_kind === "aegis"
+            ? "Protected Secrets"
+            : params.data?.row_kind === "github_token"
+            ? "Token"
+            : titleCase(params.data?.credential_type)
       },
       {
         headerName: "Connection",
@@ -142,18 +286,27 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
       {
         headerName: "Site",
         field: "site_name",
-        cellRenderer: (params) => params.value || "-"
+        cellRenderer: (params) => {
+          if (params.data?.row_kind === "aegis") {
+            return params.value || "-";
+          }
+          return params.value || "Global";
+        }
       },
       {
         headerName: "Username",
         field: "username",
-        cellRenderer: (params) => params.value || "-"
+        cellRenderer: (params) => {
+          if (params.data?.row_kind === "aegis" || params.data?.row_kind === "github_token") {
+            return "";
+          }
+          return params.value || "-";
+        }
       },
       {
         headerName: "Updated",
         field: "updated_at",
-        valueGetter: (params) =>
-          formatTs(params.data?.updated_at || params.data?.created_at)
+        valueGetter: (params) => formatTs(params.data?.updated_at || params.data?.created_at)
       },
       {
         headerName: "",
@@ -168,7 +321,7 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
         pinned: "right"
       }
     ],
-    [actionCellRenderer, connectionCellRenderer]
+    [actionCellRenderer, connectionCellRenderer, nameComparator]
   );
 
   const defaultColDef = useMemo(
@@ -203,14 +356,30 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
     setLoading(true);
     setError("");
     try {
-      const resp = await fetch("/api/credentials");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
+      const [credentialsResp, githubResp] = await Promise.all([
+        fetch("/api/credentials"),
+        fetch("/api/github/token"),
+      ]);
+      const data = await credentialsResp.json().catch(() => ({}));
+      if (!credentialsResp.ok) throw new Error(data?.message || data?.error || `HTTP ${credentialsResp.status}`);
       const list = Array.isArray(data?.credentials) ? data.credentials : [];
+      const githubData = await githubResp.json().catch(() => ({}));
       list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
       setRows(list);
+      setGithubTokenState(
+        githubResp.ok
+          ? githubData
+          : {
+              valid: false,
+              status: "error",
+              checked_at: Math.floor(Date.now() / 1000),
+              message: githubData?.message || githubData?.error || `HTTP ${githubResp.status}`,
+              token: "",
+            }
+      );
     } catch (err) {
       setRows([]);
+      setGithubTokenState(null);
       setError(String(err.message || err));
     } finally {
       setLoading(false);
@@ -222,31 +391,39 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
   }, [fetchCredentials]);
 
   const handleCreate = useCallback(() => {
+    if (!canMutateCredentials) return;
     setEditorMode("create");
     setEditingCredential(null);
     setEditorOpen(true);
-  }, []);
+  }, [canMutateCredentials]);
 
-  const handleEdit = (row) => {
+  const handleEdit = useCallback((row) => {
+    if (!canMutateCredentials || row?.row_kind === "aegis") return;
     closeMenu();
     setEditorMode("edit");
     setEditingCredential(row);
     setEditorOpen(true);
-  };
+  }, [canMutateCredentials, closeMenu]);
 
-  const handleDelete = (row) => {
+  const handleDelete = useCallback((row) => {
+    if (!canMutateCredentials || row?.row_kind === "aegis" || row?.row_kind === "github_token") return;
     closeMenu();
     setDeleteTarget(row);
-  };
+  }, [canMutateCredentials, closeMenu]);
+
+  const handleAegisMenuAction = useCallback((mode) => {
+    closeMenu();
+    onAegisAction && onAegisAction(mode);
+  }, [closeMenu, onAegisAction]);
 
   const doDelete = async () => {
     if (!deleteTarget?.id) return;
     setDeleteBusy(true);
     try {
       const resp = await fetch(`/api/credentials/${deleteTarget.id}`, { method: "DELETE" });
+      const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        throw new Error(data?.error || `HTTP ${resp.status}`);
+        throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
       }
       setDeleteTarget(null);
       await fetchCredentials();
@@ -267,35 +444,50 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
     gridApiRef.current = params.api;
   }, []);
 
-  const placeholderBanner = useMemo(() => {
-    if (!error) return null;
-    if (String(error).includes("HTTP 404")) {
-      return {
-        severity: "info",
+  const banners = useMemo(() => {
+    const next = [];
+    if (!aegisStatus?.configured) {
+      next.push({
+        severity: "warning",
         message:
-          "Credential management does not yet exist.  This page serves as a placeholder.",
-      };
+          "Set up the Aegis Cipher before creating or changing credentials. Existing credential-backed workflows remain available until setup is completed.",
+      });
+    } else if (aegisStatus?.locked) {
+      next.push({
+        severity: "warning",
+        message:
+          "Aegis Cipher is locked. Credential metadata remains visible, but credential changes are disabled until the cipher is entered.",
+      });
     }
-    return {
+    if (!error) return next;
+    if (String(error).includes("HTTP 404")) {
+      next.push({
+        severity: "info",
+        message: "Credential management does not yet exist. This page serves as a placeholder.",
+      });
+      return next;
+    }
+    next.push({
       severity: "error",
       message: `Unable to load credentials: ${error}`,
-    };
-  }, [error]);
+    });
+    return next;
+  }, [aegisStatus, error]);
 
   useEffect(() => {
     const api = gridApiRef.current;
     if (!api) return;
     if (loading) {
       api.showLoadingOverlay();
-    } else if (!rows.length) {
+    } else if (!gridRows.length) {
       api.showNoRowsOverlay();
     } else {
       api.hideOverlay();
     }
-  }, [loading, rows]);
+  }, [gridRows, loading]);
 
-  const pageHeaderActions = useMemo(
-    () => [
+  const pageHeaderActions = useMemo(() => {
+    const actions = [
       {
         id: "credentials-refresh",
         label: "Refresh",
@@ -304,21 +496,54 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
         loading,
         onClick: fetchCredentials,
       },
-      {
-        id: "credentials-create",
-        label: "New Credential",
-        icon: <AddIcon />,
+    ];
+
+    const newCredentialAction = {
+      id: "credentials-create",
+      label: "New Credential",
+      icon: <AddIcon />,
+      tone: "primary",
+      disabled: !canMutateCredentials,
+      tooltip: !aegisStatus?.configured
+        ? "Set up Aegis Cipher before adding credentials."
+        : aegisStatus?.locked
+        ? "Enter the Aegis Cipher before adding credentials."
+        : "",
+      onClick: handleCreate,
+    };
+
+    if (!aegisStatus?.configured) {
+      actions.push(newCredentialAction);
+      actions.push({
+        id: "credentials-aegis-setup",
+        label: "Setup Aegis Cipher",
+        icon: <VpnKeyIcon />,
         tone: "primary",
-        onClick: handleCreate,
-      },
-    ],
-    [fetchCredentials, handleCreate, loading]
-  );
+        onClick: () => onAegisAction && onAegisAction("setup"),
+      });
+      return actions;
+    }
+
+    if (aegisStatus?.locked) {
+      actions.push({
+        id: "credentials-aegis-unlock",
+        label: "Enter Aegis Cipher",
+        icon: <VpnKeyIcon />,
+        tone: "secondary",
+        onClick: () => onAegisAction && onAegisAction("unlock"),
+      });
+      actions.push(newCredentialAction);
+      return actions;
+    }
+
+    actions.push(newCredentialAction);
+    return actions;
+  }, [aegisStatus, canMutateCredentials, fetchCredentials, handleCreate, loading, onAegisAction]);
 
   useEffect(() => {
     onPageMetaChange?.({
       page_title: "Credentials",
-      page_subtitle: "Stored credentials for remote automation tasks and Ansible playbook runs.",
+      page_subtitle: "Stored machine & domain credentials and API service tokens for remote automation tasks, Ansible playbook runs, and Borealis GitHub access.",
       page_icon: LockIcon,
       page_header_actions: pageHeaderActions,
     });
@@ -343,8 +568,14 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
       <PageBodyFrame
         variant="grid_with_stack"
         stack={
-          placeholderBanner ? (
-            <Alert severity={placeholderBanner.severity}>{placeholderBanner.message}</Alert>
+          banners.length ? (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1.1 }}>
+              {banners.map((banner) => (
+                <Alert key={`${banner.severity}-${banner.message}`} severity={banner.severity}>
+                  {banner.message}
+                </Alert>
+              ))}
+            </Box>
           ) : null
         }
       >
@@ -407,7 +638,7 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
           }}
         >
           <AgGridReact
-            rowData={rows}
+            rowData={gridRows}
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
             animateRows
@@ -415,8 +646,8 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
             headerHeight={44}
             getRowId={getRowId}
             overlayNoRowsTemplate={`<span class='ag-overlay-no-rows-center'>${
-              placeholderBanner?.severity === "warning"
-                ? "Credential data will appear here once the API is available."
+              !aegisStatus?.configured
+                ? "Protected credentials will appear here once Aegis Cipher setup is complete."
                 : "No credentials have been created yet."
             }</span>`}
             onGridReady={handleGridReady}
@@ -439,10 +670,34 @@ export default function CredentialList({ isAdmin = false, onPageMetaChange }) {
         elevation={2}
         PaperProps={{ sx: { bgcolor: "#1f1f1f", color: "#f5f5f5" } }}
       >
-        <MenuItem onClick={() => handleEdit(menuRow)}>Edit</MenuItem>
-        <MenuItem onClick={() => handleDelete(menuRow)} sx={{ color: "#ff8080" }}>
-          Delete
-        </MenuItem>
+        {menuRow?.row_kind === "aegis" ? (
+          <>
+            {!aegisStatus?.configured ? (
+              <MenuItem onClick={() => handleAegisMenuAction("setup")}>Setup Aegis Cipher</MenuItem>
+            ) : null}
+            {aegisStatus?.configured && aegisStatus?.locked ? (
+              <MenuItem onClick={() => handleAegisMenuAction("unlock")}>Enter Aegis Cipher</MenuItem>
+            ) : null}
+            {aegisStatus?.configured ? (
+              <MenuItem onClick={() => handleAegisMenuAction("rotate")}>Rotate Aegis Cipher</MenuItem>
+            ) : null}
+          </>
+        ) : menuRow?.row_kind === "github_token" ? (
+          <MenuItem disabled={!canMutateCredentials} onClick={() => handleEdit(menuRow)}>
+            Edit Token
+          </MenuItem>
+        ) : (
+          <>
+            <MenuItem disabled={!canMutateCredentials} onClick={() => handleEdit(menuRow)}>Edit</MenuItem>
+            <MenuItem
+              disabled={!canMutateCredentials}
+              onClick={() => handleDelete(menuRow)}
+              sx={{ color: canMutateCredentials ? "#ff8080" : "inherit" }}
+            >
+              Delete
+            </MenuItem>
+          </>
+        )}
       </Menu>
 
       <CredentialEditor

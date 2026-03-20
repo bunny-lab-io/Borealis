@@ -26,6 +26,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .. import EngineServiceAdapters
 
 from ...auth.secrets import require_app_secret
+from ...aegis_cipher import (
+    AegisCipherServiceError,
+    AegisDataCorruptionError,
+    AegisLockedError,
+    AegisNotConfiguredError,
+)
 
 _ALLOWED_CREDENTIAL_TYPES = {"machine", "domain", "token"}
 _ALLOWED_CONNECTION_TYPES = {"ssh", "winrm"}
@@ -115,6 +121,7 @@ class CredentialManagementService:
         self.adapters = adapters
         self.db_conn_factory = adapters.db_conn_factory
         self.logger = adapters.context.logger
+        self.aegis = adapters.aegis_cipher_service
 
     def _db_conn(self) -> sqlite3.Connection:
         return self.db_conn_factory()
@@ -215,6 +222,19 @@ class CredentialManagementService:
 
         return json.dumps(metadata if metadata_updated or existing is not None else {}, sort_keys=True), metadata
 
+    def _protected_mutation_block(self) -> Optional[Tuple[Dict[str, Any], int]]:
+        try:
+            self.aegis.require_secret_storage_ready()
+        except AegisNotConfiguredError as exc:
+            return {"error": "aegis_not_configured", "message": str(exc)}, 409
+        except AegisLockedError as exc:
+            return {"error": "aegis_locked", "message": str(exc)}, 423
+        except AegisDataCorruptionError as exc:
+            return {"error": "corrupt_secret_store", "message": str(exc)}, 500
+        except AegisCipherServiceError as exc:
+            return {"error": "aegis_error", "message": str(exc)}, 500
+        return None
+
     def _credential_query(self) -> str:
         return """
             SELECT
@@ -299,6 +319,10 @@ class CredentialManagementService:
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
+        mutation_block = self._protected_mutation_block()
+        if mutation_block:
+            payload, status = mutation_block
+            return jsonify(payload), status
 
         payload = request.get_json(silent=True) or {}
         name = str(payload.get("name") or "").strip()
@@ -324,6 +348,12 @@ class CredentialManagementService:
             conn = self._db_conn()
             cur = conn.cursor()
             self._ensure_site_exists(cur, site_id)
+            password_blob = self.aegis.encrypt_secret_for_blob(payload.get("password"))
+            private_key_blob = self.aegis.encrypt_secret_for_blob(
+                _normalize_private_key_text(payload.get("private_key")) or None
+            )
+            passphrase_blob = self.aegis.encrypt_secret_for_blob(payload.get("private_key_passphrase"))
+            become_password_blob = self.aegis.encrypt_secret_for_blob(payload.get("become_password"))
             cur.execute(
                 """
                 INSERT INTO credentials(
@@ -351,12 +381,12 @@ class CredentialManagementService:
                     credential_type,
                     connection_type,
                     username,
-                    _normalize_secret_blob(payload.get("password")),
-                    _normalize_private_key_blob(payload.get("private_key")),
-                    _normalize_secret_blob(payload.get("private_key_passphrase")),
+                    password_blob,
+                    private_key_blob,
+                    passphrase_blob,
                     become_method,
                     become_username,
-                    _normalize_secret_blob(payload.get("become_password")),
+                    become_password_blob,
                     metadata_json,
                     now_ts,
                     now_ts,
@@ -387,6 +417,10 @@ class CredentialManagementService:
         requirement = self._require_admin()
         if requirement:
             payload, status = requirement
+            return jsonify(payload), status
+        mutation_block = self._protected_mutation_block()
+        if mutation_block:
+            payload, status = mutation_block
             return jsonify(payload), status
 
         payload = request.get_json(silent=True) or {}
@@ -448,22 +482,24 @@ class CredentialManagementService:
             self._ensure_site_exists(cur, site_id)
 
             password_blob = (
-                _normalize_secret_blob(payload.get("password"))
+                self.aegis.encrypt_secret_for_blob(payload.get("password"))
                 if "password" in payload
                 else (None if payload.get("clear_password") else existing[7])
             )
             private_key_blob = (
-                _normalize_private_key_blob(payload.get("private_key"))
+                self.aegis.encrypt_secret_for_blob(
+                    _normalize_private_key_text(payload.get("private_key")) or None
+                )
                 if "private_key" in payload
                 else (None if payload.get("clear_private_key") else existing[8])
             )
             passphrase_blob = (
-                _normalize_secret_blob(payload.get("private_key_passphrase"))
+                self.aegis.encrypt_secret_for_blob(payload.get("private_key_passphrase"))
                 if "private_key_passphrase" in payload
                 else (None if payload.get("clear_private_key_passphrase") else existing[9])
             )
             become_password_blob = (
-                _normalize_secret_blob(payload.get("become_password"))
+                self.aegis.encrypt_secret_for_blob(payload.get("become_password"))
                 if "become_password" in payload
                 else (None if payload.get("clear_become_password") else existing[12])
             )
@@ -526,6 +562,10 @@ class CredentialManagementService:
         requirement = self._require_admin()
         if requirement:
             payload, status = requirement
+            return jsonify(payload), status
+        mutation_block = self._protected_mutation_block()
+        if mutation_block:
+            payload, status = mutation_block
             return jsonify(payload), status
 
         conn: Optional[sqlite3.Connection] = None

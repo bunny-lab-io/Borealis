@@ -54,6 +54,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_agent_service_accounts(conn, logger=logger)
         _ensure_credentials(conn, logger=logger)
         _ensure_github_token(conn, logger=logger)
+        _ensure_aegis_cipher_state(conn, logger=logger)
         _ensure_device_filters(conn, logger=logger)
         _ensure_device_filter_sites(conn, logger=logger)
         _ensure_device_software_inventory(conn, logger=logger)
@@ -468,6 +469,30 @@ def _ensure_github_token(conn: sqlite3.Connection, *, logger: Optional[logging.L
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure github_token table: %s", exc, exc_info=True)
+        else:
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_aegis_cipher_state(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS aegis_cipher_state (
+                id INTEGER PRIMARY KEY,
+                kdf_name TEXT NOT NULL,
+                kdf_params_json TEXT NOT NULL,
+                verification_token TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure aegis_cipher_state table: %s", exc, exc_info=True)
         else:
             raise
     finally:

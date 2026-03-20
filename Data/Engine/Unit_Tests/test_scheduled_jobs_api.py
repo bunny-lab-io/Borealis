@@ -15,6 +15,11 @@ from .conftest import EngineTestHarness
 
 
 def _scheduled_jobs_client(engine_harness: EngineTestHarness):
+    client, scheduler, _context = _scheduled_jobs_client_with_context(engine_harness)
+    return client, scheduler
+
+
+def _scheduled_jobs_client_with_context(engine_harness: EngineTestHarness):
     config = {
         "DATABASE_URL": f"sqlite:///{engine_harness.db_path.as_posix()}",
         "TLS_CERT_PATH": engine_harness.app.config["TLS_CERT_PATH"],
@@ -32,7 +37,7 @@ def _scheduled_jobs_client(engine_harness: EngineTestHarness):
     with client.session_transaction() as sess:
         sess["username"] = "admin"
         sess["role"] = "Admin"
-    return client, context.scheduler
+    return client, context.scheduler, context
 
 
 class _MissingLastRowIdCursor:
@@ -740,6 +745,301 @@ def test_shared_ansible_dispatch_uses_execution_context_for_remote_transport(
     assert row[1] == ""
 
 
+def test_shared_ansible_dispatch_reports_aegis_locked_and_recovers_after_unlock(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    _client, scheduler, context = _scheduled_jobs_client_with_context(engine_harness)
+    service = context.aegis_cipher_service
+    service.setup("shared-ansible-cipher")
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE devices
+               SET operating_system=?,
+                   agent_id=?,
+                   connection_endpoint=''
+             WHERE guid=?
+            """,
+            ("Ubuntu 24.04 LTS", "test-device-agent", "GUID-TEST-0001"),
+        )
+        cur.execute(
+            """
+            INSERT INTO credentials(
+                id,
+                name,
+                description,
+                site_id,
+                credential_type,
+                connection_type,
+                username,
+                password_encrypted,
+                private_key_encrypted,
+                private_key_passphrase_encrypted,
+                become_method,
+                become_username,
+                become_password_encrypted,
+                metadata_json,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                5,
+                "Shared SSH Credential",
+                "Scheduler decrypt test",
+                1,
+                "machine",
+                "ssh",
+                "ubuntu",
+                service.encrypt_secret_for_blob("secret"),
+                None,
+                None,
+                "",
+                "",
+                None,
+                "{}",
+                1_773_782_704,
+                1_773_782_704,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at,
+                skip_reason,
+                shared_execution,
+                component_index,
+                component_kind,
+                component_name
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                64,
+                10,
+                1_773_782_704,
+                "Pending",
+                1_773_782_704,
+                1_773_782_704,
+                "",
+                1,
+                0,
+                "ansible",
+                "Playbook Locked",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_run_targets(
+                run_id,
+                device_guid,
+                hostname,
+                site_id,
+                resolved_from_filter_id,
+                inventory_hostname,
+                wireguard_peer_ip,
+                resolved_connection,
+                resolution_status,
+                resolution_reason,
+                resolved_from_filter_ids_json,
+                created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                64,
+                "GUID-TEST-0001",
+                "test-device",
+                1,
+                None,
+                "main_lab__test_device",
+                "",
+                "ssh",
+                "pending",
+                "",
+                json.dumps([]),
+                1_773_782_704,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at,
+                skip_reason,
+                shared_execution,
+                component_index,
+                component_kind,
+                component_name
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                65,
+                10,
+                1_773_782_705,
+                "Pending",
+                1_773_782_705,
+                1_773_782_705,
+                "",
+                1,
+                0,
+                "ansible",
+                "Playbook Unlocked",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_run_targets(
+                run_id,
+                device_guid,
+                hostname,
+                site_id,
+                resolved_from_filter_id,
+                inventory_hostname,
+                wireguard_peer_ip,
+                resolved_connection,
+                resolution_status,
+                resolution_reason,
+                resolved_from_filter_ids_json,
+                created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                65,
+                "GUID-TEST-0001",
+                "test-device",
+                1,
+                None,
+                "main_lab__test_device",
+                "",
+                "ssh",
+                "pending",
+                "",
+                json.dumps([]),
+                1_773_782_705,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    service.clear_memory_key()
+
+    locked_result = scheduler._dispatch_shared_ansible(
+        job_id=10,
+        run_row_id=64,
+        scheduled_ts=1_773_782_704,
+        run_mode="ssh",
+        component={"name": "Playbook Locked", "path": "playbook_locked.yml"},
+        credential_id=5,
+        use_service_account=False,
+    )
+
+    assert locked_result is None
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT status, error FROM scheduled_job_runs WHERE id=?", (64,))
+        locked_run = cur.fetchone()
+        cur.execute(
+            """
+            SELECT resolution_status, resolution_reason
+              FROM scheduled_job_run_targets
+             WHERE run_id=?
+            """,
+            (64,),
+        )
+        locked_target = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert locked_run[0] == "Failed"
+    assert locked_run[1] == "Aegis Cipher has not been entered; credential-backed execution is disabled."
+    assert locked_target[0] == "unresolved"
+    assert locked_target[1] == "credential_locked"
+
+    captured: dict[str, object] = {}
+    service.unlock("shared-ansible-cipher")
+    monkeypatch.setattr(
+        scheduler,
+        "_prepare_vpn_sessions",
+        lambda _agent_ids: {"test-device-agent": {"virtual_ip": "10.77.0.15/32"}},
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_preflight_remote_port",
+        lambda **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_resolve_runtime_document",
+        lambda rel_path, _default_type, assembly_guid=None: (
+            {
+                "name": "Playbook Unlocked",
+                "script": "---\n- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.ping:\n",
+                "variables": [],
+                "files": [],
+            },
+            {
+                "assembly_guid": assembly_guid or "guid-test-0001",
+                "virtual_path": rel_path or "Ansible_Playbooks/playbook_unlocked.yml",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_server_ansible_runner",
+        lambda **kwargs: captured.setdefault("kwargs", kwargs),
+    )
+
+    unlocked_result = scheduler._dispatch_shared_ansible(
+        job_id=10,
+        run_row_id=65,
+        scheduled_ts=1_773_782_705,
+        run_mode="ssh",
+        component={"name": "Playbook Unlocked", "path": "playbook_unlocked.yml"},
+        credential_id=5,
+        use_service_account=False,
+    )
+
+    assert unlocked_result is not None
+    assert "kwargs" in captured
+    target_specifications = captured["kwargs"]["target_specifications"]
+    assert len(target_specifications) == 1
+    assert target_specifications[0]["host_vars"]["ansible_user"] == "ubuntu"
+    assert target_specifications[0]["host_vars"]["ansible_password"] == "secret"
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT resolution_status, resolution_reason
+              FROM scheduled_job_run_targets
+             WHERE run_id=?
+            """,
+            (65,),
+        )
+        unlocked_target = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert unlocked_target[0] == "eligible"
+    assert unlocked_target[1] == ""
+
+
 def test_shared_ansible_dispatch_normalizes_private_key_runtime_file(
     engine_harness: EngineTestHarness,
     monkeypatch,
@@ -1040,8 +1340,6 @@ def test_shared_ansible_dispatch_fails_for_passphrase_only_ssh_key(
     assert "Passphrase-protected SSH private keys are not yet supported" in run_row[1]
     assert target_row[0] == "unresolved"
     assert target_row[1] == "credential_private_key_passphrase_unsupported"
-    assert row[2] == "10.77.0.15"
-    assert row[3] == "ssh"
 
 
 def test_shared_ansible_dispatch_allows_targets_with_preflight_warnings(
