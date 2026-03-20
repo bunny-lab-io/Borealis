@@ -14,7 +14,7 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from Data.Engine.db import dbapi as sqlite3
 
@@ -34,8 +34,16 @@ from ..crypto.aegis import (
 
 _STATE_ROW_ID = 1
 _VERIFICATION_PLAINTEXT = "7f5c2a1d-6e8b-4f3b-a0d1-9c3f77b34d52"
-
-
+_CREDENTIAL_SECRET_STATE_KEY = "aegis_secret_state"
+_CREDENTIAL_LOST_FIELDS_KEY = "aegis_lost_secret_fields"
+_CREDENTIAL_RESET_AT_KEY = "aegis_reset_at"
+_CREDENTIAL_SECRET_RESET_STATE = "reset_required"
+_CREDENTIAL_SECRET_FIELDS = (
+    "password",
+    "private_key",
+    "private_key_passphrase",
+    "become_password",
+)
 def _now_ts() -> int:
     return int(time.time())
 
@@ -58,6 +66,76 @@ class AegisInvalidCipherError(AegisCipherServiceError):
 
 class AegisDataCorruptionError(AegisCipherServiceError):
     """Raised when protected storage contains unexpected or undecryptable data."""
+
+
+class AegisSecretResetRequiredError(AegisCipherServiceError):
+    """Raised when a credential record exists but its stored secret material was destroyed."""
+
+
+def _normalize_lost_secret_fields(fields: Iterable[Any]) -> List[str]:
+    allowed = set(_CREDENTIAL_SECRET_FIELDS)
+    normalized: List[str] = []
+    for value in fields or ():
+        candidate = str(value or "").strip().lower()
+        if candidate in allowed and candidate not in normalized:
+            normalized.append(candidate)
+    return normalized
+
+
+def credential_secret_reset_details(metadata: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    source = dict(metadata or {})
+    state = str(source.get(_CREDENTIAL_SECRET_STATE_KEY) or "").strip().lower()
+    lost_fields = _normalize_lost_secret_fields(source.get(_CREDENTIAL_LOST_FIELDS_KEY) or [])
+    try:
+        reset_at = int(source.get(_CREDENTIAL_RESET_AT_KEY) or 0)
+    except Exception:
+        reset_at = 0
+    reset_required = state == _CREDENTIAL_SECRET_RESET_STATE and bool(lost_fields)
+    return {
+        "reset_required": reset_required,
+        "lost_fields": lost_fields if reset_required else [],
+        "reset_at": reset_at if reset_required else 0,
+    }
+
+
+def credential_secret_reset_required(metadata: Optional[Mapping[str, Any]]) -> bool:
+    return bool(credential_secret_reset_details(metadata).get("reset_required"))
+
+
+def apply_credential_secret_reset_metadata(
+    metadata: Optional[Mapping[str, Any]],
+    *,
+    lost_fields: Iterable[Any],
+    reset_at: Optional[int],
+) -> Dict[str, Any]:
+    next_metadata = dict(metadata or {})
+    normalized_fields = _normalize_lost_secret_fields(lost_fields)
+    if normalized_fields:
+        next_metadata[_CREDENTIAL_SECRET_STATE_KEY] = _CREDENTIAL_SECRET_RESET_STATE
+        next_metadata[_CREDENTIAL_LOST_FIELDS_KEY] = normalized_fields
+        next_metadata[_CREDENTIAL_RESET_AT_KEY] = int(reset_at or _now_ts())
+        return next_metadata
+    next_metadata.pop(_CREDENTIAL_SECRET_STATE_KEY, None)
+    next_metadata.pop(_CREDENTIAL_LOST_FIELDS_KEY, None)
+    next_metadata.pop(_CREDENTIAL_RESET_AT_KEY, None)
+    return next_metadata
+
+
+def clear_credential_secret_reset_metadata(
+    metadata: Optional[Mapping[str, Any]],
+    *,
+    resolved_fields: Iterable[Any],
+) -> Dict[str, Any]:
+    details = credential_secret_reset_details(metadata)
+    if not details["reset_required"]:
+        return dict(metadata or {})
+    resolved = set(_normalize_lost_secret_fields(resolved_fields))
+    remaining = [field for field in details["lost_fields"] if field not in resolved]
+    return apply_credential_secret_reset_metadata(
+        metadata,
+        lost_fields=remaining,
+        reset_at=details["reset_at"] or None,
+    )
 
 
 class AegisCipherService:
@@ -257,6 +335,130 @@ class AegisCipherService:
         self._log("Aegis Cipher rotated and protected secrets re-encrypted.")
         return self.status()
 
+    def force_reset(self) -> Dict[str, Any]:
+        state = self._state(required=True)
+        conn: Optional[sqlite3.Connection] = None
+        affected_credential_ids: List[int] = []
+        affected_credentials = 0
+        disabled_jobs = 0
+        github_token_reset = False
+        now_ts = _now_ts()
+        try:
+            conn = self._db_conn_factory()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    password_encrypted,
+                    private_key_encrypted,
+                    private_key_passphrase_encrypted,
+                    become_password_encrypted,
+                    metadata_json
+                  FROM credentials
+                 ORDER BY id ASC
+                """
+            )
+            rows = cur.fetchall() or []
+            for row in rows:
+                credential_id = int(row[0])
+                password_text = self._decode_db_text(row[1])
+                private_key_text = self._decode_db_text(row[2])
+                passphrase_text = self._decode_db_text(row[3])
+                become_password_text = self._decode_db_text(row[4])
+                metadata = self._parse_metadata_json(row[5])
+                lost_fields = self._lost_secret_fields_for_reset(
+                    password=password_text,
+                    private_key=private_key_text,
+                    private_key_passphrase=passphrase_text,
+                    become_password=become_password_text,
+                )
+                if not lost_fields:
+                    continue
+                metadata = apply_credential_secret_reset_metadata(
+                    metadata,
+                    lost_fields=lost_fields,
+                    reset_at=now_ts,
+                )
+                cur.execute(
+                    """
+                    UPDATE credentials
+                       SET password_encrypted=NULL,
+                           private_key_encrypted=NULL,
+                           private_key_passphrase_encrypted=NULL,
+                           become_password_encrypted=NULL,
+                           metadata_json=?,
+                           updated_at=?
+                     WHERE id=?
+                    """,
+                    (
+                        json.dumps(metadata, sort_keys=True),
+                        now_ts,
+                        credential_id,
+                    ),
+                )
+                affected_credential_ids.append(credential_id)
+
+            affected_credentials = len(affected_credential_ids)
+
+            cur.execute("SELECT token, reset_required, reset_at FROM github_token LIMIT 1")
+            github_row = cur.fetchone()
+            github_token_text = self._decode_db_text(github_row[0]) if github_row else ""
+            if github_token_text:
+                self._validate_encrypted_or_empty(github_token_text)
+                github_token_reset = True
+            cur.execute("DELETE FROM github_token")
+            if github_token_reset:
+                cur.execute(
+                    """
+                    INSERT INTO github_token(token, reset_required, reset_at)
+                    VALUES (?,?,?)
+                    """,
+                    (None, 1, now_ts),
+                )
+
+            if affected_credential_ids:
+                placeholders = ",".join("?" for _ in affected_credential_ids)
+                cur.execute(
+                    f"""
+                    UPDATE scheduled_jobs
+                       SET enabled=0,
+                           updated_at=?
+                     WHERE credential_id IN ({placeholders})
+                       AND COALESCE(enabled, 0) <> 0
+                    """,
+                    (now_ts, *affected_credential_ids),
+                )
+                disabled_jobs = int(cur.rowcount or 0)
+
+            cur.execute("DELETE FROM aegis_cipher_state WHERE id=?", (_STATE_ROW_ID,))
+            conn.commit()
+            with self._lock:
+                self._active_key = None
+        except Exception:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
+
+        self._log(
+            "Aegis Cipher force reset completed. Protected secret material was destroyed and affected scheduled jobs were disabled.",
+            level="WARNING",
+        )
+        return {
+            **self.status(),
+            "force_reset": True,
+            "affected_credentials": affected_credentials,
+            "disabled_jobs": disabled_jobs,
+            "github_token_reset": github_token_reset,
+        }
+
     # ------------------------------------------------------------------
     # Secret serialization helpers
     # ------------------------------------------------------------------
@@ -430,6 +632,48 @@ class AegisCipherService:
         except AegisCryptoError as exc:
             raise AegisDataCorruptionError("Protected secret could not be decrypted.") from exc
 
+    def _parse_metadata_json(self, value: Any) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return dict(value)
+        if not str(value or "").strip():
+            return {}
+        try:
+            parsed = json.loads(str(value))
+        except Exception:
+            return {}
+        if isinstance(parsed, dict):
+            return dict(parsed)
+        return {}
+
+    def _validate_encrypted_or_empty(self, text: str) -> None:
+        if not text:
+            return
+        if not is_aegis_envelope(text):
+            raise AegisDataCorruptionError(
+                "Protected secret is not stored as an Aegis envelope."
+            )
+
+    def _lost_secret_fields_for_reset(
+        self,
+        *,
+        password: str,
+        private_key: str,
+        private_key_passphrase: str,
+        become_password: str,
+    ) -> List[str]:
+        lost_fields: List[str] = []
+        for field_name, value in (
+            ("password", password),
+            ("private_key", private_key),
+            ("private_key_passphrase", private_key_passphrase),
+            ("become_password", become_password),
+        ):
+            if not value:
+                continue
+            self._validate_encrypted_or_empty(value)
+            lost_fields.append(field_name)
+        return lost_fields
+
     def _migrate_legacy_credentials(self, cur, key: bytes) -> None:
         cur.execute(
             """
@@ -503,22 +747,42 @@ class AegisCipherService:
             )
 
     def _migrate_legacy_github_token(self, cur, key: bytes) -> None:
-        cur.execute("SELECT token FROM github_token LIMIT 1")
+        cur.execute("SELECT token, reset_required, reset_at FROM github_token LIMIT 1")
         row = cur.fetchone()
         if not row:
             return
         token = self._legacy_secret_or_raise(row[0])
+        reset_required = int(row[1] or 0) if len(row) > 1 else 0
+        reset_at = int(row[2] or 0) if len(row) > 2 and row[2] is not None else None
         cur.execute("DELETE FROM github_token")
         if token is not None:
-            cur.execute("INSERT INTO github_token (token) VALUES (?)", (encrypt_text(token, key=key),))
+            cur.execute(
+                "INSERT INTO github_token (token, reset_required, reset_at) VALUES (?,?,?)",
+                (encrypt_text(token, key=key), 0, None),
+            )
+        elif reset_required:
+            cur.execute(
+                "INSERT INTO github_token (token, reset_required, reset_at) VALUES (?,?,?)",
+                (None, 1, reset_at),
+            )
 
     def _reencrypt_github_token(self, cur, *, old_key: bytes, new_key: bytes) -> None:
-        cur.execute("SELECT token FROM github_token LIMIT 1")
+        cur.execute("SELECT token, reset_required, reset_at FROM github_token LIMIT 1")
         row = cur.fetchone()
         token = self._decrypt_encrypted_or_raise(row[0], old_key) if row else None
+        reset_required = int(row[1] or 0) if row and len(row) > 1 else 0
+        reset_at = int(row[2] or 0) if row and len(row) > 2 and row[2] is not None else None
         cur.execute("DELETE FROM github_token")
         if token is not None:
-            cur.execute("INSERT INTO github_token (token) VALUES (?)", (encrypt_text(token, key=new_key),))
+            cur.execute(
+                "INSERT INTO github_token (token, reset_required, reset_at) VALUES (?,?,?)",
+                (encrypt_text(token, key=new_key), 0, None),
+            )
+        elif reset_required:
+            cur.execute(
+                "INSERT INTO github_token (token, reset_required, reset_at) VALUES (?,?,?)",
+                (None, 1, reset_at),
+            )
 
     def _legacy_secret_or_raise(self, value: Any) -> Optional[str]:
         text = self._decode_db_text(value)
@@ -568,4 +832,9 @@ __all__ = [
     "AegisInvalidCipherError",
     "AegisLockedError",
     "AegisNotConfiguredError",
+    "AegisSecretResetRequiredError",
+    "apply_credential_secret_reset_metadata",
+    "clear_credential_secret_reset_metadata",
+    "credential_secret_reset_details",
+    "credential_secret_reset_required",
 ]

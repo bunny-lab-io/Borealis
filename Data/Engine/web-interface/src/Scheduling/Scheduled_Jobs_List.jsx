@@ -11,6 +11,7 @@ import {
   Typography,
   Button,
   Switch,
+  Tooltip,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -20,7 +21,8 @@ import {
 import {
   Schedule as HeaderIcon,
   Cached as CachedIcon,
-  Add as AddIcon
+  Add as AddIcon,
+  WarningAmberRounded as WarningAmberRoundedIcon,
 } from "@mui/icons-material";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
@@ -420,6 +422,8 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             result: j.last_status || (j.next_run_ts ? "Scheduled" : ""),
             resultsCounts,
             enabled: Boolean(j.enabled),
+            warningCode: j.warning_code || "",
+            warningMessage: j.warning_message || "",
             categoryFlags,
             raw: { ...j, components: normalizedComponents }
           };
@@ -528,6 +532,10 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
   }, [deriveRowKey, filteredRows, selectedIds]);
 
   const anySelected = selectedIds.size > 0;
+  const credentialResetWarningCount = useMemo(
+    () => rows.filter((row) => String(row.warningCode || "").toLowerCase() === "credential_reset_required").length,
+    [rows]
+  );
   useEffect(() => {
     if (!filteredRows.length || loading) return;
     autoSizeTrackedColumns();
@@ -585,21 +593,28 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
         dispatchEdit(event);
       };
       return (
-        <a
-          href={editorHref}
-          onPointerDown={handlePointerDown}
-          onClick={handleClick}
-          title={row.name || ""}
-          style={{
-            color: "#58a6ff",
-            textDecoration: "none",
-            fontWeight: 500,
-            cursor: "pointer",
-            fontFamily: gridFontFamily
-          }}
-        >
-          {row.name || "-"}
-        </a>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
+          <a
+            href={editorHref}
+            onPointerDown={handlePointerDown}
+            onClick={handleClick}
+            title={row.name || ""}
+            style={{
+              color: "#58a6ff",
+              textDecoration: "none",
+              fontWeight: 500,
+              cursor: "pointer",
+              fontFamily: gridFontFamily
+            }}
+          >
+            {row.name || "-"}
+          </a>
+          {row.warningMessage ? (
+            <Tooltip title={row.warningMessage} arrow>
+              <WarningAmberRoundedIcon fontSize="small" sx={{ color: "#f0c36d" }} />
+            </Tooltip>
+          ) : null}
+        </Box>
       );
     },
     [onEditJob]
@@ -877,6 +892,22 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
                 >
                   Delete Job
                 </Button>
+              </Box>
+            ) : null}
+            {credentialResetWarningCount ? (
+              <Box
+                sx={{
+                  mt: 0.2,
+                  px: 1.2,
+                  py: 0.9,
+                  borderRadius: 2,
+                  border: "1px solid rgba(240,195,109,0.3)",
+                  background: "rgba(240,195,109,0.08)",
+                }}
+              >
+                <Typography variant="body2" sx={{ color: "#f0c36d" }}>
+                  {credentialResetWarningCount} scheduled job{credentialResetWarningCount === 1 ? "" : "s"} are disabled because their associated credential lost protected secret material during an Aegis Cipher force reset.
+                </Typography>
               </Box>
             ) : null}
           </>

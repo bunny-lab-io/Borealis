@@ -39,6 +39,7 @@ const MAGIC_UI = {
   accentA: "#7dd3fc",
   accentB: "#c084fc",
   danger: "#ff8a8a",
+  warning: "#f0c36d",
 };
 
 const OUTLINE_BUTTON_SX = {
@@ -60,6 +61,31 @@ const INPUT_SX = {
     "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
     "&.Mui-focused fieldset": { borderColor: MAGIC_UI.accentA },
   },
+};
+
+const RESET_FIELD_SX = {
+  "& .MuiInputLabel-root": {
+    color: MAGIC_UI.warning,
+  },
+  "& .MuiOutlinedInput-root, & .MuiInputBase-root": {
+    backgroundColor: "rgba(240,195,109,0.06)",
+    "& fieldset": {
+      borderColor: "rgba(240,195,109,0.55)",
+    },
+    "&:hover fieldset": {
+      borderColor: "rgba(240,195,109,0.82)",
+    },
+    "&.Mui-focused fieldset": {
+      borderColor: MAGIC_UI.warning,
+    },
+  },
+};
+
+const RESET_FIELD_LABELS = {
+  password: "password",
+  private_key: "SSH private key",
+  private_key_passphrase: "private key passphrase",
+  become_password: "escalation password",
 };
 
 const CREDENTIAL_TYPES = [
@@ -105,6 +131,26 @@ function normalizeSiteId(value) {
   return String(num);
 }
 
+function normalizeLostSecretFields(credential, isGitHubToken) {
+  if (isGitHubToken) {
+    return Boolean(credential?.reset_required) ? ["password"] : [];
+  }
+  const explicit = Array.isArray(credential?.lost_secret_fields)
+    ? credential.lost_secret_fields
+    : credential?.metadata?.aegis_lost_secret_fields;
+  if (!Array.isArray(explicit)) return [];
+  return explicit
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function joinNaturalLanguage(parts) {
+  if (!parts.length) return "";
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+}
+
 export default function CredentialEditor({
   open,
   mode = "create",
@@ -130,6 +176,34 @@ export default function CredentialEditor({
 
   const credentialId = credential?.id;
   const helperStyle = { fontSize: 12, color: MAGIC_UI.textMuted, mt: 0.5 };
+  const resetHelperStyle = { fontSize: 12, color: MAGIC_UI.warning, mt: 0.5 };
+  const secretResetRequired = useMemo(() => {
+    if (isGitHubToken) {
+      return Boolean(credential?.reset_required);
+    }
+    if (Boolean(credential?.secret_reset_required)) {
+      return true;
+    }
+    const state = String(credential?.metadata?.aegis_secret_state || "").trim().toLowerCase();
+    return state === "reset_required" && normalizeLostSecretFields(credential, isGitHubToken).length > 0;
+  }, [credential, isGitHubToken]);
+  const lostSecretFields = useMemo(
+    () => normalizeLostSecretFields(credential, isGitHubToken),
+    [credential, isGitHubToken]
+  );
+  const resetSummary = useMemo(() => {
+    if (!secretResetRequired) return "";
+    if (isGitHubToken) {
+      return "Aegis Cipher force reset removed the stored GitHub Personal Access Token. Re-enter the token below to restore Borealis GitHub access.";
+    }
+    const labels = lostSecretFields
+      .map((field) => RESET_FIELD_LABELS[field])
+      .filter(Boolean);
+    if (!labels.length) {
+      return "Aegis Cipher force reset removed one or more stored secret fields for this credential. Re-enter the highlighted values or clear them intentionally to resolve the warning.";
+    }
+    return `Aegis Cipher force reset removed the stored ${joinNaturalLanguage(labels)} for this credential. Re-enter the highlighted values or clear them intentionally to resolve the warning.`;
+  }, [isGitHubToken, lostSecretFields, secretResetRequired]);
 
   useEffect(() => {
     if (!open || isGitHubToken) {
@@ -231,6 +305,9 @@ export default function CredentialEditor({
   }), [credential, isGitHubToken]);
 
   const disableSave = loading || fetchingDetail;
+  const fieldLostInReset = (fieldName) => lostSecretFields.includes(fieldName);
+  const inputSxForField = (fieldName, extra = {}) => [INPUT_SX, extra, fieldLostInReset(fieldName) ? RESET_FIELD_SX : null];
+  const resetFieldHelper = "Lost during Aegis Cipher force reset. Re-enter or clear intentionally to resolve this warning.";
 
   const updateField = (key) => (event) => {
     const value = event?.target?.value ?? "";
@@ -364,13 +441,30 @@ export default function CredentialEditor({
       onClose={handleCancel}
       maxWidth="md"
       fullWidth
-      PaperProps={{ sx: DIALOG_PAPER_SX }}
+      scroll="paper"
+      PaperProps={{
+        sx: {
+          ...DIALOG_PAPER_SX,
+          display: "flex",
+          flexDirection: "column",
+          maxHeight: "min(90vh, 1040px)",
+        },
+      }}
     >
       <DialogTitle sx={DIALOG_TITLE_SX}>
         <DialogHeaderBlock title={title} subtitle={subtitle} />
       </DialogTitle>
       <DialogContent
-        sx={{ ...DIALOG_CONTENT_SX, display: "flex", flexDirection: "column", gap: 2 }}
+        sx={{
+          ...DIALOG_CONTENT_SX,
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+          flex: "1 1 auto",
+          minHeight: 0,
+          overflowY: "auto",
+          pr: 2.5,
+        }}
       >
         {fetchingDetail && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: MAGIC_UI.textMuted }}>
@@ -388,6 +482,20 @@ export default function CredentialEditor({
             }}
           >
             <Typography variant="body2" sx={{ color: MAGIC_UI.danger }}>{error}</Typography>
+          </Box>
+        )}
+        {secretResetRequired && (
+          <Box
+            sx={{
+              bgcolor: "rgba(240,195,109,0.08)",
+              border: "1px solid rgba(240,195,109,0.32)",
+              borderRadius: 2,
+              p: 1.5,
+            }}
+          >
+            <Typography variant="body2" sx={{ color: MAGIC_UI.warning, lineHeight: 1.55 }}>
+              {resetSummary}
+            </Typography>
           </Box>
         )}
         {isGitHubToken && (
@@ -440,8 +548,11 @@ export default function CredentialEditor({
               value={form.password}
               onChange={updateField("password")}
               disabled={disableSave}
-              sx={INPUT_SX}
+              sx={inputSxForField("password")}
             />
+            {fieldLostInReset("password") && (
+              <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
+            )}
           </>
         ) : (
           <>
@@ -520,7 +631,7 @@ export default function CredentialEditor({
                 value={form.password}
                 onChange={updateField("password")}
                 disabled={disableSave}
-                sx={{ flex: 1, ...INPUT_SX }}
+                sx={inputSxForField("password", { flex: 1 })}
               />
               {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
                 <Tooltip title="Clear stored password">
@@ -532,6 +643,9 @@ export default function CredentialEditor({
             </Box>
             {isEdit && currentCredentialFlags.hasPassword && !passwordDirty && !clearPassword && (
               <Typography sx={helperStyle}>Stored password will remain unless you change or clear it.</Typography>
+            )}
+            {fieldLostInReset("password") && !clearPassword && (
+              <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
             )}
             {clearPassword && (
               <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Password will be removed when saving.</Typography>
@@ -546,11 +660,10 @@ export default function CredentialEditor({
                 multiline
                 minRows={4}
                 maxRows={12}
-                sx={{
+                sx={inputSxForField("private_key", {
                   flex: 1,
-                  ...INPUT_SX,
                   "& .MuiOutlinedInput-input": { fontFamily: "monospace" },
-                }}
+                })}
               />
               <Button
                 variant="outlined"
@@ -573,6 +686,9 @@ export default function CredentialEditor({
             {isEdit && currentCredentialFlags.hasPrivateKey && !privateKeyDirty && !clearPrivateKey ? (
               <Typography sx={helperStyle}>Private key is stored. Upload or paste a new one to replace, or clear it.</Typography>
             ) : null}
+            {fieldLostInReset("private_key") && !clearPrivateKey ? (
+              <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
+            ) : null}
             {clearPrivateKey && (
               <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Private key will be removed when saving.</Typography>
             )}
@@ -584,7 +700,7 @@ export default function CredentialEditor({
                 value={form.private_key_passphrase}
                 onChange={updateField("private_key_passphrase")}
                 disabled={disableSave}
-                sx={{ flex: 1, ...INPUT_SX }}
+                sx={inputSxForField("private_key_passphrase", { flex: 1 })}
               />
               {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase && (
                 <Tooltip title="Clear stored passphrase">
@@ -596,6 +712,9 @@ export default function CredentialEditor({
             </Box>
             {isEdit && currentCredentialFlags.hasPrivateKeyPassphrase && !passphraseDirty && !clearPassphrase ? (
               <Typography sx={helperStyle}>A passphrase is stored for this key.</Typography>
+            ) : null}
+            {fieldLostInReset("private_key_passphrase") && !clearPassphrase ? (
+              <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
             ) : null}
             {clearPassphrase && (
               <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Key passphrase will be removed when saving.</Typography>
@@ -630,7 +749,7 @@ export default function CredentialEditor({
                 value={form.become_password}
                 onChange={updateField("become_password")}
                 disabled={disableSave}
-                sx={{ flex: 1, ...INPUT_SX }}
+                sx={inputSxForField("become_password", { flex: 1 })}
               />
               {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword && (
                 <Tooltip title="Clear stored escalation password">
@@ -642,6 +761,9 @@ export default function CredentialEditor({
             </Box>
             {isEdit && currentCredentialFlags.hasBecomePassword && !becomePasswordDirty && !clearBecomePassword ? (
               <Typography sx={helperStyle}>Escalation password is stored.</Typography>
+            ) : null}
+            {fieldLostInReset("become_password") && !clearBecomePassword ? (
+              <Typography sx={resetHelperStyle}>{resetFieldHelper}</Typography>
             ) : null}
             {clearBecomePassword && (
               <Typography sx={{ ...helperStyle, color: MAGIC_UI.danger }}>Escalation password will be removed when saving.</Typography>

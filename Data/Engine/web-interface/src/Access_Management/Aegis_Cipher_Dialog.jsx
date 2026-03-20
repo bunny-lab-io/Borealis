@@ -19,6 +19,7 @@ import {
   DIALOG_BODY_TEXT_SX,
   DIALOG_BUTTON_SX,
   DIALOG_CONTENT_SX,
+  DIALOG_DANGER_BUTTON_SX,
   DIALOG_INPUT_SX,
   DIALOG_PAPER_SX,
   DIALOG_PRIMARY_BUTTON_SX,
@@ -43,6 +44,17 @@ function dialogCopy(mode, source) {
       body:
         "Rotation re-encrypts all protected secrets in one step and keeps the Engine unlocked with the new cipher for the rest of this process lifetime.",
       confirmLabel: "Rotate Aegis Cipher",
+    };
+  }
+  if (mode === "force_reset") {
+    return {
+      title: "Force Reset Aegis Cipher",
+      subtitle:
+        "This destructive recovery action permanently destroys all currently stored credential secrets and the GitHub token so a brand-new Aegis Cipher can be set up.",
+      body:
+        "Credential records, usernames, site assignments, and job references stay in place, but the protected secret values themselves cannot be recovered after this reset.",
+      confirmLabel: "Force Reset Aegis Cipher",
+      danger: true,
     };
   }
   if (source === "login") {
@@ -75,15 +87,21 @@ export default function AegisCipherDialog({
   const [currentCipher, setCurrentCipher] = useState("");
   const [newCipher, setNewCipher] = useState("");
   const [confirmCipher, setConfirmCipher] = useState("");
+  const [forceResetText, setForceResetText] = useState("");
   const [showCipherValues, setShowCipherValues] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const copy = useMemo(() => dialogCopy(mode, source), [mode, source]);
   const requiresConfirmation = mode === "setup" || mode === "rotate";
+  const requiresForceResetPhrase = mode === "force_reset";
   const primaryCipherValue = mode === "rotate" ? newCipher : cipher;
   const confirmationMissing = requiresConfirmation && !confirmCipher;
   const confirmationMismatch = requiresConfirmation && confirmCipher !== "" && primaryCipherValue !== confirmCipher;
+  const forceResetPhraseMismatch =
+    requiresForceResetPhrase &&
+    forceResetText.trim().toUpperCase() !== "FORCE RESET";
+  const forceResetPhraseEntered = forceResetText.trim().length > 0;
   const confirmationHint = confirmationMismatch
     ? "The new Aegis Cipher does not match."
     : "Re-enter the new Aegis Cipher exactly as typed above.";
@@ -94,15 +112,27 @@ export default function AegisCipherDialog({
     setCurrentCipher("");
     setNewCipher("");
     setConfirmCipher("");
+    setForceResetText("");
     setShowCipherValues(false);
     setLoading(false);
     setError("");
   }, [mode, open, source]);
 
-  const endpoint = mode === "setup" ? "/api/aegis/setup" : mode === "rotate" ? "/api/aegis/rotate" : "/api/aegis/unlock";
+  const endpoint =
+    mode === "setup"
+      ? "/api/aegis/setup"
+      : mode === "rotate"
+      ? "/api/aegis/rotate"
+      : mode === "force_reset"
+      ? "/api/aegis/force_reset"
+      : "/api/aegis/unlock";
 
   const handleSubmit = async (event) => {
     event?.preventDefault?.();
+    if (requiresForceResetPhrase && forceResetPhraseMismatch) {
+      setError('Type "FORCE RESET" exactly to continue.');
+      return;
+    }
     if (requiresConfirmation && confirmationMissing) {
       setError("Please confirm the new Aegis Cipher before continuing.");
       return;
@@ -114,9 +144,12 @@ export default function AegisCipherDialog({
     setLoading(true);
     setError("");
     try {
-      const payload = mode === "rotate"
-        ? { current_cipher: currentCipher, new_cipher: newCipher }
-        : { cipher };
+      const payload =
+        mode === "rotate"
+          ? { current_cipher: currentCipher, new_cipher: newCipher }
+          : mode === "force_reset"
+          ? {}
+          : { cipher };
       const resp = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -157,6 +190,8 @@ export default function AegisCipherDialog({
   const submitDisabled = loading || (
     mode === "rotate"
       ? !currentCipher || !newCipher || confirmationMissing || confirmationMismatch
+      : mode === "force_reset"
+      ? forceResetPhraseMismatch
       : !cipher || (requiresConfirmation && (confirmationMissing || confirmationMismatch))
   );
 
@@ -181,7 +216,53 @@ export default function AegisCipherDialog({
             {copy.body}
           </Typography>
 
-          {mode === "rotate" ? (
+          {mode === "force_reset" ? (
+            <>
+              <Box
+                sx={{
+                  borderRadius: 2,
+                  border: "1px solid rgba(251, 113, 133, 0.42)",
+                  background: "rgba(69, 10, 27, 0.38)",
+                  px: 1.5,
+                  py: 1.3,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 0.7,
+                }}
+              >
+                <Typography variant="body2" sx={{ color: "#ffd3d9", fontWeight: 600 }}>
+                  This action will immediately:
+                </Typography>
+                <Typography variant="body2" sx={{ color: "#ffd3d9" }}>
+                  1. Permanently destroy all stored credential passwords, private keys, passphrases, and the GitHub token.
+                </Typography>
+                <Typography variant="body2" sx={{ color: "#ffd3d9" }}>
+                  2. Keep the credential records themselves, but mark affected secret fields for re-entry.
+                </Typography>
+                <Typography variant="body2" sx={{ color: "#ffd3d9" }}>
+                  3. Disable scheduled jobs that rely on the affected credentials until those secrets are restored.
+                </Typography>
+              </Box>
+              <TextField
+                autoFocus
+                label='Type "FORCE RESET" to continue'
+                value={forceResetText}
+                onChange={(event) => {
+                  setForceResetText(event.target.value);
+                  setError("");
+                }}
+                fullWidth
+                sx={DIALOG_INPUT_SX}
+                error={forceResetPhraseEntered && forceResetPhraseMismatch}
+              />
+              <Typography
+                variant="body2"
+                sx={forceResetPhraseEntered && forceResetPhraseMismatch ? { color: "#ff9aa5", mt: -1.1 } : { ...DIALOG_BODY_TEXT_SX, mt: -1.1 }}
+              >
+                Type the phrase exactly as shown. This cannot be undone.
+              </Typography>
+            </>
+          ) : mode === "rotate" ? (
             <>
               <TextField
                 autoFocus
@@ -297,8 +378,8 @@ export default function AegisCipherDialog({
         <Button
           onClick={handleSubmit}
           disabled={submitDisabled}
-          startIcon={!loading ? <VpnKeyIcon /> : null}
-          sx={DIALOG_PRIMARY_BUTTON_SX}
+          startIcon={!loading && !copy.danger ? <VpnKeyIcon /> : null}
+          sx={copy.danger ? DIALOG_DANGER_BUTTON_SX : DIALOG_PRIMARY_BUTTON_SX}
         >
           {copy.confirmLabel}
         </Button>

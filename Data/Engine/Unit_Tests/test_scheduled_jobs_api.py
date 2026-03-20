@@ -1040,6 +1040,291 @@ def test_shared_ansible_dispatch_reports_aegis_locked_and_recovers_after_unlock(
     assert unlocked_target[1] == ""
 
 
+def test_shared_ansible_dispatch_reports_credential_reset_required(
+    engine_harness: EngineTestHarness,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE devices
+               SET operating_system=?,
+                   agent_id=?,
+                   connection_endpoint=''
+             WHERE guid=?
+            """,
+            ("Ubuntu 24.04 LTS", "test-device-agent", "GUID-TEST-0001"),
+        )
+        cur.execute(
+            """
+            INSERT INTO credentials(
+                id,
+                name,
+                description,
+                site_id,
+                credential_type,
+                connection_type,
+                username,
+                password_encrypted,
+                private_key_encrypted,
+                private_key_passphrase_encrypted,
+                become_method,
+                become_username,
+                become_password_encrypted,
+                metadata_json,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                6,
+                "Reset Required Credential",
+                "Lost during reset",
+                1,
+                "machine",
+                "ssh",
+                "ubuntu",
+                None,
+                None,
+                None,
+                "",
+                "",
+                None,
+                json.dumps(
+                    {
+                        "aegis_secret_state": "reset_required",
+                        "aegis_lost_secret_fields": ["password"],
+                        "aegis_reset_at": 1_773_782_704,
+                    }
+                ),
+                1_773_782_704,
+                1_773_782_704,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at,
+                skip_reason,
+                shared_execution,
+                component_index,
+                component_kind,
+                component_name
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                66,
+                10,
+                1_773_782_706,
+                "Pending",
+                1_773_782_706,
+                1_773_782_706,
+                "",
+                1,
+                0,
+                "ansible",
+                "Playbook Reset Required",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_run_targets(
+                run_id,
+                device_guid,
+                hostname,
+                site_id,
+                resolved_from_filter_id,
+                inventory_hostname,
+                wireguard_peer_ip,
+                resolved_connection,
+                resolution_status,
+                resolution_reason,
+                resolved_from_filter_ids_json,
+                created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                66,
+                "GUID-TEST-0001",
+                "test-device",
+                1,
+                None,
+                "main_lab__test_device",
+                "",
+                "ssh",
+                "pending",
+                "",
+                json.dumps([]),
+                1_773_782_706,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = scheduler._dispatch_shared_ansible(
+        job_id=10,
+        run_row_id=66,
+        scheduled_ts=1_773_782_706,
+        run_mode="ssh",
+        component={"name": "Playbook Reset Required", "path": "playbook_reset_required.yml"},
+        credential_id=6,
+        use_service_account=False,
+    )
+
+    assert result is None
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT status, error FROM scheduled_job_runs WHERE id=?", (66,))
+        run_row = cur.fetchone()
+        cur.execute(
+            """
+            SELECT resolution_status, resolution_reason
+              FROM scheduled_job_run_targets
+             WHERE run_id=?
+            """,
+            (66,),
+        )
+        target_row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert run_row[0] == "Failed"
+    assert run_row[1] == (
+        "The credential associated with this scheduled job can no longer be decrypted due to the "
+        "Aegis Cipher being reset, please update the credential with the data it is missing."
+    )
+    assert target_row[0] == "unresolved"
+    assert target_row[1] == "credential_reset_required"
+
+
+def test_scheduled_jobs_warn_and_stay_disabled_when_credential_requires_reset(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client, _scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO credentials(
+                id,
+                name,
+                description,
+                site_id,
+                credential_type,
+                connection_type,
+                username,
+                password_encrypted,
+                private_key_encrypted,
+                private_key_passphrase_encrypted,
+                become_method,
+                become_username,
+                become_password_encrypted,
+                metadata_json,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                7,
+                "Reset Marker Credential",
+                "Disabled job warning",
+                1,
+                "machine",
+                "ssh",
+                "ubuntu",
+                None,
+                None,
+                None,
+                "",
+                "",
+                None,
+                json.dumps(
+                    {
+                        "aegis_secret_state": "reset_required",
+                        "aegis_lost_secret_fields": ["password"],
+                        "aegis_reset_at": 1_773_782_800,
+                    }
+                ),
+                1_773_782_800,
+                1_773_782_800,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                execution_context,
+                credential_id,
+                enabled,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                77,
+                "Disabled By Reset",
+                json.dumps([{"kind": "ansible", "name": "Playbook", "path": "playbook.yml"}]),
+                json.dumps(["test-device"]),
+                "once",
+                "ssh",
+                7,
+                0,
+                1_773_782_800,
+                1_773_782_800,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    list_response = client.get("/api/scheduled_jobs")
+    assert list_response.status_code == 200
+    jobs = list_response.get_json()["jobs"]
+    assert len(jobs) == 1
+    assert jobs[0]["enabled"] is False
+    assert jobs[0]["warning_code"] == "credential_reset_required"
+    assert "Aegis Cipher being reset" in jobs[0]["warning_message"]
+
+    toggle_response = client.post("/api/scheduled_jobs/77/toggle", json={"enabled": True})
+    assert toggle_response.status_code == 409
+    toggle_payload = toggle_response.get_json()
+    assert toggle_payload["error"] == "credential_reset_required"
+
+    create_response = client.post(
+        "/api/scheduled_jobs",
+        json={
+            "name": "Created While Reset Required",
+            "components": [{"kind": "ansible", "name": "Playbook", "path": "playbook.yml"}],
+            "targets": ["test-device"],
+            "schedule": {"type": "once"},
+            "execution_context": "ssh",
+            "credential_id": 7,
+            "enabled": True,
+        },
+    )
+    assert create_response.status_code == 200
+    created_payload = create_response.get_json()
+    assert created_payload["job"]["enabled"] is False
+    assert created_payload["warning_code"] == "credential_reset_required"
+
+
 def test_shared_ansible_dispatch_normalizes_private_key_runtime_file(
     engine_harness: EngineTestHarness,
     monkeypatch,

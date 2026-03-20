@@ -31,10 +31,18 @@ from ...aegis_cipher import (
     AegisDataCorruptionError,
     AegisLockedError,
     AegisNotConfiguredError,
+    apply_credential_secret_reset_metadata,
+    credential_secret_reset_details,
 )
 
 _ALLOWED_CREDENTIAL_TYPES = {"machine", "domain", "token"}
 _ALLOWED_CONNECTION_TYPES = {"ssh", "winrm"}
+_AFFECTED_SECRET_FIELDS = ("password", "private_key", "private_key_passphrase", "become_password")
+_AEGIS_RESET_METADATA_KEYS = (
+    "aegis_secret_state",
+    "aegis_lost_secret_fields",
+    "aegis_reset_at",
+)
 
 
 def _now_ts() -> int:
@@ -92,6 +100,7 @@ def _parse_metadata(value: Any) -> Dict[str, Any]:
 
 def _credential_row_to_dict(row: Sequence[Any]) -> Mapping[str, Any]:
     metadata = _parse_metadata(row[14] if len(row) > 14 else None)
+    reset_details = credential_secret_reset_details(metadata)
     return {
         "id": int(row[0]),
         "name": row[1] or "",
@@ -108,6 +117,9 @@ def _credential_row_to_dict(row: Sequence[Any]) -> Mapping[str, Any]:
         "become_username": row[12] or "",
         "has_become_password": _secret_present(row[13]),
         "metadata": metadata,
+        "secret_reset_required": bool(reset_details["reset_required"]),
+        "lost_secret_fields": list(reset_details["lost_fields"]),
+        "reset_at": int(reset_details["reset_at"] or 0),
         "created_at": row[15] or 0,
         "updated_at": row[16] or 0,
     }
@@ -221,6 +233,35 @@ class CredentialManagementService:
             metadata_updated = True
 
         return json.dumps(metadata if metadata_updated or existing is not None else {}, sort_keys=True), metadata
+
+    def _strip_aegis_reset_metadata(self, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        cleaned = dict(metadata or {})
+        for key in _AEGIS_RESET_METADATA_KEYS:
+            cleaned.pop(key, None)
+        return cleaned
+
+    def _merge_aegis_reset_metadata(
+        self,
+        metadata: Optional[Dict[str, Any]],
+        *,
+        existing_metadata: Optional[Dict[str, Any]] = None,
+        resolved_fields: Sequence[str] = (),
+    ) -> Dict[str, Any]:
+        cleaned = self._strip_aegis_reset_metadata(metadata)
+        details = credential_secret_reset_details(existing_metadata if existing_metadata is not None else metadata)
+        if not details["reset_required"]:
+            return cleaned
+        normalized_resolved = []
+        for field in resolved_fields:
+            candidate = str(field or "").strip().lower()
+            if candidate in _AFFECTED_SECRET_FIELDS and candidate not in normalized_resolved:
+                normalized_resolved.append(candidate)
+        remaining = [field for field in details["lost_fields"] if field not in normalized_resolved]
+        return apply_credential_secret_reset_metadata(
+            cleaned,
+            lost_fields=remaining,
+            reset_at=details["reset_at"] or _now_ts(),
+        )
 
     def _protected_mutation_block(self) -> Optional[Tuple[Dict[str, Any], int]]:
         try:
@@ -338,7 +379,9 @@ class CredentialManagementService:
             site_id = self._normalize_site_id(payload.get("site_id"))
             credential_type = self._normalize_credential_type(payload.get("credential_type"))
             connection_type = self._normalize_connection_type(payload.get("connection_type"))
-            metadata_json, _metadata = self._normalize_metadata(payload)
+            _metadata_json, _metadata = self._normalize_metadata(payload)
+            metadata = self._merge_aegis_reset_metadata(_metadata, resolved_fields=_AFFECTED_SECRET_FIELDS)
+            metadata_json = json.dumps(metadata, sort_keys=True)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
@@ -475,7 +518,8 @@ class CredentialManagementService:
                     if "connection_type" in payload
                     else str(existing[5] or "ssh").lower()
                 )
-                metadata_json, _metadata = self._normalize_metadata(payload, existing=_parse_metadata(existing[13]))
+                existing_metadata = _parse_metadata(existing[13])
+                _metadata_json, _metadata = self._normalize_metadata(payload, existing=existing_metadata)
             except ValueError as exc:
                 return jsonify({"error": str(exc)}), 400
 
@@ -503,6 +547,21 @@ class CredentialManagementService:
                 if "become_password" in payload
                 else (None if payload.get("clear_become_password") else existing[12])
             )
+            resolved_secret_fields = []
+            if "password" in payload or payload.get("clear_password"):
+                resolved_secret_fields.append("password")
+            if "private_key" in payload or payload.get("clear_private_key"):
+                resolved_secret_fields.append("private_key")
+            if "private_key_passphrase" in payload or payload.get("clear_private_key_passphrase"):
+                resolved_secret_fields.append("private_key_passphrase")
+            if "become_password" in payload or payload.get("clear_become_password"):
+                resolved_secret_fields.append("become_password")
+            metadata = self._merge_aegis_reset_metadata(
+                _metadata,
+                existing_metadata=existing_metadata,
+                resolved_fields=resolved_secret_fields,
+            )
+            metadata_json = json.dumps(metadata, sort_keys=True)
 
             now_ts = _now_ts()
             cur.execute(

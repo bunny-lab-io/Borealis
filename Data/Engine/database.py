@@ -462,10 +462,21 @@ def _ensure_github_token(conn: sqlite3.Connection, *, logger: Optional[logging.L
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS github_token (
-                token TEXT
+                token TEXT,
+                reset_required INTEGER NOT NULL DEFAULT 0,
+                reset_at INTEGER
             )
             """
         )
+        cur.execute("PRAGMA table_info(github_token)")
+        columns: Sequence[Sequence[object]] = cur.fetchall()
+        existing = {row[1] for row in columns}
+        if "reset_required" not in existing:
+            cur.execute(
+                "ALTER TABLE github_token ADD COLUMN reset_required INTEGER NOT NULL DEFAULT 0"
+            )
+        if "reset_at" not in existing:
+            cur.execute("ALTER TABLE github_token ADD COLUMN reset_at INTEGER")
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure github_token table: %s", exc, exc_info=True)

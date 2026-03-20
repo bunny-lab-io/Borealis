@@ -88,6 +88,7 @@ class GitHubTokenService:
             return jsonify(payload), status
 
         aegis_status = self.aegis.status()
+        storage_state = self.github.token_storage_state()
         if aegis_status["configured"] and aegis_status["locked"]:
             payload = {
                 "token": "",
@@ -100,23 +101,34 @@ class GitHubTokenService:
                 "checked_at": _now_ts(),
                 "configured": aegis_status["configured"],
                 "locked": aegis_status["locked"],
+                "reset_required": False,
+                "reset_at": 0,
             }
             return jsonify(payload)
 
         token = self.github.load_token(force_refresh=True)
         verification = self.github.verify_token(token)
-        message = verification.get("message") or ("API Token Invalid" if token else "API Token Not Configured")
+        reset_required = bool(storage_state.get("reset_required"))
+        reset_at = int(storage_state.get("reset_at") or 0)
+        if reset_required and not token:
+            message = "Aegis Cipher reset removed the stored GitHub token. Please re-enter the Personal Access Token."
+            status = "reset_required"
+        else:
+            message = verification.get("message") or ("API Token Invalid" if token else "API Token Not Configured")
+            status = verification.get("status") or ("missing" if not token else "unknown")
         payload = {
             "token": token or "",
             "has_token": bool(token),
             "valid": bool(verification.get("valid")),
             "message": message,
-            "status": verification.get("status") or ("missing" if not token else "unknown"),
+            "status": status,
             "rate_limit": verification.get("rate_limit"),
             "error": verification.get("error"),
             "checked_at": _now_ts(),
             "configured": aegis_status["configured"],
             "locked": aegis_status["locked"],
+            "reset_required": reset_required,
+            "reset_at": reset_at,
         }
         return jsonify(payload)
 
@@ -164,6 +176,8 @@ class GitHubTokenService:
             "checked_at": _now_ts(),
             "configured": True,
             "locked": False,
+            "reset_required": False,
+            "reset_at": 0,
         }
         return jsonify(payload)
 

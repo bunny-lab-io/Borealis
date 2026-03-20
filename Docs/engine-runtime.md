@@ -123,7 +123,8 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Setup migrates any legacy plaintext credential or GitHub token rows into Aegis envelopes and stores KDF metadata plus a verification token in `aegis_cipher_state`.
 - The derived key is cached only in Engine memory. Restarting the Engine relocks protected secrets until an admin re-enters the cipher.
 - While locked, metadata-only credential reads remain available, but credential writes, GitHub token writes, and credential-backed remote SSH or WinRM execution stay blocked.
-- The WebUI auto-prompts authenticated admins after login when Aegis is configured but locked, and Access Management exposes manual unlock and rotation actions from the Credentials page.
+- The WebUI auto-prompts authenticated admins after login when Aegis is configured but locked, and Access Management exposes manual unlock, rotation, and destructive force-reset actions from the Credentials page.
+- Force reset is the disaster-recovery path when the old cipher is gone: Borealis destroys unrecoverable secret material, clears the Aegis state row, marks affected credentials and the GitHub token for re-entry, and disables scheduled jobs that still point at wiped credentials.
 
 #### Reverse VPN tunnels
 - WireGuard reverse VPN design and lifecycle are documented in `vpn-and-remote-access.md`.
@@ -146,3 +147,4 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Shared remote Ansible transport follows the scheduled job execution context; device `connection_type` metadata does not override the operator-selected `ssh` or `winrm` mode.
 - The credentials API now backs stored SSH/WinRM credentials for scheduler selection, while quick-run, cancel, PSRP, and richer recap UX remain in progress.
 - When Aegis is locked, credential-backed shared Ansible runs fail with an explicit `credential_locked` resolution reason instead of being reported as missing credentials.
+- When a credential survives an Aegis force reset but its secret material was destroyed, scheduled jobs surface `credential_reset_required` warnings and stay disabled until the operator restores the missing credential data.

@@ -293,6 +293,7 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Before Aegis setup, legacy plaintext values may still exist in the `*_encrypted` columns as migration input.
 - After Aegis setup, secret columns store ASCII `aegis:v1:` envelopes even though the schema type remains `BLOB`.
 - The runtime decrypts credential secrets on demand through `Data/Engine/services/aegis_cipher.py`; metadata-only reads stay available while the Engine is locked.
+- If `metadata_json` contains `aegis_secret_state = "reset_required"`, the record survived an Aegis force reset but one or more stored secret fields were intentionally destroyed and must be re-entered.
 
 #### `aegis_cipher_state`
 - Status: Active after the first Aegis Cipher setup.
@@ -302,11 +303,12 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - `id` primary key, with Borealis using `id = 1`.
 - Used by:
 - `Data/Engine/services/aegis_cipher.py` setup, unlock, and rotation flows.
-- `/api/aegis/status`, `/api/aegis/setup`, `/api/aegis/unlock`, and `/api/aegis/rotate`.
+- `/api/aegis/status`, `/api/aegis/setup`, `/api/aegis/unlock`, `/api/aegis/rotate`, and `/api/aegis/force_reset`.
 - Notes:
 - `kdf_params_json` stores the per-install `scrypt` parameters and Base64 salt.
 - `verification_token` stores an Aegis-encrypted constant plaintext that validates the entered cipher without persisting the derived key.
 - The derived key is never stored in the database; it lives only in Engine memory for the process lifetime.
+- A force reset deletes the singleton row after protected secret material is destroyed, allowing a fresh Aegis setup to start from a clean state.
 
 #### `ansible_play_recaps`
 - Status: Active for Engine-local scheduled Ansible execution; broader API/UI surfacing is still incomplete.
@@ -348,7 +350,7 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 #### `github_token`
 - Status: Active.
 - Purpose: Persisted GitHub API token for repo hash checks and integration.
-- Columns: `token`.
+- Columns: `token`, `reset_required`, `reset_at`.
 - Constraints and indexes:
 - No explicit primary key.
 - Used by:
@@ -356,9 +358,10 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - `/api/github/token` admin endpoint.
 - Notes:
 - Service writes token by deleting all rows then inserting one row.
-- Reads use `SELECT token FROM github_token LIMIT 1`.
+- Reads use `SELECT token FROM github_token LIMIT 1` or `SELECT token, reset_required, reset_at FROM github_token LIMIT 1` depending on whether reset-state metadata is needed.
 - Before Aegis setup, a legacy plaintext token may exist and is migrated during setup.
 - After Aegis setup, `token` stores an ASCII `aegis:v1:` envelope, and a locked Engine treats it as unavailable until unlock.
+- After an Aegis force reset, Borealis can preserve a row with `token = NULL`, `reset_required = 1`, and `reset_at` set so the WebUI can warn that the GitHub token must be re-entered.
 
 ### SQLite Internal Table
 #### `sqlite_sequence`

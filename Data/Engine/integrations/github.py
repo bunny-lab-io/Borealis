@@ -371,6 +371,31 @@ class GitHubIntegration:
         self._set_cached_token(token)
         return token
 
+    def token_storage_state(self) -> Dict[str, Any]:
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = self._db_conn_factory()
+            cursor = conn.cursor()
+            cursor.execute("SELECT token, reset_required, reset_at FROM github_token LIMIT 1")
+            row = cursor.fetchone()
+            return {
+                "has_row": bool(row),
+                "has_token": bool(row and str(row[0] or "").strip()),
+                "reset_required": bool(row and int(row[1] or 0)),
+                "reset_at": int(row[2] or 0) if row and row[2] is not None else 0,
+            }
+        except sqlite3.OperationalError:
+            return {"has_row": False, "has_token": False, "reset_required": False, "reset_at": 0}
+        except Exception as exc:
+            self._service_log("server", f"github token state lookup failed: {exc}", level="WARNING")
+            return {"has_row": False, "has_token": False, "reset_required": False, "reset_at": 0}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def store_token(self, token: Optional[str]) -> None:
         stored_token = token if token else None
         if stored_token is not None and self._aegis_cipher_service is not None:
@@ -380,8 +405,11 @@ class GitHubIntegration:
             conn = self._db_conn_factory()
             cur = conn.cursor()
             cur.execute("DELETE FROM github_token")
-            if stored_token:
-                cur.execute("INSERT INTO github_token (token) VALUES (?)", (stored_token,))
+            if stored_token is not None:
+                cur.execute(
+                    "INSERT INTO github_token (token, reset_required, reset_at) VALUES (?,?,?)",
+                    (stored_token, 0, None),
+                )
             conn.commit()
         except Exception as exc:
             if conn is not None:

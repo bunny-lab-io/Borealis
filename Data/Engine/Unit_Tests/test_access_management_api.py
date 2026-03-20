@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
 
 import pytest
@@ -584,6 +585,182 @@ def test_aegis_rotation_rolls_back_on_reencryption_failure(
     assert _decode_db_text(current_secret) == _decode_db_text(original_secret)
     assert service.status()["locked"] is False
     assert service.decrypt_secret_blob(current_secret) == "rollback-secret"
+
+
+def test_aegis_force_reset_preserves_records_and_requires_secret_reentry(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_github_verify_ok(monkeypatch)
+    client = _admin_client(engine_harness)
+    _setup_aegis(client, cipher="force-reset-old")
+
+    create_response = client.post(
+        "/api/credentials",
+        json={
+            "name": "Force Reset Credential",
+            "description": "Needs recovery after reset",
+            "site_id": 1,
+            "credential_type": "machine",
+            "connection_type": "ssh",
+            "username": "automation",
+            "password": "force-reset-password",
+            "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----",
+        },
+    )
+    assert create_response.status_code == 200
+    credential_id = create_response.get_json()["credential"]["id"]
+
+    github_response = client.post("/api/github/token", json={"token": "ghp_force_reset"})
+    assert github_response.status_code == 200
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                execution_context,
+                credential_id,
+                enabled,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                91,
+                "Credential Dependent Job",
+                "[]",
+                json.dumps(["test-device"]),
+                "once",
+                "ssh",
+                credential_id,
+                1,
+                1_773_900_000,
+                1_773_900_000,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    reset_response = client.post("/api/aegis/force_reset", json={})
+    assert reset_response.status_code == 200
+    reset_payload = reset_response.get_json()
+    assert reset_payload["configured"] is False
+    assert reset_payload["locked"] is False
+    assert reset_payload["force_reset"] is True
+    assert reset_payload["affected_credentials"] == 1
+    assert reset_payload["disabled_jobs"] == 1
+    assert reset_payload["github_token_reset"] is True
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                password_encrypted,
+                private_key_encrypted,
+                private_key_passphrase_encrypted,
+                become_password_encrypted,
+                metadata_json
+              FROM credentials
+             WHERE id=?
+            """,
+            (credential_id,),
+        )
+        credential_row = cur.fetchone()
+        cur.execute("SELECT token, reset_required, reset_at FROM github_token LIMIT 1")
+        github_row = cur.fetchone()
+        cur.execute("SELECT enabled FROM scheduled_jobs WHERE id=?", (91,))
+        job_row = cur.fetchone()
+        cur.execute("SELECT COUNT(*) FROM aegis_cipher_state")
+        state_count = int(cur.fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+    assert credential_row is not None
+    assert credential_row[0] is None
+    assert credential_row[1] is None
+    assert credential_row[2] is None
+    assert credential_row[3] is None
+    credential_metadata = json.loads(credential_row[4] or "{}")
+    assert credential_metadata["aegis_secret_state"] == "reset_required"
+    assert set(credential_metadata["aegis_lost_secret_fields"]) == {"password", "private_key"}
+    assert int(credential_metadata["aegis_reset_at"]) > 0
+
+    assert github_row is not None
+    assert github_row[0] is None
+    assert int(github_row[1] or 0) == 1
+    assert int(github_row[2] or 0) > 0
+
+    assert job_row is not None
+    assert int(job_row[0] or 0) == 0
+    assert state_count == 0
+
+    reconfigure_response = client.post("/api/aegis/setup", json={"cipher": "force-reset-new"})
+    assert reconfigure_response.status_code == 200
+    assert reconfigure_response.get_json()["configured"] is True
+    assert reconfigure_response.get_json()["locked"] is False
+
+    github_status = client.get("/api/github/token")
+    assert github_status.status_code == 200
+    github_payload = github_status.get_json()
+    assert github_payload["status"] == "reset_required"
+    assert github_payload["reset_required"] is True
+    assert github_payload["token"] == ""
+
+    credential_detail = client.get(f"/api/credentials/{credential_id}")
+    assert credential_detail.status_code == 200
+    detail_payload = credential_detail.get_json()["credential"]
+    assert detail_payload["secret_reset_required"] is True
+    assert set(detail_payload["lost_secret_fields"]) == {"password", "private_key"}
+
+    recover_response = client.put(
+        f"/api/credentials/{credential_id}",
+        json={
+            "password": "replacement-password",
+            "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nrecovery\n-----END OPENSSH PRIVATE KEY-----",
+        },
+    )
+    assert recover_response.status_code == 200
+    recovered_payload = recover_response.get_json()["credential"]
+    assert recovered_payload["secret_reset_required"] is False
+    assert recovered_payload["lost_secret_fields"] == []
+    assert recovered_payload["has_password"] is True
+    assert recovered_payload["has_private_key"] is True
+
+    github_restore = client.post("/api/github/token", json={"token": "ghp_restored"})
+    assert github_restore.status_code == 200
+    github_restore_payload = github_restore.get_json()
+    assert github_restore_payload["reset_required"] is False
+    assert github_restore_payload["status"] == "ok"
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT metadata_json, password_encrypted, private_key_encrypted FROM credentials WHERE id=?", (credential_id,))
+        recovered_row = cur.fetchone()
+        cur.execute("SELECT token, reset_required, reset_at FROM github_token LIMIT 1")
+        restored_github_row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert recovered_row is not None
+    recovered_metadata = json.loads(recovered_row[0] or "{}")
+    assert "aegis_secret_state" not in recovered_metadata
+    assert _decode_db_text(recovered_row[1]).startswith(ENVELOPE_PREFIX)
+    assert _decode_db_text(recovered_row[2]).startswith(ENVELOPE_PREFIX)
+    assert restored_github_row is not None
+    assert _decode_db_text(restored_github_row[0]).startswith(ENVELOPE_PREFIX)
+    assert int(restored_github_row[1] or 0) == 0
+    assert restored_github_row[2] is None
 
 
 def test_credentials_listing_requires_login_and_writes_require_admin(engine_harness: EngineTestHarness) -> None:

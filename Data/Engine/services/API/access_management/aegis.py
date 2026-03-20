@@ -7,6 +7,7 @@
 # - POST /api/aegis/setup (Token Authenticated (Admin)) - Configures Aegis Cipher and encrypts protected secrets.
 # - POST /api/aegis/unlock (Token Authenticated (Admin)) - Unlocks Aegis-protected secrets for the current Engine process.
 # - POST /api/aegis/rotate (Token Authenticated (Admin)) - Rotates the configured Aegis Cipher and re-encrypts protected secrets.
+# - POST /api/aegis/force_reset (Token Authenticated (Admin)) - Destroys unrecoverable protected secrets and clears Aegis configuration.
 # ======================================================
 
 """Aegis Cipher endpoints for the Borealis Engine runtime."""
@@ -139,6 +140,30 @@ def register_aegis_cipher_management(app: Flask, adapters: "EngineServiceAdapter
             "aegis_cipher",
             f"Aegis Cipher rotated by {user.get('username')}.",
             scope="ADMIN",
+        )
+        return jsonify({"status": "ok", **payload})
+
+    @blueprint.route("/api/aegis/force_reset", methods=["POST"])
+    def _aegis_force_reset():
+        user, login_error = auth.require_user()
+        if login_error:
+            return jsonify(login_error[0]), login_error[1]
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        try:
+            payload = service.force_reset()
+        except AegisNotConfiguredError as exc:
+            return _error_payload("not_configured", str(exc), 409)
+        except AegisDataCorruptionError as exc:
+            return _error_payload("corrupt_secret_store", str(exc), 500)
+        except AegisCipherServiceError as exc:
+            return _error_payload("invalid_request", str(exc), 400)
+        adapters.service_log(
+            "aegis_cipher",
+            f"Aegis Cipher force reset by {user.get('username')}. Protected secret material was destroyed.",
+            scope="ADMIN",
+            level="WARNING",
         )
         return jsonify({"status": "ok", **payload})
 

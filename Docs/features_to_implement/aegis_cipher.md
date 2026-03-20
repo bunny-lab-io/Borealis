@@ -43,6 +43,7 @@
 - `POST /api/aegis/setup`: admin-only setup endpoint. Encrypts legacy plaintext credentials and GitHub token, stores the verification token, and leaves the Engine unlocked.
 - `POST /api/aegis/unlock`: admin-only unlock endpoint. Derives the key from stored params, verifies the stored token, and caches the key in Engine memory.
 - `POST /api/aegis/rotate`: admin-only rotation endpoint. Verifies the current cipher, derives a new key, re-encrypts all protected values, and stays unlocked with the new key.
+- `POST /api/aegis/force_reset`: admin-only destructive recovery endpoint. Destroys unrecoverable secret material, clears the configured Aegis state, preserves credential records, and marks affected secrets for re-entry.
 
 ### Access-management behavior
 - `GET /api/credentials` and `GET /api/credentials/<id>` remain metadata-only and keep working while locked.
@@ -52,14 +53,15 @@
 
 ### WebUI behavior
 - `Data/Engine/web-interface/src/App.jsx` owns Aegis status, refreshes it with session validation, and auto-prompts admins when configured and locked.
-- `Data/Engine/web-interface/src/Access_Management/Aegis_Cipher_Dialog.jsx` provides shared `setup`, `unlock`, and `rotate` modes with copy that covers both credentials and the GitHub token.
+- `Data/Engine/web-interface/src/Access_Management/Aegis_Cipher_Dialog.jsx` provides shared `setup`, `unlock`, `rotate`, and destructive `force_reset` modes with copy that covers both credentials and the GitHub token.
 - Canceling the login-time unlock prompt dismisses it for the current SPA session and sends a warning toast through the existing notification path.
-- `Data/Engine/web-interface/src/Access_Management/Credential_List.jsx` renders a synthetic `Aegis Cipher` row with `Not configured`, `Locked`, or `Unlocked` status and shows the correct Setup, Enter, and Rotate actions.
+- `Data/Engine/web-interface/src/Access_Management/Credential_List.jsx` renders a synthetic `Aegis Cipher` row with `Not configured`, `Locked`, or `Unlocked` status and shows the correct Setup, Enter, Rotate, and Force Reset actions.
 - Credentials page header behavior:
 - Before setup: `Refresh`, disabled `New Credential`, far-right primary `Setup Aegis Cipher`
 - Configured but locked: `Refresh`, secondary `Enter Aegis Cipher`, disabled `New Credential`
 - Configured and unlocked: `Refresh`, normal `New Credential`
 - `Data/Engine/web-interface/src/Access_Management/Credential_List.jsx` now owns the synthetic GitHub token row, and `Data/Engine/web-interface/src/Access_Management/Credential_Editor.jsx` provides the GitHub-token update flow.
+- Force reset keeps credential records visible, marks affected secret fields in metadata, highlights those fields in the credential editor, preserves a GitHub token reset marker, and warns operators that dependent scheduled jobs stay disabled until secrets are restored.
 - `Data/Engine/web-interface/src/Scheduling/Create_Job.jsx` continues to show credential metadata while locked and warns that remote jobs can still be saved but will not execute until unlock.
 
 ## Scheduler and Secret Use
@@ -70,6 +72,10 @@
 - operator-facing error: `Aegis Cipher has not been entered; credential-backed execution is disabled.`
 - target resolution reason: `credential_locked`
 - Locked credentials are not reported as missing credentials.
+- Credentials that were wiped by an Aegis force reset fail with:
+- operator-facing error: `The credential associated with this scheduled job can no longer be decrypted due to the Aegis Cipher being reset, please update the credential with the data it is missing.`
+- target resolution reason: `credential_reset_required`
+- Scheduled jobs linked to reset-required credentials are disabled automatically until the operator restores those secrets and re-enables the job.
 
 ## Verification Coverage
 - Unit coverage was added for:
@@ -80,7 +86,10 @@
 - blocked credential and GitHub token mutations while unconfigured or locked
 - Aegis rotation and invalidation of the old cipher
 - rollback on rotation failure
+- force reset preserving records while destroying secret material
+- reset-marker clearing after secret re-entry
 - scheduled-job failure while locked and recovery after unlock
+- scheduled-job disablement and `credential_reset_required` handling after force reset
 - Manual runtime verification in this workspace is limited because the active environment does not include `flask`, `eventlet`, `pytest`, or Node-based WebUI tooling. Syntax checks were completed with `python3 -m py_compile`, and the remaining runtime/UI verification should be done in the packaged Borealis environment.
 
 ## Primary Files

@@ -21,7 +21,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ...assemblies.service import AssemblyRuntimeService
-from ...aegis_cipher import AegisDataCorruptionError, AegisLockedError
+from ...aegis_cipher import (
+    AegisDataCorruptionError,
+    AegisLockedError,
+    AegisSecretResetRequiredError,
+    credential_secret_reset_required,
+)
 from ....db import dbapi as sqlite3
 from ...filters.matcher import DeviceFilterMatcher
 
@@ -59,6 +64,10 @@ RESOLUTION_STATUS_ELIGIBLE = "eligible"
 RESOLUTION_STATUS_SKIPPED = "skipped"
 RESOLUTION_STATUS_UNRESOLVED = "unresolved"
 ENGINE_LOCAL_ALIAS = "borealis-engine-01"
+CREDENTIAL_RESET_REQUIRED_MESSAGE = (
+    "The credential associated with this scheduled job can no longer be decrypted due to the "
+    "Aegis Cipher being reset, please update the credential with the data it is missing."
+)
 
 
 def _now_ts() -> int:
@@ -1523,13 +1532,49 @@ class JobScheduler:
                 return value.decode("utf-8", errors="replace")
         return str(value)
 
+    def _parse_metadata_json(self, value: Any) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return dict(value)
+        raw = str(value or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}
+        if isinstance(parsed, dict):
+            return dict(parsed)
+        return {}
+
+    def _credential_reset_warning(self, credential_id: Optional[int]) -> Optional[Dict[str, str]]:
+        if credential_id is None:
+            return None
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT metadata_json FROM credentials WHERE id=?", (int(credential_id),))
+            row = cur.fetchone()
+            if not row:
+                return None
+            metadata = self._parse_metadata_json(row[0])
+            if not credential_secret_reset_required(metadata):
+                return None
+            return {
+                "warning_code": "credential_reset_required",
+                "warning_message": CREDENTIAL_RESET_REQUIRED_MESSAGE,
+            }
+        except Exception:
+            return None
+        finally:
+            conn.close()
+
     def _load_credential(self, credential_id: Optional[int]) -> Optional[Dict[str, Any]]:
         if credential_id is None:
             return None
         if callable(self._credential_fetcher):
             try:
                 return self._credential_fetcher(int(credential_id))
-            except (AegisLockedError, AegisDataCorruptionError):
+            except (AegisLockedError, AegisDataCorruptionError, AegisSecretResetRequiredError):
                 raise
             except Exception as exc:
                 self._log_event(
@@ -1567,10 +1612,9 @@ class JobScheduler:
             if not row:
                 return None
             metadata = {}
-            try:
-                metadata = json.loads(row[12] or "{}")
-            except Exception:
-                metadata = {}
+            metadata = self._parse_metadata_json(row[12])
+            if credential_secret_reset_required(metadata):
+                raise AegisSecretResetRequiredError(CREDENTIAL_RESET_REQUIRED_MESSAGE)
             return {
                 "id": int(row[0]),
                 "name": row[1] or "",
@@ -2503,6 +2547,46 @@ class JobScheduler:
                     (
                         RESOLUTION_STATUS_UNRESOLVED,
                         "credential_locked",
+                        run_mode_norm,
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+        except AegisSecretResetRequiredError:
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_FAILED,
+                        ts_now,
+                        ts_now,
+                        CREDENTIAL_RESET_REQUIRED_MESSAGE,
+                        int(run_row_id),
+                    ),
+                )
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_run_targets
+                       SET resolution_status=?,
+                           resolution_reason=?,
+                           resolved_connection=?
+                     WHERE run_id=?
+                    """,
+                    (
+                        RESOLUTION_STATUS_UNRESOLVED,
+                        "credential_reset_required",
                         run_mode_norm,
                         int(run_row_id),
                     ),
@@ -3880,6 +3964,9 @@ class JobScheduler:
                 )
             except Exception:
                 base["next_run_ts"] = None
+            warning = self._credential_reset_warning(base.get("credential_id"))
+            base["warning_code"] = (warning or {}).get("warning_code") or ""
+            base["warning_message"] = (warning or {}).get("warning_message") or ""
             return base
 
         def _normalize_targets_for_save(raw_targets: Any) -> List[Any]:
@@ -4052,6 +4139,7 @@ class JobScheduler:
             use_service_account_raw = data.get("use_service_account")
             use_service_account = 1 if (execution_context == "winrm" and (use_service_account_raw is None or bool(use_service_account_raw))) else 0
             enabled = int(bool(data.get("enabled", True)))
+            credential_warning = None
             if not name or not components or not targets:
                 return json.dumps({"error": "name, components, targets required"}), 400, {"Content-Type": "application/json"}
             target_error = _validate_targets_for_save(targets)
@@ -4060,6 +4148,9 @@ class JobScheduler:
             component_error = _validate_components_for_context(components, execution_context)
             if component_error:
                 return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
+            credential_warning = self._credential_reset_warning(credential_id)
+            if credential_warning and enabled:
+                enabled = 0
             now = _now_ts()
             components_json = json.dumps(components)
             targets_json = json.dumps(targets)
@@ -4158,7 +4249,10 @@ class JobScheduler:
                         500,
                         {"Content-Type": "application/json"},
                     )
-                return json.dumps({"job": _job_row_to_dict(row)}), 200, {"Content-Type": "application/json"}
+                payload = {"job": _job_row_to_dict(row)}
+                if credential_warning:
+                    payload.update(credential_warning)
+                return json.dumps(payload), 200, {"Content-Type": "application/json"}
             except Exception as e:
                 return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
 
@@ -4188,6 +4282,7 @@ class JobScheduler:
             data = self._json_body()
             fields: Dict[str, Any] = {}
             next_components: Optional[List[Any]] = None
+            credential_warning = None
             if "name" in data:
                 fields["name"] = (data.get("name") or "").strip()
             if "components" in data:
@@ -4233,22 +4328,34 @@ class JobScheduler:
             try:
                 conn = self._conn()
                 cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT credential_id, enabled, components_json, execution_context
+                      FROM scheduled_jobs
+                     WHERE id=?
+                    """,
+                    (job_id,),
+                )
+                current_row = cur.fetchone()
+                if not current_row:
+                    conn.close()
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 if "execution_context" in fields or next_components is not None:
-                    cur.execute("SELECT components_json, execution_context FROM scheduled_jobs WHERE id=?", (job_id,))
-                    existing_row = cur.fetchone()
-                    if not existing_row:
-                        conn.close()
-                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                     if next_components is None:
                         try:
-                            next_components = json.loads(existing_row[0] or "[]")
+                            next_components = json.loads(current_row[2] or "[]")
                         except Exception:
                             next_components = []
-                    effective_context = fields.get("execution_context") or existing_row[1] or "system"
+                    effective_context = fields.get("execution_context") or current_row[3] or "system"
                     component_error = _validate_components_for_context(next_components or [], str(effective_context))
                     if component_error:
                         conn.close()
                         return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
+                effective_credential_id = fields.get("credential_id", current_row[0])
+                effective_enabled = int(fields.get("enabled", current_row[1] or 0))
+                credential_warning = self._credential_reset_warning(effective_credential_id)
+                if credential_warning and effective_enabled:
+                    fields["enabled"] = 0
                 sets = ", ".join([f"{k}=?" for k in fields.keys()])
                 params = list(fields.values()) + [_now_ts(), job_id]
                 cur.execute(f"UPDATE scheduled_jobs SET {sets}, updated_at=? WHERE id=?", params)
@@ -4266,7 +4373,10 @@ class JobScheduler:
                 )
                 row = cur.fetchone()
                 conn.close()
-                return json.dumps({"job": _job_row_to_dict(row)}), 200, {"Content-Type": "application/json"}
+                payload = {"job": _job_row_to_dict(row)}
+                if credential_warning:
+                    payload.update(credential_warning)
+                return json.dumps(payload), 200, {"Content-Type": "application/json"}
             except Exception as e:
                 return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
 
@@ -4277,6 +4387,25 @@ class JobScheduler:
             try:
                 conn = self._conn()
                 cur = conn.cursor()
+                if enabled:
+                    cur.execute("SELECT credential_id FROM scheduled_jobs WHERE id=?", (job_id,))
+                    existing_row = cur.fetchone()
+                    if not existing_row:
+                        conn.close()
+                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                    credential_warning = self._credential_reset_warning(existing_row[0])
+                    if credential_warning:
+                        conn.close()
+                        return (
+                            json.dumps(
+                                {
+                                    "error": credential_warning["warning_code"],
+                                    "message": credential_warning["warning_message"],
+                                }
+                            ),
+                            409,
+                            {"Content-Type": "application/json"},
+                        )
                 cur.execute("UPDATE scheduled_jobs SET enabled=?, updated_at=? WHERE id=?", (enabled, _now_ts(), job_id))
                 if cur.rowcount == 0:
                     conn.close()

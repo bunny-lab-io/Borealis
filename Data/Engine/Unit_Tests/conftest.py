@@ -220,7 +220,9 @@ CREATE TABLE IF NOT EXISTS scheduled_job_run_targets (
 );
 CREATE TABLE IF NOT EXISTS github_token (
     id INTEGER PRIMARY KEY,
-    token TEXT
+    token TEXT,
+    reset_required INTEGER NOT NULL DEFAULT 0,
+    reset_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS aegis_cipher_state (
     id INTEGER PRIMARY KEY,

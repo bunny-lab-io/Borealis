@@ -1220,6 +1220,22 @@ export default function CreateJob({
     const target = execContext === "winrm" ? "winrm" : "ssh";
     return credentials.filter((cred) => String(cred.connection_type || "").toLowerCase() === target);
   }, [credentials, remoteExec, execContext]);
+  const credentialNeedsReset = useCallback((credential) => {
+    if (!credential) return false;
+    if (Boolean(credential.secret_reset_required)) return true;
+    const state = String(credential?.metadata?.aegis_secret_state || "").trim().toLowerCase();
+    const lostFields = Array.isArray(credential?.lost_secret_fields)
+      ? credential.lost_secret_fields
+      : credential?.metadata?.aegis_lost_secret_fields;
+    return state === "reset_required" && Array.isArray(lostFields) && lostFields.length > 0;
+  }, []);
+  const selectedCredentialRecord = useMemo(
+    () => filteredCredentials.find((cred) => String(cred.id) === String(selectedCredentialId)) || null,
+    [filteredCredentials, selectedCredentialId]
+  );
+  const selectedCredentialResetRequired = credentialNeedsReset(selectedCredentialRecord);
+  const selectedCredentialResetMessage =
+    "The credential associated with this scheduled job can no longer be decrypted due to the Aegis Cipher being reset, please update the credential with the data it is missing.";
 
   useEffect(() => {
     if (!remoteExec) {
@@ -3613,6 +3629,7 @@ const heroTiles = useMemo(() => {
                   {filteredCredentials.map((cred) => (
                     <MenuItem key={cred.id} value={String(cred.id)}>
                       {cred.name}
+                      {credentialNeedsReset(cred) ? " (Secret Re-Entry Required)" : ""}
                     </MenuItem>
                   ))}
                 </TextField>
@@ -3640,6 +3657,11 @@ const heroTiles = useMemo(() => {
                 {aegisLocked && remoteExec && !(execContext === "winrm" && useSvcAccount) && (
                   <Typography variant="body2" sx={{ color: "#f0c36d" }}>
                     Aegis Cipher is locked. Remote jobs can still be saved, but credential-backed execution will remain disabled until the cipher is entered from Access Management &gt; Credentials.
+                  </Typography>
+                )}
+                {!aegisLocked && remoteExec && !(execContext === "winrm" && useSvcAccount) && selectedCredentialResetRequired && (
+                  <Typography variant="body2" sx={{ color: "#f0c36d" }}>
+                    {selectedCredentialResetMessage}
                   </Typography>
                 )}
                 {!credentialLoading &&

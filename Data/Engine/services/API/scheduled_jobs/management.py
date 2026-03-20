@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, List
 
 from ...ansible import EngineAnsibleRunner
 from ...assemblies.service import AssemblyRuntimeService
+from ...aegis_cipher import AegisSecretResetRequiredError, credential_secret_reset_required
 from . import job_scheduler
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
@@ -314,6 +315,8 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
                 metadata = json.loads(row[12] or "{}")
             except Exception:
                 metadata = {}
+            if credential_secret_reset_required(metadata if isinstance(metadata, dict) else {}):
+                raise AegisSecretResetRequiredError(job_scheduler.CREDENTIAL_RESET_REQUIRED_MESSAGE)
             aegis = adapters.aegis_cipher_service
             return {
                 "id": int(row[0]),

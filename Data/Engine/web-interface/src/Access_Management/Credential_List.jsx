@@ -6,6 +6,7 @@ import {
   Menu,
   MenuItem,
   Paper,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
@@ -17,6 +18,7 @@ import VpnKeyIcon from "@mui/icons-material/VpnKeyRounded";
 import GitHubIcon from "@mui/icons-material/GitHub";
 import WifiIcon from "@mui/icons-material/Wifi";
 import ComputerIcon from "@mui/icons-material/Computer";
+import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import CredentialEditor from "./Credential_Editor.jsx";
@@ -48,6 +50,48 @@ const MAGIC_UI = {
   textBright: "#e2e8f0",
   textMuted: "#9aa3ad",
 };
+const RESET_WARNING_COLOR = "#f0c36d";
+
+function normalizeLostSecretFields(row) {
+  if (Array.isArray(row?.lost_secret_fields)) {
+    return row.lost_secret_fields
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+  }
+  const metadataFields = row?.metadata?.aegis_lost_secret_fields;
+  if (Array.isArray(metadataFields)) {
+    return metadataFields
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function rowRequiresSecretReset(row) {
+  if (!row) return false;
+  if (row.row_kind === "github_token") {
+    return Boolean(row.reset_required);
+  }
+  if (row.row_kind === "aegis") {
+    return false;
+  }
+  if (Boolean(row.secret_reset_required)) {
+    return true;
+  }
+  const state = String(row?.metadata?.aegis_secret_state || "").trim().toLowerCase();
+  return state === "reset_required" && normalizeLostSecretFields(row).length > 0;
+}
+
+function rowResetWarningMessage(row) {
+  if (!rowRequiresSecretReset(row)) return "";
+  if (row?.row_kind === "github_token") {
+    return (
+      row?.github_message ||
+      "Aegis Cipher reset removed the stored GitHub token. Re-enter the Personal Access Token to restore GitHub access."
+    );
+  }
+  return "Aegis Cipher reset removed one or more stored secret fields for this credential. Open it to re-enter the highlighted values.";
+}
 
 function formatTs(ts) {
   if (!ts) return "-";
@@ -129,6 +173,8 @@ function githubTokenRowFromStatus(githubTokenState, aegisStatus) {
     github_valid: verified,
     github_message: githubTokenState?.message || "",
     github_rate_limit: rateLimit,
+    reset_required: Boolean(githubTokenState?.reset_required),
+    reset_at: Number(githubTokenState?.reset_at) || 0,
   };
 }
 
@@ -241,6 +287,13 @@ export default function CredentialList({
         comparator: nameComparator,
         cellRenderer: (params) => {
           const row = params.data || {};
+          const resetRequired = rowRequiresSecretReset(row);
+          const resetMessage = rowResetWarningMessage(row);
+          const warningGlyph = resetRequired ? (
+            <Tooltip title={resetMessage} arrow>
+              <WarningAmberRoundedIcon fontSize="small" sx={{ color: RESET_WARNING_COLOR }} />
+            </Tooltip>
+          ) : null;
           if (row.row_kind === "aegis") {
             return (
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.9, fontWeight: 600 }}>
@@ -254,6 +307,7 @@ export default function CredentialList({
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.9, fontWeight: 600 }}>
                 <GitHubIcon fontSize="small" sx={{ color: "#7db7ff" }} />
                 <Box component="span">{row.name || "GitHub API Token"}</Box>
+                {warningGlyph}
               </Box>
             );
           }
@@ -262,10 +316,16 @@ export default function CredentialList({
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.9 }}>
                 <ComputerIcon fontSize="small" sx={{ color: "#7db7ff" }} />
                 <Box component="span">{row.name || "-"}</Box>
+                {warningGlyph}
               </Box>
             );
           }
-          return params.value || "-";
+          return (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.9 }}>
+              <Box component="span">{params.value || "-"}</Box>
+              {warningGlyph}
+            </Box>
+          );
         }
       },
       {
@@ -388,7 +448,7 @@ export default function CredentialList({
 
   useEffect(() => {
     fetchCredentials();
-  }, [fetchCredentials]);
+  }, [fetchCredentials, aegisStatus?.configured, aegisStatus?.locked]);
 
   const handleCreate = useCallback(() => {
     if (!canMutateCredentials) return;
@@ -446,6 +506,8 @@ export default function CredentialList({
 
   const banners = useMemo(() => {
     const next = [];
+    const resetCredentialCount = rows.filter((row) => rowRequiresSecretReset(row)).length;
+    const githubResetRequired = rowRequiresSecretReset(githubTokenRow);
     if (!aegisStatus?.configured) {
       next.push({
         severity: "warning",
@@ -457,6 +519,19 @@ export default function CredentialList({
         severity: "warning",
         message:
           "Aegis Cipher is locked. Credential metadata remains visible, but credential changes are disabled until the cipher is entered.",
+      });
+    }
+    if (resetCredentialCount || githubResetRequired) {
+      const credentialSummary =
+        resetCredentialCount > 0
+          ? `${resetCredentialCount} credential${resetCredentialCount === 1 ? "" : "s"}`
+          : "";
+      const githubSummary = githubResetRequired ? "the GitHub API token" : "";
+      const subjects = [credentialSummary, githubSummary].filter(Boolean).join(" and ");
+      next.push({
+        severity: "warning",
+        message:
+          `Aegis Cipher was force reset. ${subjects} lost stored secret material and must be updated before dependent jobs can be safely re-enabled.`,
       });
     }
     if (!error) return next;
@@ -472,7 +547,7 @@ export default function CredentialList({
       message: `Unable to load credentials: ${error}`,
     });
     return next;
-  }, [aegisStatus, error]);
+  }, [aegisStatus, error, githubTokenRow, rows]);
 
   useEffect(() => {
     const api = gridApiRef.current;
@@ -680,6 +755,11 @@ export default function CredentialList({
             ) : null}
             {aegisStatus?.configured ? (
               <MenuItem onClick={() => handleAegisMenuAction("rotate")}>Rotate Aegis Cipher</MenuItem>
+            ) : null}
+            {aegisStatus?.configured ? (
+              <MenuItem onClick={() => handleAegisMenuAction("force_reset")} sx={{ color: "#ff9aa5" }}>
+                Force Reset Aegis Cipher
+              </MenuItem>
             ) : null}
           </>
         ) : menuRow?.row_kind === "github_token" ? (
