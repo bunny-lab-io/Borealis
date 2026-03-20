@@ -412,20 +412,24 @@ export default function CredentialList({
     []
   );
 
+  const sortCredentialRows = useCallback(
+    (items) => [...items].sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""))),
+    []
+  );
+
   const fetchCredentials = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
       const [credentialsResp, githubResp] = await Promise.all([
-        fetch("/api/credentials"),
-        fetch("/api/github/token"),
+        fetch("/api/credentials", { cache: "no-store", credentials: "include" }),
+        fetch("/api/github/token", { cache: "no-store", credentials: "include" }),
       ]);
       const data = await credentialsResp.json().catch(() => ({}));
       if (!credentialsResp.ok) throw new Error(data?.message || data?.error || `HTTP ${credentialsResp.status}`);
       const list = Array.isArray(data?.credentials) ? data.credentials : [];
       const githubData = await githubResp.json().catch(() => ({}));
-      list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
-      setRows(list);
+      setRows(sortCredentialRows(list));
       setGithubTokenState(
         githubResp.ok
           ? githubData
@@ -444,7 +448,7 @@ export default function CredentialList({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sortCredentialRows]);
 
   useEffect(() => {
     fetchCredentials();
@@ -480,7 +484,10 @@ export default function CredentialList({
     if (!deleteTarget?.id) return;
     setDeleteBusy(true);
     try {
-      const resp = await fetch(`/api/credentials/${deleteTarget.id}`, { method: "DELETE" });
+      const resp = await fetch(`/api/credentials/${deleteTarget.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
@@ -494,7 +501,15 @@ export default function CredentialList({
     }
   };
 
-  const handleEditorSaved = async () => {
+  const handleEditorSaved = async (savedCredential) => {
+    if (savedCredential?.id) {
+      setRows((prev) => {
+        const next = prev.some((row) => String(row?.id) === String(savedCredential.id))
+          ? prev.map((row) => (String(row?.id) === String(savedCredential.id) ? { ...row, ...savedCredential } : row))
+          : [...prev, savedCredential];
+        return sortCredentialRows(next);
+      });
+    }
     setEditorOpen(false);
     setEditingCredential(null);
     await fetchCredentials();

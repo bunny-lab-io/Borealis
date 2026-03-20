@@ -213,7 +213,7 @@ export default function CredentialEditor({
     let canceled = false;
     (async () => {
       try {
-        const resp = await fetch("/api/sites");
+        const resp = await fetch("/api/sites", { cache: "no-store", credentials: "include" });
         if (!resp.ok) return;
         const data = await resp.json();
         if (canceled) return;
@@ -238,6 +238,7 @@ export default function CredentialEditor({
 
   useEffect(() => {
     if (!open) return;
+    let canceled = false;
     setError("");
     setPasswordDirty(false);
     setPrivateKeyDirty(false);
@@ -256,9 +257,13 @@ export default function CredentialEditor({
       next.connection_type = "github";
       next.username = "";
       next.password = credential?.token || "";
-      setForm(next);
-      setFetchingDetail(false);
-      return;
+      if (!canceled) {
+        setForm(next);
+        setFetchingDetail(false);
+      }
+      return () => {
+        canceled = true;
+      };
     }
     if (isEdit && credentialId) {
       const applyData = (detail) => {
@@ -271,30 +276,39 @@ export default function CredentialEditor({
         next.username = detail?.username || "";
         next.become_method = (detail?.become_method || "").toLowerCase();
         next.become_username = detail?.become_username || "";
-        setForm(next);
+        if (!canceled) {
+          setForm(next);
+        }
       };
 
-      if (credential?.name) {
+      if (credential) {
         applyData(credential);
-      } else {
-        setFetchingDetail(true);
-        (async () => {
-          try {
-            const resp = await fetch(`/api/credentials/${credentialId}`);
-            if (resp.ok) {
-              const data = await resp.json();
-              applyData(data?.credential || {});
-            }
-          } catch {
-            /* ignore */
-          } finally {
+      }
+      setFetchingDetail(true);
+      (async () => {
+        try {
+          const resp = await fetch(`/api/credentials/${credentialId}`, {
+            cache: "no-store",
+            credentials: "include",
+          });
+          if (!resp.ok) return;
+          const data = await resp.json();
+          applyData(data?.credential || {});
+        } catch {
+          /* ignore */
+        } finally {
+          if (!canceled) {
             setFetchingDetail(false);
           }
-        })();
-      }
+        }
+      })();
     } else {
       setForm(emptyForm());
+      setFetchingDetail(false);
     }
+    return () => {
+      canceled = true;
+    };
   }, [open, isEdit, credentialId, credential, isGitHubToken]);
 
   const currentCredentialFlags = useMemo(() => ({
@@ -405,6 +419,7 @@ export default function CredentialEditor({
         {
           method: isGitHubToken ? "POST" : isEdit ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify(isGitHubToken ? { token: form.password } : buildPayload())
         }
       );
