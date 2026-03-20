@@ -67,6 +67,85 @@ const iconFontFamily = '"Quartz Regular"';
 const BOREALIS_BLUE = "#58a6ff";
 const DARKER_GRAY = "#9aa3ad";
 const PAGE_SIZE = 25;
+const ASSEMBLY_TYPE_FILTER_OPTIONS = [
+  { key: "applications", label: "Applications", match: "applications" },
+  { key: "playbooks", label: "Playbooks", match: "playbooks" },
+  { key: "scripts", label: "Scripts", match: "scripts" },
+  { key: "workflows", label: "Workflows", match: "workflows" },
+];
+const ASSEMBLY_OS_FILTER_OPTIONS = [
+  { key: "windows", label: "Windows", match: "windows" },
+  { key: "linux", label: "Linux", match: "linux" },
+  { key: "macos", label: "MacOS", match: "macos" },
+];
+
+function CountSliderGroup({ options, activeKey, counts, onChange }) {
+  return (
+    <Box
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.75,
+        background: "linear-gradient(120deg, rgba(8,12,24,0.92), rgba(4,7,17,0.85))",
+        borderRadius: 999,
+        border: "1px solid rgba(148,163,184,0.35)",
+        boxShadow: "0 18px 48px rgba(2,8,23,0.45)",
+        padding: "4px",
+      }}
+    >
+      {options.map((option) => {
+        const active = activeKey === option.key;
+        return (
+          <Box
+            key={option.key}
+            component="button"
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(active ? "" : option.key)}
+            sx={{
+              border: "none",
+              outline: "none",
+              background: active ? "linear-gradient(135deg,#7dd3fc,#c084fc)" : "transparent",
+              color: active ? "#041224" : "#cbd5e1",
+              fontWeight: 600,
+              fontSize: 13,
+              px: 2,
+              py: 0.5,
+              borderRadius: 999,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 0.6,
+              boxShadow: active ? "0 0 18px rgba(125,211,252,0.35)" : "none",
+              transition: "all 0.2s ease",
+            }}
+          >
+            <Box component="span" sx={{ userSelect: "none" }}>
+              {option.label}
+            </Box>
+            <Box
+              component="span"
+              sx={{
+                minWidth: 28,
+                textAlign: "center",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 600,
+                px: 0.75,
+                py: 0.1,
+                color: active ? "#041224" : "#94a3b8",
+                backgroundColor: active ? "rgba(4,18,36,0.2)" : "rgba(15,23,42,0.65)",
+                border: active ? "1px solid rgba(4,18,36,0.3)" : "1px solid rgba(148,163,184,0.3)",
+              }}
+            >
+              {counts?.[option.key] ?? 0}
+            </Box>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
 
 const SELECT_BASE_SX = {
   "& .MuiOutlinedInput-root": {
@@ -247,6 +326,21 @@ const formatPathDisplay = (folderPath) => {
   return segments.join(" \u203A ");
 };
 
+const buildPathSearchValue = (folderPath) => {
+  const rawPath = String(folderPath || "").replace(/\\/g, "/");
+  const formattedPath = formatPathDisplay(rawPath);
+  return [rawPath, formattedPath]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+};
+
+const buildFilterFlags = (pathSearchValue, options) =>
+  options.reduce((acc, option) => {
+    acc[option.key] = pathSearchValue.includes(String(option.match || "").toLowerCase());
+    return acc;
+  }, {});
+
 const toCount = (value) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return 0;
@@ -293,6 +387,9 @@ const normalizeRow = (item, queueEntry) => {
   const queueRecord = queueEntry || null;
   const isDirty = Boolean(item.is_dirty);
   const pathDisplay = formatPathDisplay(folder);
+  const pathSearchValue = buildPathSearchValue(folder);
+  const assemblyTypeFlags = buildFilterFlags(pathSearchValue, ASSEMBLY_TYPE_FILTER_OPTIONS);
+  const targetOsFlags = buildFilterFlags(pathSearchValue, ASSEMBLY_OS_FILTER_OPTIONS);
 
   return {
     id: assemblyGuid || `${typeKey}:${displayName}`,
@@ -307,6 +404,9 @@ const normalizeRow = (item, queueEntry) => {
     fileName,
     folder,
     pathDisplay,
+    pathSearchValue,
+    assemblyTypeFlags,
+    targetOsFlags,
     domain,
     domainLabel: domainMeta.label,
     isDirty,
@@ -391,6 +491,8 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   const [updatingOfficialGuid, setUpdatingOfficialGuid] = useState("");
   const [updatingAllOfficial, setUpdatingAllOfficial] = useState(false);
   const [checkingForAuroraUpdates, setCheckingForAuroraUpdates] = useState(false);
+  const [assemblyTypeFilterMode, setAssemblyTypeFilterMode] = useState("");
+  const [assemblyOsFilterMode, setAssemblyOsFilterMode] = useState("");
   const isAdmin = (userRole || "").toLowerCase() === "admin";
   const sendNotification = useCallback(async (message) => {
     if (!message) return;
@@ -700,6 +802,87 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       setUpdatingOfficialGuid("");
     }
   }, [catalogStatus.repoUrl, fetchAssemblies, officialUpdateDialog, sendNotification]);
+
+  const typeScopedRows = useMemo(() => {
+    if (!assemblyOsFilterMode) return rows;
+    return rows.filter((row) => row?.targetOsFlags?.[assemblyOsFilterMode]);
+  }, [assemblyOsFilterMode, rows]);
+
+  const osScopedRows = useMemo(() => {
+    if (!assemblyTypeFilterMode) return rows;
+    return rows.filter((row) => row?.assemblyTypeFlags?.[assemblyTypeFilterMode]);
+  }, [assemblyTypeFilterMode, rows]);
+
+  const assemblyTypeCounts = useMemo(() => {
+    const totals = ASSEMBLY_TYPE_FILTER_OPTIONS.reduce((acc, option) => {
+      acc[option.key] = 0;
+      return acc;
+    }, {});
+    typeScopedRows.forEach((row) => {
+      ASSEMBLY_TYPE_FILTER_OPTIONS.forEach((option) => {
+        if (row?.assemblyTypeFlags?.[option.key]) {
+          totals[option.key] += 1;
+        }
+      });
+    });
+    return totals;
+  }, [typeScopedRows]);
+
+  const assemblyOsCounts = useMemo(() => {
+    const totals = ASSEMBLY_OS_FILTER_OPTIONS.reduce((acc, option) => {
+      acc[option.key] = 0;
+      return acc;
+    }, {});
+    osScopedRows.forEach((row) => {
+      ASSEMBLY_OS_FILTER_OPTIONS.forEach((option) => {
+        if (row?.targetOsFlags?.[option.key]) {
+          totals[option.key] += 1;
+        }
+      });
+    });
+    return totals;
+  }, [osScopedRows]);
+
+  const filteredRows = useMemo(
+    () =>
+      rows.filter((row) => {
+        if (assemblyTypeFilterMode && !row?.assemblyTypeFlags?.[assemblyTypeFilterMode]) {
+          return false;
+        }
+        if (assemblyOsFilterMode && !row?.targetOsFlags?.[assemblyOsFilterMode]) {
+          return false;
+        }
+        return true;
+      }),
+    [assemblyOsFilterMode, assemblyTypeFilterMode, rows],
+  );
+
+  const activeAssemblyTypeLabel = useMemo(() => {
+    const match = ASSEMBLY_TYPE_FILTER_OPTIONS.find((option) => option.key === assemblyTypeFilterMode);
+    return match ? match.label : "";
+  }, [assemblyTypeFilterMode]);
+
+  const activeAssemblyOsLabel = useMemo(() => {
+    const match = ASSEMBLY_OS_FILTER_OPTIONS.find((option) => option.key === assemblyOsFilterMode);
+    return match ? match.label : "";
+  }, [assemblyOsFilterMode]);
+
+  const filterSummary = useMemo(() => {
+    const count = filteredRows.length;
+    const assemblyLabel = count === 1 ? "assembly" : "assemblies";
+    const activeFilters = [activeAssemblyTypeLabel, activeAssemblyOsLabel].filter(Boolean);
+    if (!activeFilters.length) {
+      return `Showing ${count} ${assemblyLabel}`;
+    }
+    return `Showing ${count} ${assemblyLabel} for ${activeFilters.join(" / ")}`;
+  }, [activeAssemblyOsLabel, activeAssemblyTypeLabel, filteredRows.length]);
+
+  useEffect(() => {
+    const api = gridRef.current?.api;
+    if (!api) return;
+    api.paginationGoToFirstPage();
+  }, [assemblyOsFilterMode, assemblyTypeFilterMode]);
+
   const gridContext = useMemo(
     () => ({
       openRow,
@@ -953,13 +1136,82 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         <MenuItem onClick={() => handleNewAssemblyOption("workflow")}>Workflow</MenuItem>
         <MenuItem onClick={() => handleNewAssemblyOption("ansible")}>Ansible Playbook</MenuItem>
       </Menu>
-      <PageBodyFrame variant="grid">
+      <PageBodyFrame
+        variant="grid_with_stack"
+        stack={(
+          <>
+            {error ? (
+              <Typography variant="body2" sx={{ color: "#ff8a8a" }}>
+                {error}
+              </Typography>
+            ) : null}
+            <Box
+              sx={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 1.5,
+              }}
+            >
+              <Box
+                sx={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "flex-start",
+                  columnGap: 1,
+                  rowGap: 1,
+                }}
+              >
+                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
+                  <Typography
+                    component="span"
+                    sx={{
+                      color: BOREALIS_BLUE,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      lineHeight: 1.1,
+                      pl: 1,
+                    }}
+                  >
+                    Assembly Type
+                  </Typography>
+                  <CountSliderGroup
+                    options={ASSEMBLY_TYPE_FILTER_OPTIONS}
+                    activeKey={assemblyTypeFilterMode}
+                    counts={assemblyTypeCounts}
+                    onChange={setAssemblyTypeFilterMode}
+                  />
+                </Box>
+                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
+                  <Typography
+                    component="span"
+                    sx={{
+                      color: BOREALIS_BLUE,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      lineHeight: 1.1,
+                      pl: 1,
+                    }}
+                  >
+                    Operating System
+                  </Typography>
+                  <CountSliderGroup
+                    options={ASSEMBLY_OS_FILTER_OPTIONS}
+                    activeKey={assemblyOsFilterMode}
+                    counts={assemblyOsCounts}
+                    onChange={setAssemblyOsFilterMode}
+                  />
+                </Box>
+              </Box>
+              <Typography variant="body2" sx={{ color: DARKER_GRAY, ml: "auto" }}>
+                {filterSummary}
+              </Typography>
+            </Box>
+          </>
+        )}
+      >
         <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
-          {error ? (
-            <Typography variant="body2" sx={{ color: "#ff8a8a", mb: 1.5 }}>
-              {error}
-            </Typography>
-          ) : null}
           <Box
             className={gridWrapperClass}
             sx={{
@@ -1009,7 +1261,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
           >
             <AgGridReact
               ref={gridRef}
-              rowData={rows}
+              rowData={filteredRows}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
               context={gridContext}
