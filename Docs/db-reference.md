@@ -311,7 +311,7 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - A force reset deletes the singleton row after protected secret material is destroyed, allowing a fresh Aegis setup to start from a clean state.
 
 #### `ansible_play_recaps`
-- Status: Active for Engine-local scheduled Ansible execution; broader API/UI surfacing is still incomplete.
+- Status: Active for Engine-side scheduled Ansible execution; broader API/UI surfacing is still incomplete.
 - Purpose: Intended run recap storage for Ansible executions.
 - Columns: `id`, `run_id`, `hostname`, `agent_id`, `playbook_path`, `playbook_name`, `scheduled_job_id`, `scheduled_run_id`, `activity_job_id`, `status`, `recap_text`, `recap_json`, `started_ts`, `finished_ts`, `created_at`, `updated_at`.
 - Constraints and indexes:
@@ -320,7 +320,7 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - `idx_ansible_recaps_host_created` on `(hostname, created_at)`.
 - `idx_ansible_recaps_status` on `status`.
 - Used by:
-- Engine-local scheduled Ansible runs executed from the Linux Engine.
+- Engine-side scheduled Ansible runs executed from the Linux Engine.
 - Future recap/report APIs and UI views.
 
 #### `agent_service_account`

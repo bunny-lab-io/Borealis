@@ -65,8 +65,8 @@ if (!window.BorealisUpdateRate) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Load node modules dynamically
-const modules = import.meta.glob('./Nodes/**/*.jsx', { eager: true });
+// Load node modules dynamically from the actual lowercase source tree.
+const modules = import.meta.glob("./nodes/**/*.jsx", { eager: true });
 const nodeTypes = {};
 const categorizedNodes = {};
 Object.entries(modules).forEach(([path, mod]) => {
@@ -74,12 +74,18 @@ Object.entries(modules).forEach(([path, mod]) => {
   if (!comp) return;
   const { type, component } = comp;
   if (!type || !component) return;
-  const parts = path.replace('./Nodes/', '').split('/');
+  const parts = path.replace("./nodes/", "").split("/");
   const category = parts[0];
   if (!categorizedNodes[category]) categorizedNodes[category] = [];
   categorizedNodes[category].push(comp);
   nodeTypes[type] = component;
 });
+if (!Object.keys(nodeTypes).length) {
+  console.warn(
+    "[Flow Editor] No node modules were loaded from ./nodes/**/*.jsx. " +
+      "Check the node source tree and import.meta.glob path casing."
+  );
+}
 
 const darkTheme = createTheme({
   palette: {

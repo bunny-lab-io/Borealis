@@ -16,8 +16,8 @@ import LockIcon from "@mui/icons-material/Lock";
 import LockOpenIcon from "@mui/icons-material/LockOpenRounded";
 import VpnKeyIcon from "@mui/icons-material/VpnKeyRounded";
 import GitHubIcon from "@mui/icons-material/GitHub";
-import WifiIcon from "@mui/icons-material/Wifi";
 import ComputerIcon from "@mui/icons-material/Computer";
+import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
@@ -130,8 +130,8 @@ function connectionIcon(connection) {
   if (val === "aegis_unlocked") return <LockOpenIcon fontSize="small" sx={{ mr: 0.6, color: "#7dffac" }} />;
   if (val === "github_verified") return <GitHubIcon fontSize="small" sx={{ mr: 0.6, color: "#7dffac" }} />;
   if (val === "github_invalid") return <GitHubIcon fontSize="small" sx={{ mr: 0.6, color: "#ff8080" }} />;
-  if (val === "ssh") return <LockIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
-  if (val === "winrm") return <WifiIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
+  if (val === "ssh") return <TerminalRoundedIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
+  if (val === "winrm") return <TerminalRoundedIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
   return <ComputerIcon fontSize="small" sx={{ mr: 0.6, color: "#58a6ff" }} />;
 }
 

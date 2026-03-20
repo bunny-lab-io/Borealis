@@ -12,7 +12,7 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
 
 ## Node Registration Pipeline
 - Node modules are auto-loaded in `Data/Engine/web-interface/src/App.jsx` via:
-  `import.meta.glob('./Nodes/**/*.jsx', { eager: true })`.
+  `import.meta.glob('./nodes/**/*.jsx', { eager: true })`.
 - Each module default-exports a descriptor object that includes:
   - `type` (unique node type string)
   - `component` (React component)
@@ -77,6 +77,6 @@ None. This is a UI-only domain.
 - Keep job flow nodes separate from the general node catalog to avoid accidental crossover.
 
 ### Common gotchas
-- Folder path casing is `src/nodes/` in the repo, but `App.jsx` imports `./Nodes/` (Windows is case-insensitive).
+- Folder path casing matters. The source tree is `src/nodes/`, and `App.jsx` must import `./nodes/**/*.jsx` to work on Linux as well as Windows.
 - Ensure each node descriptor has a unique `type` or React Flow will mis-render.
 - If the sidebar does not show the new node, verify the export default object has `type` and `component`.

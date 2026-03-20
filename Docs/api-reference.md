@@ -99,6 +99,8 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `DELETE /api/device/activity/<hostname>` (Token Authenticated) - clear activity history.
 - `GET /api/device/activity/job/<int:job_id>` (Token Authenticated) - activity record details.
 
+Playbook execution currently happens through scheduled jobs with `execution_context` set to `local`, `ssh`, or `winrm`; the dedicated Ansible quick-run endpoint is still pending.
+
 ### Scheduled Jobs
 - `GET /api/scheduled_jobs` (Token Authenticated) - list scheduled jobs.
 - `POST /api/scheduled_jobs` (Token Authenticated) - create scheduled job.

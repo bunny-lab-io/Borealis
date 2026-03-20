@@ -98,7 +98,7 @@ Supported schedule types (from the scheduler core):
   - `scheduled_job_run_id`
   - `scheduled_ts`
 - `quick_job_result` updates `scheduled_job_runs` and `activity_history`.
-- `execution_context = local` is Engine-side only and currently intended for localhost Ansible validation on the Linux Engine.
+- `execution_context = local` is Engine-side only and runs the playbook directly on the Linux Engine against the localhost-style Engine target.
 - `execution_context = ssh` and `execution_context = winrm` now run from the Linux Engine, synthesize per-run inventories, and target remote devices over the managed WireGuard network.
 - Shared Ansible occurrences write one `scheduled_job_runs` row per playbook component and freeze one deduplicated target snapshot per resolved device in `scheduled_job_run_targets`.
 

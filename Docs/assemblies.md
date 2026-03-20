@@ -42,10 +42,10 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - Payloads near the hard ceiling are best-effort and depend on available Engine memory/CPU during JSON parse and DB write.
 
 ## Ansible Status (Current)
-- The Linux Engine now packages an Ansible control-node runtime inside the Engine venv.
-- Scheduled jobs support Engine-local localhost playbook testing with `execution_context = local`.
+- The Linux Engine packages an Ansible control-node runtime inside the Engine venv.
+- Scheduled jobs support Engine-side playbook execution for `execution_context = local`, `ssh`, and `winrm`.
+- Remote SSH/WinRM runs synthesize per-run inventories from Borealis device state, credentials, and active WireGuard sessions.
 - Ansible quick-run still exists as an endpoint placeholder and is not implemented yet.
-- Remote SSH/WinRM targeting remains incomplete until Borealis grows Engine-side inventory synthesis, WireGuard-aware target resolution, and credential plumbing for those paths.
 
 ## API Endpoints
 - `GET /api/assemblies` (Token Authenticated) - list assemblies.
@@ -175,8 +175,8 @@ psql "$BOREALIS_DATABASE_URL" -c "\copy (
 ```
 
 ### Known limitations
-- Ansible quick-run is not implemented in the Engine runtime.
-- Remote SSH/WinRM playbook execution is not finished; localhost scheduler execution is the currently supported Engine-side path.
+- Ansible quick-run is not implemented in the Engine runtime; scheduled jobs are the supported playbook execution path.
+- Recap/report APIs and some recap-focused UI surfaces are still being fleshed out around the working Engine-side runner.
 - Linux agent support is incomplete; PowerShell scripts are Windows-first.
 
 ### Touch points to remember

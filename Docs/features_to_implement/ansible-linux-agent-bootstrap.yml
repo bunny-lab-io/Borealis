@@ -1,0 +1,70 @@
+---
+- name: Bootstrap Borealis Linux agent
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    bootstrap_runtime_dir: /run/borealis-agent-bootstrap
+    bootstrap_runner: "{{ bootstrap_runtime_dir }}/runner.sh"
+    bootstrap_log: "{{ bootstrap_runtime_dir }}/bootstrap.log"
+  tasks:
+    - name: Create ephemeral Borealis bootstrap runtime directory
+      ansible.builtin.file:
+        path: "{{ bootstrap_runtime_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Stage detached Borealis bootstrap runner
+      ansible.builtin.copy:
+        dest: "{{ bootstrap_runner }}"
+        mode: "0700"
+        content: |
+          #!/usr/bin/env bash
+          set -o nounset
+          set -o pipefail
+
+          runner_path={{ bootstrap_runner | quote }}
+          bootstrap_log={{ bootstrap_log | quote }}
+          trap 'rm -f "$runner_path"' EXIT
+
+          : >"$bootstrap_log"
+          exec >>{{ bootstrap_log | quote }} 2>&1
+
+          echo "[$(date -Is)] Starting Borealis bootstrap."
+          export BOREALIS_SERVER_URL={{ server_url | quote }}
+          export BOREALIS_ENROLLMENT_CODE={{ enrollment_code | quote }}
+
+          if curl -fsSL {{ bootstrap_url | quote }} | bash -s -- --agent; then
+            rc=0
+          else
+            rc=$?
+          fi
+
+          echo "[$(date -Is)] Borealis bootstrap exited with rc=${rc}."
+          exit "${rc}"
+      no_log: true
+
+    - name: Launch detached Borealis bootstrap runner
+      ansible.builtin.shell: |
+        set -o errexit
+        set -o nounset
+        set -o pipefail
+
+        if command -v systemd-run >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+          unit_name="borealis-agent-bootstrap-$(date +%s)"
+          systemd-run \
+            --unit "${unit_name}" \
+            --description "Borealis agent bootstrap" \
+            /bin/bash {{ bootstrap_runner | quote }}
+        else
+          nohup /bin/bash {{ bootstrap_runner | quote }} </dev/null >/dev/null 2>&1 &
+        fi
+      args:
+        executable: /bin/bash
+      async: 45
+      poll: 0
+      changed_when: true
+
+    - name: Report detached bootstrap log path
+      ansible.builtin.debug:
+        msg: "Detached Borealis bootstrap launched. Check {{ bootstrap_log }} on the target host for progress logs."
