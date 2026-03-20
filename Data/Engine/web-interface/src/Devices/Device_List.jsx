@@ -1915,10 +1915,6 @@ export default function DeviceList({
             },
             "& .ag-row": {
               borderColor: "rgba(255,255,255,0.04)",
-              transition: "background 0.2s ease",
-            },
-            "& .ag-row:nth-of-type(even)": {
-              backgroundColor: "rgba(15,23,42,0.45)",
             },
             "& .ag-row-hover": {
               backgroundColor: "rgba(73,156,196,0.2) !important",
@@ -1954,6 +1950,18 @@ export default function DeviceList({
             "& .status-pill-cell .ag-cell-value > span": {
               margin: 0,
             },
+          }}
+          style={{
+            "--ag-background-color": "#070b1a",
+            "--ag-foreground-color": "#f4f7ff",
+            "--ag-header-background-color": "#0f172a",
+            "--ag-header-foreground-color": "#cfe0ff",
+            "--ag-odd-row-background-color": "rgba(15,23,42,0.45)",
+            "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+            "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+            "--ag-border-color": "rgba(125,183,255,0.18)",
+            "--ag-row-border-color": "rgba(125,183,255,0.14)",
+            "--ag-border-radius": "8px",
           }}
         >
             <AgGridReact
