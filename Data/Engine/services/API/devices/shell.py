@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from .tunnel import _get_tunnel_service, _resolve_requested_agent_id
 
@@ -86,6 +87,7 @@ def register_shell(app, adapters: "EngineServiceAdapters") -> None:
     blueprint = Blueprint("vpn_shell", __name__)
     logger = adapters.context.logger.getChild("vpn_shell.api")
     service_log = adapters.service_log
+    site_access = UserSiteAccessManager(adapters.db_conn_factory, logger=logger)
 
     def _service_log_event(message: str, *, level: str = "INFO") -> None:
         if not callable(service_log):
@@ -116,6 +118,8 @@ def register_shell(app, adapters: "EngineServiceAdapters") -> None:
         if not requested_agent_id:
             return jsonify({"error": "agent_id_required"}), 400
         agent_id = _resolve_requested_agent_id(adapters, requested_agent_id)
+        if not site_access.user_can_access_agent_id(user, agent_id):
+            return jsonify({"error": "not found"}), 404
 
         try:
             tunnel_service = _get_tunnel_service(adapters)
@@ -179,10 +183,13 @@ def register_shell(app, adapters: "EngineServiceAdapters") -> None:
 
         if not agent_id:
             return jsonify({"error": "agent_id_required"}), 400
+        resolved_agent_id = _resolve_requested_agent_id(adapters, agent_id)
+        if not site_access.user_can_access_agent_id(_current_user(app) or {}, resolved_agent_id):
+            return jsonify({"error": "not found"}), 404
 
         _service_log_event(
             "vpn_shell_disconnect_request agent_id={0} operator={1} reason={2} remote={3}".format(
-                agent_id,
+                resolved_agent_id,
                 operator_id or "-",
                 reason or "-",
                 _request_remote() or "-",

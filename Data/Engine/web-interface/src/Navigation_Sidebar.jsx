@@ -46,6 +46,7 @@ const NAV_ITEM_ALIASES = {
   assemblies: ["scripts", "ansible_editor", "workflow-editor", "workflows"],
   jobs: ["create_job"],
   filters: ["filter_editor"],
+  access_users: ["site_assignment"],
 };
 
 function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
@@ -84,6 +85,7 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
       access: [
         "access_credentials",
         "access_users",
+        "site_assignment",
       ].includes(currentPage),
       admin: ["server_info", "log_management"].includes(currentPage),
       developer: ["page_template"].includes(currentPage),

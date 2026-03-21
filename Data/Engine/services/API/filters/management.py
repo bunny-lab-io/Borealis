@@ -25,7 +25,7 @@ from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from flask import Blueprint, Flask, jsonify, request
 
-from Data.Engine.services.auth.context import RequestAuthContext
+from Data.Engine.services.auth import RequestAuthContext, UserSiteAccessManager
 from Data.Engine.services.filters.matcher import (
     DeviceFilterMatcher,
     filter_metadata,
@@ -39,6 +39,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Register device filter endpoints backed by the Engine database."""
 
     matcher = DeviceFilterMatcher(db_conn_factory=adapters.db_conn_factory)
+    site_access = UserSiteAccessManager(adapters.db_conn_factory, logger=adapters.context.logger)
     auth_context = RequestAuthContext(
         app=app,
         dev_mode_manager=adapters.dev_mode_manager,
@@ -53,6 +54,60 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
 
     def _require_user() -> tuple[Optional[Dict[str, Any]], Optional[tuple[Dict[str, Any], int]]]:
         return auth_context.require_user()
+
+    def _load_all_site_ids() -> set[int]:
+        conn = _conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM sites")
+            return {
+                int(row[0])
+                for row in cur.fetchall()
+                if row and row[0] is not None
+            }
+        finally:
+            conn.close()
+
+    def _effective_filter_site_ids(
+        record: Dict[str, Any],
+        *,
+        all_site_ids: Optional[set[int]] = None,
+    ) -> set[int]:
+        site_mode = str(record.get("site_mode") or "global").strip().lower()
+        configured_site_ids = {
+            int(value)
+            for value in (record.get("site_ids") or [])
+            if value is not None
+        }
+        if site_mode == "specific_sites":
+            return configured_site_ids
+        current_site_ids = set(all_site_ids) if all_site_ids is not None else _load_all_site_ids()
+        if site_mode == "global_exclusions":
+            return current_site_ids.difference(configured_site_ids)
+        return current_site_ids
+
+    def _filter_visible_to_user(
+        record: Dict[str, Any],
+        user: Optional[Dict[str, Any]],
+        *,
+        all_site_ids: Optional[set[int]] = None,
+    ) -> bool:
+        allowed_site_ids = site_access.site_ids_for_user(user)
+        if allowed_site_ids is None:
+            return True
+        effective_site_ids = _effective_filter_site_ids(record, all_site_ids=all_site_ids)
+        return effective_site_ids.issubset(allowed_site_ids)
+
+    def _validate_filter_scope(record: Dict[str, Any], user: Optional[Dict[str, Any]]) -> Optional[tuple[Dict[str, Any], int]]:
+        if _filter_visible_to_user(record, user):
+            return None
+        return (
+            {
+                "error": "out_of_scope_sites",
+                "message": "One or more selected sites is outside your assigned site scope.",
+            },
+            403,
+        )
 
     def _trim_single_line(value: Any) -> str:
         text = str(value or "").strip()
@@ -143,7 +198,11 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         finally:
             conn.close()
 
-    def _usage_for_filters(filter_ids: Iterable[int]) -> Dict[int, Dict[str, Any]]:
+    def _usage_for_filters(
+        filter_ids: Iterable[int],
+        *,
+        user: Optional[Dict[str, Any]] = None,
+    ) -> Dict[int, Dict[str, Any]]:
         ids = {int(value) for value in filter_ids if value is not None}
         usage = {filter_id: {"job_count": 0, "jobs": []} for filter_id in ids}
         if not ids:
@@ -158,7 +217,8 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
                   ORDER BY LOWER(name) ASC
                 """
             )
-            for row in cur.fetchall():
+            rows = site_access.filter_job_rows_for_user(user, cur.fetchall(), targets_index=2)
+            for row in rows:
                 job_id = int(row["id"])
                 job_name = row["name"] or f"Job {job_id}"
                 try:
@@ -195,14 +255,21 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         finally:
             conn.close()
 
-    def _attach_counts_and_usage(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _attach_counts_and_usage(
+        records: List[Dict[str, Any]],
+        *,
+        user: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
         if not records:
             return records
         try:
-            devices = matcher.fetch_devices()
+            devices = matcher.fetch_devices(allowed_site_ids=site_access.site_ids_for_user(user))
         except Exception:
             devices = []
-        usage_lookup = _usage_for_filters(record["id"] for record in records if record.get("id") is not None)
+        usage_lookup = _usage_for_filters(
+            (record["id"] for record in records if record.get("id") is not None),
+            user=user,
+        )
         for record in records:
             try:
                 record["matching_device_count"] = matcher.count_filter_devices(record, devices=devices)
@@ -217,12 +284,14 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             record["usage"] = usage or {"job_count": 0, "jobs": []}
         return records
 
-    def _select_filter(filter_id: int) -> Optional[Dict[str, Any]]:
+    def _select_filter(filter_id: int, *, user: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         records = matcher.load_filters([filter_id], include_archived=True)
         record = records.get(int(filter_id))
         if not record:
             return None
-        _attach_counts_and_usage([record])
+        if not _filter_visible_to_user(record, user):
+            return None
+        _attach_counts_and_usage([record], user=user)
         return record
 
     def _sync_filter_sites(cur: sqlite3.Cursor, filter_id: int, site_ids: List[int]) -> None:
@@ -349,8 +418,13 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         archived = archived_raw in {"1", "true", "yes", "archived"}
         ids = _load_ordered_filter_ids(archived=archived)
         records = matcher.load_filters(ids, include_archived=True)
-        ordered = [records[int(filter_id)] for filter_id in ids if int(filter_id) in records]
-        _attach_counts_and_usage(ordered)
+        all_site_ids = _load_all_site_ids()
+        ordered = [
+            records[int(filter_id)]
+            for filter_id in ids
+            if int(filter_id) in records and _filter_visible_to_user(records[int(filter_id)], user, all_site_ids=all_site_ids)
+        ]
+        _attach_counts_and_usage(ordered, user=user)
         return jsonify({"filters": ordered, "archived": archived})
 
     @blueprint.route("/metadata", methods=["GET"])
@@ -373,16 +447,23 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             key in data
             for key in {"name", "criteria_mode", "criteriaMode", "site_mode", "siteMode", "criteria", "basic_criteria", "advanced_criteria", "groups"}
         ):
-            record = _select_filter(int(filter_id))
+            record = _select_filter(int(filter_id), user=user)
             if not record:
                 return jsonify({"error": "Filter not found"}), 404
             draft = record
         else:
             draft = _normalize_request_record(data, user=user)
+            scope_error = _validate_filter_scope(draft, user)
+            if scope_error:
+                payload, status = scope_error
+                return jsonify(payload), status
         errors = matcher.validate_filter_record(draft)
         if errors:
             return jsonify({"error": "validation_failed", "validation_errors": errors}), 400
-        devices = matcher.match_filter_devices(draft)
+        devices = matcher.match_filter_devices(
+            draft,
+            devices=matcher.fetch_devices(allowed_site_ids=site_access.site_ids_for_user(user)),
+        )
         return jsonify(
             {
                 "matched_device_count": len(devices),
@@ -397,7 +478,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
-        record = _select_filter(filter_id)
+        record = _select_filter(filter_id, user=user)
         if not record:
             return jsonify({"error": "Filter not found"}), 404
         return jsonify({"filter": record})
@@ -408,7 +489,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
-        record = _select_filter(filter_id)
+        record = _select_filter(filter_id, user=user)
         if not record:
             return jsonify({"error": "Filter not found"}), 404
         return jsonify({"usage": record.get("usage") or {"job_count": 0, "jobs": []}})
@@ -421,6 +502,10 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             return jsonify(payload), status
         data = request.get_json(silent=True) or {}
         record = _normalize_request_record(data, user=user)
+        scope_error = _validate_filter_scope(record, user)
+        if scope_error:
+            payload, status = scope_error
+            return jsonify(payload), status
         errors = matcher.validate_filter_record(record)
         if errors:
             return jsonify({"error": "validation_failed", "validation_errors": errors}), 400
@@ -440,11 +525,15 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
-        existing = _select_filter(filter_id)
+        existing = _select_filter(filter_id, user=user)
         if not existing:
             return jsonify({"error": "Filter not found"}), 404
         data = request.get_json(silent=True) or {}
         record = _normalize_request_record(data, existing=existing, user=user)
+        scope_error = _validate_filter_scope(record, user)
+        if scope_error:
+            payload, status = scope_error
+            return jsonify(payload), status
         errors = matcher.validate_filter_record(record)
         if errors:
             return jsonify({"error": "validation_failed", "validation_errors": errors}), 400
@@ -461,7 +550,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
-        existing = _select_filter(filter_id)
+        existing = _select_filter(filter_id, user=user)
         if not existing:
             return jsonify({"error": "Filter not found"}), 404
         clone_record = matcher.normalize_filter_record(existing)
@@ -481,7 +570,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
-        existing = _select_filter(filter_id)
+        existing = _select_filter(filter_id, user=user)
         if not existing:
             return jsonify({"error": "Filter not found"}), 404
         conflict = _usage_conflict(filter_id)
@@ -500,7 +589,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
-        existing = _select_filter(filter_id)
+        existing = _select_filter(filter_id, user=user)
         if not existing:
             return jsonify({"error": "Filter not found"}), 404
         existing["archived"] = False
@@ -516,7 +605,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
-        existing = _select_filter(filter_id)
+        existing = _select_filter(filter_id, user=user)
         if not existing:
             return jsonify({"error": "Filter not found"}), 404
         conflict = _usage_conflict(filter_id)

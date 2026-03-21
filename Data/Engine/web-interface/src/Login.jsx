@@ -154,7 +154,9 @@ export default function Login({ onLogin }) {
   };
 
   const formTitle = step === "mfa"
-    ? "Multi-Factor Authentication"
+    ? mfaStage === "setup"
+      ? "Multi-Factor Setup Required"
+      : "Multi-Factor Authentication"
     : "Borealis - Automation Platform";
 
   // ----------------- UI helpers -----------------
@@ -361,7 +363,7 @@ export default function Login({ onLogin }) {
               </div>
 
               <Typography variant="h5" className="title">
-                {step === "mfa" ? "Multi‑Factor Authentication" : ""}
+                {step === "mfa" ? formTitle : ""}
               </Typography>
 
               {step === "credentials" ? (
@@ -404,8 +406,9 @@ export default function Login({ onLogin }) {
                   {mfaStage === "setup" ? (
                     <>
                       <Typography variant="body2" className="helper">
-                        Scan the QR code with your authenticator app, then enter the 6‑digit code to
-                        complete setup for <strong>{username}</strong>.
+                        Multi-factor authentication is required for Borealis accounts. Scan the QR code
+                        with your authenticator app, then enter the 6-digit code to finish setup for
+                        <strong> {username}</strong>. You will not be able to continue until setup is complete.
                       </Typography>
                       {setupQr ? (
                         <Box sx={{ display: "flex", justifyContent: "center", mb: 1.5 }}>
@@ -430,7 +433,7 @@ export default function Login({ onLogin }) {
                     </>
                   ) : (
                     <Typography variant="body2" className="helper">
-                      Enter the 6‑digit code from your authenticator app for <strong>{username}</strong>.
+                      Enter the 6-digit code from your authenticator app for <strong>{username}</strong>.
                     </Typography>
                   )}
 

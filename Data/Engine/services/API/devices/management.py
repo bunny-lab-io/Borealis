@@ -44,6 +44,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ....auth.guid_utils import normalize_guid
 from ....auth.device_auth import DeviceAuthError, require_device_auth
+from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
@@ -485,6 +486,7 @@ class DeviceManagementService:
         self.service_log = adapters.service_log
         self.logger = adapters.context.logger or logging.getLogger(__name__)
         self.repo_cache = adapters.github_integration
+        self.site_access = UserSiteAccessManager(self.db_conn_factory, logger=self.logger)
 
     def _db_conn(self) -> sqlite3.Connection:
         return self.db_conn_factory()
@@ -633,7 +635,10 @@ class DeviceManagementService:
         connection_type: Optional[str] = None,
         hostname: Optional[str] = None,
         only_agents: bool = False,
+        allowed_site_ids: Optional[set[int]] = None,
     ) -> List[Dict[str, Any]]:
+        if allowed_site_ids is not None and not allowed_site_ids:
+            return []
         conn = self._db_conn()
         try:
             cur = conn.cursor()
@@ -654,6 +659,10 @@ class DeviceManagementService:
                 params.append(hostname.lower())
             if only_agents:
                 clauses.append("(d.connection_type IS NULL OR TRIM(d.connection_type) = '')")
+            if allowed_site_ids is not None:
+                placeholders = ",".join("?" for _ in sorted(allowed_site_ids))
+                clauses.append(f"ds.site_id IN ({placeholders})")
+                params.extend(sorted(allowed_site_ids))
             if clauses:
                 sql += " WHERE " + " AND ".join(clauses)
             cur.execute(sql, params)
@@ -669,10 +678,12 @@ class DeviceManagementService:
     def list_devices(self) -> Tuple[Dict[str, Any], int]:
         try:
             only_agents = request.args.get("only_agents") in {"1", "true", "yes"}
+            allowed_site_ids = self.site_access.site_ids_for_user(self._current_user())
             devices = self._fetch_devices(
                 connection_type=request.args.get("connection_type"),
                 hostname=request.args.get("hostname"),
                 only_agents=only_agents,
+                allowed_site_ids=allowed_site_ids,
             )
             return {"devices": devices}, 200
         except Exception as exc:
@@ -681,7 +692,10 @@ class DeviceManagementService:
 
     def list_agents(self) -> Tuple[Dict[str, Any], int]:
         try:
-            devices = self._fetch_devices(only_agents=True)
+            devices = self._fetch_devices(
+                only_agents=True,
+                allowed_site_ids=self.site_access.site_ids_for_user(self._current_user()),
+            )
             grouped: Dict[str, Dict[str, Dict[str, Any]]] = {}
             now = time.time()
             for record in devices:
@@ -757,6 +771,7 @@ class DeviceManagementService:
         normalized_guid = normalize_guid(guid)
         if not normalized_guid:
             return {"error": "invalid guid"}, 400
+        current_user = self._current_user()
         conn = self._db_conn()
         try:
             cur = conn.cursor()
@@ -776,6 +791,8 @@ class DeviceManagementService:
                 return {"error": "not found"}, 404
             device_tuple = row[: len(self._DEVICE_COLUMNS)]
             site_tuple = row[len(self._DEVICE_COLUMNS):]
+            if not self.site_access.user_can_access_site(current_user, site_tuple[0]):
+                return {"error": "not found"}, 404
             payload = self._build_device_payload(device_tuple, site_tuple)
             return payload, 200
         except Exception as exc:
@@ -985,18 +1002,29 @@ class DeviceManagementService:
             conn.close()
 
     def get_device_details(self, hostname: str) -> Tuple[Dict[str, Any], int]:
+        current_user = self._current_user()
         conn = self._db_conn()
         try:
             cur = conn.cursor()
             columns_sql = ", ".join(f"d.{col}" for col in self._DEVICE_COLUMNS)
             cur.execute(
-                f"SELECT {columns_sql} FROM devices AS d WHERE d.hostname = ?",
+                f"""
+                SELECT {columns_sql}, s.id, s.name, s.description
+                  FROM devices AS d
+             LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+             LEFT JOIN sites AS s ON s.id = ds.site_id
+                 WHERE d.hostname = ?
+                """,
                 (hostname,),
             )
             row = cur.fetchone()
             if not row:
                 return {}, 200
-            mapping = dict(zip(self._DEVICE_COLUMNS, row))
+            device_tuple = row[: len(self._DEVICE_COLUMNS)]
+            site_tuple = row[len(self._DEVICE_COLUMNS):]
+            if not self.site_access.user_can_access_site(current_user, site_tuple[0]):
+                return {}, 200
+            mapping = dict(zip(self._DEVICE_COLUMNS, device_tuple))
             created_at = mapping.get("created_at") or 0
             last_seen = mapping.get("last_seen") or 0
             payload = {
@@ -1043,6 +1071,9 @@ class DeviceManagementService:
             conn.close()
 
     def set_device_description(self, hostname: str, description: str) -> Tuple[Dict[str, Any], int]:
+        current_user = self._current_user()
+        if not self.site_access.user_can_access_hostname(current_user, hostname):
+            return {"error": "not found"}, 404
         conn = self._db_conn()
         try:
             cur = conn.cursor()
@@ -1253,10 +1284,20 @@ class DeviceManagementService:
         return cur.fetchone()
 
     def list_sites(self) -> Tuple[Dict[str, Any], int]:
+        allowed_site_ids = self.site_access.site_ids_for_user(self._current_user())
+        if allowed_site_ids is not None and not allowed_site_ids:
+            return {"sites": []}, 200
         conn = self._db_conn()
         try:
             cur = conn.cursor()
-            cur.execute(self._site_select_sql() + " ORDER BY LOWER(s.name) ASC")
+            sql = self._site_select_sql()
+            params: List[Any] = []
+            if allowed_site_ids is not None:
+                placeholders = ",".join("?" for _ in sorted(allowed_site_ids))
+                sql += f" WHERE s.id IN ({placeholders})"
+                params.extend(sorted(allowed_site_ids))
+            sql += " ORDER BY LOWER(s.name) ASC"
+            cur.execute(sql, tuple(params))
             rows = cur.fetchall()
             sites = [_row_to_site(row) for row in rows]
             return {"sites": sites}, 200
@@ -1332,6 +1373,10 @@ class DeviceManagementService:
             cur = conn.cursor()
             placeholders = ",".join("?" * len(norm_ids))
             cur.execute(
+                f"DELETE FROM user_site_assignments WHERE site_id IN ({placeholders})",
+                tuple(norm_ids),
+            )
+            cur.execute(
                 f"DELETE FROM device_sites WHERE site_id IN ({placeholders})",
                 tuple(norm_ids),
             )
@@ -1350,6 +1395,9 @@ class DeviceManagementService:
             conn.close()
 
     def sites_device_map(self, hostnames: Optional[str]) -> Tuple[Dict[str, Any], int]:
+        allowed_site_ids = self.site_access.site_ids_for_user(self._current_user())
+        if allowed_site_ids is not None and not allowed_site_ids:
+            return {"mapping": {}}, 200
         filter_set: set[str] = set()
         if hostnames:
             for part in hostnames.split(","):
@@ -1359,6 +1407,12 @@ class DeviceManagementService:
         conn = self._db_conn()
         try:
             cur = conn.cursor()
+            params: List[Any] = []
+            site_clause = ""
+            if allowed_site_ids is not None:
+                placeholders = ",".join("?" for _ in sorted(allowed_site_ids))
+                site_clause = f" AND ds.site_id IN ({placeholders})"
+                params.extend(sorted(allowed_site_ids))
             if filter_set:
                 placeholders = ",".join("?" * len(filter_set))
                 cur.execute(
@@ -1367,16 +1421,20 @@ class DeviceManagementService:
                       FROM device_sites ds
                       JOIN sites s ON s.id = ds.site_id
                      WHERE ds.device_hostname IN ({placeholders})
+                       {site_clause}
                     """,
-                    tuple(filter_set),
+                    tuple(list(filter_set) + params),
                 )
             else:
                 cur.execute(
-                    """
+                    f"""
                     SELECT ds.device_hostname, s.id, s.name
                       FROM device_sites ds
                       JOIN sites s ON s.id = ds.site_id
-                    """
+                     WHERE 1 = 1
+                       {site_clause}
+                    """,
+                    tuple(params),
                 )
             mapping: Dict[str, Dict[str, Any]] = {}
             for hostname, site_id, site_name in cur.fetchall():

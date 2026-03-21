@@ -51,6 +51,7 @@ const MAGIC_UI = {
     "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
   panelBorder: "rgba(148, 163, 184, 0.35)",
   textBright: "#e2e8f0",
+  textMuted: "#94a3b8",
   accentA: "#7dd3fc",
 };
 

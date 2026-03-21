@@ -9,6 +9,13 @@
 
 from .context import RequestAuthContext, PermissionResult
 from .dev_mode import DevModeEntry, DevModeManager
+from .site_scope import UserSiteAccessManager, UserSiteScope
 
-__all__ = ["RequestAuthContext", "PermissionResult", "DevModeEntry", "DevModeManager"]
-
+__all__ = [
+    "RequestAuthContext",
+    "PermissionResult",
+    "DevModeEntry",
+    "DevModeManager",
+    "UserSiteAccessManager",
+    "UserSiteScope",
+]

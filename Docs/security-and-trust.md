@@ -191,8 +191,11 @@ sequenceDiagram
 - `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
 - `POST /api/auth/login` (No Authentication) - operator login.
 - `POST /api/auth/logout` (Token Authenticated) - operator logout.
+- `POST /api/auth/password/reset` (Token Authenticated) - verify the current operator password and replace it with a new password hash.
 - `POST /api/auth/mfa/verify` (Token Authenticated, MFA pending) - verify MFA.
-- `GET /api/auth/me` (Token Authenticated) - current operator profile.
+- `POST /api/auth/mfa/reset` (Token Authenticated) - clear the current operator's MFA secret so MFA setup is required on the next login.
+- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state.
+- MFA policy note: Borealis requires MFA by default. Only an administrator can explicitly disable MFA for an operator account.
 - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
 - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
 - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).

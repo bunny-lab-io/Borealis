@@ -1,12 +1,13 @@
 # ======================================================
 # Data\Engine\services\API\access_management\multi_factor_authentication.py
-# Description: Multifactor administration endpoints for enabling, disabling, or resetting operator MFA state.
+# Description: Multifactor management endpoints for enabling, disabling, or resetting operator MFA state.
 #
 # API Endpoints (if applicable):
 # - POST /api/users/<username>/mfa (Token Authenticated (Admin)) - Toggles MFA and optionally resets shared secrets.
+# - POST /api/auth/mfa/reset (Token Authenticated) - Clears the current operator's MFA secret so setup is required on the next login.
 # ======================================================
 
-"""Multifactor administrative endpoints for the Borealis Engine."""
+"""Multifactor management endpoints for the Borealis Engine."""
 from __future__ import annotations
 
 import os
@@ -27,7 +28,7 @@ def _now_ts() -> int:
 
 
 class MultiFactorAdministrationService:
-    """Admin-focused MFA utility wrapper."""
+    """MFA utility wrapper for admin and self-service operations."""
 
     def __init__(self, app: Flask, adapters: "EngineServiceAdapters") -> None:
         self.app = app
@@ -100,23 +101,23 @@ class MultiFactorAdministrationService:
             if enabled:
                 if reset_secret:
                     cur.execute(
-                        "UPDATE users SET mfa_enabled=1, mfa_secret=NULL, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                        "UPDATE users SET mfa_enabled=0, mfa_disabled=0, mfa_secret=NULL, updated_at=? WHERE LOWER(username)=LOWER(?)",
                         (now_ts, username_norm),
                     )
                 else:
                     cur.execute(
-                        "UPDATE users SET mfa_enabled=1, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                        "UPDATE users SET mfa_disabled=0, updated_at=? WHERE LOWER(username)=LOWER(?)",
                         (now_ts, username_norm),
                     )
             else:
                 if reset_secret:
                     cur.execute(
-                        "UPDATE users SET mfa_enabled=0, mfa_secret=NULL, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                        "UPDATE users SET mfa_enabled=0, mfa_disabled=1, mfa_secret=NULL, updated_at=? WHERE LOWER(username)=LOWER(?)",
                         (now_ts, username_norm),
                     )
                 else:
                     cur.execute(
-                        "UPDATE users SET mfa_enabled=0, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                        "UPDATE users SET mfa_disabled=1, updated_at=? WHERE LOWER(username)=LOWER(?)",
                         (now_ts, username_norm),
                     )
 
@@ -137,6 +138,55 @@ class MultiFactorAdministrationService:
             if conn:
                 conn.close()
 
+    def reset_own_mfa(self):
+        user = self._current_user()
+        if not user:
+            return jsonify({"error": "unauthorized"}), 401
+
+        username_norm = (user.get("username") or "").strip()
+        if not username_norm:
+            return jsonify({"error": "unauthorized"}), 401
+
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = self._db_conn()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT CASE WHEN COALESCE(mfa_disabled, 0) = 1 THEN 0 ELSE 1 END
+                FROM users
+                WHERE LOWER(username)=LOWER(?)
+                """,
+                (username_norm,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"error": "user not found"}), 404
+
+            mfa_enabled = bool(row[0] or 0)
+            now_ts = _now_ts()
+            cur.execute(
+                "UPDATE users SET mfa_enabled=0, mfa_secret=NULL, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                (now_ts, username_norm),
+            )
+            conn.commit()
+
+            session.pop("mfa_pending", None)
+            return jsonify(
+                {
+                    "status": "ok",
+                    "username": username_norm,
+                    "mfa_enabled": mfa_enabled,
+                    "setup_required_on_next_login": mfa_enabled,
+                }
+            )
+        except Exception as exc:
+            self.logger.debug("Failed to reset MFA for %s", username_norm, exc_info=True)
+            return jsonify({"error": str(exc)}), 500
+        finally:
+            if conn:
+                conn.close()
+
 
 def register_mfa_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Register MFA administration endpoints."""
@@ -147,5 +197,9 @@ def register_mfa_management(app: Flask, adapters: "EngineServiceAdapters") -> No
     @blueprint.route("/api/users/<username>/mfa", methods=["POST"])
     def _toggle_mfa(username: str):
         return service.toggle_mfa(username)
+
+    @blueprint.route("/api/auth/mfa/reset", methods=["POST"])
+    def _reset_own_mfa():
+        return service.reset_own_mfa()
 
     app.register_blueprint(blueprint)

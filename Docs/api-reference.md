@@ -10,10 +10,12 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /health` (No Authentication) - liveness probe.
 
 ### Authentication and Access Management
-- `POST /api/auth/login` (No Authentication) - operator login.
+- `POST /api/auth/login` (No Authentication) - operator login. Borealis requires MFA setup or verification by default unless an administrator has explicitly disabled MFA for that operator.
 - `POST /api/auth/logout` (Token Authenticated) - operator logout.
+- `POST /api/auth/password/reset` (Token Authenticated) - verify the current operator password and replace it with a new password hash.
 - `POST /api/auth/mfa/verify` (Token Authenticated, MFA pending) - verify MFA.
-- `GET /api/auth/me` (Token Authenticated) - current operator profile.
+- `POST /api/auth/mfa/reset` (Token Authenticated) - clear the current operator's MFA secret so Borealis prompts for MFA setup on the next login.
+- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state for account menu actions.
 - `GET /api/credentials` (Token Authenticated) - list stored remote-execution credentials.
 - `GET /api/credentials/<int:credential_id>` (Token Authenticated) - get one stored credential without secret material.
 - `POST /api/credentials` (Admin) - create a stored credential.
@@ -24,7 +26,9 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `DELETE /api/users/<username>` (Admin) - delete operator account.
 - `POST /api/users/<username>/reset_password` (Admin) - reset operator password.
 - `POST /api/users/<username>/role` (Admin) - update operator role.
-- `POST /api/users/<username>/mfa` (Admin) - toggle MFA/reset secrets.
+- `POST /api/users/<username>/mfa` (Admin) - enable, disable, or reset MFA for an operator. Disabling MFA is admin-only.
+- `POST /api/user_site_assignments/selection` (Admin) - load current site assignments for selected operators.
+- `POST /api/user_site_assignments/assign` (Admin) - replace site assignments for selected operators.
 - `GET /api/github/token` (Admin) - GitHub API token status.
 - `POST /api/github/token` (Admin) - update GitHub API token.
 
@@ -39,19 +43,19 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
 - `GET /api/agents` (Token Authenticated) - list online collectors by hostname/context.
-- `GET /api/devices` (Token Authenticated) - device summary list.
-- `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
-- `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
-- `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
+- `GET /api/devices` (Token Authenticated) - device summary list, scoped to the operator's assigned sites unless the operator is an admin.
+- `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID, site-scoped for operators.
+- `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators.
+- `POST /api/device/description/<hostname>` (Token Authenticated) - update description for an in-scope device.
 - `GET /api/device_list_views` (Token Authenticated) - list saved device views.
 - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.
 - `POST /api/device_list_views` (Token Authenticated) - create saved view.
 - `PUT /api/device_list_views/<int:view_id>` (Token Authenticated) - update saved view.
 - `DELETE /api/device_list_views/<int:view_id>` (Token Authenticated) - delete saved view.
-- `GET /api/sites` (Token Authenticated) - list sites.
+- `GET /api/sites` (Token Authenticated) - list sites visible to the current operator.
 - `POST /api/sites` (Admin) - create site.
 - `POST /api/sites/delete` (Admin) - delete sites.
-- `GET /api/sites/device_map` (Token Authenticated) - hostname to site map.
+- `GET /api/sites/device_map` (Token Authenticated) - hostname to site map for devices in the current operator's site scope.
 - `POST /api/sites/assign` (Admin) - assign devices to site.
 - `POST /api/sites/rename` (Admin) - rename site.
 - `GET /api/repo/current_hash` (Device or Token Authenticated) - current agent repo hash.
@@ -59,22 +63,22 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/hash` (Device Authenticated) - update agent hash.
 - `GET /api/agent/hash_list` (Admin + Loopback) - list agent hashes (local diagnostics).
 
-### Admin Approvals and Install Codes
+### Approvals and Install Codes
 - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
 - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
 - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
-- `GET /api/admin/device-approvals` (Admin) - approval queue.
-- `POST /api/admin/device-approvals/<approval_id>/approve` (Admin) - approve device.
-- `POST /api/admin/device-approvals/<approval_id>/deny` (Admin) - deny device.
+- `GET /api/admin/device-approvals` (Token Authenticated) - approval queue, scoped to the current operator's assigned sites unless the operator is an admin.
+- `POST /api/admin/device-approvals/<approval_id>/approve` (Token Authenticated) - approve an in-scope device enrollment.
+- `POST /api/admin/device-approvals/<approval_id>/deny` (Token Authenticated) - deny an in-scope device enrollment.
 
 ### Device Filters
 - `GET /api/device_filters` (Token Authenticated) - list filters.
 - `GET /api/device_filters/metadata` (Token Authenticated) - filter field/operator metadata.
-- `POST /api/device_filters/preview` (Token Authenticated) - manual filter preview against current inventory.
+- `POST /api/device_filters/preview` (Token Authenticated) - manual filter preview against current inventory, restricted to the current operator's site scope.
 - `GET /api/device_filters/<filter_id>` (Token Authenticated) - get filter.
 - `GET /api/device_filters/<filter_id>/usage` (Token Authenticated) - scheduled-job usage summary.
-- `POST /api/device_filters` (Token Authenticated) - create filter.
-- `PUT /api/device_filters/<filter_id>` (Token Authenticated) - update filter.
+- `POST /api/device_filters` (Token Authenticated) - create filter within the current operator's site scope.
+- `PUT /api/device_filters/<filter_id>` (Token Authenticated) - update filter within the current operator's site scope.
 - `POST /api/device_filters/<filter_id>/clone` (Token Authenticated) - clone filter.
 - `POST /api/device_filters/<filter_id>/archive` (Token Authenticated) - archive filter.
 - `POST /api/device_filters/<filter_id>/unarchive` (Token Authenticated) - unarchive filter.
@@ -93,19 +97,19 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/assemblies/<assembly_guid>/export` (Token Authenticated) - export legacy JSON.
 - `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official Aurora assembly from the active catalog.
 - `POST /api/assemblies/official/update-all` (Admin) - sync all official Aurora assemblies, including newly added catalog entries.
-- `POST /api/scripts/quick_run` (Token Authenticated) - quick job (PowerShell).
+- `POST /api/scripts/quick_run` (Token Authenticated) - quick job (PowerShell) for in-scope devices only.
 - `POST /api/ansible/quick_run` (Token Authenticated) - placeholder (not implemented).
-- `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history.
+- `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history for an in-scope device.
 - `DELETE /api/device/activity/<hostname>` (Token Authenticated) - clear activity history.
-- `GET /api/device/activity/job/<int:job_id>` (Token Authenticated) - activity record details.
+- `GET /api/device/activity/job/<int:job_id>` (Token Authenticated) - activity record details for an in-scope device activity.
 
 Playbook execution currently happens through scheduled jobs with `execution_context` set to `local`, `ssh`, or `winrm`; the dedicated Ansible quick-run endpoint is still pending.
 
 ### Scheduled Jobs
-- `GET /api/scheduled_jobs` (Token Authenticated) - list scheduled jobs.
-- `POST /api/scheduled_jobs` (Token Authenticated) - create scheduled job.
-- `GET /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - get scheduled job.
-- `PUT /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - update scheduled job.
+- `GET /api/scheduled_jobs` (Token Authenticated) - list scheduled jobs visible within the current operator's site scope.
+- `POST /api/scheduled_jobs` (Token Authenticated) - create scheduled job with targets constrained to the current operator's site scope.
+- `GET /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - get a scheduled job if it is visible within the current operator's site scope.
+- `PUT /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - update a scheduled job within the current operator's site scope.
 - `POST /api/scheduled_jobs/<int:job_id>/toggle` (Token Authenticated) - enable/disable.
 - `DELETE /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - delete scheduled job.
 - `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
@@ -116,19 +120,19 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - `POST /api/notifications/notify` (Token Authenticated) - broadcast toast notification.
 
 ### VPN and Remote Access
-- `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an agent.
-- `GET /api/tunnel/status` (Token Authenticated) - tunnel status by agent.
-- `GET /api/tunnel/active` (Token Authenticated) - list active tunnels.
+- `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an in-scope agent.
+- `GET /api/tunnel/status` (Token Authenticated) - tunnel status by in-scope agent.
+- `GET /api/tunnel/active` (Token Authenticated) - list active tunnels visible in the current operator's site scope.
 
 ### VNC
 - `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC credentials for the agent.
-- `POST /api/vnc/establish` (Token Authenticated) - establish VNC session.
-- `POST /api/vnc/disconnect` (Token Authenticated) - disconnect VNC session.
+- `POST /api/vnc/establish` (Token Authenticated) - establish VNC session for an in-scope device.
+- `POST /api/vnc/disconnect` (Token Authenticated) - disconnect VNC session for an in-scope device.
 - `POST /api/vnc/session` (Token Authenticated) - legacy alias for establish.
 
 ### Remote Shell
-- `POST /api/shell/establish` (Token Authenticated) - establish remote shell session.
-- `POST /api/shell/disconnect` (Token Authenticated) - disconnect remote shell session.
+- `POST /api/shell/establish` (Token Authenticated) - establish remote shell session for an in-scope device.
+- `POST /api/shell/disconnect` (Token Authenticated) - disconnect remote shell session for an in-scope device.
 
 ### Server Info and Logs
 - `GET /api/server/time` (Operator Session) - server clock.

@@ -20,6 +20,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+
 from ...assemblies.service import AssemblyRuntimeService
 from ...aegis_cipher import (
     AegisDataCorruptionError,
@@ -28,6 +30,8 @@ from ...aegis_cipher import (
     credential_secret_reset_required,
 )
 from ....db import dbapi as sqlite3
+from ...auth import UserSiteAccessManager
+from ...auth.secrets import require_app_secret
 from ...filters.matcher import DeviceFilterMatcher
 
 _WINRM_USERNAME_VAR = "__borealis_winrm_username"
@@ -606,6 +610,7 @@ class JobScheduler:
 
             self._db_conn_factory = _legacy_conn_factory
         self._filter_matcher = DeviceFilterMatcher(db_conn_factory=self._db_conn_factory)
+        self._site_access = UserSiteAccessManager(self._db_conn_factory, logger=self.app.logger)
         self._script_signer = script_signer
         self._running = False
         self._service_log = service_logger
@@ -678,6 +683,52 @@ class JobScheduler:
                 return
         except Exception:
             pass
+
+    def _current_user(self) -> Optional[Dict[str, str]]:
+        from flask import request, session
+
+        username = session.get("username")
+        role = session.get("role") or "User"
+        if username:
+            return {"username": username, "role": role}
+
+        token = None
+        auth_header = request.headers.get("Authorization") or ""
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+        if not token:
+            token = request.cookies.get("borealis_auth")
+        if not token:
+            return None
+
+        try:
+            serializer = URLSafeTimedSerializer(require_app_secret(self.app), salt="borealis-auth")
+            token_ttl = int(os.environ.get("BOREALIS_TOKEN_TTL_SECONDS", 60 * 60 * 24 * 30))
+            data = serializer.loads(token, max_age=token_ttl)
+            username = data.get("u")
+            role = data.get("r") or "User"
+            if username:
+                return {"username": username, "role": role}
+        except (BadSignature, SignatureExpired, Exception):
+            return None
+        return None
+
+    def _require_user(self) -> Optional[Tuple[Dict[str, Any], int]]:
+        if not self._current_user():
+            return {"error": "unauthorized"}, 401
+        return None
+
+    def _job_visible_to_user(self, user: Optional[Mapping[str, Any]], raw_targets: Any) -> bool:
+        if isinstance(raw_targets, str):
+            try:
+                targets = json.loads(raw_targets or "[]")
+            except Exception:
+                targets = []
+        elif isinstance(raw_targets, list):
+            targets = raw_targets
+        else:
+            targets = []
+        return self._site_access.job_targets_fit_scope(user, targets)
         try:
             numeric_level = getattr(logging, level.upper(), logging.INFO)
             self.app.logger.log(numeric_level, "[Scheduler] %s", payload)
@@ -4101,6 +4152,10 @@ class JobScheduler:
 
         @app.route("/api/scheduled_jobs", methods=["GET"])
         def api_scheduled_jobs_list():
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
             try:
                 conn = self._conn()
                 cur = conn.cursor()
@@ -4113,7 +4168,8 @@ class JobScheduler:
                     ORDER BY created_at DESC
                     """
                 )
-                rows = [ _job_row_to_dict(r) for r in cur.fetchall() ]
+                rows_raw = cur.fetchall()
+                rows = [_job_row_to_dict(r) for r in rows_raw if self._job_visible_to_user(user, r[3])]
                 conn.close()
                 return json.dumps({"jobs": rows}), 200, {"Content-Type": "application/json"}
             except Exception as e:
@@ -4121,10 +4177,22 @@ class JobScheduler:
 
         @app.route("/api/scheduled_jobs", methods=["POST"])
         def api_scheduled_jobs_create():
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
             data = self._json_body()
             name = (data.get("name") or "").strip()
             components = data.get("components") or []
             targets = _normalize_targets_for_save(data.get("targets") or [])
+            scoped_targets, scope_error = self._site_access.scope_job_targets_for_persistence(user, targets)
+            if scope_error:
+                return (
+                    json.dumps({"error": "out_of_scope_targets", "message": scope_error}),
+                    403,
+                    {"Content-Type": "application/json"},
+                )
+            targets = scoped_targets or []
             schedule_type = (data.get("schedule", {}).get("type") or data.get("schedule_type") or "immediately").strip().lower()
             start = data.get("schedule", {}).get("start") or data.get("start") or None
             start_ts = _parse_ts(start) if start else None
@@ -4258,6 +4326,10 @@ class JobScheduler:
 
         @app.route("/api/scheduled_jobs/<int:job_id>", methods=["GET"])
         def api_scheduled_jobs_get(job_id: int):
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
             try:
                 conn = self._conn()
                 cur = conn.cursor()
@@ -4273,12 +4345,18 @@ class JobScheduler:
                 conn.close()
                 if not row:
                     return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                if not self._job_visible_to_user(user, row[3]):
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 return json.dumps({"job": _job_row_to_dict(row)}), 200, {"Content-Type": "application/json"}
             except Exception as e:
                 return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
 
         @app.route("/api/scheduled_jobs/<int:job_id>", methods=["PUT"])
         def api_scheduled_jobs_update(job_id: int):
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
             data = self._json_body()
             fields: Dict[str, Any] = {}
             next_components: Optional[List[Any]] = None
@@ -4292,10 +4370,17 @@ class JobScheduler:
                 normalized_targets = _normalize_targets_for_save(data.get("targets") or [])
                 if not normalized_targets:
                     return json.dumps({"error": "targets required"}), 400, {"Content-Type": "application/json"}
+                scoped_targets, scope_error = self._site_access.scope_job_targets_for_persistence(user, normalized_targets)
+                if scope_error:
+                    return (
+                        json.dumps({"error": "out_of_scope_targets", "message": scope_error}),
+                        403,
+                        {"Content-Type": "application/json"},
+                    )
                 target_error = _validate_targets_for_save(normalized_targets)
                 if target_error:
                     return json.dumps({"error": target_error}), 400, {"Content-Type": "application/json"}
-                fields["targets_json"] = json.dumps(normalized_targets)
+                fields["targets_json"] = json.dumps(scoped_targets or [])
             if "schedule" in data or "schedule_type" in data:
                 schedule_type = (data.get("schedule", {}).get("type") or data.get("schedule_type") or "immediately").strip().lower()
                 fields["schedule_type"] = schedule_type
@@ -4330,7 +4415,7 @@ class JobScheduler:
                 cur = conn.cursor()
                 cur.execute(
                     """
-                    SELECT credential_id, enabled, components_json, execution_context
+                    SELECT credential_id, enabled, components_json, execution_context, targets_json
                       FROM scheduled_jobs
                      WHERE id=?
                     """,
@@ -4338,6 +4423,9 @@ class JobScheduler:
                 )
                 current_row = cur.fetchone()
                 if not current_row:
+                    conn.close()
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                if not self._job_visible_to_user(user, current_row[4]):
                     conn.close()
                     return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 if "execution_context" in fields or next_components is not None:
@@ -4382,15 +4470,22 @@ class JobScheduler:
 
         @app.route("/api/scheduled_jobs/<int:job_id>/toggle", methods=["POST"])
         def api_scheduled_jobs_toggle(job_id: int):
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
             data = self._json_body()
             enabled = int(bool(data.get("enabled", True)))
             try:
                 conn = self._conn()
                 cur = conn.cursor()
                 if enabled:
-                    cur.execute("SELECT credential_id FROM scheduled_jobs WHERE id=?", (job_id,))
+                    cur.execute("SELECT credential_id, targets_json FROM scheduled_jobs WHERE id=?", (job_id,))
                     existing_row = cur.fetchone()
                     if not existing_row:
+                        conn.close()
+                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                    if not self._job_visible_to_user(user, existing_row[1]):
                         conn.close()
                         return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                     credential_warning = self._credential_reset_warning(existing_row[0])
@@ -4406,6 +4501,15 @@ class JobScheduler:
                             409,
                             {"Content-Type": "application/json"},
                         )
+                else:
+                    cur.execute("SELECT targets_json FROM scheduled_jobs WHERE id=?", (job_id,))
+                    existing_row = cur.fetchone()
+                    if not existing_row:
+                        conn.close()
+                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                    if not self._job_visible_to_user(user, existing_row[0]):
+                        conn.close()
+                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 cur.execute("UPDATE scheduled_jobs SET enabled=?, updated_at=? WHERE id=?", (enabled, _now_ts(), job_id))
                 if cur.rowcount == 0:
                     conn.close()
@@ -4423,9 +4527,21 @@ class JobScheduler:
 
         @app.route("/api/scheduled_jobs/<int:job_id>", methods=["DELETE"])
         def api_scheduled_jobs_delete(job_id: int):
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
             try:
                 conn = self._conn()
                 cur = conn.cursor()
+                cur.execute("SELECT targets_json FROM scheduled_jobs WHERE id=?", (job_id,))
+                existing_row = cur.fetchone()
+                if not existing_row:
+                    conn.close()
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                if not self._job_visible_to_user(user, existing_row[0]):
+                    conn.close()
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 cur.execute("DELETE FROM scheduled_jobs WHERE id=?", (job_id,))
                 deleted = cur.rowcount
                 conn.commit()
@@ -4438,6 +4554,10 @@ class JobScheduler:
 
         @app.route("/api/scheduled_jobs/<int:job_id>/runs", methods=["GET"])
         def api_scheduled_job_runs(job_id: int):
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
             try:
                 from flask import request
                 days = request.args.get('days', default=str(self.RETENTION_DAYS))
@@ -4449,6 +4569,14 @@ class JobScheduler:
 
                 conn = self._conn()
                 cur = conn.cursor()
+                cur.execute("SELECT targets_json FROM scheduled_jobs WHERE id=?", (job_id,))
+                visibility_row = cur.fetchone()
+                if not visibility_row:
+                    conn.close()
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                if not self._job_visible_to_user(user, visibility_row[0]):
+                    conn.close()
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 cur.execute(
                     """
                     SELECT
@@ -4497,6 +4625,10 @@ class JobScheduler:
         @app.route("/api/scheduled_jobs/<int:job_id>/devices", methods=["GET"])
         def api_scheduled_job_devices(job_id: int):
             """Return per-target status for the latest occurrence (or specified via ?occurrence=epoch)."""
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
             try:
                 from flask import request
                 occurrence = request.args.get('occurrence')
@@ -4510,6 +4642,9 @@ class JobScheduler:
                 )
                 row = cur.fetchone()
                 if not row:
+                    conn.close()
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                if not self._job_visible_to_user(user, row[0]):
                     conn.close()
                     return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 try:
@@ -4695,9 +4830,21 @@ class JobScheduler:
             We keep all rows that belong to the latest occurrence (by scheduled_ts)
             and delete everything older. If there is no occurrence, no-op.
             """
+            requirement = self._require_user()
+            if requirement:
+                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
+            user = self._current_user() or {}
             try:
                 conn = self._conn()
                 cur = conn.cursor()
+                cur.execute("SELECT targets_json FROM scheduled_jobs WHERE id=?", (job_id,))
+                visibility_row = cur.fetchone()
+                if not visibility_row:
+                    conn.close()
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
+                if not self._job_visible_to_user(user, visibility_row[0]):
+                    conn.close()
+                    return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
                 # Determine latest occurrence for this job
                 cur.execute(
                     "SELECT MAX(scheduled_ts) FROM scheduled_job_runs WHERE job_id=?",

@@ -240,7 +240,15 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT,
     last_login INTEGER,
     created_at INTEGER,
-    updated_at INTEGER
+    updated_at INTEGER,
+    mfa_enabled INTEGER NOT NULL DEFAULT 0,
+    mfa_disabled INTEGER NOT NULL DEFAULT 0,
+    mfa_secret TEXT
+);
+CREATE TABLE IF NOT EXISTS user_site_assignments (
+    user_id INTEGER NOT NULL,
+    site_id INTEGER NOT NULL,
+    assigned_at INTEGER
 );
 """
 

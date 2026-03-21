@@ -3,10 +3,10 @@
 # Description: Primary authentication blueprint used by the Engine auth group for sessions, MFA, and logout.
 #
 # API Endpoints (if applicable):
-# - POST /api/auth/login (No Authentication) - Authenticates operator credentials and starts a session token.
+# - POST /api/auth/login (No Authentication) - Authenticates operator credentials and starts a session token or MFA setup/verification challenge.
 # - POST /api/auth/logout (Token Authenticated) - Clears the active operator session and authentication cookie.
 # - POST /api/auth/mfa/verify (Token Authenticated (MFA pending)) - Verifies TOTP codes during multifactor setup or login.
-# - GET /api/auth/me (Token Authenticated) - Returns the currently authenticated operator profile.
+# - GET /api/auth/me (Token Authenticated) - Returns the currently authenticated operator profile, including MFA state.
 # ======================================================
 
 """Authentication endpoints for the Borealis Engine API."""
@@ -43,6 +43,7 @@ from .aegis import register_aegis_cipher_management
 from .credentials import register_credential_management
 from .github import register_github_token_management
 from .multi_factor_authentication import register_mfa_management
+from .site_assignments import register_user_site_assignment_management
 from .users import register_user_management
 
 _logger = logging.getLogger(__name__)
@@ -233,7 +234,8 @@ class _AuthService:
                     created_at,
                     updated_at,
                     COALESCE(mfa_enabled, 0) AS mfa_enabled,
-                    COALESCE(mfa_secret, '') AS mfa_secret
+                    COALESCE(mfa_secret, '') AS mfa_secret,
+                    COALESCE(mfa_disabled, 0) AS mfa_disabled
                 FROM users WHERE LOWER(username)=LOWER(?)
                 """,
                 (username,),
@@ -251,13 +253,13 @@ class _AuthService:
             return jsonify({"error": "invalid username or password"}), 401
 
         role = row[4] or "User"
-        mfa_enabled = bool(row[8] or 0)
         existing_secret = (row[9] or "").strip()
+        mfa_disabled = bool(row[10] or 0)
 
         session.pop("username", None)
         session.pop("role", None)
 
-        if not mfa_enabled:
+        if mfa_disabled:
             session.pop("mfa_pending", None)
             return self._finalize_login(row[1], role)
 
@@ -346,7 +348,7 @@ class _AuthService:
                 try:
                     cur = conn.cursor()
                     cur.execute(
-                        "UPDATE users SET mfa_secret=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
+                        "UPDATE users SET mfa_enabled=1, mfa_disabled=0, mfa_secret=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
                         (secret, now_ts, username),
                     )
                     conn.commit()
@@ -386,7 +388,19 @@ class _AuthService:
             try:
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT id, username, display_name, role, last_login, created_at, updated_at FROM users WHERE LOWER(username)=LOWER(?)",
+                    """
+                    SELECT
+                        id,
+                        username,
+                        display_name,
+                        role,
+                        last_login,
+                        created_at,
+                        updated_at,
+                        CASE WHEN COALESCE(mfa_disabled, 0) = 1 THEN 0 ELSE 1 END AS mfa_enabled
+                    FROM users
+                    WHERE LOWER(username)=LOWER(?)
+                    """,
                     (username,),
                 )
                 row = cur.fetchone()
@@ -399,6 +413,7 @@ class _AuthService:
                         "username": info["username"],
                         "display_name": info["display_name"],
                         "role": info["role"],
+                        "mfa_enabled": bool(info["mfa_enabled"]),
                     }
                 )
         except Exception:
@@ -409,6 +424,7 @@ class _AuthService:
                 "username": username,
                 "display_name": username,
                 "role": user.get("role") or "User",
+                "mfa_enabled": False,
             }
         )
 
@@ -437,6 +453,7 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
 
     app.register_blueprint(blueprint)
     register_user_management(app, adapters)
+    register_user_site_assignment_management(app, adapters)
     register_mfa_management(app, adapters)
     register_aegis_cipher_management(app, adapters)
     register_github_token_management(app, adapters)

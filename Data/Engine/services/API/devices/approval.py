@@ -23,6 +23,7 @@ from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ....auth.guid_utils import normalize_guid
+from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
@@ -46,6 +47,7 @@ class AdminDeviceService:
         self.db_conn_factory = adapters.db_conn_factory
         self.service_log = adapters.service_log
         self.logger = adapters.context.logger
+        self.site_access = UserSiteAccessManager(self.db_conn_factory, logger=self.logger)
 
     def _db_conn(self) -> sqlite3.Connection:
         return self.db_conn_factory()
@@ -87,6 +89,12 @@ class AdminDeviceService:
             return {"error": "unauthorized"}, 401
         if (user.get("role") or "").lower() != "admin":
             return {"error": "forbidden"}, 403
+        return None
+
+    def require_user(self) -> Optional[Tuple[Dict[str, Any], int]]:
+        user = self._current_user()
+        if not user:
+            return {"error": "unauthorized"}, 401
         return None
 
     def _lookup_user_id(self, cur: sqlite3.Cursor, username: str) -> Optional[str]:
@@ -214,6 +222,7 @@ class AdminDeviceService:
 
     def list_device_approvals(self, status_filter: Optional[str]) -> Tuple[Dict[str, Any], int]:
         approvals: List[Dict[str, Any]] = []
+        current_user = self._current_user() or {}
         conn = self._db_conn()
         try:
             cur = conn.cursor()
@@ -252,6 +261,8 @@ class AdminDeviceService:
             cur.execute(sql, params)
             rows = cur.fetchall()
             for row in rows:
+                if not self.site_access.user_can_access_site(current_user, row[6]):
+                    continue
                 record_guid = row[2]
                 hostname = row[3]
                 fingerprint_claimed = row[4]
@@ -301,6 +312,21 @@ class AdminDeviceService:
             conn.close()
         return {"approvals": approvals}, 200
 
+    def _approval_accessible(
+        self,
+        cur: sqlite3.Cursor,
+        user: Optional[Dict[str, Any]],
+        approval_id: str,
+    ) -> bool:
+        cur.execute(
+            "SELECT site_id FROM device_approvals WHERE id = ?",
+            (approval_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        return self.site_access.user_can_access_site(user or {}, row[0])
+
     def _set_approval_status(
         self,
         approval_id: str,
@@ -315,6 +341,8 @@ class AdminDeviceService:
         conn = self._db_conn()
         try:
             cur = conn.cursor()
+            if not self._approval_accessible(cur, user, approval_id):
+                return {"error": "not found"}, 404
             cur.execute(
                 """
                 SELECT status,
@@ -404,42 +432,58 @@ def register_admin_endpoints(app, adapters: "EngineServiceAdapters") -> None:
     service = AdminDeviceService(app, adapters)
     blueprint = Blueprint("device_admin", __name__)
 
-    @blueprint.before_request
-    def _ensure_admin():
+    @blueprint.route("/api/admin/enrollment-codes", methods=["GET"])
+    def _admin_enrollment_codes():
         requirement = service.require_admin()
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
-        return None
-
-    @blueprint.route("/api/admin/enrollment-codes", methods=["GET"])
-    def _admin_enrollment_codes():
         payload, status = service.list_enrollment_codes(request.args.get("status"))
         return jsonify(payload), status
 
     @blueprint.route("/api/admin/enrollment-codes", methods=["POST"])
     def _admin_create_enrollment_code():
+        requirement = service.require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.create_enrollment_code(0, 0)
         return jsonify(payload), status
 
     @blueprint.route("/api/admin/enrollment-codes/<code_id>", methods=["DELETE"])
     def _admin_delete_enrollment_code(code_id: str):
+        requirement = service.require_admin()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.delete_enrollment_code(code_id)
         return jsonify(payload), status
 
     @blueprint.route("/api/admin/device-approvals", methods=["GET"])
     def _admin_list_device_approvals():
+        requirement = service.require_user()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.list_device_approvals(request.args.get("status"))
         return jsonify(payload), status
 
     @blueprint.route("/api/admin/device-approvals/<approval_id>/approve", methods=["POST"])
     def _admin_approve_device(approval_id: str):
+        requirement = service.require_user()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         data = request.get_json(force=True, silent=True) or {}
         payload, status = service.approve_device(approval_id, data)
         return jsonify(payload), status
 
     @blueprint.route("/api/admin/device-approvals/<approval_id>/deny", methods=["POST"])
     def _admin_deny_device(approval_id: str):
+        requirement = service.require_user()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
         payload, status = service.deny_device(approval_id)
         return jsonify(payload), status
 

@@ -29,6 +29,8 @@ Supported schedule types (from the scheduler core):
 - Each occurrence freezes the resolved host list in `scheduled_job_run_targets`.
 - Online snapshot logic is used only to decide when a pending target can dispatch, not to recalculate the occurrence target list.
 - Engine-side Ansible jobs persist structured device targets with `device_guid`, `hostname`, and site context so duplicate hostnames across sites can be targeted safely.
+- When an operator creates or edits a job, Borealis constrains targets to the operator's assigned sites before persistence.
+- Filter targets created by operators persist `allowed_site_ids` alongside the filter reference so future scheduler runs stay inside the operator's approved site scope.
 
 ## Execution Flow
 1) Scheduler tick loads enabled jobs.
@@ -89,6 +91,7 @@ Supported schedule types (from the scheduler core):
 ### Targeting logic
 - Targets can be hostnames or device filters.
 - `DeviceFilterMatcher` loads device snapshots and resolves filter matches.
+- Operator-created filter targets carry persisted `allowed_site_ids`; matcher resolution must honor that saved site scope instead of treating the filter as globally visible.
 - A due occurrence is resolved once, then reused for the rest of that occurrence.
 - The scheduler can also request an online-only hostname snapshot when deciding whether a pending target can dispatch.
 

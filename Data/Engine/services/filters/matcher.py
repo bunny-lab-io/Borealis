@@ -479,11 +479,24 @@ class DeviceFilterMatcher:
         return conn
 
     # ---------- Device loading ----------
-    def fetch_devices(self) -> List[Dict[str, Any]]:
+    def fetch_devices(self, *, allowed_site_ids: Optional[Iterable[Any]] = None) -> List[Dict[str, Any]]:
+        normalized_site_ids = {
+            parsed
+            for parsed in (_coerce_int(value) for value in (allowed_site_ids or []))
+            if parsed is not None
+        } if allowed_site_ids is not None else None
+        if normalized_site_ids is not None and not normalized_site_ids:
+            return []
         conn = self._conn()
         try:
             cur = conn.cursor()
-            cur.execute(_DEVICE_SELECT_SQL)
+            sql = _DEVICE_SELECT_SQL
+            params: tuple[Any, ...] = ()
+            if normalized_site_ids is not None:
+                placeholders = ",".join("?" for _ in sorted(normalized_site_ids))
+                sql += f" WHERE ds.site_id IN ({placeholders})"
+                params = tuple(sorted(normalized_site_ids))
+            cur.execute(sql, params)
             rows = cur.fetchall()
             guids = [normalize_guid(row["guid"]) or "" for row in rows]
             software_map = self._load_software_by_guid([guid for guid in guids if guid])
@@ -1177,14 +1190,14 @@ class DeviceFilterMatcher:
 
         target_hosts: List[str] = []
         target_records: List[Dict[str, Any]] = []
-        filter_ids: List[int] = []
+        filter_targets: List[Dict[str, Any]] = []
         explicit_targets: List[Dict[str, Any]] = []
         for entry in raw_targets or []:
             parsed = self._normalize_target_entry(entry)
             if parsed["kind"] == "device":
                 explicit_targets.append(parsed)
             elif parsed["kind"] == "filter" and parsed.get("filter_id") is not None:
-                filter_ids.append(int(parsed["filter_id"]))
+                filter_targets.append(parsed)
 
         host_details: Dict[str, Dict[str, Any]] = {}
         target_identity_map: Dict[str, Dict[str, Any]] = {}
@@ -1292,13 +1305,29 @@ class DeviceFilterMatcher:
                 )
 
         filter_matches: Dict[int, List[str]] = {}
-        if filter_ids:
+        if filter_targets:
+            filter_ids = [int(target["filter_id"]) for target in filter_targets if target.get("filter_id") is not None]
             filters = filters_by_id or self.load_filters(filter_ids, include_archived=False)
-            for filter_id in filter_ids:
-                record = filters.get(int(filter_id))
+            for filter_target in filter_targets:
+                filter_id = int(filter_target["filter_id"])
+                record = filters.get(filter_id)
                 if not record or record.get("archived"):
                     continue
-                matches = self.match_filter_devices(record, devices=dataset)
+                allowed_site_ids = {
+                    int(value)
+                    for value in self._normalize_site_ids(
+                        filter_target.get("allowed_site_ids") or filter_target.get("scope_site_ids")
+                    )
+                }
+                if allowed_site_ids:
+                    scoped_dataset = [
+                        device
+                        for device in dataset
+                        if _coerce_int(device.get("site_id")) in allowed_site_ids
+                    ]
+                else:
+                    scoped_dataset = dataset
+                matches = self.match_filter_devices(record, devices=scoped_dataset)
                 resolved_hosts: List[str] = []
                 for device in matches:
                     details = _append_target_record(_build_target_record(device))
@@ -1331,6 +1360,9 @@ class DeviceFilterMatcher:
                     "kind": "filter",
                     "filter_id": filter_id,
                     "name": entry.get("name"),
+                    "allowed_site_ids": self._normalize_site_ids(
+                        entry.get("allowed_site_ids") or entry.get("scope_site_ids")
+                    ),
                 }
             hostname = _normalize_string(entry.get("hostname"))
             if hostname:

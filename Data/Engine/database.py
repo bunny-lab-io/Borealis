@@ -49,6 +49,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_sites(conn, logger=logger)
         _ensure_site_enrollment_codes(conn, logger=logger)
         _ensure_users_table(conn, logger=logger)
+        _ensure_user_site_assignments(conn, logger=logger)
         _ensure_default_admin(conn, logger=logger)
         _ensure_ansible_recaps(conn, logger=logger)
         _ensure_agent_service_accounts(conn, logger=logger)
@@ -277,6 +278,7 @@ def _ensure_users_table(conn: sqlite3.Connection, *, logger: Optional[logging.Lo
                 created_at INTEGER,
                 updated_at INTEGER,
                 mfa_enabled INTEGER NOT NULL DEFAULT 0,
+                mfa_disabled INTEGER NOT NULL DEFAULT 0,
                 mfa_secret TEXT
             )
             """
@@ -287,6 +289,8 @@ def _ensure_users_table(conn: sqlite3.Connection, *, logger: Optional[logging.Lo
 
         if "mfa_enabled" not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN mfa_enabled INTEGER NOT NULL DEFAULT 0")
+        if "mfa_disabled" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN mfa_disabled INTEGER NOT NULL DEFAULT 0")
         if "mfa_secret" not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN mfa_secret TEXT")
     except Exception as exc:
@@ -327,6 +331,50 @@ def _ensure_default_admin(conn: sqlite3.Connection, *, logger: Optional[logging.
         if logger:
             logger.error("Failed to ensure default admin: %s", exc, exc_info=True)
         else:  # pragma: no cover - escalate without logger for tests
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_user_site_assignments(
+    conn: sqlite3.Connection,
+    *,
+    logger: Optional[logging.Logger],
+) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_site_assignments (
+                user_id INTEGER NOT NULL,
+                site_id INTEGER NOT NULL,
+                assigned_at INTEGER,
+                FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_user_site_assignments_user_site
+                ON user_site_assignments(user_id, site_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_site_assignments_user_id
+                ON user_site_assignments(user_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_site_assignments_site_id
+                ON user_site_assignments(site_id)
+            """
+        )
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure user_site_assignments table: %s", exc, exc_info=True)
+        else:
             raise
     finally:
         cur.close()

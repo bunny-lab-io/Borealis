@@ -20,6 +20,7 @@ from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ....auth.guid_utils import normalize_guid
+from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from ...VPN import WireGuardServerConfig, WireGuardServerManager, VpnTunnelService
 
@@ -179,6 +180,7 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
     blueprint = Blueprint("vpn_tunnel", __name__)
     logger = adapters.context.logger.getChild("vpn_tunnel.api")
     service_log = adapters.service_log
+    site_access = UserSiteAccessManager(adapters.db_conn_factory, logger=logger)
 
     def _service_log_event(message: str, *, level: str = "INFO") -> None:
         if not callable(service_log):
@@ -209,6 +211,8 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
         if not requested_agent_id:
             return jsonify({"error": "agent_id_required"}), 400
         agent_id = _resolve_requested_agent_id(adapters, requested_agent_id)
+        if not site_access.user_can_access_agent_id(user, agent_id):
+            return jsonify({"error": "not found"}), 404
 
         try:
             tunnel_service = _get_tunnel_service(adapters)
@@ -258,6 +262,9 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
         if not requested_agent_id:
             return jsonify({"error": "agent_id_required"}), 400
         agent_id = _resolve_requested_agent_id(adapters, requested_agent_id)
+        user = _current_user(app) or {}
+        if not site_access.user_can_access_agent_id(user, agent_id):
+            return jsonify({"error": "not found"}), 404
 
         tunnel_service = _get_tunnel_service(adapters)
         payload = tunnel_service.status(agent_id)
@@ -312,6 +319,8 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
         for session_payload in sessions:
             payload = dict(session_payload or {})
             agent_id = _normalize_text(payload.get("agent_id"))
+            if agent_id and not site_access.user_can_access_agent_id(_current_user(app) or {}, agent_id):
+                continue
             agent_socket = False
             if agent_id and registry and hasattr(registry, "is_registered"):
                 try:

@@ -1,14 +1,8 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   Paper,
   Box,
   Typography,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
-  TableSortLabel,
   IconButton,
   Menu,
   MenuItem,
@@ -20,14 +14,17 @@ import {
   DialogActions,
   TextField,
   Checkbox,
-  Popover,
-  Stack
+  Stack,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
-import FilterListIcon from "@mui/icons-material/FilterList";
 import GroupIcon from "@mui/icons-material/Group";
+import LocationCityIcon from "@mui/icons-material/LocationCity";
+import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
+import { AgGridReact } from "ag-grid-react";
+import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
 import { PageHeaderActionRail } from "../Page_Header_Actions.jsx";
+import PageBodyFrame from "../PageBodyFrame.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BODY_TEXT_SX,
@@ -41,31 +38,25 @@ import {
   DialogHeaderBlock,
 } from "../DialogStyles.jsx";
 
-/* ---------- Formatting helpers to keep this page in lockstep with Device_List ---------- */
-const tablePaperSx = { m: 0, p: 0, bgcolor: "transparent", border: "none", boxShadow: "none" };
-const tableSx = {
-  minWidth: 820,
-  "& th, & td": {
-    color: "#ddd",
-    borderColor: "#2a2a2a",
-    fontSize: 13,
-    py: 0.75
-  },
-  "& th .MuiTableSortLabel-root": { color: "#ddd" },
-  "& th .MuiTableSortLabel-root.Mui-active": { color: "#ddd" }
-};
-const menuPaperSx = { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" };
-const filterFieldSx = {
-  input: { color: "#fff" },
-  minWidth: 220,
-  "& .MuiOutlinedInput-root": {
-    "& fieldset": { borderColor: "#555" },
-    "&:hover fieldset": { borderColor: "#888" }
-  }
-};
+ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_TITLE = "User Management";
 const PAGE_SUBTITLE = "Manage Borealis Engine Operators, MFA, and password resets.";
+const ADMIN_SELECTION_MESSAGE =
+  "An administrator was selected, admins inherantly have access to all managed sites.  Please unselect the admin and try again.";
+
+const gridTheme = themeQuartz.withParams({
+  accentColor: "#7dd3fc",
+  backgroundColor: "#070b1a",
+  browserColorScheme: "dark",
+  fontFamily: { googleFont: "IBM Plex Sans" },
+  foregroundColor: "#f4f7ff",
+  headerFontSize: 13,
+});
+const themeClassName = gridTheme.themeName || "ag-theme-quartz";
+const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
+const iconFontFamily = '"Quartz Regular"';
+const AUTO_SIZE_COLUMNS = ["__select__", "display_name", "username", "last_login", "role", "mfa_enabled"];
 
 function formatTs(tsSec) {
   if (!tsSec) return "-";
@@ -83,10 +74,12 @@ async function sha512(text) {
   return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
-  const [rows, setRows] = useState([]); // {username, display_name, role, last_login}
-  const [orderBy, setOrderBy] = useState("username");
-  const [order, setOrder] = useState("asc");
+export default function UserManagement({
+  isAdmin = false,
+  onPageMetaChange,
+  onOpenSiteAssignment,
+}) {
+  const [rows, setRows] = useState([]);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuUser, setMenuUser] = useState(null);
   const [resetOpen, setResetOpen] = useState(false);
@@ -103,9 +96,16 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
   const [warnMessage, setWarnMessage] = useState("");
   const [me, setMe] = useState(null);
   const [mfaBusyUser, setMfaBusyUser] = useState(null);
+  const [confirmMfaStateOpen, setConfirmMfaStateOpen] = useState(false);
+  const [confirmMfaStateTarget, setConfirmMfaStateTarget] = useState(null);
+  const [confirmMfaStateNextEnabled, setConfirmMfaStateNextEnabled] = useState(null);
   const [resetMfaOpen, setResetMfaOpen] = useState(false);
   const [resetMfaTarget, setResetMfaTarget] = useState(null);
+  const [selectedUsernames, setSelectedUsernames] = useState(() => new Set());
+  const gridRef = useRef(null);
+  const gridApiRef = useRef(null);
   const useGlobalHeader = Boolean(onPageMetaChange);
+
   const sendNotification = useCallback(async (message) => {
     if (!message) return;
     try {
@@ -114,7 +114,7 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          title: "User Management",
+          title: PAGE_TITLE,
           message,
           icon: "group",
           variant: "info",
@@ -125,21 +125,6 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
     }
   }, []);
 
-  // Columns and filters
-  const columns = useMemo(() => ([
-    { id: "display_name", label: "Display Name" },
-    { id: "username", label: "User Name" },
-    { id: "last_login", label: "Last Login" },
-    { id: "role", label: "User Role" },
-    { id: "mfa_enabled", label: "MFA" },
-    { id: "actions", label: "" }
-  ]), []);
-  const [filters, setFilters] = useState({}); // id -> string
-  const [filterAnchor, setFilterAnchor] = useState(null); // { id, anchorEl }
-  const openFilter = (id) => (e) => setFilterAnchor({ id, anchorEl: e.currentTarget });
-  const closeFilter = () => setFilterAnchor(null);
-  const onFilterChange = (id) => (e) => setFilters((prev) => ({ ...prev, [id]: e.target.value }));
-
   const fetchUsers = useCallback(async () => {
     try {
       const res = await fetch("/api/users", { credentials: "include" });
@@ -148,7 +133,7 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         setRows(
           data.users.map((u) => ({
             ...u,
-            mfa_enabled: u && typeof u.mfa_enabled !== "undefined" ? (u.mfa_enabled ? 1 : 0) : 0
+            mfa_enabled: u && typeof u.mfa_enabled !== "undefined" ? (u.mfa_enabled ? 1 : 0) : 0,
           }))
         );
       } else {
@@ -173,40 +158,51 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
     fetchUsers();
   }, [fetchUsers, isAdmin]);
 
-  const handleSort = (col) => {
-    if (orderBy === col) setOrder(order === "asc" ? "desc" : "asc");
-    else { setOrderBy(col); setOrder("asc"); }
-  };
-
-  const filteredSorted = useMemo(() => {
-    const applyFilters = (r) => {
-      for (const [key, val] of Object.entries(filters || {})) {
-        if (!val) continue;
-        const needle = String(val).toLowerCase();
-        let hay = "";
-        if (key === "last_login") hay = String(formatTs(r.last_login));
-        else hay = String(r[key] ?? "");
-        if (!hay.toLowerCase().includes(needle)) return false;
-      }
-      return true;
+  const autoSizeColumns = useCallback(() => {
+    const api = gridApiRef.current || gridRef.current?.api;
+    if (!api || !rows.length) return;
+    const doSize = () => {
+      try {
+        api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
+      } catch {}
     };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(doSize);
+    } else {
+      setTimeout(doSize, 0);
+    }
+  }, [rows.length]);
 
-    const dir = order === "asc" ? 1 : -1;
-    const arr = rows.filter(applyFilters);
-    arr.sort((a, b) => {
-      if (orderBy === "last_login") return ((a.last_login || 0) - (b.last_login || 0)) * dir;
-      if (orderBy === "mfa_enabled") return ((a.mfa_enabled ? 1 : 0) - (b.mfa_enabled ? 1 : 0)) * dir;
-      return String(a[orderBy] ?? "").toLowerCase()
-        .localeCompare(String(b[orderBy] ?? "").toLowerCase()) * dir;
+  useEffect(() => {
+    autoSizeColumns();
+  }, [rows, autoSizeColumns]);
+
+  useEffect(() => {
+    const api = gridApiRef.current || gridRef.current?.api;
+    if (!api) return;
+    api.forEachNode((node) => {
+      const username = String(node.data?.username || "").trim().toLowerCase();
+      node.setSelected(Boolean(username && selectedUsernames.has(username)));
     });
-    return arr;
-  }, [rows, filters, orderBy, order]);
+  }, [rows, selectedUsernames]);
 
-  const openMenu = (evt, user) => {
-    setMenuAnchor({ mouseX: evt.clientX, mouseY: evt.clientY, anchorEl: evt.currentTarget });
+  const selectedUsers = useMemo(
+    () =>
+      rows.filter((row) => {
+        const key = String(row?.username || "").trim().toLowerCase();
+        return Boolean(key && selectedUsernames.has(key));
+      }),
+    [rows, selectedUsernames]
+  );
+
+  const openMenu = (event, user) => {
+    setMenuAnchor(event.currentTarget);
     setMenuUser(user);
   };
-  const closeMenu = () => { setMenuAnchor(null); setMenuUser(null); };
+  const closeMenu = () => {
+    setMenuAnchor(null);
+    setMenuUser(null);
+  };
 
   const confirmDelete = (user) => {
     if (!user) return;
@@ -232,6 +228,11 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         return;
       }
       await fetchUsers();
+      setSelectedUsernames((prev) => {
+        const next = new Set(prev);
+        next.delete(String(user.username).toLowerCase());
+        return next;
+      });
       if (user?.username) {
         sendNotification(`User ${user.username} Deleted Successfully`);
       }
@@ -249,7 +250,7 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
       setWarnOpen(true);
       return;
     }
-    const nextRole = (String(user.role || "User").toLowerCase() === "admin") ? "User" : "Admin";
+    const nextRole = String(user.role || "User").toLowerCase() === "admin" ? "User" : "Admin";
     setChangeRoleTarget(user);
     setChangeRoleNext(nextRole);
     setConfirmChangeRoleOpen(true);
@@ -265,7 +266,7 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ role: nextRole })
+        body: JSON.stringify({ role: nextRole }),
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -291,6 +292,49 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
     setResetMfaOpen(true);
   };
 
+  const openChangeMfaState = (user) => {
+    if (!user) return;
+    setConfirmMfaStateTarget(user);
+    setConfirmMfaStateNextEnabled(!Boolean(user.mfa_enabled));
+    setConfirmMfaStateOpen(true);
+  };
+
+  const doChangeMfaState = async () => {
+    const user = confirmMfaStateTarget;
+    const nextEnabled = Boolean(confirmMfaStateNextEnabled);
+    setConfirmMfaStateOpen(false);
+    setConfirmMfaStateTarget(null);
+    setConfirmMfaStateNextEnabled(null);
+    if (!user) return;
+
+    const username = user.username;
+    setMfaBusyUser(username);
+    try {
+      const resp = await fetch(`/api/users/${encodeURIComponent(username)}/mfa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ enabled: nextEnabled }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setWarnMessage(data?.error || "Failed to update MFA settings.");
+        setWarnOpen(true);
+        return;
+      }
+      await fetchUsers();
+      if (username) {
+        sendNotification(`MFA ${nextEnabled ? "Enabled" : "Disabled"} for "${username}"`);
+      }
+    } catch (err) {
+      console.error(err);
+      setWarnMessage("Failed to update MFA settings.");
+      setWarnOpen(true);
+    } finally {
+      setMfaBusyUser(null);
+    }
+  };
+
   const doResetMfa = async () => {
     const user = resetMfaTarget;
     setResetMfaOpen(false);
@@ -304,7 +348,7 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ enabled: keepEnabled, reset_secret: true })
+        body: JSON.stringify({ enabled: keepEnabled, reset_secret: true }),
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -342,7 +386,7 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ enabled })
+        body: JSON.stringify({ enabled }),
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -385,11 +429,12 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ password_sha512: hash })
+        body: JSON.stringify({ password_sha512: hash }),
       });
       const data = await resp.json();
       if (!resp.ok) {
-        alert(data?.error || "Failed to reset password");
+        setWarnMessage(data?.error || "Failed to reset password");
+        setWarnOpen(true);
         return;
       }
       setResetOpen(false);
@@ -400,7 +445,8 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
       }
     } catch (e) {
       console.error(e);
-      alert("Failed to reset password");
+      setWarnMessage("Failed to reset password");
+      setWarnOpen(true);
     }
   };
 
@@ -416,16 +462,36 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
     setCreateForm({ username: "", display_name: "", password: "", role: "User" });
   }, []);
 
+  const handleOpenSiteAssignment = useCallback(() => {
+    if (!selectedUsers.length) return;
+    const adminSelected = selectedUsers.some((user) => String(user.role || "").toLowerCase() === "admin");
+    if (adminSelected) {
+      setWarnMessage(ADMIN_SELECTION_MESSAGE);
+      setWarnOpen(true);
+      return;
+    }
+    onOpenSiteAssignment?.(selectedUsers);
+  }, [onOpenSiteAssignment, selectedUsers]);
+
   const pageHeaderActions = useMemo(
     () => [
       {
+        id: "users-site-assignment",
+        label: "Site Assignment",
+        icon: <LocationCityIcon />,
+        tone: "secondary",
+        disabled: selectedUsers.length === 0,
+        onClick: handleOpenSiteAssignment,
+      },
+      {
         id: "users-create",
         label: "Create User",
+        icon: <PersonAddAlt1Icon />,
         tone: "primary",
         onClick: openCreate,
       },
     ],
-    [openCreate]
+    [handleOpenSiteAssignment, openCreate, selectedUsers.length]
   );
 
   useEffect(() => {
@@ -437,11 +503,12 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
     });
     return () => onPageMetaChange?.(null);
   }, [onPageMetaChange, pageHeaderActions]);
+
   const doCreate = async () => {
     const u = (createForm.username || "").trim();
     const dn = (createForm.display_name || u).trim();
     const pw = (createForm.password || "").trim();
-    const role = (createForm.role || "User");
+    const role = createForm.role || "User";
     if (!u || !pw) return;
     try {
       const hash = await sha512(pw);
@@ -449,11 +516,12 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ username: u, display_name: dn, password_sha512: hash, role })
+        body: JSON.stringify({ username: u, display_name: dn, password_sha512: hash, role }),
       });
       const data = await resp.json();
       if (!resp.ok) {
-        alert(data?.error || "Failed to create user");
+        setWarnMessage(data?.error || "Failed to create user");
+        setWarnOpen(true);
         return;
       }
       setCreateOpen(false);
@@ -461,15 +529,152 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
       sendNotification(`User ${u} Created Successfully`);
     } catch (e) {
       console.error(e);
-      alert("Failed to create user");
+      setWarnMessage("Failed to create user");
+      setWarnOpen(true);
     }
   };
+
+  const columnDefs = useMemo(
+    () => [
+      {
+        headerName: "",
+        field: "__select__",
+        checkboxSelection: true,
+        headerCheckboxSelection: true,
+        minWidth: 52,
+        width: 52,
+        maxWidth: 52,
+        pinned: "left",
+        filter: false,
+        sortable: false,
+        suppressMenu: true,
+        lockPosition: true,
+      },
+      {
+        headerName: "Display Name",
+        field: "display_name",
+        minWidth: 220,
+        cellClass: "auto-col-tight",
+      },
+      {
+        headerName: "User Name",
+        field: "username",
+        minWidth: 220,
+        cellClass: "auto-col-tight",
+      },
+      {
+        headerName: "Last Login",
+        field: "last_login",
+        minWidth: 190,
+        valueFormatter: (params) => formatTs(params.value),
+        comparator: (a, b) => (Number(a) || 0) - (Number(b) || 0),
+        cellClass: "auto-col-tight",
+      },
+      {
+        headerName: "User Role",
+        field: "role",
+        minWidth: 150,
+        cellClass: "auto-col-tight",
+      },
+      {
+        headerName: "MFA",
+        field: "mfa_enabled",
+        minWidth: 110,
+        width: 110,
+        maxWidth: 110,
+        filter: false,
+        valueGetter: (params) => (params.data?.mfa_enabled ? "Enabled" : "Disabled"),
+        comparator: (a, b) => String(a || "").localeCompare(String(b || "")),
+        cellRenderer: (params) => {
+          const user = params.data || {};
+          const busy = Boolean(
+            mfaBusyUser && String(mfaBusyUser).toLowerCase() === String(user.username || "").toLowerCase()
+          );
+          const explicitlyDisabled = !Boolean(user.mfa_enabled);
+          return (
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+              <Checkbox
+                size="small"
+                checked={Boolean(user.mfa_enabled)}
+                disabled={busy || explicitlyDisabled}
+                onChange={(event) => {
+                  event.stopPropagation();
+                  toggleMfa(user, event.target.checked);
+                }}
+                onClick={(event) => event.stopPropagation()}
+                sx={{
+                  color: explicitlyDisabled ? "rgba(124,138,165,0.42)" : "#7c8aa5",
+                  "&.Mui-checked": { color: "#7dd3fc" },
+                  "&.Mui-disabled": { color: "rgba(124,138,165,0.42)" },
+                }}
+                inputProps={{ "aria-label": `Toggle MFA for ${user.username}` }}
+              />
+            </Box>
+          );
+        },
+      },
+      {
+        headerName: "Actions",
+        field: "actions",
+        minWidth: 110,
+        width: 110,
+        maxWidth: 110,
+        sortable: false,
+        filter: false,
+        suppressMenu: true,
+        cellRenderer: (params) => {
+          const user = params.data || {};
+          return (
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "flex-end", width: "100%" }}>
+              <IconButton
+                size="small"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openMenu(event, user);
+                }}
+                sx={{ color: "#cbd5e1" }}
+              >
+                <MoreVertIcon fontSize="inherit" />
+              </IconButton>
+            </Box>
+          );
+        },
+      },
+    ],
+    [mfaBusyUser]
+  );
+
+  const defaultColDef = useMemo(
+    () => ({
+      sortable: true,
+      filter: "agTextColumnFilter",
+      resizable: true,
+      minWidth: 140,
+    }),
+    []
+  );
 
   if (!isAdmin) return null;
 
   return (
     <>
-      <Paper sx={tablePaperSx} elevation={0}>
+      <Paper
+        sx={{
+          m: 0,
+          p: 0,
+          display: "flex",
+          flexDirection: "column",
+          flexGrow: 1,
+          minWidth: 0,
+          height: "100%",
+          borderRadius: 0,
+          border: "none",
+          background: "transparent",
+          boxShadow: "none",
+          overflow: "hidden",
+        }}
+        elevation={0}
+      >
         {!useGlobalHeader ? (
           <Box sx={{ px: 3, pt: 3, pb: 1.5 }}>
             <Box
@@ -488,7 +693,7 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
                     {PAGE_TITLE}
                   </Typography>
                 </Stack>
-                <Typography variant="body2" sx={{ color: "#aaa", mt: 0.5 }}>
+                <Typography variant="body2" sx={{ color: "#94a3b8", mt: 0.5 }}>
                   {PAGE_SUBTITLE}
                 </Typography>
               </Box>
@@ -497,138 +702,160 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
           </Box>
         ) : null}
 
-        <Table size="small" sx={tableSx}>
-          <TableHead>
-            <TableRow>
-              {/* Leading checkbox gutter to match Devices table rhythm */}
-              <TableCell padding="checkbox" />
-              {columns.map((col) => (
-                <TableCell
-                  key={col.id}
-                  sortDirection={["actions"].includes(col.id) ? false : (orderBy === col.id ? order : false)}
-                >
-                  {col.id !== "actions" ? (
-                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <TableSortLabel
-                        active={orderBy === col.id}
-                        direction={orderBy === col.id ? order : "asc"}
-                        onClick={() => handleSort(col.id)}
-                      >
-                        {col.label}
-                      </TableSortLabel>
-                      <IconButton
-                        size="small"
-                        onClick={openFilter(col.id)}
-                        sx={{ color: filters[col.id] ? "#58a6ff" : "#888" }}
-                      >
-                        <FilterListIcon fontSize="inherit" />
-                      </IconButton>
-                    </Box>
-                  ) : null}
-                </TableCell>
-              ))}
-            </TableRow>
-          </TableHead>
-
-          <TableBody>
-            {filteredSorted.map((u) => (
-              <TableRow key={u.username} hover>
-                {/* Body gutter to stay aligned with header */}
-                <TableCell padding="checkbox" />
-                <TableCell>{u.display_name || u.username}</TableCell>
-                <TableCell>{u.username}</TableCell>
-                <TableCell>{formatTs(u.last_login)}</TableCell>
-                <TableCell>{u.role || "User"}</TableCell>
-                <TableCell align="center">
-                  <Checkbox
-                    size="small"
-                    checked={Boolean(u.mfa_enabled)}
-                    disabled={Boolean(mfaBusyUser && String(mfaBusyUser).toLowerCase() === String(u.username).toLowerCase())}
-                    onChange={(event) => {
-                      event.stopPropagation();
-                      toggleMfa(u, event.target.checked);
-                    }}
-                    onClick={(event) => event.stopPropagation()}
-                    sx={{
-                      color: "#888",
-                      "&.Mui-checked": { color: "#58a6ff" }
-                    }}
-                    inputProps={{ "aria-label": `Toggle MFA for ${u.username}` }}
-                  />
-                </TableCell>
-                <TableCell align="right">
-                  <IconButton size="small" onClick={(e) => openMenu(e, u)} sx={{ color: "#ccc" }}>
-                    <MoreVertIcon fontSize="inherit" />
-                  </IconButton>
-                </TableCell>
-              </TableRow>
-            ))}
-            {filteredSorted.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={columns.length + 1} sx={{ color: "#888" }}>
-                  No users found.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-
-        {/* Filter popover (styled to match Device_List) */}
-        <Popover
-          open={Boolean(filterAnchor)}
-          anchorEl={filterAnchor?.anchorEl || null}
-          onClose={closeFilter}
-          anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-          PaperProps={{ sx: { bgcolor: "#1e1e1e", p: 1 } }}
-        >
-          {filterAnchor && (
-            <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-              <TextField
-                autoFocus
-                size="small"
-                placeholder={`Filter ${columns.find((c) => c.id === filterAnchor.id)?.label || ""}`}
-                value={filters[filterAnchor.id] || ""}
-                onChange={onFilterChange(filterAnchor.id)}
-                onKeyDown={(e) => { if (e.key === "Escape") closeFilter(); }}
-                sx={filterFieldSx}
-              />
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => {
-                  setFilters((prev) => ({ ...prev, [filterAnchor.id]: "" }));
-                  closeFilter();
+        <PageBodyFrame variant="grid">
+          <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}>
+            {selectedUsers.length ? (
+              <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1.25 }}>
+                <Typography variant="body2" sx={{ color: "#94a3b8", fontWeight: 600 }}>
+                  {selectedUsers.length} selected
+                </Typography>
+              </Box>
+            ) : null}
+            <Box
+              className={themeClassName}
+              sx={{
+                flexGrow: 1,
+                minHeight: 0,
+                "--ag-font-family": gridFontFamily,
+                "--ag-icon-font-family": iconFontFamily,
+                "--ag-checkbox-border-radius": "3px",
+                "& .ag-root-wrapper": {
+                  minHeight: "100%",
+                  border: "none",
+                  borderRadius: 0,
+                  background: "transparent",
+                },
+                "& .ag-header": {
+                  backgroundColor: "rgba(15,23,42,0.9)",
+                  borderBottom: "1px solid rgba(148,163,184,0.25)",
+                },
+                "& .ag-header-cell-label": {
+                  color: "#e2e8f0",
+                  fontWeight: 600,
+                  letterSpacing: 0.3,
+                },
+                "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  textAlign: "left",
+                  padding: "8px 12px 8px 18px",
+                },
+                "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  padding: 0,
+                },
+                "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+                  paddingLeft: "12px",
+                  paddingRight: "9px",
+                },
+                "& .ag-row": {
+                  borderColor: "rgba(255,255,255,0.04)",
+                  transition: "background 0.2s ease",
+                },
+                "& .ag-row:nth-of-type(even)": {
+                  backgroundColor: "rgba(15,23,42,0.45)",
+                },
+                "& .ag-row-hover": {
+                  backgroundColor: "rgba(73,156,196,0.2) !important",
+                },
+                "& .ag-row-selected": {
+                  backgroundColor: "rgba(125,211,252,0.2) !important",
+                  boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+                },
+              }}
+            >
+              <AgGridReact
+                ref={gridRef}
+                rowData={rows}
+                columnDefs={columnDefs}
+                defaultColDef={defaultColDef}
+                rowSelection="multiple"
+                rowMultiSelectWithClick
+                suppressRowClickSelection
+                suppressCellFocus
+                pagination
+                paginationPageSize={20}
+                paginationPageSizeSelector={[20, 50, 100]}
+                animateRows
+                getRowId={(params) => String(params.data?.username || "")}
+                onGridReady={(params) => {
+                  gridApiRef.current = params.api;
+                  autoSizeColumns();
                 }}
-                sx={{ textTransform: "none", borderColor: "#555", color: "#bbb" }}
-              >
-                Clear
-              </Button>
+                onSelectionChanged={() => {
+                  const api = gridApiRef.current || gridRef.current?.api;
+                  if (!api) return;
+                  const selected = api
+                    .getSelectedNodes()
+                    .map((node) => String(node.data?.username || "").trim().toLowerCase())
+                    .filter(Boolean);
+                  setSelectedUsernames(new Set(selected));
+                }}
+                theme={gridTheme}
+              />
             </Box>
-          )}
-        </Popover>
+          </Box>
+        </PageBodyFrame>
 
         <Menu
-          anchorEl={menuAnchor?.anchorEl}
+          anchorEl={menuAnchor}
           open={Boolean(menuAnchor)}
           onClose={closeMenu}
           anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
           transformOrigin={{ vertical: "top", horizontal: "right" }}
-          PaperProps={{ sx: menuPaperSx }}
+          PaperProps={{ sx: { bgcolor: "#111827", color: "#e5eefc", fontSize: "0.9rem" } }}
         >
           <MenuItem
             disabled={me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase()}
-            onClick={() => { const u = menuUser; closeMenu(); confirmDelete(u); }}
+            onClick={() => {
+              const user = menuUser;
+              closeMenu();
+              confirmDelete(user);
+            }}
           >
             Delete User
           </MenuItem>
-          <MenuItem onClick={() => { const u = menuUser; closeMenu(); openReset(u); }}>Reset Password</MenuItem>
+          <MenuItem
+            onClick={() => {
+              const user = menuUser;
+              closeMenu();
+              openReset(user);
+            }}
+          >
+            Reset Password
+          </MenuItem>
           <MenuItem
             disabled={me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase()}
-            onClick={() => { const u = menuUser; closeMenu(); openChangeRole(u); }}
+            onClick={() => {
+              const user = menuUser;
+              closeMenu();
+              openChangeRole(user);
+            }}
           >
             Change Role
           </MenuItem>
-          <MenuItem onClick={() => { const u = menuUser; closeMenu(); openResetMfa(u); }}>
+          <MenuItem
+            disabled={Boolean(mfaBusyUser && menuUser && String(mfaBusyUser).toLowerCase() === String(menuUser.username || "").toLowerCase())}
+            onClick={() => {
+              const user = menuUser;
+              closeMenu();
+              openChangeMfaState(user);
+            }}
+          >
+            {Boolean(menuUser?.mfa_enabled) ? "Disable MFA" : "Enable MFA"}
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              const user = menuUser;
+              closeMenu();
+              openResetMfa(user);
+            }}
+            disabled={!Boolean(menuUser?.mfa_enabled)}
+          >
             Reset MFA
           </MenuItem>
         </Menu>
@@ -703,8 +930,8 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
               onChange={(e) => setCreateForm((p) => ({ ...p, role: e.target.value }))}
               sx={{ ...DIALOG_SELECT_SX, mt: 2.1 }}
             >
-                <MenuItem value="User">User</MenuItem>
-                <MenuItem value="Admin">Admin</MenuItem>
+              <MenuItem value="User">User</MenuItem>
+              <MenuItem value="Admin">Admin</MenuItem>
             </TextField>
           </DialogContent>
           <DialogActions sx={DIALOG_ACTIONS_SX}>
@@ -730,6 +957,25 @@ export default function UserManagement({ isAdmin = false, onPageMetaChange }) {
         onConfirm={doChangeRole}
         confirmLabel="Change Role"
         confirmTone="primary"
+      />
+      <ConfirmDeleteDialog
+        open={confirmMfaStateOpen}
+        title={confirmMfaStateNextEnabled ? "Enable MFA" : "Disable MFA"}
+        message={
+          confirmMfaStateTarget
+            ? confirmMfaStateNextEnabled
+              ? `Require MFA for '${confirmMfaStateTarget.username}'? If they do not already have an authenticator configured, Borealis will require MFA setup on their next login.`
+              : `Disable MFA for '${confirmMfaStateTarget.username}'? They will be able to sign in without MFA until an administrator enables it again.`
+            : ""
+        }
+        onCancel={() => {
+          setConfirmMfaStateOpen(false);
+          setConfirmMfaStateTarget(null);
+          setConfirmMfaStateNextEnabled(null);
+        }}
+        onConfirm={doChangeMfaState}
+        confirmLabel={confirmMfaStateNextEnabled ? "Enable MFA" : "Disable MFA"}
+        confirmTone={confirmMfaStateNextEnabled ? "primary" : "danger"}
       />
       <ConfirmDeleteDialog
         open={resetMfaOpen}

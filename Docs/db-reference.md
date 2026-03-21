@@ -37,6 +37,8 @@ scheduled_job_runs (id) ------< scheduled_job_run_targets (run_id)
 activity_history (id) --------< scheduled_job_run_activity (activity_id, unique)
 
 users (id/username) ----------< device_approvals.approved_by_user_id (soft relation)
+users (id) -------------------< user_site_assignments (user_id)
+sites (id) -------------------< user_site_assignments (site_id)
 ```
 
 ## Important SQLite Behavior
@@ -142,6 +144,21 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Notes:
 - Mapping key is hostname, not GUID.
 - There is no FK to `devices.hostname`; this is a logical relationship.
+
+#### `user_site_assignments`
+- Status: Active.
+- Purpose: Operator-to-site RBAC scope assignments.
+- Columns: `user_id`, `site_id`, `assigned_at`.
+- Constraints and indexes:
+- Unique index on `(user_id, site_id)`.
+- `idx_user_site_assignments_user_id` on `user_id`.
+- `idx_user_site_assignments_site_id` on `site_id`.
+- Used by:
+- `/api/user_site_assignments/selection` and `/api/user_site_assignments/assign`.
+- Inventory, approvals, filters, quick jobs, scheduled jobs, tunnel/shell/VNC site-scope checks.
+- Notes:
+- Admins do not need rows in this table; they implicitly see all sites.
+- Operators with no rows here have no site visibility until an admin assigns at least one site.
 
 #### `device_vpn_config`
 - Status: Dormant (schema present, no active read/write paths in current Engine source).
@@ -336,7 +353,7 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 #### `users`
 - Status: Active.
 - Purpose: Operator login accounts and MFA state.
-- Columns: `id`, `username`, `display_name`, `password_sha512`, `role`, `last_login`, `created_at`, `updated_at`, `mfa_enabled`, `mfa_secret`.
+- Columns: `id`, `username`, `display_name`, `password_sha512`, `role`, `last_login`, `created_at`, `updated_at`, `mfa_enabled`, `mfa_disabled`, `mfa_secret`.
 - Constraints and indexes:
 - `id` autoincrement primary key.
 - `username` unique.
@@ -346,6 +363,8 @@ users (id/username) ----------< device_approvals.approved_by_user_id (soft relat
 - Device approval auditing (`approved_by_user_id` lookup by id or username).
 - Notes:
 - Startup bootstrap ensures at least one Admin account exists.
+- `mfa_disabled=0` means MFA is required by default, even before the operator has completed first-time setup.
+- `mfa_secret` remaining empty with `mfa_disabled=0` causes the next successful password login to enter MFA setup immediately.
 
 #### `github_token`
 - Status: Active.

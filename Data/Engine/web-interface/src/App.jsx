@@ -13,17 +13,32 @@ import { PageHeaderActionRail } from "./Page_Header_Actions.jsx";
 // Styling Imports
 import {
       AppBar, Toolbar, Typography, Box, Menu, MenuItem, Button,
+      Dialog, DialogActions, DialogContent, DialogTitle, TextField,
       CssBaseline, ThemeProvider, createTheme, Breadcrumbs
     } from "@mui/material";
     import {
       KeyboardArrowDown as KeyboardArrowDownIcon,
+      LockReset as LockResetIcon,
       Logout as LogoutIcon,
-      NavigateNext as NavigateNextIcon
+      NavigateNext as NavigateNextIcon,
+      VpnKey as VpnKeyIcon,
     } from "@mui/icons-material";
     import ClickAwayListener from "@mui/material/ClickAwayListener";
     import SearchIcon from "@mui/icons-material/Search";
     import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
     import ArrowDropUpIcon from "@mui/icons-material/ArrowDropUp";
+import {
+  DIALOG_ACTIONS_SX,
+  DIALOG_BODY_TEXT_SX,
+  DIALOG_BUTTON_SX,
+  DIALOG_CONTENT_SX,
+  DIALOG_DANGER_BUTTON_SX,
+  DIALOG_INPUT_SX,
+  DIALOG_PAPER_SX,
+  DIALOG_PRIMARY_BUTTON_SX,
+  DIALOG_TITLE_SX,
+  DialogHeaderBlock,
+} from "./DialogStyles.jsx";
 
 // Workflow Editor Imports
 import FlowTabs from "./Flow_Editor/Flow_Tabs";
@@ -39,6 +54,7 @@ import {
 // Borealis Page Imports
 import Login from "./Login.jsx";
 import SiteList from "./Sites/Site_List";
+import SiteAssignment from "./Sites/Site_Assignment.jsx";
 import DeviceList from "./Devices/Device_List";
 import DeviceDetails from "./Devices/Device_Details";
 import AgentDevices from "./Devices/Agent_Devices.jsx";
@@ -143,6 +159,21 @@ function normalizeAegisStatus(payload) {
   };
 }
 
+async function sha512(text) {
+  try {
+    if (window.crypto && window.crypto.subtle && window.isSecureContext) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(text || "");
+      const hashBuffer = await window.crypto.subtle.digest("SHA-512", data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+  } catch (_) {
+    /* fall through to plaintext fallback */
+  }
+  return null;
+}
+
   export default function App() {
   const [tabs, setTabs] = useState([createDefaultFlowTab("flow_1")]);
   const [activeTabId, setActiveTabId] = useState("flow_1");
@@ -160,11 +191,13 @@ function normalizeAegisStatus(payload) {
   const [user, setUser] = useState(null);
   const [userRole, setUserRole] = useState(null);
   const [userDisplayName, setUserDisplayName] = useState(null);
+  const [userMfaEnabled, setUserMfaEnabled] = useState(false);
   const [editingJob, setEditingJob] = useState(null);
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0);
   const [quickJobDraft, setQuickJobDraft] = useState(null);
   const [assemblyEditorState, setAssemblyEditorState] = useState(null); // { mode: 'script'|'ansible', row, nonce }
   const [filterEditorState, setFilterEditorState] = useState(null);
+  const [siteAssignmentState, setSiteAssignmentState] = useState(null);
   const [filtersRefreshToken, setFiltersRefreshToken] = useState(0);
   const [sessionResolved, setSessionResolved] = useState(false);
   const initialPathRef = useRef(window.location.pathname + window.location.search);
@@ -175,15 +208,55 @@ function normalizeAegisStatus(payload) {
   const [aegisStatus, setAegisStatus] = useState(EMPTY_AEGIS_STATUS);
   const [aegisDialog, setAegisDialog] = useState(null);
   const [aegisPromptDismissed, setAegisPromptDismissed] = useState(false);
+  const [resetOwnPasswordOpen, setResetOwnPasswordOpen] = useState(false);
+  const [resetOwnPasswordBusy, setResetOwnPasswordBusy] = useState(false);
+  const [resetOwnPasswordCurrent, setResetOwnPasswordCurrent] = useState("");
+  const [resetOwnPasswordNext, setResetOwnPasswordNext] = useState("");
+  const [resetOwnPasswordConfirm, setResetOwnPasswordConfirm] = useState("");
+  const [resetOwnPasswordError, setResetOwnPasswordError] = useState("");
+  const [resetOwnMfaOpen, setResetOwnMfaOpen] = useState(false);
+  const [resetOwnMfaBusy, setResetOwnMfaBusy] = useState(false);
+
+  const clearResetOwnPasswordState = useCallback(() => {
+    setResetOwnPasswordOpen(false);
+    setResetOwnPasswordBusy(false);
+    setResetOwnPasswordCurrent("");
+    setResetOwnPasswordNext("");
+    setResetOwnPasswordConfirm("");
+    setResetOwnPasswordError("");
+  }, []);
 
   const clearClientSession = useCallback(() => {
     try { localStorage.removeItem("borealis_session"); } catch {}
     setUser(null);
     setUserRole(null);
     setUserDisplayName(null);
+    setUserMfaEnabled(false);
     setAegisStatus(EMPTY_AEGIS_STATUS);
     setAegisDialog(null);
     setAegisPromptDismissed(false);
+    clearResetOwnPasswordState();
+    setResetOwnMfaOpen(false);
+    setResetOwnMfaBusy(false);
+    setUserMenuAnchorEl(null);
+  }, [clearResetOwnPasswordState]);
+
+  const sendNotification = useCallback(async ({ title, message, icon = "notification", variant = "info" }) => {
+    try {
+      await fetch("/api/notifications/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title,
+          message,
+          icon,
+          variant,
+        }),
+      });
+    } catch {
+      /* notifications are best-effort */
+    }
   }, []);
 
   const fetchAegisStatus = useCallback(async () => {
@@ -205,23 +278,14 @@ function normalizeAegisStatus(payload) {
   }, []);
 
   const notifyAegisDeferred = useCallback(async () => {
-    try {
-      await fetch("/api/notifications/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          title: "Aegis Cipher",
-          message:
-            "Aegis Cipher not entered. Credential-backed jobs and other protected-secret workflows remain disabled until it is entered.",
-          icon: "pendingactions",
-          variant: "warning",
-        }),
-      });
-    } catch {
-      /* notifications are best-effort */
-    }
-  }, []);
+    await sendNotification({
+      title: "Aegis Cipher",
+      message:
+        "Aegis Cipher not entered. Credential-backed jobs and other protected-secret workflows remain disabled until it is entered.",
+      icon: "pendingactions",
+      variant: "warning",
+    });
+  }, [sendNotification]);
 
   const openAegisDialog = useCallback((mode, source = "credentials") => {
     setAegisDialog({ mode, source });
@@ -415,6 +479,22 @@ function normalizeAegisStatus(payload) {
           return "/access_management/credentials";
       case "access_users":
         return "/access_management/users";
+      case "site_assignment": {
+        const params = new URLSearchParams();
+        const usernames = Array.isArray(options.usernames)
+          ? options.usernames
+          : Array.isArray(siteAssignmentState?.usernames)
+          ? siteAssignmentState.usernames
+          : [];
+        usernames
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+          .forEach((username) => params.append("user", username));
+        const query = params.toString();
+        return query
+          ? `/access_management/users/site_assignment?${query}`
+          : "/access_management/users/site_assignment";
+      }
       case "server_info":
         return "/admin/server_info";
       case "page_template":
@@ -425,7 +505,7 @@ function normalizeAegisStatus(payload) {
         return "/devices";
       }
     },
-    [assemblyEditorState, editingJob?.id, selectedDevice]
+    [assemblyEditorState, editingJob?.id, selectedDevice, siteAssignmentState]
   );
 
   const interpretPath = useCallback((rawPath) => {
@@ -510,6 +590,13 @@ function normalizeAegisStatus(payload) {
         };
       }
       if (path === "/access_management/users") return { page: "access_users", options: {} };
+      if (path === "/access_management/users/site_assignment") {
+        const usernames = params
+          .getAll("user")
+          .map((value) => String(value || "").trim())
+          .filter(Boolean);
+        return { page: "site_assignment", options: usernames.length ? { usernames } : {} };
+      }
       if (path === "/access_management/github_token") return { page: "access_credentials", options: {} };
       if (path === "/access_management/credentials") return { page: "access_credentials", options: {} };
       if (path === "/admin/server_info") return { page: "server_info", options: {} };
@@ -555,6 +642,15 @@ function normalizeAegisStatus(payload) {
         setFilterEditorState(null);
       }
 
+      if (page === "site_assignment") {
+        const usernames = Array.isArray(options.usernames)
+          ? options.usernames.map((value) => String(value || "").trim()).filter(Boolean)
+          : [];
+        setSiteAssignmentState({ usernames });
+      } else if (!options.preserveSiteAssignment) {
+        setSiteAssignmentState(null);
+      }
+
       if (page === "create_job") {
         if (options.job && typeof options.job === "object") {
           setEditingJob(options.job);
@@ -583,6 +679,7 @@ function normalizeAegisStatus(payload) {
       setCurrentPageState,
       setEditingJob,
       setFilterEditorState,
+      setSiteAssignmentState,
       setSelectedDevice,
     ]
   );
@@ -803,6 +900,11 @@ function normalizeAegisStatus(payload) {
         items.push({ label: "Access Management", page: "access_credentials" });
         items.push({ label: "Users", page: "access_users" });
         break;
+      case "site_assignment":
+        items.push({ label: "Access Management", page: "access_credentials" });
+        items.push({ label: "Users", page: "access_users" });
+        items.push({ label: "Site Assignment" });
+        break;
       case "server_info":
         items.push({ label: "Admin Settings" });
         items.push({ label: "Server Info", page: "server_info" });
@@ -816,7 +918,7 @@ function normalizeAegisStatus(payload) {
         items.push({ label: "Page Template", page: "page_template" });
         break;
       case "admin_device_approvals":
-        items.push({ label: "Admin Settings", page: "server_info" });
+        items.push({ label: "Inventory", page: "devices" });
         items.push({ label: "Device Approvals", page: "admin_device_approvals" });
         break;
       case "filters":
@@ -864,6 +966,7 @@ function normalizeAegisStatus(payload) {
             setUser(me.username);
             setUserRole(me.role || null);
             setUserDisplayName(me.display_name || me.username);
+            setUserMfaEnabled(Boolean(me.mfa_enabled));
           }
           localStorage.setItem(
             "borealis_session",
@@ -906,6 +1009,15 @@ function normalizeAegisStatus(payload) {
           clearClientSession();
           setAegisStatus(EMPTY_AEGIS_STATUS);
         } else if (resp.ok && !canceled) {
+          const me = await resp.json();
+          setUser(me.username);
+          setUserRole(me.role || null);
+          setUserDisplayName(me.display_name || me.username);
+          setUserMfaEnabled(Boolean(me.mfa_enabled));
+          localStorage.setItem(
+            "borealis_session",
+            JSON.stringify({ username: me.username, display_name: me.display_name || me.username, role: me.role, timestamp: Date.now() })
+          );
           fetchAegisStatus();
         }
       } catch {}
@@ -1072,6 +1184,7 @@ function normalizeAegisStatus(payload) {
     setUser(username);
     setUserRole(role || null);
     setUserDisplayName(username);
+    setUserMfaEnabled(false);
     localStorage.setItem(
       "borealis_session",
       JSON.stringify({ username, display_name: username, role: role || null, timestamp: Date.now() })
@@ -1083,6 +1196,7 @@ function normalizeAegisStatus(payload) {
         if (resp.ok) {
           const me = await resp.json();
           setUserDisplayName(me.display_name || me.username);
+          setUserMfaEnabled(Boolean(me.mfa_enabled));
           localStorage.setItem(
             "borealis_session",
             JSON.stringify({ username: me.username, display_name: me.display_name || me.username, role: me.role, timestamp: Date.now() })
@@ -1155,6 +1269,155 @@ function normalizeAegisStatus(payload) {
 
   const handleUserMenuOpen = (event) => setUserMenuAnchorEl(event.currentTarget);
   const handleUserMenuClose = () => setUserMenuAnchorEl(null);
+  const handleOpenResetOwnPasswordDialog = () => {
+    handleUserMenuClose();
+    if (resetOwnPasswordBusy) return;
+    setResetOwnPasswordError("");
+    setResetOwnPasswordCurrent("");
+    setResetOwnPasswordNext("");
+    setResetOwnPasswordConfirm("");
+    setResetOwnPasswordOpen(true);
+  };
+  const handleCloseResetOwnPasswordDialog = () => {
+    if (resetOwnPasswordBusy) return;
+    clearResetOwnPasswordState();
+  };
+  const handleResetOwnPassword = async () => {
+    if (resetOwnPasswordBusy) return;
+
+    const currentPassword = String(resetOwnPasswordCurrent || "");
+    const nextPassword = String(resetOwnPasswordNext || "");
+    const confirmPassword = String(resetOwnPasswordConfirm || "");
+
+    if (!currentPassword || !nextPassword) {
+      setResetOwnPasswordError("Enter your current password and a new password.");
+      return;
+    }
+    if (nextPassword !== confirmPassword) {
+      setResetOwnPasswordError("The new password and confirmation do not match.");
+      return;
+    }
+    if (currentPassword === nextPassword) {
+      setResetOwnPasswordError("Choose a new password that differs from your current password.");
+      return;
+    }
+
+    setResetOwnPasswordBusy(true);
+    setResetOwnPasswordError("");
+    try {
+      const currentPasswordHash = await sha512(currentPassword);
+      const nextPasswordHash = await sha512(nextPassword);
+      const payload =
+        currentPasswordHash && nextPasswordHash
+          ? {
+              current_password_sha512: currentPasswordHash,
+              new_password_sha512: nextPasswordHash,
+            }
+          : {
+              current_password: currentPassword,
+              new_password: nextPassword,
+            };
+
+      const resp = await fetch("/api/auth/password/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
+
+      if (resp.status === 401 || resp.status === 403) {
+        const unauthorizedPayload = await resp.json().catch(() => ({}));
+        if ((unauthorizedPayload?.error || "") === "invalid current password") {
+          setResetOwnPasswordError("Your current password is incorrect.");
+          return;
+        }
+        clearClientSession();
+        navigateTo("login", { replace: true, allowUnauthenticated: true, suppressPending: true });
+        return;
+      }
+
+      const responsePayload = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        const errorMessageMap = {
+          "invalid current password": "Your current password is incorrect.",
+          "new password must differ from the current password": "Choose a new password that differs from your current password.",
+          "invalid current password hash": "Enter your current password.",
+          "invalid new password hash": "Enter a valid new password.",
+        };
+        throw new Error(errorMessageMap[responsePayload?.error] || responsePayload?.error || "Failed to reset password.");
+      }
+
+      clearResetOwnPasswordState();
+      await sendNotification({
+        title: "Reset Password",
+        message: "Your Borealis password was updated.",
+        icon: "user",
+        variant: "info",
+      });
+    } catch (error) {
+      setResetOwnPasswordError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Borealis could not update your password."
+      );
+    } finally {
+      setResetOwnPasswordBusy(false);
+    }
+  };
+  const handleOpenResetOwnMfaDialog = () => {
+    handleUserMenuClose();
+    if (!userMfaEnabled || resetOwnMfaBusy) return;
+    setResetOwnMfaOpen(true);
+  };
+  const handleCloseResetOwnMfaDialog = () => {
+    if (resetOwnMfaBusy) return;
+    setResetOwnMfaOpen(false);
+  };
+  const handleResetOwnMfa = async () => {
+    if (resetOwnMfaBusy) return;
+    setResetOwnMfaBusy(true);
+    try {
+      const resp = await fetch("/api/auth/mfa/reset", {
+        method: "POST",
+        credentials: "include",
+      });
+
+      if (resp.status === 401 || resp.status === 403) {
+        clearClientSession();
+        navigateTo("login", { replace: true, allowUnauthenticated: true, suppressPending: true });
+        return;
+      }
+
+      const payload = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(payload.error || "Failed to reset MFA.");
+      }
+
+      setUserMfaEnabled(Boolean(payload.mfa_enabled));
+      setResetOwnMfaOpen(false);
+      await sendNotification({
+        title: "Reset MFA",
+        message: payload.setup_required_on_next_login
+          ? "Your MFA setup was reset. The next time you sign in, Borealis will prompt you to set up MFA again."
+          : "No active MFA setup was found for your account.",
+        icon: "user",
+        variant: "info",
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Borealis could not reset MFA for this account.";
+      await sendNotification({
+        title: "Reset MFA",
+        message,
+        icon: "warning",
+        variant: "error",
+      });
+    } finally {
+      setResetOwnMfaBusy(false);
+    }
+  };
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
@@ -1467,9 +1730,9 @@ function normalizeAegisStatus(payload) {
 
   useEffect(() => {
     const requiresAdmin = currentPage === 'server_info'
-      || currentPage === 'admin_device_approvals'
       || currentPage === 'access_credentials'
       || currentPage === 'access_users'
+      || currentPage === 'site_assignment'
       || currentPage === 'log_management'
       || currentPage === 'ssh_devices'
       || currentPage === 'winrm_devices'
@@ -1705,7 +1968,28 @@ function normalizeAegisStatus(payload) {
         );
 
       case "access_users":
-        return <UserManagement isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
+        return (
+          <UserManagement
+            isAdmin={isAdmin}
+            onPageMetaChange={handlePageMetaChange}
+            onOpenSiteAssignment={(users) =>
+              navigateTo("site_assignment", {
+                usernames: Array.isArray(users)
+                  ? users.map((user) => String(user?.username || "").trim()).filter(Boolean)
+                  : [],
+              })
+            }
+          />
+        );
+
+      case "site_assignment":
+        return (
+          <SiteAssignment
+            onPageMetaChange={handlePageMetaChange}
+            selectedUsernames={siteAssignmentState?.usernames || []}
+            onBack={() => navigateTo("access_users")}
+          />
+        );
 
       case "server_info":
         return <ServerInfo isAdmin={isAdmin} onPageMetaChange={handlePageMetaChange} />;
@@ -1926,7 +2210,7 @@ function normalizeAegisStatus(payload) {
               {/* Push user menu to the right */}
               <Box sx={{ flexGrow: 1 }} />
 
-              {/* User Menu (unchanged) */}
+              {/* User Menu */}
               <Button
                 color="inherit"
                 onClick={handleUserMenuOpen}
@@ -1936,6 +2220,26 @@ function normalizeAegisStatus(payload) {
                 {userDisplayName || user || "User"}
               </Button>
               <Menu anchorEl={userMenuAnchorEl} open={Boolean(userMenuAnchorEl)} onClose={handleUserMenuClose}>
+                <MenuItem disabled={resetOwnPasswordBusy} onClick={handleOpenResetOwnPasswordDialog}>
+                  <VpnKeyIcon
+                    sx={{
+                      fontSize: 18,
+                      color: !resetOwnPasswordBusy ? "#8ecbff" : "rgba(148,163,184,0.62)",
+                      mr: 1,
+                    }}
+                  />
+                  Reset Password
+                </MenuItem>
+                <MenuItem disabled={!userMfaEnabled || resetOwnMfaBusy} onClick={handleOpenResetOwnMfaDialog}>
+                  <LockResetIcon
+                    sx={{
+                      fontSize: 18,
+                      color: userMfaEnabled && !resetOwnMfaBusy ? "#8ecbff" : "rgba(148,163,184,0.62)",
+                      mr: 1,
+                    }}
+                  />
+                  Reset MFA
+                </MenuItem>
                 <MenuItem onClick={() => { handleUserMenuClose(); handleLogout(); }}>
                   <LogoutIcon sx={{ fontSize: 18, color: "#ff6b6b", mr: 1 }} /> Logout
                 </MenuItem>
@@ -2028,6 +2332,91 @@ function normalizeAegisStatus(payload) {
         onRename={handleRenameTab}
         onCloseTab={handleCloseTab}
       />
+      <Dialog
+        open={resetOwnPasswordOpen}
+        onClose={handleCloseResetOwnPasswordDialog}
+        fullWidth
+        maxWidth="xs"
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Reset Password"
+            subtitle="Verify your current password, then set a new one for this Borealis account."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <TextField
+            autoFocus
+            fullWidth
+            label="Current Password"
+            type="password"
+            variant="outlined"
+            value={resetOwnPasswordCurrent}
+            onChange={(event) => setResetOwnPasswordCurrent(event.target.value)}
+            sx={{ ...DIALOG_INPUT_SX, mt: 1.25 }}
+          />
+          <TextField
+            fullWidth
+            label="New Password"
+            type="password"
+            variant="outlined"
+            value={resetOwnPasswordNext}
+            onChange={(event) => setResetOwnPasswordNext(event.target.value)}
+            sx={{ ...DIALOG_INPUT_SX, mt: 2.1 }}
+          />
+          <TextField
+            fullWidth
+            label="Confirm New Password"
+            type="password"
+            variant="outlined"
+            value={resetOwnPasswordConfirm}
+            onChange={(event) => setResetOwnPasswordConfirm(event.target.value)}
+            sx={{ ...DIALOG_INPUT_SX, mt: 2.1 }}
+          />
+          {resetOwnPasswordError ? (
+            <Typography sx={{ ...DIALOG_BODY_TEXT_SX, mt: 1.5, color: "#ffb4b4" }}>
+              {resetOwnPasswordError}
+            </Typography>
+          ) : null}
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={handleCloseResetOwnPasswordDialog} sx={DIALOG_BUTTON_SX} disabled={resetOwnPasswordBusy}>
+            Cancel
+          </Button>
+          <Button onClick={handleResetOwnPassword} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={resetOwnPasswordBusy}>
+            {resetOwnPasswordBusy ? "Saving..." : "Save Password"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={resetOwnMfaOpen}
+        onClose={handleCloseResetOwnMfaDialog}
+        fullWidth
+        maxWidth="xs"
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Reset MFA"
+            subtitle="Clear your current Borealis MFA secret for this account."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Typography sx={DIALOG_BODY_TEXT_SX}>
+            Borealis will keep MFA enabled for your account, but the next time you sign in you will be prompted
+            to complete MFA setup again.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={handleCloseResetOwnMfaDialog} sx={DIALOG_BUTTON_SX} disabled={resetOwnMfaBusy}>
+            Cancel
+          </Button>
+          <Button onClick={handleResetOwnMfa} sx={DIALOG_DANGER_BUTTON_SX} disabled={resetOwnMfaBusy}>
+            {resetOwnMfaBusy ? "Resetting..." : "Reset MFA"}
+          </Button>
+        </DialogActions>
+      </Dialog>
       <NotAuthorizedDialog open={notAuthorizedOpen} onClose={() => setNotAuthorizedOpen(false)} />
     </ThemeProvider>
   );

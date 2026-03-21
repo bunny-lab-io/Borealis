@@ -27,7 +27,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
 
 from ...assemblies.service import AssemblyRuntimeService
-from ...auth import RequestAuthContext
+from ...auth import RequestAuthContext, UserSiteAccessManager
 
 def _normalize_script_relpath(rel_path: Any) -> Optional[str]:
     """Return a canonical Scripts-relative path or ``None`` when invalid."""
@@ -381,6 +381,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         config=adapters.config,
         logger=adapters.context.logger,
     )
+    site_access = UserSiteAccessManager(adapters.db_conn_factory, logger=adapters.context.logger)
 
     @blueprint.route("/api/scripts/quick_run", methods=["POST"])
     def scripts_quick_run():
@@ -400,6 +401,19 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "Missing hostnames[]"}), 400
         if not rel_path_normalized and not assembly_guid_input:
             return jsonify({"error": "Missing script_path or assembly_guid"}), 400
+        inaccessible_hosts = [
+            host
+            for host in hostnames
+            if not site_access.user_can_access_hostname(user, host)
+        ]
+        if inaccessible_hosts:
+            return jsonify(
+                {
+                    "error": "out_of_scope_hostnames",
+                    "message": "One or more selected devices is outside your assigned sites.",
+                    "hostnames": inaccessible_hosts,
+                }
+            ), 403
 
         rel_path_canonical = rel_path_normalized or ""
         username = (user.get("username") if isinstance(user, dict) else None) or "unknown"
@@ -585,9 +599,11 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
     def device_activity(hostname: str):
-        _, error = auth.require_user()
+        user, error = auth.require_user()
         if error:
             return jsonify(error[0]), error[1]
+        if not site_access.user_can_access_hostname(user, hostname):
+            return jsonify({"error": "Not found"}), 404
         conn = None
         try:
             conn = adapters.db_conn_factory()
@@ -630,7 +646,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/device/activity/job/<int:job_id>", methods=["GET"])
     def device_activity_job(job_id: int):
-        _, error = auth.require_user()
+        user, error = auth.require_user()
         if error:
             return jsonify(error[0]), error[1]
         conn = None
@@ -649,6 +665,8 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
             if not row:
                 return jsonify({"error": "Not found"}), 404
             (jid, hostname, name, path, stype, ran_at, status, stdout, stderr) = row
+            if not site_access.user_can_access_hostname(user, hostname):
+                return jsonify({"error": "Not found"}), 404
             return jsonify(
                 {
                     "id": jid,

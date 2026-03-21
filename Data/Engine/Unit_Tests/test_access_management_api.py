@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Dict
 
@@ -16,6 +17,7 @@ from Data.Engine.server import create_app
 
 from Data.Engine.crypto.aegis import ENVELOPE_PREFIX
 from Data.Engine.integrations import github as github_integration
+from Data.Engine.services.API.access_management import login as access_login
 
 from .conftest import EngineTestHarness
 
@@ -67,6 +69,10 @@ def _decode_db_text(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8")
     return str(value)
+
+
+def _sha512_hex(value: str) -> str:
+    return hashlib.sha512((value or "").encode("utf-8")).hexdigest()
 
 
 def _setup_aegis(client, cipher: str = "correct horse battery staple"):
@@ -819,3 +825,375 @@ def test_credentials_listing_requires_login_and_writes_require_admin(engine_harn
         },
     )
     assert create_response.status_code == 403
+
+
+def test_auth_me_reports_current_user_mfa_state(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", "test", "User", 0, 0, 0, 0, 0, None),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.get("/api/auth/me")
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["username"] == "operator"
+    assert payload["display_name"] == "Operator One"
+    assert payload["role"] == "User"
+    assert payload["mfa_enabled"] is True
+
+
+def test_user_can_reset_own_mfa_without_disabling_it(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", "test", "User", 0, 0, 0, 1, 0, "existing-secret"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.post("/api/auth/mfa/reset")
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["username"] == "operator"
+    assert payload["mfa_enabled"] is True
+    assert payload["setup_required_on_next_login"] is True
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COALESCE(mfa_enabled, 0), COALESCE(mfa_disabled, 0), mfa_secret FROM users WHERE LOWER(username)=LOWER(?)",
+            ("operator",),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert int(row[0] or 0) == 0
+    assert int(row[1] or 0) == 0
+    assert row[2] is None
+
+
+def test_user_mfa_reset_requires_login(engine_harness: EngineTestHarness) -> None:
+    client = engine_harness.app.test_client()
+    response = client.post("/api/auth/mfa/reset")
+    assert response.status_code == 401
+
+
+def test_login_requires_mfa_setup_by_default(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    password_hash = _sha512_hex("operator-password")
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", password_hash, "User", 0, 0, 0, 0, 0, None),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(access_login, "_generate_totp_secret", lambda: "JBSWY3DPEHPK3PXP")
+    monkeypatch.setattr(
+        access_login,
+        "_totp_provisioning_uri",
+        lambda secret, username: f"otpauth://totp/Borealis:{username}?secret={secret}",
+    )
+    monkeypatch.setattr(access_login, "_totp_qr_data_uri", lambda payload: "data:image/png;base64,test")
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "operator", "password_sha512": password_hash},
+    )
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "mfa_required"
+    assert payload["stage"] == "setup"
+    assert payload["pending_token"]
+    assert payload["secret"] == "JBSWY3DPEHPK3PXP"
+
+
+def test_login_skips_mfa_when_admin_has_disabled_it(engine_harness: EngineTestHarness) -> None:
+    password_hash = _sha512_hex("operator-password")
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", password_hash, "User", 0, 0, 0, 1, 1, "EXISTINGSECRET"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "operator", "password_sha512": password_hash},
+    )
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["username"] == "operator"
+    assert payload["role"] == "User"
+    assert payload["token"]
+
+
+def test_mfa_setup_verification_marks_user_as_configured(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    password_hash = _sha512_hex("operator-password")
+    expected_secret = "JBSWY3DPEHPK3PXP"
+
+    class _DummyTotp:
+        def verify(self, code: str, valid_window: int = 0) -> bool:
+            return str(code) == "123456"
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at,
+                mfa_enabled,
+                mfa_disabled,
+                mfa_secret
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", password_hash, "User", 0, 0, 0, 0, 0, None),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(access_login, "_generate_totp_secret", lambda: expected_secret)
+    monkeypatch.setattr(
+        access_login,
+        "_totp_provisioning_uri",
+        lambda secret, username: f"otpauth://totp/Borealis:{username}?secret={secret}",
+    )
+    monkeypatch.setattr(access_login, "_totp_qr_data_uri", lambda payload: "data:image/png;base64,test")
+    monkeypatch.setattr(access_login, "_totp_for_secret", lambda secret: _DummyTotp())
+
+    client = engine_harness.app.test_client()
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "operator", "password_sha512": password_hash},
+    )
+    assert login_response.status_code == 200
+    login_payload = login_response.get_json()
+    assert login_payload["status"] == "mfa_required"
+    assert login_payload["stage"] == "setup"
+
+    verify_response = client.post(
+        "/api/auth/mfa/verify",
+        json={"pending_token": login_payload["pending_token"], "code": "123456"},
+    )
+    assert verify_response.status_code == 200
+    verify_payload = verify_response.get_json()
+    assert verify_payload["status"] == "ok"
+    assert verify_payload["username"] == "operator"
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COALESCE(mfa_enabled, 0), COALESCE(mfa_disabled, 0), COALESCE(mfa_secret, '') FROM users WHERE LOWER(username)=LOWER(?)",
+            ("operator",),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert int(row[0] or 0) == 1
+    assert int(row[1] or 0) == 0
+    assert (row[2] or "") == expected_secret
+
+
+def test_user_can_reset_own_password_with_current_password(engine_harness: EngineTestHarness) -> None:
+    original_hash = _sha512_hex("old-password")
+    replacement_hash = _sha512_hex("new-password")
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", original_hash, "User", 0, 0, 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.post(
+        "/api/auth/password/reset",
+        json={
+            "current_password_sha512": original_hash,
+            "new_password_sha512": replacement_hash,
+        },
+    )
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ok"
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT password_sha512 FROM users WHERE LOWER(username)=LOWER(?)",
+            ("operator",),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert (row[0] or "").lower() == replacement_hash
+
+
+def test_user_password_reset_rejects_invalid_current_password(engine_harness: EngineTestHarness) -> None:
+    original_hash = _sha512_hex("old-password")
+    replacement_hash = _sha512_hex("new-password")
+    invalid_hash = _sha512_hex("wrong-password")
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (
+                id,
+                username,
+                display_name,
+                password_sha512,
+                role,
+                last_login,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (2, "operator", "Operator One", original_hash, "User", 0, 0, 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _user_client(engine_harness)
+    response = client.post(
+        "/api/auth/password/reset",
+        json={
+            "current_password_sha512": invalid_hash,
+            "new_password_sha512": replacement_hash,
+        },
+    )
+    assert response.status_code == 401
+    assert response.get_json()["error"] == "invalid current password"
+
+
+def test_user_password_reset_requires_login(engine_harness: EngineTestHarness) -> None:
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/auth/password/reset",
+        json={
+            "current_password_sha512": _sha512_hex("old-password"),
+            "new_password_sha512": _sha512_hex("new-password"),
+        },
+    )
+    assert response.status_code == 401

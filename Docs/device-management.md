@@ -14,18 +14,26 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Each site can have an enrollment code that agents can use during install.
 - Site mapping is stored separately from device records and exposed via API.
 
+## Operator Site Scope (RBAC)
+- Admins implicitly see all sites, devices, approvals, and remote-access surfaces.
+- Operators are scoped by `user_site_assignments`; if an operator has no assigned sites, Borealis hides all sites and devices from that operator.
+- Devices without a site assignment remain admin-only until an admin places them into a site.
+- The WebUI site-assignment workflow lives on the Users page and writes assignments through `/api/user_site_assignments/*`.
+
 ## Device Filters
 - Filters are stored as typed records with separate `basic_criteria_json` and `advanced_criteria_json` payloads.
 - Site scope is explicit via `site_mode` plus `device_filter_sites` rows keyed by `site_id`.
 - The Engine computes match counts using `DeviceFilterMatcher` against the inventory snapshot.
 - Filters can be `Global`, `Specific Sites`, or `Global w/ Exclusions`.
+- Operator visibility is based on the filter's effective included site scope, not the subset of matching devices the operator can see.
 
 ## Device List Views
 - Operators can save custom table views for the device list UI.
 - Views are stored per operator and exposed via `/api/device_list_views`.
 
 ## Enrollment Approvals
-- Enrollment requests are queued for admin approval.
+- Enrollment requests are queued for approval within the request's site.
+- Admins can approve any site; operators can approve only requests for sites they are assigned to.
 - Approvals enforce hostname conflict checks and device identity tracking.
 
 ## API Endpoints
@@ -47,6 +55,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map.
 - `POST /api/sites/assign` (Admin) - assign devices to site.
 - `POST /api/sites/rename` (Admin) - rename site.
+- `POST /api/user_site_assignments/selection` (Admin) - load selected-operator site assignments.
+- `POST /api/user_site_assignments/assign` (Admin) - replace selected-operator site assignments.
 - `GET /api/device_filters` (Token Authenticated) - list filters.
 - `GET /api/device_filters/metadata` (Token Authenticated) - filter metadata.
 - `POST /api/device_filters/preview` (Token Authenticated) - preview filter matches.
@@ -61,9 +71,9 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
 - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
 - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
-- `GET /api/admin/device-approvals` (Admin) - approval queue.
-- `POST /api/admin/device-approvals/<approval_id>/approve` (Admin) - approve device.
-- `POST /api/admin/device-approvals/<approval_id>/deny` (Admin) - deny device.
+- `GET /api/admin/device-approvals` (Token Authenticated) - approval queue scoped to the current operator's assigned sites unless the operator is an admin.
+- `POST /api/admin/device-approvals/<approval_id>/approve` (Token Authenticated) - approve an in-scope device.
+- `POST /api/admin/device-approvals/<approval_id>/deny` (Token Authenticated) - deny an in-scope device.
 
 ## Related Documentation
 - [Agent Runtime](agent-runtime.md)
@@ -95,6 +105,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ### Sites and enrollment codes
 - Sites live in `sites` and `device_sites` tables (see `Data/Engine/database.py`).
+- Operator RBAC scope lives in `user_site_assignments`.
 - Enrollment codes are stored directly on `sites.enrollment_code`.
 - Rotating a site code updates the `sites` record only.
 
@@ -106,7 +117,8 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ### Approval flow detail
 - Enrollment requests create approval records (pending).
-- Admin approval handles hostname conflicts (merge or rename).
+- Approval access is site-scoped for operators and unrestricted for admins.
+- Approval handles hostname conflicts (merge or rename).
 - Denials are logged and remove pending requests.
 
 ### WebUI deep links
