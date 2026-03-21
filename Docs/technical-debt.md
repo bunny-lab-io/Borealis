@@ -35,6 +35,20 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
+ID: TD-20260321-01
+Status: active
+Owner: Agent + Engine
+Date Added: 2026-03-21
+Summary: Device update-status v1 reuses `devices.agent_hash` to store the installed agent build id.
+Impact: Automatic agent updates and the Device Details `Agent Version` status work without a schema migration, but the database column name no longer reflects its broader meaning and could confuse future API/UI work.
+Root Cause: Borealis needed a low-friction way to persist the installed agent build id for heartbeat/details reporting and server-side update-status checks while keeping the rollout simple and backward-compatible.
+Current Mitigation: Agent payloads now prefer `agent_build_id` / `installed_build_id` externally, while `Data/Engine/services/API/devices/routes.py` and `Data/Engine/services/API/devices/management.py` continue storing that value in `devices.agent_hash` internally and mirror it back out as both `agent_hash` and `agent_build_id`.
+Removal Criteria: Borealis introduces a dedicated persisted build/version field (or migration) and removes the dual-purpose use of `devices.agent_hash`.
+Files: `Data/Engine/services/API/devices/routes.py`, `Data/Engine/services/API/devices/management.py`, `Data/Agent/agent.py`, `Data/Agent/Roles/role_DeviceAudit.py`
+Evidence: The auto-update rollout compares the installed build id from normal heartbeat/details traffic against `/api/repo/current_hash`, but the Engine still persists that value via the legacy `agent_hash` device column.
+Next Step: Add a first-class schema field for installed agent build metadata and retire the aliasing layer once existing agents can report the new field reliably.
+GitHub Issue: not yet
+
 ID: TD-20260319-05
 Status: active
 Owner: Engine

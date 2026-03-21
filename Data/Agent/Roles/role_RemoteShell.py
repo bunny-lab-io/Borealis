@@ -26,6 +26,10 @@ try:
     import pty
 except Exception:
     pty = None
+try:
+    from update_state import busy_activity
+except Exception:
+    busy_activity = None
 
 ROLE_NAME = "RemoteShell"
 ROLE_CONTEXTS = ["system"]
@@ -127,10 +131,23 @@ class ShellSession:
         self.input_bytes = 0
         self.output_lines = 0
         self.output_bytes = 0
+        self._busy_lease = None
 
     def start(self) -> None:
         # Spawn an interactive shell process and bridge stdin/stdout.
         _write_log(f"Shell session starting for {self.address[0]}:{self.address[1]} type={self.shell_kind}")
+        if callable(busy_activity):
+            try:
+                self._busy_lease = busy_activity(
+                    "remote_shell",
+                    metadata={
+                        "remote_ip": self.address[0],
+                        "remote_port": self.address[1],
+                        "shell_kind": self.shell_kind,
+                    },
+                ).acquire()
+            except Exception as exc:
+                _write_log(f"Remote shell busy lease acquisition failed: {exc}")
         if self.shell_kind == "powershell":
             self._start_powershell()
             return
@@ -369,6 +386,12 @@ class ShellSession:
                 self.output_bytes,
             )
         )
+        if self._busy_lease is not None:
+            try:
+                self._busy_lease.close()
+            except Exception:
+                pass
+            self._busy_lease = None
 
 
 class ShellServer:

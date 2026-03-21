@@ -186,6 +186,10 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             if payload.get(field):
                 updates[field] = str(payload[field])
 
+        agent_build_id = payload.get("agent_build_id") or payload.get("installed_build_id") or payload.get("agent_hash")
+        if isinstance(agent_build_id, str) and agent_build_id.strip():
+            updates["agent_hash"] = agent_build_id.strip()
+
         conn = db_conn_factory()
         try:
             cur = conn.cursor()

@@ -1,6 +1,7 @@
 import os
 import re
 import asyncio
+import contextlib
 import tempfile
 import uuid
 import time
@@ -10,6 +11,10 @@ import shutil
 from typing import Dict, List, Optional
 
 from signature_utils import decode_script_bytes, verify_and_store_script_signature
+try:
+    from update_state import busy_activity
+except Exception:
+    busy_activity = None
 
 
 ROLE_NAME = 'script_exec_system'
@@ -486,22 +491,34 @@ class Role:
                     timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
                 except Exception:
                     timeout_seconds = 0
-                if script_type == 'powershell':
-                    if os.name == 'nt':
-                        rc, out, err = _run_powershell_via_system_task(content, env_map, timeout_seconds)
-                        if rc == -999:
+                busy_ctx = (
+                    busy_activity(
+                        'quick_job_system',
+                        metadata={
+                            'job_id': str(job_label),
+                            'script_type': script_type or 'unknown',
+                        },
+                    )
+                    if callable(busy_activity)
+                    else contextlib.nullcontext()
+                )
+                with busy_ctx:
+                    if script_type == 'powershell':
+                        if os.name == 'nt':
+                            rc, out, err = _run_powershell_via_system_task(content, env_map, timeout_seconds)
+                            if rc == -999:
+                                rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
+                        else:
                             rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
+                    elif script_type == 'batch':
+                        rc, out, err = _run_batch_script_content(content, env_map, timeout_seconds)
+                    elif script_type == 'bash':
+                        rc, out, err = _run_bash_script_content(content, env_map, timeout_seconds)
                     else:
-                        rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
-                elif script_type == 'batch':
-                    rc, out, err = _run_batch_script_content(content, env_map, timeout_seconds)
-                elif script_type == 'bash':
-                    rc, out, err = _run_bash_script_content(content, env_map, timeout_seconds)
-                else:
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f"Unsupported type: {script_type}"))
-                    return
-                status = 'Success' if rc == 0 else 'Failed'
-                await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
+                        await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f"Unsupported type: {script_type}"))
+                        return
+                    status = 'Success' if rc == 0 else 'Failed'
+                    await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
             except Exception as e:
                 context = payload.get('context') if isinstance(payload, dict) else None
                 def _error_payload(job_value, message):

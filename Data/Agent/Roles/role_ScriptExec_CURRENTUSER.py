@@ -11,6 +11,10 @@ from typing import Dict, List, Optional
 from PyQt5 import QtWidgets, QtGui
 
 from signature_utils import decode_script_bytes, verify_and_store_script_signature
+try:
+    from update_state import busy_activity
+except Exception:
+    busy_activity = None
 
 ROLE_NAME = 'script_exec_currentuser'
 ROLE_CONTEXTS = ['interactive']
@@ -487,19 +491,31 @@ class Role:
                     timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
                 except Exception:
                     timeout_seconds = 0
-                if script_type == 'powershell':
-                    rc, out, err = await _run_powershell_via_user_task(content, env_map, timeout_seconds)
-                    if rc == -999:
-                        rc, out, err = await _run_powershell_script_content(content, env_map, timeout_seconds)
-                elif script_type == 'batch':
-                    rc, out, err = await _run_batch_local(content, env_map, timeout_seconds)
-                elif script_type == 'bash':
-                    rc, out, err = await _run_bash_local(content, env_map, timeout_seconds)
-                else:
-                    await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported type: {script_type}'))
-                    return
-                status = 'Success' if rc == 0 else 'Failed'
-                await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
+                busy_ctx = (
+                    busy_activity(
+                        'quick_job_currentuser',
+                        metadata={
+                            'job_id': str(job_label),
+                            'script_type': script_type or 'unknown',
+                        },
+                    )
+                    if callable(busy_activity)
+                    else contextlib.nullcontext()
+                )
+                with busy_ctx:
+                    if script_type == 'powershell':
+                        rc, out, err = await _run_powershell_via_user_task(content, env_map, timeout_seconds)
+                        if rc == -999:
+                            rc, out, err = await _run_powershell_script_content(content, env_map, timeout_seconds)
+                    elif script_type == 'batch':
+                        rc, out, err = await _run_batch_local(content, env_map, timeout_seconds)
+                    elif script_type == 'bash':
+                        rc, out, err = await _run_bash_local(content, env_map, timeout_seconds)
+                    else:
+                        await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported type: {script_type}'))
+                        return
+                    status = 'Success' if rc == 0 else 'Failed'
+                    await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
             except Exception as e:
                 try:
                     context = payload.get('context') if isinstance(payload, dict) else None
@@ -561,4 +577,3 @@ class Role:
             QtWidgets.QApplication.instance().quit()
         except Exception:
             os._exit(0)
-

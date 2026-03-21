@@ -100,6 +100,14 @@ function Get-GitExecutablePath {
         $candidates += (Join-Path $ProjectRoot 'Dependencies\git\cmd\git.exe')
         $candidates += (Join-Path $ProjectRoot 'Dependencies\git\bin\git.exe')
     }
+    try {
+        $gitCmd = Get-Command git.exe -ErrorAction SilentlyContinue
+        if ($gitCmd -and $gitCmd.Source) { $candidates += $gitCmd.Source }
+    } catch {}
+    try {
+        $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+        if ($gitCmd -and $gitCmd.Source) { $candidates += $gitCmd.Source }
+    } catch {}
 
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         try {
@@ -108,6 +116,47 @@ function Get-GitExecutablePath {
     }
 
     return ''
+}
+
+function Resolve-BorealisRepositoryUrl {
+    param(
+        [string]$GitExe,
+        [string]$ProjectRoot
+    )
+
+    $configuredRepo = ''
+    try {
+        if ($env:BOREALIS_UPDATE_REPO) {
+            $configuredRepo = $env:BOREALIS_UPDATE_REPO.Trim()
+        }
+    } catch {}
+
+    if ($configuredRepo) {
+        if ($configuredRepo -match '^[A-Za-z][A-Za-z0-9+.-]*://') {
+            return $configuredRepo
+        }
+        if ($configuredRepo -like 'git@*') {
+            return $configuredRepo
+        }
+        return ("https://github.com/{0}.git" -f $configuredRepo)
+    }
+
+    if ($GitExe -and $ProjectRoot -and (Test-Path (Join-Path $ProjectRoot '.git'))) {
+        try {
+            $origin = Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('config', '--get', 'remote.origin.url')
+            if ($origin) {
+                $candidate = ($origin | Select-Object -Last 1)
+                if ($candidate) {
+                    $candidate = $candidate.Trim()
+                    if ($candidate) {
+                        return $candidate
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    return $repositoryUrl
 }
 
 function Invoke-GitCommand {
@@ -734,6 +783,188 @@ function Get-AgentPythonExecutable {
     }
     Write-UpdateLog "No Python executable found for HTTP helper fallback." 'WARN'
     return ''
+}
+
+function Invoke-AgentUpdateHelper {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+
+        [string]$AgentRoot,
+
+        [switch]$ExpectJson
+    )
+
+    $pythonExe = Get-AgentPythonExecutable -AgentRoot $AgentRoot
+    if (-not $pythonExe -or -not (Test-Path $pythonExe -PathType Leaf)) {
+        throw 'Agent runtime Python executable not found.'
+    }
+
+    $helperScript = Join-Path $scriptDir 'Data\Agent\update_helper.py'
+    if (-not (Test-Path $helperScript -PathType Leaf)) {
+        throw "Agent update helper not found at '$helperScript'."
+    }
+
+    $output = & $pythonExe $helperScript @Arguments 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+    if ($exitCode -ne 0) {
+        if ($text) {
+            throw "Agent update helper failed: $text"
+        }
+        throw 'Agent update helper failed without output.'
+    }
+
+    if (-not $ExpectJson) {
+        return $text
+    }
+
+    if (-not $text) {
+        throw 'Agent update helper returned empty JSON output.'
+    }
+
+    try {
+        return ($text | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        throw ("Failed to decode agent update helper JSON: {0}" -f $_.Exception.Message)
+    }
+}
+
+function Get-AgentUpdaterStatus {
+    param([string]$AgentRoot)
+
+    return (Invoke-AgentUpdateHelper -AgentRoot $AgentRoot -Arguments @('status') -ExpectJson)
+}
+
+function Get-AgentUpdaterRepoInfo {
+    param(
+        [string]$AgentRoot,
+        [switch]$Refresh
+    )
+
+    $arguments = @('repo-hash')
+    if ($Refresh) {
+        $arguments += '--refresh'
+    }
+    return (Invoke-AgentUpdateHelper -AgentRoot $AgentRoot -Arguments $arguments -ExpectJson)
+}
+
+function Sync-AgentInstalledBuildId {
+    param([string]$AgentRoot)
+
+    try {
+        $result = Invoke-AgentUpdateHelper -AgentRoot $AgentRoot -Arguments @('sync-build-id')
+        return ($result -as [string]).Trim()
+    } catch {
+        Write-UpdateLog ("Failed to sync installed build id: {0}" -f $_.Exception.Message) 'WARN'
+        return ''
+    }
+}
+
+function Invoke-BorealisAgentRuntimeRefresh {
+    param(
+        [string]$ProjectRoot
+    )
+
+    if (-not $ProjectRoot) { $ProjectRoot = $scriptDir }
+    $scriptPath = Join-Path $ProjectRoot 'Borealis.ps1'
+    if (-not (Test-Path $scriptPath -PathType Leaf)) {
+        Write-UpdateLog ("Borealis.ps1 not found at '{0}'." -f $scriptPath) 'ERROR'
+        return $false
+    }
+
+    $argTokens = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $scriptPath,
+        '-Agent',
+        '-RefreshAgentRuntime'
+    )
+
+    $argLine = ($argTokens | ForEach-Object {
+        $text = [string]$_
+        if ($text -match '\s') {
+            '"' + ($text -replace '"','`"') + '"'
+        } else {
+            $text
+        }
+    }) -join ' '
+
+    Write-UpdateLog ("Refreshing Borealis agent runtime via {0}." -f $scriptPath) 'STEP'
+    try {
+        $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $argLine -WorkingDirectory $ProjectRoot -NoNewWindow -Wait -PassThru
+    } catch {
+        Write-UpdateLog ("Failed to start Borealis runtime refresh: {0}" -f $_.Exception.Message) 'ERROR'
+        return $false
+    }
+
+    if (-not $process) {
+        Write-UpdateLog 'Borealis runtime refresh process did not start.' 'ERROR'
+        return $false
+    }
+
+    if ($process.ExitCode -ne 0) {
+        Write-UpdateLog ("Borealis runtime refresh exited with code {0}." -f $process.ExitCode) 'ERROR'
+        return $false
+    }
+
+    Write-UpdateLog 'Borealis agent runtime refresh completed successfully.' 'SUCCESS'
+    return $true
+}
+
+function Invoke-BorealisRepoSync {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GitExe,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TargetHash,
+
+        [string]$BranchName = 'main'
+    )
+
+    if (-not (Test-Path (Join-Path $ProjectRoot '.git'))) {
+        throw "Project root '$ProjectRoot' is not a git checkout."
+    }
+
+    try {
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('remote', 'set-url', 'origin', $RepositoryUrl) | Out-Null
+    } catch {
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('remote', 'add', 'origin', $RepositoryUrl) | Out-Null
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($BranchName)) {
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('fetch', '--force', '--prune', 'origin', $BranchName) | Out-Null
+    } else {
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('fetch', '--force', '--prune', 'origin') | Out-Null
+    }
+
+    $haveHash = $false
+    try {
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('rev-parse', $TargetHash) | Out-Null
+        $haveHash = $true
+    } catch {
+        $haveHash = $false
+    }
+
+    if (-not $haveHash) {
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('fetch', '--force', 'origin', $TargetHash) | Out-Null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($BranchName)) {
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('checkout', '--force', $TargetHash) | Out-Null
+    } else {
+        Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('checkout', '--force', '-B', $BranchName, $TargetHash) | Out-Null
+    }
+
+    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('reset', '--hard', $TargetHash) | Out-Null
+    Invoke-GitCommand -GitExe $GitExe -WorkingDirectory $ProjectRoot -Arguments @('clean', '-fd') | Out-Null
 }
 
 function Ensure-AgentPythonHttpHelper {
@@ -1834,23 +2065,65 @@ function Invoke-BorealisAgentUpdate {
     }
 
     $gitExe = Get-GitExecutablePath -ProjectRoot $scriptDir
-    $currentHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot -GitExe $gitExe
-    $serverBaseUrl = Get-BorealisServerUrl -AgentRoot $agentRoot
-    Initialize-BorealisTlsContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl
-    $agentId = Get-AgentServiceId -AgentRoot $agentRoot
-    Write-UpdateLog ("Agent service ID detected: {0}" -f $agentId) 'DEBUG'
-
-    $authContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
-    if (-not $authContext -or -not $authContext.AccessToken) {
-        Write-Host "Unable to obtain agent authentication token. Ensure the agent is running and enrolled, then rerun the updater." -ForegroundColor Yellow
+    if (-not $gitExe -or -not (Test-Path $gitExe -PathType Leaf)) {
+        Write-Host "Bundled or system Git was not found. Ensure Git is installed, then rerun the updater." -ForegroundColor Yellow
         Write-Host "⚠️ Borealis update aborted."
-        Write-UpdateLog "Authentication context unavailable; aborting update." 'ERROR'
+        Write-UpdateLog "Git executable not found; aborting update." 'ERROR'
         return
     }
-    $authToken = $authContext.AccessToken
+    $resolvedRepositoryUrl = Resolve-BorealisRepositoryUrl -GitExe $gitExe -ProjectRoot $scriptDir
+    Write-UpdateLog ("Repository origin resolved to {0}" -f $resolvedRepositoryUrl) 'INFO'
 
-    Write-UpdateLog "Querying Borealis server for current repository hash." 'STEP'
-    $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken -AgentRoot $agentRoot
+    $statusPayload = $null
+    try {
+        $statusPayload = Get-AgentUpdaterStatus -AgentRoot $agentRoot
+    } catch {
+        Write-UpdateLog ("Unable to load agent updater status: {0}" -f $_.Exception.Message) 'WARN'
+    }
+
+    $installedHash = ''
+    $currentHash = ''
+    $busyReasons = @()
+    $deviceBusy = $false
+    if ($statusPayload) {
+        try { $installedHash = (($statusPayload.installed_build_id) -as [string]).Trim() } catch { $installedHash = '' }
+        try { $currentHash = (($statusPayload.repo_build_id) -as [string]).Trim() } catch { $currentHash = '' }
+        try {
+            $deviceBusy = [bool]$statusPayload.busy
+        } catch {
+            $deviceBusy = $false
+        }
+        try {
+            $busyReasons = @($statusPayload.reasons | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+        } catch {
+            $busyReasons = @()
+        }
+    }
+    if (-not $currentHash) {
+        $currentHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot -GitExe $gitExe
+    }
+
+    $serverRepoInfo = $null
+    try {
+        Write-UpdateLog "Querying Borealis server for current repository hash." 'STEP'
+        $serverRepoInfo = Get-AgentUpdaterRepoInfo -AgentRoot $agentRoot -Refresh
+    } catch {
+        Write-UpdateLog ("Agent helper repo-hash lookup failed: {0}" -f $_.Exception.Message) 'WARN'
+    }
+
+    if (-not $serverRepoInfo) {
+        $serverBaseUrl = Get-BorealisServerUrl -AgentRoot $agentRoot
+        Initialize-BorealisTlsContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl
+        $authContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
+        if (-not $authContext -or -not $authContext.AccessToken) {
+            Write-Host "Unable to obtain agent authentication token. Ensure the agent is running and enrolled, then rerun the updater." -ForegroundColor Yellow
+            Write-Host "⚠️ Borealis update aborted."
+            Write-UpdateLog "Authentication context unavailable; aborting update." 'ERROR'
+            return
+        }
+        $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authContext.AccessToken -AgentRoot $agentRoot
+    }
+
     $serverHash = ''
     $serverBranch = 'main'
     if ($serverRepoInfo) {
@@ -1866,10 +2139,16 @@ function Invoke-BorealisAgentUpdate {
     $forceUpdate = $updateMode -eq 'force_update'
     Write-UpdateLog ("Updater mode: {0} (force={1})" -f $updateMode, $forceUpdate) 'INFO'
 
-    if ($currentHash) {
-        Write-Host ("Local Agent Hash: {0}" -f $currentHash)
+    if ($installedHash) {
+        Write-Host ("Installed Agent Hash: {0}" -f $installedHash)
     } else {
-        Write-Host "Local Agent Hash: unavailable"
+        Write-Host "Installed Agent Hash: unavailable"
+    }
+
+    if ($currentHash) {
+        Write-Host ("Local Repo Hash: {0}" -f $currentHash)
+    } else {
+        Write-Host "Local Repo Hash: unavailable"
     }
 
     if ($serverHash) {
@@ -1878,10 +2157,12 @@ function Invoke-BorealisAgentUpdate {
         Write-Host "Borealis Server Hash: unavailable"
     }
 
+    $normalizedInstalledHash = if ($installedHash) { $installedHash.Trim().ToLowerInvariant() } else { '' }
     $normalizedLocalHash = if ($currentHash) { $currentHash.Trim().ToLowerInvariant() } else { '' }
     $normalizedServerHash = if ($serverHash) { $serverHash.Trim().ToLowerInvariant() } else { '' }
-    $hashesMatch = ($normalizedLocalHash -and $normalizedServerHash -and ($normalizedLocalHash -eq $normalizedServerHash))
-    $needsUpdate = $forceUpdate -or (-not $hashesMatch)
+    $runtimeNeedsUpdate = (-not $normalizedInstalledHash) -or (-not $normalizedServerHash) -or ($normalizedInstalledHash -ne $normalizedServerHash)
+    $repoNeedsSync = (-not $normalizedLocalHash) -or (-not $normalizedServerHash) -or ($normalizedLocalHash -ne $normalizedServerHash)
+    $needsUpdate = $forceUpdate -or $runtimeNeedsUpdate -or $repoNeedsSync
 
     if ($forceUpdate) {
         Write-Host "Force update requested; skipping hash comparison." -ForegroundColor Yellow
@@ -1892,26 +2173,27 @@ function Invoke-BorealisAgentUpdate {
         Write-UpdateLog "Server hash unavailable; aborting." 'ERROR'
         return
     } elseif (-not $needsUpdate) {
-        Write-Host "Local agent files already match the server repository hash." -ForegroundColor Green
-        Write-UpdateLog "Local agent hash matches remote; ensuring server record is updated." 'SUCCESS'
-        Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $serverHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
+        Write-Host "Local agent runtime already matches the server repository hash." -ForegroundColor Green
+        Write-UpdateLog "Installed agent build already matches the target hash." 'SUCCESS'
+        [void](Sync-AgentInstalledBuildId -AgentRoot $agentRoot)
         Write-Host "✅ Borealis - Automation Platform Already Up-to-Date"
         return
     } else {
         Write-Host "Repository hash mismatch detected; update required."
-        Write-UpdateLog ("Repository hash mismatch detected (local={0}, remote={1})." -f $currentHash, $serverHash) 'WARN'
+        Write-UpdateLog ("Repository hash mismatch detected (installed={0}, repo={1}, remote={2})." -f $installedHash, $currentHash, $serverHash) 'WARN'
     }
 
-    if (-not ($gitExe) -or -not (Test-Path $gitExe -PathType Leaf)) {
-        Write-Host "Bundled Git dependency not found. Run '.\Borealis.ps1 -Agent' to redeploy the agent dependencies and try again." -ForegroundColor Yellow
-        Write-Host "⚠️ Borealis update aborted."
-        Write-UpdateLog "Bundled Git dependency missing; aborting update." 'ERROR'
+    if ($deviceBusy) {
+        $reasonText = if ($busyReasons.Count -gt 0) { $busyReasons -join ', ' } else { 'unspecified activity' }
+        Write-Host ("Agent update deferred because the device is busy: {0}" -f $reasonText) -ForegroundColor Yellow
+        Write-UpdateLog ("Device busy; deferring update. Reasons: {0}" -f $reasonText) 'WARN'
         return
     }
 
     $mutex = $null
     $gotMutex = $false
     $managedTasks = @()
+    $refreshSucceeded = $false
     try {
         $mutex = New-Object System.Threading.Mutex($false, 'Global\BorealisUpdate')
         $gotMutex = $mutex.WaitOne(0)
@@ -1921,7 +2203,20 @@ function Invoke-BorealisAgentUpdate {
             return
         }
 
-        $staging = Join-Path $scriptDir 'Update_Staging'
+        try {
+            $statusPayload = Get-AgentUpdaterStatus -AgentRoot $agentRoot
+            $deviceBusy = [bool]$statusPayload.busy
+            $busyReasons = @($statusPayload.reasons | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+        } catch {
+            $deviceBusy = $false
+            $busyReasons = @()
+        }
+        if ($deviceBusy) {
+            $reasonText = if ($busyReasons.Count -gt 0) { $busyReasons -join ', ' } else { 'unspecified activity' }
+            Write-Host ("Agent update deferred because the device became busy: {0}" -f $reasonText) -ForegroundColor Yellow
+            Write-UpdateLog ("Device busy after mutex acquisition; deferring update. Reasons: {0}" -f $reasonText) 'WARN'
+            return
+        }
 
         $managedTasks = Stop-AgentScheduledTasks -TaskNames @('Borealis Agent','Borealis Agent (UserHelper)')
         if ($managedTasks.Count -gt 0) {
@@ -1931,92 +2226,48 @@ function Invoke-BorealisAgentUpdate {
         }
         Run-Step "Updating: Terminate Running Python Processes" { Stop-AgentPythonProcesses -ProjectRoot $scriptDir -SkipEngine }
 
-        $updateSucceeded = $false
         try {
             Write-UpdateLog ("Starting repository sync to commit {0} (branch={1})." -f $serverHash, $serverBranch) 'STEP'
-            Invoke-BorealisUpdate -GitExe $gitExe -RepositoryUrl $repositoryUrl -TargetHash $serverHash -BranchName $serverBranch -Silent
-            $updateSucceeded = $true
+            Invoke-BorealisRepoSync -GitExe $gitExe -ProjectRoot $scriptDir -RepositoryUrl $resolvedRepositoryUrl -TargetHash $serverHash -BranchName $serverBranch
             Write-UpdateLog "Repository sync completed successfully." 'SUCCESS'
 
-            $refreshedContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
-            if ($refreshedContext -and $refreshedContext.AccessToken) {
-                $authToken = $refreshedContext.AccessToken
-            }
-            $postUpdateInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authToken -AgentRoot $agentRoot
-            if ($postUpdateInfo) {
-                try {
-                    $refreshedSha = (($postUpdateInfo.sha) -as [string]).Trim()
-                    if ($refreshedSha) { $serverHash = $refreshedSha }
-                } catch {}
-                try {
-                    $branchCandidate = (($postUpdateInfo.branch) -as [string]).Trim()
-                    if ($branchCandidate) { $serverBranch = $branchCandidate }
-                } catch {}
-            }
-
             $newHash = Get-RepositoryCommitHash -ProjectRoot $scriptDir -AgentRoot $agentRoot -GitExe $gitExe
-
             $normalizedNewHash = if ($newHash) { $newHash.Trim().ToLowerInvariant() } else { '' }
-            $normalizedServerHash = if ($serverHash) { $serverHash.Trim().ToLowerInvariant() } else { '' }
-
-            if ($normalizedServerHash -and (-not $normalizedNewHash -or $normalizedNewHash -ne $normalizedServerHash)) {
-                $newHash = $serverHash
-                $normalizedNewHash = $normalizedServerHash
-            } elseif (-not $newHash -and $serverHash) {
-                $newHash = $serverHash
+            if ($normalizedServerHash -and $normalizedNewHash -and $normalizedNewHash -ne $normalizedServerHash) {
+                throw ("Repository sync completed, but HEAD ({0}) does not match target hash ({1})." -f $newHash, $serverHash)
             }
 
-            if ($newHash) {
-                Write-UpdateLog ("Final agent hash determined: {0}" -f $newHash) 'INFO'
-                Sync-AgentHashRecord -ProjectRoot $scriptDir -AgentRoot $agentRoot -AgentHash $newHash -ServerBaseUrl $serverBaseUrl -AgentId $agentId -AgentGuid $agentGuid -AuthToken $authToken -BranchName $serverBranch
-            } else {
-                Write-Host "Unable to determine repository hash for submission; server hash not updated." -ForegroundColor DarkYellow
-                Write-UpdateLog "Unable to determine final agent hash; skipping submission." 'WARN'
-            }
-
-            Run-Step "Updating: Re-deploy Borealis Agent" {
-                $serverInfo = Get-AgentServerUrlFromSettings -AgentRoot $agentRoot
-                if (-not $serverInfo -or -not $serverInfo.Url) {
-                    $missingPath = if ($serverInfo -and $serverInfo.Source) { $serverInfo.Source } else { Join-Path (Join-Path $agentRoot 'Settings') 'server_url.txt' }
-                    throw "Server URL not found in $missingPath."
-                }
-
-                $enrollmentInfo = Get-AgentEnrollmentCode -AgentRoot $agentRoot
-                if (-not $enrollmentInfo -or -not $enrollmentInfo.Code) {
-                    $settingsDir = Join-Path $agentRoot 'Settings'
-                    $hintPath = Join-Path $settingsDir 'agent_settings_SYSTEM.json'
-                    if ($enrollmentInfo -and $enrollmentInfo.Source) { $hintPath = $enrollmentInfo.Source }
-                    throw "Enrollment code not found in $hintPath."
-                }
-
-                $sourceName = ''
-                if ($enrollmentInfo.Source) { $sourceName = Split-Path -Path $enrollmentInfo.Source -Leaf }
-                if ($sourceName -and $sourceName -ne 'agent_settings_SYSTEM.json') {
-                    Write-UpdateLog ("Enrollment code loaded from fallback settings file: {0}" -f $enrollmentInfo.Source) 'WARN'
-                }
-                if ($enrollmentInfo.Field -and $enrollmentInfo.Field -ne 'enrollment_code') {
-                    Write-UpdateLog ("Enrollment code loaded from legacy field '{0}' in {1}." -f $enrollmentInfo.Field, $enrollmentInfo.Source) 'WARN'
-                }
-
-                Write-UpdateLog ("Re-deploying agent with server URL '{0}'." -f $serverInfo.Url) 'INFO'
-                $redeployOk = Invoke-BorealisAgentRedeploy -ProjectRoot $scriptDir -ServerUrl $serverInfo.Url -EnrollmentCode $enrollmentInfo.Code
-                if (-not $redeployOk) {
-                    throw 'Borealis agent re-deployment failed.'
+            Run-Step "Updating: Refresh Borealis Agent Runtime" {
+                $refreshOk = Invoke-BorealisAgentRuntimeRefresh -ProjectRoot $scriptDir
+                if (-not $refreshOk) {
+                    throw 'Borealis agent runtime refresh failed.'
                 }
             }
 
+            $syncedBuildId = Sync-AgentInstalledBuildId -AgentRoot $agentRoot
+            if ($syncedBuildId) {
+                Write-UpdateLog ("Installed build id synced to {0}." -f $syncedBuildId) 'INFO'
+            }
+
+            try {
+                $statusPayload = Get-AgentUpdaterStatus -AgentRoot $agentRoot
+                $installedHash = (($statusPayload.installed_build_id) -as [string]).Trim()
+            } catch {
+                $installedHash = $syncedBuildId
+            }
+
+            if ($normalizedServerHash -and $installedHash -and $installedHash.Trim().ToLowerInvariant() -ne $normalizedServerHash) {
+                Write-UpdateLog ("Installed build id after refresh ({0}) does not yet match target hash ({1})." -f $installedHash, $serverHash) 'WARN'
+            }
+
+            $refreshSucceeded = $true
             Write-Host "✅ Borealis - Automation Platform Successfully Updated"
             Write-UpdateLog "Update workflow completed successfully." 'SUCCESS'
         } finally {
-            if ($managedTasks.Count -gt 0) {
+            if (-not $refreshSucceeded -and $managedTasks.Count -gt 0) {
                 Start-AgentScheduledTasks -TaskNames $managedTasks
-                Write-UpdateLog "Agent scheduled tasks restarted." 'INFO'
+                Write-UpdateLog "Agent scheduled tasks restarted after unsuccessful refresh." 'INFO'
             }
-        }
-
-        if (-not $updateSucceeded) {
-            Write-UpdateLog "Repository sync reported failure." 'ERROR'
-            throw 'Borealis update failed.'
         }
 
     } finally {

@@ -374,7 +374,6 @@ export default function DeviceList({
       lastUser: "Last User",
       type: "Type",
       os: "OS",
-      agentVersion: "Agent Version",
       internalIp: "Internal IP",
       externalIp: "External IP",
       wireguardVpnStatus: "Wireguard VPN Status",
@@ -383,7 +382,6 @@ export default function DeviceList({
       created: "Created",
       lastSeen: "Last Seen",
       agentId: "Agent ID",
-      agentHash: "Agent Hash",
       agentGuid: "Agent GUID",
       domain: "Domain",
       uptime: "Uptime",
@@ -514,52 +512,7 @@ export default function DeviceList({
   const [savedFilterHostnames, setSavedFilterHostnames] = useState(null);
   const [savedFilterPreviewError, setSavedFilterPreviewError] = useState("");
 
-  const [repoHash, setRepoHash] = useState(null);
-  const lastRepoFetchRef = useRef(0);
-
   const gridWrapperClass = themeClassName;
-
-  const fetchLatestRepoHash = useCallback(async (options = {}) => {
-    const { force = false } = options || {};
-    const now = Date.now();
-    const elapsed = now - lastRepoFetchRef.current;
-    if (!force && repoHash && elapsed >= 0 && elapsed < 60_000) {
-      return repoHash;
-    }
-    try {
-      const params = new URLSearchParams({ repo: "bunny-lab-io/Borealis", branch: "main" });
-      if (force) {
-        params.set("refresh", "1");
-      }
-      const resp = await fetch(`/api/repo/current_hash?${params.toString()}`);
-      const json = await resp.json();
-      const sha = (json?.sha || "").trim();
-      if (!resp.ok || !sha) {
-        const err = new Error(`Latest hash status ${resp.status}${json?.error ? ` - ${json.error}` : ""}`);
-        err.response = json;
-        throw err;
-      }
-      lastRepoFetchRef.current = now;
-      setRepoHash((prev) => (sha ? sha : prev || null));
-      return sha || null;
-    } catch (err) {
-      console.warn("Failed to fetch repository hash", err);
-      if (!force && repoHash) {
-        return repoHash;
-      }
-      lastRepoFetchRef.current = now;
-      setRepoHash((prev) => prev || null);
-      return null;
-    }
-  }, [repoHash]);
-
-  const computeAgentVersion = useCallback((agentHashValue, repoHashValue) => {
-    const agentHash = (agentHashValue || "").trim();
-    const repo = (repoHashValue || "").trim();
-    if (!repo) return agentHash ? "Unknown" : "Unknown";
-    if (!agentHash) return "Needs Updated";
-    return agentHash === repo ? "Up-to-Date" : "Needs Updated";
-  }, []);
 
   const heroStats = useMemo(() => {
     const now = Date.now() / 1000;
@@ -567,7 +520,6 @@ export default function DeviceList({
     let online = 0;
     let offline = 0;
     let stale = 0;
-    let needsUpdate = 0;
     rows.forEach((row) => {
       const lastSeen =
         row.lastSeen ??
@@ -587,14 +539,6 @@ export default function DeviceList({
         statusFromHeartbeat(lastSeen);
       if ((statusRaw || "").toLowerCase() === "online") online += 1;
       else offline += 1;
-      const agentHash =
-        row.agentHash ||
-        row.summary?.agent_hash ||
-        row.summary?.agentHash ||
-        row.summary?.agent_hash_value;
-      if (repoHash && computeAgentVersion(agentHash, repoHash) === "Needs Updated") {
-        needsUpdate += 1;
-      }
     });
     return {
       total: rows.length,
@@ -602,9 +546,8 @@ export default function DeviceList({
       offline,
       sites: siteSet.size,
       stale,
-      needsUpdate,
     };
-  }, [rows, repoHash, computeAgentVersion]);
+  }, [rows]);
 
   const heroSubtitle = useMemo(() => {
     if (!heroStats.total) {
@@ -683,46 +626,8 @@ export default function DeviceList({
   }, []);
 
   const fetchDevices = useCallback(async (options = {}) => {
-    const { refreshRepo = false, showLoading = true } = options || {};
+    const { showLoading = true } = options || {};
     if (showLoading) setLoading(true);
-    let repoSha = repoHash;
-    const hashById = new Map();
-    const hashByGuid = new Map();
-    const hashByHost = new Map();
-    try {
-      if (refreshRepo || !repoSha) {
-        const fetched = await fetchLatestRepoHash({ force: refreshRepo });
-        if (fetched) repoSha = fetched;
-      }
-      const hashResp = await fetch('/api/agent/hash_list', {
-        cache: "no-store",
-        credentials: "include",
-      });
-      if (hashResp.ok) {
-        const hashJson = await hashResp.json();
-        const list = Array.isArray(hashJson?.agents) ? hashJson.agents : [];
-        list.forEach((rec) => {
-          if (!rec || typeof rec !== 'object') return;
-          const hash = (rec.agent_hash || '').trim();
-          if (!hash) return;
-          const agentId = (rec.agent_id || '').trim();
-          const guidRaw = (rec.agent_guid || '').trim().toLowerCase();
-          const hostKey = (rec.hostname || '').trim().toLowerCase();
-          const isMemory = (rec.source || '').trim() === 'memory';
-          if (agentId && (!hashById.has(agentId) || isMemory)) {
-            hashById.set(agentId, hash);
-          }
-          if (guidRaw && (!hashByGuid.has(guidRaw) || isMemory)) {
-            hashByGuid.set(guidRaw, hash);
-          }
-          if (hostKey && (!hashByHost.has(hostKey) || isMemory)) {
-            hashByHost.set(hostKey, hash);
-          }
-        });
-      }
-    } catch (err) {
-      console.warn('Failed to fetch agent hash list', err);
-    }
 
     try {
       const tunnelTelemetry = await fetchTunnelTelemetry();
@@ -760,15 +665,7 @@ export default function DeviceList({
         const guidRaw = (device.agent_guid || summary.agent_guid || '').trim();
         const guidLookupKey = guidRaw.toLowerCase();
         const rowKey = guidRaw || agentId || hostname || `device-${index + 1}`;
-        let agentHash = (device.agent_hash || summary.agent_hash || '').trim();
-        if (agentId && hashById.has(agentId)) agentHash = hashById.get(agentId) || agentHash;
-        if (!agentHash && guidLookupKey && hashByGuid.has(guidLookupKey)) {
-          agentHash = hashByGuid.get(guidLookupKey) || agentHash;
-        }
         const hostKey = hostname.trim().toLowerCase();
-        if (!agentHash && hostKey && hashByHost.has(hostKey)) {
-          agentHash = hashByHost.get(hostKey) || agentHash;
-        }
         const lastSeen = Number(device.last_seen || summary.last_seen || 0) || 0;
         const status = device.status || statusFromHeartbeat(lastSeen);
 
@@ -857,8 +754,6 @@ export default function DeviceList({
           createdTs,
           createdIso: device.created_at_iso || '',
           agentGuid: guidRaw,
-          agentHash,
-          agentVersion: computeAgentVersion(agentHash, repoSha),
           agentId,
           domain,
           internalIp,
@@ -904,7 +799,7 @@ export default function DeviceList({
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [repoHash, fetchLatestRepoHash, computeAgentVersion, filterMode, fetchTunnelTelemetry, applyTunnelTelemetry]);
+  }, [filterMode, fetchTunnelTelemetry, applyTunnelTelemetry]);
 
   const hasWireguardColumn = useMemo(
     () => columns.some((col) => col.id === "wireguardPeerIp"),
@@ -931,26 +826,6 @@ export default function DeviceList({
     };
   }, [hasWireguardColumn, hasWireguardVpnStatusColumn, fetchTunnelTelemetry, applyTunnelTelemetry]);
 
-  useEffect(() => {
-    setRows((prev) => {
-      if (!Array.isArray(prev) || !prev.length) return prev;
-      let changed = false;
-      const next = prev.map((row) => {
-        const nextVersion = computeAgentVersion(row.agentHash, repoHash);
-        if (row.agentVersion === nextVersion) return row;
-        changed = true;
-        return { ...row, agentVersion: nextVersion };
-      });
-      return changed ? next : prev;
-    });
-    setSelected((prev) => {
-      if (!prev) return prev;
-      const nextVersion = computeAgentVersion(prev.agentHash, repoHash);
-      if (prev.agentVersion === nextVersion) return prev;
-      return { ...prev, agentVersion: nextVersion };
-    });
-  }, [repoHash, computeAgentVersion]);
-
   const fetchViews = useCallback(async () => {
     try {
       const res = await fetch("/api/device_list_views");
@@ -964,7 +839,7 @@ export default function DeviceList({
 
   useEffect(() => {
     // Initial load only; removed auto-refresh interval
-    fetchDevices({ refreshRepo: true });
+    fetchDevices();
   }, [fetchDevices]);
 
   useEffect(() => {
@@ -1172,7 +1047,7 @@ export default function DeviceList({
         icon: <CachedIcon />,
         tone: "secondary",
         loading,
-        onClick: () => fetchDevices({ refreshRepo: true }),
+        onClick: () => fetchDevices(),
       },
       {
         id: "device-quick-job",
@@ -1487,16 +1362,6 @@ export default function DeviceList({
             minWidth: 112,
             flex: 0,
           };
-        case "agentVersion":
-          return {
-            field: "agentVersion",
-            headerName: col.label,
-            width: 140,
-            minWidth: 150,
-            flex: 0,
-            valueGetter: (params) =>
-              computeAgentVersion(params.data?.agentHash, repoHash),
-          };
         case "site":
           return {
             field: "site",
@@ -1626,14 +1491,6 @@ export default function DeviceList({
             minWidth: 290,
             flex: 0,
           };
-        case "agentHash":
-          return {
-            field: "agentHash",
-            headerName: col.label,
-            width: 365,
-            minWidth: 365,
-            flex: 0,
-          };
         case "agentGuid":
           return {
             field: "agentGuid",
@@ -1713,12 +1570,10 @@ export default function DeviceList({
   }, [
     columns,
     actionCellRenderer,
-    computeAgentVersion,
     formatCreated,
     handleDescriptionSave,
     hostnameCellRenderer,
     osCellRenderer,
-    repoHash,
     statusCellRenderer,
   ]);
 
@@ -2283,7 +2138,7 @@ export default function DeviceList({
         onCreated={() => {
           setAddDeviceOpen(false);
           setAddDeviceType(derivedDefaultType ?? null);
-          fetchDevices({ refreshRepo: true });
+          fetchDevices();
         }}
       />
     </Paper>

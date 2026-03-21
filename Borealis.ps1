@@ -3,6 +3,7 @@
 [CmdletBinding()]
 param(
     [switch]$Agent,
+    [switch]$RefreshAgentRuntime,
     [string]$EnrollmentCode = '',
     [string]$ServerUrl = ''
 )
@@ -1709,24 +1710,24 @@ ListenPort = 0
 function Ensure-AgentTasks {
     param([string]$ScriptRoot)
     $pyw         = Join-Path $ScriptRoot 'Agent\Scripts\pythonw.exe'
+    $py          = Join-Path $ScriptRoot 'Agent\Scripts\python.exe'
     $agentPy     = Join-Path $ScriptRoot 'Agent\Borealis\agent.py'
     $svcWrapper  = Join-Path $ScriptRoot 'Agent\Borealis\launch_service.ps1'
+    $updateScript= Join-Path $ScriptRoot 'Update.ps1'
     if (-not (Test-Path $pyw))      { Write-Host "pythonw.exe not found under Agent\Scripts" -ForegroundColor Yellow; return }
+    if (-not (Test-Path $py))       { Write-Host "python.exe not found under Agent\Scripts" -ForegroundColor Yellow; return }
     if (-not (Test-Path $agentPy))  { Write-Host "Agent script not found under Agent\Borealis" -ForegroundColor Yellow; return }
     if (-not (Test-Path $svcWrapper)) { Write-Host "launch_service.ps1 not found under Agent\Borealis" -ForegroundColor Yellow; return }
+    if (-not (Test-Path $updateScript)) { Write-Host "Update.ps1 not found under project root" -ForegroundColor Yellow; return }
 
-    # Clean old tasks first
-    try { Unregister-ScheduledTask -TaskName 'Borealis Agent' -Confirm:$false -ErrorAction SilentlyContinue } catch {}
-    try { Unregister-ScheduledTask -TaskName 'Borealis Agent (UserHelper)' -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+    $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+    $principalSystem = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 
     # SYSTEM startup task
-    # Use a wrapper PowerShell to enforce WorkingDirectory and capture stdout/stderr
     $sysArg     = ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $svcWrapper)
     $sysAction  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $sysArg -WorkingDirectory (Split-Path $svcWrapper -Parent)
     $sysTrigger = New-ScheduledTaskTrigger -AtStartup
-    $sysSet     = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-    $sysPrin    = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    Register-ScheduledTask -TaskName 'Borealis Agent' -Action $sysAction -Trigger $sysTrigger -Settings $sysSet -Principal $sysPrin -Force | Out-Null
+    Register-ScheduledTask -TaskName 'Borealis Agent' -Action $sysAction -Trigger $sysTrigger -Settings $taskSettings -Principal $principalSystem -Force | Out-Null
     try { Start-ScheduledTask -TaskName 'Borealis Agent' | Out-Null } catch {}
 
     # Optional user-session helper for interactive roles (tray, overlays)
@@ -1734,13 +1735,61 @@ function Ensure-AgentTasks {
     $usrArg     = ('"{0}" --config CURRENTUSER' -f $agentPy)
     $usrAction  = New-ScheduledTaskAction -Execute $pyw -Argument $usrArg -WorkingDirectory (Split-Path $agentPy -Parent)
     $usrTrig    = New-ScheduledTaskTrigger -AtLogOn
-    $usrSet     = New-ScheduledTaskSettingsSet -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-    $currentUser= [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $usrPrin    = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName $helperName -Action $usrAction -Trigger $usrTrig -Settings $usrSet -Principal $usrPrin -Force | Out-Null
-    try { Start-ScheduledTask -TaskName $helperName | Out-Null } catch {}
+    $currentUser = $null
+    try {
+        $existingTask = Get-ScheduledTask -TaskName $helperName -ErrorAction SilentlyContinue
+        if ($existingTask -and $existingTask.Principal -and $existingTask.Principal.UserId) {
+            $candidateUser = ([string]$existingTask.Principal.UserId).Trim()
+            if ($candidateUser -and $candidateUser -notmatch '^(SYSTEM|NT AUTHORITY\\SYSTEM)$') {
+                $currentUser = $candidateUser
+            }
+        }
+    } catch {}
+    if (-not $currentUser) {
+        try {
+            $consoleUser = (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
+            if ($consoleUser -and $consoleUser.Trim()) {
+                $currentUser = $consoleUser.Trim()
+            }
+        } catch {}
+    }
+    if (-not $currentUser) {
+        try {
+            $explorerOwner = Get-Process explorer -IncludeUserName -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty UserName
+            if ($explorerOwner -and $explorerOwner.Trim()) {
+                $currentUser = $explorerOwner.Trim()
+            }
+        } catch {}
+    }
+    if (-not $currentUser) {
+        try {
+            $identityUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            if ($identityUser -and $identityUser.Trim() -and $identityUser -notmatch '^(SYSTEM|NT AUTHORITY\\SYSTEM)$') {
+                $currentUser = $identityUser.Trim()
+            }
+        } catch {}
+    }
+    if ($currentUser -and $currentUser -notmatch '^(SYSTEM|NT AUTHORITY\\SYSTEM)$') {
+        $usrPrin = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+        Register-ScheduledTask -TaskName $helperName -Action $usrAction -Trigger $usrTrig -Settings $taskSettings -Principal $usrPrin -Force | Out-Null
+        try { Start-ScheduledTask -TaskName $helperName | Out-Null } catch {}
+    } else {
+        Write-AgentLog -FileName 'Install.log' -Message '[TASKS] Unable to resolve an interactive user principal for Borealis Agent (UserHelper); leaving the existing task unchanged.'
+    }
+
+    $autoUpdaterName = 'Borealis Agent (AutoUpdater)'
+    $now = Get-Date
+    $nextHour = [datetime]::new($now.Year, $now.Month, $now.Day, $now.Hour, 0, 0, $now.Kind)
+    if ($nextHour -le $now) { $nextHour = $nextHour.AddHours(1) }
+    $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $nextHour -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 3650)
+    $startupTrigger = New-ScheduledTaskTrigger -AtStartup
+    try { $startupTrigger.Delay = 'PT5M' } catch {}
+    $updateArg = ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $updateScript)
+    $updateAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $updateArg -WorkingDirectory $ScriptRoot
+    Register-ScheduledTask -TaskName $autoUpdaterName -Action $updateAction -Trigger @($hourlyTrigger, $startupTrigger) -Settings $taskSettings -Principal $principalSystem -Force | Out-Null
 }
 function InstallOrUpdate-BorealisAgent {
+    $isRefreshRuntime = $RefreshAgentRuntime.IsPresent
     Write-Host "Ensuring Agent Dependencies Exist..." -ForegroundColor DarkCyan
     Install_Shared_Dependencies
     Install_Agent_Dependencies
@@ -1750,10 +1799,24 @@ function InstallOrUpdate-BorealisAgent {
     }
     $env:PATH = '{0};{1}' -f (Split-Path $pythonExe), $env:PATH
     Write-Host "Cleaning previous agent tasks/processes..." -ForegroundColor Yellow
-    Remove-BorealisServicesAndTasks -LogName 'Install.log'
+    if ($isRefreshRuntime) {
+        try { Stop-ScheduledTask -TaskName 'Borealis Agent' -ErrorAction SilentlyContinue } catch {}
+        try { Stop-ScheduledTask -TaskName 'Borealis Agent (UserHelper)' -ErrorAction SilentlyContinue } catch {}
+        try {
+            Get-Process python,pythonw -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -like (Join-Path $scriptDir 'Agent\*') } |
+                ForEach-Object { try { $_ | Stop-Process -Force } catch {} }
+        } catch {}
+    } else {
+        Remove-BorealisServicesAndTasks -LogName 'Install.log'
+    }
     Ensure-SystemUtf8CodePage -LogName 'Install.log'
     Ensure-SoftwareSASGeneration -LogName 'Install.log'
-    Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
+    if ($isRefreshRuntime) {
+        Write-Host "Refreshing Borealis Agent runtime..." -ForegroundColor Blue
+    } else {
+        Write-Host "Deploying Borealis Agent..." -ForegroundColor Blue
+    }
 
     # Resolve all paths relative to the script directory to avoid CWD issues
     $venvFolderPath         = Join-Path $scriptDir 'Agent'
@@ -1838,7 +1901,7 @@ function InstallOrUpdate-BorealisAgent {
             & $pythonForVenv -m venv --upgrade $venvFolderPath
         }
         if (Test-Path $agentSourcePath) {
-            # Cleanup Previous Agent Folder & Create New Folder
+            # Preserve enrolled runtime state and replace only the staged code payload.
             $existingServerUrlPath = Join-Path $agentDestinationFolder 'Settings\server_url.txt'
             if (Test-Path $existingServerUrlPath) {
                 try {
@@ -1853,7 +1916,6 @@ function InstallOrUpdate-BorealisAgent {
                     $existingServerUrl = $candidateUrl
                 }
             }
-            Remove-Item $agentDestinationFolder -Recurse -Force -ErrorAction SilentlyContinue
             New-Item -Path $agentDestinationFolder -ItemType Directory -Force | Out-Null
 
             # Copy Agent Files to Virtual Python Environment
@@ -1870,9 +1932,16 @@ function InstallOrUpdate-BorealisAgent {
                 (Join-Path $agentSourceRoot 'security.py'),
                 (Join-Path $agentSourceRoot 'signature_utils.py'),
                 (Join-Path $agentSourceRoot 'sitecustomize.py'),
-                (Join-Path $agentSourceRoot 'termios_stub.py')
+                (Join-Path $agentSourceRoot 'termios_stub.py'),
+                (Join-Path $agentSourceRoot 'update_helper.py'),
+                (Join-Path $agentSourceRoot 'update_state.py')
             )
 
+            foreach ($coreItem in $coreAgentFiles) {
+                if (-not $coreItem) { continue }
+                $targetItem = Join-Path $agentDestinationFolder (Split-Path -Path $coreItem -Leaf)
+                Remove-Item $targetItem -Recurse -Force -ErrorAction SilentlyContinue
+            }
             Copy-Item $coreAgentFiles -Destination $agentDestinationFolder -Recurse -Force
 
             # Stage UltraVNC payload + password tool into agent runtime so we don't write under Dependencies at runtime.
@@ -2005,6 +2074,8 @@ function InstallOrUpdate-BorealisAgent {
         }
         if ($providedServerUrl) {
             $inputUrl = $providedServerUrl
+        } elseif ($isRefreshRuntime) {
+            $inputUrl = $currentUrl
         } else {
             Write-Host ""; Write-Host "Set Borealis Server URL" -ForegroundColor DarkYellow
             $prompt = "Server URL [$currentUrl]"
@@ -2063,14 +2134,22 @@ function InstallOrUpdate-BorealisAgent {
 
         if (-not $providedEnrollmentCode) {
             $defaultDisplay = if ($existingEnrollmentCode) { $existingEnrollmentCode } else { '' }
-            Write-Host ""; Write-Host "Set an enrollment code for agent enrollment." -ForegroundColor DarkYellow
-            $inputCode = Read-Host ("Enrollment Code [{0}] (e.g. A4E1-••••-••••-••••-••••-••••-••••-350A)" -f $defaultDisplay)
-            if ($inputCode -and $inputCode.Trim()) {
-                $providedEnrollmentCode = $inputCode.Trim()
-            } elseif ($defaultDisplay) {
-                $providedEnrollmentCode = $defaultDisplay
+            if ($isRefreshRuntime) {
+                if ($defaultDisplay) {
+                    $providedEnrollmentCode = $defaultDisplay
+                } else {
+                    $providedEnrollmentCode = ''
+                }
             } else {
-                $providedEnrollmentCode = ''
+                Write-Host ""; Write-Host "Set an enrollment code for agent enrollment." -ForegroundColor DarkYellow
+                $inputCode = Read-Host ("Enrollment Code [{0}] (e.g. A4E1-••••-••••-••••-••••-••••-••••-350A)" -f $defaultDisplay)
+                if ($inputCode -and $inputCode.Trim()) {
+                    $providedEnrollmentCode = $inputCode.Trim()
+                } elseif ($defaultDisplay) {
+                    $providedEnrollmentCode = $defaultDisplay
+                } else {
+                    $providedEnrollmentCode = ''
+                }
             }
         }
 

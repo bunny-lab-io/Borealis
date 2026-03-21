@@ -1149,7 +1149,17 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
             detailData?.operating_system || normalizedSummary.operating_system || normalizedSummary.agent_operating_system || "",
           agentId: detailData?.agent_id || normalizedSummary.agent_id || agentId || "",
           agentGuid: detailData?.agent_guid || normalizedSummary.agent_guid || guid || "",
-          agentHash: detailData?.agent_hash || normalizedSummary.agent_hash || "",
+          agentBuildId:
+            detailData?.agent_build_id ||
+            detailData?.agent_hash ||
+            normalizedSummary.agent_build_id ||
+            normalizedSummary.agent_hash ||
+            "",
+          agentVersionStatus:
+            detailData?.agent_version_status ||
+            normalizedSummary.agent_version_status ||
+            detailData?.details?.summary?.agent_version_status ||
+            "Needs Updated",
           internalIp: detailData?.internal_ip || normalizedSummary.internal_ip || "",
           externalIp: detailData?.external_ip || normalizedSummary.external_ip || "",
           manufacturer: manufacturerValue || "",
@@ -1170,7 +1180,8 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           ...(prev || {}),
           id: agentId || prev?.id,
           hostname: metaPayload.hostname || prev?.hostname,
-          agent_hash: metaPayload.agentHash || prev?.agent_hash,
+          agent_hash: metaPayload.agentBuildId || prev?.agent_hash,
+          agent_build_id: metaPayload.agentBuildId || prev?.agent_build_id,
           agent_operating_system: metaPayload.operatingSystem || prev?.agent_operating_system,
           device_type: metaPayload.deviceType || prev?.device_type,
           last_seen: metaPayload.lastSeen || prev?.last_seen,
@@ -2479,6 +2490,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           value: meta.agentGuid || summary.agent_guid || device?.agent_guid || agent?.agent_guid || "unknown",
         },
         {
+          id: "agent-version",
+          label: "Agent Version",
+          value: meta.agentVersionStatus || summary.agent_version_status || "Needs Updated",
+        },
+        {
           id: "enrollment-date",
           label: "Enrollment Date",
           value: formatDateValue(
@@ -2500,8 +2516,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     },
     [
       meta.agentGuid,
+      meta.agentVersionStatus,
       meta.created,
       summary.agent_guid,
+      summary.agent_version_status,
       summary.created,
       device?.agent_guid,
       device?.created,

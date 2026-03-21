@@ -37,6 +37,7 @@ QUICK_FLAG=0
 ENGINE_TESTS_FLAG=0
 ENGINE_PROD_FLAG=0
 ENGINE_DEV_FLAG=0
+REFRESH_AGENT_RUNTIME_FLAG=0
 ENROLLMENT_CODE=""
 SERVER_URL=""
 
@@ -57,6 +58,7 @@ while (( "$#" )); do
     -EngineTests|--engine-tests) ENGINE_TESTS_FLAG=1 ;;
     -EngineProduction|--engine-production) ENGINE_PROD_FLAG=1 ;;
     -EngineDev|--engine-dev) ENGINE_DEV_FLAG=1 ;;
+    --refresh-agent-runtime) REFRESH_AGENT_RUNTIME_FLAG=1 ;;
     -EnrollmentCode|--EnrollmentCode|--enrollmentcode|--enrollment-code)
       shift
       ENROLLMENT_CODE="${1:-}"
@@ -419,6 +421,7 @@ echo -e "${INFO} Borealis source root: ${SCRIPT_DIR}"
 # ---- Agent configuration ----
 configure_agent_settings() {
   local preserved_server_url="${1:-}"
+  local noninteractive_mode="${2:-0}"
   echo -e "${GREEN}Configuring Borealis Agent settings...${RESET}"
   local settings_dir="${SCRIPT_DIR}/Agent/Borealis/Settings"
   local legacy_settings_dir="${SCRIPT_DIR}/Agent/Settings"
@@ -447,7 +450,7 @@ configure_agent_settings() {
     input_url="${SERVER_URL}"
   elif [[ -n "${BOREALIS_SERVER_URL:-}" ]]; then
     input_url="${BOREALIS_SERVER_URL}"
-  elif [[ -t 0 ]]; then
+  elif [[ "${noninteractive_mode}" -ne 1 && -t 0 ]]; then
     input_url="$(prompt_input "Server URL [${current_url}]: ")"
   fi
 
@@ -482,7 +485,7 @@ PY
       )"
     fi
 
-    if [[ -t 0 ]]; then
+    if [[ "${noninteractive_mode}" -ne 1 && -t 0 ]]; then
       input_code="$(prompt_input "Enrollment Code [${existing_code}]: ")"
     else
       input_code=""
@@ -840,13 +843,18 @@ create_agent_venv_and_stage_data() {
     local existing_py
     existing_py="$(agent_python_bin)"
     if [[ -z "${existing_py}" ]] || ! "${existing_py}" -c "import sys" >/dev/null 2>&1; then
-      rm -rf "${venv_dir}" 2>/dev/null || true
       mkdir -p "${venv_dir}"
+      rm -rf \
+        "${venv_dir}/bin" \
+        "${venv_dir}/include" \
+        "${venv_dir}/lib" \
+        "${venv_dir}/lib64" \
+        "${venv_dir}/share" \
+        "${venv_dir}/pyvenv.cfg" 2>/dev/null || true
       "${py_bin}" -m venv "${venv_dir}"
     fi
   fi
 
-  rm -rf "${destination}" 2>/dev/null || true
   mkdir -p "${destination}"
 
   local core_items=(
@@ -863,10 +871,13 @@ create_agent_venv_and_stage_data() {
     "signature_utils.py"
     "sitecustomize.py"
     "termios_stub.py"
+    "update_helper.py"
+    "update_state.py"
   )
 
   local item=""
   for item in "${core_items[@]}"; do
+    rm -rf "${destination}/${item}" 2>/dev/null || true
     if [[ -e "${source_root}/${item}" ]]; then
       cp -a "${source_root}/${item}" "${destination}/"
     fi
@@ -933,6 +944,66 @@ EOF
   return 0
 }
 
+ensure_agent_updater_systemd_units() {
+  if ! command_exists systemctl; then
+    write_agent_log "systemctl unavailable; skipping Borealis agent updater timer."
+    return 0
+  fi
+
+  local updater_script="${SCRIPT_DIR}/Update.sh"
+  if [[ ! -f "${updater_script}" ]]; then
+    write_agent_log "Update.sh not found; skipping Borealis agent updater timer."
+    return 1
+  fi
+
+  local service_name="borealis-agent-updater.service"
+  local timer_name="borealis-agent-updater.timer"
+  local service_path="/etc/systemd/system/${service_name}"
+  local timer_path="/etc/systemd/system/${timer_name}"
+  local logdir
+  logdir="$(ensure_agent_log_dir)"
+  local service_tmp="${logdir}/${service_name}"
+  local timer_tmp="${logdir}/${timer_name}"
+
+  cat > "${service_tmp}" <<EOF
+[Unit]
+Description=Borealis Agent Auto Updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=${SCRIPT_DIR}
+Environment=BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
+ExecStart=/usr/bin/env bash ${updater_script}
+EOF
+
+  cat > "${timer_tmp}" <<EOF
+[Unit]
+Description=Borealis Agent Auto Updater Timer
+
+[Timer]
+OnCalendar=*-*-* *:00:00
+OnBootSec=5min
+Persistent=true
+AccuracySec=1s
+Unit=${service_name}
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  run_privileged cp "${service_tmp}" "${service_path}" || return 1
+  run_privileged cp "${timer_tmp}" "${timer_path}" || return 1
+  run_privileged chmod 644 "${service_path}" "${timer_path}" || true
+  run_privileged chmod +x "${updater_script}" || true
+  run_privileged systemctl daemon-reload || return 1
+  run_privileged systemctl enable "${timer_name}" || return 1
+  run_privileged systemctl restart "${timer_name}" || return 1
+  write_agent_log "Systemd updater timer '${timer_name}' installed/restarted."
+  return 0
+}
+
 start_agent_background_fallback() {
   local venv_py
   venv_py="$(agent_python_bin)"
@@ -971,6 +1042,7 @@ start_agent_background_fallback() {
 configure_agent_supervision() {
   if command_exists systemctl; then
     if ensure_agent_systemd_service; then
+      ensure_agent_updater_systemd_units || write_agent_log "Agent updater timer setup failed."
       return 0
     fi
     write_agent_log "Systemd supervision setup failed; falling back to background launch."
@@ -1007,6 +1079,7 @@ print_agent_service_status() {
 }
 
 install_or_update_borealis_agent() {
+  local noninteractive_mode="${1:-0}"
   echo -e "${GREEN}Ensuring Agent dependencies exist...${RESET}"
   install_agent_dependencies
 
@@ -1022,7 +1095,7 @@ install_or_update_borealis_agent() {
 
   run_step "Create Borealis Agent virtual environment & stage runtime" create_agent_venv_and_stage_data
   run_step "Install Agent Python dependencies" install_agent_python_deps
-  run_step "Configure Agent settings" configure_agent_settings "$preserved_url"
+  run_step "Configure Agent settings" configure_agent_settings "$preserved_url" "$noninteractive_mode"
   if ! verify_agent_runtime_exec_path; then
     echo -e "${RED}Agent runtime path is on a noexec mount. Set BOREALIS_AGENT_VENV to an executable path (for example /opt/Borealis/Agent).${RESET}"
     return 1
@@ -1712,7 +1785,11 @@ server_menu() {
 
 agent_menu() {
   echo -e "\nDeploying Borealis Agent..."
-  install_or_update_borealis_agent
+  if [[ "${REFRESH_AGENT_RUNTIME_FLAG}" -eq 1 ]]; then
+    install_or_update_borealis_agent 1
+    return $?
+  fi
+  install_or_update_borealis_agent 0
 }
 
 main_menu() {

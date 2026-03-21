@@ -39,6 +39,16 @@ import aiohttp
 import socketio
 from security import AgentKeyStore
 from signature_utils import decode_script_bytes as _decode_script_bytes, verify_and_store_script_signature as _verify_and_store_script_signature
+try:
+    from update_state import (
+        read_installed_build_id as _read_installed_build_id,
+        read_repo_build_id as _read_repo_build_id,
+        sync_installed_build_id as _sync_installed_build_id,
+    )
+except Exception:
+    _read_installed_build_id = None
+    _read_repo_build_id = None
+    _sync_installed_build_id = None
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -561,6 +571,31 @@ def _mask_sensitive(value: str, *, prefix: int = 4, suffix: int = 4) -> str:
         return f"{trimmed[:prefix]}***{trimmed[-suffix:]}"
     except Exception:
         return '***'
+
+
+def _current_agent_build_id(*, sync: bool = False) -> str:
+    try:
+        if sync and callable(_sync_installed_build_id):
+            build_id = (_sync_installed_build_id() or "").strip()
+            if build_id:
+                return build_id
+    except Exception:
+        pass
+    try:
+        if callable(_read_installed_build_id):
+            build_id = (_read_installed_build_id() or "").strip()
+            if build_id:
+                return build_id
+    except Exception:
+        pass
+    try:
+        if callable(_read_repo_build_id):
+            build_id = (_read_repo_build_id() or "").strip()
+            if build_id:
+                return build_id
+    except Exception:
+        pass
+    return ""
 
 
 def _format_debug_pairs(pairs: Dict[str, Any]) -> str:
@@ -2539,6 +2574,7 @@ async def send_heartbeat():
                 "guid": client.guid or _read_agent_guid_from_disk(),
                 "hostname": socket.gethostname(),
                 "metrics": _collect_heartbeat_metrics(),
+                "agent_build_id": _current_agent_build_id(sync=True),
             }
             await client.async_post_json("/api/agent/heartbeat", payload, require_auth=True)
         except Exception as exc:
@@ -2868,6 +2904,7 @@ async def send_agent_details():
                 "agent_id": AGENT_ID,
                 "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
                 "details": details,
+                "agent_build_id": _current_agent_build_id(sync=True),
             }
             client = http_client()
             await client.async_post_json("/api/agent/details", payload, require_auth=True)
@@ -2890,6 +2927,7 @@ async def send_agent_details_once():
             "agent_id": AGENT_ID,
             "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
             "details": details,
+            "agent_build_id": _current_agent_build_id(sync=True),
         }
         client = http_client()
         await client.async_post_json("/api/agent/details", payload, require_auth=True)
@@ -3341,10 +3379,17 @@ if __name__=='__main__':
         _log_agent(f'Authentication bootstrap failed: {exc}', fname='agent.error.log')
         print(f"[WARN] Authentication bootstrap failed: {exc}")
     try:
+        build_id = _current_agent_build_id(sync=True)
+        if build_id:
+            _log_agent(f'Agent build id ready: {build_id}')
+    except Exception:
+        pass
+    try:
         base_hooks = {
             'send_service_control': send_service_control,
             'get_server_url': get_server_url,
             'http_client': http_client,
+            'get_agent_build_id': lambda: _current_agent_build_id(sync=True),
             'log_agent': lambda message, **kwargs: _log_agent(message, **kwargs),
         }
         if not SYSTEM_SERVICE_MODE:

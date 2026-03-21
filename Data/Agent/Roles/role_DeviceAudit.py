@@ -1699,10 +1699,22 @@ class Role:
                 # Always post the latest available details (possibly cached)
                 details_to_send = self._last_details or {'summary': collect_summary(self.ctx.config)}
                 get_url = (self.ctx.hooks.get('get_server_url') if isinstance(self.ctx.hooks, dict) else None) or (lambda: 'http://localhost:5000')
+                agent_build_id = ''
+                if isinstance(self.ctx.hooks, dict):
+                    build_id_getter = self.ctx.hooks.get('get_agent_build_id')
+                    if callable(build_id_getter):
+                        try:
+                            agent_build_id = str(build_id_getter() or '').strip()
+                        except Exception:
+                            agent_build_id = ''
+                details_to_send.setdefault('summary', {})
+                if agent_build_id and not details_to_send['summary'].get('agent_build_id'):
+                    details_to_send['summary']['agent_build_id'] = agent_build_id
                 payload = {
                     'agent_id': self.ctx.agent_id,
                     'hostname': details_to_send.get('summary', {}).get('hostname', _local_hostname()),
                     'details': details_to_send,
+                    'agent_build_id': agent_build_id,
                 }
                 client_factory = None
                 if isinstance(self.ctx.hooks, dict):

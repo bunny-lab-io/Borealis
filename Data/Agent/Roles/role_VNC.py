@@ -16,6 +16,10 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
+try:
+    from update_state import busy_activity
+except Exception:
+    busy_activity = None
 
 
 def _env_bool(value: Optional[str], default: bool) -> bool:
@@ -1178,6 +1182,7 @@ class Role:
         self._engine_wait_logged = False
         self._state = _load_vnc_state()
         self._last_allowed_ips = _parse_allowed_ips(self._state.get("allowed_ips"))
+        self._session_busy_lease = None
         self.vnc = VncManager()
         if os.name == "nt":
             self.vnc.ensure_standby(reason="startup_policy")
@@ -1215,6 +1220,27 @@ class Role:
         self._engine_ready_for_vnc = True
         self._engine_wait_logged = False
         self._log(f"VNC engine readiness confirmed via {source}.")
+
+    def _acquire_session_busy(self, reason: str) -> None:
+        if self._session_busy_lease is not None or not callable(busy_activity):
+            return
+        try:
+            self._session_busy_lease = busy_activity(
+                "vnc_session",
+                metadata={"reason": str(reason or "vnc_session_start")},
+            ).acquire()
+        except Exception as exc:
+            self._log(f"Failed to acquire VNC busy lease: {exc}", error=True)
+            self._session_busy_lease = None
+
+    def _release_session_busy(self) -> None:
+        if self._session_busy_lease is None:
+            return
+        try:
+            self._session_busy_lease.close()
+        except Exception:
+            pass
+        self._session_busy_lease = None
 
     def _state_password(self) -> Optional[str]:
         value = self._state.get("password")
@@ -1357,6 +1383,7 @@ class Role:
                     return
                 reason = payload.get("reason") or reason
             self._log(f"VNC stop requested (reason={reason}).")
+            self._release_session_busy()
             self.vnc.stop(reason=str(reason))
 
         @sio.on("vnc_start")
@@ -1382,6 +1409,7 @@ class Role:
                 allowed_ips=allowed_ips if allowed_ips else None,
                 port=port if port is not None else None,
             )
+            self._acquire_session_busy(str(reason))
             self._mark_engine_ready("vnc_start_event")
             self._ensure_always_on(reason=str(reason))
 
@@ -1394,6 +1422,7 @@ class Role:
                     return
                 reason = payload.get("reason") or reason
             self._log(f"VNC stop requested (reason={reason}).")
+            self._release_session_busy()
             self.vnc.stop(reason=str(reason))
 
     def stop_all(self) -> None:
@@ -1401,3 +1430,4 @@ class Role:
             self._always_on_stop.set()
         except Exception:
             pass
+        self._release_session_busy()

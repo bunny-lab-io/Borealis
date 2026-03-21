@@ -488,6 +488,62 @@ class DeviceManagementService:
         self.repo_cache = adapters.github_integration
         self.site_access = UserSiteAccessManager(self.db_conn_factory, logger=self.logger)
 
+    def _target_repo_config(self) -> Tuple[str, str]:
+        repo_name = (os.environ.get("BOREALIS_UPDATE_REPO") or "bunny-lab-io/Borealis").strip()
+        branch_name = (os.environ.get("BOREALIS_UPDATE_BRANCH") or "main").strip()
+        return repo_name or "bunny-lab-io/Borealis", branch_name or "main"
+
+    def _current_target_repo_hash(self) -> str:
+        repo_name, branch_name = self._target_repo_config()
+        try:
+            payload, status = self.repo_cache.current_repo_hash(repo_name, branch_name)
+        except Exception:
+            return ""
+        if status != 200 or not isinstance(payload, dict):
+            return ""
+        return (_clean_device_str(payload.get("sha")) or "").lower()
+
+    def _compute_agent_version_status(self, installed_build_id: Any, target_build_id: Optional[str] = None) -> str:
+        installed = (_clean_device_str(installed_build_id) or "").lower()
+        target = (target_build_id or "").strip().lower()
+        if installed and target and installed == target:
+            return "Up-to-Date"
+        return "Needs Updated"
+
+    def _attach_agent_version_status(
+        self,
+        payload: Dict[str, Any],
+        *,
+        target_build_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return payload
+        if target_build_id is None:
+            target_build_id = self._current_target_repo_hash()
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        installed_build_id = (
+            _clean_device_str(payload.get("agent_build_id"))
+            or _clean_device_str(payload.get("agent_hash"))
+            or _clean_device_str(summary.get("agent_build_id"))
+            or _clean_device_str(summary.get("agent_hash"))
+        )
+        status = self._compute_agent_version_status(installed_build_id, target_build_id)
+        payload["agent_version_status"] = status
+        if installed_build_id:
+            payload["agent_build_id"] = installed_build_id
+        if isinstance(summary, dict):
+            summary["agent_version_status"] = status
+            if installed_build_id and not summary.get("agent_build_id"):
+                summary["agent_build_id"] = installed_build_id
+        details = payload.get("details")
+        if isinstance(details, dict):
+            detail_summary = details.setdefault("summary", {})
+            if isinstance(detail_summary, dict):
+                detail_summary["agent_version_status"] = status
+                if installed_build_id and not detail_summary.get("agent_build_id"):
+                    detail_summary["agent_build_id"] = installed_build_id
+        return payload
+
     def _db_conn(self) -> sqlite3.Connection:
         return self.db_conn_factory()
 
@@ -570,6 +626,7 @@ class DeviceManagementService:
             "hostname": mapping.get("hostname") or "",
             "description": mapping.get("description") or "",
             "agent_hash": (mapping.get("agent_hash") or "").strip(),
+            "agent_build_id": (mapping.get("agent_hash") or "").strip(),
             "agent_guid": normalize_guid(mapping.get("guid")) or "",
             "agent_id": (mapping.get("agent_id") or "").strip(),
             "device_type": mapping.get("device_type") or "",
@@ -602,6 +659,7 @@ class DeviceManagementService:
             "created_at": created_at or 0,
             "created_at_iso": _ts_to_iso(created_at),
             "agent_hash": summary["agent_hash"],
+            "agent_build_id": summary["agent_build_id"],
             "agent_guid": summary["agent_guid"],
             "guid": summary["agent_guid"],
             "memory": details["memory"],
@@ -794,6 +852,7 @@ class DeviceManagementService:
             if not self.site_access.user_can_access_site(current_user, site_tuple[0]):
                 return {"error": "not found"}, 404
             payload = self._build_device_payload(device_tuple, site_tuple)
+            payload = self._attach_agent_version_status(payload)
             return payload, 200
         except Exception as exc:
             self.logger.debug("Failed to load device by guid", exc_info=True)
@@ -823,7 +882,14 @@ class DeviceManagementService:
         incoming_hostname = hostname
 
         agent_id = _clean_device_str(payload.get("agent_id"))
-        agent_hash = _clean_device_str(payload.get("agent_hash"))
+        agent_hash = (
+            _clean_device_str(payload.get("agent_build_id"))
+            or _clean_device_str(payload.get("installed_build_id"))
+            or _clean_device_str(payload.get("agent_hash"))
+            or _clean_device_str((details.get("summary") or {}).get("agent_build_id"))
+            or _clean_device_str((details.get("summary") or {}).get("installed_build_id"))
+            or _clean_device_str((details.get("summary") or {}).get("agent_hash"))
+        )
 
         raw_guid = getattr(ctx, "guid", None)
         try:
@@ -913,6 +979,7 @@ class DeviceManagementService:
                 incoming_summary["hostname"] = hostname
             if agent_hash:
                 incoming_summary["agent_hash"] = agent_hash
+                incoming_summary["agent_build_id"] = agent_hash
 
             effective_guid = auth_guid or existing_guid
             if effective_guid:
@@ -938,6 +1005,8 @@ class DeviceManagementService:
                 merged_summary.setdefault("agent_id", agent_id)
             if agent_hash and _is_empty(merged_summary.get("agent_hash")):
                 merged_summary["agent_hash"] = agent_hash
+            if agent_hash and _is_empty(merged_summary.get("agent_build_id")):
+                merged_summary["agent_build_id"] = agent_hash
             if effective_guid:
                 merged_summary["agent_guid"] = effective_guid
             if fingerprint:
@@ -946,6 +1015,8 @@ class DeviceManagementService:
                 merged_summary["description"] = description
             if existing_agent_hash and _is_empty(merged_summary.get("agent_hash")):
                 merged_summary["agent_hash"] = existing_agent_hash
+            if existing_agent_hash and _is_empty(merged_summary.get("agent_build_id")):
+                merged_summary["agent_build_id"] = existing_agent_hash
 
             if created_at <= 0:
                 created_at = int(time.time())
@@ -1032,6 +1103,7 @@ class DeviceManagementService:
                     "summary": {
                         "hostname": mapping.get("hostname") or "",
                         "description": mapping.get("description") or "",
+                        "agent_build_id": (mapping.get("agent_hash") or "").strip(),
                     },
                     "memory": _safe_json(mapping.get("memory"), []),
                     "network": _safe_json(mapping.get("network"), []),
@@ -1046,6 +1118,7 @@ class DeviceManagementService:
                 "description": mapping.get("description") or "",
                 "created_at": created_at or 0,
                 "agent_hash": (mapping.get("agent_hash") or "").strip(),
+                "agent_build_id": (mapping.get("agent_hash") or "").strip(),
                 "agent_guid": normalize_guid(mapping.get("guid")) or "",
                 "memory": _safe_json(mapping.get("memory"), []),
                 "network": _safe_json(mapping.get("network"), []),
@@ -1063,6 +1136,7 @@ class DeviceManagementService:
                 "uptime": mapping.get("uptime") or 0,
                 "agent_id": (mapping.get("agent_id") or "").strip(),
             }
+            payload = self._attach_agent_version_status(payload)
             return payload, 200
         except Exception as exc:
             self.logger.debug("Failed to load device details", exc_info=True)
