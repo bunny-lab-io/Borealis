@@ -10,7 +10,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - Payload JSON is stored inline in each `assemblies` row (`payload_json`).
 - Assemblies are cached at runtime by the Engine and served via API.
 - `assembly_type` is the canonical classifier used to route assemblies to the Script Editor, Workflow Editor, and execution paths.
-- `assembly_subtype` captures implementation/runtime subtype (for example: `powershell`, `workflow`, `ansible`).
+- `assembly_subtype` captures implementation/runtime subtype (for example: `powershell`, `batch`, `bash`, `workflow`, `ansible`).
 - The assembly table does not use `metadata_json` or `payload_type`.
 - Engine startup enforces the compact `assemblies` schema exactly; legacy extra columns are rejected instead of auto-migrated.
 
@@ -72,7 +72,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - `GET /api/assemblies/<assembly_guid>/export` (Token Authenticated) - export legacy JSON.
 - `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official assembly from the active catalog.
 - `POST /api/assemblies/official/update-all` (Admin) - sync official assemblies from the active catalog, including brand-new Aurora entries that are not yet installed locally.
-- `POST /api/scripts/quick_run` (Token Authenticated) - quick PowerShell job.
+- `POST /api/scripts/quick_run` (Token Authenticated) - quick agent-side script job (`powershell`, `batch`, or `bash`, depending on the target agent platform/runtime).
 - `POST /api/ansible/quick_run` (Token Authenticated) - placeholder (not implemented).
 - `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history.
 - `DELETE /api/device/activity/<hostname>` (Token Authenticated) - clear history.
@@ -115,7 +115,9 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 
 ### Script variables and environment injection
 - Assembly variables are stored with name, type, default, and description.
-- Engine builds an environment map and also rewrites `$env:VAR` occurrences.
+- Engine always builds an environment map for agent-side scripts.
+- PowerShell scripts also use literal rewrite for `$env:VAR` references before dispatch.
+- Batch and Bash scripts rely on the injected process environment on the agent side (`%VAR%` / `$VAR`).
 - Variables are included in the payload so agents can log context.
 
 ### Code signing

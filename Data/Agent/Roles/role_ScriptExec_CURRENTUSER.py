@@ -2,9 +2,11 @@ import os
 import sys
 import re
 import asyncio
+import contextlib
 import tempfile
 import uuid
 import base64
+import shutil
 from typing import Dict, List, Optional
 from PyQt5 import QtWidgets, QtGui
 
@@ -184,6 +186,133 @@ async def _run_powershell_local(path: str):
         return -1, "", str(e)
 
 
+async def _run_subprocess(args: List[str], timeout_seconds: int, *, env: Optional[Dict[str, str]] = None):
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=(0x08000000 if IS_WINDOWS else 0),
+            env=env,
+        )
+        try:
+            if timeout_seconds and timeout_seconds > 0:
+                out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+            else:
+                out_b, err_b = await proc.communicate()
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            out_b, err_b = await proc.communicate()
+            stdout_text = (out_b or b"").decode(errors="replace")
+            stderr_text = (err_b or b"").decode(errors="replace")
+            timeout_text = f"Script timed out after {timeout_seconds} seconds"
+            if stderr_text:
+                stderr_text = f"{stderr_text.rstrip()}\n{timeout_text}"
+            else:
+                stderr_text = timeout_text
+            return -1, stdout_text, stderr_text
+        return proc.returncode, (out_b or b"").decode(errors="replace"), (err_b or b"").decode(errors="replace")
+    except Exception as exc:
+        return -1, "", str(exc)
+
+
+async def _run_powershell_script_content(content: str, env_map: Dict[str, str], timeout_seconds: int):
+    path = _write_temp_script(content or "", ".ps1", env_map, timeout_seconds)
+    try:
+        return await _run_powershell_local(path)
+    finally:
+        try:
+            if path and os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+
+def _resolve_cmd_binary() -> str:
+    candidates = []
+    if IS_WINDOWS:
+        system_root = os.environ.get("SystemRoot") or r"C:\Windows"
+        candidates.append(os.path.join(system_root, "System32", "cmd.exe"))
+    candidates.extend(["cmd.exe", "cmd"])
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if os.path.isabs(candidate):
+            if os.path.isfile(candidate):
+                return candidate
+            continue
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+        return candidate
+    return "cmd.exe"
+
+
+def _resolve_bash_binary() -> str:
+    candidates = []
+    override = (os.environ.get("BOREALIS_BASH_BIN") or os.environ.get("BOREALIS_REMOTE_BASH_BIN") or "").strip()
+    if override:
+        candidates.append(override)
+    candidates.extend(["bash", "bash.exe", "/bin/bash", "/usr/bin/bash", "sh", "sh.exe", "/bin/sh", "/usr/bin/sh"])
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if os.path.isabs(candidate):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+            continue
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return ""
+
+
+async def _run_batch_local(content: str, env_map: Dict[str, str], timeout_seconds: int):
+    if not IS_WINDOWS:
+        return -1, "", "Batch scripts are only supported on Windows agents."
+    temp_dir = os.path.join(tempfile.gettempdir(), "Borealis", "quick_jobs")
+    os.makedirs(temp_dir, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="bj_", suffix=".bat", dir=temp_dir, text=True)
+    try:
+        normalized = (content or "").replace("\r\n", "\n").replace("\r", "\n")
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\r\n") as fh:
+            fh.write(normalized)
+        env = os.environ.copy()
+        env.update(env_map or {})
+        return await _run_subprocess([_resolve_cmd_binary(), "/D", "/C", path], timeout_seconds, env=env)
+    finally:
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+
+async def _run_bash_local(content: str, env_map: Dict[str, str], timeout_seconds: int):
+    bash_bin = _resolve_bash_binary()
+    if not bash_bin:
+        return -1, "", "Bash is not available on this agent."
+    temp_dir = os.path.join(tempfile.gettempdir(), "Borealis", "quick_jobs")
+    os.makedirs(temp_dir, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="bj_", suffix=".sh", dir=temp_dir, text=True)
+    try:
+        normalized = (content or "").replace("\r\n", "\n").replace("\r", "\n")
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(normalized)
+        if not IS_WINDOWS:
+            os.chmod(path, 0o700)
+        env = os.environ.copy()
+        env.update(env_map or {})
+        return await _run_subprocess([bash_bin, path], timeout_seconds, env=env)
+    finally:
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+
 async def _run_powershell_via_user_task(content: str, env_map: Dict[str, str], timeout_seconds: int):
     if not IS_WINDOWS:
         return -999, '', 'Windows only'
@@ -358,13 +487,17 @@ class Role:
                     timeout_seconds = max(0, int(payload.get('timeout_seconds') or 0))
                 except Exception:
                     timeout_seconds = 0
-                if script_type != 'powershell':
+                if script_type == 'powershell':
+                    rc, out, err = await _run_powershell_via_user_task(content, env_map, timeout_seconds)
+                    if rc == -999:
+                        rc, out, err = await _run_powershell_script_content(content, env_map, timeout_seconds)
+                elif script_type == 'batch':
+                    rc, out, err = await _run_batch_local(content, env_map, timeout_seconds)
+                elif script_type == 'bash':
+                    rc, out, err = await _run_bash_local(content, env_map, timeout_seconds)
+                else:
                     await sio.emit('quick_job_result', _result_payload(job_id, 'Failed', '', f'Unsupported type: {script_type}'))
                     return
-
-                rc, out, err = await _run_powershell_via_user_task(content, env_map, timeout_seconds)
-                if rc == -999:
-                    rc, out, err = _run_powershell_script_content(content, env_map, timeout_seconds)
                 status = 'Success' if rc == 0 else 'Failed'
                 await sio.emit('quick_job_result', _result_payload(job_id, status, out, err))
             except Exception as e:
@@ -428,5 +561,4 @@ class Role:
             QtWidgets.QApplication.instance().quit()
         except Exception:
             os._exit(0)
-
 

@@ -3,7 +3,7 @@
 # Description: Quick job dispatch and activity history endpoints for script and playbook assemblies.
 #
 # API Endpoints (if applicable):
-# - POST /api/scripts/quick_run (Token Authenticated) - Queues a PowerShell assembly for execution on agents.
+# - POST /api/scripts/quick_run (Token Authenticated) - Queues a script assembly for execution on agents.
 # - POST /api/ansible/quick_run (Token Authenticated) - (Not Yet Implemented) Placeholder for Ansible assemblies.
 # - GET/DELETE /api/device/activity/<hostname> (Token Authenticated) - Retrieves or clears device activity history.
 # - GET /api/device/activity/job/<int:job_id> (Token Authenticated) - Retrieves a specific activity record.
@@ -228,6 +228,30 @@ def rewrite_powershell_script(content: str, literal_lookup: Dict[str, str]) -> s
         return literal
 
     return _ENV_VAR_PATTERN.sub(_replace, content)
+
+
+_SUPPORTED_AGENT_SCRIPT_TYPES = {"powershell", "batch", "bash"}
+
+
+def _normalize_agent_script_type(value: Any) -> str:
+    normalized = str(value or "powershell").strip().lower()
+    return normalized or "powershell"
+
+
+def _rewrite_script_for_dispatch(content: str, script_type: str, literal_lookup: Dict[str, str]) -> str:
+    normalized_content = (content or "").replace("\r\n", "\n")
+    if script_type == "powershell":
+        return rewrite_powershell_script(normalized_content, literal_lookup)
+    return normalized_content
+
+
+def _normalize_target_service_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == "current_user":
+        return "currentuser"
+    if normalized in {"system", "currentuser"}:
+        return normalized
+    return ""
 
 
 def _load_assembly_document(
@@ -460,9 +484,16 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         if not doc:
             return jsonify({"error": "Script not found"}), 404
 
-        script_type = (doc.get("type") or "powershell").lower()
-        if script_type != "powershell":
-            return jsonify({"error": f"Unsupported script type '{script_type}'. Only PowerShell is supported."}), 400
+        script_type = _normalize_agent_script_type(doc.get("type"))
+        if script_type not in _SUPPORTED_AGENT_SCRIPT_TYPES:
+            return jsonify(
+                {
+                    "error": (
+                        f"Unsupported script type '{script_type}'. "
+                        "Agent quick jobs currently support PowerShell, Batch, and Bash."
+                    )
+                }
+            ), 400
 
         content = doc.get("script") or ""
         doc_variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
@@ -476,8 +507,7 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                 overrides[name] = val
 
         env_map, variables, literal_lookup = prepare_variable_context(doc_variables, overrides)
-        content = rewrite_powershell_script(content, literal_lookup)
-        normalized_script = (content or "").replace("\r\n", "\n")
+        normalized_script = _rewrite_script_for_dispatch(content, script_type, literal_lookup)
         script_bytes = normalized_script.encode("utf-8")
         encoded_content = (
             base64.b64encode(script_bytes).decode("ascii")
@@ -510,6 +540,8 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
         socketio = getattr(adapters.context, "socketio", None)
         if socketio is None:
             return jsonify({"error": "Realtime transport unavailable; cannot dispatch quick job."}), 500
+        emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
+        target_service_mode = _normalize_target_service_mode(run_mode)
 
         conn = None
         try:
@@ -561,7 +593,63 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                 if assembly_guid:
                     context_block["assembly_guid"] = assembly_guid
 
-                socketio.emit("quick_job_run", payload)
+                emitted = False
+                delivery_mode = "broadcast"
+                if target_service_mode and callable(emit_host_service_event):
+                    emitted = bool(
+                        emit_host_service_event(
+                            host,
+                            target_service_mode,
+                            "quick_job_run",
+                            payload,
+                        )
+                    )
+                    delivery_mode = f"targeted:{target_service_mode}"
+                else:
+                    socketio.emit("quick_job_run", payload)
+                    emitted = True
+
+                if not emitted and target_service_mode and callable(emit_host_service_event):
+                    failure_text = (
+                        f"No {target_service_mode} agent socket is registered for host {host}; "
+                        "unable to dispatch quick job."
+                    )
+                    cur.execute(
+                        "UPDATE activity_history SET status=?, stderr=? WHERE id=?",
+                        ("Failed", failure_text, job_id),
+                    )
+                    conn.commit()
+                    try:
+                        socketio.emit(
+                            "device_activity_changed",
+                            {
+                                "hostname": host,
+                                "activity_id": job_id,
+                                "change": "updated",
+                                "source": "quick_job",
+                            },
+                        )
+                    except Exception:
+                        pass
+                    results.append(
+                        {
+                            "hostname": host,
+                            "job_id": job_id,
+                            "status": "Failed",
+                            "error": failure_text,
+                        }
+                    )
+                    service_log(
+                        "assemblies",
+                        (
+                            f"quick job dispatch failed hostname={host} path={rel_path_canonical} "
+                            f"run_mode={run_mode} source={assembly_source} requested_by={username} "
+                            f"delivery={delivery_mode} error={failure_text}"
+                        ),
+                        level="ERROR",
+                    )
+                    continue
+
                 try:
                     socketio.emit(
                         "device_activity_changed",
@@ -578,7 +666,11 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
                 results.append({"hostname": host, "job_id": job_id, "status": "Running"})
                 service_log(
                     "assemblies",
-                    f"quick job queued hostname={host} path={rel_path_canonical} run_mode={run_mode} source={assembly_source} requested_by={username}",
+                    (
+                        f"quick job queued hostname={host} path={rel_path_canonical} "
+                        f"run_mode={run_mode} source={assembly_source} requested_by={username} "
+                        f"delivery={delivery_mode} script_type={script_type}"
+                    ),
                 )
         except Exception as exc:
             if conn is not None:

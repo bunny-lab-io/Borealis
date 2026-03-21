@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.server import create_app
 
@@ -2144,5 +2146,142 @@ def test_scheduled_job_dispatch_fails_cleanly_when_system_socket_is_missing(
         assert activity_row[0] == "Failed"
         assert activity_row[1] == ""
         assert "No system agent socket is registered" in (activity_row[2] or "")
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("script_type", "script_body", "script_path"),
+    [
+        ("batch", "@echo off\r\necho scheduled\r\n", "Scripts/hello.bat"),
+        ("bash", "echo scheduled\n", "Scripts/hello.sh"),
+    ],
+)
+def test_scheduled_job_dispatch_accepts_batch_and_bash(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+    script_type: str,
+    script_body: str,
+    script_path: str,
+) -> None:
+    _client, scheduler = _scheduled_jobs_client(engine_harness)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname TEXT,
+                script_path TEXT,
+                script_name TEXT,
+                script_type TEXT,
+                ran_at INTEGER,
+                status TEXT,
+                stdout TEXT,
+                stderr TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id,
+                name,
+                components_json,
+                targets_json,
+                schedule_type,
+                created_at,
+                updated_at,
+                enabled
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                4,
+                f"{script_type.title()} Context Run",
+                json.dumps([]),
+                json.dumps(["LAB-AIO-01"]),
+                "once",
+                1_773_780_000,
+                1_773_780_000,
+                1,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_job_runs(
+                id,
+                job_id,
+                target_hostname,
+                scheduled_ts,
+                status,
+                created_at,
+                updated_at
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                31 if script_type == "batch" else 32,
+                4,
+                "LAB-AIO-01",
+                1_773_782_710,
+                "Pending",
+                1_773_782_710,
+                1_773_782_710,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        scheduler,
+        "_resolve_runtime_document",
+        lambda rel_path, default_type, assembly_guid=None: (
+            {
+                "type": script_type,
+                "script": script_body,
+                "variables": [],
+                "timeout_seconds": 60,
+                "files": [],
+                "name": f"{script_type.title()} Script",
+            },
+            {
+                "assembly_guid": "GUID-SCRIPT-TYPE-0001",
+                "virtual_path": script_path,
+            },
+        ),
+    )
+    scheduler._script_signer = _FakeSigner()
+    dispatched: list[tuple[str, str, str, dict]] = []
+    scheduler._emit_host_service_event = lambda hostname, service_mode, event, payload: (
+        dispatched.append((hostname, service_mode, event, payload)) or True
+    )
+
+    link = scheduler._dispatch_script(
+        4,
+        31 if script_type == "batch" else 32,
+        1_773_782_710,
+        "LAB-AIO-01",
+        {"path": script_path},
+        "system",
+    )
+
+    assert link is not None
+    assert link["component_name"] == f"{script_type.title()} Script"
+    assert len(dispatched) == 1
+    hostname, service_mode, event_name, payload = dispatched[0]
+    assert hostname == "LAB-AIO-01"
+    assert service_mode == "system"
+    assert event_name == "quick_job_run"
+    assert payload["script_type"] == script_type
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT script_type, status FROM activity_history ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        assert row[0] == script_type
+        assert row[1] == "Running"
     finally:
         conn.close()

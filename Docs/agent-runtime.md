@@ -15,10 +15,10 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `role_DeviceAudit.py` (ROLE_NAME: `device_audit`) - inventory and audit data capture.
 - `role_Macro.py` (ROLE_NAME: `macro`) - macro automation.
 - `role_VNC.py` (ROLE_NAME: `VNC`) - always-on UltraVNC server lifecycle.
-- `role_RemotePowershell.py` (ROLE_NAME: `RemotePowershell`) - TCP PowerShell server over WireGuard.
+- `role_RemoteShell.py` (ROLE_NAME: `RemoteShell`) - remote shell server over WireGuard (PowerShell on Windows, Bash on Linux).
 - `role_Screenshot.py` (ROLE_NAME: `screenshot`) - screenshot capture.
-- `role_ScriptExec_CURRENTUSER.py` (ROLE_NAME: `script_exec_currentuser`) - interactive PowerShell execution.
-- `role_ScriptExec_SYSTEM.py` (ROLE_NAME: `script_exec_system`) - SYSTEM PowerShell execution.
+- `role_ScriptExec_CURRENTUSER.py` (ROLE_NAME: `script_exec_currentuser`) - interactive device-local script execution (PowerShell, Batch, Bash when available).
+- `role_ScriptExec_SYSTEM.py` (ROLE_NAME: `script_exec_system`) - SYSTEM device-local script execution (PowerShell, Batch, Bash when available).
 - `role_WireGuardTunnel.py` (ROLE_NAME: `WireGuardTunnel`) - WireGuard client lifecycle.
 
 ## Agent Settings and Storage
@@ -121,12 +121,12 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - The original references were `REVERSE_TUNNELS.md` and `Reverse_VPN_Tunnel_Deployment.md` (now consolidated into this knowledgebase).
 - Agent roles:
   - `Data/Agent/Roles/role_WireGuardTunnel.py` (tunnel lifecycle)
-  - `Data/Agent/Roles/role_RemotePowershell.py` (VPN PowerShell TCP server)
+  - `Data/Agent/Roles/role_RemoteShell.py` (VPN remote shell TCP server)
 
 #### Execution contexts and roles
 - Auto-discovers roles from `Data/Agent/Roles/`; no loader changes needed.
 - Naming: `role_<Purpose>.py` with `ROLE_NAME`, `ROLE_CONTEXTS`, and optional hooks (`register_events`, `on_config`, `stop_all`).
-- Standard roles: `role_DeviceInventory.py`, `role_Screenshot.py`, `role_ScriptExec_CURRENTUSER.py`, `role_ScriptExec_SYSTEM.py`, `role_Macro.py`.
+- Standard roles: `role_DeviceAudit.py`, `role_Screenshot.py`, `role_ScriptExec_CURRENTUSER.py`, `role_ScriptExec_SYSTEM.py`, `role_Macro.py`, `role_RemoteShell.py`, `role_VNC.py`, `role_WireGuardTunnel.py`.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 
 #### Platform parity

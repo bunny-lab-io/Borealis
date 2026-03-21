@@ -97,7 +97,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/assemblies/<assembly_guid>/export` (Token Authenticated) - export legacy JSON.
 - `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official Aurora assembly from the active catalog.
 - `POST /api/assemblies/official/update-all` (Admin) - sync all official Aurora assemblies, including newly added catalog entries.
-- `POST /api/scripts/quick_run` (Token Authenticated) - quick job (PowerShell) for in-scope devices only.
+- `POST /api/scripts/quick_run` (Token Authenticated) - quick agent-side script job (`powershell`, `batch`, or `bash`, depending on the target agent platform/runtime) for in-scope devices only.
 - `POST /api/ansible/quick_run` (Token Authenticated) - placeholder (not implemented).
 - `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history for an in-scope device.
 - `DELETE /api/device/activity/<hostname>` (Token Authenticated) - clear activity history.

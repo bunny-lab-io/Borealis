@@ -1112,18 +1112,19 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     const trimmed = scriptName.trim();
     if (!trimmed || !scriptDialog.typeKey) return;
     const isAnsible = scriptDialog.typeKey === "ansible";
+    const scriptType = isAnsible ? "ansible" : scriptDialog.typeKey || "powershell";
     const context = {
       folder: "",
       suggestedFileName: trimmed,
       name: trimmed,
-      defaultType: isAnsible ? "ansible" : "powershell",
-      type: isAnsible ? "ansible" : "powershell",
+      defaultType: scriptType,
+      type: scriptType,
     };
     const newRow = {
       assemblyGuid: null,
       typeKey: isAnsible ? "ansible" : "script",
       assemblyKind: isAnsible ? "ansible" : "script",
-      assemblyType: isAnsible ? "ansible" : context.type,
+      assemblyType: context.type,
       name: trimmed,
       domain: "user",
       isDirty: false,

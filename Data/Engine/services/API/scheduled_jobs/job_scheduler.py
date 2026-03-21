@@ -387,6 +387,21 @@ def _rewrite_powershell_script(content: str, literal_lookup: Dict[str, str]) -> 
     return _ENV_VAR_PATTERN.sub(_replace, content)
 
 
+_SUPPORTED_AGENT_SCRIPT_TYPES = {"powershell", "batch", "bash"}
+
+
+def _normalize_agent_script_type(value: Any) -> str:
+    normalized = str(value or "powershell").strip().lower()
+    return normalized or "powershell"
+
+
+def _rewrite_script_for_dispatch(content: str, script_type: str, literal_lookup: Dict[str, str]) -> str:
+    normalized_content = (content or "").replace("\r\n", "\n")
+    if script_type == "powershell":
+        return _rewrite_powershell_script(normalized_content, literal_lookup)
+    return normalized_content
+
+
 def _parse_ts(val: Any) -> Optional[int]:
     """Best effort to parse ISO-ish datetime string or numeric seconds to epoch seconds."""
     if val is None:
@@ -1173,9 +1188,8 @@ class JobScheduler:
             if not path_norm and isinstance(record, dict):
                 path_norm = str(record.get("virtual_path") or "").strip()
             assembly_source = "runtime"
-            stype = (doc.get("type") or "powershell").lower()
-            # For now, only PowerShell is supported by agents for scheduled jobs
-            if stype != "powershell":
+            stype = _normalize_agent_script_type(doc.get("type"))
+            if stype not in _SUPPORTED_AGENT_SCRIPT_TYPES:
                 return None
             content = doc.get("script") or ""
             doc_variables = doc.get("variables") if isinstance(doc.get("variables"), list) else []
@@ -1198,7 +1212,7 @@ class JobScheduler:
                             overrides[name] = var.get("value")
 
             env_map, variables, literal_lookup = _prepare_variable_context(doc_variables, overrides)
-            content = _rewrite_powershell_script(content, literal_lookup)
+            content = _rewrite_script_for_dispatch(content, stype, literal_lookup)
             encoded_content = _encode_script_content(content)
             if self._script_signer is None:
                 self._log_event(
