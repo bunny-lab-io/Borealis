@@ -49,6 +49,24 @@ const parseObjectMaybe = (value) => {
   }
 };
 
+const parseWorkflowPayloadMaybe = (item = {}) => {
+  const workflowValue = item?.workflow;
+  if (!workflowValue) return null;
+  if (workflowValue && typeof workflowValue === "object" && !Array.isArray(workflowValue)) {
+    return workflowValue;
+  }
+  if (typeof workflowValue !== "string") return null;
+
+  const workflowText = workflowValue.trim();
+  const decoded = decodeBase64String(workflowText);
+  if (decoded.success) {
+    const parsedDecoded = parseObjectMaybe(decoded.value);
+    if (parsedDecoded) return parsedDecoded;
+  }
+
+  return parseObjectMaybe(workflowText);
+};
+
 const resolveAssemblySummary = (item = {}, payload = null) =>
   firstText(
     payload?.description,
@@ -496,6 +514,7 @@ export function parseAssemblyExport(exportDoc) {
   }
 
   const payloadDocCandidate =
+    parseWorkflowPayloadMaybe(exportDoc) ||
     parseObjectMaybe(exportDoc.payload) ||
     parseObjectMaybe(exportDoc.payload_json) ||
     parseObjectMaybe(exportDoc.document) ||
@@ -509,6 +528,8 @@ export function parseAssemblyExport(exportDoc) {
       ? exportDoc.document
       : "";
   const looksLikeInlinePayload =
+    typeof exportDoc?.workflow === "string" ||
+    (exportDoc?.workflow && typeof exportDoc.workflow === "object" && !Array.isArray(exportDoc.workflow)) ||
     Array.isArray(exportDoc?.nodes) ||
     Array.isArray(exportDoc?.edges) ||
     typeof exportDoc?.script === "string" ||

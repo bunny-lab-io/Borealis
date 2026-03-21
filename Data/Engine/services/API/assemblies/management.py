@@ -233,7 +233,7 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
     # ------------------------------------------------------------------
     @blueprint.route("", methods=["GET"])
     def list_assemblies():
-        _, error = service.require_user()
+        user, error = service.require_user()
         if error:
             return jsonify(error[0]), error[1]
 
@@ -242,15 +242,51 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
         force_catalog_refresh = _coerce_bool(
             request.args.get("refresh_catalog") or request.args.get("force_catalog_refresh")
         )
-        items = service.runtime.list_assemblies(domain=domain, assembly_type=assembly_type)
         manifest = service.catalog.manifest(force_remote=force_catalog_refresh)
+        cleanup_result = {
+            "cleanup_performed": False,
+            "deleted": [],
+            "deleted_items": [],
+            "deleted_count": 0,
+            "state_pruned_count": 0,
+            "failed": [],
+        }
+        if force_catalog_refresh:
+            cleanup_result = service.catalog.cleanup_deleted_official_assemblies(manifest=manifest)
+            deleted_count = int(cleanup_result.get("deleted_count") or 0)
+            failed_count = len(cleanup_result.get("failed") or [])
+            if deleted_count or failed_count:
+                detail_parts = []
+                if deleted_count:
+                    detail_parts.append(f"deleted={deleted_count}")
+                if failed_count:
+                    detail_parts.append(f"failed={failed_count}")
+                service._audit(
+                    user=user,
+                    action="official_catalog_cleanup",
+                    domain=AssemblyDomain.OFFICIAL,
+                    status="success" if not failed_count else "failed",
+                    detail=" ".join(detail_parts),
+                )
+        items = service.runtime.list_assemblies(domain=domain, assembly_type=assembly_type)
         items = service.catalog.annotate_collection(items, manifest=manifest)
         queue_state = service.runtime.queue_snapshot()
+        official_catalog_status = service.catalog.catalog_status(items, manifest=manifest)
+        official_catalog_status.update(
+            {
+                "cleanup_performed": bool(cleanup_result.get("cleanup_performed")),
+                "deleted_assembly_count": int(cleanup_result.get("deleted_count") or 0),
+                "deleted_assemblies": cleanup_result.get("deleted") or [],
+                "deleted_items": cleanup_result.get("deleted_items") or [],
+                "cleanup_failed": cleanup_result.get("failed") or [],
+                "state_pruned_count": int(cleanup_result.get("state_pruned_count") or 0),
+            }
+        )
         return jsonify(
             {
                 "items": items,
                 "queue": queue_state,
-                "official_catalog": service.catalog.catalog_status(items, manifest=manifest),
+                "official_catalog": official_catalog_status,
             }
         ), 200
 
@@ -659,6 +695,9 @@ def register_assemblies(app, adapters: "EngineServiceAdapters") -> None:
             installed_count = int(result.get("installed_count") or 0)
             if installed_count:
                 detail_parts.append(f"installed={installed_count}")
+            deleted_count = int(result.get("deleted_count") or 0)
+            if deleted_count:
+                detail_parts.append(f"deleted={deleted_count}")
             failed_count = len(result.get("failed") or [])
             if failed_count:
                 detail_parts.append(f"failed={failed_count}")

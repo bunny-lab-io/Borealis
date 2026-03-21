@@ -16,30 +16,64 @@ import {
   Save as SaveIcon,
   FileOpen as FileOpenIcon,
   DeleteForever as DeleteForeverIcon,
+  DriveFileRenameOutline as DriveFileRenameOutlineIcon,
   DragIndicator as DragIndicatorIcon,
   Polyline as PolylineIcon,
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon
 } from "@mui/icons-material";
-import { SaveWorkflowDialog } from "../Dialogs";
+import { ConfirmDeleteDialog, RenameWorkflowDialog, SaveWorkflowDialog } from "../Dialogs";
 
 export default function NodeSidebar({
   categorizedNodes,
   handleExportFlow,
   handleImportFlow,
   handleSaveFlow,
+  handleRenameFlow,
+  handleDeleteFlow,
   handleOpenCloseAllDialog,
   fileInputRef,
   onFileInputChange,
-  currentTabName
+  currentTabName,
+  currentAssemblyGuid,
+  currentDomain
 }) {
   const [expandedCategory, setExpandedCategory] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameName, setRenameName] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
+  const normalizedGuid = typeof currentAssemblyGuid === "string" ? currentAssemblyGuid.trim() : "";
+  const normalizedDomain = typeof currentDomain === "string" ? currentDomain.trim().toLowerCase() : "";
+  const canManageWorkflow = Boolean(normalizedGuid) && (!normalizedDomain || normalizedDomain === "user");
+  const workflowManagementHint = !normalizedGuid
+    ? "Save this workflow to the User domain before renaming or deleting it."
+    : "Only User-domain workflows can be renamed or deleted from the flow editor.";
 
   const handleAccordionChange = (category) => (_, isExpanded) => {
     setExpandedCategory(isExpanded ? category : null);
+  };
+
+  const handleSaveConfirm = () => {
+    const trimmedName = (saveName || "").trim();
+    setSaveOpen(false);
+    if (!trimmedName) return;
+    handleSaveFlow(trimmedName);
+  };
+
+  const handleRenameConfirm = () => {
+    const trimmedName = (renameName || "").trim();
+    setRenameOpen(false);
+    if (!trimmedName) return;
+    handleRenameFlow(trimmedName);
+  };
+
+  const handleDeleteConfirm = () => {
+    setDeleteOpen(false);
+    handleDeleteFlow();
   };
 
   return (
@@ -77,7 +111,7 @@ export default function NodeSidebar({
                 </Typography>
               </AccordionSummary>
               <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-                <Tooltip title="Save Current Flow to Workflows Folder" placement="right" arrow>
+                <Tooltip title="Save the current flow as a Borealis workflow assembly document." placement="right" arrow>
                   <Button
                     fullWidth
                     startIcon={<SaveIcon />}
@@ -90,12 +124,65 @@ export default function NodeSidebar({
                     Save Workflow
                   </Button>
                 </Tooltip>
-                <Tooltip title="Import JSON File into New Flow Tab" placement="right" arrow>
+                <Tooltip
+                  title={
+                    canManageWorkflow
+                      ? "Rename the saved User-domain workflow and update its assembly record."
+                      : workflowManagementHint
+                  }
+                  placement="right"
+                  arrow
+                >
+                  <span style={{ display: "block", width: "100%" }}>
+                    <Button
+                      fullWidth
+                      disabled={!canManageWorkflow}
+                      startIcon={<DriveFileRenameOutlineIcon />}
+                      onClick={() => {
+                        setRenameName(currentTabName || "workflow");
+                        setRenameOpen(true);
+                      }}
+                      sx={buttonStyle}
+                    >
+                      Rename Workflow
+                    </Button>
+                  </span>
+                </Tooltip>
+                <Tooltip
+                  title={
+                    canManageWorkflow
+                      ? "Delete the saved User-domain workflow from assemblies and remove it from the editor."
+                      : workflowManagementHint
+                  }
+                  placement="right"
+                  arrow
+                >
+                  <span style={{ display: "block", width: "100%" }}>
+                    <Button
+                      fullWidth
+                      disabled={!canManageWorkflow}
+                      startIcon={<DeleteForeverIcon />}
+                      onClick={() => setDeleteOpen(true)}
+                      sx={deleteButtonStyle}
+                    >
+                      Delete Workflow
+                    </Button>
+                  </span>
+                </Tooltip>
+                <Tooltip
+                  title="Import a workflow assembly document or legacy flat canvas JSON into a new flow tab."
+                  placement="right"
+                  arrow
+                >
                   <Button fullWidth startIcon={<FileOpenIcon />} onClick={handleImportFlow} sx={buttonStyle}>
                     Import Workflow (JSON)
                   </Button>
                 </Tooltip>
-                <Tooltip title="Export Current Tab to a JSON File" placement="right" arrow>
+                <Tooltip
+                  title="Export the current tab as a canonical workflow assembly document with encoded workflow data."
+                  placement="right"
+                  arrow
+                >
                   <Button fullWidth startIcon={<SaveAltIcon />} onClick={handleExportFlow} sx={buttonStyle}>
                     Export Workflow (JSON)
                   </Button>
@@ -234,10 +321,22 @@ export default function NodeSidebar({
         value={saveName}
         onChange={setSaveName}
         onCancel={() => setSaveOpen(false)}
-        onSave={() => {
-          setSaveOpen(false);
-          handleSaveFlow(saveName);
-        }}
+        onSave={handleSaveConfirm}
+      />
+      <RenameWorkflowDialog
+        open={renameOpen}
+        value={renameName}
+        onChange={setRenameName}
+        onCancel={() => setRenameOpen(false)}
+        onSave={handleRenameConfirm}
+      />
+      <ConfirmDeleteDialog
+        open={deleteOpen}
+        title="Delete Workflow"
+        message={`Delete "${currentTabName || "workflow"}" from the User domain? This cannot be undone.`}
+        confirmLabel="Delete"
+        onCancel={() => setDeleteOpen(false)}
+        onConfirm={handleDeleteConfirm}
       />
     </div>
   );
@@ -252,6 +351,14 @@ const buttonStyle = {
   textTransform: "none",
   "&:hover": {
     backgroundColor: "#2a2a2a"
+  }
+};
+
+const deleteButtonStyle = {
+  ...buttonStyle,
+  color: "#f0b3b3",
+  "&:hover": {
+    backgroundColor: "rgba(127, 29, 29, 0.28)"
   }
 };
 

@@ -347,6 +347,23 @@ const toCount = (value) => {
   return parsed;
 };
 
+const getOfficialRevocationLabels = (deletedItems = []) => [...new Set(
+  (Array.isArray(deletedItems) ? deletedItems : [])
+    .map((item) => String(item?.display_name || item?.name || item?.assembly_guid || "").trim())
+    .filter(Boolean)
+)];
+
+const buildOfficialRevocationNotifications = (deletedItems = [], deletedCount = 0) => {
+  const labels = getOfficialRevocationLabels(deletedItems);
+  if (labels.length) {
+    return labels.map((label) => `Official Assembly "${label}" removed from Aurora repository. Removing from local database.`);
+  }
+
+  const count = toCount(deletedCount || deletedItems?.length);
+  if (count <= 0) return [];
+  return [`Official Assemblies removed from Aurora repository. Removing ${count} assemblies from local database.`];
+};
+
 const normalizeRow = (item, queueEntry) => {
   if (!item) return null;
   const assemblyGuid = item.assembly_guid || item.assembly_id || "";
@@ -444,16 +461,20 @@ const formatOfficialUpdateAllMessage = (payload) => {
   if (!fragments.length && updatedItems.length > 0) {
     fragments.push(`updated ${updatedItems.length} Aurora ${updatedItems.length === 1 ? "assembly" : "assemblies"}`);
   }
-  if (!fragments.length) {
+  const sentences = [];
+  if (fragments.length) {
+    const message = fragments.join(" and ");
+    sentences.push(`${message.charAt(0).toUpperCase()}${message.slice(1)}.`);
+  }
+  if (!sentences.length) {
     return failedCount > 0
       ? `Aurora sync completed with ${failedCount} ${failedCount === 1 ? "failure" : "failures"}.`
       : "No Aurora assemblies needed installation or updating.";
   }
   if (failedCount > 0) {
-    return `${fragments.join(" and ")}; ${failedCount} ${failedCount === 1 ? "item failed" : "items failed"}.`;
+    sentences.push(`${failedCount} ${failedCount === 1 ? "item failed" : "items failed"}.`);
   }
-  const message = fragments.join(" and ");
-  return `${message.charAt(0).toUpperCase()}${message.slice(1)}.`;
+  return sentences.join(" ");
 };
 
 export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = "User", onPageMetaChange }) {
@@ -469,6 +490,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
     newAssemblyCount: 0,
     metadataRefreshCount: 0,
     actionableCount: 0,
+    deletedAssemblyCount: 0,
     error: "",
     warning: "",
     hasChecked: false,
@@ -542,6 +564,8 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       const updateCount = toCount(officialCatalog?.update_count);
       const newAssemblyCount = toCount(officialCatalog?.new_assembly_count);
       const metadataRefreshCount = toCount(officialCatalog?.metadata_refresh_count);
+      const deletedItems = Array.isArray(officialCatalog?.deleted_items) ? officialCatalog.deleted_items : [];
+      const deletedAssemblyCount = toCount(officialCatalog?.deleted_assembly_count);
       const fallbackExistingUpdates = processed.filter((row) => row.officialUpdateAvailable).length;
       const effectiveUpdateCount = updateCount || fallbackExistingUpdates;
       const actionableCount =
@@ -557,11 +581,17 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
           newAssemblyCount: hasChecked ? newAssemblyCount : 0,
           metadataRefreshCount: hasChecked ? metadataRefreshCount : 0,
           actionableCount: hasChecked ? actionableCount : 0,
+          deletedAssemblyCount: hasChecked ? deletedAssemblyCount : 0,
           error: hasChecked ? officialCatalog?.error || "" : "",
           warning: hasChecked ? officialCatalog?.warning || "" : "",
           hasChecked,
         };
       });
+      if (forceCatalogRefresh && deletedAssemblyCount > 0) {
+        for (const message of buildOfficialRevocationNotifications(deletedItems, deletedAssemblyCount)) {
+          await sendNotification(message);
+        }
+      }
     } catch (err) {
       console.error("Failed to load assemblies:", err);
       setRows([]);
@@ -575,6 +605,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
           newAssemblyCount: 0,
           metadataRefreshCount: 0,
           actionableCount: 0,
+          deletedAssemblyCount: 0,
           error: hasChecked ? err?.message || "Failed to load assemblies" : "",
           warning: "",
           hasChecked,
@@ -587,7 +618,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       }
       setLoading(false);
     }
-  }, []);
+  }, [sendNotification]);
 
   useEffect(() => {
     fetchAssemblies();
@@ -767,7 +798,15 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
         const resp = await fetch("/api/assemblies/official/update-all", { method: "POST" });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
-        await sendNotification(formatOfficialUpdateAllMessage(data));
+        const summaryMessage = formatOfficialUpdateAllMessage(data);
+        if (summaryMessage !== "No Aurora assemblies needed installation or updating.") {
+          await sendNotification(summaryMessage);
+        }
+        const deletedItems = Array.isArray(data?.deleted_items) ? data.deleted_items : [];
+        const deletedCount = toCount(data?.deleted_count || data?.deleted?.length);
+        for (const message of buildOfficialRevocationNotifications(deletedItems, deletedCount)) {
+          await sendNotification(message);
+        }
         setOfficialUpdateDialog({ open: false, row: null, mode: "single" });
         await fetchAssemblies({ forceCatalogRefresh: true });
       } catch (err) {
@@ -984,6 +1023,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
   const existingAuroraUpdates = toCount(catalogStatus.updateCount);
   const auroraMetadataRefreshes = toCount(catalogStatus.metadataRefreshCount);
   const auroraActionableCount = toCount(catalogStatus.actionableCount);
+  const revokedAuroraAssemblies = toCount(catalogStatus.deletedAssemblyCount);
   const hasAuroraActions = catalogStatus.hasChecked && auroraActionableCount > 0;
   const shouldInstallNewAuroraAssemblies = hasAuroraActions && newAuroraAssemblies > 0;
   const handleCheckForAuroraUpdates = useCallback(() => {
@@ -1013,7 +1053,11 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
               : "Install new Aurora assemblies from Aurora without restarting the Engine."
             : "Apply all available Aurora assembly updates."
           : catalogStatus.hasChecked
-          ? catalogStatus.error || catalogStatus.warning || "No new Aurora assemblies or updates are available."
+          ? catalogStatus.error
+            || catalogStatus.warning
+            || (revokedAuroraAssemblies > 0
+              ? `Removed ${revokedAuroraAssemblies} revoked Aurora ${revokedAuroraAssemblies === 1 ? "assembly" : "assemblies"} during the last catalog check.`
+              : "No new Aurora assemblies or updates are available.")
           : "Check Aurora for available assembly updates.",
         loading: hasAuroraActions ? updatingAllOfficial : checkingForAuroraUpdates,
         onClick: hasAuroraActions ? requestOfficialUpdateAll : handleCheckForAuroraUpdates,
@@ -1035,6 +1079,7 @@ export default function AssemblyList({ onOpenWorkflow, onOpenScript, userRole = 
       isAdmin,
       auroraMetadataRefreshes,
       existingAuroraUpdates,
+      revokedAuroraAssemblies,
       shouldInstallNewAuroraAssemblies,
       checkingForAuroraUpdates,
       requestOfficialUpdateAll,

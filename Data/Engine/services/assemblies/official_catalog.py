@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import json
@@ -63,7 +64,64 @@ def _payload_from_document(document: Mapping[str, Any]) -> Any:
         return dict(payload)
     if isinstance(payload, list):
         return list(payload)
+    workflow_payload = _workflow_payload_from_document(document)
+    if workflow_payload is not None:
+        return workflow_payload
     return dict(document)
+
+
+def _workflow_payload_from_document(document: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    workflow = document.get("workflow")
+    if workflow is None:
+        return None
+
+    extracted: Optional[Dict[str, Any]] = None
+    if isinstance(workflow, Mapping):
+        extracted = dict(workflow)
+    elif isinstance(workflow, str):
+        workflow_text = workflow.strip()
+        decoded = _decode_base64_text(workflow_text)
+        if decoded is not None:
+            workflow_text = decoded
+        try:
+            parsed = json.loads(workflow_text)
+        except json.JSONDecodeError as exc:
+            raise ValueError("workflow field did not decode to JSON") from exc
+        if not isinstance(parsed, Mapping):
+            raise ValueError("workflow field must decode to a JSON object")
+        extracted = dict(parsed)
+    else:
+        raise ValueError("workflow field must be a JSON object or encoded string")
+
+    resolved_guid = _coerce_guid(document.get("assembly_guid") or extracted.get("assembly_guid"))
+    if resolved_guid:
+        extracted["assembly_guid"] = resolved_guid
+    tab_name = _coerce_optional_text(
+        extracted.get("tab_name")
+        or document.get("tab_name")
+        or document.get("name")
+        or document.get("display_name")
+    )
+    if tab_name:
+        extracted["tab_name"] = tab_name
+    return extracted
+
+
+def _decode_base64_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return ""
+    cleaned = "".join(text.split())
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except Exception:
+        return None
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def _summary_from_document(document: Mapping[str, Any], payload: Any) -> Optional[str]:
@@ -246,6 +304,15 @@ def _normalize_relative_path(value: Any) -> str:
             return ""
         parts.append(candidate)
     return "/".join(parts)
+
+
+def _manifest_allows_deleted_cleanup(manifest: "OfficialCatalogManifest") -> bool:
+    return (
+        manifest.available
+        and manifest.source == "aurora"
+        and not manifest.error
+        and int(manifest.failed_files or 0) == 0
+    )
 
 
 def _should_ignore_catalog_path(path: Path) -> bool:
@@ -646,6 +713,82 @@ class OfficialAssemblyCatalogService:
             "failed_files": manifest.failed_files,
         }
 
+    def cleanup_deleted_official_assemblies(
+        self,
+        *,
+        manifest: Optional[OfficialCatalogManifest] = None,
+        force_remote: bool = False,
+        allow_remote_sync: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Delete local official assemblies that no longer exist in the authoritative Aurora manifest."""
+
+        if allow_remote_sync is None:
+            allow_remote_sync = force_remote
+        manifest = manifest or self._active_manifest(
+            force_remote=force_remote,
+            allow_remote_sync=bool(allow_remote_sync),
+        )
+
+        if not _manifest_allows_deleted_cleanup(manifest):
+            return {
+                "cleanup_performed": False,
+                "deleted": [],
+                "deleted_items": [],
+                "deleted_count": 0,
+                "state_pruned_count": 0,
+                "failed": [],
+            }
+
+        runtime = self._runtime_service()
+        current_items = runtime.list_assemblies(domain=AssemblyDomain.OFFICIAL.value)
+        current_items_by_guid = {
+            _coerce_guid(item.get("assembly_guid") or item.get("assembly_id")): item
+            for item in current_items
+            if _coerce_guid(item.get("assembly_guid") or item.get("assembly_id"))
+        }
+        state_map = self._db_manager.load_official_catalog_state()
+        manifest_guids = set(manifest.entries.keys())
+
+        deleted: List[str] = []
+        deleted_items: List[Dict[str, Any]] = []
+        failed: List[Dict[str, str]] = []
+
+        for guid, item in current_items_by_guid.items():
+            if guid in manifest_guids:
+                continue
+            try:
+                runtime.delete_assembly(guid)
+                deleted.append(guid)
+                deleted_items.append(
+                    {
+                        "assembly_guid": guid,
+                        "display_name": _coerce_text(item.get("display_name") or item.get("name"), guid),
+                        "source_path": _normalize_relative_path(item.get("source_path") or item.get("path") or ""),
+                    }
+                )
+            except Exception as exc:
+                failed.append({"assembly_guid": guid, "error": str(exc), "action": "delete"})
+                self._logger.exception("Failed to delete revoked official assembly %s", guid)
+
+        if deleted:
+            runtime.flush_writes()
+            for guid in deleted:
+                self._db_manager.delete_official_catalog_state(guid)
+
+        state_pruned_count = 0
+        for guid in set(state_map.keys()) - manifest_guids - set(current_items_by_guid.keys()):
+            self._db_manager.delete_official_catalog_state(guid)
+            state_pruned_count += 1
+
+        return {
+            "cleanup_performed": True,
+            "deleted": deleted,
+            "deleted_items": deleted_items,
+            "deleted_count": len(deleted),
+            "state_pruned_count": state_pruned_count,
+            "failed": failed,
+        }
+
     def update_official_assembly(self, assembly_guid: str) -> Dict[str, Any]:
         """Update a single official assembly from the active Aurora or bundled source."""
 
@@ -779,6 +922,11 @@ class OfficialAssemblyCatalogService:
         if updated:
             runtime.flush_writes()
 
+        cleanup_result = self.cleanup_deleted_official_assemblies(manifest=manifest)
+        cleanup_failed = list(cleanup_result.get("failed") or [])
+        if cleanup_failed:
+            failed.extend(cleanup_failed)
+
         return {
             "updated": updated,
             "updated_items": updated_items,
@@ -786,6 +934,9 @@ class OfficialAssemblyCatalogService:
             "installed_items": installed_items,
             "installed_count": len(installed),
             "updated_existing_count": max(len(updated) - len(installed), 0),
+            "deleted": cleanup_result.get("deleted") or [],
+            "deleted_items": cleanup_result.get("deleted_items") or [],
+            "deleted_count": int(cleanup_result.get("deleted_count") or 0),
             "skipped": skipped,
             "failed": failed,
             "source": manifest.source,

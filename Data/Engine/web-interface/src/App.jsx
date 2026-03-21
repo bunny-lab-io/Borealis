@@ -30,6 +30,11 @@ import FlowTabs from "./Flow_Editor/Flow_Tabs";
 import FlowEditor from "./Flow_Editor/Flow_Editor";
 import NodeSidebar from "./Flow_Editor/Node_Sidebar";
 import StatusBar from "./Flow_Editor/Status_Bar.jsx";
+import {
+  buildWorkflowAuthoringDocument,
+  extractWorkflowCanvasDocument,
+  generateWorkflowAssemblyGuid,
+} from "./Flow_Editor/workflowDocuments";
 
 // Borealis Page Imports
 import Login from "./Login.jsx";
@@ -124,6 +129,10 @@ const EMPTY_AEGIS_STATUS = {
   updated_at: 0,
 };
 
+function createDefaultFlowTab(id = "flow_1") {
+  return { id, tab_name: "Flow 1", nodes: [], edges: [] };
+}
+
 function normalizeAegisStatus(payload) {
   return {
     configured: Boolean(payload?.configured),
@@ -135,7 +144,7 @@ function normalizeAegisStatus(payload) {
 }
 
   export default function App() {
-  const [tabs, setTabs] = useState([{ id: "flow_1", tab_name: "Flow 1", nodes: [], edges: [] }]);
+  const [tabs, setTabs] = useState([createDefaultFlowTab("flow_1")]);
   const [activeTabId, setActiveTabId] = useState("flow_1");
   const [currentPage, setCurrentPageState] = useState("devices");
   const [selectedDevice, setSelectedDevice] = useState(null);
@@ -1160,21 +1169,41 @@ function normalizeAegisStatus(payload) {
     setTabMenuTabId(tabId);
   };
 
-  const handleCloseTab = () => {
+  const closeFlowTabById = useCallback((targetTabId) => {
+    if (!targetTabId) {
+      setTabMenuAnchor(null);
+      return;
+    }
+
     setTabs((prev) => {
-      const filtered = prev.filter((t) => t.id !== tabMenuTabId);
+      const targetIndex = prev.findIndex((tab) => tab.id === targetTabId);
+      if (targetIndex === -1) {
+        return prev;
+      }
+
+      const filtered = prev.filter((tab) => tab.id !== targetTabId);
       if (filtered.length === 0) {
-        const newTab = { id: "flow_1", tab_name: "Flow 1", nodes: [], edges: [] };
-        setActiveTabId(newTab.id);
+        const newTab = createDefaultFlowTab("flow_1");
+        setActiveTabId(() => newTab.id);
         return [newTab];
       }
-      if (activeTabId === tabMenuTabId) {
-        setActiveTabId(filtered[0].id);
-      }
+
+      setActiveTabId((currentActiveId) => {
+        if (currentActiveId !== targetTabId) {
+          return currentActiveId;
+        }
+        const fallbackIndex = Math.max(0, targetIndex - 1);
+        const fallbackTab = filtered[fallbackIndex] || filtered[0];
+        return fallbackTab ? fallbackTab.id : currentActiveId;
+      });
       return filtered;
     });
     setTabMenuAnchor(null);
-  };
+  }, []);
+
+  const handleCloseTab = useCallback(() => {
+    closeFlowTabById(tabMenuTabId);
+  }, [closeFlowTabById, tabMenuTabId]);
 
   const handleRenameTab = () => {
     const tab = tabs.find((t) => t.id === tabMenuTabId);
@@ -1196,11 +1225,23 @@ function normalizeAegisStatus(payload) {
   const handleExportFlow = useCallback(() => {
     const tab = tabs.find((t) => t.id === activeTabId);
     if (!tab) return;
-    const payload = {
-      tab_name: tab.tab_name,
+    const existingGuid =
+      typeof tab.assemblyGuid === "string" ? tab.assemblyGuid.trim() : "";
+    const workflowGuid = existingGuid || generateWorkflowAssemblyGuid();
+    if (!existingGuid) {
+      setTabs((prev) =>
+        prev.map((item) =>
+          item.id === activeTabId ? { ...item, assemblyGuid: workflowGuid } : item
+        )
+      );
+    }
+    const payload = buildWorkflowAuthoringDocument({
+      assemblyGuid: workflowGuid,
+      name: tab.tab_name,
+      description: tab.description || tab.exportMetadata?.description || "",
       nodes: tab.nodes,
-      edges: tab.edges
-    };
+      edges: tab.edges,
+    });
     const fileName = `${tab.tab_name || "workflow"}.json`;
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1209,7 +1250,7 @@ function normalizeAegisStatus(payload) {
     a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
-  }, [tabs, activeTabId]);
+  }, [tabs, activeTabId, setTabs]);
 
   const handleImportFlow = useCallback(() => {
     if (fileInputRef.current) {
@@ -1227,14 +1268,17 @@ function normalizeAegisStatus(payload) {
         try {
           const data = JSON.parse(reader.result);
           const newId = "flow_" + Date.now();
+          const parsedWorkflow = extractWorkflowCanvasDocument(data);
           setTabs((prev) => [
             ...prev,
             {
               id: newId,
               tab_name:
-                data.tab_name || data.name || file.name.replace(/\.json$/i, ""),
-              nodes: data.nodes || [],
-              edges: data.edges || []
+                parsedWorkflow.tabName || file.name.replace(/\.json$/i, ""),
+              description: parsedWorkflow.description || "",
+              nodes: parsedWorkflow.nodes,
+              edges: parsedWorkflow.edges,
+              assemblyGuid: parsedWorkflow.assemblyGuid,
             }
           ]);
           setActiveTabId(newId);
@@ -1253,13 +1297,13 @@ function normalizeAegisStatus(payload) {
     async (name) => {
       const tab = tabs.find((t) => t.id === activeTabId);
       if (!tab || !name) return;
-      const document = {
-        tab_name: name,
+      const document = buildWorkflowAuthoringDocument({
+        assemblyGuid: tab.assemblyGuid || null,
         name,
-        display_name: name,
+        description: tab.description || tab.exportMetadata?.description || "",
         nodes: tab.nodes,
         edges: tab.edges,
-      };
+      });
       try {
         const resp = await fetch("/api/assemblies/import", {
           method: "POST",
@@ -1278,6 +1322,7 @@ function normalizeAegisStatus(payload) {
               ? {
                   ...t,
                   tab_name: name,
+                  description: tab.description || tab.exportMetadata?.description || "",
                   assemblyGuid: data?.assembly_guid || t.assemblyGuid || null,
                   domain: (data?.source || data?.domain || t.domain || "user").toLowerCase(),
                 }
@@ -1289,6 +1334,42 @@ function normalizeAegisStatus(payload) {
       }
     },
     [tabs, activeTabId]
+  );
+
+  const handleRenameFlow = useCallback(
+    async (name) => {
+      const tab = tabs.find((t) => t.id === activeTabId);
+      const normalizedGuid = typeof tab?.assemblyGuid === "string" ? tab.assemblyGuid.trim() : "";
+      const normalizedDomain = (tab?.domain || "user").toLowerCase();
+      if (!tab || !normalizedGuid || normalizedDomain !== "user") {
+        return;
+      }
+      await handleSaveFlow(name);
+    },
+    [tabs, activeTabId, handleSaveFlow]
+  );
+
+  const handleDeleteFlow = useCallback(
+    async () => {
+      const tab = tabs.find((t) => t.id === activeTabId);
+      const normalizedGuid = typeof tab?.assemblyGuid === "string" ? tab.assemblyGuid.trim() : "";
+      const normalizedDomain = (tab?.domain || "user").toLowerCase();
+      if (!tab || !normalizedGuid || normalizedDomain !== "user") {
+        return;
+      }
+
+      try {
+        const resp = await fetch(`/api/assemblies/${encodeURIComponent(normalizedGuid)}`, {
+          method: "DELETE",
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
+        closeFlowTabById(tab.id);
+      } catch (err) {
+        console.error("Failed to delete workflow:", err);
+      }
+    },
+    [tabs, activeTabId, closeFlowTabById]
   );
 
   const openScriptFromList = useCallback(
@@ -1325,26 +1406,20 @@ function normalizeAegisStatus(payload) {
           const resp = await fetch(`/api/assemblies/${encodeURIComponent(row.assemblyGuid)}/export`);
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const data = await resp.json();
-          let payload = data?.payload;
-          if (typeof payload === "string") {
-            try {
-              payload = JSON.parse(payload);
-            } catch {
-              payload = {};
-            }
-          }
-          const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
-          const edges = Array.isArray(payload?.edges) ? payload.edges : [];
-          const tabName = payload?.tab_name || data?.display_name || row?.name || "Workflow";
+          const parsedWorkflow = extractWorkflowCanvasDocument(data);
+          const nodes = parsedWorkflow.nodes;
+          const edges = parsedWorkflow.edges;
+          const tabName = parsedWorkflow.tabName || row?.name || "Workflow";
           const domain = (data?.domain || rawDomain).toLowerCase();
           setTabs([
             {
               id: newId,
               tab_name: tabName,
+              description: parsedWorkflow.description || "",
               nodes,
               edges,
               folderPath,
-              assemblyGuid: data?.assembly_guid || row?.assemblyGuid || null,
+              assemblyGuid: parsedWorkflow.assemblyGuid || row?.assemblyGuid || null,
               domain,
               sourceRow: row,
               exportMetadata: data,
@@ -1356,6 +1431,7 @@ function normalizeAegisStatus(payload) {
             {
               id: newId,
               tab_name: row?.name || "Workflow",
+              description: "",
               nodes: [],
               edges: [],
               folderPath,
@@ -1370,6 +1446,7 @@ function normalizeAegisStatus(payload) {
           {
             id: newId,
             tab_name: row?.name || "Workflow",
+            description: "",
             nodes: [],
             edges: [],
             folderPath,
@@ -1386,6 +1463,7 @@ function normalizeAegisStatus(payload) {
   );
 
   const isAdmin = (String(userRole || '').toLowerCase() === 'admin');
+  const activeWorkflowTab = tabs.find((tab) => tab.id === activeTabId) || null;
 
   useEffect(() => {
     const requiresAdmin = currentPage === 'server_info'
@@ -1652,10 +1730,14 @@ function normalizeAegisStatus(payload) {
                 handleExportFlow={handleExportFlow}
                 handleImportFlow={handleImportFlow}
                 handleSaveFlow={handleSaveFlow}
+                handleRenameFlow={handleRenameFlow}
+                handleDeleteFlow={handleDeleteFlow}
                 handleOpenCloseAllDialog={() => setConfirmCloseOpen(true)}
                 fileInputRef={fileInputRef}
                 onFileInputChange={onFileInputChange}
-                currentTabName={tabs.find((t) => t.id === activeTabId)?.tab_name}
+                currentTabName={activeWorkflowTab?.tab_name}
+                currentAssemblyGuid={activeWorkflowTab?.assemblyGuid}
+                currentDomain={activeWorkflowTab?.domain}
               />
               <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
                 <FlowTabs

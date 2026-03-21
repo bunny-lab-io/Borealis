@@ -42,10 +42,9 @@ def _script_document(name: str = "Import Script") -> dict:
     }
 
 
-def _workflow_document(name: str = "Import Workflow") -> dict:
+def _workflow_canvas(name: str = "Import Workflow") -> dict:
     return {
         "tab_name": name,
-        "description": "Import/export workflow test.",
         "nodes": [
             {
                 "id": "node-1",
@@ -56,6 +55,25 @@ def _workflow_document(name: str = "Import Workflow") -> dict:
         ],
         "edges": [],
     }
+
+
+def _workflow_document(name: str = "Import Workflow") -> dict:
+    encoded = base64.b64encode(
+        json.dumps(_workflow_canvas(name), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    return {
+        "assembly_guid": "import-workflow-guid",
+        "name": name,
+        "description": "Import/export workflow test.",
+        "type": "workflow",
+        "workflow": encoded,
+    }
+
+
+def _legacy_workflow_document(name: str = "Legacy Workflow") -> dict:
+    document = _workflow_canvas(name)
+    document["description"] = "Import/export workflow test."
+    return document
 
 
 def test_script_import_export_round_trip(engine_harness: EngineTestHarness) -> None:
@@ -102,10 +120,40 @@ def test_workflow_import_export_round_trip(engine_harness: EngineTestHarness) ->
     export_response = client.get(f"/api/assemblies/{assembly_guid}/export")
     assert export_response.status_code == 200
     exported = export_response.get_json()
-    assert exported["nodes"][0]["id"] == "node-1"
-    assert exported["tab_name"] == document["tab_name"]
+    assert exported["assembly_guid"] == assembly_guid
+    assert exported["name"] == document["name"]
+    assert exported["type"] == "workflow"
+    decoded = base64.b64decode(exported["workflow"]).decode("utf-8")
+    parsed = json.loads(decoded)
+    assert parsed["nodes"][0]["id"] == "node-1"
+    assert parsed["tab_name"] == document["name"]
     assert "payload" not in exported
     assert "display_name" not in exported
+    assert "nodes" not in exported
+    assert "workflow_encoding" not in exported
+
+
+def test_legacy_workflow_import_exports_canonical_encoded_document(engine_harness: EngineTestHarness) -> None:
+    client = _user_client(engine_harness)
+    document = _legacy_workflow_document()
+
+    response = client.post(
+        "/api/assemblies/import",
+        json={"domain": "user", "document": document},
+    )
+    assert response.status_code == 201
+    payload = response.get_json()
+    assembly_guid = payload["assembly_guid"]
+    assert payload["payload_json"]["nodes"][0]["id"] == "node-1"
+
+    export_response = client.get(f"/api/assemblies/{assembly_guid}/export")
+    assert export_response.status_code == 200
+    exported = export_response.get_json()
+    decoded = base64.b64decode(exported["workflow"]).decode("utf-8")
+    parsed = json.loads(decoded)
+    assert parsed["tab_name"] == document["tab_name"]
+    assert parsed["nodes"][0]["id"] == "node-1"
+    assert "workflow_encoding" not in exported
 
 
 def test_import_without_guid_generates_and_persists_nested_guid(engine_harness: EngineTestHarness) -> None:

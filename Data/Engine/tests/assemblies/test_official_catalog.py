@@ -59,6 +59,40 @@ def _official_document(
     }
 
 
+def _official_workflow_document(
+    *,
+    summary: str,
+    assembly_guid: str = "aurora-workflow-guid",
+    display_name: str = "Aurora Workflow",
+    source_path: str = "workflows/general/aurora-workflow.json",
+) -> dict:
+    workflow_payload = {
+        "tab_name": display_name,
+        "nodes": [
+            {
+                "id": "node-1",
+                "type": "DataNode",
+                "position": {"x": 64, "y": 64},
+                "data": {"label": "Input", "value": "example"},
+            }
+        ],
+        "edges": [],
+    }
+    encoded_workflow = base64.b64encode(
+        json.dumps(workflow_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    return {
+        "assembly_guid": assembly_guid,
+        "name": display_name,
+        "description": summary,
+        "type": "workflow",
+        "source_repo": "https://github.com/bunny-lab-io/Aurora",
+        "source_path": source_path,
+        "source_version": "git:seeded",
+        "workflow": encoded_workflow,
+    }
+
+
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -311,5 +345,175 @@ def test_official_catalog_status_reports_new_assemblies_missing_locally(tmp_path
         assert status["new_assembly_count"] == 1
         assert status["metadata_refresh_count"] == 0
         assert status["actionable_count"] == 1
+    finally:
+        cache.shutdown(flush=True)
+
+
+def test_official_catalog_cleanup_deletes_revoked_aurora_assemblies_on_refresh(tmp_path: Path) -> None:
+    aurora_repo = tmp_path / "Aurora"
+    aurora_repo.mkdir(parents=True, exist_ok=True)
+    _run_git(aurora_repo, "init")
+    _run_git(aurora_repo, "config", "user.email", "tests@example.com")
+    _run_git(aurora_repo, "config", "user.name", "Borealis Tests")
+    _run_git(aurora_repo, "checkout", "-b", "main")
+
+    aurora_doc = _official_document(summary="Aurora repository version", script_body='Write-Host "aurora"')
+    aurora_file = aurora_repo / "scripts" / "windows" / "aurora-script.json"
+    _write_json(aurora_file, aurora_doc)
+    _run_git(aurora_repo, "add", ".")
+    _run_git(aurora_repo, "commit", "-m", "Seed Aurora official assembly")
+
+    db_url = f"sqlite:///{(tmp_path / 'assemblies.sqlite3').as_posix()}"
+    db_manager = AssemblyDatabaseManager(database_url=db_url, logger=LOGGER)
+    db_manager.initialise()
+    cache = AssemblyCache(
+        database_manager=db_manager,
+        flush_interval_seconds=5.0,
+        logger=LOGGER,
+    )
+    runtime = AssemblyRuntimeService(cache, logger=LOGGER)
+    service = OfficialAssemblyCatalogService(
+        cache=cache,
+        database_manager=db_manager,
+        logger=LOGGER,
+        bundled_root=tmp_path / "missing-bundled",
+        checkout_root=tmp_path / "checkout",
+        repo_url="https://github.com/bunny-lab-io/Aurora",
+        repo_git_url=aurora_repo.as_posix(),
+        repo_ref="main",
+        refresh_seconds=30,
+    )
+
+    try:
+        initial_sync = service.update_all_official_assemblies()
+        assert initial_sync["installed"] == ["aurora-official-guid"]
+        assert runtime.get_assembly("aurora-official-guid") is not None
+        assert "aurora-official-guid" in db_manager.load_official_catalog_state()
+
+        aurora_file.unlink()
+        _run_git(aurora_repo, "add", "-A")
+        _run_git(aurora_repo, "commit", "-m", "Revoke Aurora official assembly")
+
+        cleanup = service.cleanup_deleted_official_assemblies(manifest=service.manifest(force_remote=True))
+        assert cleanup["cleanup_performed"] is True
+        assert cleanup["deleted"] == ["aurora-official-guid"]
+        assert cleanup["deleted_count"] == 1
+        assert cleanup["failed"] == []
+        assert runtime.get_assembly("aurora-official-guid") is None
+        assert "aurora-official-guid" not in db_manager.load_official_catalog_state()
+    finally:
+        cache.shutdown(flush=True)
+
+
+def test_official_catalog_update_all_deletes_revoked_aurora_assemblies(tmp_path: Path) -> None:
+    aurora_repo = tmp_path / "Aurora"
+    aurora_repo.mkdir(parents=True, exist_ok=True)
+    _run_git(aurora_repo, "init")
+    _run_git(aurora_repo, "config", "user.email", "tests@example.com")
+    _run_git(aurora_repo, "config", "user.name", "Borealis Tests")
+    _run_git(aurora_repo, "checkout", "-b", "main")
+
+    aurora_doc = _official_document(summary="Aurora repository version", script_body='Write-Host "aurora"')
+    aurora_file = aurora_repo / "scripts" / "windows" / "aurora-script.json"
+    _write_json(aurora_file, aurora_doc)
+    _run_git(aurora_repo, "add", ".")
+    _run_git(aurora_repo, "commit", "-m", "Seed Aurora official assembly")
+
+    db_url = f"sqlite:///{(tmp_path / 'assemblies.sqlite3').as_posix()}"
+    db_manager = AssemblyDatabaseManager(database_url=db_url, logger=LOGGER)
+    db_manager.initialise()
+    cache = AssemblyCache(
+        database_manager=db_manager,
+        flush_interval_seconds=5.0,
+        logger=LOGGER,
+    )
+    runtime = AssemblyRuntimeService(cache, logger=LOGGER)
+    service = OfficialAssemblyCatalogService(
+        cache=cache,
+        database_manager=db_manager,
+        logger=LOGGER,
+        bundled_root=tmp_path / "missing-bundled",
+        checkout_root=tmp_path / "checkout",
+        repo_url="https://github.com/bunny-lab-io/Aurora",
+        repo_git_url=aurora_repo.as_posix(),
+        repo_ref="main",
+        refresh_seconds=30,
+    )
+
+    try:
+        initial_sync = service.update_all_official_assemblies()
+        assert initial_sync["installed"] == ["aurora-official-guid"]
+        assert runtime.get_assembly("aurora-official-guid") is not None
+
+        aurora_file.unlink()
+        _run_git(aurora_repo, "add", "-A")
+        _run_git(aurora_repo, "commit", "-m", "Revoke Aurora official assembly")
+
+        result = service.update_all_official_assemblies()
+        assert result["updated"] == []
+        assert result["deleted"] == ["aurora-official-guid"]
+        assert result["deleted_count"] == 1
+        assert result["failed"] == []
+        assert runtime.get_assembly("aurora-official-guid") is None
+    finally:
+        cache.shutdown(flush=True)
+
+
+def test_official_catalog_imports_canonical_base64_workflow_documents(tmp_path: Path) -> None:
+    aurora_repo = tmp_path / "Aurora"
+    aurora_repo.mkdir(parents=True, exist_ok=True)
+    _run_git(aurora_repo, "init")
+    _run_git(aurora_repo, "config", "user.email", "tests@example.com")
+    _run_git(aurora_repo, "config", "user.name", "Borealis Tests")
+    _run_git(aurora_repo, "checkout", "-b", "main")
+
+    aurora_doc = _official_workflow_document(summary="Encoded workflow from Aurora")
+    _write_json(aurora_repo / "workflows" / "general" / "aurora-workflow.json", aurora_doc)
+    _run_git(aurora_repo, "add", ".")
+    _run_git(aurora_repo, "commit", "-m", "Add encoded Aurora workflow")
+
+    db_url = f"sqlite:///{(tmp_path / 'assemblies.sqlite3').as_posix()}"
+    db_manager = AssemblyDatabaseManager(database_url=db_url, logger=LOGGER)
+    db_manager.initialise()
+    cache = AssemblyCache(
+        database_manager=db_manager,
+        flush_interval_seconds=5.0,
+        logger=LOGGER,
+    )
+    runtime = AssemblyRuntimeService(cache, logger=LOGGER)
+    service = OfficialAssemblyCatalogService(
+        cache=cache,
+        database_manager=db_manager,
+        logger=LOGGER,
+        bundled_root=tmp_path / "missing-bundled",
+        checkout_root=tmp_path / "checkout",
+        repo_url="https://github.com/bunny-lab-io/Aurora",
+        repo_git_url=aurora_repo.as_posix(),
+        repo_ref="main",
+        refresh_seconds=30,
+    )
+
+    try:
+        update_result = service.update_all_official_assemblies()
+        assert update_result["updated"] == ["aurora-workflow-guid"]
+        assert update_result["installed"] == ["aurora-workflow-guid"]
+
+        updated = runtime.get_assembly("aurora-workflow-guid")
+        assert updated is not None
+        assert updated["assembly_type"] == "workflow"
+        assert updated["assembly_subtype"] == "workflow"
+        assert updated["summary"] == "Encoded workflow from Aurora"
+        assert updated["payload_json"]["tab_name"] == "Aurora Workflow"
+        assert updated["payload_json"]["nodes"][0]["id"] == "node-1"
+
+        export_root = tmp_path / "aurora-export"
+        service.write_aurora_snapshot(export_root)
+        exported_file = export_root / "workflows" / "general" / "aurora-workflow.json"
+        assert exported_file.is_file()
+        exported_doc = json.loads(exported_file.read_text(encoding="utf-8"))
+        decoded = base64.b64decode(exported_doc["workflow"]).decode("utf-8")
+        parsed = json.loads(decoded)
+        assert parsed["tab_name"] == "Aurora Workflow"
+        assert "workflow_encoding" not in exported_doc
     finally:
         cache.shutdown(flush=True)

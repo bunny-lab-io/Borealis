@@ -443,6 +443,24 @@ class AssemblyDatabaseManager:
         finally:
             conn.close()
 
+    def delete_official_catalog_state(self, assembly_guid: str) -> None:
+        """Remove persisted official-catalog sync metadata for one assembly GUID."""
+
+        guid = str(assembly_guid or "").strip().lower()
+        if not guid:
+            return
+
+        conn = self._open_connection(AssemblyDomain.OFFICIAL)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f"DELETE FROM {self._qualified_official_catalog_state_table()} WHERE assembly_guid = ?",
+                (guid,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def upsert_record(self, domain: AssemblyDomain, entry: CachedAssembly) -> None:
         """Insert or update an assembly record."""
 

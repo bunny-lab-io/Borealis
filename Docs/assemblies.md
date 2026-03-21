@@ -24,7 +24,19 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
   - `type`
   - `script`
   - optional: `timeout_seconds`, `variables`, `files`
+- For workflow assemblies, the intended authoring shape is:
+  - `assembly_guid`
+  - `name`
+  - `description`
+  - `type` = `workflow`
+  - `workflow`
+- The decoded `workflow` JSON payload should contain the flow-canvas body such as:
+  - `tab_name`
+  - `nodes`
+  - `edges`
+- Borealis still accepts legacy flat workflow exports where `tab_name`, `nodes`, and `edges` live at the top level, but canonical export now normalizes workflows into the encoded `workflow` field so assembly metadata and flow payload stay standardized.
 - Borealis no longer needs authoring exports to carry `display_name`, `summary`, `category`, `sites`, `script_encoding`, `version`, `payload_guid`, `source_repo`, `source_version`, `content_hash`, or dirty/persisted queue metadata.
+- When an operator refreshes the Aurora catalog, Borealis now treats a clean Aurora manifest as authoritative for the official domain and removes local official assemblies whose GUIDs were revoked upstream. That cleanup does not run against bundled or fallback manifests.
 
 ## Quick Jobs
 - Quick jobs are immediate executions of a script assembly.

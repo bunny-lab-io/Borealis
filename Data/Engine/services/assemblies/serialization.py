@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any, Dict, Mapping, Optional, Tuple, Union
 
@@ -139,7 +140,47 @@ def _extract_payload_document(document: Mapping[str, Any]) -> LegacyDocument:
     payload = document.get("payload")
     if isinstance(payload, Mapping):
         return dict(payload)
+    workflow_payload = _extract_workflow_document(document)
+    if workflow_payload is not None:
+        return workflow_payload
     return dict(document)
+
+
+def _extract_workflow_document(document: Mapping[str, Any]) -> Optional[LegacyDocument]:
+    workflow = document.get("workflow")
+    if workflow is None:
+        return None
+
+    extracted: Optional[LegacyDocument] = None
+    if isinstance(workflow, Mapping):
+        extracted = dict(workflow)
+    elif isinstance(workflow, str):
+        workflow_text = workflow.strip()
+        decoded = _decode_base64_text(workflow_text)
+        if decoded is not None:
+            workflow_text = decoded
+        try:
+            parsed = json.loads(workflow_text)
+        except json.JSONDecodeError as exc:
+            raise AssemblySerializationError("Workflow document did not decode to valid JSON.") from exc
+        if not isinstance(parsed, Mapping):
+            raise AssemblySerializationError("Workflow document must decode to a JSON object.")
+        extracted = dict(parsed)
+    else:
+        raise AssemblySerializationError("Workflow document must be a JSON object or encoded string.")
+
+    resolved_guid = _coerce_guid(document.get("assembly_guid") or extracted.get("assembly_guid"))
+    if resolved_guid:
+        extracted["assembly_guid"] = resolved_guid
+    tab_name = _coerce_optional_str(
+        extracted.get("tab_name")
+        or document.get("tab_name")
+        or document.get("name")
+        or document.get("display_name")
+    )
+    if tab_name:
+        extracted["tab_name"] = tab_name
+    return extracted
 
 
 def _resolve_summary(document: Mapping[str, Any], payload: Mapping[str, Any]) -> Optional[str]:
@@ -157,13 +198,52 @@ def _payload_summary(payload: Any) -> Optional[str]:
 
 
 def _authoring_document_from_payload(record: AssemblyRecord, payload_body: LegacyDocument) -> LegacyDocument:
+    if record.assembly_type == "workflow":
+        workflow_document = dict(payload_body)
+        if not _coerce_optional_str(workflow_document.get("tab_name")) and record.display_name:
+            workflow_document["tab_name"] = record.display_name
+        for field in (
+            "assembly_guid",
+            "assembly_type",
+            "assembly_subtype",
+            "display_name",
+            "summary",
+            "domain",
+            "payload_guid",
+            "source_repo",
+            "source_path",
+            "source_version",
+            "content_hash",
+            "created_at",
+            "updated_at",
+            "is_dirty",
+            "dirty_since",
+            "last_persisted",
+            "version",
+            "category",
+            "sites",
+            "name",
+            "description",
+            "type",
+            "workflow",
+            "workflow_encoding",
+            "workflowEncoding",
+        ):
+            workflow_document.pop(field, None)
+        encoded_workflow = base64.b64encode(
+            json.dumps(workflow_document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        return {
+            "assembly_guid": record.assembly_guid,
+            "name": _coerce_str(record.display_name, workflow_document.get("tab_name") or "Workflow"),
+            "description": _coerce_optional_str(record.summary) or "",
+            "type": "workflow",
+            "workflow": encoded_workflow,
+        }
+
     document = dict(payload_body)
     document["assembly_guid"] = record.assembly_guid
-
-    if record.assembly_type == "workflow":
-        if not _coerce_optional_str(document.get("tab_name") or document.get("name")) and record.display_name:
-            document["tab_name"] = record.display_name
-    elif not _coerce_optional_str(document.get("name") or document.get("tab_name")) and record.display_name:
+    if not _coerce_optional_str(document.get("name") or document.get("tab_name")) and record.display_name:
         document["name"] = record.display_name
 
     if not _coerce_optional_str(document.get("description")) and record.summary:
@@ -213,6 +293,9 @@ def _infer_assembly_type(document: Mapping[str, Any]) -> str:
         type_lower = type_hint.lower()
         if type_lower in {"script", "workflow", "ansible"}:
             return type_lower
+    workflow = document.get("workflow")
+    if workflow is not None:
+        return "workflow"
     subtype_hint = _coerce_optional_str(document.get("assembly_subtype") or document.get("type") or document.get("script_type"))
     if subtype_hint:
         subtype_lower = subtype_hint.lower()
@@ -246,6 +329,23 @@ def _coerce_optional_str(value: Any) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _decode_base64_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return ""
+    cleaned = "".join(text.split())
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except Exception:
+        return None
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 __all__ = [
