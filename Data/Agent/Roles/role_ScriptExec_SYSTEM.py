@@ -396,9 +396,35 @@ Get-ScheduledTask -TaskName $task | Out-Null
 class Role:
     def __init__(self, ctx):
         self.ctx = ctx
+        self.role_health_label = "Script Execution - SYSTEM"
+        self._listener_registered = False
+
+    def health_report(self) -> dict:
+        if not self._listener_registered:
+            return {
+                'status': 'unhealthy',
+                'role_label': self.role_health_label,
+                'detail': 'Quick job listener was not registered.',
+                'details': {
+                    'running_status': 'Stopped',
+                    'execution_context': 'SYSTEM',
+                    'listener_state': 'Not Registered',
+                },
+            }
+        return {
+            'status': 'healthy',
+            'role_label': self.role_health_label,
+            'detail': 'Quick job listener ready for SYSTEM script execution.',
+            'details': {
+                'running_status': 'Ready',
+                'execution_context': 'SYSTEM',
+                'listener_state': 'Registered',
+            },
+        }
 
     def register_events(self):
         sio = self.ctx.sio
+        self._listener_registered = True
         hooks = getattr(self.ctx, 'hooks', {}) or {}
         log_agent_hook = hooks.get('log_agent')
 

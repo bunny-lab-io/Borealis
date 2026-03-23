@@ -34,6 +34,18 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _clean_details_map(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    cleaned: Dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = _clean_text(raw_key)
+        if not key:
+            continue
+        cleaned[key] = _clean_text(raw_value)
+    return cleaned
+
+
 def _normalize_context(value: Any) -> str:
     text = _clean_text(value).lower().replace("-", "_")
     if text in {"system", "svc", "service", "system_service"}:
@@ -140,6 +152,7 @@ def normalize_agent_role_health(raw: Any, *, default_context: Optional[str] = No
             "status_code": status_code,
             "status": STATUS_LABELS.get(status_code, "Unknown"),
             "detail": _clean_text(item.get("detail") or item.get("message")),
+            "details": _clean_details_map(item.get("details") or item.get("metadata") or item.get("info")),
             "last_checked_at": last_checked_at,
         }
         roles.append(role)

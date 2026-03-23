@@ -105,3 +105,34 @@ $env:BOREALIS_SERVER_URL="https://192.168.3.252:5000"; $env:BOREALIS_ENROLLMENT_
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://192.168.3.252:5000" --enrollmentcode "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
 ```
+
+### Moving An Agent To A New Engine
+Use the `NewEngine` flag when an agent previously trusted a different Borealis Engine and you want it to forget that pinned server certificate, forget the old enrollment/auth state, and establish trust with a new Engine through the normal approval flow.  This can also resolve some edge-case issues with agents.
+
+#### Windows
+Bootstrap from GitHub directly:
+```powershell
+$bootstrap = Join-Path $env:TEMP "borealis-bootstrap.ps1"
+irm https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1 -OutFile $bootstrap
+& $bootstrap --agent --newEngine --serverurl "https://NEW-ENGINE-IP:5000" --enrollmentcode "PUT-NEW-ENROLLMENT-CODE-HERE"
+```
+
+Already-installed local repo/runtime:
+```powershell
+.\bootstrap.ps1 --agent --newEngine --serverurl "https://NEW-ENGINE-IP:5000" --enrollmentcode "PUT-NEW-ENROLLMENT-CODE-HERE"
+.\Borealis.ps1 -Agent -NewEngine -ServerUrl "https://NEW-ENGINE-IP:5000" -EnrollmentCode "PUT-NEW-ENROLLMENT-CODE-HERE"
+```
+
+#### Linux
+Bootstrap from GitHub directly:
+```sh
+curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --newEngine --serverurl "https://NEW-ENGINE-IP:5000" --enrollmentcode "PUT-NEW-ENROLLMENT-CODE-HERE"
+```
+
+Already-installed local repo/runtime:
+```sh
+sudo ./bootstrap.sh --agent --newEngine --serverurl "https://NEW-ENGINE-IP:5000" --enrollmentcode "PUT-NEW-ENROLLMENT-CODE-HERE"
+sudo ./Borealis.sh --agent --newEngine --serverurl "https://NEW-ENGINE-IP:5000" --enrollmentcode "PUT-NEW-ENROLLMENT-CODE-HERE"
+```
+
+`NewEngine` clears the persisted Borealis server trust and enrollment state while preserving the device identity keypair, so the agent can establish trust with the replacement Engine without looking like a completely different machine.

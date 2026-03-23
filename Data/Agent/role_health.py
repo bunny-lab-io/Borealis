@@ -35,6 +35,18 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _clean_details_map(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    cleaned: Dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = _clean_text(raw_key)
+        if not key:
+            continue
+        cleaned[key] = _clean_text(raw_value)
+    return cleaned
+
+
 def normalize_role_context(value: Any) -> str:
     text = _clean_text(value).lower().replace("-", "_")
     if text in {"system", "svc", "service", "system_service"}:
@@ -97,6 +109,7 @@ def role_health_snapshot(
     status: Any = "healthy",
     role_label: Any = None,
     detail: Any = "",
+    details: Any = None,
     last_checked_at: Any = None,
     role_id: Any = None,
 ) -> Dict[str, Any]:
@@ -113,6 +126,7 @@ def role_health_snapshot(
         "status_code": normalized_status,
         "status": _STATUS_LABELS.get(normalized_status, "Unknown"),
         "detail": _clean_text(detail),
+        "details": _clean_details_map(details),
         "last_checked_at": checked_at,
     }
 
@@ -171,6 +185,7 @@ class RoleHealthRegistry:
                     status=payload.get("status_code") or payload.get("status") or "healthy",
                     role_label=payload.get("role_label") or payload.get("label") or role_label,
                     detail=payload.get("detail") or payload.get("message") or "",
+                    details=payload.get("details") or payload.get("metadata") or payload.get("info"),
                     last_checked_at=payload.get("last_checked_at") or payload.get("checked_at") or reported_at,
                     role_id=payload.get("role_id") or entry.get("role_id"),
                 )

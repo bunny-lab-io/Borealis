@@ -35,7 +35,7 @@ Bootstrap options:
 
 Any other arguments are forwarded to Borealis.sh, for example:
   bootstrap.sh --agent --serverurl https://10.0.0.54:5000 --enrollmentcode XXXX-XXXX
-  bootstrap.sh --agent --force-reenroll --serverurl https://10.0.0.54:5000 --enrollmentcode XXXX-XXXX
+  bootstrap.sh --agent --newEngine --serverurl https://10.0.0.54:5000 --enrollmentcode XXXX-XXXX
 EOF
 }
 

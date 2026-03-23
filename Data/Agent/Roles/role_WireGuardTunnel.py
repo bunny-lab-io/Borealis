@@ -1215,39 +1215,59 @@ class Role:
     def health_report(self) -> dict:
         session = getattr(self.client, "session", None)
         tunnel_id = ""
+        peer_ip = ""
+        endpoint = ""
         if session is not None:
             try:
                 tunnel_id = str(session.tunnel_id or "").strip()
             except Exception:
                 tunnel_id = ""
+            try:
+                peer_ip = str(session.virtual_ip or "").strip()
+            except Exception:
+                peer_ip = ""
+            try:
+                endpoint = str(session.endpoint or "").strip()
+            except Exception:
+                endpoint = ""
         try:
             service_state = self.client._service_state()
         except Exception:
             service_state = None
         thread_alive = bool(self._ensure_thread and self._ensure_thread.is_alive())
         detail_suffix = f" tunnel_id={tunnel_id}" if tunnel_id else ""
+        details = {
+            "running_status": str(service_state or "Stopped"),
+            "wireguard_peer_ip": peer_ip.split("/", 1)[0] if peer_ip else "",
+            "tunnel_id": tunnel_id,
+            "endpoint": endpoint,
+        }
         if service_state in ("RUNNING", "START_PENDING") and session is not None:
             return {
                 "status": "healthy",
                 "role_label": self.role_health_label,
                 "detail": f"Persistent tunnel active (state={service_state or 'RUNNING'}).{detail_suffix}",
+                "details": details,
             }
         if not thread_alive:
             return {
                 "status": "unhealthy",
                 "role_label": self.role_health_label,
                 "detail": "Persistent ensure loop stopped.",
+                "details": details,
             }
         if session is not None:
             return {
                 "status": "recovering",
                 "role_label": self.role_health_label,
                 "detail": f"Tunnel expected but service state is {service_state or 'stopped'}.{detail_suffix}",
+                "details": details,
             }
         return {
             "status": "recovering",
             "role_label": self.role_health_label,
             "detail": "Awaiting persistent tunnel session bootstrap.",
+            "details": details,
         }
 
     def _request_persistent_session(self) -> Optional[Dict[str, Any]]:

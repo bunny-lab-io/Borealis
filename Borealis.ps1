@@ -4,7 +4,8 @@
 param(
     [switch]$Agent,
     [switch]$RefreshAgentRuntime,
-    [switch]$ForceReEnroll,
+    [Alias('DeleteServerTrust', 'ForceReEnroll')]
+    [switch]$NewEngine,
     [string]$EnrollmentCode = '',
     [string]$ServerUrl = ''
 )
@@ -1877,7 +1878,7 @@ function InstallOrUpdate-BorealisAgent {
     $venvPython             = Join-Path $venvFolderPath 'Scripts\python.exe'
     $existingServerUrl      = $null
 
-    if ($ForceReEnroll) {
+    if ($NewEngine) {
         Run-Step "Clear Persisted Borealis Agent Enrollment State" {
             Clear-AgentEnrollmentState -LogName 'Install.log'
         }

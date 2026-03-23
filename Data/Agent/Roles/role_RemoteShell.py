@@ -419,11 +419,19 @@ class ShellServer:
             listening = self._listening
             last_error = self._last_error
             last_checked_at = self._last_checked_at or int(time.time())
+        details = {
+            "running_status": "Running" if listening else "Stopped",
+            "listener_ip": self.host,
+            "listener_port": str(self.port),
+            "shell_binary": self.shell_bin,
+            "last_error": last_error,
+        }
         if not self._thread.is_alive():
             return {
                 "status": "unhealthy",
                 "role_label": "Remote Shell Service",
                 "detail": "Remote shell listener thread stopped.",
+                "details": details,
                 "last_checked_at": last_checked_at,
             }
         if not self.shell_bin:
@@ -431,6 +439,10 @@ class ShellServer:
                 "status": "unsupported",
                 "role_label": "Remote Shell Service",
                 "detail": "No compatible shell binary is available.",
+                "details": {
+                    **details,
+                    "running_status": "Unsupported",
+                },
                 "last_checked_at": last_checked_at,
             }
         if listening:
@@ -438,6 +450,10 @@ class ShellServer:
                 "status": "healthy",
                 "role_label": "Remote Shell Service",
                 "detail": f"Listening on {self.host}:{self.port}.",
+                "details": {
+                    **details,
+                    "running_status": "Running",
+                },
                 "last_checked_at": last_checked_at,
             }
         if last_error:
@@ -445,12 +461,20 @@ class ShellServer:
                 "status": "recovering",
                 "role_label": "Remote Shell Service",
                 "detail": f"Retrying after listener error: {last_error}",
+                "details": {
+                    **details,
+                    "running_status": "Recovering",
+                },
                 "last_checked_at": last_checked_at,
             }
         return {
             "status": "recovering",
             "role_label": "Remote Shell Service",
             "detail": "Waiting for listener startup.",
+            "details": {
+                **details,
+                "running_status": "Recovering",
+            },
             "last_checked_at": last_checked_at,
         }
 
@@ -545,6 +569,9 @@ class Role:
                 "status": "unsupported",
                 "role_label": self.role_health_label,
                 "detail": f"Unsupported remote shell platform '{platform.system()}'.",
+                "details": {
+                    "running_status": "Unsupported",
+                },
             }
         return self.server.health_report()
 

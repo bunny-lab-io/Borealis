@@ -65,11 +65,6 @@ const MAGIC_UI = {
   accentC: "#34d399",
 };
 
-const DEVICE_LIST_STATUS_COLORS = Object.freeze({
-  online: "#00d18c",
-  recovering: "#ffb347",
-  offline: "#b0b8c8",
-});
 const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
 const DEVICE_DETAILS_POLL_INTERVAL_MS = 60000;
 const ROLE_HEALTH_LAST_CHECKED_COLOR = "rgba(123, 137, 161, 0.9)";
@@ -138,29 +133,11 @@ const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
 
 const SUMMARY_SECTIONS = [
   { key: "top-level", label: "Top-Level", icon: InfoOutlinedIcon },
-  { key: "agent-roles-health", label: "Agent Roles Health", icon: DeveloperBoardRoundedIcon },
+  { key: "agent-health", label: "Agent Health", icon: DeveloperBoardRoundedIcon },
   { key: "storage", label: "Storage", icon: StorageRoundedIcon },
   { key: "memory", label: "Memory", icon: MemoryRoundedIcon },
   { key: "network", label: "Network", icon: LanRoundedIcon },
 ];
-
-function getWireguardTunnelPresentation(tunnelInfo) {
-  const peerIp = tunnelInfo?.virtual_ip ? String(tunnelInfo.virtual_ip).split("/")[0] : "";
-  const tunnelState = String(tunnelInfo?.status || "").toLowerCase();
-  const recoveryInProgress = Boolean(tunnelInfo?.recovery_in_progress);
-  const listenerHealthy = tunnelInfo?.listener_healthy !== false;
-  const isTunnelOnline =
-    tunnelState === "up" &&
-    listenerHealthy &&
-    Boolean(peerIp);
-  const statusText = recoveryInProgress ? "Recovering" : isTunnelOnline ? "Online" : "Offline";
-  const statusColor = recoveryInProgress
-    ? DEVICE_LIST_STATUS_COLORS.recovering
-    : isTunnelOnline
-      ? DEVICE_LIST_STATUS_COLORS.online
-      : DEVICE_LIST_STATUS_COLORS.offline;
-  return { peerIp, statusText, statusColor, isTunnelOnline };
-}
 
 function formatRoleHealthContext(context) {
   const normalized = String(context || "").trim().toLowerCase();
@@ -184,6 +161,136 @@ function normalizeRoleHealthStatusText(value) {
 function getRoleHealthStatusColor(statusCode) {
   const normalized = String(statusCode || "").trim().toLowerCase();
   return ROLE_HEALTH_STATUS_COLOR_BY_CODE[normalized] || SUMMARY_DEFAULT_TEXT_COLOR;
+}
+
+const AGENT_HEALTH_KIND = Object.freeze({
+  role: "role",
+  service: "service",
+});
+
+const AGENT_HEALTH_PRESENTATION_BY_KEY = Object.freeze({
+  deviceaudit: { label: "Device Auditor", kind: AGENT_HEALTH_KIND.role },
+  macro: { label: "Macro Automation", kind: AGENT_HEALTH_KIND.role },
+  remoteshell: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
+  remoteshellservice: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
+  screenshot: { label: "Screenshot Capture", kind: AGENT_HEALTH_KIND.role },
+  scriptexeccurrentuser: { label: "Script Execution - CURRENTUSER", kind: AGENT_HEALTH_KIND.role },
+  scriptexecsystem: { label: "Script Execution - SYSTEM", kind: AGENT_HEALTH_KIND.role },
+  vnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
+  ultravnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
+  ultravncservice: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
+  wireguardtunnel: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
+  wireguardservice: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
+  wireguardvpn: { label: "WireGuard VPN", kind: AGENT_HEALTH_KIND.service },
+});
+
+function compactAgentHealthKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function resolveAgentHealthPresentation(item, index = 0) {
+  const rawRoleName = String(item?.role_name || item?.role || "").trim();
+  const rawRoleLabel = String(item?.role_label || "").trim();
+  const presentation =
+    AGENT_HEALTH_PRESENTATION_BY_KEY[compactAgentHealthKey(rawRoleName)] ||
+    AGENT_HEALTH_PRESENTATION_BY_KEY[compactAgentHealthKey(rawRoleLabel)] ||
+    null;
+  return {
+    label: presentation?.label || rawRoleLabel || rawRoleName || `Role ${index + 1}`,
+    kind: presentation?.kind || AGENT_HEALTH_KIND.role,
+  };
+}
+
+function parseAgentHealthHostPort(detailText) {
+  const text = String(detailText || "").trim();
+  const match = text.match(/\b(?:Listening on\s+)?([^\s:]+):(\d{1,5})\b/i);
+  if (!match) return { host: "", port: "" };
+  return { host: String(match[1] || "").trim(), port: String(match[2] || "").trim() };
+}
+
+function parseAgentHealthTunnelId(detailText) {
+  const text = String(detailText || "").trim();
+  const match = text.match(/\btunnel_id=([^\s]+)/i);
+  return match ? String(match[1] || "").trim() : "";
+}
+
+function formatAgentHealthDialogValue(value, fallback = "Unavailable") {
+  const text = String(value || "").trim();
+  return text || fallback;
+}
+
+function buildAgentHealthDialogContent(entry, tunnelInfo) {
+  if (!entry) return "";
+  const details = entry.detailsMap && typeof entry.detailsMap === "object" ? entry.detailsMap : {};
+  const lines = [];
+  const appendLine = (label, value, fallback = "Unavailable") => {
+    lines.push(`${label}: ${formatAgentHealthDialogValue(value, fallback)}`);
+  };
+
+  const presentationKey = String(entry.presentationKey || "").trim().toLowerCase();
+  const parsedHostPort = parseAgentHealthHostPort(entry.detail);
+  const fallbackWireGuardPeerIp = tunnelInfo?.virtual_ip ? String(tunnelInfo.virtual_ip).split("/")[0] : "";
+  const fallbackTunnelId = String(tunnelInfo?.tunnel_id || "").trim();
+
+  appendLine("Running Status", details.running_status || entry.status, "Unknown");
+
+  switch (presentationKey) {
+    case "deviceaudit":
+      appendLine("Reporter Task", details.reporter_task, "Unknown");
+      appendLine("Report Interval", details.report_interval, "Unknown");
+      break;
+    case "macro":
+      appendLine("Configured Tasks", details.configured_tasks, "0");
+      appendLine("Active Tasks", details.active_tasks, "0");
+      break;
+    case "remoteshell":
+    case "remoteshellservice":
+      appendLine("IP", details.listener_ip || parsedHostPort.host, "Unavailable");
+      appendLine("Port", details.listener_port || parsedHostPort.port, "Unavailable");
+      appendLine("Shell Binary", details.shell_binary, "Unavailable");
+      break;
+    case "screenshot":
+      appendLine("Configured Regions", details.configured_regions, "0");
+      appendLine("Active Tasks", details.active_tasks, "0");
+      appendLine("Visible Overlays", details.visible_overlays, "0");
+      break;
+    case "scriptexeccurrentuser":
+      appendLine("Execution Context", details.execution_context, "CURRENTUSER");
+      appendLine("Listener State", details.listener_state, "Unknown");
+      break;
+    case "scriptexecsystem":
+      appendLine("Execution Context", details.execution_context, "SYSTEM");
+      appendLine("Listener State", details.listener_state, "Unknown");
+      break;
+    case "vnc":
+    case "ultravnc":
+    case "ultravncservice":
+      appendLine("IP", details.listener_ip, "Unavailable");
+      appendLine("Port", details.listener_port, "Unavailable");
+      appendLine("Service Name", details.service_name, "Unavailable");
+      break;
+    case "wireguardtunnel":
+    case "wireguardservice":
+    case "wireguardvpn":
+      appendLine("WireGuard Peer IP", details.wireguard_peer_ip || fallbackWireGuardPeerIp, "Inactive");
+      appendLine("Tunnel ID", details.tunnel_id || parseAgentHealthTunnelId(entry.detail) || fallbackTunnelId, "Inactive");
+      appendLine("Endpoint", details.endpoint, "Unavailable");
+      break;
+    default:
+      break;
+  }
+
+  appendLine("Last Checked", entry.lastCheckedText, "Unknown");
+
+  if (String(entry.detail || "").trim()) {
+    lines.push("");
+    lines.push(`Details: ${String(entry.detail).trim()}`);
+  }
+
+  return lines.join("\n");
 }
 
 const myTheme = themeQuartz.withParams({
@@ -270,6 +377,96 @@ const UNABLE_TO_RETRIEVE_SN = "<Unable to Retrieve S/N>";
 const STORAGE_USAGE_ALERT_THRESHOLD_PCT = 90;
 const STORAGE_USAGE_ALERT_LABEL = `Usage Exceeding ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}%`;
 const STORAGE_USAGE_ALERT_COLOR = "#facc15";
+
+function buildAgentHealthMeta(rows, emptyText, fallbackText) {
+  if (!rows.length) return emptyText;
+  const counts = rows.reduce((acc, row) => {
+    const key = String(row.statusCode || "unknown").trim().toLowerCase();
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const parts = [];
+  if (counts.healthy) parts.push(`${counts.healthy} healthy`);
+  if (counts.recovering) parts.push(`${counts.recovering} recovering`);
+  if (counts.unhealthy) parts.push(`${counts.unhealthy} unhealthy`);
+  if (counts.pending) parts.push(`${counts.pending} pending`);
+  if (!parts.length) parts.push(fallbackText);
+  return parts.join(" • ");
+}
+
+function createAgentHealthColumnDefs(nameHeader, onOpen) {
+  return [
+    {
+      field: "name",
+      headerName: nameHeader,
+      width: 220,
+      flex: 1.1,
+      sortable: false,
+      filter: false,
+      cellRenderer: AgentHealthLinkCell,
+      cellRendererParams: { onOpen },
+      cellStyle: { color: SUMMARY_FIELD_TEXT_COLOR },
+      tooltipValueGetter: (params) => params?.data?.detail || params?.value || "",
+    },
+    {
+      field: "status",
+      headerName: "Status",
+      width: 170,
+      flex: 0.7,
+      sortable: false,
+      filter: false,
+      cellStyle: (params) => ({
+        color: getRoleHealthStatusColor(params?.data?.statusCode),
+        fontWeight: 600,
+      }),
+      tooltipValueGetter: (params) => params?.data?.detail || params?.value || "",
+    },
+    {
+      field: "lastCheckedText",
+      headerName: "Last Checked",
+      width: 220,
+      flex: 0.85,
+      sortable: false,
+      filter: false,
+      cellStyle: { color: ROLE_HEALTH_LAST_CHECKED_COLOR },
+    },
+  ];
+}
+
+const AgentHealthLinkCell = React.memo(function AgentHealthLinkCell(props) {
+  const row = props?.data || null;
+  const onOpen = props?.onOpen;
+  const value = String(props?.value || row?.name || "").trim();
+  if (!value) return null;
+  return (
+    <Button
+      size="small"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen?.(row);
+      }}
+      sx={{
+        minWidth: 0,
+        px: 0,
+        py: 0,
+        justifyContent: "flex-start",
+        textTransform: "none",
+        color: SUMMARY_FIELD_TEXT_COLOR,
+        fontWeight: 600,
+        textDecoration: "underline",
+        textDecorationColor: "rgba(88,166,255,0.5)",
+        "&:hover": {
+          background: "transparent",
+          color: "#7dd3fc",
+          textDecorationColor: "#7dd3fc",
+        },
+      }}
+    >
+      {value}
+    </Button>
+  );
+});
 
 const isStorageUsageAlert = (usageValue) =>
   typeof usageValue === "number" &&
@@ -716,6 +913,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const [outputTitle, setOutputTitle] = useState("");
   const [outputContent, setOutputContent] = useState("");
   const [outputLang, setOutputLang] = useState("powershell");
+  const [agentHealthDialogEntry, setAgentHealthDialogEntry] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [assemblyNameMap, setAssemblyNameMap] = useState({});
@@ -804,18 +1002,21 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     return values;
   }, [agent, device]);
   const canLaunchQuickJob = quickJobTargets.length > 0 && typeof onQuickJobLaunch === "function";
-  const tunnelIndicators = useMemo(() => {
-    const items = [];
-    const { peerIp, statusText, statusColor } = getWireguardTunnelPresentation(tunnelInfo);
-    items.push({
-      key: "peer-ip",
-      label: "WireGuard Peer IP",
-      value: `${statusText} - ${peerIp || "Inactive"}`,
-      color: statusColor,
-      icon: <LanRoundedIcon sx={{ fontSize: 16 }} />,
-    });
-    return items;
-  }, [tunnelInfo]);
+  const openAgentHealthDialog = useCallback((entry) => {
+    if (!entry) return;
+    setAgentHealthDialogEntry(entry);
+  }, []);
+  const closeAgentHealthDialog = useCallback(() => {
+    setAgentHealthDialogEntry(null);
+  }, []);
+  const agentHealthDialogTitle = useMemo(() => {
+    if (!agentHealthDialogEntry?.name) return "Agent Health Details";
+    return `Agent Health Details  - ${agentHealthDialogEntry.name}`;
+  }, [agentHealthDialogEntry]);
+  const agentHealthDialogContent = useMemo(
+    () => buildAgentHealthDialogContent(agentHealthDialogEntry, tunnelInfo),
+    [agentHealthDialogEntry, tunnelInfo]
+  );
 
   useEffect(() => {
     setConnectionError("");
@@ -2108,24 +2309,81 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                   </Island>
                 </Box>
 
-                <Box id="device-summary-agent-roles-health" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
+                <Box id="device-summary-agent-health" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
                   <Island
-                    title="Agent Roles Health"
+                    title="Agent Health"
                     icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
-                    meta={agentRolesHealthMeta}
+                    meta={agentHealthMeta}
                     sx={{ mb: 0 }}
                   >
-                    {summaryDataReady ? (
-                      <SummarySectionGrid
-                        sectionKey="agent-roles-health"
-                        rowData={agentRolesHealthRows}
-                        columnDefs={agentRolesHealthColumnDefs}
-                        defaultColDef={defaultGridColDef}
-                        height={agentRolesHealthGridHeight}
-                      />
-                    ) : (
-                      <SummaryGridPlaceholder height={agentRolesHealthGridHeight} />
-                    )}
+                    <Stack direction={{ xs: "column", xl: "row" }} spacing={1.6} sx={{ minWidth: 0 }}>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Box sx={{ mb: 1.2 }}>
+                          <Typography
+                            sx={{
+                              color: SUMMARY_FIELD_TEXT_COLOR,
+                              fontSize: "0.88rem",
+                              fontWeight: 700,
+                              letterSpacing: 0.3,
+                              textTransform: "none",
+                              display: "block",
+                            }}
+                          >
+                            Roles
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            sx={{ color: MAGIC_UI.textMuted, letterSpacing: 0.16, display: "block", mt: 0.25 }}
+                          >
+                            {agentRoleHealthMeta}
+                          </Typography>
+                        </Box>
+                        {summaryDataReady ? (
+                          <SummarySectionGrid
+                            sectionKey="agent-health-roles"
+                            rowData={agentRoleHealthRows}
+                            columnDefs={agentRoleHealthColumnDefs}
+                            defaultColDef={defaultGridColDef}
+                            height={agentRoleHealthGridHeight}
+                          />
+                        ) : (
+                          <SummaryGridPlaceholder height={agentRoleHealthGridHeight} />
+                        )}
+                      </Box>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Box sx={{ mb: 1.2 }}>
+                          <Typography
+                            sx={{
+                              color: SUMMARY_FIELD_TEXT_COLOR,
+                              fontSize: "0.88rem",
+                              fontWeight: 700,
+                              letterSpacing: 0.3,
+                              textTransform: "none",
+                              display: "block",
+                            }}
+                          >
+                            Services
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            sx={{ color: MAGIC_UI.textMuted, letterSpacing: 0.16, display: "block", mt: 0.25 }}
+                          >
+                            {agentServiceHealthMeta}
+                          </Typography>
+                        </Box>
+                        {summaryDataReady ? (
+                          <SummarySectionGrid
+                            sectionKey="agent-health-services"
+                            rowData={agentServiceHealthRows}
+                            columnDefs={agentServiceHealthColumnDefs}
+                            defaultColDef={defaultGridColDef}
+                            height={agentServiceHealthGridHeight}
+                          />
+                        ) : (
+                          <SummaryGridPlaceholder height={agentServiceHealthGridHeight} />
+                        )}
+                      </Box>
+                    </Stack>
                   </Island>
                 </Box>
 
@@ -2632,7 +2890,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     ]
   );
 
-  const agentRolesHealthRows = useMemo(() => {
+  const agentHealthRows = useMemo(() => {
     const payload =
       meta.agentRoleHealth && typeof meta.agentRoleHealth === "object"
         ? meta.agentRoleHealth
@@ -2640,88 +2898,99 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           ? summary.agent_role_health
           : {};
     const items = Array.isArray(payload?.roles) ? payload.roles : [];
-    const labelCounts = items.reduce((acc, item) => {
-      const baseLabel = String(item?.role_label || item?.role_name || item?.role || "").trim();
-      if (baseLabel) {
-        const key = baseLabel.toLowerCase();
+    const normalizedItems = items.map((item, index) => {
+      const rawRoleName = String(item?.role_name || item?.role || "").trim();
+      const rawRoleLabel = String(item?.role_label || item?.label || "").trim();
+      const presentation = resolveAgentHealthPresentation(item, index);
+      return {
+        id: item?.role_id || `${presentation.kind}-${presentation.label}-${index}`,
+        baseLabel: presentation.label,
+        presentationKey: compactAgentHealthKey(rawRoleName || rawRoleLabel || presentation.label),
+        healthKind: presentation.kind,
+        sourceRoleName: rawRoleName,
+        sourceRoleLabel: rawRoleLabel,
+        contextLabel: formatRoleHealthContext(item?.context),
+        status: normalizeRoleHealthStatusText(item?.status || item?.status_code || "Unknown"),
+        statusCode: String(item?.status_code || item?.status || "unknown").trim().toLowerCase(),
+        lastCheckedAt: item?.last_checked_at ?? null,
+        lastCheckedText: formatTimestamp(item?.last_checked_at),
+        detail: String(item?.detail || "").trim(),
+        detailsMap: item?.details && typeof item.details === "object" ? item.details : {},
+      };
+    });
+    const labelCounts = normalizedItems.reduce((acc, item) => {
+      const key = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
+      if (key !== `${item.healthKind}:`) {
         acc[key] = (acc[key] || 0) + 1;
       }
       return acc;
     }, {});
-    return items
-      .map((item, index) => {
-        const baseLabel = String(item?.role_label || item?.role_name || item?.role || "").trim() || `Role ${index + 1}`;
-        const contextLabel = formatRoleHealthContext(item?.context);
-        const labelKey = baseLabel.toLowerCase();
-        const roleLabel =
-          contextLabel && labelCounts[labelKey] > 1 ? `${baseLabel} (${contextLabel})` : baseLabel;
+    return normalizedItems
+      .map((item) => {
+        const labelKey = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
+        const name =
+          item.contextLabel && labelCounts[labelKey] > 1 ? `${item.baseLabel} (${item.contextLabel})` : item.baseLabel;
         return {
-          id: item?.role_id || `${roleLabel}-${index}`,
-          role: roleLabel,
-          status: normalizeRoleHealthStatusText(item?.status || item?.status_code || "Unknown"),
-          statusCode: String(item?.status_code || item?.status || "unknown").trim().toLowerCase(),
-          lastCheckedAt: item?.last_checked_at ?? null,
-          lastCheckedText: formatTimestamp(item?.last_checked_at),
-          detail: String(item?.detail || "").trim(),
+          ...item,
+          name,
         };
       })
-      .sort((left, right) => String(left.role || "").localeCompare(String(right.role || "")));
+      .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
   }, [meta.agentRoleHealth, summary.agent_role_health, formatTimestamp]);
 
-  const agentRolesHealthMeta = useMemo(() => {
-    if (!agentRolesHealthRows.length) {
-      return "Awaiting role health telemetry";
-    }
-    const counts = agentRolesHealthRows.reduce((acc, row) => {
-      const key = String(row.statusCode || "unknown").trim().toLowerCase();
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
-    const parts = [];
-    if (counts.healthy) parts.push(`${counts.healthy} healthy`);
-    if (counts.recovering) parts.push(`${counts.recovering} recovering`);
-    if (counts.unhealthy) parts.push(`${counts.unhealthy} unhealthy`);
-    if (counts.pending) parts.push(`${counts.pending} pending`);
-    if (!parts.length) parts.push(`${agentRolesHealthRows.length} roles reporting`);
-    return parts.join(" • ");
-  }, [agentRolesHealthRows]);
+  const agentRoleHealthRows = useMemo(
+    () => agentHealthRows.filter((row) => row.healthKind === AGENT_HEALTH_KIND.role),
+    [agentHealthRows]
+  );
 
-  const agentRolesHealthColumnDefs = useMemo(
-    () => [
-      {
-        field: "role",
-        headerName: "Role",
-        width: 220,
-        flex: 1.1,
-        sortable: false,
-        filter: false,
-        cellStyle: { color: SUMMARY_FIELD_TEXT_COLOR },
-        tooltipValueGetter: (params) => params?.data?.detail || params?.value || "",
-      },
-      {
-        field: "status",
-        headerName: "Status",
-        width: 170,
-        flex: 0.7,
-        sortable: false,
-        filter: false,
-        cellStyle: (params) => ({
-          color: getRoleHealthStatusColor(params?.data?.statusCode),
-          fontWeight: 600,
-        }),
-        tooltipValueGetter: (params) => params?.data?.detail || params?.value || "",
-      },
-      {
-        field: "lastCheckedText",
-        headerName: "Last Checked",
-        width: 220,
-        flex: 0.85,
-        sortable: false,
-        filter: false,
-        cellStyle: { color: ROLE_HEALTH_LAST_CHECKED_COLOR },
-      },
-    ],
-    []
+  const agentServiceHealthRows = useMemo(
+    () => agentHealthRows.filter((row) => row.healthKind === AGENT_HEALTH_KIND.service),
+    [agentHealthRows]
+  );
+
+  const agentHealthMeta = useMemo(() => {
+    if (!agentHealthRows.length) {
+      return "Awaiting agent health telemetry";
+    }
+    const parts = [];
+    if (agentRoleHealthRows.length) {
+      parts.push(`${agentRoleHealthRows.length} ${agentRoleHealthRows.length === 1 ? "role" : "roles"}`);
+    }
+    if (agentServiceHealthRows.length) {
+      parts.push(`${agentServiceHealthRows.length} ${agentServiceHealthRows.length === 1 ? "service" : "services"}`);
+    }
+    const statusMeta = buildAgentHealthMeta(agentHealthRows, "", `${agentHealthRows.length} items reporting`);
+    if (statusMeta) parts.push(statusMeta);
+    return parts.filter(Boolean).join(" • ");
+  }, [agentHealthRows, agentRoleHealthRows.length, agentServiceHealthRows.length]);
+
+  const agentRoleHealthMeta = useMemo(
+    () =>
+      buildAgentHealthMeta(
+        agentRoleHealthRows,
+        "No role telemetry reported yet",
+        `${agentRoleHealthRows.length} roles reporting`
+      ),
+    [agentRoleHealthRows]
+  );
+
+  const agentServiceHealthMeta = useMemo(
+    () =>
+      buildAgentHealthMeta(
+        agentServiceHealthRows,
+        "No service telemetry reported yet",
+        `${agentServiceHealthRows.length} services reporting`
+      ),
+    [agentServiceHealthRows]
+  );
+
+  const agentRoleHealthColumnDefs = useMemo(
+    () => createAgentHealthColumnDefs("Role", openAgentHealthDialog),
+    [openAgentHealthDialog]
+  );
+  const agentServiceHealthColumnDefs = useMemo(
+    () => createAgentHealthColumnDefs("Service", openAgentHealthDialog),
+    [openAgentHealthDialog]
   );
 
   const topLevelSplitColumnDefs = useMemo(
@@ -2764,13 +3033,23 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     });
     return Math.round(baseHeight * 1.2);
   }, [overviewInfoRows.length, borealisAgentRows.length, resolveGridHeight]);
-  const agentRolesHealthGridHeight = useMemo(
+  const agentRoleHealthGridHeight = useMemo(
     () =>
-      resolveGridHeight(Math.max(agentRolesHealthRows.length, 1), {
-        minHeight: BASE_GRID_HEIGHTS.agentRolesHealth,
-        maxHeight: 420,
-      }),
-    [agentRolesHealthRows.length, resolveGridHeight]
+      Math.round(
+        resolveGridHeight(Math.max(agentRoleHealthRows.length, 1), {
+          minHeight: BASE_GRID_HEIGHTS.agentRolesHealth,
+        }) * 1.1
+      ),
+    [agentRoleHealthRows.length, resolveGridHeight]
+  );
+  const agentServiceHealthGridHeight = useMemo(
+    () =>
+      Math.round(
+        resolveGridHeight(Math.max(agentServiceHealthRows.length, 1), {
+          minHeight: BASE_GRID_HEIGHTS.agentRolesHealth,
+        }) * 1.1
+      ),
+    [agentServiceHealthRows.length, resolveGridHeight]
   );
   const storageGridHeight = useMemo(
     () =>
@@ -2983,46 +3262,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           Clear Device Activity
         </MenuItem>
       </Menu>
-      {tunnelIndicators.length ? (
-        <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1.25 }}>
-          <Stack direction="row" spacing={1.2} alignItems="center" flexWrap="wrap" useFlexGap>
-            {tunnelIndicators.map((item) => {
-              const itemColor = item.color || (item.muted ? "rgba(125, 211, 252, 0.6)" : MAGIC_UI.accentA);
-              return (
-                <Stack
-                  key={item.key}
-                  direction="row"
-                  spacing={0.6}
-                  alignItems="center"
-                  sx={{ color: itemColor }}
-                >
-                  {item.icon}
-                  <Typography
-                    variant="caption"
-                    sx={{ color: itemColor, fontWeight: 600, letterSpacing: 0.2 }}
-                  >
-                    {item.label}:
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      color: itemColor,
-                      fontWeight: 600,
-                      maxWidth: 280,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={item.value}
-                  >
-                    {item.value}
-                  </Typography>
-                </Stack>
-              );
-            })}
-          </Stack>
-        </Box>
-      ) : null}
       <Tabs
         value={tab}
         onChange={(e, v) => setTab(v)}
@@ -3106,6 +3345,47 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       >
         {tabContent}
       </Box>
+
+      <Dialog
+        open={Boolean(agentHealthDialogEntry)}
+        onClose={closeAgentHealthDialog}
+        fullWidth
+        maxWidth="sm"
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock title={agentHealthDialogTitle} subtitle="Current health telemetry and runtime details." />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <TextField
+            fullWidth
+            multiline
+            minRows={12}
+            value={agentHealthDialogContent}
+            InputProps={{ readOnly: true }}
+            sx={{
+              "& .MuiOutlinedInput-root": {
+                alignItems: "flex-start",
+                bgcolor: "rgba(4,7,17,0.72)",
+                borderRadius: 2,
+                fontFamily:
+                  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                fontSize: 12.5,
+                color: "#e6edf3",
+                "& textarea": {
+                  lineHeight: 1.55,
+                  whiteSpace: "pre-wrap",
+                },
+              },
+            }}
+          />
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={closeAgentHealthDialog} sx={DIALOG_BUTTON_SX}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog
         open={outputOpen}

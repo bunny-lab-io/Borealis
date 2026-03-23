@@ -5,7 +5,7 @@
 # - Mirrors Engine flow: venv + staging + Vite + Flask launch
 # - Mirrors Agent flow: venv + Data/Agent staging + dependency install + settings + supervision
 # - Supports parity flags: --server/--agent, --vite/--flask, --quick, --engine-tests,
-#   --engine-production/--engine-dev, --enrollmentcode, --serverurl, --force-reenroll
+#   --engine-production/--engine-dev, --enrollmentcode, --serverurl, --newEngine
 
 set -o errexit
 set -o nounset
@@ -38,7 +38,7 @@ ENGINE_TESTS_FLAG=0
 ENGINE_PROD_FLAG=0
 ENGINE_DEV_FLAG=0
 REFRESH_AGENT_RUNTIME_FLAG=0
-FORCE_REENROLL_FLAG=0
+NEW_ENGINE_FLAG=0
 ENROLLMENT_CODE=""
 SERVER_URL=""
 
@@ -60,7 +60,7 @@ while (( "$#" )); do
     -EngineProduction|--engine-production) ENGINE_PROD_FLAG=1 ;;
     -EngineDev|--engine-dev) ENGINE_DEV_FLAG=1 ;;
     --refresh-agent-runtime) REFRESH_AGENT_RUNTIME_FLAG=1 ;;
-    -ForceReEnroll|--force-reenroll|--forcereenroll) FORCE_REENROLL_FLAG=1 ;;
+    -NewEngine|--newEngine|--newengine|-DeleteServerTrust|--delete-servertrust|--deleteservertrust|-ForceReEnroll|--force-reenroll|--forcereenroll) NEW_ENGINE_FLAG=1 ;;
     -EnrollmentCode|--EnrollmentCode|--enrollmentcode|--enrollment-code)
       shift
       ENROLLMENT_CODE="${1:-}"
@@ -1138,7 +1138,7 @@ install_or_update_borealis_agent() {
   local preserved_url
   preserved_url="$(capture_existing_server_url)"
 
-  if [[ "${FORCE_REENROLL_FLAG}" -eq 1 ]]; then
+  if [[ "${NEW_ENGINE_FLAG}" -eq 1 ]]; then
     run_step "Clear persisted Borealis Agent enrollment state" clear_agent_enrollment_state
   fi
 

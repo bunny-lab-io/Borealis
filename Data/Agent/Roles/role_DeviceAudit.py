@@ -1679,17 +1679,30 @@ class Role:
                 'status': 'unhealthy',
                 'role_label': self.role_health_label,
                 'detail': 'Audit reporter task was not created.',
+                'details': {
+                    'running_status': 'Stopped',
+                    'reporter_task': 'Missing',
+                },
             }
         if task.done():
             return {
                 'status': 'unhealthy',
                 'role_label': self.role_health_label,
                 'detail': 'Audit reporter task stopped.',
+                'details': {
+                    'running_status': 'Stopped',
+                    'reporter_task': 'Stopped',
+                },
             }
         return {
             'status': 'healthy',
             'role_label': self.role_health_label,
             'detail': 'Audit reporter active.',
+            'details': {
+                'running_status': 'Running',
+                'reporter_task': 'Active',
+                'report_interval': '300 seconds',
+            },
         }
 
     async def _report_loop(self):

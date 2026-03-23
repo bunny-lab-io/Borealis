@@ -1367,38 +1367,52 @@ class Role:
                 "status": "unsupported",
                 "role_label": self.role_health_label,
                 "detail": "Always-on UltraVNC is only supported on Windows agents.",
+                "details": {
+                    "running_status": "Unsupported",
+                },
             }
         service_name = self.vnc._resolve_service_name()
         service_state = self.vnc._service_state_by_name(service_name) if service_name else None
         loop_alive = bool(self._always_on_thread and self._always_on_thread.is_alive())
+        details = {
+            "running_status": str(service_state or "Stopped"),
+            "listener_ip": "0.0.0.0",
+            "listener_port": str(self._state_port()),
+            "service_name": service_name or ULTRAVNC_SERVICE_NAME,
+        }
         if service_state in {"RUNNING", "START_PENDING"}:
             return {
                 "status": "healthy",
                 "role_label": self.role_health_label,
                 "detail": f"{service_name or ULTRAVNC_SERVICE_NAME} is {service_state.lower()}.",
+                "details": details,
             }
         if not loop_alive:
             return {
                 "status": "unhealthy",
                 "role_label": self.role_health_label,
                 "detail": "Always-on reconciliation loop stopped.",
+                "details": details,
             }
         if not self._engine_ready_for_vnc:
             return {
                 "status": "recovering",
                 "role_label": self.role_health_label,
                 "detail": "Waiting for engine readiness before enabling UltraVNC.",
+                "details": details,
             }
         if not self._state_password():
             return {
                 "status": "recovering",
                 "role_label": self.role_health_label,
                 "detail": "Waiting for VNC credentials from the Engine.",
+                "details": details,
             }
         return {
             "status": "recovering",
             "role_label": self.role_health_label,
             "detail": f"{service_name or ULTRAVNC_SERVICE_NAME} is {service_state or 'stopped'}; restart will be retried.",
+            "details": details,
         }
 
     def register_events(self) -> None:

@@ -274,6 +274,7 @@ class Role:
         self.ctx = ctx
         self.tasks = {}
         self.running_configs = {}
+        self.role_health_label = 'Screenshot Capture'
 
     def register_events(self):
         sio = self.ctx.sio
@@ -288,6 +289,46 @@ class Role:
                 'agent_id': self.ctx.agent_id,
                 'windows': windows,
             })
+
+    def health_report(self) -> dict:
+        active_tasks = sum(1 for task in self.tasks.values() if task and not task.done())
+        configured_regions = len(self.running_configs)
+        overlay_count = len(overlay_widgets)
+        if configured_regions and active_tasks == 0:
+            return {
+                'status': 'recovering',
+                'role_label': self.role_health_label,
+                'detail': 'Screenshot regions are configured but capture tasks are not active.',
+                'details': {
+                    'running_status': 'Recovering',
+                    'configured_regions': str(configured_regions),
+                    'active_tasks': str(active_tasks),
+                    'visible_overlays': str(overlay_count),
+                },
+            }
+        if active_tasks:
+            return {
+                'status': 'healthy',
+                'role_label': self.role_health_label,
+                'detail': f'{active_tasks} screenshot capture task(s) active.',
+                'details': {
+                    'running_status': 'Running',
+                    'configured_regions': str(configured_regions),
+                    'active_tasks': str(active_tasks),
+                    'visible_overlays': str(overlay_count),
+                },
+            }
+        return {
+            'status': 'healthy',
+            'role_label': self.role_health_label,
+            'detail': 'Loaded and waiting for screenshot regions.',
+            'details': {
+                'running_status': 'Idle',
+                'configured_regions': str(configured_regions),
+                'active_tasks': str(active_tasks),
+                'visible_overlays': str(overlay_count),
+            },
+        }
 
     def _close_overlay(self, node_id: str):
         w = overlay_widgets.pop(node_id, None)

@@ -34,6 +34,7 @@ class Role:
     def __init__(self, ctx):
         self.ctx = ctx
         self.tasks = {}
+        self.role_health_label = 'Macro Automation'
 
     def stop_all(self):
         for t in list(self.tasks.values()):
@@ -59,6 +60,42 @@ class Role:
             nid = rcfg.get('node_id')
             if nid and nid not in self.tasks:
                 self.tasks[nid] = asyncio.create_task(self._macro_task(rcfg))
+
+    def health_report(self) -> dict:
+        active_tasks = sum(1 for task in self.tasks.values() if task and not task.done())
+        total_tasks = len(self.tasks)
+        if total_tasks and active_tasks == 0:
+            return {
+                'status': 'recovering',
+                'role_label': self.role_health_label,
+                'detail': 'Macro tasks are configured but not currently running.',
+                'details': {
+                    'running_status': 'Recovering',
+                    'configured_tasks': str(total_tasks),
+                    'active_tasks': str(active_tasks),
+                },
+            }
+        if active_tasks:
+            return {
+                'status': 'healthy',
+                'role_label': self.role_health_label,
+                'detail': f'{active_tasks} macro automation task(s) active.',
+                'details': {
+                    'running_status': 'Running',
+                    'configured_tasks': str(total_tasks),
+                    'active_tasks': str(active_tasks),
+                },
+            }
+        return {
+            'status': 'healthy',
+            'role_label': self.role_health_label,
+            'detail': 'Loaded and waiting for macro configuration.',
+            'details': {
+                'running_status': 'Idle',
+                'configured_tasks': '0',
+                'active_tasks': '0',
+            },
+        }
 
     async def _macro_task(self, cfg):
         nid = cfg.get('node_id')
@@ -119,4 +156,3 @@ class Role:
                 await emit_macro_status(False, str(e))
             # interval wait
             await asyncio.sleep(max(0.05, (interval_ms or 1000) / 1000.0))
-

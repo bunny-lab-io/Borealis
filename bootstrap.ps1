@@ -26,7 +26,7 @@ $gitZipPath = $defaultGitZipPath
 $gitCacheDir = $defaultGitCacheDir
 $forwardedServerUrl = $null
 $forwardedEnrollmentCode = $null
-$forwardedForceReEnroll = $false
+$forwardedNewEngine = $false
 $passthroughArgs = New-Object System.Collections.Generic.List[string]
 $script:BootstrapCurlExe = $null
 $script:BootstrapSevenZipExe = $null
@@ -58,7 +58,7 @@ Common forwarded options:
   --agent
   --serverurl <url>
   --enrollmentcode <code>
-  --force-reenroll
+  --newEngine
 '@ | Write-Host
 }
 
@@ -110,8 +110,8 @@ function Normalize-BorealisArgument {
             $script:forwardedEnrollmentCode = $result.Value
             return [pscustomobject]@{ NextIndex = $result.NextIndex; Handled = $true }
         }
-        '^(--force-reenroll|--forcereenroll|-forcereenroll|-force-reenroll)$' {
-            $script:forwardedForceReEnroll = $true
+        '^(--newengine|-newengine|--delete-servertrust|--deleteservertrust|-deleteservertrust|-delete-servertrust|--force-reenroll|--forcereenroll|-forcereenroll|-force-reenroll)$' {
+            $script:forwardedNewEngine = $true
             return [pscustomobject]@{ NextIndex = $Index; Handled = $true }
         }
         default {
@@ -700,9 +700,9 @@ try {
         $invokeArgs.Add($forwardedEnrollmentCode)
         $env:BOREALIS_ENROLLMENT_CODE = $forwardedEnrollmentCode
     }
-    if ($forwardedForceReEnroll) {
-        Write-Host "[i] Forwarding force reenroll flag to Borealis.ps1"
-        $invokeArgs.Add('-ForceReEnroll')
+    if ($forwardedNewEngine) {
+        Write-Host "[i] Forwarding new Engine trust reset flag to Borealis.ps1"
+        $invokeArgs.Add('-NewEngine')
     }
     foreach ($arg in $passthroughArgs) {
         if (-not [string]::IsNullOrWhiteSpace($arg)) {
