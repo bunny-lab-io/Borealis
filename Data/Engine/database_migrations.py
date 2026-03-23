@@ -49,6 +49,7 @@ def _ensure_devices_table(conn: sqlite3.Connection) -> None:
         "hostname": "TEXT",
         "description": "TEXT",
         "created_at": "INTEGER",
+        "last_enrollment_at": "INTEGER",
         "agent_hash": "TEXT",
         "agent_role_health": "TEXT",
         "memory": "TEXT",
@@ -370,6 +371,7 @@ def _create_devices_table(cur: sqlite3.Cursor) -> None:
             hostname TEXT,
             description TEXT,
             created_at INTEGER,
+            last_enrollment_at INTEGER,
             agent_hash TEXT,
             agent_role_health TEXT,
             memory TEXT,
@@ -453,17 +455,18 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
     insert_sql = (
         """
         INSERT INTO devices (
-            guid, hostname, description, created_at, agent_hash, agent_role_health, memory,
+            guid, hostname, description, created_at, last_enrollment_at, agent_hash, agent_role_health, memory,
             network, software, storage, cpu, device_type, domain, external_ip,
             internal_ip, last_reboot, last_seen, last_user, operating_system,
             uptime, agent_id, connection_type, connection_endpoint,
             agent_vnc_password, ssl_key_fingerprint, token_version, status, key_added_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guid) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             description = EXCLUDED.description,
             created_at = EXCLUDED.created_at,
+            last_enrollment_at = EXCLUDED.last_enrollment_at,
             agent_hash = EXCLUDED.agent_hash,
             agent_role_health = EXCLUDED.agent_role_health,
             memory = EXCLUDED.memory,
@@ -498,6 +501,9 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             guid = str(uuid.uuid4())
         hostname = record.get("hostname")
         created_at = record.get("created_at")
+        last_enrollment_at = record.get("last_enrollment_at")
+        if last_enrollment_at is None:
+            last_enrollment_at = created_at
         key_added_at = record.get("key_added_at")
         if key_added_at is None:
             key_added_at = _default_key_added_at(created_at)
@@ -507,6 +513,7 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             hostname,
             record.get("description"),
             created_at,
+            last_enrollment_at,
             record.get("agent_hash"),
             record.get("agent_role_health"),
             record.get("memory"),

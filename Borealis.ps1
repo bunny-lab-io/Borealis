@@ -10,6 +10,33 @@ param(
     [string]$ServerUrl = ''
 )
 
+function Test-BorealisTruthyValue {
+    param(
+        [AllowNull()]
+        [object]$Value
+    )
+
+    try {
+        $normalized = [string]$Value
+    } catch {
+        return $false
+    }
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        return $false
+    }
+    switch ($normalized.Trim().ToLowerInvariant()) {
+        '1' { return $true }
+        'true' { return $true }
+        'yes' { return $true }
+        'on' { return $true }
+        default { return $false }
+    }
+}
+
+if (-not $NewEngine -and $Agent -and (Test-BorealisTruthyValue $env:BOREALIS_BOOTSTRAP_NEW_ENGINE)) {
+    $NewEngine = $true
+}
+
 # Admin/Elevation helpers for Borealis runtime
 $script:BorealisElevatedExitCode = $null
 

@@ -26,7 +26,7 @@ $gitZipPath = $defaultGitZipPath
 $gitCacheDir = $defaultGitCacheDir
 $forwardedServerUrl = $null
 $forwardedEnrollmentCode = $null
-$forwardedNewEngine = $false
+$forwardedNewEngine = $true
 $passthroughArgs = New-Object System.Collections.Generic.List[string]
 $script:BootstrapCurlExe = $null
 $script:BootstrapSevenZipExe = $null
@@ -58,7 +58,9 @@ Common forwarded options:
   --agent
   --serverurl <url>
   --enrollmentcode <code>
-  --newEngine
+
+Windows agent bootstrap always forwards -NewEngine so rerunning bootstrap
+clears persisted Engine trust and enrollment tokens before Borealis.ps1 starts.
 '@ | Write-Host
 }
 
@@ -686,6 +688,7 @@ try {
         throw "Borealis.ps1 not found at '$borealisScript' after Git checkout."
     }
 
+    $env:BOREALIS_BOOTSTRAP_NEW_ENGINE = '1'
     $invokeArgs = New-Object System.Collections.Generic.List[string]
     $invokeArgs.Add('-Agent')
     if (-not [string]::IsNullOrWhiteSpace($forwardedServerUrl)) {
@@ -701,7 +704,7 @@ try {
         $env:BOREALIS_ENROLLMENT_CODE = $forwardedEnrollmentCode
     }
     if ($forwardedNewEngine) {
-        Write-Host "[i] Forwarding new Engine trust reset flag to Borealis.ps1"
+        Write-Host "[i] Agent bootstrap always forwards -NewEngine to clear persisted Engine trust and enrollment state."
         $invokeArgs.Add('-NewEngine')
     }
     foreach ($arg in $passthroughArgs) {

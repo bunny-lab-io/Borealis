@@ -469,6 +469,7 @@ class DeviceManagementService:
         "hostname",
         "description",
         "created_at",
+        "last_enrollment_at",
         "agent_hash",
         "agent_role_health",
         "memory",
@@ -632,6 +633,7 @@ class DeviceManagementService:
     ) -> Dict[str, Any]:
         mapping = dict(zip(self._DEVICE_COLUMNS, row))
         created_at = mapping.get("created_at") or 0
+        last_enrollment_at = mapping.get("last_enrollment_at") or created_at or 0
         last_seen = mapping.get("last_seen") or 0
         role_health = normalize_agent_role_health(mapping.get("agent_role_health"))
         summary = {
@@ -652,6 +654,7 @@ class DeviceManagementService:
             "operating_system": mapping.get("operating_system") or "",
             "uptime": mapping.get("uptime") or 0,
             "created_at": created_at or 0,
+            "last_enrollment_at": last_enrollment_at or 0,
             "connection_type": mapping.get("connection_type") or "",
             "connection_endpoint": mapping.get("connection_endpoint") or "",
         }
@@ -671,6 +674,8 @@ class DeviceManagementService:
             "summary": summary,
             "created_at": created_at or 0,
             "created_at_iso": _ts_to_iso(created_at),
+            "last_enrollment_at": last_enrollment_at or 0,
+            "last_enrollment_at_iso": _ts_to_iso(last_enrollment_at),
             "agent_hash": summary["agent_hash"],
             "agent_build_id": summary["agent_build_id"],
             "agent_role_health": role_health,

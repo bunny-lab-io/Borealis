@@ -1413,12 +1413,28 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           }
         }
 
+        const lastEnrollmentAtValue =
+          detailData?.last_enrollment_at ||
+          normalizedSummary.last_enrollment_at ||
+          detailData?.details?.summary?.last_enrollment_at ||
+          detailData?.created_at ||
+          normalizedSummary.created_at ||
+          0;
+        const lastEnrollmentAtIso =
+          detailData?.last_enrollment_at_iso ||
+          normalizedSummary.last_enrollment_at_iso ||
+          detailData?.details?.summary?.last_enrollment_at_iso ||
+          detailData?.created_at_iso ||
+          "";
+
         const metaPayload = {
           hostname: detailData?.hostname || normalizedSummary.hostname || hostname || "",
           lastUser: detailData?.last_user || normalizedSummary.last_user || "",
           deviceType: detailData?.device_type || normalizedSummary.device_type || "",
           created: createdDisplay,
           createdAtIso: detailData?.created_at_iso || "",
+          lastEnrollmentAt: lastEnrollmentAtValue,
+          lastEnrollmentAtIso: lastEnrollmentAtIso,
           lastSeen: detailData?.last_seen || normalizedSummary.last_seen || 0,
           lastReboot: detailData?.last_reboot || normalizedSummary.last_reboot || "",
           operatingSystem:
@@ -2857,7 +2873,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const borealisAgentRows = useMemo(
     () => {
-      const peerIp = tunnelInfo?.virtual_ip ? String(tunnelInfo.virtual_ip).split("/")[0] : "";
       return [
         {
           id: "agent-guid",
@@ -2870,38 +2885,38 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           value: meta.agentVersionStatus || summary.agent_version_status || "Needs Updated",
         },
         {
-          id: "enrollment-date",
-          label: "Enrollment Date",
+          id: "reenrollment-date",
+          label: "(Re)Enrollment Date",
           value: formatDateValue(
-            meta.created || summary.created || device?.created || device?.created_at || "",
+            meta.lastEnrollmentAt ||
+              meta.lastEnrollmentAtIso ||
+              summary.last_enrollment_at ||
+              device?.last_enrollment_at ||
+              meta.created ||
+              summary.created ||
+              device?.created ||
+              device?.created_at ||
+              "",
             "placeholder"
           ),
-        },
-        {
-          id: "wireguard-peer-ip",
-          label: "Wireguard Peer IP",
-          value: peerIp || "Inactive",
-        },
-        {
-          id: "vpn-tunnel-id",
-          label: "VPN Tunnel ID",
-          value: tunnelInfo?.tunnel_id || "Inactive",
         },
       ];
     },
     [
       meta.agentGuid,
       meta.agentVersionStatus,
+      meta.lastEnrollmentAt,
+      meta.lastEnrollmentAtIso,
       meta.created,
       summary.agent_guid,
       summary.agent_version_status,
+      summary.last_enrollment_at,
       summary.created,
       device?.agent_guid,
+      device?.last_enrollment_at,
       device?.created,
       device?.created_at,
       agent?.agent_guid,
-      tunnelInfo?.virtual_ip,
-      tunnelInfo?.tunnel_id,
       formatDateValue,
     ]
   );

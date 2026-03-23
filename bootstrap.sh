@@ -22,6 +22,8 @@ REPO_URL="${BOREALIS_BOOTSTRAP_REPO_URL:-${DEFAULT_REPO_URL}}"
 REPO_REF="${BOREALIS_BOOTSTRAP_REF:-${DEFAULT_REPO_REF}}"
 
 FORWARD_ARGS=()
+FORWARD_AGENT=0
+FORWARDED_NEW_ENGINE=0
 
 usage() {
   cat <<'EOF'
@@ -35,7 +37,9 @@ Bootstrap options:
 
 Any other arguments are forwarded to Borealis.sh, for example:
   bootstrap.sh --agent --serverurl https://10.0.0.54:5000 --enrollmentcode XXXX-XXXX
-  bootstrap.sh --agent --newEngine --serverurl https://10.0.0.54:5000 --enrollmentcode XXXX-XXXX
+
+Agent bootstrap always forwards --newEngine so rerunning bootstrap clears
+persisted Engine trust and enrollment tokens before Borealis.sh starts.
 EOF
 }
 
@@ -122,6 +126,14 @@ parse_args() {
       -h|--help)
         usage
         exit 0
+        ;;
+      -Agent|--agent|--Agent)
+        FORWARD_AGENT=1
+        FORWARD_ARGS+=("$1")
+        ;;
+      -NewEngine|--newEngine|--newengine|-DeleteServerTrust|--delete-servertrust|--deleteservertrust|-ForceReEnroll|--force-reenroll|--forcereenroll)
+        FORWARDED_NEW_ENGINE=1
+        FORWARD_ARGS+=("$1")
         ;;
       *)
         FORWARD_ARGS+=("$1")
@@ -217,6 +229,12 @@ main() {
   ensure_bootstrap_dependencies
   sync_repo
 
+  if [[ "${FORWARD_AGENT}" -eq 1 && "${FORWARDED_NEW_ENGINE}" -eq 0 ]]; then
+    echo -e "${GREEN}Agent bootstrap always runs with --newEngine to clear persisted Engine trust and enrollment state.${RESET}"
+    FORWARD_ARGS+=("--newEngine")
+  fi
+
+  export BOREALIS_BOOTSTRAP_NEW_ENGINE=1
   echo -e "${GREEN}Launching ${INSTALL_DIR}/Borealis.sh${RESET}"
   if [[ ! -t 0 && -r /dev/tty ]]; then
     # When bootstrap is piped to bash, stdin is consumed by the script stream.

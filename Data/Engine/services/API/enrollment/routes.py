@@ -161,9 +161,11 @@ def register(
 
     def _ensure_device_record(cur: sqlite3.Cursor, guid: str, hostname: str, fingerprint: str) -> Dict[str, Any]:
         guid_norm = normalize_guid(guid)
+        now_iso = _iso(_now())
+        now_ts = int(time.time())
         cur.execute(
             """
-            SELECT guid, hostname, token_version, status, ssl_key_fingerprint, key_added_at
+            SELECT guid, hostname, token_version, status, ssl_key_fingerprint, key_added_at, last_enrollment_at
               FROM devices
              WHERE UPPER(guid) = ?
             """,
@@ -178,6 +180,7 @@ def register(
                 "status",
                 "ssl_key_fingerprint",
                 "key_added_at",
+                "last_enrollment_at",
             ]
             record = dict(zip(keys, row))
             record["guid"] = normalize_guid(record.get("guid"))
@@ -185,12 +188,19 @@ def register(
             new_fp = (fingerprint or "").strip().lower()
             if not stored_fp and new_fp:
                 cur.execute(
-                    "UPDATE devices SET ssl_key_fingerprint = ?, key_added_at = ? WHERE guid = ?",
-                    (fingerprint, _iso(_now()), record["guid"]),
+                    """
+                    UPDATE devices
+                       SET ssl_key_fingerprint = ?,
+                           key_added_at = ?,
+                           last_enrollment_at = ?,
+                           status = 'active'
+                     WHERE guid = ?
+                    """,
+                    (fingerprint, now_iso, now_ts, record["guid"]),
                 )
                 record["ssl_key_fingerprint"] = fingerprint
+                record["key_added_at"] = now_iso
             elif new_fp and stored_fp != new_fp:
-                now_iso = _iso(_now())
                 try:
                     current_version = int(record.get("token_version") or 1)
                 except Exception:
@@ -198,14 +208,15 @@ def register(
                 new_version = max(current_version + 1, 1)
                 cur.execute(
                     """
-                    UPDATE devices
-                       SET ssl_key_fingerprint = ?,
-                           key_added_at = ?,
-                           token_version = ?,
-                           status = 'active'
-                     WHERE guid = ?
+                        UPDATE devices
+                           SET ssl_key_fingerprint = ?,
+                               key_added_at = ?,
+                               last_enrollment_at = ?,
+                               token_version = ?,
+                               status = 'active'
+                         WHERE guid = ?
                     """,
-                    (fingerprint, now_iso, new_version, record["guid"]),
+                    (fingerprint, now_iso, now_ts, new_version, record["guid"]),
                 )
                 cur.execute(
                     """
@@ -220,6 +231,18 @@ def register(
                 record["token_version"] = new_version
                 record["status"] = "active"
                 record["key_added_at"] = now_iso
+            else:
+                cur.execute(
+                    """
+                    UPDATE devices
+                       SET last_enrollment_at = ?,
+                           status = 'active'
+                     WHERE guid = ?
+                    """,
+                    (now_ts, record["guid"]),
+                )
+                record["status"] = "active"
+            record["last_enrollment_at"] = now_ts
             return record
 
         resolved_hostname = _normalize_host(hostname, guid_norm, cur)
@@ -228,14 +251,15 @@ def register(
         cur.execute(
             """
             INSERT INTO devices (
-                guid, hostname, created_at, last_seen, ssl_key_fingerprint,
+                guid, hostname, created_at, last_enrollment_at, last_seen, ssl_key_fingerprint,
                 token_version, status, key_added_at
             )
-            VALUES (?, ?, ?, ?, ?, 1, 'active', ?)
+            VALUES (?, ?, ?, ?, ?, ?, 1, 'active', ?)
             """,
             (
                 guid_norm,
                 resolved_hostname,
+                created_at,
                 created_at,
                 created_at,
                 fingerprint,
@@ -249,6 +273,7 @@ def register(
             "status": "active",
             "ssl_key_fingerprint": fingerprint,
             "key_added_at": key_added_at,
+            "last_enrollment_at": created_at,
         }
 
     def _hash_refresh_token(token: str) -> str:

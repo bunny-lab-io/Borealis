@@ -41,6 +41,7 @@ REFRESH_AGENT_RUNTIME_FLAG=0
 NEW_ENGINE_FLAG=0
 ENROLLMENT_CODE=""
 SERVER_URL=""
+BOOTSTRAP_NEW_ENGINE_DEFAULT="${BOREALIS_BOOTSTRAP_NEW_ENGINE:-}"
 
 CHOICE=""
 ENGINE_MODE_CHOICE=""
@@ -84,6 +85,14 @@ run_step() {
     printf "\r%s %s - Failed\n" "${CROSSMARK}" "$message" 1>&2
     exit 1
   fi
+}
+
+env_flag_enabled() {
+  local value="${1:-}"
+  case "${value,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 prompt_input() {
@@ -1125,6 +1134,11 @@ print_agent_service_status() {
 
 install_or_update_borealis_agent() {
   local noninteractive_mode="${1:-0}"
+  if [[ "${NEW_ENGINE_FLAG}" -eq 0 ]] && env_flag_enabled "${BOOTSTRAP_NEW_ENGINE_DEFAULT}"; then
+    NEW_ENGINE_FLAG=1
+    echo -e "${INFO} Bootstrap-invoked agent install detected; enabling --newEngine behavior."
+  fi
+
   echo -e "${GREEN}Ensuring Agent dependencies exist...${RESET}"
   install_agent_dependencies
 
