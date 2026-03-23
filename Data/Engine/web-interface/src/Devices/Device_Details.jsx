@@ -2375,10 +2375,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                             rowData={agentRoleHealthRows}
                             columnDefs={agentRoleHealthColumnDefs}
                             defaultColDef={defaultGridColDef}
-                            height={agentRoleHealthGridHeight}
+                            height={agentHealthGridHeight}
                           />
                         ) : (
-                          <SummaryGridPlaceholder height={agentRoleHealthGridHeight} />
+                          <SummaryGridPlaceholder height={agentHealthGridHeight} />
                         )}
                       </Box>
                       <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -2408,10 +2408,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                             rowData={agentServiceHealthRows}
                             columnDefs={agentServiceHealthColumnDefs}
                             defaultColDef={defaultGridColDef}
-                            height={agentServiceHealthGridHeight}
+                            height={agentHealthGridHeight}
                           />
                         ) : (
-                          <SummaryGridPlaceholder height={agentServiceHealthGridHeight} />
+                          <SummaryGridPlaceholder height={agentHealthGridHeight} />
                         )}
                       </Box>
                     </Stack>
@@ -3063,23 +3063,14 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     });
     return Math.round(baseHeight * 1.2);
   }, [overviewInfoRows.length, borealisAgentRows.length, resolveGridHeight]);
-  const agentRoleHealthGridHeight = useMemo(
+  const agentHealthGridHeight = useMemo(
     () =>
       Math.round(
-        resolveGridHeight(Math.max(agentRoleHealthRows.length, 1), {
+        resolveGridHeight(Math.max(agentRoleHealthRows.length, agentServiceHealthRows.length, 1), {
           minHeight: BASE_GRID_HEIGHTS.agentRolesHealth,
         }) * 1.2
       ),
-    [agentRoleHealthRows.length, resolveGridHeight]
-  );
-  const agentServiceHealthGridHeight = useMemo(
-    () =>
-      Math.round(
-        resolveGridHeight(Math.max(agentServiceHealthRows.length, 1), {
-          minHeight: BASE_GRID_HEIGHTS.agentRolesHealth,
-        }) * 1.2
-      ),
-    [agentServiceHealthRows.length, resolveGridHeight]
+    [agentRoleHealthRows.length, agentServiceHealthRows.length, resolveGridHeight]
   );
   const storageGridHeight = useMemo(
     () =>
