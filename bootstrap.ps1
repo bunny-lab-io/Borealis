@@ -26,6 +26,7 @@ $gitZipPath = $defaultGitZipPath
 $gitCacheDir = $defaultGitCacheDir
 $forwardedServerUrl = $null
 $forwardedEnrollmentCode = $null
+$forwardedForceReEnroll = $false
 $passthroughArgs = New-Object System.Collections.Generic.List[string]
 $script:BootstrapCurlExe = $null
 $script:BootstrapSevenZipExe = $null
@@ -57,6 +58,7 @@ Common forwarded options:
   --agent
   --serverurl <url>
   --enrollmentcode <code>
+  --force-reenroll
 '@ | Write-Host
 }
 
@@ -107,6 +109,10 @@ function Normalize-BorealisArgument {
             $result = Read-OptionValue -Token $Token -Index $Index -SourceArgs $SourceArgs -OptionName '--enrollmentcode'
             $script:forwardedEnrollmentCode = $result.Value
             return [pscustomobject]@{ NextIndex = $result.NextIndex; Handled = $true }
+        }
+        '^(--force-reenroll|--forcereenroll|-forcereenroll|-force-reenroll)$' {
+            $script:forwardedForceReEnroll = $true
+            return [pscustomobject]@{ NextIndex = $Index; Handled = $true }
         }
         default {
             return [pscustomobject]@{ NextIndex = $Index; Handled = $false }
@@ -693,6 +699,10 @@ try {
         $invokeArgs.Add('-EnrollmentCode')
         $invokeArgs.Add($forwardedEnrollmentCode)
         $env:BOREALIS_ENROLLMENT_CODE = $forwardedEnrollmentCode
+    }
+    if ($forwardedForceReEnroll) {
+        Write-Host "[i] Forwarding force reenroll flag to Borealis.ps1"
+        $invokeArgs.Add('-ForceReEnroll')
     }
     foreach ($arg in $passthroughArgs) {
         if (-not [string]::IsNullOrWhiteSpace($arg)) {

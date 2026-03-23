@@ -4,6 +4,7 @@
 param(
     [switch]$Agent,
     [switch]$RefreshAgentRuntime,
+    [switch]$ForceReEnroll,
     [string]$EnrollmentCode = '',
     [string]$ServerUrl = ''
 )
@@ -293,6 +294,54 @@ function Remove-BorealisServicesAndTasks {
     } catch {}
     # Remove legacy watchdog script if present
     try { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:ProgramData 'Borealis\watchdog.ps1') } catch {}
+}
+
+function Clear-AgentEnrollmentState {
+    param([string]$LogName = 'Install.log')
+
+    $settingsDirs = @(
+        (Join-Path $scriptDir 'Agent\Borealis\Settings'),
+        (Join-Path $scriptDir 'Agent\Settings')
+    )
+    $certDirs = @(
+        (Join-Path $scriptDir 'Agent\Borealis\Certificates\Trusted_Server_Cert'),
+        (Join-Path $scriptDir 'Agent\Certificates\Trusted_Server_Cert')
+    )
+    $filesToRemove = @(
+        'Agent_GUID.txt',
+        'access.jwt',
+        'access.meta.json',
+        'refresh.token',
+        'server_signing_key.pub'
+    )
+
+    Write-AgentLog -FileName $LogName -Message '[REENROLL] Force reenroll requested; clearing persisted enrollment state while preserving the device identity keypair.'
+
+    foreach ($settingsDir in $settingsDirs) {
+        foreach ($fileName in $filesToRemove) {
+            $targetPath = Join-Path $settingsDir $fileName
+            if (Test-Path $targetPath -PathType Leaf) {
+                try {
+                    Remove-Item -Path $targetPath -Force -ErrorAction Stop
+                    Write-AgentLog -FileName $LogName -Message ("[REENROLL] Removed persisted enrollment artifact '{0}'." -f $targetPath)
+                } catch {
+                    Write-AgentLog -FileName $LogName -Message ("[REENROLL] Failed to remove '{0}': {1}" -f $targetPath, $_.Exception.Message)
+                }
+            }
+        }
+    }
+
+    foreach ($certDir in $certDirs) {
+        $targetPath = Join-Path $certDir 'server_certificate.pem'
+        if (Test-Path $targetPath -PathType Leaf) {
+            try {
+                Remove-Item -Path $targetPath -Force -ErrorAction Stop
+                Write-AgentLog -FileName $LogName -Message ("[REENROLL] Removed pinned server certificate '{0}'." -f $targetPath)
+            } catch {
+                Write-AgentLog -FileName $LogName -Message ("[REENROLL] Failed to remove pinned server certificate '{0}': {1}" -f $targetPath, $_.Exception.Message)
+            }
+        }
+    }
 }
 
 function Write-ProgressStep {
@@ -1828,6 +1877,12 @@ function InstallOrUpdate-BorealisAgent {
     $venvPython             = Join-Path $venvFolderPath 'Scripts\python.exe'
     $existingServerUrl      = $null
 
+    if ($ForceReEnroll) {
+        Run-Step "Clear Persisted Borealis Agent Enrollment State" {
+            Clear-AgentEnrollmentState -LogName 'Install.log'
+        }
+    }
+
     Run-Step "Create Virtual Python Environment" {
         $venvActivate = Join-Path $venvFolderPath 'Scripts\Activate'
         $pyvenvCfg    = Join-Path $venvFolderPath 'pyvenv.cfg'
@@ -1928,6 +1983,7 @@ function InstallOrUpdate-BorealisAgent {
                 (Join-Path $agentSourceRoot 'Borealis.ico'),
                 (Join-Path $agentSourceRoot 'fcntl_stub.py'),
                 (Join-Path $agentSourceRoot 'launch_service.ps1'),
+                (Join-Path $agentSourceRoot 'role_health.py'),
                 (Join-Path $agentSourceRoot 'role_manager.py'),
                 (Join-Path $agentSourceRoot 'security.py'),
                 (Join-Path $agentSourceRoot 'signature_utils.py'),

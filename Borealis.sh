@@ -5,7 +5,7 @@
 # - Mirrors Engine flow: venv + staging + Vite + Flask launch
 # - Mirrors Agent flow: venv + Data/Agent staging + dependency install + settings + supervision
 # - Supports parity flags: --server/--agent, --vite/--flask, --quick, --engine-tests,
-#   --engine-production/--engine-dev, --enrollmentcode, --serverurl
+#   --engine-production/--engine-dev, --enrollmentcode, --serverurl, --force-reenroll
 
 set -o errexit
 set -o nounset
@@ -38,6 +38,7 @@ ENGINE_TESTS_FLAG=0
 ENGINE_PROD_FLAG=0
 ENGINE_DEV_FLAG=0
 REFRESH_AGENT_RUNTIME_FLAG=0
+FORCE_REENROLL_FLAG=0
 ENROLLMENT_CODE=""
 SERVER_URL=""
 
@@ -59,6 +60,7 @@ while (( "$#" )); do
     -EngineProduction|--engine-production) ENGINE_PROD_FLAG=1 ;;
     -EngineDev|--engine-dev) ENGINE_DEV_FLAG=1 ;;
     --refresh-agent-runtime) REFRESH_AGENT_RUNTIME_FLAG=1 ;;
+    -ForceReEnroll|--force-reenroll|--forcereenroll) FORCE_REENROLL_FLAG=1 ;;
     -EnrollmentCode|--EnrollmentCode|--enrollmentcode|--enrollment-code)
       shift
       ENROLLMENT_CODE="${1:-}"
@@ -362,6 +364,48 @@ capture_existing_server_url() {
     current_url="$(head -n 1 "${old_settings_dir}/server_url.txt" 2>/dev/null || true)"
   fi
   echo "${current_url:-}"
+}
+
+clear_agent_enrollment_state() {
+  local settings_dirs=(
+    "${SCRIPT_DIR}/Agent/Borealis/Settings"
+    "${SCRIPT_DIR}/Agent/Settings"
+  )
+  local cert_dirs=(
+    "${SCRIPT_DIR}/Agent/Borealis/Certificates/Trusted_Server_Cert"
+    "${SCRIPT_DIR}/Agent/Certificates/Trusted_Server_Cert"
+  )
+  local files_to_remove=(
+    "Agent_GUID.txt"
+    "access.jwt"
+    "access.meta.json"
+    "refresh.token"
+    "server_signing_key.pub"
+  )
+
+  write_agent_log "Force reenroll requested; clearing persisted enrollment state while preserving the device identity keypair."
+
+  local settings_dir=""
+  local rel_path=""
+  local target=""
+  for settings_dir in "${settings_dirs[@]}"; do
+    for rel_path in "${files_to_remove[@]}"; do
+      target="${settings_dir}/${rel_path}"
+      if [[ -e "${target}" ]]; then
+        rm -f "${target}" 2>/dev/null || true
+        write_agent_log "Removed persisted enrollment artifact '${target}'."
+      fi
+    done
+  done
+
+  local cert_dir=""
+  for cert_dir in "${cert_dirs[@]}"; do
+    target="${cert_dir}/server_certificate.pem"
+    if [[ -e "${target}" ]]; then
+      rm -f "${target}" 2>/dev/null || true
+      write_agent_log "Removed pinned server certificate '${target}'."
+    fi
+  done
 }
 
 agent_python_bin() {
@@ -866,6 +910,7 @@ create_agent_venv_and_stage_data() {
     "Borealis.ico"
     "fcntl_stub.py"
     "launch_service.ps1"
+    "role_health.py"
     "role_manager.py"
     "security.py"
     "signature_utils.py"
@@ -1092,6 +1137,10 @@ install_or_update_borealis_agent() {
 
   local preserved_url
   preserved_url="$(capture_existing_server_url)"
+
+  if [[ "${FORCE_REENROLL_FLAG}" -eq 1 ]]; then
+    run_step "Clear persisted Borealis Agent enrollment state" clear_agent_enrollment_state
+  fi
 
   run_step "Create Borealis Agent virtual environment & stage runtime" create_agent_venv_and_stage_data
   run_step "Install Agent Python dependencies" install_agent_python_deps
