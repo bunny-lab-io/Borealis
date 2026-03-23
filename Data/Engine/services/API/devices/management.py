@@ -6,6 +6,7 @@
 # - POST /api/agent/details (Device Authenticated) - Ingests hardware and inventory payloads from enrolled agents.
 # - GET /api/agents (Token Authenticated) - Lists online collectors grouped by hostname and run context.
 # - GET /api/devices (Token Authenticated) - Returns a summary list of known devices for the WebUI transition.
+# - GET /api/devices/search (Token Authenticated) - Returns hostname search matches scoped to the operator's assigned sites unless the operator is an admin.
 # - GET /api/devices/<guid> (Token Authenticated) - Retrieves a single device record by GUID, including summary fields.
 # - GET /api/device/details/<hostname> (Token Authenticated) - Returns full device details keyed by hostname.
 # - POST /api/device/description/<hostname> (Token Authenticated) - Updates the human-readable description for a device.
@@ -90,6 +91,10 @@ def _status_from_last_seen(last_seen: Optional[int]) -> str:
     except Exception:
         pass
     return "Offline"
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _normalize_service_mode(value: Any, agent_id: Optional[str] = None) -> str:
@@ -766,6 +771,82 @@ class DeviceManagementService:
         except Exception as exc:
             self.logger.debug("Failed to list devices", exc_info=True)
             return {"error": str(exc)}, 500
+
+    def search_devices_by_hostname(self, query: str) -> Tuple[Dict[str, Any], int]:
+        normalized_query = _clean_device_str(query) or ""
+        if len(normalized_query) < 3:
+            return {"devices": [], "query": normalized_query, "count": 0}, 200
+
+        allowed_site_ids = self.site_access.site_ids_for_user(self._current_user())
+        if allowed_site_ids is not None and not allowed_site_ids:
+            return {"devices": [], "query": normalized_query, "count": 0}, 200
+
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            sql = """
+                SELECT d.guid, d.hostname, d.agent_id, d.connection_type, s.id, s.name, s.description
+                  FROM devices AS d
+             LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+             LEFT JOIN sites AS s ON s.id = ds.site_id
+                 WHERE LOWER(d.hostname) LIKE ? ESCAPE '\\'
+            """
+            params: List[Any] = [f"%{_escape_like(normalized_query.lower())}%"]
+            if allowed_site_ids is not None:
+                placeholders = ",".join("?" for _ in sorted(allowed_site_ids))
+                sql += f" AND ds.site_id IN ({placeholders})"
+                params.extend(sorted(allowed_site_ids))
+            cur.execute(sql, params)
+
+            seen: set[tuple[str, str, Any, str]] = set()
+            matches: List[Dict[str, Any]] = []
+            query_lc = normalized_query.lower()
+            for row in cur.fetchall():
+                raw_guid = _clean_device_str(row[0]) or ""
+                try:
+                    agent_guid = normalize_guid(raw_guid) if raw_guid else ""
+                except Exception:
+                    agent_guid = raw_guid
+                hostname = _clean_device_str(row[1]) or ""
+                if not hostname:
+                    continue
+                agent_id = _clean_device_str(row[2]) or ""
+                site_id = row[4]
+                dedupe_key = (
+                    agent_guid.lower(),
+                    hostname.lower(),
+                    site_id,
+                    agent_id.lower(),
+                )
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                matches.append(
+                    {
+                        "agent_guid": agent_guid,
+                        "agent_id": agent_id,
+                        "hostname": hostname,
+                        "connection_type": _clean_device_str(row[3]) or "",
+                        "site_id": site_id,
+                        "site_name": _clean_device_str(row[5]) or "",
+                        "site_description": _clean_device_str(row[6]) or "",
+                    }
+                )
+
+            matches.sort(
+                key=lambda item: (
+                    0 if item["hostname"].lower() == query_lc else 1,
+                    0 if item["hostname"].lower().startswith(query_lc) else 1,
+                    item["hostname"].lower(),
+                    item["site_name"].lower(),
+                )
+            )
+            return {"devices": matches, "query": normalized_query, "count": len(matches)}, 200
+        except Exception as exc:
+            self.logger.debug("Failed to search devices by hostname", exc_info=True)
+            return {"error": str(exc)}, 500
+        finally:
+            conn.close()
 
     def list_agents(self) -> Tuple[Dict[str, Any], int]:
         try:
@@ -1899,6 +1980,15 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
             payload, status = requirement
             return jsonify(payload), status
         payload, status = service.list_devices()
+        return jsonify(payload), status
+
+    @blueprint.route("/api/devices/search", methods=["GET"])
+    def _search_devices():
+        requirement = service._require_login()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+        payload, status = service.search_devices_by_hostname(request.args.get("hostname") or "")
         return jsonify(payload), status
 
     @blueprint.route("/api/devices/<guid>", methods=["GET"])

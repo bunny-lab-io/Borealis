@@ -9,6 +9,7 @@ import {
 } from "./Dialogs";
 import NavigationSidebar from "./Navigation_Sidebar";
 import { PageHeaderActionRail } from "./Page_Header_Actions.jsx";
+import GlobalDeviceSearch from "./GlobalDeviceSearch.jsx";
 
 // Styling Imports
 import {
@@ -23,10 +24,6 @@ import {
       NavigateNext as NavigateNextIcon,
       VpnKey as VpnKeyIcon,
     } from "@mui/icons-material";
-    import ClickAwayListener from "@mui/material/ClickAwayListener";
-    import SearchIcon from "@mui/icons-material/Search";
-    import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
-    import ArrowDropUpIcon from "@mui/icons-material/ArrowDropUp";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BODY_TEXT_SX,
@@ -305,46 +302,6 @@ async function sha512(text) {
     setAegisPromptDismissed(false);
     setAegisStatus(normalizeAegisStatus(payload));
   }, []);
-
-      // Top-bar search state
-      const SEARCH_CATEGORIES = [
-        { key: "hostname", label: "Hostname", scope: "device", placeholder: "Search Hostname" },
-        { key: "internal_ip", label: "Internal IP", scope: "device", placeholder: "Search Internal IP" },
-        { key: "external_ip", label: "External IP", scope: "device", placeholder: "Search External IP" },
-        { key: "description", label: "Description", scope: "device", placeholder: "Search Description" },
-        { key: "last_user", label: "Last User", scope: "device", placeholder: "Search Last User" },
-        { key: "serial_number", label: "Serial Number (Soon)", scope: "device", placeholder: "Search Serial Number" },
-        { key: "site_name", label: "Site Name", scope: "site", placeholder: "Search Site Name" },
-        { key: "site_description", label: "Site Description", scope: "site", placeholder: "Search Site Description" },
-      ];
-      const [searchCategory, setSearchCategory] = useState("hostname");
-      const [searchOpen, setSearchOpen] = useState(false);
-      const [searchQuery, setSearchQuery] = useState("");
-      const [searchMenuEl, setSearchMenuEl] = useState(null);
-      const [suggestions, setSuggestions] = useState({ devices: [], sites: [], q: "", field: "" });
-      const searchAnchorRef = useRef(null);
-      const searchDebounceRef = useRef(null);
-
-      // Gentle highlight helper for matched substrings
-      const highlightText = useCallback((text, query) => {
-        const t = String(text ?? "");
-        const q = String(query ?? "").trim();
-        if (!q) return t;
-        try {
-          const esc = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const re = new RegExp(`(${esc})`, "ig");
-          const parts = t.split(re);
-          return parts.map((part, i) =>
-            part.toLowerCase() === q.toLowerCase()
-              ? (
-                  <span key={i} style={{ backgroundColor: '#243a52', color: '#a7d0ff', borderRadius: 2, padding: '0 1px' }}>{part}</span>
-                )
-              : <span key={i}>{part}</span>
-          );
-        } catch {
-          return t;
-        }
-      }, []);
 
   const handlePageMetaChange = useCallback((meta) => {
     if (!meta) {
@@ -1090,95 +1047,6 @@ async function sha512(text) {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, [sessionResolved, user]);
-
-      // Suggest fetcher with debounce
-      const fetchSuggestions = useCallback((field, q) => {
-        const query = String(q || "").trim();
-        if (query.length < 3) {
-          setSuggestions({ devices: [], sites: [], q: query, field });
-          return;
-        }
-        const params = new URLSearchParams({ field, q: query, limit: "5" });
-        fetch(`/api/search/suggest?${params.toString()}`)
-          .then((r) => (r.ok ? r.json() : { devices: [], sites: [], q: query, field }))
-          .then((data) => setSuggestions(data))
-          .catch(() => setSuggestions({ devices: [], sites: [], q: query, field }));
-      }, []);
-
-      useEffect(() => {
-        if (!searchOpen) return;
-        if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-        searchDebounceRef.current = setTimeout(() => {
-          fetchSuggestions(searchCategory, searchQuery);
-        }, 220);
-        return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); };
-      }, [searchOpen, searchCategory, searchQuery, fetchSuggestions]);
-
-      const execSearch = useCallback(async (field, q, navigateImmediate = true) => {
-        const cat = SEARCH_CATEGORIES.find((c) => c.key === field) || SEARCH_CATEGORIES[0];
-        if (cat.scope === "site") {
-          try {
-            localStorage.setItem('site_list_initial_filters', JSON.stringify(
-              field === 'site_name' ? { name: q } : { description: q }
-            ));
-          } catch {}
-          if (navigateImmediate) navigateTo("sites");
-        } else {
-          // device field
-          // Map API field -> Device_List filter key
-          const fieldMap = {
-            hostname: 'hostname',
-            description: 'description',
-            last_user: 'lastUser',
-            internal_ip: 'internalIp',
-            external_ip: 'externalIp',
-            serial_number: 'serialNumber', // placeholder (ignored by Device_List for now)
-          };
-          const k = fieldMap[field] || 'hostname';
-          const qLc = String(q || '').toLowerCase();
-          const exact = (suggestions.devices || []).find((d) => String(d.hostname || d.value || '').toLowerCase() === qLc);
-          if (exact && (exact.hostname || '').trim()) {
-            const device = { hostname: exact.hostname.trim() };
-            if (navigateImmediate) {
-              navigateTo('device_details', { device });
-            } else {
-              setSelectedDevice(device);
-            }
-          } else if (field === 'hostname') {
-            // Probe device existence and open directly if found
-            try {
-              const resp = await fetch(`/api/device/details/${encodeURIComponent(q)}`);
-              if (resp.ok) {
-                const data = await resp.json();
-                if (data && (data.summary?.hostname || Object.keys(data).length > 0)) {
-                  const device = { hostname: q };
-                  if (navigateImmediate) {
-                    navigateTo('device_details', { device });
-                  } else {
-                    setSelectedDevice(device);
-                  }
-                } else {
-                  try { localStorage.setItem('device_list_initial_filters', JSON.stringify({ [k]: q })); } catch {}
-                  if (navigateImmediate) navigateTo('devices');
-                }
-              } else {
-                try { localStorage.setItem('device_list_initial_filters', JSON.stringify({ [k]: q })); } catch {}
-                if (navigateImmediate) navigateTo('devices');
-              }
-            } catch {
-              try { localStorage.setItem('device_list_initial_filters', JSON.stringify({ [k]: q })); } catch {}
-              if (navigateImmediate) navigateTo('devices');
-            }
-          } else {
-            try {
-              const payload = (k === 'serialNumber') ? {} : { [k]: q };
-              localStorage.setItem('device_list_initial_filters', JSON.stringify(payload));
-            } catch {}
-            if (navigateImmediate) navigateTo("devices");
-          }
-        }
-        setSearchOpen(false);
-      }, [SEARCH_CATEGORIES, navigateTo, suggestions.devices]);
 
   const handleLoginSuccess = ({ username, role }) => {
     setUser(username);
@@ -2131,51 +1999,22 @@ async function sha512(text) {
                 sx={{ height: 50, ml: -1.8, mr: 1.5 }}
               />
 
-              {/* Search (about 20% wider) */}
-              <ClickAwayListener onClickAway={() => setSearchOpen(false)}>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, ml: 2 }}>
-                  {/* Category button unchanged... */}
-
-                  <Box
-                    ref={searchAnchorRef}
-                    sx={{
-                      position: "relative",
-                      display: "flex",
-                      alignItems: "center",
-                      border: "1px solid #3a3f44",
-                      borderRadius: 1,
-                      height: 34,
-                      minWidth: 384,             // was 320 → ~20% wider
-                      bgcolor: "#1e2328"
+              {user ? (
+                <Box
+                  sx={{
+                    ml: 2,
+                    flex: { xs: "1 1 220px", md: "0 1 460px" },
+                    minWidth: 0,
+                    maxWidth: 520,
+                  }}
+                >
+                  <GlobalDeviceSearch
+                    onSelectDevice={(device) => {
+                      navigateTo("device_details", { device });
                     }}
-                  >
-                    <input
-                      value={searchQuery}
-                      onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
-                      onFocus={() => setSearchOpen(true)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") execSearch(searchCategory, searchQuery);
-                        else if (e.key === "Escape") setSearchOpen(false);
-                      }}
-                      placeholder={(SEARCH_CATEGORIES.find(c => c.key === searchCategory) || {}).placeholder || "Search"}
-                      style={{
-                        outline: "none",
-                        border: "none",
-                        background: "transparent",
-                        color: "#e8eaed",
-                        paddingLeft: 10,
-                        paddingRight: 28,
-                        width: 360,               // keep input width comfortable inside the wider box
-                        height: "100%"
-                      }}
-                    />
-                    <SearchIcon sx={{ position: "absolute", right: 6, color: "#8aa0b4", fontSize: 18 }} />
-
-                    {/* suggestions popover remains as-is */}
-                    { /* ...existing suggestions code... */ }
-                  </Box>
+                  />
                 </Box>
-              </ClickAwayListener>
+              ) : null}
 
               {/* Breadcrumbs — now inline and vertically centered */}
               <Box sx={{ ml: 2, display: "flex", alignItems: "center" }}>

@@ -18,6 +18,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Admins implicitly see all sites, devices, approvals, and remote-access surfaces.
 - Operators are scoped by `user_site_assignments`; if an operator has no assigned sites, Borealis hides all sites and devices from that operator.
 - Devices without a site assignment remain admin-only until an admin places them into a site.
+- The shared header hostname search follows the same scope rules and only returns devices in the signed-in operator's visible sites unless the operator is an admin.
 - The WebUI site-assignment workflow lives on the Users page and writes assignments through `/api/user_site_assignments/*`.
 
 ## Device Filters
@@ -41,6 +42,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `POST /api/agent/details` (Device Authenticated) - inventory payloads.
 - `GET /api/agents` (Token Authenticated) - online collectors grouped by context.
 - `GET /api/devices` (Token Authenticated) - device summary list.
+- `GET /api/devices/search?hostname=<query>` (Token Authenticated) - site-scoped hostname search for the shared header search UI.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
@@ -125,6 +127,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Device Details route: `/device/<agent_guid_or_hostname>`.
 - Tab query keys: `device_summary`, `installed_software`, `activity_history`, `remote_shell`, `remote_desktop`.
 - Route parsing and URL preservation are implemented in `Data/Engine/web-interface/src/App.jsx`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Devices/Device_Details.jsx`.
+- Shared header hostname search is implemented in `Data/Engine/web-interface/src/GlobalDeviceSearch.jsx` and queries `GET /api/devices/search`.
 
 ### Debug checklist
 - Device missing from list: check PostgreSQL `engine.devices` and `engine.device_keys`.

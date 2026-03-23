@@ -200,6 +200,24 @@ def test_list_devices(engine_harness: EngineTestHarness) -> None:
     assert "summary" in device and isinstance(device["summary"], dict)
 
 
+def test_device_hostname_search_requires_three_characters(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    response = client.get("/api/devices/search?hostname=te")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload == {"devices": [], "query": "te", "count": 0}
+
+
+def test_device_hostname_search_returns_matches(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    response = client.get("/api/devices/search?hostname=tes")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["count"] == 1
+    assert payload["devices"][0]["hostname"] == "test-device"
+    assert payload["devices"][0]["site_name"] == "Main Lab"
+
+
 def test_list_agents(engine_harness: EngineTestHarness) -> None:
     client = _client_with_admin_session(engine_harness)
     response = client.get("/api/agents")

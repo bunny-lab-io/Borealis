@@ -44,6 +44,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
 - `GET /api/agents` (Token Authenticated) - list online collectors by hostname/context.
 - `GET /api/devices` (Token Authenticated) - device summary list, scoped to the operator's assigned sites unless the operator is an admin.
+- `GET /api/devices/search?hostname=<query>` (Token Authenticated) - hostname search matches for the shared header search, scoped to the operator's assigned sites unless the operator is an admin.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID, site-scoped for operators.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description for an in-scope device.

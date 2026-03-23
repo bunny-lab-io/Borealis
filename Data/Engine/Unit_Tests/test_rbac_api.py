@@ -476,6 +476,22 @@ def test_operator_inventory_endpoints_hide_out_of_scope_and_unassigned_devices(
         "test-device": {"site_id": 1, "site_name": "Main Lab"}
     }
 
+    search_response = client.get("/api/devices/search?hostname=device")
+    assert search_response.status_code == 200
+    search_payload = search_response.get_json()
+    assert search_payload["count"] == 1
+    assert search_payload["devices"] == [
+        {
+            "agent_guid": "GUID-TEST-0001",
+            "agent_id": "test-device-agent",
+            "hostname": "test-device",
+            "connection_type": "",
+            "site_id": 1,
+            "site_name": "Main Lab",
+            "site_description": "Primary integration site",
+        }
+    ]
+
 
 def test_operator_approval_queue_and_tunnel_access_are_site_scoped(
     engine_harness: EngineTestHarness,

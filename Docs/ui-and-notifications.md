@@ -21,6 +21,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 
 ## API Endpoints
 - `POST /api/notifications/notify` (Token Authenticated) - broadcast a toast to all connected operators.
+- `GET /api/devices/search?hostname=<query>` (Token Authenticated) - shared header device search, scoped to the current operator's visible sites unless the operator is an admin.
 
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)
@@ -69,6 +70,15 @@ Applies to all Borealis frontends. Use `Data/Engine/web-interface/src/Admin/Page
 - `filter_editor` -> `filters`
 - `create_job` -> `jobs`
 - `scripts`, `ansible_editor`, `workflow-editor` -> `assemblies`
+
+#### Global Device Search
+- Shared header ownership: `Data/Engine/web-interface/src/App.jsx` places the global device search in the top app bar; the search UI itself lives in `Data/Engine/web-interface/src/GlobalDeviceSearch.jsx`.
+- Scope: search is hostname-only and should use `GET /api/devices/search?hostname=<query>` so operators only see devices inside their assigned sites while admins can see any device, including unassigned inventory.
+- Minimum activation: do not open the search overlay or call the API until the operator has entered at least 3 characters.
+- Presentation: style the field as a compact dark glass control with cyan hover/focus treatment so it feels like part of the shared header band rather than a legacy toolbar widget.
+- Results overlay: use a compact AG Grid rendered as a dropdown surface with `Hostname` and `Site` columns, Quartz styling, muted matte headers, and rounded overlay chrome.
+- Cell treatment: hostnames use the Borealis blue accent; site names use the shared muted gray copy used elsewhere in Borealis. Unassigned devices may display `Not Configured`.
+- Interaction: clicking a row should navigate directly to the target device's `device_details` page.
 
 #### MagicUI Styling Language (Visual System)
 - Full-bleed canvas: hero shells run edge-to-edge; inset padding lives inside cards so gradients feel immersive.
