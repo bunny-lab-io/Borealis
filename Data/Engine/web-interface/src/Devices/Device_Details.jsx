@@ -491,12 +491,11 @@ const AgentHealthLinkCell = React.memo(function AgentHealthLinkCell(props) {
         textTransform: "none",
         color: SUMMARY_FIELD_TEXT_COLOR,
         fontWeight: 600,
-        textDecoration: "underline",
-        textDecorationColor: "rgba(88,166,255,0.5)",
+        textDecoration: "none",
         "&:hover": {
           background: "transparent",
           color: "#7dd3fc",
-          textDecorationColor: "#7dd3fc",
+          textDecoration: "none",
         },
       }}
     >
