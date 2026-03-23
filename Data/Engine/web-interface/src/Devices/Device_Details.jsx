@@ -3069,7 +3069,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       Math.round(
         resolveGridHeight(Math.max(agentRoleHealthRows.length, 1), {
           minHeight: BASE_GRID_HEIGHTS.agentRolesHealth,
-        }) * 1.1
+        }) * 1.2
       ),
     [agentRoleHealthRows.length, resolveGridHeight]
   );
@@ -3078,7 +3078,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       Math.round(
         resolveGridHeight(Math.max(agentServiceHealthRows.length, 1), {
           minHeight: BASE_GRID_HEIGHTS.agentRolesHealth,
-        }) * 1.1
+        }) * 1.2
       ),
     [agentServiceHealthRows.length, resolveGridHeight]
   );

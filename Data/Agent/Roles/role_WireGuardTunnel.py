@@ -1102,6 +1102,7 @@ class Role:
         self._log_hook = hooks.get("log_agent")
         self._http_client_factory = hooks.get("http_client")
         self._get_server_url = hooks.get("get_server_url")
+        self._last_tunnel_snapshot: Dict[str, Any] = {}
         self._ensure_stop = threading.Event()
         self._ensure_thread = threading.Thread(target=self._ensure_loop, daemon=True)
         self._ensure_thread.start()
@@ -1151,10 +1152,97 @@ class Role:
             self._log(f"WireGuard endpoint override: {endpoint} -> {resolved}")
         return resolved or endpoint
 
+    def _remember_tunnel_snapshot(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        token = payload.get("token") or payload.get("orchestration_token")
+        if not isinstance(token, dict):
+            token = {}
+        endpoint = payload.get("endpoint") or payload.get("server_endpoint")
+        resolved_endpoint = self._resolve_endpoint(endpoint, token)
+        self._last_tunnel_snapshot = {
+            "tunnel_id": str(payload.get("tunnel_id") or token.get("tunnel_id") or "").strip(),
+            "virtual_ip": str(payload.get("virtual_ip") or payload.get("client_virtual_ip") or "").strip(),
+            "endpoint": str(resolved_endpoint or endpoint or "").strip(),
+            "server_public_key": str(payload.get("server_public_key") or payload.get("public_key") or "").strip(),
+            "observed_at": int(time.time()),
+        }
+
+    def _live_config_paths(self) -> list[Path]:
+        candidates: list[Path] = []
+        conf_path = getattr(self.client, "conf_path", None)
+        if isinstance(conf_path, Path):
+            candidates.append(conf_path)
+        service_config_getter = getattr(self.client, "_service_config_path", None)
+        if callable(service_config_getter):
+            try:
+                service_path = service_config_getter()
+            except Exception:
+                service_path = None
+            if isinstance(service_path, Path):
+                candidates.append(service_path)
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            try:
+                key = str(candidate.resolve())
+            except Exception:
+                key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(candidate)
+        return unique
+
+    def _read_live_config_snapshot(self) -> Dict[str, Any]:
+        snapshot: Dict[str, Any] = {
+            "virtual_ip": "",
+            "wireguard_peer_ip": "",
+            "endpoint": "",
+            "active_config": False,
+        }
+        for path in self._live_config_paths():
+            try:
+                if not path.is_file():
+                    continue
+                raw = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            virtual_ip = ""
+            endpoint = ""
+            for line in raw.splitlines():
+                stripped = line.split("#", 1)[0].strip()
+                if "=" not in stripped:
+                    continue
+                key, value = [part.strip() for part in stripped.split("=", 1)]
+                key_lower = key.lower()
+                if key_lower == "address" and not virtual_ip:
+                    virtual_ip = value.split(",", 1)[0].strip()
+                elif key_lower == "endpoint" and not endpoint:
+                    endpoint = value.strip()
+            peer_ip = virtual_ip.split("/", 1)[0] if virtual_ip else ""
+            is_idle = virtual_ip == TUNNEL_IDLE_ADDRESS or peer_ip == TUNNEL_IDLE_ADDRESS.split("/", 1)[0]
+            active_config = bool(virtual_ip and not is_idle)
+            if active_config:
+                return {
+                    "virtual_ip": virtual_ip,
+                    "wireguard_peer_ip": peer_ip,
+                    "endpoint": endpoint,
+                    "active_config": True,
+                }
+            if virtual_ip and not snapshot.get("virtual_ip"):
+                snapshot["virtual_ip"] = virtual_ip
+                snapshot["wireguard_peer_ip"] = peer_ip
+            if endpoint and not snapshot.get("endpoint"):
+                snapshot["endpoint"] = endpoint
+        return snapshot
+
     def _build_session(self, payload: Any) -> Optional[SessionConfig]:
         if not isinstance(payload, dict):
             self._log("WireGuard start payload missing/invalid.", error=True)
             return None
+
+        self._remember_tunnel_snapshot(payload)
 
         payload_agent_id = payload.get("agent_id") or payload.get("agent_guid")
         if payload_agent_id:
@@ -1230,6 +1318,22 @@ class Role:
                 endpoint = str(session.endpoint or "").strip()
             except Exception:
                 endpoint = ""
+        remembered_snapshot = self._last_tunnel_snapshot if isinstance(self._last_tunnel_snapshot, dict) else {}
+        live_config_snapshot = self._read_live_config_snapshot()
+        if not tunnel_id:
+            tunnel_id = str(remembered_snapshot.get("tunnel_id") or "").strip()
+        if not peer_ip:
+            peer_ip = str(
+                remembered_snapshot.get("virtual_ip")
+                or live_config_snapshot.get("virtual_ip")
+                or ""
+            ).strip()
+        if not endpoint:
+            endpoint = str(
+                live_config_snapshot.get("endpoint")
+                or remembered_snapshot.get("endpoint")
+                or ""
+            ).strip()
         try:
             service_state = self.client._service_state()
         except Exception:
@@ -1237,6 +1341,7 @@ class Role:
         thread_alive = bool(self._ensure_thread and self._ensure_thread.is_alive())
         peer_ip_display = peer_ip.split("/", 1)[0] if peer_ip else ""
         detail_suffix = f" tunnel_id={tunnel_id}" if tunnel_id else ""
+        live_config_active = bool(live_config_snapshot.get("active_config"))
         details = {
             "running_status": str(service_state or "Stopped"),
             "wireguard_peer_ip": peer_ip_display,
@@ -1248,6 +1353,16 @@ class Role:
                 "status": "healthy",
                 "role_label": self.role_health_label,
                 "detail": f"Persistent tunnel active (state={service_state or 'RUNNING'}).{detail_suffix}",
+                "details": details,
+            }
+        if service_state in ("RUNNING", "START_PENDING") and live_config_active and peer_ip_display:
+            return {
+                "status": "healthy",
+                "role_label": self.role_health_label,
+                "detail": (
+                    f"Persistent tunnel active (state={service_state or 'RUNNING'}; "
+                    f"local session metadata rehydrating).{detail_suffix}"
+                ),
                 "details": details,
             }
         if service_state in ("RUNNING", "START_PENDING") and session is not None and not peer_ip_display:
@@ -1264,7 +1379,7 @@ class Role:
                 "detail": "Persistent ensure loop stopped.",
                 "details": details,
             }
-        if session is not None:
+        if session is not None or live_config_active or tunnel_id or peer_ip_display:
             return {
                 "status": "recovering",
                 "role_label": self.role_health_label,
