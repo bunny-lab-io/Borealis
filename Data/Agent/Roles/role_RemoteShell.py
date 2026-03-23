@@ -23,10 +23,6 @@ from pathlib import Path
 from typing import Optional
 
 try:
-    import pty
-except Exception:
-    pty = None
-try:
     from update_state import busy_activity
 except Exception:
     busy_activity = None
@@ -124,7 +120,6 @@ class ShellSession:
         self.shell_kind = shell_kind
         self.shell_bin = shell_bin
         self.proc: Optional[subprocess.Popen] = None
-        self.master_fd: Optional[int] = None
         self._stop = threading.Event()
         self._closed = threading.Event()
         self.input_messages = 0
@@ -179,26 +174,24 @@ class ShellSession:
             self._send_stdout(b"[borealis] No bash-compatible shell found on this agent.\n")
             self.close()
             return
-        if pty is None:
-            self._send_stdout(b"[borealis] pty module unavailable; remote bash is unsupported on this platform.\n")
-            self.close()
-            return
 
-        slave_fd: Optional[int] = None
         try:
-            self.master_fd, slave_fd = pty.openpty()
             env = os.environ.copy()
-            env.setdefault("TERM", "xterm")
+            env.setdefault("TERM", "dumb")
+            env.setdefault("NO_COLOR", "1")
+            env.setdefault("CLICOLOR", "0")
+            env.setdefault("FORCE_COLOR", "0")
+            env.setdefault("SYSTEMD_COLORS", "0")
             cmd = [self.shell_bin]
             if os.path.basename(self.shell_bin) == "bash":
-                cmd.extend(["--noprofile", "--norc", "-i"])
+                cmd.extend(["--noprofile", "--norc", "-s"])
             else:
-                cmd.append("-i")
+                cmd.append("-s")
             self.proc = subprocess.Popen(
                 cmd,
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 close_fds=True,
                 start_new_session=True,
                 env=env,
@@ -208,12 +201,6 @@ class ShellSession:
             self._send_stdout(f"[borealis] Failed to start bash shell: {exc}\n".encode("utf-8", errors="replace"))
             self.close()
             return
-        finally:
-            if slave_fd is not None:
-                try:
-                    os.close(slave_fd)
-                except Exception:
-                    pass
 
         threading.Thread(target=self._reader_loop_bash, daemon=True).start()
         self._writer_loop_bash()
@@ -243,24 +230,32 @@ class ShellSession:
             _write_log(f"Shell stdout error: {exc}")
 
     def _reader_loop_bash(self) -> None:
-        if self.master_fd is None:
+        if not self.proc or not self.proc.stdout:
             return
+        stdout_fd = None
+        try:
+            stdout_fd = self.proc.stdout.fileno()
+        except Exception:
+            stdout_fd = None
         try:
             while not self._stop.is_set():
-                try:
-                    readable, _, _ = select.select([self.master_fd], [], [], 0.5)
-                except Exception:
-                    readable = []
+                if stdout_fd is not None:
+                    try:
+                        readable, _, _ = select.select([stdout_fd], [], [], 0.5)
+                    except Exception:
+                        readable = []
 
-                if not readable:
-                    if self.proc and self.proc.poll() is not None:
+                    if not readable:
+                        if self.proc and self.proc.poll() is not None:
+                            break
+                        continue
+
+                    try:
+                        chunk = os.read(stdout_fd, 4096)
+                    except OSError:
                         break
-                    continue
-
-                try:
-                    chunk = os.read(self.master_fd, 4096)
-                except OSError:
-                    break
+                else:
+                    chunk = self.proc.stdout.read(4096)
                 if not chunk:
                     if self.proc and self.proc.poll() is not None:
                         break
@@ -333,14 +328,16 @@ class ShellSession:
                         continue
                     if msg.get("type") == "stdin":
                         payload = msg.get("data") or ""
-                        if self.master_fd is None:
+                        if not self.proc or not self.proc.stdin:
                             continue
                         try:
                             decoded = _b64decode(str(payload))
-                            os.write(self.master_fd, decoded)
+                            normalized = decoded.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                            self.proc.stdin.write(normalized)
+                            self.proc.stdin.flush()
                             self.input_messages += 1
-                            self.input_bytes += len(decoded)
-                            _write_log(f"Shell stdin received bytes={len(decoded)}")
+                            self.input_bytes += len(normalized)
+                            _write_log(f"Shell stdin received bytes={len(normalized)}")
                         except Exception:
                             _write_log("Shell stdin write failed.")
                     if msg.get("type") == "close":
@@ -360,13 +357,17 @@ class ShellSession:
             self.conn.close()
         except Exception:
             pass
-        if self.master_fd is not None:
+        if self.proc:
             try:
-                os.close(self.master_fd)
+                if self.proc.stdin:
+                    self.proc.stdin.close()
             except Exception:
                 pass
-            self.master_fd = None
-        if self.proc:
+            try:
+                if self.proc.stdout:
+                    self.proc.stdout.close()
+            except Exception:
+                pass
             try:
                 self.proc.terminate()
             except Exception:

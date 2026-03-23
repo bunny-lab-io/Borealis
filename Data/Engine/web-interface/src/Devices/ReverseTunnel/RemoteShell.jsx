@@ -17,6 +17,7 @@ import {
 } from "@mui/icons-material";
 import { io } from "socket.io-client";
 import Prism from "prismjs";
+import "prismjs/components/prism-bash";
 import "prismjs/components/prism-powershell";
 import "prismjs/themes/prism-okaidia.css";
 import Editor from "react-simple-code-editor";
@@ -44,6 +45,12 @@ const gradientButtonSx = {
 
 const fontFamilyMono =
   'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+const OUTPUT_LIMIT = 40000;
+const ANSI_OSC_PATTERN = /\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
+const ANSI_ST_PATTERN = /\u001B[P^_][\s\S]*?\u001B\\/g;
+const ANSI_CSI_PATTERN = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+const ANSI_ESC_PATTERN = /\u001B[@-Z\\-_]/g;
+const ANSI_C1_CSI_PATTERN = /\u009B[0-?]*[ -/]*[@-~]/g;
 
 const emitAsync = (socket, event, payload, timeoutMs = 4000) =>
   new Promise((resolve) => {
@@ -72,9 +79,63 @@ function normalizeText(value) {
   }
 }
 
-function highlightPs(code) {
+function clampOutput(value) {
+  return value.length > OUTPUT_LIMIT ? value.slice(value.length - OUTPUT_LIMIT) : value;
+}
+
+function inferShellKind(device) {
+  const fingerprint = [
+    device?.operating_system,
+    device?.agent_operating_system,
+    device?.os,
+    device?.summary?.operating_system,
+    device?.summary?.agent_operating_system,
+    device?.summary?.os,
+  ]
+    .map(normalizeText)
+    .join(" ")
+    .toLowerCase();
+
+  if (!fingerprint) return "powershell";
+  if (fingerprint.includes("windows")) return "powershell";
+  if (
+    fingerprint.includes("linux") ||
+    fingerprint.includes("ubuntu") ||
+    fingerprint.includes("debian") ||
+    fingerprint.includes("rocky") ||
+    fingerprint.includes("centos") ||
+    fingerprint.includes("red hat") ||
+    fingerprint.includes("rhel") ||
+    fingerprint.includes("fedora") ||
+    fingerprint.includes("suse") ||
+    fingerprint.includes("alpine")
+  ) {
+    return "bash";
+  }
+  return "powershell";
+}
+
+function cleanShellOutput(value) {
+  if (value == null) return "";
   try {
-    return Prism.highlight(code || "", Prism.languages.powershell, "powershell");
+    return String(value)
+      .replace(/\r\n/g, "\n")
+      .replace(/\r(?!\n)/g, "")
+      .replace(ANSI_OSC_PATTERN, "")
+      .replace(ANSI_ST_PATTERN, "")
+      .replace(ANSI_CSI_PATTERN, "")
+      .replace(ANSI_C1_CSI_PATTERN, "")
+      .replace(ANSI_ESC_PATTERN, "")
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+  } catch {
+    return "";
+  }
+}
+
+function highlightShell(code, shellKind) {
+  const language = shellKind === "bash" ? "bash" : "powershell";
+  try {
+    return Prism.highlight(code || "", Prism.languages[language] || Prism.languages.markup, language);
   } catch {
     return code || "";
   }
@@ -97,6 +158,10 @@ export default function ReverseTunnelRemoteShell({ device }) {
   const activeAgentIdRef = useRef("");
   const previousAgentIdRef = useRef("");
   const connectAttemptRef = useRef(0);
+  const shellKind = useMemo(() => inferShellKind(device), [device]);
+  const promptLabel = shellKind === "bash" ? "$" : "PS>";
+  const displayOutput = useMemo(() => cleanShellOutput(output), [output]);
+  const highlightOutput = useCallback((code) => highlightShell(code, shellKind), [shellKind]);
 
   const agentId = useMemo(() => {
     return (
@@ -167,11 +232,17 @@ export default function ReverseTunnelRemoteShell({ device }) {
   const appendOutput = useCallback((text) => {
     if (!text) return;
     setOutput((prev) => {
-      const next = `${prev}${text}`;
-      const limit = 40000;
-      return next.length > limit ? next.slice(next.length - limit) : next;
+      return clampOutput(`${prev}${text}`);
     });
   }, []);
+
+  const appendCommandEcho = useCallback((text) => {
+    if (!text) return;
+    setOutput((prev) => {
+      const separator = prev && !prev.endsWith("\n") ? "\n" : "";
+      return clampOutput(`${prev}${separator}${promptLabel} ${text}\n`);
+    });
+  }, [promptLabel]);
 
   const scrollToBottom = useCallback(() => {
     const el = terminalRef.current;
@@ -404,20 +475,21 @@ export default function ReverseTunnelRemoteShell({ device }) {
     async (text) => {
       const socket = ensureSocket();
       if (!socket || sessionState !== "connected") return;
-      const payload = `${text}${text.endsWith("\n") ? "" : "\r\n"}`;
-      appendOutput(`\nPS> ${text}\n`);
+      const lineEnding = shellKind === "bash" ? "\n" : "\r\n";
+      const payload = text.endsWith("\n") ? text : `${text}${lineEnding}`;
+      appendCommandEcho(text);
       setInput("");
       const resp = await emitAsync(socket, "vpn_shell_send", { data: payload });
       if (resp?.error) {
         setStatusMessage(String(resp.error));
       }
     },
-    [appendOutput, ensureSocket, sessionState]
+    [appendCommandEcho, ensureSocket, sessionState, shellKind]
   );
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(output || "");
+      await navigator.clipboard.writeText(displayOutput || "");
       setCopyFlash(true);
       setTimeout(() => setCopyFlash(false), 1200);
     } catch {
@@ -474,9 +546,9 @@ export default function ReverseTunnelRemoteShell({ device }) {
           }}
         >
           <Editor
-            value={output}
+            value={displayOutput}
             onValueChange={() => {}}
-            highlight={highlightPs}
+            highlight={highlightOutput}
             padding={12}
             readOnly
             style={{
@@ -517,7 +589,11 @@ export default function ReverseTunnelRemoteShell({ device }) {
             size="small"
             value={input}
             disabled={!isConnected}
-            placeholder={isConnected ? "Type a command and press `Enter`" : "Click the `Open Shell` button to start sending commands."}
+            placeholder={
+              isConnected
+                ? `Type a ${shellKind === "bash" ? "shell" : "PowerShell"} command and press \`Enter\``
+                : "Click the `Open Shell` button to start sending commands."
+            }
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
