@@ -159,7 +159,7 @@ export default function ReverseTunnelRemoteShell({ device }) {
   const previousAgentIdRef = useRef("");
   const connectAttemptRef = useRef(0);
   const shellKind = useMemo(() => inferShellKind(device), [device]);
-  const promptLabel = shellKind === "bash" ? "$" : "PS>";
+  const promptLabel = shellKind === "bash" ? "#" : "PS>";
   const displayOutput = useMemo(() => cleanShellOutput(output), [output]);
   const highlightOutput = useCallback((code) => highlightShell(code, shellKind), [shellKind]);
 
