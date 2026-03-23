@@ -1235,18 +1235,26 @@ class Role:
         except Exception:
             service_state = None
         thread_alive = bool(self._ensure_thread and self._ensure_thread.is_alive())
+        peer_ip_display = peer_ip.split("/", 1)[0] if peer_ip else ""
         detail_suffix = f" tunnel_id={tunnel_id}" if tunnel_id else ""
         details = {
             "running_status": str(service_state or "Stopped"),
-            "wireguard_peer_ip": peer_ip.split("/", 1)[0] if peer_ip else "",
+            "wireguard_peer_ip": peer_ip_display,
             "tunnel_id": tunnel_id,
             "endpoint": endpoint,
         }
-        if service_state in ("RUNNING", "START_PENDING") and session is not None:
+        if service_state in ("RUNNING", "START_PENDING") and session is not None and peer_ip_display:
             return {
                 "status": "healthy",
                 "role_label": self.role_health_label,
                 "detail": f"Persistent tunnel active (state={service_state or 'RUNNING'}).{detail_suffix}",
+                "details": details,
+            }
+        if service_state in ("RUNNING", "START_PENDING") and session is not None and not peer_ip_display:
+            return {
+                "status": "recovering",
+                "role_label": self.role_health_label,
+                "detail": f"Tunnel service is {service_state or 'RUNNING'} but no peer IP is assigned yet.{detail_suffix}",
                 "details": details,
             }
         if not thread_alive:

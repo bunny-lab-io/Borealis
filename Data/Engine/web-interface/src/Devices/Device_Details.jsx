@@ -103,6 +103,16 @@ const BASE_GRID_HEIGHTS = {
   memory: 260,
   network: 260,
 };
+const TUNNEL_INFO_IDLE = Object.freeze({
+  status: "idle",
+  tunnel_id: "",
+  virtual_ip: "",
+  agent_socket: false,
+  listener_healthy: false,
+  recovery_in_progress: false,
+  last_recovery_attempt_at: null,
+  last_recovery_attempt_at_iso: "",
+});
 
 const TOP_TABS = [
   { key: "summary", label: "Device Summary", icon: InfoOutlinedIcon },
@@ -147,6 +157,33 @@ function formatRoleHealthContext(context) {
     return "Current User";
   }
   return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function normalizeTunnelInfoState(data = {}) {
+  return {
+    status: data?.status || "idle",
+    tunnel_id: data?.tunnel_id || "",
+    virtual_ip: data?.virtual_ip || "",
+    agent_socket: Boolean(data?.agent_socket),
+    listener_healthy: data?.listener_healthy !== false,
+    recovery_in_progress: Boolean(data?.recovery_in_progress),
+    last_recovery_attempt_at: data?.last_recovery_attempt_at ?? null,
+    last_recovery_attempt_at_iso: data?.last_recovery_attempt_at_iso || "",
+  };
+}
+
+function tunnelInfoMatches(left, right) {
+  if (!left || !right) return false;
+  return (
+    String(left.status || "") === String(right.status || "") &&
+    String(left.tunnel_id || "") === String(right.tunnel_id || "") &&
+    String(left.virtual_ip || "") === String(right.virtual_ip || "") &&
+    Boolean(left.agent_socket) === Boolean(right.agent_socket) &&
+    Boolean(left.listener_healthy) === Boolean(right.listener_healthy) &&
+    Boolean(left.recovery_in_progress) === Boolean(right.recovery_in_progress) &&
+    (left.last_recovery_attempt_at ?? null) === (right.last_recovery_attempt_at ?? null) &&
+    String(left.last_recovery_attempt_at_iso || "") === String(right.last_recovery_attempt_at_iso || "")
+  );
 }
 
 function normalizeRoleHealthStatusText(value) {
@@ -898,16 +935,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const [summaryDataReady, setSummaryDataReady] = useState(false);
   const [summaryScrollOffset, setSummaryScrollOffset] = useState(0);
   const [summaryBottomSpacer, setSummaryBottomSpacer] = useState(0);
-  const [tunnelInfo, setTunnelInfo] = useState({
-    status: "idle",
-    tunnel_id: "",
-    virtual_ip: "",
-    agent_socket: false,
-    listener_healthy: false,
-    recovery_in_progress: false,
-    last_recovery_attempt_at: null,
-    last_recovery_attempt_at_iso: "",
-  });
+  const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [historyRows, setHistoryRows] = useState([]);
   const [outputOpen, setOutputOpen] = useState(false);
   const [outputTitle, setOutputTitle] = useState("");
@@ -944,9 +972,9 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   }, [connectionDraft]);
 
   useEffect(() => {
-    const activeTabKey = TOP_TABS[tab]?.key || "";
-    if (!activeTabKey) return;
-    const urlTabKey = DEVICE_DETAILS_TAB_URL_BY_KEY[activeTabKey] || activeTabKey;
+    const nextActiveTabKey = TOP_TABS[tab]?.key || "";
+    if (!nextActiveTabKey) return;
+    const urlTabKey = DEVICE_DETAILS_TAB_URL_BY_KEY[nextActiveTabKey] || nextActiveTabKey;
     try {
       const params = new URLSearchParams(window.location.search || "");
       if ((params.get("tab") || "").trim().toLowerCase() === urlTabKey) {
@@ -1002,6 +1030,8 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     return values;
   }, [agent, device]);
   const canLaunchQuickJob = quickJobTargets.length > 0 && typeof onQuickJobLaunch === "function";
+  const activeTabKey = TOP_TABS[tab]?.key || TOP_TABS[0]?.key || "summary";
+  const shouldPollTunnelStatus = activeTabKey === "shell" || activeTabKey === "vnc";
   const openAgentHealthDialog = useCallback((entry) => {
     if (!entry) return;
     setAgentHealthDialogEntry(entry);
@@ -1034,16 +1064,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     let inFlight = false;
     let pollingTimer = null;
     if (!tunnelAgentId) {
-      setTunnelInfo({
-        status: "idle",
-        tunnel_id: "",
-        virtual_ip: "",
-        agent_socket: false,
-        listener_healthy: false,
-        recovery_in_progress: false,
-        last_recovery_attempt_at: null,
-        last_recovery_attempt_at_iso: "",
-      });
+      setTunnelInfo((prev) => (tunnelInfoMatches(prev, TUNNEL_INFO_IDLE) ? prev : TUNNEL_INFO_IDLE));
       return () => {};
     }
     const loadTunnelStatus = async () => {
@@ -1056,7 +1077,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         const data = await resp.json().catch(() => ({}));
         if (canceled) return;
         if (!resp.ok) {
-          setTunnelInfo({
+          const nextTunnelInfo = {
             status: "error",
             tunnel_id: "",
             virtual_ip: "",
@@ -1065,35 +1086,27 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
             recovery_in_progress: false,
             last_recovery_attempt_at: null,
             last_recovery_attempt_at_iso: "",
-          });
+          };
+          setTunnelInfo((prev) => (tunnelInfoMatches(prev, nextTunnelInfo) ? prev : nextTunnelInfo));
           return;
         }
-        if (data?.status === "down") {
-          setTunnelInfo({
-            status: "down",
-            tunnel_id: "",
-            virtual_ip: "",
-            agent_socket: Boolean(data?.agent_socket),
-            listener_healthy: Boolean(data?.listener_healthy),
-            recovery_in_progress: Boolean(data?.recovery_in_progress),
-            last_recovery_attempt_at: data?.last_recovery_attempt_at ?? null,
-            last_recovery_attempt_at_iso: data?.last_recovery_attempt_at_iso || "",
-          });
-          return;
-        }
-        setTunnelInfo({
-          status: data?.status || "up",
-          tunnel_id: data?.tunnel_id || "",
-          virtual_ip: data?.virtual_ip || "",
-          agent_socket: Boolean(data?.agent_socket),
-          listener_healthy: data?.listener_healthy !== false,
-          recovery_in_progress: Boolean(data?.recovery_in_progress),
-          last_recovery_attempt_at: data?.last_recovery_attempt_at ?? null,
-          last_recovery_attempt_at_iso: data?.last_recovery_attempt_at_iso || "",
-        });
+        const nextTunnelInfo =
+          data?.status === "down"
+            ? {
+                status: "down",
+                tunnel_id: "",
+                virtual_ip: "",
+                agent_socket: Boolean(data?.agent_socket),
+                listener_healthy: Boolean(data?.listener_healthy),
+                recovery_in_progress: Boolean(data?.recovery_in_progress),
+                last_recovery_attempt_at: data?.last_recovery_attempt_at ?? null,
+                last_recovery_attempt_at_iso: data?.last_recovery_attempt_at_iso || "",
+              }
+            : normalizeTunnelInfoState(data?.status ? data : { ...data, status: "up" });
+        setTunnelInfo((prev) => (tunnelInfoMatches(prev, nextTunnelInfo) ? prev : nextTunnelInfo));
       } catch {
         if (!canceled) {
-          setTunnelInfo({
+          const nextTunnelInfo = {
             status: "error",
             tunnel_id: "",
             virtual_ip: "",
@@ -1102,19 +1115,22 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
             recovery_in_progress: false,
             last_recovery_attempt_at: null,
             last_recovery_attempt_at_iso: "",
-          });
+          };
+          setTunnelInfo((prev) => (tunnelInfoMatches(prev, nextTunnelInfo) ? prev : nextTunnelInfo));
         }
       } finally {
         inFlight = false;
       }
     };
     loadTunnelStatus();
-    pollingTimer = setInterval(loadTunnelStatus, TUNNEL_STATUS_POLL_INTERVAL_MS);
+    if (shouldPollTunnelStatus) {
+      pollingTimer = setInterval(loadTunnelStatus, TUNNEL_STATUS_POLL_INTERVAL_MS);
+    }
     return () => {
       canceled = true;
       if (pollingTimer) clearInterval(pollingTimer);
     };
-  }, [tunnelAgentId]);
+  }, [tunnelAgentId, shouldPollTunnelStatus]);
 
   useEffect(() => {
     let canceled = false;
