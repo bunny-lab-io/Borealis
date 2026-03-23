@@ -401,8 +401,58 @@ class ShellServer:
         self.shell_kind = shell_kind
         self.shell_bin = shell_bin
         self._stop = threading.Event()
+        self._state_lock = threading.Lock()
+        self._listening = False
+        self._last_error = ""
+        self._last_checked_at = 0
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
+
+    def _set_state(self, *, listening: bool, last_error: str = "") -> None:
+        with self._state_lock:
+            self._listening = bool(listening)
+            self._last_error = str(last_error or "")
+            self._last_checked_at = int(time.time())
+
+    def health_report(self) -> dict:
+        with self._state_lock:
+            listening = self._listening
+            last_error = self._last_error
+            last_checked_at = self._last_checked_at or int(time.time())
+        if not self._thread.is_alive():
+            return {
+                "status": "unhealthy",
+                "role_label": "Remote Shell Service",
+                "detail": "Remote shell listener thread stopped.",
+                "last_checked_at": last_checked_at,
+            }
+        if not self.shell_bin:
+            return {
+                "status": "unsupported",
+                "role_label": "Remote Shell Service",
+                "detail": "No compatible shell binary is available.",
+                "last_checked_at": last_checked_at,
+            }
+        if listening:
+            return {
+                "status": "healthy",
+                "role_label": "Remote Shell Service",
+                "detail": f"Listening on {self.host}:{self.port}.",
+                "last_checked_at": last_checked_at,
+            }
+        if last_error:
+            return {
+                "status": "recovering",
+                "role_label": "Remote Shell Service",
+                "detail": f"Retrying after listener error: {last_error}",
+                "last_checked_at": last_checked_at,
+            }
+        return {
+            "status": "recovering",
+            "role_label": "Remote Shell Service",
+            "detail": "Waiting for listener startup.",
+            "last_checked_at": last_checked_at,
+        }
 
     def _serve(self) -> None:
         # Accept TCP shell connections; restrict to the WireGuard subnet and keep retrying on bind failures.
@@ -414,6 +464,7 @@ class ShellServer:
                     server.bind((self.host, self.port))
                     server.listen(5)
                     server.settimeout(1.0)
+                    self._set_state(listening=True, last_error="")
                     _write_log(
                         "VPN shell server listening on {0}:{1} type={2} shell={3}".format(
                             self.host,
@@ -430,6 +481,7 @@ class ShellServer:
                         except Exception as exc:
                             if self._stop.is_set():
                                 break
+                            self._set_state(listening=False, last_error=str(exc))
                             _write_log(
                                 "VPN shell server accept error on {0}:{1}: {2}".format(
                                     self.host,
@@ -449,6 +501,7 @@ class ShellServer:
             except Exception as exc:
                 if self._stop.is_set():
                     break
+                self._set_state(listening=False, last_error=str(exc))
                 _write_log(
                     "VPN shell server failed on {0}:{1} type={2} shell={3} error={4}; retrying in {5}s".format(
                         self.host,
@@ -463,6 +516,7 @@ class ShellServer:
 
     def stop(self) -> None:
         self._stop.set()
+        self._set_state(listening=False, last_error="listener stopped")
 
 
 class Role:
@@ -470,6 +524,7 @@ class Role:
         # Start the shell server immediately when the role loads.
         self.ctx = ctx
         self.server = None
+        self.role_health_label = "Remote Shell Service"
 
         shell_kind = _detect_shell_kind()
         if shell_kind == "powershell":
@@ -483,6 +538,15 @@ class Role:
 
     def register_events(self) -> None:
         return
+
+    def health_report(self) -> dict:
+        if self.server is None:
+            return {
+                "status": "unsupported",
+                "role_label": self.role_health_label,
+                "detail": f"Unsupported remote shell platform '{platform.system()}'.",
+            }
+        return self.server.health_report()
 
     def stop_all(self) -> None:
         if self.server and hasattr(self.server, "stop"):

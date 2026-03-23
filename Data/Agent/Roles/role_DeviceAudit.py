@@ -1653,6 +1653,7 @@ def _build_details_fallback() -> dict:
 class Role:
     def __init__(self, ctx):
         self.ctx = ctx
+        self.role_health_label = "Device Audit"
         self._ext_ip = None
         self._ext_ip_ts = 0
         self._refresh_ts = 0
@@ -1670,6 +1671,26 @@ class Role:
                 self.task.cancel()
         except Exception:
             pass
+
+    def health_report(self) -> dict:
+        task = getattr(self, 'task', None)
+        if task is None:
+            return {
+                'status': 'unhealthy',
+                'role_label': self.role_health_label,
+                'detail': 'Audit reporter task was not created.',
+            }
+        if task.done():
+            return {
+                'status': 'unhealthy',
+                'role_label': self.role_health_label,
+                'detail': 'Audit reporter task stopped.',
+            }
+        return {
+            'status': 'healthy',
+            'role_label': self.role_health_label,
+            'detail': 'Audit reporter active.',
+        }
 
     async def _report_loop(self):
         interval_sec = 300  # post heartbeat/details every 5 minutes

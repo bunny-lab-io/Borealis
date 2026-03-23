@@ -40,7 +40,9 @@ class RoleManager:
         self.loop = loop
         self.hooks = hooks or {}
         self._log_hook = self.hooks.get('log_agent')
+        self._role_health_registry = self.hooks.get('role_health_registry')
         self.roles: Dict[str, object] = {}
+        self._registered_role_health: List[str] = []
 
         # Ensure role helpers alongside Roles/ are importable (e.g., signature_utils.py).
         try:
@@ -99,6 +101,20 @@ class RoleManager:
                         role_obj.register_events()
                     except Exception as exc:
                         self._log(f"Role register_events failed name={role_name} error={exc}", error=True)
+                if self._role_health_registry is not None and hasattr(self._role_health_registry, 'register_role'):
+                    try:
+                        reporter = getattr(role_obj, 'health_report', None)
+                        role_label = getattr(role_obj, 'role_health_label', None)
+                        role_id = self._role_health_registry.register_role(
+                            role_name,
+                            context=self.context,
+                            reporter=reporter if callable(reporter) else None,
+                            role_label=role_label,
+                        )
+                        if role_id:
+                            self._registered_role_health.append(str(role_id))
+                    except Exception as exc:
+                        self._log(f"Role health registration failed name={role_name} error={exc}", error=True)
                 self.roles[role_name] = role_obj
                 self._log(f"Role loaded name={role_name} context={self.context}")
             except Exception as exc:
@@ -120,3 +136,9 @@ class RoleManager:
                     role.stop_all()
             except Exception:
                 pass
+        if self._role_health_registry is not None and hasattr(self._role_health_registry, 'unregister_role'):
+            for role_name in list(self.roles.keys()):
+                try:
+                    self._role_health_registry.unregister_role(role_name, context=self.context)
+                except Exception:
+                    pass

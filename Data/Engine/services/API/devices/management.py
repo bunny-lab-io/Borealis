@@ -46,6 +46,11 @@ from ....auth.guid_utils import normalize_guid
 from ....auth.device_auth import DeviceAuthError, require_device_auth
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
+from .agent_role_health import (
+    merge_agent_role_health,
+    normalize_agent_role_health,
+    serialize_agent_role_health,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
@@ -351,6 +356,7 @@ def _device_upsert(
     created_at: Optional[int],
     *,
     agent_hash: Optional[str] = None,
+    agent_role_health: Optional[Any] = None,
     guid: Optional[str] = None,
 ) -> None:
     if not hostname:
@@ -364,6 +370,7 @@ def _device_upsert(
         normalized_description = ""
 
     normalized_hash = _clean_device_str(agent_hash) or None
+    normalized_role_health = serialize_agent_role_health(agent_role_health) if agent_role_health is not None else None
     normalized_guid = _clean_device_str(guid) or None
     if normalized_guid:
         try:
@@ -381,6 +388,7 @@ def _device_upsert(
             description,
             created_at,
             agent_hash,
+            agent_role_health,
             guid,
             memory,
             network,
@@ -399,11 +407,12 @@ def _device_upsert(
             agent_id,
             connection_type,
             connection_endpoint
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(hostname) DO UPDATE SET
             description=excluded.description,
             created_at=COALESCE({DEVICE_TABLE}.created_at, excluded.created_at),
             agent_hash=COALESCE(NULLIF(excluded.agent_hash, ''), {DEVICE_TABLE}.agent_hash),
+            agent_role_health=COALESCE(NULLIF(excluded.agent_role_health, ''), {DEVICE_TABLE}.agent_role_health),
             guid=COALESCE(NULLIF(excluded.guid, ''), {DEVICE_TABLE}.guid),
             memory=excluded.memory,
             network=excluded.network,
@@ -429,6 +438,7 @@ def _device_upsert(
         normalized_description,
         created_ts,
         normalized_hash,
+        normalized_role_health,
         normalized_guid,
         column_values.get("memory"),
         column_values.get("network"),
@@ -460,6 +470,7 @@ class DeviceManagementService:
         "description",
         "created_at",
         "agent_hash",
+        "agent_role_health",
         "memory",
         "network",
         "software",
@@ -622,11 +633,13 @@ class DeviceManagementService:
         mapping = dict(zip(self._DEVICE_COLUMNS, row))
         created_at = mapping.get("created_at") or 0
         last_seen = mapping.get("last_seen") or 0
+        role_health = normalize_agent_role_health(mapping.get("agent_role_health"))
         summary = {
             "hostname": mapping.get("hostname") or "",
             "description": mapping.get("description") or "",
             "agent_hash": (mapping.get("agent_hash") or "").strip(),
             "agent_build_id": (mapping.get("agent_hash") or "").strip(),
+            "agent_role_health": role_health,
             "agent_guid": normalize_guid(mapping.get("guid")) or "",
             "agent_id": (mapping.get("agent_id") or "").strip(),
             "device_type": mapping.get("device_type") or "",
@@ -660,6 +673,7 @@ class DeviceManagementService:
             "created_at_iso": _ts_to_iso(created_at),
             "agent_hash": summary["agent_hash"],
             "agent_build_id": summary["agent_build_id"],
+            "agent_role_health": role_health,
             "agent_guid": summary["agent_guid"],
             "guid": summary["agent_guid"],
             "memory": details["memory"],
@@ -890,6 +904,20 @@ class DeviceManagementService:
             or _clean_device_str((details.get("summary") or {}).get("installed_build_id"))
             or _clean_device_str((details.get("summary") or {}).get("agent_hash"))
         )
+        incoming_role_health = (
+            payload.get("agent_role_health")
+            if payload.get("agent_role_health") is not None
+            else payload.get("role_health")
+        )
+        if incoming_role_health is None:
+            incoming_role_health = details.get("agent_role_health")
+        if incoming_role_health is None:
+            incoming_role_health = (details.get("summary") or {}).get("agent_role_health")
+        incoming_service_mode = (
+            _clean_device_str(payload.get("service_mode"))
+            or _clean_device_str((details.get("summary") or {}).get("service_mode"))
+            or _clean_device_str(getattr(ctx, "service_mode", None))
+        )
 
         raw_guid = getattr(ctx, "guid", None)
         try:
@@ -936,6 +964,7 @@ class DeviceManagementService:
             created_at = 0
             existing_guid = None
             existing_agent_hash = None
+            existing_role_health = None
             db_fp = ""
 
             if row:
@@ -953,6 +982,7 @@ class DeviceManagementService:
                 except Exception:
                     existing_guid = None
                 existing_agent_hash = _clean_device_str(previous.get("agent_hash")) or None
+                existing_role_health = previous.get("agent_role_health")
                 db_fp = (row[-1] or "").strip().lower() if row[-1] else ""
             if db_fp and fingerprint_lower and db_fp != fingerprint_lower:
                 self.service_log(
@@ -986,6 +1016,15 @@ class DeviceManagementService:
                 incoming_summary["agent_guid"] = effective_guid
             if fingerprint:
                 incoming_summary.setdefault("ssl_key_fingerprint", fingerprint)
+            merged_role_health = (
+                merge_agent_role_health(
+                    existing_role_health,
+                    incoming_role_health,
+                    incoming_context=incoming_service_mode,
+                )
+                if incoming_role_health is not None
+                else normalize_agent_role_health(existing_role_health)
+            )
 
             prev_summary = prev_details.get("summary") if isinstance(prev_details, dict) else {}
             if isinstance(prev_summary, dict):
@@ -1036,6 +1075,7 @@ class DeviceManagementService:
                 merged,
                 created_at,
                 agent_hash=agent_hash or existing_agent_hash,
+                agent_role_health=merged_role_health,
                 guid=effective_guid,
             )
             _sync_device_software_inventory(cur, effective_guid, merged.get("software"))
@@ -1095,47 +1135,7 @@ class DeviceManagementService:
             site_tuple = row[len(self._DEVICE_COLUMNS):]
             if not self.site_access.user_can_access_site(current_user, site_tuple[0]):
                 return {}, 200
-            mapping = dict(zip(self._DEVICE_COLUMNS, device_tuple))
-            created_at = mapping.get("created_at") or 0
-            last_seen = mapping.get("last_seen") or 0
-            payload = {
-                "details": {
-                    "summary": {
-                        "hostname": mapping.get("hostname") or "",
-                        "description": mapping.get("description") or "",
-                        "agent_build_id": (mapping.get("agent_hash") or "").strip(),
-                    },
-                    "memory": _safe_json(mapping.get("memory"), []),
-                    "network": _safe_json(mapping.get("network"), []),
-                    "software": _normalize_software_inventory(_safe_json(mapping.get("software"), [])),
-                    "storage": _safe_json(mapping.get("storage"), []),
-                    "cpu": _safe_json(mapping.get("cpu"), {}),
-                },
-                "summary": {
-                    "hostname": mapping.get("hostname") or "",
-                    "description": mapping.get("description") or "",
-                },
-                "description": mapping.get("description") or "",
-                "created_at": created_at or 0,
-                "agent_hash": (mapping.get("agent_hash") or "").strip(),
-                "agent_build_id": (mapping.get("agent_hash") or "").strip(),
-                "agent_guid": normalize_guid(mapping.get("guid")) or "",
-                "memory": _safe_json(mapping.get("memory"), []),
-                "network": _safe_json(mapping.get("network"), []),
-                "software": _normalize_software_inventory(_safe_json(mapping.get("software"), [])),
-                "storage": _safe_json(mapping.get("storage"), []),
-                "cpu": _safe_json(mapping.get("cpu"), {}),
-                "device_type": mapping.get("device_type") or "",
-                "domain": mapping.get("domain") or "",
-                "external_ip": mapping.get("external_ip") or "",
-                "internal_ip": mapping.get("internal_ip") or "",
-                "last_reboot": mapping.get("last_reboot") or "",
-                "last_seen": last_seen or 0,
-                "last_user": mapping.get("last_user") or "",
-                "operating_system": mapping.get("operating_system") or "",
-                "uptime": mapping.get("uptime") or 0,
-                "agent_id": (mapping.get("agent_id") or "").strip(),
-            }
+            payload = self._build_device_payload(device_tuple, site_tuple)
             payload = self._attach_agent_version_status(payload)
             return payload, 200
         except Exception as exc:

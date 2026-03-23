@@ -71,6 +71,17 @@ const DEVICE_LIST_STATUS_COLORS = Object.freeze({
   offline: "#b0b8c8",
 });
 const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
+const DEVICE_DETAILS_POLL_INTERVAL_MS = 60000;
+const ROLE_HEALTH_LAST_CHECKED_COLOR = "rgba(123, 137, 161, 0.9)";
+const ROLE_HEALTH_STATUS_COLOR_BY_CODE = Object.freeze({
+  healthy: "#00d18c",
+  recovering: "#ffb347",
+  unhealthy: "#ff7b89",
+  pending: "#8fbfff",
+  loaded: "#e2e8f0",
+  unsupported: "#94a3b8",
+  unknown: "#b0b8c8",
+});
 
 const PAGE_ICON = DeveloperBoardRoundedIcon;
 
@@ -92,6 +103,7 @@ const iconFontFamily = '"Quartz Regular"';
 
 const BASE_GRID_HEIGHTS = {
   topLevel: 300,
+  agentRolesHealth: 240,
   storage: 300,
   memory: 260,
   network: 260,
@@ -126,6 +138,7 @@ const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
 
 const SUMMARY_SECTIONS = [
   { key: "top-level", label: "Top-Level", icon: InfoOutlinedIcon },
+  { key: "agent-roles-health", label: "Agent Roles Health", icon: DeveloperBoardRoundedIcon },
   { key: "storage", label: "Storage", icon: StorageRoundedIcon },
   { key: "memory", label: "Memory", icon: MemoryRoundedIcon },
   { key: "network", label: "Network", icon: LanRoundedIcon },
@@ -147,6 +160,30 @@ function getWireguardTunnelPresentation(tunnelInfo) {
       ? DEVICE_LIST_STATUS_COLORS.online
       : DEVICE_LIST_STATUS_COLORS.offline;
   return { peerIp, statusText, statusColor, isTunnelOnline };
+}
+
+function formatRoleHealthContext(context) {
+  const normalized = String(context || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "system") return "System";
+  if (normalized === "currentuser" || normalized === "current_user" || normalized === "interactive") {
+    return "Current User";
+  }
+  return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function normalizeRoleHealthStatusText(value) {
+  const text = String(value || "").trim();
+  if (!text) return "Unknown";
+  if (/^[a-z0-9_-]+$/i.test(text)) {
+    return text.replace(/[_-]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+  }
+  return text;
+}
+
+function getRoleHealthStatusColor(statusCode) {
+  const normalized = String(statusCode || "").trim().toLowerCase();
+  return ROLE_HEALTH_STATUS_COLOR_BY_CODE[normalized] || SUMMARY_DEFAULT_TEXT_COLOR;
 }
 
 const myTheme = themeQuartz.withParams({
@@ -692,9 +729,21 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     const now = Date.now() / 1000;
     return now - tsSec <= 300 ? "Online" : "Offline";
   });
+  const descriptionDraftRef = useRef("");
+  const loadedDescriptionRef = useRef("");
+  const connectionDraftRef = useRef("");
+  const loadedConnectionEndpointRef = useRef("");
   const pageRenderCountRef = useRef(0);
   pageRenderCountRef.current += 1;
   const summary = details.summary || {};
+
+  useEffect(() => {
+    descriptionDraftRef.current = description;
+  }, [description]);
+
+  useEffect(() => {
+    connectionDraftRef.current = connectionDraft;
+  }, [connectionDraft]);
 
   useEffect(() => {
     const activeTabKey = TOP_TABS[tab]?.key || "";
@@ -943,6 +992,8 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
 
   useEffect(() => {
     let canceled = false;
+    let inFlight = false;
+    let pollingTimer = null;
     if (device) {
       setLockedStatus(device.status || statusFromHeartbeat(device.lastSeen));
     }
@@ -959,9 +1010,11 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
 
     setSummaryDataReady(false);
 
-    const load = async () => {
+    const load = async ({ silent = false, includeAgents = false } = {}) => {
+      if (inFlight) return;
+      inFlight = true;
       try {
-        const agentsPromise = fetch("/api/agents").catch(() => null);
+        const agentsPromise = includeAgents ? fetch("/api/agents").catch(() => null) : Promise.resolve(null);
         let detailResponse = null;
         if (guid) {
           try {
@@ -1011,7 +1064,13 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           "";
         setConnectionType(connectionTypeValue);
         setConnectionEndpoint(connectionEndpointValue);
-        setConnectionDraft(connectionEndpointValue);
+        if (
+          !silent ||
+          String(connectionDraftRef.current || "").trim() === String(loadedConnectionEndpointRef.current || "").trim()
+        ) {
+          setConnectionDraft(connectionEndpointValue);
+        }
+        loadedConnectionEndpointRef.current = String(connectionEndpointValue || "");
         setConnectionMessage("");
         setConnectionError("");
 
@@ -1172,9 +1231,21 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
           status: detailData?.status || "",
           connectionType: connectionTypeValue,
           connectionEndpoint: connectionEndpointValue,
+          agentRoleHealth:
+            detailData?.agent_role_health ||
+            normalizedSummary.agent_role_health ||
+            detailData?.details?.summary?.agent_role_health ||
+            { roles: [], reported_at: 0 },
         };
         setMeta(metaPayload);
-        setDescription(normalizedSummary.description || detailData?.description || "");
+        const nextDescription = normalizedSummary.description || detailData?.description || "";
+        if (
+          !silent ||
+          String(descriptionDraftRef.current || "") === String(loadedDescriptionRef.current || "")
+        ) {
+          setDescription(nextDescription);
+        }
+        loadedDescriptionRef.current = String(nextDescription || "");
 
         setAgent((prev) => ({
           ...(prev || {}),
@@ -1195,16 +1266,23 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
       } catch (e) {
         if (canceled) return;
         console.warn("Failed to load device info", e);
-        setMeta({});
+        if (!silent) {
+          setMeta({});
+        }
       } finally {
-        if (!canceled) {
+        inFlight = false;
+        if (!canceled && !silent) {
           setSummaryDataReady(true);
         }
       }
     };
-    load();
+    load({ silent: false, includeAgents: true });
+    pollingTimer = setInterval(() => {
+      load({ silent: true, includeAgents: false });
+    }, DEVICE_DETAILS_POLL_INTERVAL_MS);
     return () => {
       canceled = true;
+      if (pollingTimer) clearInterval(pollingTimer);
     };
   }, [device]);
 
@@ -1239,6 +1317,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
       const updated = data?.device?.connection_endpoint || trimmed;
       setConnectionEndpoint(updated);
       setConnectionDraft(updated);
+      loadedConnectionEndpointRef.current = updated;
       setMeta((prev) => ({ ...(prev || {}), connectionEndpoint: updated }));
       setConnectionMessage("SSH endpoint updated.");
       setTimeout(() => setConnectionMessage(""), 3000);
@@ -1317,6 +1396,7 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description })
       });
+      loadedDescriptionRef.current = description;
       setDetails((d) => ({
         ...d,
         summary: { ...(d.summary || {}), description }
@@ -2028,6 +2108,27 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                   </Island>
                 </Box>
 
+                <Box id="device-summary-agent-roles-health" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
+                  <Island
+                    title="Agent Roles Health"
+                    icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
+                    meta={agentRolesHealthMeta}
+                    sx={{ mb: 0 }}
+                  >
+                    {summaryDataReady ? (
+                      <SummarySectionGrid
+                        sectionKey="agent-roles-health"
+                        rowData={agentRolesHealthRows}
+                        columnDefs={agentRolesHealthColumnDefs}
+                        defaultColDef={defaultGridColDef}
+                        height={agentRolesHealthGridHeight}
+                      />
+                    ) : (
+                      <SummaryGridPlaceholder height={agentRolesHealthGridHeight} />
+                    )}
+                  </Island>
+                </Box>
+
                 <Box id="device-summary-storage" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
                   <Island
                     title="Storage"
@@ -2531,6 +2632,98 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     ]
   );
 
+  const agentRolesHealthRows = useMemo(() => {
+    const payload =
+      meta.agentRoleHealth && typeof meta.agentRoleHealth === "object"
+        ? meta.agentRoleHealth
+        : summary.agent_role_health && typeof summary.agent_role_health === "object"
+          ? summary.agent_role_health
+          : {};
+    const items = Array.isArray(payload?.roles) ? payload.roles : [];
+    const labelCounts = items.reduce((acc, item) => {
+      const baseLabel = String(item?.role_label || item?.role_name || item?.role || "").trim();
+      if (baseLabel) {
+        const key = baseLabel.toLowerCase();
+        acc[key] = (acc[key] || 0) + 1;
+      }
+      return acc;
+    }, {});
+    return items
+      .map((item, index) => {
+        const baseLabel = String(item?.role_label || item?.role_name || item?.role || "").trim() || `Role ${index + 1}`;
+        const contextLabel = formatRoleHealthContext(item?.context);
+        const labelKey = baseLabel.toLowerCase();
+        const roleLabel =
+          contextLabel && labelCounts[labelKey] > 1 ? `${baseLabel} (${contextLabel})` : baseLabel;
+        return {
+          id: item?.role_id || `${roleLabel}-${index}`,
+          role: roleLabel,
+          status: normalizeRoleHealthStatusText(item?.status || item?.status_code || "Unknown"),
+          statusCode: String(item?.status_code || item?.status || "unknown").trim().toLowerCase(),
+          lastCheckedAt: item?.last_checked_at ?? null,
+          lastCheckedText: formatTimestamp(item?.last_checked_at),
+          detail: String(item?.detail || "").trim(),
+        };
+      })
+      .sort((left, right) => String(left.role || "").localeCompare(String(right.role || "")));
+  }, [meta.agentRoleHealth, summary.agent_role_health, formatTimestamp]);
+
+  const agentRolesHealthMeta = useMemo(() => {
+    if (!agentRolesHealthRows.length) {
+      return "Awaiting role health telemetry";
+    }
+    const counts = agentRolesHealthRows.reduce((acc, row) => {
+      const key = String(row.statusCode || "unknown").trim().toLowerCase();
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    const parts = [];
+    if (counts.healthy) parts.push(`${counts.healthy} healthy`);
+    if (counts.recovering) parts.push(`${counts.recovering} recovering`);
+    if (counts.unhealthy) parts.push(`${counts.unhealthy} unhealthy`);
+    if (counts.pending) parts.push(`${counts.pending} pending`);
+    if (!parts.length) parts.push(`${agentRolesHealthRows.length} roles reporting`);
+    return parts.join(" • ");
+  }, [agentRolesHealthRows]);
+
+  const agentRolesHealthColumnDefs = useMemo(
+    () => [
+      {
+        field: "role",
+        headerName: "Role",
+        width: 220,
+        flex: 1.1,
+        sortable: false,
+        filter: false,
+        cellStyle: { color: SUMMARY_FIELD_TEXT_COLOR },
+        tooltipValueGetter: (params) => params?.data?.detail || params?.value || "",
+      },
+      {
+        field: "status",
+        headerName: "Status",
+        width: 170,
+        flex: 0.7,
+        sortable: false,
+        filter: false,
+        cellStyle: (params) => ({
+          color: getRoleHealthStatusColor(params?.data?.statusCode),
+          fontWeight: 600,
+        }),
+        tooltipValueGetter: (params) => params?.data?.detail || params?.value || "",
+      },
+      {
+        field: "lastCheckedText",
+        headerName: "Last Checked",
+        width: 220,
+        flex: 0.85,
+        sortable: false,
+        filter: false,
+        cellStyle: { color: ROLE_HEALTH_LAST_CHECKED_COLOR },
+      },
+    ],
+    []
+  );
+
   const topLevelSplitColumnDefs = useMemo(
     () => [
       {
@@ -2571,6 +2764,14 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     });
     return Math.round(baseHeight * 1.2);
   }, [overviewInfoRows.length, borealisAgentRows.length, resolveGridHeight]);
+  const agentRolesHealthGridHeight = useMemo(
+    () =>
+      resolveGridHeight(Math.max(agentRolesHealthRows.length, 1), {
+        minHeight: BASE_GRID_HEIGHTS.agentRolesHealth,
+        maxHeight: 420,
+      }),
+    [agentRolesHealthRows.length, resolveGridHeight]
+  );
   const storageGridHeight = useMemo(
     () =>
       resolveGridHeight(storageRows.length, {

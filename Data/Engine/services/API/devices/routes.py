@@ -23,6 +23,7 @@ from flask import Blueprint, jsonify, request, g
 
 from ....auth.device_auth import AGENT_CONTEXT_HEADER, require_device_auth
 from ....auth.guid_utils import normalize_guid
+from .agent_role_health import merge_agent_role_health, serialize_agent_role_health
 from .tunnel import _get_tunnel_service
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
@@ -172,6 +173,12 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     updates[key] = encoded
 
         metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+        incoming_role_health = payload.get("agent_role_health")
+        incoming_service_mode = (
+            payload.get("service_mode")
+            or metrics.get("service_mode")
+            or getattr(ctx, "service_mode", None)
+        )
         if metrics.get("last_user"):
             updates["last_user"] = str(metrics["last_user"])
         if metrics.get("operating_system"):
@@ -195,10 +202,9 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             cur = conn.cursor()
 
             def _apply_updates() -> int:
-                if not updates:
+                if not updates and incoming_role_health is None:
                     return 0
-                columns = ", ".join(f"{col} = ?" for col in updates.keys())
-                values = list(updates.values())
+                pending_updates = dict(updates)
                 normalized_guid = normalize_guid(ctx.guid)
                 selected_guid: Optional[str] = None
                 if normalized_guid:
@@ -214,6 +220,27 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     if not selected_guid and rows:
                         selected_guid = rows[0][0]
                 target_guid = selected_guid or ctx.guid
+                if incoming_role_health is not None:
+                    existing_role_health = None
+                    try:
+                        cur.execute(
+                            "SELECT agent_role_health FROM devices WHERE guid = ?",
+                            (target_guid,),
+                        )
+                        existing_row = cur.fetchone()
+                        if existing_row:
+                            existing_role_health = existing_row[0]
+                    except Exception:
+                        existing_role_health = None
+                    pending_updates["agent_role_health"] = serialize_agent_role_health(
+                        merge_agent_role_health(
+                            existing_role_health,
+                            incoming_role_health,
+                            incoming_context=incoming_service_mode,
+                        )
+                    )
+                columns = ", ".join(f"{col} = ?" for col in pending_updates.keys())
+                values = list(pending_updates.values())
                 cur.execute(
                     f"UPDATE devices SET {columns} WHERE guid = ?",
                     values + [target_guid],

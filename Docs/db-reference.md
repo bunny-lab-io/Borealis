@@ -86,7 +86,7 @@ sites (id) -------------------< user_site_assignments (site_id)
 #### `devices`
 - Status: Active (core inventory and identity table).
 - Purpose: Canonical device identity and inventory snapshot.
-- Columns: `guid`, `hostname`, `description`, `created_at`, `agent_hash`, `memory`, `network`, `software`, `storage`, `cpu`, `device_type`, `domain`, `external_ip`, `internal_ip`, `last_reboot`, `last_seen`, `last_user`, `operating_system`, `uptime`, `agent_id`, `connection_type`, `connection_endpoint`, `agent_vnc_password`, `ssl_key_fingerprint`, `token_version`, `status`, `key_added_at`.
+- Columns: `guid`, `hostname`, `description`, `created_at`, `agent_hash`, `agent_role_health`, `memory`, `network`, `software`, `storage`, `cpu`, `device_type`, `domain`, `external_ip`, `internal_ip`, `last_reboot`, `last_seen`, `last_user`, `operating_system`, `uptime`, `agent_id`, `connection_type`, `connection_endpoint`, `agent_vnc_password`, `ssl_key_fingerprint`, `token_version`, `status`, `key_added_at`.
 - Constraints and indexes:
 - `guid` primary key.
 - `uq_devices_hostname` unique on `hostname`.
@@ -96,6 +96,7 @@ sites (id) -------------------< user_site_assignments (site_id)
 - Device auth (`guid + fingerprint + token_version` validation).
 - Enrollment finalize/upsert.
 - Heartbeats and inventory detail updates.
+- Per-role health snapshots for the Device Details `Agent Roles Health` panel.
 - VNC/VPN agent routing (`agent_id`, `agent_vnc_password`).
 - Scheduled-jobs online host snapshot (`last_seen`).
 - Notes:

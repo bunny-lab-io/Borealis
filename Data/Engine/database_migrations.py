@@ -50,6 +50,7 @@ def _ensure_devices_table(conn: sqlite3.Connection) -> None:
         "description": "TEXT",
         "created_at": "INTEGER",
         "agent_hash": "TEXT",
+        "agent_role_health": "TEXT",
         "memory": "TEXT",
         "network": "TEXT",
         "software": "TEXT",
@@ -370,6 +371,7 @@ def _create_devices_table(cur: sqlite3.Cursor) -> None:
             description TEXT,
             created_at INTEGER,
             agent_hash TEXT,
+            agent_role_health TEXT,
             memory TEXT,
             network TEXT,
             software TEXT,
@@ -451,18 +453,19 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
     insert_sql = (
         """
         INSERT INTO devices (
-            guid, hostname, description, created_at, agent_hash, memory,
+            guid, hostname, description, created_at, agent_hash, agent_role_health, memory,
             network, software, storage, cpu, device_type, domain, external_ip,
             internal_ip, last_reboot, last_seen, last_user, operating_system,
             uptime, agent_id, connection_type, connection_endpoint,
             agent_vnc_password, ssl_key_fingerprint, token_version, status, key_added_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guid) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             description = EXCLUDED.description,
             created_at = EXCLUDED.created_at,
             agent_hash = EXCLUDED.agent_hash,
+            agent_role_health = EXCLUDED.agent_role_health,
             memory = EXCLUDED.memory,
             network = EXCLUDED.network,
             software = EXCLUDED.software,
@@ -505,6 +508,7 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             record.get("description"),
             created_at,
             record.get("agent_hash"),
+            record.get("agent_role_health"),
             record.get("memory"),
             record.get("network"),
             record.get("software"),

@@ -71,6 +71,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - `connect_agent` registration (agent socket registry).
 - WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
+- Heartbeats/details also carry per-role health snapshots so the Device Details `Agent Roles Health` section can show current role/service status with last-checked timestamps.
 
 ### Token storage
 - Refresh tokens are stored encrypted (DPAPI on Windows) in `refresh.token`.

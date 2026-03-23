@@ -1172,6 +1172,7 @@ class VncManager:
 class Role:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
+        self.role_health_label = "UltraVNC Service"
         hooks = getattr(ctx, "hooks", {}) or {}
         self._log_hook = hooks.get("log_agent")
         self._http_client_factory = hooks.get("http_client")
@@ -1359,6 +1360,46 @@ class Role:
             except Exception as exc:
                 self._log(f"VNC always-on loop error: {exc}", error=True)
             self._always_on_stop.wait(interval)
+
+    def health_report(self) -> dict:
+        if os.name != "nt":
+            return {
+                "status": "unsupported",
+                "role_label": self.role_health_label,
+                "detail": "Always-on UltraVNC is only supported on Windows agents.",
+            }
+        service_name = self.vnc._resolve_service_name()
+        service_state = self.vnc._service_state_by_name(service_name) if service_name else None
+        loop_alive = bool(self._always_on_thread and self._always_on_thread.is_alive())
+        if service_state in {"RUNNING", "START_PENDING"}:
+            return {
+                "status": "healthy",
+                "role_label": self.role_health_label,
+                "detail": f"{service_name or ULTRAVNC_SERVICE_NAME} is {service_state.lower()}.",
+            }
+        if not loop_alive:
+            return {
+                "status": "unhealthy",
+                "role_label": self.role_health_label,
+                "detail": "Always-on reconciliation loop stopped.",
+            }
+        if not self._engine_ready_for_vnc:
+            return {
+                "status": "recovering",
+                "role_label": self.role_health_label,
+                "detail": "Waiting for engine readiness before enabling UltraVNC.",
+            }
+        if not self._state_password():
+            return {
+                "status": "recovering",
+                "role_label": self.role_health_label,
+                "detail": "Waiting for VNC credentials from the Engine.",
+            }
+        return {
+            "status": "recovering",
+            "role_label": self.role_health_label,
+            "detail": f"{service_name or ULTRAVNC_SERVICE_NAME} is {service_state or 'stopped'}; restart will be retried.",
+        }
 
     def register_events(self) -> None:
         sio = self.ctx.sio

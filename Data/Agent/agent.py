@@ -52,6 +52,7 @@ except Exception:
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from role_health import RoleHealthRegistry
 
 def _iter_exception_chain(exc: BaseException):
     seen = set()
@@ -2348,6 +2349,7 @@ background_tasks = []
 AGENT_LOOP = None
 ROLE_MANAGER = None
 ROLE_MANAGER_SYS = None
+ROLE_HEALTH_REGISTRY = RoleHealthRegistry()
 
 # ---------------- Local IPC Bridge (Service -> Agent) ----------------
 def start_agent_bridge_pipe(loop_ref):
@@ -2559,6 +2561,17 @@ async def stop_all_roles():
     except Exception:
         pass
 
+
+def _collect_agent_role_health() -> Dict[str, Any]:
+    try:
+        snapshot = ROLE_HEALTH_REGISTRY.snapshot()
+        if isinstance(snapshot, dict):
+            return snapshot
+    except Exception as exc:
+        _log_agent(f'Role health snapshot failed: {exc}', fname='agent.error.log')
+    return {"roles": [], "reported_at": int(time.time())}
+
+
 # ---------------- Heartbeat ----------------
 async def send_heartbeat():
     """
@@ -2575,6 +2588,8 @@ async def send_heartbeat():
                 "hostname": socket.gethostname(),
                 "metrics": _collect_heartbeat_metrics(),
                 "agent_build_id": _current_agent_build_id(sync=True),
+                "agent_role_health": _collect_agent_role_health(),
+                "service_mode": SERVICE_MODE,
             }
             await client.async_post_json("/api/agent/heartbeat", payload, require_auth=True)
         except Exception as exc:
@@ -2905,6 +2920,8 @@ async def send_agent_details():
                 "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
                 "details": details,
                 "agent_build_id": _current_agent_build_id(sync=True),
+                "agent_role_health": _collect_agent_role_health(),
+                "service_mode": SERVICE_MODE,
             }
             client = http_client()
             await client.async_post_json("/api/agent/details", payload, require_auth=True)
@@ -2928,6 +2945,8 @@ async def send_agent_details_once():
             "hostname": details.get("summary", {}).get("hostname", socket.gethostname()),
             "details": details,
             "agent_build_id": _current_agent_build_id(sync=True),
+            "agent_role_health": _collect_agent_role_health(),
+            "service_mode": SERVICE_MODE,
         }
         client = http_client()
         await client.async_post_json("/api/agent/details", payload, require_auth=True)
@@ -2959,6 +2978,9 @@ async def connect():
             "hostname": socket.gethostname(),
             "inventory": {},
             "metrics": _collect_heartbeat_metrics(),
+            "agent_build_id": _current_agent_build_id(sync=True),
+            "agent_role_health": _collect_agent_role_health(),
+            "service_mode": SERVICE_MODE,
         }
         await client.async_post_json("/api/agent/heartbeat", payload, require_auth=True)
     except Exception as exc:
@@ -3391,6 +3413,7 @@ if __name__=='__main__':
             'http_client': http_client,
             'get_agent_build_id': lambda: _current_agent_build_id(sync=True),
             'log_agent': lambda message, **kwargs: _log_agent(message, **kwargs),
+            'role_health_registry': ROLE_HEALTH_REGISTRY,
         }
         if not SYSTEM_SERVICE_MODE:
             # Load interactive-context roles (tray/UI, current-user execution, screenshot, etc.)

@@ -1097,6 +1097,7 @@ class Role:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
         self.client = _get_client()
+        self.role_health_label = "WireGuard Service"
         hooks = getattr(ctx, "hooks", {}) or {}
         self._log_hook = hooks.get("log_agent")
         self._http_client_factory = hooks.get("http_client")
@@ -1210,6 +1211,44 @@ class Role:
             client_private_key=payload.get("client_private_key"),
             client_public_key=payload.get("client_public_key"),
         )
+
+    def health_report(self) -> dict:
+        session = getattr(self.client, "session", None)
+        tunnel_id = ""
+        if session is not None:
+            try:
+                tunnel_id = str(session.tunnel_id or "").strip()
+            except Exception:
+                tunnel_id = ""
+        try:
+            service_state = self.client._service_state()
+        except Exception:
+            service_state = None
+        thread_alive = bool(self._ensure_thread and self._ensure_thread.is_alive())
+        detail_suffix = f" tunnel_id={tunnel_id}" if tunnel_id else ""
+        if service_state in ("RUNNING", "START_PENDING") and session is not None:
+            return {
+                "status": "healthy",
+                "role_label": self.role_health_label,
+                "detail": f"Persistent tunnel active (state={service_state or 'RUNNING'}).{detail_suffix}",
+            }
+        if not thread_alive:
+            return {
+                "status": "unhealthy",
+                "role_label": self.role_health_label,
+                "detail": "Persistent ensure loop stopped.",
+            }
+        if session is not None:
+            return {
+                "status": "recovering",
+                "role_label": self.role_health_label,
+                "detail": f"Tunnel expected but service state is {service_state or 'stopped'}.{detail_suffix}",
+            }
+        return {
+            "status": "recovering",
+            "role_label": self.role_health_label,
+            "detail": "Awaiting persistent tunnel session bootstrap.",
+        }
 
     def _request_persistent_session(self) -> Optional[Dict[str, Any]]:
         client = self._http_client()
