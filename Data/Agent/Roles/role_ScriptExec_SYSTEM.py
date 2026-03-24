@@ -156,12 +156,10 @@ def _build_wrapped_script(content: str, env_map: Dict[str, str], timeout_seconds
     prelude_lines: List[str] = []
     _env_assignment_lines(prelude_lines)
 
-    inner_lines: List[str] = []
-    _env_assignment_lines(inner_lines)
-    inner_lines.append(content or "")
-
     prelude = "\n".join(prelude_lines)
-    inner = "\n".join(line for line in inner_lines if line is not None)
+    # Keep the assembly body first inside the script block so advanced scripts
+    # can legally start with [CmdletBinding()] and param(...).
+    inner = content or ""
 
     pieces: List[str] = []
     if prelude:

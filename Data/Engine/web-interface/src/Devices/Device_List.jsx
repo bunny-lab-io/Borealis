@@ -104,6 +104,40 @@ const formatHostnameForDisplay = (value) => {
   return dotIndex > 0 ? text.slice(0, dotIndex) : text;
 };
 
+const alphaSortCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
+const normalizeAlphaSortValue = (value) => {
+  if (typeof value === "string") return value.trim();
+  if (value == null) return "";
+  return String(value).trim();
+};
+
+const compareAlphaValues = (left, right) =>
+  alphaSortCollator.compare(normalizeAlphaSortValue(left), normalizeAlphaSortValue(right));
+
+const getDeviceSiteSortValue = (device) => {
+  const siteName = normalizeAlphaSortValue(device?.site || device?.summary?.site_name);
+  return siteName || "Not Configured";
+};
+
+const getDeviceHostnameSortValue = (device) =>
+  formatHostnameForDisplay(device?.hostname || device?.summary?.hostname || "");
+
+const compareDeviceRowsBySiteThenHostname = (left, right) => {
+  const siteCompare = compareAlphaValues(
+    getDeviceSiteSortValue(left),
+    getDeviceSiteSortValue(right)
+  );
+  if (siteCompare !== 0) return siteCompare;
+  return compareAlphaValues(
+    getDeviceHostnameSortValue(left),
+    getDeviceHostnameSortValue(right)
+  );
+};
+
 const DescriptionCellRenderer = React.memo(function DescriptionCellRenderer(props) {
   const { value, data, onSaveDescription, fontFamily } = props;
   const safeValue = typeof value === "string" ? value : value == null ? "" : String(value);
@@ -402,6 +436,7 @@ export default function DeviceList({
   const [columns, setColumns] = useState(defaultColumns);
   const [colChooserAnchor, setColChooserAnchor] = useState(null);
   const gridRef = useRef(null);
+  const initialSortAppliedRef = useRef(false);
   const tunnelPeerCacheRef = useRef(new Map());
   const tunnelStatusCacheRef = useRef(new Map());
 
@@ -942,8 +977,13 @@ export default function DeviceList({
   }, []);
 
   const displayedRows = useMemo(() => {
-    if (!(savedFilterHostnames instanceof Set)) return rows;
-    return rows.filter((row) => savedFilterHostnames.has(String(row?.hostname || "").trim().toLowerCase()));
+    const filteredRows =
+      savedFilterHostnames instanceof Set
+        ? rows.filter((row) =>
+            savedFilterHostnames.has(String(row?.hostname || "").trim().toLowerCase())
+          )
+        : rows;
+    return [...filteredRows].sort(compareDeviceRowsBySiteThenHostname);
   }, [rows, savedFilterHostnames]);
 
   const applyView = useCallback((view) => {
@@ -1366,9 +1406,10 @@ export default function DeviceList({
           return {
             field: "site",
             headerName: col.label,
-            valueGetter: (params) => params.data?.site || "Not Configured",
-            width: 100,
-            minWidth: 100,
+            valueGetter: (params) => getDeviceSiteSortValue(params.data),
+            comparator: (left, right) => compareAlphaValues(left, right),
+            width: 150,
+            minWidth: 150,
             flex: 0,
           };
         case "hostname":
@@ -1376,8 +1417,13 @@ export default function DeviceList({
             field: "hostname",
             headerName: col.label,
             cellRenderer: hostnameCellRenderer,
-            width: 150,
-            minWidth: 150,
+            comparator: (left, right, nodeA, nodeB) =>
+              compareAlphaValues(
+                getDeviceHostnameSortValue(nodeA?.data) || left,
+                getDeviceHostnameSortValue(nodeB?.data) || right
+              ),
+            width: 200,
+            minWidth: 200,
             flex: 0,
           };
         case "description":
@@ -1591,6 +1637,22 @@ export default function DeviceList({
   const handleGridReady = useCallback(
     (params) => {
       params.api.setFilterModel(filterModel);
+      if (initialSortAppliedRef.current) return;
+      const applyColumnState =
+        typeof params.api?.applyColumnState === "function"
+          ? params.api.applyColumnState.bind(params.api)
+          : typeof params.columnApi?.applyColumnState === "function"
+          ? params.columnApi.applyColumnState.bind(params.columnApi)
+          : null;
+      if (!applyColumnState) return;
+      applyColumnState({
+        state: [
+          { colId: "site", sort: "asc", sortIndex: 0 },
+          { colId: "hostname", sort: "asc", sortIndex: 1 },
+        ],
+        defaultState: { sort: null },
+      });
+      initialSortAppliedRef.current = true;
     },
     [filterModel]
   );
@@ -1768,6 +1830,9 @@ export default function DeviceList({
               fontWeight: 600,
               letterSpacing: 0.3,
             },
+            "& .ag-sort-order, & [data-ref='eSortOrder']": {
+              display: "none !important",
+            },
             "& .ag-row": {
               borderColor: "rgba(255,255,255,0.04)",
             },
@@ -1828,7 +1893,7 @@ export default function DeviceList({
             suppressRowClickSelection
             suppressCellFocus
             pagination
-            paginationPageSize={20}
+            paginationPageSize={100}
             paginationPageSizeSelector={[20, 50, 100]}
             animateRows
             onSelectionChanged={handleSelectionChanged}
