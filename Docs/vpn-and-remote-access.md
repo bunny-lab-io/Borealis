@@ -172,7 +172,7 @@ http:
   - Generates server keys, renders config, manages platform-specific WireGuard interface/service lifecycle, checks listener health, and applies allowlist-based firewall rules.
 - PowerShell bridge: `Data/Engine/services/WebSocket/vpn_shell.py`
   - Proxies UI shell input/output to the agent's TCP shell server over WireGuard.
-- Logging: `Engine/Logs/VPN_Tunnel/tunnel.log` plus Device Activity entries; shell I/O is in `Engine/Logs/VPN_Tunnel/remote_shell.log`.
+- Logging: `Engine/Logs/VPN_Tunnel/tunnel.log`; persistent WireGuard tunnel lifecycle is intentionally suppressed from Device Activity history, and shell I/O is in `Engine/Logs/VPN_Tunnel/remote_shell.log`.
 
 #### 3) API endpoints
 - `POST /api/tunnel/connect` -> issues or reuses session material (tunnel_id, token, virtual_ip, endpoint).

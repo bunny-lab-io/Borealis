@@ -136,7 +136,10 @@ class _FakeWireGuardManager:
         return dict(self.health)
 
 
-def _build_vpn_service() -> tuple[VpnTunnelService, _FakeWireGuardManager, _DummySocketIO, list[tuple[str, str, str]]]:
+def _build_vpn_service(
+    *,
+    db_conn_factory: Any = None,
+) -> tuple[VpnTunnelService, _FakeWireGuardManager, _DummySocketIO, list[tuple[str, str, str]]]:
     socketio = _DummySocketIO()
     wg = _FakeWireGuardManager()
     service_events: list[tuple[str, str, str]] = []
@@ -150,7 +153,7 @@ def _build_vpn_service() -> tuple[VpnTunnelService, _FakeWireGuardManager, _Dumm
     service = VpnTunnelService(
         context=context,
         wireguard_manager=wg,
-        db_conn_factory=None,
+        db_conn_factory=db_conn_factory,
         socketio=socketio,
         service_log=lambda name, message, level="INFO": service_events.append((name, message, level)),
         signer=None,
@@ -485,6 +488,34 @@ def test_vpn_service_watchdog_noops_when_listener_healthy() -> None:
     assert status is not None
     assert status["listener_healthy"] is True
     assert status["recovery_in_progress"] is False
+
+
+def test_vpn_service_suppresses_device_activity_history(engine_harness: EngineTestHarness) -> None:
+    service, _wg, socketio, _service_events = _build_vpn_service(
+        db_conn_factory=lambda: sqlite3.connect(str(engine_harness.db_path))
+    )
+
+    service.connect(agent_id="test-device-agent", operator_id=None, endpoint_host="engine.local")
+    service.disconnect("test-device-agent", reason="operator_stop", force=True)
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*)
+              FROM activity_history
+             WHERE hostname = ?
+               AND script_type = ?
+            """,
+            ("test-device", "vpn_tunnel"),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert int(row[0] or 0) == 0
+    assert all(event_name != "device_activity_changed" for event_name, _payload, _namespace in socketio.emits)
 
 
 def test_tunnel_status_endpoint_exposes_listener_health(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:

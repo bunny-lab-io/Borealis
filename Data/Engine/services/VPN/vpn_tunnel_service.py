@@ -842,23 +842,12 @@ class VpnTunnelService:
             )
 
     def _log_device_activity(self, session: VpnSession, *, event: str, reason: Optional[str] = None) -> None:
-        if self.db_conn_factory is None:
-            self.activity_logger.info(
-                "device_activity event=%s agent_id=%s tunnel_id=%s operator=%s reason=%s",
-                event,
-                session.agent_id,
-                session.tunnel_id,
-                ",".join(sorted(filter(None, session.operator_ids))) or "-",
-                reason or "-",
-            )
-            return
-
+        hostname = session.hostname
         conn = None
         try:
-            conn = self.db_conn_factory()
-            cur = conn.cursor()
-            hostname = session.hostname
-            if not hostname:
+            if not hostname and self.db_conn_factory is not None:
+                conn = self.db_conn_factory()
+                cur = conn.cursor()
                 try:
                     cur.execute(
                         "SELECT hostname FROM devices WHERE agent_id = ? ORDER BY last_seen DESC LIMIT 1",
@@ -870,102 +859,14 @@ class VpnTunnelService:
                         session.hostname = hostname
                 except Exception:
                     hostname = None
-
-            if not hostname:
-                self.activity_logger.info(
-                    "device_activity event=%s agent_id=%s tunnel_id=%s operator=%s reason=%s hostname=unknown",
-                    event,
-                    session.agent_id,
-                    session.tunnel_id,
-                    ",".join(sorted(filter(None, session.operator_ids))) or "-",
-                    reason or "-",
-                )
-                return
-
-            now_ts = int(time.time())
-            script_name = "Reverse VPN Tunnel (WireGuard)"
-
-            if event == "start":
-                cur.execute(
-                    """
-                    INSERT INTO activity_history(hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr)
-                    VALUES(?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        hostname,
-                        session.tunnel_id,
-                        script_name,
-                        "vpn_tunnel",
-                        now_ts,
-                        "Running",
-                        "",
-                        "",
-                    ),
-                )
-                session.activity_id = cur.lastrowid
-                conn.commit()
-                if self.socketio:
-                    try:
-                        self.socketio.emit(
-                            "device_activity_changed",
-                            {
-                                "hostname": hostname,
-                                "activity_id": session.activity_id,
-                                "change": "created",
-                                "source": "vpn_tunnel",
-                            },
-                        )
-                    except Exception:
-                        pass
-                self.activity_logger.info(
-                    "device_activity_start hostname=%s agent_id=%s tunnel_id=%s operator=%s activity_id=%s",
-                    hostname,
-                    session.agent_id,
-                    session.tunnel_id,
-                    ",".join(sorted(filter(None, session.operator_ids))) or "-",
-                    session.activity_id or "-",
-                )
-                return
-
-            if session.activity_id:
-                status = "Completed" if event == "stop" else "Closed"
-                cur.execute(
-                    """
-                    UPDATE activity_history
-                       SET status=?,
-                           stderr=COALESCE(stderr, '') || ?
-                     WHERE id=?
-                    """,
-                    (
-                        status,
-                        f"\nreason: {reason}" if reason else "",
-                        session.activity_id,
-                    ),
-                )
-                conn.commit()
-                if self.socketio:
-                    try:
-                        self.socketio.emit(
-                            "device_activity_changed",
-                            {
-                                "hostname": hostname,
-                                "activity_id": session.activity_id,
-                                "change": "updated",
-                                "source": "vpn_tunnel",
-                            },
-                        )
-                    except Exception:
-                        pass
-
             self.activity_logger.info(
-                "device_activity event=%s hostname=%s agent_id=%s tunnel_id=%s operator=%s reason=%s activity_id=%s",
+                "device_activity_suppressed event=%s hostname=%s agent_id=%s tunnel_id=%s operator=%s reason=%s",
                 event,
-                hostname,
+                hostname or "-",
                 session.agent_id,
                 session.tunnel_id,
                 ",".join(sorted(filter(None, session.operator_ids))) or "-",
                 reason or "-",
-                session.activity_id or "-",
             )
         except Exception:
             self.activity_logger.debug(
