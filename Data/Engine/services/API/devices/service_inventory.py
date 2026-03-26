@@ -145,7 +145,8 @@ def _normalized_service_entry(item: Any, *, default_captured_at: int = 0) -> Opt
     return {
         "service_id": _clean_text(item.get("service_id")) or _service_id_for_name(name),
         "name": name,
-        "description": _clean_text(item.get("description") or item.get("display_name") or item.get("detail")),
+        "display_name": _clean_text(item.get("display_name") or item.get("displayName") or item.get("label")),
+        "description": _clean_text(item.get("description") or item.get("detail")),
         "status_code": status_code,
         "status": STATUS_LABELS.get(status_code, "Unknown"),
         "captured_at": captured_at,
@@ -169,6 +170,7 @@ def normalize_device_services(raw: Any, *, default_captured_at: int = 0) -> Dict
     normalized_services = sorted(
         services.values(),
         key=lambda entry: (
+            str(entry.get("display_name") or entry.get("name") or "").lower(),
             str(entry.get("name") or "").lower(),
             str(entry.get("description") or "").lower(),
         ),
@@ -211,6 +213,11 @@ def merge_device_services(existing_raw: Any, incoming_raw: Any) -> Dict[str, Any
         requested_by = _clean_text(incoming_entry.get("pending_requested_by")) or _clean_text(
             (existing_entry or {}).get("pending_requested_by")
         )
+        display_name = _clean_text(incoming_entry.get("display_name")) or _clean_text(
+            (existing_entry or {}).get("display_name")
+        )
+        if display_name:
+            merged_entry["display_name"] = display_name
 
         if pending_action and not _pending_reached_target(
             merged_entry,
@@ -237,6 +244,7 @@ def merge_device_services(existing_raw: Any, incoming_raw: Any) -> Dict[str, Any
         "services": sorted(
             merged_services,
             key=lambda entry: (
+                str(entry.get("display_name") or entry.get("name") or "").lower(),
                 str(entry.get("name") or "").lower(),
                 str(entry.get("description") or "").lower(),
             ),
@@ -285,4 +293,3 @@ def mark_service_control_pending(
 def serialize_device_services(payload: Any) -> str:
     normalized = normalize_device_services(payload)
     return json.dumps(normalized, ensure_ascii=True, sort_keys=True)
-

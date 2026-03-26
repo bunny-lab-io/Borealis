@@ -196,18 +196,20 @@ class Role:
             name = _clean_text(item.get("Name"))
             if not name:
                 continue
-            description = _clean_text(item.get("Description")) or _clean_text(item.get("DisplayName"))
+            display_name = _clean_text(item.get("DisplayName"))
+            description = _clean_text(item.get("Description"))
             status_code = _normalize_status_code(item.get("State"))
             services.append(
                 {
                     "name": name,
+                    "display_name": display_name,
                     "description": description,
                     "status_code": status_code,
                     "status": STATUS_LABELS.get(status_code, "Unknown"),
                     "captured_at": captured_at,
                 }
             )
-        services.sort(key=lambda entry: entry["name"].lower())
+        services.sort(key=lambda entry: (entry.get("display_name") or entry["name"]).lower())
         return services
 
     def _query_linux_services(self) -> List[Dict[str, Any]]:
@@ -246,13 +248,14 @@ class Role:
             services.append(
                 {
                     "name": name,
+                    "display_name": _clean_text(description),
                     "description": _clean_text(description),
                     "status_code": status_code,
                     "status": STATUS_LABELS.get(status_code, "Unknown"),
                     "captured_at": captured_at,
                 }
             )
-        services.sort(key=lambda entry: entry["name"].lower())
+        services.sort(key=lambda entry: (entry.get("display_name") or entry["name"]).lower())
         return services
 
     def _collect_services(self) -> List[Dict[str, Any]]:

@@ -6,6 +6,7 @@ import {
   Menu,
   MenuItem,
   Stack,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import {
@@ -37,22 +38,83 @@ const BOOST_WINDOW_MS = 30_000;
 const AUTO_SIZE_COLUMNS = ["name", "description"];
 
 const MAGIC_UI = {
-  panelBg: "rgba(7,11,24,0.92)",
   panelBorder: "rgba(148, 163, 184, 0.35)",
-  textMuted: "#94a3b8",
-  textBright: "#e2e8f0",
-  accentA: "#7dd3fc",
-  accentB: "#c084fc",
 };
 
 const STATUS_META = {
-  running: { label: "Running", bg: "rgba(16,185,129,0.18)", color: "#6ee7b7", border: "rgba(16,185,129,0.35)" },
-  stopped: { label: "Stopped", bg: "rgba(148,163,184,0.16)", color: "#cbd5e1", border: "rgba(148,163,184,0.35)" },
-  starting: { label: "Starting", bg: "rgba(125,183,255,0.18)", color: "#a5d8ff", border: "rgba(125,183,255,0.35)" },
-  stopping: { label: "Stopping", bg: "rgba(251,191,36,0.18)", color: "#fcd34d", border: "rgba(251,191,36,0.35)" },
-  paused: { label: "Paused", bg: "rgba(192,132,252,0.18)", color: "#d8b4fe", border: "rgba(192,132,252,0.35)" },
-  failed: { label: "Failed", bg: "rgba(244,63,94,0.18)", color: "#fda4af", border: "rgba(244,63,94,0.35)" },
-  unknown: { label: "Unknown", bg: "rgba(71,85,105,0.24)", color: "#cbd5e1", border: "rgba(71,85,105,0.4)" },
+  running: {
+    label: "Running",
+    text: "#00d18c",
+    background: "rgba(0, 209, 140, 0.16)",
+    border: "1px solid rgba(0, 209, 140, 0.45)",
+    dot: "#00d18c",
+  },
+  stopped: {
+    label: "Stopped",
+    text: "#b0b8c8",
+    background: "rgba(176, 184, 200, 0.14)",
+    border: "1px solid rgba(176, 184, 200, 0.35)",
+    dot: "#c3cada",
+  },
+  starting: {
+    label: "Starting",
+    text: "#8fbfff",
+    background: "rgba(143, 191, 255, 0.16)",
+    border: "1px solid rgba(143, 191, 255, 0.4)",
+    dot: "#8fbfff",
+  },
+  stopping: {
+    label: "Stopping",
+    text: "#ffb347",
+    background: "rgba(255, 179, 71, 0.16)",
+    border: "1px solid rgba(255, 179, 71, 0.45)",
+    dot: "#ffb347",
+  },
+  paused: {
+    label: "Paused",
+    text: "#d8b4fe",
+    background: "rgba(216, 180, 254, 0.16)",
+    border: "1px solid rgba(216, 180, 254, 0.35)",
+    dot: "#d8b4fe",
+  },
+  failed: {
+    label: "Failed",
+    text: "#fda4af",
+    background: "rgba(244, 63, 94, 0.16)",
+    border: "1px solid rgba(244, 63, 94, 0.4)",
+    dot: "#fda4af",
+  },
+  unknown: {
+    label: "Unknown",
+    text: "#e2e6f0",
+    background: "rgba(226, 230, 240, 0.12)",
+    border: "1px solid rgba(226, 230, 240, 0.25)",
+    dot: "#e2e6f0",
+  },
+};
+
+const PENDING_META = {
+  start: {
+    label: "Starting...",
+    text: "#8fbfff",
+    background: "rgba(143, 191, 255, 0.16)",
+    border: "1px solid rgba(143, 191, 255, 0.4)",
+    dot: "#8fbfff",
+  },
+  stop: {
+    label: "Stopping...",
+    text: "#ffb347",
+    background: "rgba(255, 179, 71, 0.16)",
+    border: "1px solid rgba(255, 179, 71, 0.45)",
+    dot: "#ffb347",
+  },
+  restart: {
+    label: "Restarting...",
+    text: "#d8b4fe",
+    background: "rgba(216, 180, 254, 0.16)",
+    border: "1px solid rgba(216, 180, 254, 0.35)",
+    dot: "#d8b4fe",
+  },
 };
 
 const ACTION_META = {
@@ -77,58 +139,96 @@ function formatStatusMeta(statusCode) {
 
 function formatUpdatedAt(epochSeconds) {
   const value = Number(epochSeconds || 0);
-  if (!value) return "Awaiting service telemetry";
+  if (!value) return "Last Updated Awaiting service telemetry";
   const date = new Date(value * 1000);
-  if (Number.isNaN(date.getTime())) return "Awaiting service telemetry";
-  return `Updated ${date.toLocaleString()}`;
+  if (Number.isNaN(date.getTime())) return "Last Updated Awaiting service telemetry";
+  const dateText = date.toLocaleDateString();
+  const timeText = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return `Last Updated ${dateText} @ ${timeText}`;
+}
+
+function formatDescriptionValue(data) {
+  const description = normalizeText(data?.description);
+  const displayName = normalizeText(data?.display_name);
+  if (!description) return "No description";
+  if (displayName && description === displayName) return "No description";
+  return description;
+}
+
+function StatusBadge({ meta, label }) {
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: 76,
+        px: 1.5,
+        py: 0.4,
+        borderRadius: 999,
+        backgroundColor: meta.background,
+        border: meta.border,
+        color: meta.text,
+        fontWeight: 600,
+        fontSize: "13px",
+        lineHeight: 1,
+        fontFamily: gridFontFamily,
+        gap: 0.75,
+        whiteSpace: "nowrap",
+      }}
+    >
+      <Box
+        component="span"
+        sx={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          backgroundColor: meta.dot,
+          boxShadow: "0 0 0 2px rgba(0, 0, 0, 0.22)",
+        }}
+      />
+      {label}
+    </Box>
+  );
 }
 
 function StatusCell({ data }) {
   const statusMeta = formatStatusMeta(data?.status_code);
-  const pendingMeta = ACTION_META[normalizeText(data?.pending_action).toLowerCase()] || null;
+  const pendingMeta = PENDING_META[normalizeText(data?.pending_action).toLowerCase()] || null;
   return (
     <Stack direction="row" spacing={0.9} alignItems="center" flexWrap="wrap" useFlexGap>
-      <Box
-        component="span"
-        sx={{
-          display: "inline-flex",
-          alignItems: "center",
-          px: 1.15,
-          py: 0.45,
-          borderRadius: 999,
-          fontSize: "0.76rem",
-          fontWeight: 700,
-          letterSpacing: "0.01em",
-          color: statusMeta.color,
-          backgroundColor: statusMeta.bg,
-          border: `1px solid ${statusMeta.border}`,
-          whiteSpace: "nowrap",
-        }}
-      >
-        {statusMeta.label}
-      </Box>
-      {pendingMeta ? (
-        <Box
-          component="span"
-          sx={{
-            display: "inline-flex",
-            alignItems: "center",
-            px: 1.15,
-            py: 0.45,
-            borderRadius: 999,
-            fontSize: "0.76rem",
-            fontWeight: 700,
-            letterSpacing: "0.01em",
-            color: "#d8b4fe",
-            backgroundColor: "rgba(192,132,252,0.16)",
-            border: "1px solid rgba(192,132,252,0.35)",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {pendingMeta.pending}
-        </Box>
-      ) : null}
+      <StatusBadge meta={statusMeta} label={statusMeta.label} />
+      {pendingMeta ? <StatusBadge meta={pendingMeta} label={pendingMeta.label} /> : null}
     </Stack>
+  );
+}
+
+function NameCell({ data, value }) {
+  const serviceName = normalizeText(data?.name);
+  const displayName = normalizeText(value) || serviceName;
+  const showTooltip = Boolean(serviceName) && displayName && displayName !== serviceName;
+  const content = (
+    <Box
+      component="span"
+      sx={{
+        color: "#dbeafe",
+        fontWeight: 600,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {displayName}
+    </Box>
+  );
+  if (!showTooltip) {
+    return content;
+  }
+  return (
+    <Tooltip title={serviceName} arrow>
+      {content}
+    </Tooltip>
   );
 }
 
@@ -260,29 +360,35 @@ export default function ServiceList({ device }) {
   const columnDefs = useMemo(
     () => [
       {
+        field: "status",
+        headerName: "Status",
+        minWidth: 230,
+        width: 230,
+        flex: 0,
+        sortable: true,
+        filter: "agTextColumnFilter",
+        cellClass: "auto-col-tight",
+        cellRenderer: StatusCell,
+      },
+      {
         field: "name",
         headerName: "Name",
         minWidth: 210,
         sortable: true,
+        filter: "agTextColumnFilter",
         cellClass: "auto-col-tight",
-        cellStyle: { color: "#dbeafe", fontWeight: 600 },
+        valueGetter: (params) => normalizeText(params.data?.display_name) || normalizeText(params.data?.name),
+        cellRenderer: NameCell,
       },
       {
         field: "description",
         headerName: "Description",
         minWidth: 320,
-        sortable: true,
-        cellClass: "auto-col-tight",
-        valueFormatter: (params) => normalizeText(params.value) || "No description",
-      },
-      {
-        field: "status",
-        headerName: "Status",
-        minWidth: 220,
         flex: 1,
         sortable: true,
         cellClass: "auto-col-tight",
-        cellRenderer: StatusCell,
+        filter: false,
+        valueGetter: (params) => formatDescriptionValue(params.data),
       },
     ],
     []
@@ -359,12 +465,6 @@ export default function ServiceList({ device }) {
     });
   }, [rows, selectedServiceId]);
 
-  const headerNote = useMemo(() => {
-    if (!hostname) return "Select a device to view service inventory.";
-    if (!agentSocket) return "System agent socket unavailable. Showing cached service data only.";
-    return "Service inventory refreshes every 60 seconds, with short accelerated refreshes after an action.";
-  }, [agentSocket, hostname]);
-
   return (
     <Box
       sx={{
@@ -382,23 +482,7 @@ export default function ServiceList({ device }) {
         alignItems={{ xs: "flex-start", md: "center" }}
       >
         <Box sx={{ minWidth: 0 }}>
-          <Typography
-            variant="h5"
-            sx={{
-              color: MAGIC_UI.textBright,
-              fontWeight: 700,
-              letterSpacing: "0.01em",
-            }}
-          >
-            Service Management
-          </Typography>
-          <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mt: 0.4 }}>
-            Query, start, stop, and restart system services.
-          </Typography>
-          <Typography variant="caption" sx={{ display: "block", color: MAGIC_UI.textMuted, mt: 0.7 }}>
-            {headerNote}
-          </Typography>
-          <Typography variant="caption" sx={{ display: "block", color: "rgba(203,213,225,0.78)", mt: 0.35 }}>
+          <Typography variant="caption" sx={{ display: "block", color: "rgba(203,213,225,0.78)" }}>
             {formatUpdatedAt(reportedAt)}
           </Typography>
         </Box>
@@ -486,35 +570,43 @@ export default function ServiceList({ device }) {
           minHeight: 360,
           borderRadius: 3,
           border: `1px solid ${MAGIC_UI.panelBorder}`,
-          background: MAGIC_UI.panelBg,
-          boxShadow: "0 24px 48px rgba(2, 6, 23, 0.38)",
+          background: "transparent",
+          boxShadow: "none",
           overflow: "hidden",
           width: "100%",
+          fontFamily: gridFontFamily,
+          "--ag-font-family": gridFontFamily,
+          "--ag-icon-font-family": iconFontFamily,
           "& .ag-root-wrapper": {
             minHeight: "100%",
             border: "none",
             borderRadius: 0,
             background: "transparent",
           },
-          "& .ag-header": {
-            background: "linear-gradient(180deg, rgba(15,23,42,0.98), rgba(9,14,28,0.96))",
-            borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+          "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
+            fontFamily: gridFontFamily,
           },
-          "& .ag-header-cell": {
+          "& .ag-header": {
+            backgroundColor: "rgba(15,23,42,0.9)",
+            borderBottom: "1px solid rgba(148,163,184,0.25)",
+          },
+          "& .ag-header-cell-label": {
             fontWeight: 600,
-            color: "#cbd5e1",
-            letterSpacing: "0.02em",
+            color: "#e2e8f0",
+            letterSpacing: 0.3,
           },
           "& .ag-row": {
-            backgroundColor: "rgba(8,13,28,0.72)",
-            borderBottom: "1px solid rgba(148,163,184,0.08)",
+            borderColor: "rgba(255,255,255,0.04)",
           },
-          "& .ag-row:nth-of-type(even)": {
-            backgroundColor: "rgba(10,16,32,0.9)",
+          "& .ag-row-hover": {
+            backgroundColor: "rgba(73,156,196,0.2) !important",
           },
           "& .ag-row-selected": {
             backgroundColor: "rgba(125,211,252,0.2) !important",
             boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+          },
+          "& .ag-icon": {
+            fontFamily: iconFontFamily,
           },
           "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
             display: "flex",
@@ -534,15 +626,16 @@ export default function ServiceList({ device }) {
             paddingLeft: "12px",
             paddingRight: "9px",
           },
-          "--ag-font-family": gridFontFamily,
-          "--ag-icon-font-family": iconFontFamily,
-          "--ag-background-color": "transparent",
+          "--ag-background-color": "#070b1a",
           "--ag-foreground-color": "#f4f7ff",
-          "--ag-header-background-color": "transparent",
-          "--ag-border-color": "rgba(148,163,184,0.18)",
-          "--ag-wrapper-border-radius": "0px",
+          "--ag-header-background-color": "#0f172a",
+          "--ag-header-foreground-color": "#cfe0ff",
+          "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
           "--ag-row-hover-color": "rgba(73,156,196,0.2)",
           "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+          "--ag-border-color": "rgba(125,183,255,0.18)",
+          "--ag-row-border-color": "rgba(125,183,255,0.14)",
+          "--ag-border-radius": "8px",
           "--ag-checkbox-checked-color": "#7dd3fc",
         }}
       >
