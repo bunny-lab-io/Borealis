@@ -60,7 +60,7 @@ export default function Context_Menu_Sidebar({
       else if (field === "labelStyle.fontWeight") updated.labelStyle = { ...updated.labelStyle, fontWeight: value };
       else if (field === "data.route_on") {
         updated.data = { ...(updated.data || {}), route_on: value };
-        if (edgePortMetadata?.isActionEdge) {
+        if (edgePortMetadata?.supportsRouteSelection) {
           const descriptor = getWorkflowRouteDescriptor(value);
           updated.animated = true;
           updated.label = descriptor.label;
@@ -264,7 +264,7 @@ export default function Context_Menu_Sidebar({
 
   const renderStyleTab = () => (
     <Box sx={{ px: 2, pt: 1, pb: 2 }}>
-      {edgePortMetadata?.isActionEdge ? (
+      {edgePortMetadata?.supportsRouteSelection ? (
         <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
           <Typography variant="body2" sx={{ color: "#ccc", flex: 1 }}>Flow Control</Typography>
           <TextField

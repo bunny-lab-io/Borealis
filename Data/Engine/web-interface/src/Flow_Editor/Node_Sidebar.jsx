@@ -3,11 +3,13 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
-  Button,
   Tooltip,
   Typography,
   Box,
   Chip,
+  Divider,
+  ListItemButton,
+  ListItemText,
 } from "@mui/material";
 import {
   ExpandMore as ExpandMoreIcon,
@@ -25,6 +27,254 @@ import {
 } from "@mui/icons-material";
 import { ConfirmDeleteDialog, RenameWorkflowDialog, SaveWorkflowDialog } from "../Dialogs";
 import WorkflowWebhookDialog from "./Workflow_Webhook_Dialog.jsx";
+
+const COLORS = {
+  cyan: "#7db7ff",
+  violet: "#c084fc",
+  text: "#cbd5e1",
+  textActive: "#e6f2ff",
+  matte: "#0f141c",
+  line: "rgba(125,183,255,0.14)",
+  hover: "rgba(255,255,255,0.05)",
+  itemActiveBg:
+    "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+};
+
+function Section({ title, expanded, onChange, collapsed, children }) {
+  return (
+    <Accordion
+      expanded={collapsed ? true : expanded}
+      onChange={(_, isExpanded) => {
+        if (collapsed) return;
+        onChange?.(isExpanded);
+      }}
+      square
+      disableGutters
+      sx={{
+        "&:before": { display: "none" },
+        m: 0,
+        bgcolor: "transparent",
+        border: 0,
+      }}
+    >
+      <AccordionSummary
+        expandIcon={<ExpandMoreIcon sx={{ color: COLORS.cyan }} />}
+        sx={{
+          minHeight: 38,
+          "& .MuiAccordionSummary-content": {
+            m: 0,
+            py: 0.5,
+            display: collapsed ? "none" : "flex",
+          },
+          display: collapsed ? "none" : "flex",
+          backgroundColor: "rgba(255,255,255,0.02)",
+          borderTopRightRadius: 8,
+          borderBottomRightRadius: 8,
+          px: collapsed ? 1 : 1.5,
+        }}
+        title={collapsed ? title : undefined}
+      >
+        {collapsed ? null : (
+          <Typography
+            sx={{
+              fontSize: "0.85rem",
+              color: COLORS.cyan,
+              fontWeight: 700,
+              letterSpacing: 0.3,
+            }}
+          >
+            {title}
+          </Typography>
+        )}
+      </AccordionSummary>
+      <AccordionDetails sx={{ p: 0 }}>{children}</AccordionDetails>
+    </Accordion>
+  );
+}
+
+function SidebarItem({
+  icon,
+  label,
+  onClick,
+  tooltip,
+  disabled = false,
+  collapsed = false,
+  tone = "default",
+  draggable = false,
+  onDragStart = null,
+  trailing = null,
+}) {
+  const destructive = tone === "danger";
+  const iconColor = destructive ? "#fca5a5" : "#8fbfff";
+  const labelColor = destructive ? "#f0b3b3" : COLORS.text;
+  const disabledColor = destructive ? "rgba(252,165,165,0.45)" : "rgba(203,213,225,0.45)";
+  const hoverBackground = destructive
+    ? "linear-gradient(90deg, rgba(248,113,113,0.14) 0%, rgba(127,29,29,0.14) 55%, rgba(127,29,29,0.00) 100%)"
+    : COLORS.hover;
+
+  const item = (
+    <ListItemButton
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      sx={{
+        pl: collapsed ? 1.5 : 2,
+        pr: collapsed ? 1.5 : 2,
+        py: 1,
+        color: disabled ? disabledColor : labelColor,
+        position: "relative",
+        background: "transparent",
+        borderTopRightRadius: 0,
+        borderBottomRightRadius: 0,
+        justifyContent: collapsed ? "center" : "flex-start",
+        transition:
+          "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
+        "&:hover": {
+          background: disabled ? "transparent" : hoverBackground,
+        },
+        "&:active": disabled ? undefined : { transform: "translateY(0.5px)" },
+        "&.Mui-disabled": {
+          opacity: 1,
+          color: disabledColor,
+        },
+      }}
+      title={collapsed ? label : undefined}
+    >
+      {icon ? (
+        <Box
+          sx={{
+            mr: collapsed ? 0 : 1,
+            display: "flex",
+            alignItems: "center",
+            color: disabled ? disabledColor : iconColor,
+            transition: "color 160ms ease",
+            minWidth: collapsed ? "auto" : 18,
+          }}
+        >
+          {icon}
+        </Box>
+      ) : null}
+      <ListItemText
+        primary={label}
+        sx={{ display: collapsed ? "none" : "block", minWidth: 0 }}
+        primaryTypographyProps={{
+          fontSize: "0.8rem",
+          fontWeight: 400,
+          letterSpacing: 0.2,
+          color: disabled ? disabledColor : labelColor,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      />
+      {!collapsed && trailing ? (
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            color: disabled ? disabledColor : "rgba(143,191,255,0.7)",
+            ml: 1,
+          }}
+        >
+          {trailing}
+        </Box>
+      ) : null}
+    </ListItemButton>
+  );
+
+  if (!tooltip) {
+    return item;
+  }
+
+  return (
+    <Tooltip
+      title={
+        <span style={{ whiteSpace: "pre-line", wordWrap: "break-word", maxWidth: 240 }}>
+          {tooltip}
+        </span>
+      }
+      placement="right"
+      arrow
+    >
+      <span style={{ display: "block", width: "100%" }}>{item}</span>
+    </Tooltip>
+  );
+}
+
+function NodeCategory({
+  category,
+  items,
+  expanded,
+  onChange,
+  collapsed,
+}) {
+  return (
+    <Accordion
+      square
+      expanded={collapsed ? true : expanded}
+      onChange={(_, isExpanded) => {
+        if (collapsed) return;
+        onChange?.(isExpanded);
+      }}
+      disableGutters
+      sx={{
+        "&:before": { display: "none" },
+        m: 0,
+        bgcolor: "transparent",
+        border: 0,
+      }}
+    >
+      <AccordionSummary
+        expandIcon={<ExpandMoreIcon sx={{ color: COLORS.cyan }} />}
+        sx={{
+          minHeight: 34,
+          "& .MuiAccordionSummary-content": {
+            m: 0,
+            py: 0.35,
+            display: collapsed ? "none" : "flex",
+          },
+          display: collapsed ? "none" : "flex",
+          backgroundColor: "rgba(255,255,255,0.02)",
+          borderTopRightRadius: 8,
+          borderBottomRightRadius: 8,
+          px: collapsed ? 1 : 1.5,
+        }}
+        title={collapsed ? category : undefined}
+      >
+        {collapsed ? null : (
+          <Typography
+            sx={{
+              fontSize: "0.8rem",
+              color: COLORS.text,
+              fontWeight: 500,
+              letterSpacing: 0.2,
+            }}
+          >
+            {category}
+          </Typography>
+        )}
+      </AccordionSummary>
+      <AccordionDetails sx={{ p: 0 }}>
+        {items.map((nodeDef) => (
+          <SidebarItem
+            key={`${category}-${nodeDef.type}`}
+            collapsed={collapsed}
+            icon={<PolylineIcon fontSize="small" />}
+            trailing={<DragIndicatorIcon sx={{ fontSize: 16 }} />}
+            label={nodeDef.label}
+            tooltip={nodeDef.description || "Drag and drop this node into the workflow editor."}
+            draggable
+            onDragStart={(event) => {
+              event.dataTransfer.setData("application/reactflow", nodeDef.type);
+              event.dataTransfer.effectAllowed = "move";
+            }}
+          />
+        ))}
+      </AccordionDetails>
+    </Accordion>
+  );
+}
 
 export default function NodeSidebar({
   categorizedNodes,
@@ -44,6 +294,8 @@ export default function NodeSidebar({
 }) {
   const [expandedCategory, setExpandedCategory] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [workflowSectionExpanded, setWorkflowSectionExpanded] = useState(true);
+  const [nodeSectionExpanded, setNodeSectionExpanded] = useState(true);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [renameOpen, setRenameOpen] = useState(false);
@@ -57,10 +309,6 @@ export default function NodeSidebar({
   const workflowManagementHint = !normalizedGuid
     ? "Save this workflow to the User domain before renaming or deleting it."
     : "Only User-domain workflows can be renamed or deleted from the flow editor.";
-
-  const handleAccordionChange = (category) => (_, isExpanded) => {
-    setExpandedCategory(isExpanded ? category : null);
-  };
 
   const handleSaveConfirm = () => {
     const trimmedName = (saveName || "").trim();
@@ -81,291 +329,218 @@ export default function NodeSidebar({
     handleDeleteFlow();
   };
 
+  const handleCategoryChange = (category, isExpanded) => {
+    setExpandedCategory(isExpanded ? category : null);
+  };
+
   return (
-    <div
-      style={{
-        width: collapsed ? 40 : 300,
+    <Box
+      sx={{
+        width: collapsed ? 45 : 260,
         flexShrink: 0,
-        backgroundColor: "#121212",
-        borderRight: "1px solid #333",
-        overflow: "hidden",
+        position: "relative",
+        zIndex: 2,
         display: "flex",
         flexDirection: "column",
+        overflow: "hidden",
+        background:
+          "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), " +
+          COLORS.matte,
+        borderRight: `1px solid ${COLORS.line}`,
+        backdropFilter: "blur(8px) saturate(130%)",
         height: "100%",
       }}
     >
-      <div style={{ flex: 1, overflowY: "auto" }}>
-        {!collapsed ? (
-          <>
-            <Accordion defaultExpanded square disableGutters sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}>
-              <AccordionSummary
-                expandIcon={<ExpandMoreIcon />}
-                sx={{
-                  backgroundColor: "#2c2c2c",
-                  minHeight: "36px",
-                  "& .MuiAccordionSummary-content": { margin: 0 },
-                }}
-              >
-                <Typography sx={{ fontSize: "0.9rem", color: "#0475c2" }}>
-                  <b>{readOnly ? "Run Snapshot" : "Workflows"}</b>
-                </Typography>
-              </AccordionSummary>
-              <AccordionDetails sx={{ p: 0, bgcolor: "#232323" }}>
-                {readOnly ? (
-                  <Box sx={{ px: 2, py: 1.5, display: "flex", flexDirection: "column", gap: 1 }}>
-                    <Typography sx={{ color: "#e2e8f0", fontSize: "0.85rem", fontWeight: 700 }}>
-                      {workflowRun?.workflow_name || currentTabName || "Workflow Run"}
-                    </Typography>
-                    <Typography sx={{ color: "#94a3b8", fontSize: "0.76rem", lineHeight: 1.45 }}>
-                      This canvas is read-only and reflects the immutable server-side workflow snapshot for the selected run.
-                    </Typography>
-                    {workflowRun?.status ? (
-                      <Chip
-                        size="small"
-                        label={workflowRun.status}
-                        sx={{
-                          width: "fit-content",
-                          color: "#7dd3fc",
-                          border: "1px solid rgba(125,211,252,0.28)",
-                          bgcolor: "rgba(14,116,144,0.16)",
-                        }}
-                      />
-                    ) : null}
-                    <Tooltip title="Define webhooks to trigger this saved workflow." placement="right" arrow>
-                      <span style={{ display: "block", width: "100%" }}>
-                        <Button
-                          fullWidth
-                          disabled={!normalizedGuid}
-                          startIcon={<WebhookRoundedIcon />}
-                          onClick={() => setWebhookDialogOpen(true)}
-                          sx={buttonStyle}
-                        >
-                          Webhook Management
-                        </Button>
-                      </span>
-                    </Tooltip>
-                  </Box>
-                ) : (
-                  <>
-                    <Tooltip title="Save the current flow as a Borealis workflow assembly document." placement="right" arrow>
-                      <Button
-                        fullWidth
-                        startIcon={<SaveIcon />}
-                        onClick={() => {
-                          setSaveName(currentTabName || "workflow");
-                          setSaveOpen(true);
-                        }}
-                        sx={buttonStyle}
-                      >
-                        Save Workflow
-                      </Button>
-                    </Tooltip>
-                    <Tooltip title="Save the current workflow, launch it, and open a read-only run snapshot." placement="right" arrow>
-                      <span style={{ display: "block", width: "100%" }}>
-                        <Button
-                          fullWidth
-                          startIcon={<PlayArrowRoundedIcon />}
-                          onClick={() => handleTriggerWorkflow?.()}
-                          sx={buttonStyle}
-                        >
-                          Trigger Workflow
-                        </Button>
-                      </span>
-                    </Tooltip>
-                    <Tooltip
-                      title={
-                        normalizedGuid
-                          ? "Define webhooks to trigger this workflow."
-                          : "Save this workflow first so Borealis can create opaque webhook URLs for it."
-                      }
-                      placement="right"
-                      arrow
-                    >
-                      <span style={{ display: "block", width: "100%" }}>
-                        <Button
-                          fullWidth
-                          disabled={!normalizedGuid}
-                          startIcon={<WebhookRoundedIcon />}
-                          onClick={() => setWebhookDialogOpen(true)}
-                          sx={buttonStyle}
-                        >
-                          Webhook Management
-                        </Button>
-                      </span>
-                    </Tooltip>
-                    <Tooltip
-                      title={
-                        canManageWorkflow
-                          ? "Rename the saved User-domain workflow and update its assembly record."
-                          : workflowManagementHint
-                      }
-                      placement="right"
-                      arrow
-                    >
-                      <span style={{ display: "block", width: "100%" }}>
-                        <Button
-                          fullWidth
-                          disabled={!canManageWorkflow}
-                          startIcon={<DriveFileRenameOutlineIcon />}
-                          onClick={() => {
-                            setRenameName(currentTabName || "workflow");
-                            setRenameOpen(true);
-                          }}
-                          sx={buttonStyle}
-                        >
-                          Rename Workflow
-                        </Button>
-                      </span>
-                    </Tooltip>
-                    <Tooltip
-                      title={
-                        canManageWorkflow
-                          ? "Delete the saved User-domain workflow from assemblies and remove it from the editor."
-                          : workflowManagementHint
-                      }
-                      placement="right"
-                      arrow
-                    >
-                      <span style={{ display: "block", width: "100%" }}>
-                        <Button
-                          fullWidth
-                          disabled={!canManageWorkflow}
-                          startIcon={<DeleteForeverIcon />}
-                          onClick={() => setDeleteOpen(true)}
-                          sx={deleteButtonStyle}
-                        >
-                          Delete Workflow
-                        </Button>
-                      </span>
-                    </Tooltip>
-                    <Tooltip title="Import a workflow assembly document or legacy flat canvas JSON into a new flow tab." placement="right" arrow>
-                      <Button fullWidth startIcon={<FileOpenIcon />} onClick={handleImportFlow} sx={buttonStyle}>
-                        Import Workflow (JSON)
-                      </Button>
-                    </Tooltip>
-                    <Tooltip title="Export the current tab as a canonical workflow assembly document with encoded workflow data." placement="right" arrow>
-                      <Button fullWidth startIcon={<SaveAltIcon />} onClick={handleExportFlow} sx={buttonStyle}>
-                        Export Workflow (JSON)
-                      </Button>
-                    </Tooltip>
-                  </>
-                )}
-              </AccordionDetails>
-            </Accordion>
+      <Divider sx={{ borderColor: COLORS.line }} />
 
-            {!readOnly ? (
-              <Accordion defaultExpanded square disableGutters sx={{ "&:before": { display: "none" }, margin: 0, border: 0 }}>
-                <AccordionSummary
-                  expandIcon={<ExpandMoreIcon />}
-                  sx={{
-                    backgroundColor: "#2c2c2c",
-                    minHeight: "36px",
-                    "& .MuiAccordionSummary-content": { margin: 0 },
-                  }}
-                >
-                  <Typography sx={{ fontSize: "0.9rem", color: "#0475c2" }}>
-                    <b>Nodes</b>
+      <Box sx={{ flex: 1, overflowY: "auto", p: 0.25 }}>
+        <Section
+          title={readOnly ? "Run Snapshot" : "Workflows"}
+          expanded={workflowSectionExpanded}
+          onChange={setWorkflowSectionExpanded}
+          collapsed={collapsed}
+        >
+          {readOnly ? (
+            <>
+              {!collapsed ? (
+                <Box sx={{ px: 2, py: 1.5, display: "flex", flexDirection: "column", gap: 0.9 }}>
+                  <Typography sx={{ color: "#e2e8f0", fontSize: "0.85rem", fontWeight: 700 }}>
+                    {workflowRun?.workflow_name || currentTabName || "Workflow Run"}
                   </Typography>
-                </AccordionSummary>
-                <AccordionDetails sx={{ p: 0 }}>
-                  {Object.keys(categorizedNodes).length ? (
-                    Object.entries(categorizedNodes).map(([category, items]) => (
-                      <Accordion
-                        key={category}
-                        square
-                        expanded={expandedCategory === category}
-                        onChange={handleAccordionChange(category)}
-                        disableGutters
-                        sx={{
-                          bgcolor: "#232323",
-                          "&:before": { display: "none" },
-                          margin: 0,
-                          border: 0,
-                        }}
-                      >
-                        <AccordionSummary
-                          expandIcon={<ExpandMoreIcon />}
-                          sx={{
-                            bgcolor: "#1e1e1e",
-                            px: 2,
-                            minHeight: "32px",
-                            "& .MuiAccordionSummary-content": { margin: 0 },
-                          }}
-                        >
-                          <Typography sx={{ color: "#888", fontSize: "0.75rem" }}>{category}</Typography>
-                        </AccordionSummary>
-                        <AccordionDetails sx={{ px: 1, py: 0 }}>
-                          {items.map((nodeDef) => (
-                            <Tooltip
-                              key={`${category}-${nodeDef.type}`}
-                              title={
-                                <span style={{ whiteSpace: "pre-line", wordWrap: "break-word", maxWidth: 220 }}>
-                                  {nodeDef.description || "Drag & Drop into Editor"}
-                                </span>
-                              }
-                              placement="right"
-                              arrow
-                            >
-                              <Button
-                                fullWidth
-                                sx={nodeButtonStyle}
-                                draggable
-                                onDragStart={(event) => {
-                                  event.dataTransfer.setData("application/reactflow", nodeDef.type);
-                                  event.dataTransfer.effectAllowed = "move";
-                                }}
-                                startIcon={<DragIndicatorIcon sx={{ color: "#666", fontSize: 18 }} />}
-                              >
-                                <span style={{ flexGrow: 1, textAlign: "left" }}>{nodeDef.label}</span>
-                                <PolylineIcon sx={{ color: "#58a6ff", fontSize: 18, ml: 1 }} />
-                              </Button>
-                            </Tooltip>
-                          ))}
-                        </AccordionDetails>
-                      </Accordion>
-                    ))
-                  ) : (
-                    <Box sx={{ px: 2, py: 1.5 }}>
-                      <Typography sx={{ color: "#8a94a6", fontSize: "0.78rem", lineHeight: 1.45 }}>
-                        No nodes were loaded into the workflow editor. Check the node registry in <code>src/App.jsx</code>.
-                      </Typography>
-                    </Box>
-                  )}
-                </AccordionDetails>
-              </Accordion>
-            ) : null}
+                  <Typography sx={{ color: "#94a3b8", fontSize: "0.76rem", lineHeight: 1.45 }}>
+                    This canvas is read-only and reflects the immutable server-side workflow snapshot for the selected run.
+                  </Typography>
+                  {workflowRun?.status ? (
+                    <Chip
+                      size="small"
+                      label={workflowRun.status}
+                      sx={{
+                        width: "fit-content",
+                        color: "#7dd3fc",
+                        border: "1px solid rgba(125,211,252,0.28)",
+                        bgcolor: "rgba(14,116,144,0.16)",
+                        borderRadius: 999,
+                      }}
+                    />
+                  ) : null}
+                </Box>
+              ) : null}
+              <SidebarItem
+                collapsed={collapsed}
+                icon={<WebhookRoundedIcon fontSize="small" />}
+                label="Webhook Management"
+                tooltip="Define webhooks to trigger this saved workflow."
+                disabled={!normalizedGuid}
+                onClick={() => setWebhookDialogOpen(true)}
+              />
+            </>
+          ) : (
+            <>
+              <SidebarItem
+                collapsed={collapsed}
+                icon={<SaveIcon fontSize="small" />}
+                label="Save Workflow"
+                tooltip="Save the current flow as a Borealis workflow assembly document."
+                onClick={() => {
+                  setSaveName(currentTabName || "workflow");
+                  setSaveOpen(true);
+                }}
+              />
+              <SidebarItem
+                collapsed={collapsed}
+                icon={<PlayArrowRoundedIcon fontSize="small" />}
+                label="Trigger Workflow"
+                tooltip="Save the current workflow, launch it, and open a read-only run snapshot."
+                onClick={() => handleTriggerWorkflow?.()}
+              />
+              <SidebarItem
+                collapsed={collapsed}
+                icon={<WebhookRoundedIcon fontSize="small" />}
+                label="Webhook Management"
+                tooltip={
+                  normalizedGuid
+                    ? "Define webhooks to trigger this workflow."
+                    : "Save this workflow first so Borealis can create opaque webhook URLs for it."
+                }
+                disabled={!normalizedGuid}
+                onClick={() => setWebhookDialogOpen(true)}
+              />
+              {!collapsed ? (
+                <SidebarItem
+                  collapsed={collapsed}
+                  icon={<DriveFileRenameOutlineIcon fontSize="small" />}
+                  label="Rename Workflow"
+                  tooltip={
+                    canManageWorkflow
+                      ? "Rename the saved User-domain workflow and update its assembly record."
+                      : workflowManagementHint
+                  }
+                  disabled={!canManageWorkflow}
+                  onClick={() => {
+                    setRenameName(currentTabName || "workflow");
+                    setRenameOpen(true);
+                  }}
+                />
+              ) : null}
+              <SidebarItem
+                collapsed={collapsed}
+                icon={<DeleteForeverIcon fontSize="small" />}
+                label="Delete Workflow"
+                tooltip={
+                  canManageWorkflow
+                    ? "Delete the saved User-domain workflow from assemblies and remove it from the editor."
+                    : workflowManagementHint
+                }
+                disabled={!canManageWorkflow}
+                onClick={() => setDeleteOpen(true)}
+                tone="danger"
+              />
+              <SidebarItem
+                collapsed={collapsed}
+                icon={<FileOpenIcon fontSize="small" />}
+                label="Import Workflow (JSON)"
+                tooltip="Import a workflow assembly document or legacy flat canvas JSON into a new flow tab."
+                onClick={handleImportFlow}
+              />
+              <SidebarItem
+                collapsed={collapsed}
+                icon={<SaveAltIcon fontSize="small" />}
+                label="Export Workflow (JSON)"
+                tooltip="Export the current tab as a canonical workflow assembly document with encoded workflow data."
+                onClick={handleExportFlow}
+              />
+            </>
+          )}
+        </Section>
 
-            <input
-              type="file"
-              accept=".json,application/json"
-              style={{ display: "none" }}
-              ref={fileInputRef}
-              onChange={onFileInputChange}
-            />
-          </>
+        {!readOnly && !collapsed ? (
+          <Section
+            title="Nodes"
+            expanded={nodeSectionExpanded}
+            onChange={setNodeSectionExpanded}
+            collapsed={collapsed}
+          >
+            {Object.keys(categorizedNodes).length ? (
+              Object.entries(categorizedNodes).map(([category, items]) => (
+                <NodeCategory
+                  key={category}
+                  category={category}
+                  items={items}
+                  expanded={expandedCategory === category}
+                  onChange={(isExpanded) => handleCategoryChange(category, isExpanded)}
+                  collapsed={collapsed}
+                />
+              ))
+            ) : (
+              <Box sx={{ px: 2, py: 1.5 }}>
+                <Typography sx={{ color: "#8a94a6", fontSize: "0.78rem", lineHeight: 1.45 }}>
+                  No nodes were loaded into the workflow editor. Check the node registry in <code>src/App.jsx</code>.
+                </Typography>
+              </Box>
+            )}
+          </Section>
         ) : null}
-      </div>
 
-      <Tooltip title={collapsed ? "Expand Sidebar" : "Collapse Sidebar"} placement="left">
+        <input
+          type="file"
+          accept=".json,application/json"
+          style={{ display: "none" }}
+          ref={fileInputRef}
+          onChange={onFileInputChange}
+        />
+      </Box>
+
+      <Box sx={{ px: 1, pb: 1 }}>
         <Box
-          onClick={() => setCollapsed(!collapsed)}
+          component="button"
+          type="button"
+          onClick={() => setCollapsed((prev) => !prev)}
+          aria-label={collapsed ? "Expand node sidebar" : "Collapse node sidebar"}
           sx={{
-            height: "36px",
-            borderTop: "1px solid #333",
-            cursor: "pointer",
+            width: "100%",
+            height: 28,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: "#888",
-            backgroundColor: "#121212",
-            transition: "background-color 0.2s ease",
-            "&:hover": { backgroundColor: "#1e1e1e" },
-            "&:active": { backgroundColor: "#2a2a2a" },
+            background: "rgba(255,255,255,0.04)",
+            border: `1px solid ${COLORS.line}`,
+            borderRadius: 6,
+            color: COLORS.cyan,
+            cursor: "pointer",
+            transition: "background 160ms ease, transform 120ms ease",
+            "&:hover": {
+              background: "rgba(255,255,255,0.08)",
+            },
+            "&:active": {
+              transform: "translateY(1px)",
+            },
           }}
         >
-          {collapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
+          {collapsed ? <ChevronRightIcon fontSize="small" /> : <ChevronLeftIcon fontSize="small" />}
         </Box>
-      </Tooltip>
+      </Box>
+
+      <Divider sx={{ borderColor: COLORS.line }} />
 
       <SaveWorkflowDialog
         open={saveOpen}
@@ -395,39 +570,6 @@ export default function NodeSidebar({
         workflowGuid={normalizedGuid}
         workflowName={currentTabName || "workflow"}
       />
-    </div>
+    </Box>
   );
 }
-
-const buttonStyle = {
-  color: "#ccc",
-  backgroundColor: "#232323",
-  justifyContent: "flex-start",
-  pl: 2,
-  fontSize: "0.9rem",
-  textTransform: "none",
-  "&:hover": {
-    backgroundColor: "#2a2a2a",
-  },
-};
-
-const deleteButtonStyle = {
-  ...buttonStyle,
-  color: "#f0b3b3",
-  "&:hover": {
-    backgroundColor: "rgba(127, 29, 29, 0.28)",
-  },
-};
-
-const nodeButtonStyle = {
-  color: "#ccc",
-  backgroundColor: "#232323",
-  justifyContent: "space-between",
-  pl: 2,
-  pr: 1,
-  fontSize: "0.9rem",
-  textTransform: "none",
-  "&:hover": {
-    backgroundColor: "#2a2a2a",
-  },
-};

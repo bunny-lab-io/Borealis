@@ -54,7 +54,6 @@ NODE_TYPE_AGENT_FILTER = "workflow_agent_filter"
 NODE_TYPE_AGENT_ARRAY = "workflow_agent_array"
 NODE_TYPE_EXECUTE_ASSEMBLY = "workflow_execute_assembly"
 NODE_TYPE_EXECUTE_SUBWORKFLOW = "workflow_execute_subworkflow"
-NODE_TYPE_JOB_STATUS_FILTER = "workflow_job_status_filter"
 
 SUPPORTED_NODE_TYPES = {
     NODE_TYPE_TRIGGER_MANUAL,
@@ -64,7 +63,6 @@ SUPPORTED_NODE_TYPES = {
     NODE_TYPE_AGENT_ARRAY,
     NODE_TYPE_EXECUTE_ASSEMBLY,
     NODE_TYPE_EXECUTE_SUBWORKFLOW,
-    NODE_TYPE_JOB_STATUS_FILTER,
 }
 
 EDGE_ROUTE_ALWAYS = "always"
@@ -165,15 +163,6 @@ NODE_PORTS: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
         PORT_DIRECTION_OUTPUT: [
             _port("action", "Action", direction=PORT_DIRECTION_OUTPUT, kind=PORT_KIND_ACTION),
             _port("job_output", "Job Output", direction=PORT_DIRECTION_OUTPUT, kind=PORT_KIND_DATA),
-        ],
-    },
-    NODE_TYPE_JOB_STATUS_FILTER: {
-        PORT_DIRECTION_INPUT: [
-            _port("job_output", "Job Output", direction=PORT_DIRECTION_INPUT, kind=PORT_KIND_DATA, required=True),
-        ],
-        PORT_DIRECTION_OUTPUT: [
-            _port("targets", "Targets", direction=PORT_DIRECTION_OUTPUT, kind=PORT_KIND_DATA),
-            _port("action", "Action", direction=PORT_DIRECTION_OUTPUT, kind=PORT_KIND_ACTION),
         ],
     },
 }
@@ -357,6 +346,18 @@ def _edge_target_port(edge: Mapping[str, Any], node_map: Mapping[str, Mapping[st
         str(target_node.get("type") or "").strip(),
         direction=PORT_DIRECTION_INPUT,
         port_id=edge.get("targetHandle"),
+    )
+
+
+def _is_job_output_route_edge(edge: Mapping[str, Any], node_map: Mapping[str, Mapping[str, Any]]) -> bool:
+    source_port = _edge_source_port(edge, node_map)
+    target_port = _edge_target_port(edge, node_map)
+    return bool(
+        source_port
+        and target_port
+        and str(source_port.get("kind") or "") == PORT_KIND_DATA
+        and str(target_port.get("kind") or "") == PORT_KIND_DATA
+        and _port_id(source_port.get("id")) == "job_output"
     )
 
 
@@ -1328,17 +1329,6 @@ class WorkflowRuntimeService:
                 ancestry = [str(value).strip().lower() for value in (source_metadata or {}).get("workflow_ancestry") or []]
                 if child_guid.lower() in ancestry or child_guid.lower() == workflow_guid.lower():
                     errors.append(f"Subworkflow node '{_node_label(node)}' would recurse into an ancestor workflow.")
-            if node_type == NODE_TYPE_JOB_STATUS_FILTER:
-                match_status = _normalize_status(data.get("match_status") or data.get("matchStatus") or "")
-                if match_status not in {
-                    WORKFLOW_STATUS_SUCCESS,
-                    WORKFLOW_STATUS_WARNING,
-                    WORKFLOW_STATUS_FAILED,
-                }:
-                    errors.append(
-                        f"Job Status Filter node '{_node_label(node)}' must select Success, Warning, or Failed."
-                    )
-
         for trigger_type, count in trigger_counts.items():
             if count > 1:
                 errors.append(f"Workflow may contain at most one '{trigger_type}' trigger node.")
@@ -1960,21 +1950,33 @@ class WorkflowRuntimeService:
             source_port = _edge_source_port(edge, node_map)
             target_port = _edge_target_port(edge, node_map)
             port_kind = str((target_port or source_port or {}).get("kind") or PORT_KIND_DATA)
+            source_port_id = str((source_port or {}).get("id") or "")
             target_port_id = str((target_port or {}).get("id") or "")
             target_port_label = str((target_port or {}).get("label") or target_port_id or "Input").strip()
+            edge_output = source_output
+            edge_status = source_status
+            job_output_match_count = None
+            if _is_job_output_route_edge(edge, node_map):
+                edge_output, job_output_match_count = self._build_routed_job_output_output(source_output, route=route)
+                edge_status = _normalize_status(edge_output.get("status"))
             edge_summary = {
                 "edge_id": str(edge.get("id") or ""),
                 "source_node_id": source_id,
-                "source_port_id": str((source_port or {}).get("id") or ""),
+                "source_port_id": source_port_id,
                 "source_port_label": str((source_port or {}).get("label") or "").strip(),
                 "target_port_id": target_port_id,
                 "target_port_label": target_port_label,
                 "port_kind": port_kind,
                 "route_on": route,
-                "status": source_status,
-                "output": source_output,
+                "status": edge_status,
+                "output": edge_output,
             }
-            matched = _match_edge_route(route, source_status) if port_kind == PORT_KIND_ACTION else _match_data_edge(source_status)
+            if port_kind == PORT_KIND_ACTION:
+                matched = _match_edge_route(route, source_status)
+            elif source_port_id == "job_output":
+                matched = bool(job_output_match_count)
+            else:
+                matched = _match_data_edge(source_status)
             if matched:
                 matched_inputs.append(edge_summary)
                 if target_port_id:
@@ -2106,12 +2108,6 @@ class WorkflowRuntimeService:
                 node=node,
                 input_envelope=input_envelope,
                 source_metadata=source_metadata,
-            )
-        if node_type == NODE_TYPE_JOB_STATUS_FILTER:
-            return self._execute_job_status_filter_node(
-                node_run_id=node_run_id,
-                node=node,
-                input_envelope=input_envelope,
             )
         output = self._build_output_envelope(
             status=WORKFLOW_STATUS_FAILED,
@@ -2317,6 +2313,59 @@ class WorkflowRuntimeService:
                 return [dict(item) for item in raw_inputs if isinstance(item, Mapping)]
         return []
 
+    def _job_output_records_to_targets(self, records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+        return self._dedupe_target_records(
+            [
+                {
+                    "kind": "device",
+                    "hostname": str(record.get("hostname") or "").strip(),
+                    "device_guid": str(record.get("device_guid") or "").strip(),
+                    "site_id": _coerce_optional_int(record.get("site_id")),
+                    "site_name": str(record.get("site_name") or "").strip(),
+                    "agent_id": str(record.get("agent_id") or "").strip(),
+                }
+                for record in records or []
+                if isinstance(record, Mapping)
+                and (str(record.get("hostname") or "").strip() or str(record.get("device_guid") or "").strip())
+            ]
+        )
+
+    def _build_routed_job_output_output(
+        self,
+        source_output: Mapping[str, Any],
+        *,
+        route: str,
+    ) -> Tuple[Dict[str, Any], int]:
+        output_data = source_output.get("data") if isinstance(source_output.get("data"), Mapping) else {}
+        raw_job_output = output_data.get("job_output") if isinstance(output_data.get("job_output"), list) else []
+        matching_records = [
+            dict(record)
+            for record in raw_job_output
+            if isinstance(record, Mapping) and _match_edge_route(route, record.get("status"))
+        ]
+        targets = self._job_output_records_to_targets(matching_records)
+        routed_status = (
+            _rollup_status([record.get("status") for record in matching_records])
+            if matching_records
+            else WORKFLOW_STATUS_SKIPPED
+        )
+        routed_output = self._build_output_envelope(
+            status=routed_status,
+            data={
+                "job_output": matching_records,
+                "targets": targets,
+            },
+            metadata={
+                **dict(source_output.get("metadata") or {}),
+                "job_output_route": route,
+                "filtered_job_output_count": len(matching_records),
+                "target_count": len(targets),
+                "source_output_status": _normalize_status(source_output.get("status")),
+            },
+            artifacts=dict(source_output.get("artifacts") or {}),
+        )
+        return routed_output, len(matching_records)
+
     def _extract_targets_from_input_envelope(self, input_envelope: Mapping[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         matched_inputs = self._port_inputs(input_envelope, "targets")
         requested_targets: List[Dict[str, Any]] = []
@@ -2333,6 +2382,9 @@ class WorkflowRuntimeService:
             source_summaries.append(
                 {
                     "source_node_id": str(item.get("source_node_id") or "").strip(),
+                    "source_port_id": str(item.get("source_port_id") or "").strip(),
+                    "source_port_label": str(item.get("source_port_label") or "").strip(),
+                    "route_on": str(item.get("route_on") or "").strip(),
                     "target_count": len(targets),
                     "status": _normalize_status(output.get("status")),
                     "target_node_type": str(
@@ -3185,83 +3237,6 @@ class WorkflowRuntimeService:
             parsed = _parse_json_object(raw_value)
             return {str(key): value for key, value in parsed.items() if str(key).strip()}
         return {}
-
-    # ------------------------------------------------------------------
-    # Job output filter execution
-    # ------------------------------------------------------------------
-    def _execute_job_status_filter_node(
-        self,
-        *,
-        node_run_id: int,
-        node: Mapping[str, Any],
-        input_envelope: Mapping[str, Any],
-    ) -> Dict[str, Any]:
-        data = node.get("data") if isinstance(node.get("data"), Mapping) else {}
-        match_status = _normalize_status(data.get("match_status") or data.get("matchStatus") or "")
-        if match_status not in {
-            WORKFLOW_STATUS_SUCCESS,
-            WORKFLOW_STATUS_WARNING,
-            WORKFLOW_STATUS_FAILED,
-        }:
-            output = self._build_output_envelope(
-                status=WORKFLOW_STATUS_FAILED,
-                data=None,
-                metadata={"reason": "missing_match_status"},
-                artifacts={},
-            )
-            self._finalize_node_run(
-                node_run_id,
-                status=WORKFLOW_STATUS_FAILED,
-                output_envelope=output,
-                input_envelope=input_envelope,
-                error="Job Status Filter node must choose Success, Warning, or Failed.",
-            )
-            return {"status": WORKFLOW_STATUS_FAILED, "output_envelope": output}
-
-        job_output_records, source_summaries = self._extract_job_output_records(input_envelope)
-        matching_records = [
-            dict(record)
-            for record in job_output_records
-            if _normalize_status(record.get("status")) == match_status
-        ]
-        targets = self._dedupe_target_records(
-            [
-                {
-                    "kind": "device",
-                    "hostname": str(record.get("hostname") or "").strip(),
-                    "device_guid": str(record.get("device_guid") or "").strip(),
-                    "site_id": _coerce_optional_int(record.get("site_id")),
-                    "site_name": str(record.get("site_name") or "").strip(),
-                    "agent_id": str(record.get("agent_id") or "").strip(),
-                }
-                for record in matching_records
-                if str(record.get("hostname") or "").strip() or str(record.get("device_guid") or "").strip()
-            ]
-        )
-        status = WORKFLOW_STATUS_SUCCESS if matching_records else WORKFLOW_STATUS_WARNING
-        output = self._build_output_envelope(
-            status=status,
-            data={
-                "job_output": matching_records,
-                "targets": targets,
-                "matched_status": match_status,
-            },
-            metadata={
-                "matched_count": len(matching_records),
-                "target_count": len(targets),
-                "target_node_type": NODE_TYPE_JOB_STATUS_FILTER,
-                "job_output_sources": source_summaries,
-            },
-            artifacts={},
-        )
-        self._finalize_node_run(
-            node_run_id,
-            status=status,
-            output_envelope=output,
-            input_envelope=input_envelope,
-            error="" if matching_records else f"No Job Output records matched status '{match_status}'.",
-        )
-        return {"status": status, "output_envelope": output}
 
     # ------------------------------------------------------------------
     # Subworkflow execution

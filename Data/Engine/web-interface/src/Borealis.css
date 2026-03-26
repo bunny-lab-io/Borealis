@@ -37,6 +37,26 @@ body {
     z-index: -1;
 }
 
+.flow-editor-container .react-flow__attribution {
+    background: rgba(8, 12, 24, 0.92) !important;
+    color: #8fbfff !important;
+    border: 1px solid rgba(125, 183, 255, 0.18);
+    border-radius: 8px 0 0 0;
+    box-shadow: 0 10px 24px rgba(2, 8, 23, 0.28);
+    backdrop-filter: blur(8px) saturate(130%);
+    font-size: 11px;
+    padding: 4px 8px;
+}
+
+.flow-editor-container .react-flow__attribution a {
+    color: #8fbfff !important;
+    text-decoration: none;
+}
+
+.flow-editor-container .react-flow__attribution a:hover {
+    color: #cbd5e1 !important;
+}
+
 /* helper lines for snapping */
 .helper-line {
     position: absolute;

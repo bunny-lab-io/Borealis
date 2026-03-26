@@ -395,7 +395,6 @@ export default function FlowEditor({
         }}
         defaultViewport={{ x: 0, y: 0, zoom: 1.5 }}
         edgeOptions={{ type: "bezier", animated: true, style: { strokeDasharray: "6 3", stroke: "#58a6ff" } }}
-        proOptions={{ hideAttribution: true }}
         onNodeDragStart={readOnly ? undefined : (_, node) => computeGuides(node)}
         onNodeDrag={readOnly ? undefined : onNodeDrag}
         onNodeDragStop={readOnly ? undefined : () => { setGuides([]); setActiveGuides([]); }}
@@ -469,7 +468,7 @@ export default function FlowEditor({
             Edit Properties
           </MenuItem>
         ) : null}
-        {!readOnly && contextMenuEdgePorts?.isActionEdge ? (
+        {!readOnly && contextMenuEdgePorts?.supportsRouteSelection ? (
           <MenuItem onClick={(event) => handleOpenEdgeRouteMenu(event, edgeContextMenu.edgeId)}>
             <ListItemText primary="Flow Control" />
             <NavigateNextIcon sx={{ fontSize: 18, color: "#7dd3fc", ml: 1 }} />

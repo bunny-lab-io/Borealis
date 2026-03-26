@@ -38,7 +38,6 @@ import {
 } from "./DialogStyles.jsx";
 
 // Workflow Editor Imports
-import FlowTabs from "./Flow_Editor/Flow_Tabs";
 import FlowEditor from "./Flow_Editor/Flow_Editor";
 import NodeSidebar from "./Flow_Editor/Node_Sidebar";
 import StatusBar from "./Flow_Editor/Status_Bar.jsx";
@@ -2392,13 +2391,6 @@ async function sha512(text) {
                 workflowRun={workflowViewState?.runRecord || null}
               />
               <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden", minWidth: 0 }}>
-                <FlowTabs
-                  tabs={tabs}
-                  activeTabId={activeTabId}
-                  onTabChange={setActiveTabId}
-                  onAddTab={() => {}}
-                  onTabRightClick={handleTabRightClick}
-                />
                 {workflowViewState?.mode !== "run" && activeWorkflowDiagnostics?.hasLegacyPortIssues ? (
                   <Box
                     sx={{
@@ -2460,13 +2452,13 @@ async function sha512(text) {
                     </Box>
                   ))}
                 </Box>
+                <StatusBar
+                  nodeCount={activeWorkflowTab?.nodes?.length || 0}
+                  mode={workflowViewState?.mode === "run" ? "run" : "editor"}
+                  workflowRun={workflowViewState?.runRecord || null}
+                />
               </Box>
             </Box>
-            <StatusBar
-              nodeCount={activeWorkflowTab?.nodes?.length || 0}
-              mode={workflowViewState?.mode === "run" ? "run" : "editor"}
-              workflowRun={workflowViewState?.runRecord || null}
-            />
           </Box>
         );
 

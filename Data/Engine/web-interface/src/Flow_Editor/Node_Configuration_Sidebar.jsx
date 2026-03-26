@@ -244,6 +244,79 @@ function previewJobOutputFromEnvelope(envelope) {
   return Array.isArray(envelope?.data?.job_output) ? envelope.data.job_output : [];
 }
 
+function previewNormalizeStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "success") return "Success";
+  if (normalized === "warning") return "Warning";
+  if (normalized === "failed" || normalized === "failure" || normalized === "error") return "Failed";
+  if (normalized === "timed out" || normalized === "timed_out" || normalized === "timeout") return "Timed Out";
+  if (normalized === "skipped" || normalized === "inactive") return "Skipped";
+  if (normalized === "running") return "Running";
+  if (normalized === "pending") return "Pending";
+  return "";
+}
+
+function previewRouteMatchesStatus(route, status) {
+  const normalizedStatus = previewNormalizeStatus(status);
+  if (normalizedStatus === "Skipped") return false;
+  if (route === "on_success") return normalizedStatus === "Success";
+  if (route === "on_warning") return normalizedStatus === "Warning";
+  if (route === "on_failed") return normalizedStatus === "Failed" || normalizedStatus === "Timed Out";
+  return ["Success", "Warning", "Failed", "Timed Out"].includes(normalizedStatus);
+}
+
+function previewTargetsFromJobOutput(jobOutput = []) {
+  return dedupePreviewTargets(
+    (Array.isArray(jobOutput) ? jobOutput : [])
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        hostname: String(entry.hostname || "").trim(),
+        site_id: entry.site_id ?? null,
+        site_name: String(entry.site_name || "Not Configured").trim(),
+        device_guid: String(entry.device_guid || "").trim(),
+        agent_id: String(entry.agent_id || "").trim(),
+        preview_only: true,
+      }))
+      .filter((entry) => entry.hostname || entry.device_guid)
+  );
+}
+
+function buildPreviewRoutedJobOutputEnvelope(sourceEnvelope, route) {
+  const jobOutput = previewJobOutputFromEnvelope(sourceEnvelope);
+  const allPendingLike =
+    jobOutput.length > 0 &&
+    jobOutput.every((entry) => {
+      const status = previewNormalizeStatus(entry?.status || "Pending");
+      return status === "Pending" || status === "Running";
+    });
+  const matchingRecords =
+    route === "always" && allPendingLike
+      ? jobOutput.map((entry) => ({ ...entry }))
+      : jobOutput.filter((entry) => previewRouteMatchesStatus(route, entry?.status));
+  const routedTargets = previewTargetsFromJobOutput(matchingRecords);
+  return buildPreviewEnvelope({
+    status: matchingRecords.length
+      ? allPendingLike
+        ? "Pending"
+        : matchingRecords.some((entry) => previewNormalizeStatus(entry?.status) === "Failed" || previewNormalizeStatus(entry?.status) === "Timed Out")
+        ? "Failed"
+        : matchingRecords.some((entry) => previewNormalizeStatus(entry?.status) === "Warning")
+        ? "Warning"
+        : "Success"
+      : "Skipped",
+    data: {
+      job_output: matchingRecords,
+      targets: routedTargets,
+    },
+    metadata: {
+      route_on: route,
+      filtered_job_output_count: matchingRecords.length,
+      target_count: routedTargets.length,
+      source_output_status: previewNormalizeStatus(sourceEnvelope?.status || ""),
+    },
+  });
+}
+
 function buildAuthoringNodePreview({
   node,
   nodesById,
@@ -293,7 +366,8 @@ function buildAuthoringNodePreview({
   stack.add(node.id);
 
   const incomingEdges = incomingByNode.get(node.id) || [];
-  const inputRecords = incomingEdges.map((edge) => {
+  const inputRecords = incomingEdges
+    .map((edge) => {
     const portMetadata = getWorkflowEdgePortMetadata(edge, nodesById);
     const sourceNode = portMetadata.sourceNode || nodesById[String(edge?.source || "").trim()] || null;
     const sourcePreview = sourceNode
@@ -306,6 +380,21 @@ function buildAuthoringNodePreview({
           stack,
         })
       : null;
+    const route = portMetadata?.supportsRouteSelection
+      ? getWorkflowRouteDescriptor(edge?.data?.route_on).value
+      : "always";
+    const sourceOutputEnvelope = sourcePreview?.outputEnvelope || buildPreviewEnvelope({ status: "Pending", data: null });
+    const routedSourceOutput = portMetadata?.isJobOutputRouteEdge
+      ? buildPreviewRoutedJobOutputEnvelope(sourceOutputEnvelope, route)
+      : sourceOutputEnvelope;
+    const isMatched = portMetadata?.isActionEdge
+      ? previewRouteMatchesStatus(route, sourceOutputEnvelope?.status)
+      : portMetadata?.isJobOutputRouteEdge
+      ? previewJobOutputFromEnvelope(routedSourceOutput).length > 0
+      : true;
+    if (!isMatched) {
+      return null;
+    }
     return {
       edge_id: edge?.id || "",
       source_node_id: edge?.source || "",
@@ -314,11 +403,12 @@ function buildAuthoringNodePreview({
       target_port_id: portMetadata?.targetPort?.id || edge?.targetHandle || "",
       target_port_label: portMetadata?.targetPort?.label || edge?.targetHandle || "",
       port_kind: portMetadata?.sourcePort?.kind || portMetadata?.targetPort?.kind || "data",
-      route_on: portMetadata?.isActionEdge ? getWorkflowRouteDescriptor(edge?.data?.route_on).value : "always",
-      status: sourcePreview?.outputEnvelope?.status || "Pending",
-      output: sourcePreview?.outputEnvelope || buildPreviewEnvelope({ status: "Pending", data: null }),
+      route_on: route,
+      status: routedSourceOutput?.status || sourceOutputEnvelope?.status || "Pending",
+      output: routedSourceOutput,
     };
-  });
+  })
+    .filter(Boolean);
 
   const inputsByPort = inputRecords.reduce((acc, entry) => {
     const portId = String(entry?.target_port_id || "default").trim() || "default";
@@ -351,7 +441,6 @@ function buildAuthoringNodePreview({
   const nodeData = node?.data && typeof node.data === "object" ? node.data : {};
   const triggerInputs = previewPortInputs(inputEnvelope, "trigger");
   const targetInputs = previewPortInputs(inputEnvelope, "targets");
-  const jobOutputInputs = previewPortInputs(inputEnvelope, "job_output");
 
   let outputEnvelope = null;
 
@@ -463,32 +552,6 @@ function buildAuthoringNodePreview({
       },
       artifacts: { activity_ids: [] },
     });
-  } else if (nodeType === WORKFLOW_RUNTIME_NODE_TYPES.jobStatusFilter) {
-    const matchStatus = String(nodeData?.match_status || "Failed").trim() || "Failed";
-    const upstreamRecords = jobOutputInputs.flatMap((entry) => previewJobOutputFromEnvelope(entry?.output));
-    const matchingRecords = upstreamRecords.filter((entry) => String(entry?.status || "").trim() === matchStatus);
-    const targets = dedupePreviewTargets(
-      matchingRecords.map((entry) => ({
-        hostname: entry.hostname || "",
-        site_id: entry.site_id ?? null,
-        site_name: entry.site_name || "Not Configured",
-        device_guid: entry.device_guid || "",
-        agent_id: entry.agent_id || "",
-        preview_only: true,
-      }))
-    );
-    outputEnvelope = buildPreviewEnvelope({
-      status: upstreamRecords.length ? (matchingRecords.length ? "Success" : "Warning") : "Pending",
-      data: {
-        job_output: matchingRecords,
-        targets,
-      },
-      metadata: {
-        match_status: matchStatus,
-        source_record_count: upstreamRecords.length,
-        target_count: targets.length,
-      },
-    });
   } else if (nodeType === WORKFLOW_RUNTIME_NODE_TYPES.executeSubworkflow) {
     outputEnvelope = buildPreviewEnvelope({
       status: String(nodeData?.workflow_guid || "").trim() ? "Pending" : "Failed",
@@ -519,7 +582,7 @@ function buildAuthoringNodePreview({
     const portMetadata = getWorkflowEdgePortMetadata(edge, nodesById);
     return {
       edge_id: edge?.id || "",
-      route_on: portMetadata?.isActionEdge ? getWorkflowRouteDescriptor(edge?.data?.route_on).label : "Always",
+      route_on: portMetadata?.supportsRouteSelection ? getWorkflowRouteDescriptor(edge?.data?.route_on).label : "Always",
       source_port_id: portMetadata?.sourcePort?.id || edge?.sourceHandle || "",
       source_port_label: portMetadata?.sourcePort?.label || edge?.sourceHandle || "",
       target_node_id: edge?.target || "",

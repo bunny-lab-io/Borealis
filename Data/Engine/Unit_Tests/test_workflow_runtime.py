@@ -255,7 +255,7 @@ def test_workflow_validation_rejects_legacy_generic_wiring(tmp_path: Path) -> No
     assert any("legacy input wiring" in error for error in errors)
 
 
-def test_job_status_filter_emits_matching_targets(tmp_path: Path) -> None:
+def test_job_output_route_filters_matching_targets(tmp_path: Path) -> None:
     db_path = tmp_path / "workflow_runtime.sqlite3"
     _create_activity_table(db_path)
 
@@ -265,67 +265,64 @@ def test_job_status_filter_emits_matching_targets(tmp_path: Path) -> None:
         logger=logging.getLogger("workflow-runtime-test"),
     )
 
-    input_envelope = runtime._build_output_envelope(
+    source_output = runtime._build_output_envelope(
         status="Failed",
         data={
-            "inputs": [],
-            "inputs_by_port": {
-                "job_output": {
-                    "label": "Job Output",
-                    "kind": "data",
-                    "inputs": [
-                        {
-                            "edge_id": "edge-1",
-                            "source_node_id": "assembly-1",
-                            "target_port_id": "job_output",
-                            "port_kind": "data",
-                            "status": "Failed",
-                            "output": {
-                                "status": "Failed",
-                                "data": {
-                                    "job_output": [
-                                        {
-                                            "hostname": "LAB-AIO-01",
-                                            "device_guid": "GUID-1",
-                                            "site_id": 1,
-                                            "site_name": "Bunny Lab",
-                                            "agent_id": "AGENT-1",
-                                            "status": "Failed",
-                                            "stderr": "Boom",
-                                        },
-                                        {
-                                            "hostname": "LAB-OPERATOR-01",
-                                            "device_guid": "GUID-2",
-                                            "site_id": 1,
-                                            "site_name": "Bunny Lab",
-                                            "agent_id": "AGENT-2",
-                                            "status": "Success",
-                                            "stderr": "",
-                                        },
-                                    ]
-                                },
-                            },
-                        }
-                    ],
-                }
-            },
+            "job_output": [
+                {
+                    "hostname": "LAB-AIO-01",
+                    "device_guid": "GUID-1",
+                    "site_id": 1,
+                    "site_name": "Bunny Lab",
+                    "agent_id": "AGENT-1",
+                    "status": "Failed",
+                    "stderr": "Boom",
+                },
+                {
+                    "hostname": "LAB-OPERATOR-01",
+                    "device_guid": "GUID-2",
+                    "site_id": 1,
+                    "site_name": "Bunny Lab",
+                    "agent_id": "AGENT-2",
+                    "status": "Success",
+                    "stderr": "",
+                },
+            ]
         },
-        metadata={},
+        metadata={"target_count": 2},
         artifacts={},
     )
 
-    result = runtime._execute_job_status_filter_node(
-        node_run_id=999,
-        node={
-            "id": "status-filter-1",
-            "type": "workflow_job_status_filter",
-            "data": {"label": "Job Status Filter", "match_status": "Failed"},
+    input_envelope, ignored_inputs, matched_count = runtime._build_input_envelope(
+        node_id="assembly-2",
+        incoming_edges=[
+            {
+                "id": "edge-job-output-failed",
+                "source": "assembly-1",
+                "sourceHandle": "job_output",
+                "target": "assembly-2",
+                "targetHandle": "targets",
+                "data": {"route_on": "on_failed"},
+            }
+        ],
+        outputs={"assembly-1": source_output},
+        node_map={
+            "assembly-1": {
+                "id": "assembly-1",
+                "type": "workflow_execute_assembly",
+                "data": {"label": "Execute Assembly"},
+            },
+            "assembly-2": {
+                "id": "assembly-2",
+                "type": "workflow_execute_assembly",
+                "data": {"label": "Execute Assembly", "assembly_guid": "ASM-2"},
+            },
         },
-        input_envelope=input_envelope,
     )
 
-    assert result["status"] == "Success"
-    payload = result["output_envelope"]["data"]
+    assert matched_count == 1
+    assert ignored_inputs == []
+    payload = input_envelope["data"]["inputs_by_port"]["targets"]["inputs"][0]["output"]["data"]
     assert len(payload["job_output"]) == 1
     assert payload["job_output"][0]["hostname"] == "LAB-AIO-01"
     assert len(payload["targets"]) == 1
@@ -348,7 +345,7 @@ def test_execute_assembly_accepts_multiple_trigger_inputs(tmp_path: Path) -> Non
         workflow_payload={
             "nodes": [
                 {"id": "manual-trigger", "type": "workflow_trigger_manual", "data": {"label": "Trigger - Manual"}},
-                {"id": "status-filter", "type": "workflow_job_status_filter", "data": {"label": "Job Status Filter", "match_status": "Failed"}},
+                {"id": "scheduled-trigger", "type": "workflow_trigger_scheduled_job", "data": {"label": "Trigger - Scheduled Job"}},
                 {
                     "id": "targets-1",
                     "type": "workflow_agent_array",
@@ -371,7 +368,7 @@ def test_execute_assembly_accepts_multiple_trigger_inputs(tmp_path: Path) -> Non
                 },
                 {
                     "id": "edge-trigger-filter",
-                    "source": "status-filter",
+                    "source": "scheduled-trigger",
                     "sourceHandle": "action",
                     "target": "assembly-1",
                     "targetHandle": "trigger",

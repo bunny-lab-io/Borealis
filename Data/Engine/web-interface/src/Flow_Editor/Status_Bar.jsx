@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { Box, Chip, Divider, Typography } from "@mui/material";
 
 const STATUS_TONES = {
@@ -25,14 +25,6 @@ export default function StatusBar({
   mode = "editor",
   workflowRun = null,
 }) {
-  const [apiStatus, setApiStatus] = useState("checking");
-
-  useEffect(() => {
-    fetch("/health")
-      .then((res) => (res.ok ? setApiStatus("online") : setApiStatus("offline")))
-      .catch(() => setApiStatus("offline"));
-  }, []);
-
   const statusTone = STATUS_TONES[String(workflowRun?.status || "").trim()] || null;
   const modeLabel = mode === "run" ? "Run Snapshot" : "Authoring";
   const sourceLabel = useMemo(() => {
@@ -91,18 +83,6 @@ export default function StatusBar({
             </Typography>
           </>
         ) : null}
-      </Box>
-
-      <Box sx={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: 1 }}>
-        <strong style={{ color: "#7dd3fc" }}>Backend API</strong>
-        <span
-          style={{
-            color: apiStatus === "online" ? "#00d18c" : "#ff4f4f",
-            fontWeight: "bold",
-          }}
-        >
-          {apiStatus === "checking" ? "..." : apiStatus.charAt(0).toUpperCase() + apiStatus.slice(1)}
-        </span>
       </Box>
     </Box>
   );

@@ -97,11 +97,12 @@ None. This is a UI-only domain.
 - React Flow handles are authoritative for workflow-runtime execution. Use `sourceHandle` and `targetHandle` values that match the declared port ids.
 - Control flow:
   - `Action` is the only control-flow port family in V1.
-  - `edge.data.route_on` is only meaningful on `Action` edges.
+  - `edge.data.route_on` is meaningful on `Action` edges and on `Job Output` data edges.
   - `Action` edges default to `Always` and use Borealis route styling: blue `Always`, green `On Success`, orange `On Warning`, red `On Failed`.
 - Data flow:
-  - `Targets` and `Job Output` edges are data-only links.
-  - Data edges do not drive branching and should not expose flow-control routing in the UI.
+  - `Targets` and `Job Output` edges are data links.
+  - `Job Output` edges from result-producing nodes may use `Always`, `On Success`, `On Warning`, and `On Failed` to pass only the matching per-device records and target list downstream.
+  - Other data edges do not expose route controls in the UI.
   - Default workflow-runtime data edges use the Borealis dashed blue style (`#58a6ff`), not solid white lines.
   - `Targets` edges from **List of Devices** and **Device Filter** nodes should auto-label themselves with the current targeted-device count when that count is known.
 - Initial standardized workflow-runtime ports:
@@ -112,13 +113,12 @@ None. This is a UI-only domain.
   - `List of Devices`: `Targets` out
   - `Execute Assembly`: `Trigger` in, `Targets` in, `Action` out, `Job Output` out
   - `Execute Subworkflow`: `Trigger` in, `Action` out, `Job Output` out
-  - `Job Status Filter`: `Job Output` in, `Targets` out, `Action` out
 - Trigger fan-in:
   - Runtime nodes may accept multiple incoming `Trigger` action paths when the workflow uses several branches that can converge on the same node.
   - A node should execute after its predecessors are terminal and at least one routed `Trigger` input matched into the node.
 - `Job Output` standard:
   - Nodes that expose execution results should emit a per-device payload with device identity plus per-device status at minimum.
-  - `Job Status Filter` consumes `Job Output` and emits only matching devices through `Targets`.
+  - Routed `Job Output` edges emit only the matching per-device records and the derived `Targets` set for the chosen route.
 - Mixed execution results:
   - `Execute Assembly` keeps a single overall workflow status for routing and outline color.
   - When child-device results are mixed, the node badge should summarize the split, for example `7 Success | 1 Failed`, while the node outline and badge tone still follow the overall status.

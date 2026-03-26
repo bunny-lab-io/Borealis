@@ -6,7 +6,6 @@ export const WORKFLOW_RUNTIME_NODE_TYPES = {
   agentArray: "workflow_agent_array",
   executeAssembly: "workflow_execute_assembly",
   executeSubworkflow: "workflow_execute_subworkflow",
-  jobStatusFilter: "workflow_job_status_filter",
 };
 
 export const WORKFLOW_RUNTIME_EDGE_ROUTE_ALWAYS = "always";
@@ -53,12 +52,6 @@ export const WORKFLOW_RUNTIME_PORT_CARDINALITY = {
   multi: "multi",
 };
 
-export const WORKFLOW_RUNTIME_JOB_STATUS_OPTIONS = [
-  { value: "Success", label: "Success" },
-  { value: "Warning", label: "Warning" },
-  { value: "Failed", label: "Failed" },
-];
-
 const DEFAULT_WORKFLOW_NODE_LABELS = Object.freeze({
   [WORKFLOW_RUNTIME_NODE_TYPES.triggerManual]: "Trigger - Manual",
   [WORKFLOW_RUNTIME_NODE_TYPES.triggerScheduledJob]: "Trigger - Scheduled Job",
@@ -67,7 +60,6 @@ const DEFAULT_WORKFLOW_NODE_LABELS = Object.freeze({
   [WORKFLOW_RUNTIME_NODE_TYPES.agentArray]: "List of Devices",
   [WORKFLOW_RUNTIME_NODE_TYPES.executeAssembly]: "Execute Assembly",
   [WORKFLOW_RUNTIME_NODE_TYPES.executeSubworkflow]: "Execute Subworkflow",
-  [WORKFLOW_RUNTIME_NODE_TYPES.jobStatusFilter]: "Job Status Filter",
 });
 
 const LEGACY_WORKFLOW_NODE_LABEL_ALIASES = Object.freeze({
@@ -130,14 +122,6 @@ const TARGETS_IN = definePort({
   required: true,
 });
 
-const JOB_OUTPUT_IN = definePort({
-  id: "job_output",
-  label: "Job Output",
-  direction: WORKFLOW_RUNTIME_PORT_DIRECTIONS.input,
-  kind: WORKFLOW_RUNTIME_PORT_KINDS.data,
-  required: true,
-});
-
 export const WORKFLOW_RUNTIME_NODE_PORTS = Object.freeze({
   [WORKFLOW_RUNTIME_NODE_TYPES.triggerManual]: Object.freeze({
     inputs: Object.freeze([]),
@@ -166,10 +150,6 @@ export const WORKFLOW_RUNTIME_NODE_PORTS = Object.freeze({
   [WORKFLOW_RUNTIME_NODE_TYPES.executeSubworkflow]: Object.freeze({
     inputs: Object.freeze([TRIGGER_IN]),
     outputs: Object.freeze([ACTION_OUT, JOB_OUTPUT_OUT]),
-  }),
-  [WORKFLOW_RUNTIME_NODE_TYPES.jobStatusFilter]: Object.freeze({
-    inputs: Object.freeze([JOB_OUTPUT_IN]),
-    outputs: Object.freeze([TARGETS_OUT, ACTION_OUT]),
   }),
 });
 
@@ -290,7 +270,7 @@ function workflowDataEdgeStroke(existingStroke = "") {
 
 export function getWorkflowRuntimeAutoEdgeLabel(edge, metadata = null) {
   const resolvedMetadata = metadata || {};
-  if (resolvedMetadata.isActionEdge) {
+  if (resolvedMetadata.isActionEdge || resolvedMetadata.isJobOutputRouteEdge) {
     return getWorkflowRouteDescriptor(edgeRouteValue(edge)).label;
   }
   const sourceNode = resolvedMetadata.sourceNode || null;
@@ -379,6 +359,13 @@ export function getWorkflowEdgePortMetadata(edge, nodesById = {}) {
         edge?.targetHandle
       )
     : null;
+  const isJobOutputRouteEdge = Boolean(
+    sourcePort &&
+      targetPort &&
+      sourcePort.kind === "data" &&
+      targetPort.kind === "data" &&
+      normalizePortId(sourcePort.id) === "job_output"
+  );
   return {
     sourceNode,
     targetNode,
@@ -386,6 +373,12 @@ export function getWorkflowEdgePortMetadata(edge, nodesById = {}) {
     targetPort,
     isActionEdge: Boolean(sourcePort && targetPort && sourcePort.kind === "action" && targetPort.kind === "action"),
     isDataEdge: Boolean(sourcePort && targetPort && sourcePort.kind === "data" && targetPort.kind === "data"),
+    isJobOutputRouteEdge,
+    supportsRouteSelection: Boolean(
+      sourcePort &&
+        targetPort &&
+        ((sourcePort.kind === "action" && targetPort.kind === "action") || isJobOutputRouteEdge)
+    ),
   };
 }
 
@@ -394,7 +387,7 @@ export function decorateWorkflowEdge(edge, { nodesById = {} } = {}) {
   const route = normalizeWorkflowEdgeRoute(edgeRouteValue(normalizedEdge));
   const metadata = getWorkflowEdgePortMetadata(normalizedEdge, nodesById);
   const autoLabel = getWorkflowRuntimeAutoEdgeLabel(normalizedEdge, metadata);
-  if (metadata.isActionEdge) {
+  if (metadata.supportsRouteSelection) {
     const descriptor = getWorkflowRouteDescriptor(route);
     return {
       ...normalizedEdge,
@@ -605,10 +598,11 @@ export function inspectWorkflowRuntimeV1({ nodes = [], edges = [], sourceType = 
       }
       if (
         sourcePort.kind === WORKFLOW_RUNTIME_PORT_KINDS.data &&
-        route !== WORKFLOW_RUNTIME_EDGE_ROUTE_ALWAYS
+        route !== WORKFLOW_RUNTIME_EDGE_ROUTE_ALWAYS &&
+        normalizePortId(sourcePort.id) !== "job_output"
       ) {
         warnings.push(
-          `Workflow edge '${edgeId}' is a data edge. Flow-control routing is ignored unless the edge connects Action ports.`
+          `Workflow edge '${edgeId}' is a data edge. Route rules are only supported on Action edges and Job Output edges.`
         );
       }
       incrementPortCount(outgoingPortCounts, source, sourcePort.id);
