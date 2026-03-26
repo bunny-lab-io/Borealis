@@ -4,6 +4,10 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import ContentPasteIcon from "@mui/icons-material/ContentPaste";
 import RestoreIcon from "@mui/icons-material/Restore";
 import { SketchPicker } from "react-color";
+import {
+  getWorkflowRouteDescriptor,
+  WORKFLOW_RUNTIME_EDGE_ROUTES,
+} from "./runtimeV1";
 
 const SIDEBAR_WIDTH = 400;
 
@@ -27,6 +31,7 @@ export default function Context_Menu_Sidebar({
   open,
   onClose,
   edge,
+  edgePortMetadata,
   updateEdge,
 }) {
   const [activeTab, setActiveTab] = useState(0);
@@ -53,6 +58,35 @@ export default function Context_Menu_Sidebar({
       else if (field === "style.strokeDasharray") updated.style = { ...updated.style, strokeDasharray: value };
       else if (field === "style.strokeWidth") updated.style = { ...updated.style, strokeWidth: value };
       else if (field === "labelStyle.fontWeight") updated.labelStyle = { ...updated.labelStyle, fontWeight: value };
+      else if (field === "data.route_on") {
+        updated.data = { ...(updated.data || {}), route_on: value };
+        if (edgePortMetadata?.isActionEdge) {
+          const descriptor = getWorkflowRouteDescriptor(value);
+          updated.animated = true;
+          updated.label = descriptor.label;
+          updated.style = {
+            ...updated.style,
+            strokeDasharray: "6 3",
+            stroke: descriptor.color,
+            strokeWidth: updated.style?.strokeWidth ?? 1.6,
+          };
+          updated.labelStyle = {
+            ...updated.labelStyle,
+            fill: descriptor.color,
+            fontWeight: updated.labelStyle?.fontWeight || 700,
+          };
+          updated.labelBgStyle = {
+            ...updated.labelBgStyle,
+            fill: "#08111f",
+            fillOpacity: updated.labelBgStyle?.fillOpacity ?? 0.94,
+            rx: updated.labelBgStyle?.rx ?? 11,
+            ry: updated.labelBgStyle?.ry ?? 11,
+            stroke: `${descriptor.color}66`,
+            strokeWidth: updated.labelBgStyle?.strokeWidth ?? 0.8,
+          };
+          updated.labelBgPadding = updated.labelBgPadding || [9, 4];
+        }
+      }
       else updated[field] = value;
 
       if (field === "style.strokeDasharray") {
@@ -230,6 +264,29 @@ export default function Context_Menu_Sidebar({
 
   const renderStyleTab = () => (
     <Box sx={{ px: 2, pt: 1, pb: 2 }}>
+      {edgePortMetadata?.isActionEdge ? (
+        <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
+          <Typography variant="body2" sx={{ color: "#ccc", flex: 1 }}>Flow Control</Typography>
+          <TextField
+            select
+            size="small"
+            value={editState.data?.route_on || "always"}
+            onChange={e => handleChange("data.route_on", e.target.value)}
+            sx={{
+              width: 200,
+              bgcolor: "#1e1e1e",
+              "& .MuiSelect-select": { color: "#fff" }
+            }}
+          >
+            {WORKFLOW_RUNTIME_EDGE_ROUTES.map((entry) => (
+              <MenuItem key={entry.value} value={entry.value}>
+                {entry.label}
+              </MenuItem>
+            ))}
+          </TextField>
+        </Box>
+      ) : null}
+
       <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
         <Typography variant="body2" sx={{ color: "#ccc", flex: 1 }}>Edge Style</Typography>
         <TextField

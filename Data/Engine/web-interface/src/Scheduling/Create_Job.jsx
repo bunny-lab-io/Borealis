@@ -25,6 +25,7 @@ import {
   Delete as DeleteIcon,
   FilterList as FilterListIcon,
   PendingActions as PendingActionsIcon,
+  WarningAmberRounded as WarningAmberRoundedIcon,
   Sync as SyncIcon,
   Timer as TimerIcon,
   Check as CheckIcon,
@@ -73,6 +74,10 @@ import {
   parseAssemblyExport,
   resolveAssemblyForComponent
 } from "../Assemblies/assemblyUtils";
+import {
+  extractWorkflowCanvasDocument,
+  inspectWorkflowRuntimeDocument,
+} from "../Flow_Editor/workflowDocuments";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -310,12 +315,26 @@ const JOB_RESULT_THEME = {
     border: "1px solid rgba(251,113,133,0.45)",
     dot: "#fb7185",
   },
+  warning: {
+    label: "Warning",
+    text: "#fbbf24",
+    background: "linear-gradient(120deg, rgba(251,191,36,0.22), rgba(249,115,22,0.14))",
+    border: "1px solid rgba(251,191,36,0.38)",
+    dot: "#f59e0b",
+  },
   pending: {
     label: "Pending",
     text: "#fbbf24",
     background: "rgba(251,191,36,0.18)",
     border: "1px solid rgba(251,191,36,0.35)",
     dot: "#f59e0b",
+  },
+  timed_out: {
+    label: "Timed Out",
+    text: "#d8b4fe",
+    background: "rgba(192,132,252,0.18)",
+    border: "1px solid rgba(192,132,252,0.4)",
+    dot: "#c084fc",
   },
   expired: {
     label: "Expired",
@@ -345,6 +364,49 @@ const JOB_RESULT_THEME = {
     border: "1px solid rgba(226,232,240,0.2)",
     dot: "#94a3b8",
   },
+};
+
+const normalizeJobStatusKey = (status) => {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!normalized || normalized === "scheduled" || normalized === "queued") return "pending";
+  if (normalized === "failure") return "failed";
+  if (normalized === "timed out" || normalized === "timed_out") return "timed_out";
+  if (normalized === "no devices targeted") return "skipped";
+  return normalized;
+};
+
+const isWorkflowComponentRecord = (component) => {
+  const typeRaw = String(
+    component?.type ||
+    component?.component_type ||
+    component?.assembly_type ||
+    component?.assemblyType ||
+    ""
+  ).trim().toLowerCase();
+  const subtypeRaw = String(
+    component?.assembly_subtype ||
+    component?.assemblySubtype ||
+    component?.script_type ||
+    ""
+  ).trim().toLowerCase();
+  return typeRaw === "workflow" || subtypeRaw === "workflow";
+};
+
+const isAnsibleComponentRecord = (component) => {
+  const typeRaw = String(
+    component?.type ||
+    component?.component_type ||
+    component?.assembly_type ||
+    component?.assemblyType ||
+    ""
+  ).trim().toLowerCase();
+  const subtypeRaw = String(
+    component?.assembly_subtype ||
+    component?.assemblySubtype ||
+    component?.script_type ||
+    ""
+  ).trim().toLowerCase();
+  return typeRaw === "ansible" || typeRaw === "playbook" || subtypeRaw === "ansible" || subtypeRaw === "playbook";
 };
 
 const StatusPill = ({ label, theme }) => {
@@ -558,6 +620,7 @@ const STATUS_META = {
   running: { label: "Running", color: "#58a6ff", Icon: SyncIcon },
   expired: { label: "Expired", color: "#aab2bf", Icon: TimerIcon },
   success: { label: "Success", color: "#00d18c", Icon: CheckIcon },
+  warning: { label: "Warning", color: "#fbbf24", Icon: WarningAmberRoundedIcon },
   failed: { label: "Failed", color: "#ff4f4f", Icon: ErrorIcon }
 };
 
@@ -943,6 +1006,11 @@ export default function CreateJob({
   const [pageTitleJobName, setPageTitleJobName] = useState("");
   // Components the job will run: {type:'script'|'workflow', path, name, description}
   const [components, setComponents] = useState([]);
+  const workflowComponentCount = useMemo(
+    () => components.filter((component) => isWorkflowComponentRecord(component)).length,
+    [components]
+  );
+  const isWorkflowJob = workflowComponentCount > 0;
   const [targets, setTargets] = useState([]); // array of target descriptors
   const [filterCatalog, setFilterCatalog] = useState([]);
   const [loadingFilterCatalog, setLoadingFilterCatalog] = useState(false);
@@ -990,11 +1058,14 @@ export default function CreateJob({
     [pageTitleJobName]
   );
   const resolvedPageSubtitle = useMemo(() => {
+    if (isWorkflowJob) {
+      return "Workflow-backed jobs execute one saved workflow. Targets and execution context are defined inside the workflow itself.";
+    }
     if (scheduleType === "immediately") {
       return "Launch immediately or save as a quick job with your selected assemblies.";
     }
     return PAGE_SUBTITLE;
-  }, [scheduleType]);
+  }, [isWorkflowJob, scheduleType]);
   const sendNotification = useCallback(
     async (message) => {
       if (!message) return;
@@ -1253,6 +1324,22 @@ export default function CreateJob({
       setSelectedCredentialId(String(filteredCredentials[0].id));
     }
   }, [remoteExec, filteredCredentials, selectedCredentialId, execContext, useSvcAccount]);
+
+  useEffect(() => {
+    if (!isWorkflowJob) return;
+    if (targets.length) {
+      setTargets([]);
+    }
+    if (execContext !== "system") {
+      setExecContext("system");
+    }
+    if (selectedCredentialId) {
+      setSelectedCredentialId("");
+    }
+    if (useSvcAccount) {
+      setUseSvcAccount(false);
+    }
+  }, [isWorkflowJob, targets.length, execContext, selectedCredentialId, useSvcAccount]);
 
   const [addTargetOpen, setAddTargetOpen] = useState(false);
   const [availableDevices, setAvailableDevices] = useState([]); // [{hostname, display, online, deviceGuid, siteId, site}]
@@ -1914,7 +2001,7 @@ export default function CreateJob({
       );
     }
     if (columnKey === "job_status") {
-      const options = ["success", "failed", "running", "pending", "expired", "timed out"];
+      const options = ["success", "warning", "failed", "running", "pending", "expired", "timed out"];
       return (
         <Select
           size="small"
@@ -1987,16 +2074,17 @@ export default function CreateJob({
 
   const deviceFiltered = useMemo(() => {
     const matchStatusFilter = (status, filterKey) => {
-      if (filterKey === "pending") return status === "pending" || status === "scheduled" || status === "queued" || status === "";
+      if (filterKey === "pending") return status === "pending";
       if (filterKey === "running") return status === "running";
       if (filterKey === "success") return status === "success";
-      if (filterKey === "failed") return status === "failed" || status === "failure" || status === "timed out" || status === "timed_out" || status === "warning";
+      if (filterKey === "warning") return status === "warning";
+      if (filterKey === "failed") return status === "failed" || status === "timed_out";
       if (filterKey === "expired") return status === "expired";
       return true;
     };
 
     return deviceRows.filter((row) => {
-      const normalizedStatus = String(row?.job_status || "").trim().toLowerCase();
+      const normalizedStatus = normalizeJobStatusKey(row?.job_status || "");
       if (deviceStatusFilter && !matchStatusFilter(normalizedStatus, deviceStatusFilter)) {
         return false;
       }
@@ -2021,8 +2109,8 @@ export default function CreateJob({
             const formatted = fmtTs(row?.ran_on).toLowerCase();
             if (!formatted.includes(expected)) return false;
           } else if (key === "job_status") {
-            const expected = String(rawValue || "").toLowerCase();
-            if (!normalizedStatus.includes(expected)) return false;
+            const expected = normalizeJobStatusKey(rawValue || "");
+            if (expected !== "all" && normalizedStatus !== expected) return false;
           } else if (key === "output") {
             if (rawValue === "stdout" && !row?.has_stdout) return false;
             if (rawValue === "stderr" && !row?.has_stderr) return false;
@@ -2236,15 +2324,16 @@ export default function CreateJob({
   }, []);
 
   const isValid = useMemo(() => {
-    const base = jobName.trim().length > 0 && components.length > 0 && targets.length > 0;
+    const hasRequiredTargets = isWorkflowJob ? true : targets.length > 0;
+    const base = jobName.trim().length > 0 && components.length > 0 && hasRequiredTargets;
     if (!base) return false;
-    const needsCredential = remoteExec && !(execContext === "winrm" && useSvcAccount);
+    const needsCredential = !isWorkflowJob && remoteExec && !(execContext === "winrm" && useSvcAccount);
     if (needsCredential && !selectedCredentialId) return false;
     if (scheduleType !== "immediately") {
       return !!startDateTime;
     }
     return true;
-  }, [jobName, components.length, targets.length, scheduleType, startDateTime, remoteExec, selectedCredentialId, execContext, useSvcAccount]);
+  }, [jobName, components.length, isWorkflowJob, targets.length, scheduleType, startDateTime, remoteExec, selectedCredentialId, execContext, useSvcAccount]);
 
   const handleJobNameInputChange = useCallback((value) => {
     setJobName(value);
@@ -2329,7 +2418,7 @@ export default function CreateJob({
   }, [editing, loadHistory]);
 
   const resultChip = useCallback((status) => {
-    const key = String(status || "").toLowerCase();
+    const key = normalizeJobStatusKey(status);
     const theme = JOB_RESULT_THEME[key] || JOB_RESULT_THEME.default;
     const label = JOB_RESULT_THEME[key]?.label || status || "Status";
     return <StatusPill label={label} theme={theme} />;
@@ -2361,14 +2450,25 @@ export default function CreateJob({
     });
     const summaries = [];
     map.forEach((entry) => {
-      const statuses = Array.from(entry.statuses).map((s) => String(s || "").trim().toLowerCase()).filter(Boolean);
+      const statuses = Array.from(entry.statuses)
+        .map((s) => normalizeJobStatusKey(s))
+        .filter(Boolean);
       if (!statuses.length) return;
-      const hasInFlight = statuses.some((s) => s === "running" || s === "pending" || s === "scheduled");
+      const hasInFlight = statuses.some((s) => s === "running" || s === "pending");
       if (hasInFlight) return;
-      const allSkipped = statuses.every((s) => s === "skipped" || s === "no devices targeted");
-      const hasFailure = statuses.some((s) => ["failed", "failure", "expired", "timed out", "timed_out", "warning"].includes(s));
-      const allSuccess = statuses.every((s) => s === "success");
-      const statusLabel = allSkipped ? "No Devices Targeted" : (hasFailure ? "Failed" : (allSuccess ? "Success" : "Failed"));
+      const allSkipped = statuses.every((s) => s === "skipped");
+      const hasFailure = statuses.some((s) => ["failed", "expired", "timed_out"].includes(s));
+      const hasWarning = statuses.some((s) => s === "warning");
+      const hasSuccess = statuses.some((s) => s === "success");
+      const statusLabel = allSkipped
+        ? "No Devices Targeted"
+        : hasFailure
+          ? "Failed"
+          : hasWarning
+            ? "Warning"
+            : hasSuccess
+              ? "Success"
+              : "Failed";
       summaries.push({
         key: entry.key,
         scheduled_ts: entry.scheduled_ts,
@@ -2457,18 +2557,20 @@ export default function CreateJob({
   const counts = jobSummary?.result_counts || {};
 
   const deviceStatusCounts = useMemo(() => {
-    const base = { pending: 0, running: 0, success: 0, failed: 0, expired: 0 };
+    const base = { pending: 0, running: 0, success: 0, warning: 0, failed: 0, expired: 0 };
     deviceRows.forEach((row) => {
-      const normalized = String(row?.job_status || "").trim().toLowerCase();
-      if (!normalized || normalized === "pending" || normalized === "scheduled" || normalized === "queued") {
+      const normalized = normalizeJobStatusKey(row?.job_status || "");
+      if (normalized === "pending") {
         base.pending += 1;
       } else if (normalized === "running") {
         base.running += 1;
       } else if (normalized === "success") {
         base.success += 1;
+      } else if (normalized === "warning") {
+        base.warning += 1;
       } else if (normalized === "expired") {
         base.expired += 1;
-      } else if (normalized === "failed" || normalized === "failure" || normalized === "timed out" || normalized === "timed_out" || normalized === "warning") {
+      } else if (normalized === "failed" || normalized === "timed_out") {
         base.failed += 1;
       } else {
         base.pending += 1;
@@ -2478,7 +2580,7 @@ export default function CreateJob({
   }, [deviceRows]);
 
   const statusCounts = useMemo(() => {
-    const summaryKeys = ["pending", "running", "success", "failed", "expired", "timed_out", "skipped"];
+    const summaryKeys = ["pending", "running", "success", "warning", "failed", "expired", "timed_out", "skipped"];
     const hasSummaryCounts =
       Number((counts || {}).total_targets ?? 0) > 0 ||
       summaryKeys.some((key) => Number((counts || {})[key] ?? 0) > 0);
@@ -2487,7 +2589,8 @@ export default function CreateJob({
         pending: Number((counts || {}).pending ?? 0),
         running: Number((counts || {}).running ?? 0),
         success: Number((counts || {}).success ?? 0),
-        failed: Number((counts || {}).failed ?? 0),
+        warning: Number((counts || {}).warning ?? 0),
+        failed: Number((counts || {}).failed ?? 0) + Number((counts || {}).timed_out ?? 0),
         expired: Number((counts || {}).expired ?? 0),
       };
     }
@@ -2519,7 +2622,7 @@ export default function CreateJob({
     {
       id: "running",
       type: "statusNode",
-      position: { x: 0, y: 0 },
+      position: { x: 0, y: 170 },
       data: {
         label: STATUS_META.running.label,
         color: STATUS_META.running.color,
@@ -2557,6 +2660,21 @@ export default function CreateJob({
         Icon: STATUS_META.success.Icon,
         onClick: () => handleStatusNodeClick("success"),
         isActive: deviceStatusFilter === "success"
+      },
+      draggable: false,
+      selectable: false
+    },
+    {
+      id: "warning",
+      type: "statusNode",
+      position: { x: 420, y: 170 },
+      data: {
+        label: STATUS_META.warning.label,
+        color: STATUS_META.warning.color,
+        count: statusCounts.warning,
+        Icon: STATUS_META.warning.Icon,
+        onClick: () => handleStatusNodeClick("warning"),
+        isActive: deviceStatusFilter === "warning"
       },
       draggable: false,
       selectable: false
@@ -2603,6 +2721,16 @@ export default function CreateJob({
       id: "running-success",
       source: "running",
       target: "success",
+      sourceHandle: "right-top",
+      targetHandle: "left-top",
+      type: "smoothstep",
+      animated: true,
+      className: "status-flow-edge"
+    },
+    {
+      id: "running-warning",
+      source: "running",
+      target: "warning",
       sourceHandle: "right-top",
       targetHandle: "left-top",
       type: "smoothstep",
@@ -2910,22 +3038,51 @@ export default function CreateJob({
   const addSelectedComponent = useCallback(async (recordOverride = null) => {
     const record = recordOverride || selectedAssemblyRecord;
     if (!record || !record.assemblyGuid) return false;
-    if (record.kind === "workflow") {
-      alert("Workflows within Scheduled Jobs are not supported yet");
-      return false;
-    }
     try {
       const exportDoc = await loadAssemblyExport(record.assemblyGuid);
       const parsed = parseAssemblyExport(exportDoc);
-      if (parsed.kind === "workflow") {
-        alert("Workflows within Scheduled Jobs are not supported yet");
+      const nextKind = isWorkflowComponentRecord(parsed)
+        ? "workflow"
+        : isAnsibleComponentRecord(parsed) || record.kind === "ansible" || record.type === "ansible" || compTab === "ansible"
+          ? "ansible"
+          : record.kind === "workflow"
+            ? "workflow"
+            : "script";
+
+      if (nextKind === "workflow") {
+        const workflowDocument = extractWorkflowCanvasDocument(exportDoc);
+        const workflowDiagnostics = inspectWorkflowRuntimeDocument({
+          nodes: workflowDocument.nodes,
+          edges: workflowDocument.edges,
+          sourceType: "scheduled_job",
+        });
+        if (workflowDiagnostics.errors.length) {
+          const intro = workflowDiagnostics.hasLegacyPortIssues
+            ? "This workflow still uses older Borealis workflow wiring and must be repaired in the Flow Editor before a Scheduled Job can use it."
+            : "This workflow does not meet the current Workflow Runtime v1 requirements for Scheduled Jobs.";
+          alert([intro, "", ...workflowDiagnostics.errors].join("\n"));
+          return false;
+        }
+        if (components.some((component) => isWorkflowComponentRecord(component))) {
+          alert("Workflow-backed scheduled jobs currently support exactly one workflow component.");
+          return false;
+        }
+        if (components.length) {
+          alert("Workflow-backed scheduled jobs cannot mix workflows with script or Ansible assemblies. Remove the existing assemblies first.");
+          return false;
+        }
+      } else if (components.some((component) => isWorkflowComponentRecord(component))) {
+        alert("Remove the workflow component before adding script or Ansible assemblies to this job.");
         return false;
       }
+
       const docVars = Array.isArray(parsed.rawVariables) ? parsed.rawVariables : [];
       const mergedVariables = mergeComponentVariables(docVars, [], {});
-      const type = parsed.kind === "ansible" || record.kind === "ansible" || record.type === "ansible" || compTab === "ansible" ? "ansible" : "script";
-      const subtype = parsed.type || record.type || (type === "ansible" ? "ansible" : "powershell");
-      const normalizedPath = normalizeAssemblyPath(type, record.path || "", record.displayName);
+      const type = nextKind;
+      const subtype = nextKind === "workflow" ? "workflow" : parsed.type || record.type || (type === "ansible" ? "ansible" : "powershell");
+      const normalizedPath = nextKind === "workflow"
+        ? (record.path || record.displayName || "")
+        : normalizeAssemblyPath(type, record.path || "", record.displayName);
       setComponents((prev) => [
         ...prev,
         {
@@ -2934,7 +3091,7 @@ export default function CreateJob({
           assembly_subtype: subtype,
           path: normalizedPath,
           name: record.displayName,
-          description: record.summary || normalizedPath,
+          description: record.summary || normalizedPath || record.displayName,
           variables: mergedVariables,
           localId: generateLocalId(),
           assembly_guid: record.assemblyGuid,
@@ -2950,7 +3107,7 @@ export default function CreateJob({
       alert(err?.message || "Failed to load assembly details.");
       return false;
     }
-  }, [selectedAssemblyRecord, compTab, loadAssemblyExport, mergeComponentVariables, normalizeAssemblyPath, generateLocalId]);
+  }, [selectedAssemblyRecord, components, compTab, loadAssemblyExport, mergeComponentVariables, normalizeAssemblyPath, generateLocalId]);
 
   const handleAssemblyRowClick = useCallback((event) => {
     const record = event?.data?.record;
@@ -3031,27 +3188,25 @@ export default function CreateJob({
   };
 
   const handleCreate = async () => {
-    const requiresAnsibleOnly = execContext === "local" || execContext === "ssh" || execContext === "winrm";
+    const workflowComponents = components.filter((component) => isWorkflowComponentRecord(component));
+    if (workflowComponents.length > 1) {
+      alert("Workflow-backed scheduled jobs currently support exactly one workflow component.");
+      return;
+    }
+    if (workflowComponents.length === 1 && workflowComponents.length !== components.length) {
+      alert("Workflow-backed scheduled jobs cannot mix workflow, script, or Ansible components.");
+      return;
+    }
+    const workflowMode = workflowComponents.length === 1;
+    const requiresAnsibleOnly = !workflowMode && (execContext === "local" || execContext === "ssh" || execContext === "winrm");
     if (requiresAnsibleOnly) {
-      const hasNonAnsibleComponent = components.some((component) => {
-        const rawValues = [
-          component?.type,
-          component?.component_type,
-          component?.assembly_type,
-          component?.assemblyType,
-          component?.assembly_subtype,
-          component?.assemblySubtype,
-          component?.script_type,
-        ];
-        const normalized = rawValues.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
-        return !(normalized.includes("ansible") || normalized.includes("playbook"));
-      });
+      const hasNonAnsibleComponent = components.some((component) => !isAnsibleComponentRecord(component));
       if (hasNonAnsibleComponent) {
         alert("Jobs using local, SSH, or WinRM execution contexts must contain only Ansible playbook assemblies.");
         return;
       }
     }
-    if (remoteExec && !(execContext === "winrm" && useSvcAccount) && !selectedCredentialId) {
+    if (!workflowMode && remoteExec && !(execContext === "winrm" && useSvcAccount) && !selectedCredentialId) {
       alert("Please select a credential for this execution context.");
       return;
     }
@@ -3079,12 +3234,12 @@ export default function CreateJob({
     const payload = {
       name: jobName,
       components: payloadComponents,
-      targets: serializeTargetsForSave(targets),
+      targets: workflowMode ? [] : serializeTargetsForSave(targets),
       schedule: { type: scheduleType, start: scheduleType !== "immediately" ? (() => { try { const d = startDateTime?.toDate?.() || new Date(startDateTime); d.setSeconds(0,0); return d.toISOString(); } catch { return startDateTime; } })() : null },
       duration: { stopAfterEnabled, expiration },
-      execution_context: execContext,
-      credential_id: remoteExec && !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null,
-      use_service_account: execContext === "winrm" ? Boolean(useSvcAccount) : false
+      execution_context: workflowMode ? "system" : execContext,
+      credential_id: workflowMode ? null : (remoteExec && !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null),
+      use_service_account: workflowMode ? false : (execContext === "winrm" ? Boolean(useSvcAccount) : false)
     };
     try {
       const resp = await fetch(initialJob && initialJob.id ? `/api/scheduled_jobs/${initialJob.id}` : "/api/scheduled_jobs", {
@@ -3110,14 +3265,19 @@ export default function CreateJob({
     const base = [
       { key: "name", label: "Job Name", icon: DriveFileRenameOutlineIcon },
       { key: "components", label: "Assemblies", icon: AppsIcon },
-      { key: "targets", label: "Targets", icon: DevicesRoundedIcon },
-      { key: "schedule", label: "Schedule", icon: ScheduleRoundedIcon },
-      { key: "context", label: "Execution Context", icon: SettingsApplicationsRoundedIcon }
     ];
+    if (!isWorkflowJob) {
+      base.push({ key: "targets", label: "Targets", icon: DevicesRoundedIcon });
+    }
+    base.push({ key: "schedule", label: "Schedule", icon: ScheduleRoundedIcon });
+    if (!isWorkflowJob) {
+      base.push({ key: "context", label: "Execution Context", icon: SettingsApplicationsRoundedIcon });
+    }
     if (editing) base.push({ key: "history", label: "Job History", icon: HistoryRoundedIcon });
     return base;
-  }, [editing]);
+  }, [editing, isWorkflowJob]);
   const historyTabIndex = useMemo(() => tabDefs.findIndex((t) => t.key === "history"), [tabDefs]);
+  const activeTabKey = tabDefs[tab]?.key || tabDefs[0]?.key || "name";
   const tabFromUrlAppliedRef = useRef(false);
 
   useEffect(() => {
@@ -3181,6 +3341,7 @@ export default function CreateJob({
   }, [scheduleType, startDateTime]);
 
   const targetSummary = useMemo(() => {
+    if (isWorkflowJob) return "Defined inside workflow";
     if (!targets.length) return "No targets selected";
     let deviceCount = 0;
     let filterCount = 0;
@@ -3192,10 +3353,12 @@ export default function CreateJob({
     if (deviceCount) segments.push(`${deviceCount} device${deviceCount === 1 ? "" : "s"}`);
     if (filterCount) segments.push(`${filterCount} filter${filterCount === 1 ? "" : "s"}`);
     return segments.join(" • ") || `${targets.length} target${targets.length === 1 ? "" : "s"}`;
-  }, [targets]);
+  }, [isWorkflowJob, targets]);
 
 const heroTiles = useMemo(() => {
-    const execMeta = EXEC_CONTEXT_COPY[execContext] || EXEC_CONTEXT_COPY.system;
+    const execMeta = isWorkflowJob
+      ? { title: "Workflow-defined" }
+      : (EXEC_CONTEXT_COPY[execContext] || EXEC_CONTEXT_COPY.system);
     return [
       {
         key: "assemblies",
@@ -3205,7 +3368,7 @@ const heroTiles = useMemo(() => {
       {
         key: "targets",
         label: "Targets",
-        value: targets.length ? targets.length.toString() : "0",
+        value: isWorkflowJob ? "Inside workflow" : (targets.length ? targets.length.toString() : "0"),
       },
       {
         key: "schedule",
@@ -3218,7 +3381,7 @@ const heroTiles = useMemo(() => {
         value: execMeta.title,
       },
     ];
-  }, [components.length, targets.length, scheduleType, scheduleSummary, targetSummary, execContext]);
+  }, [components.length, isWorkflowJob, targets.length, scheduleType, execContext]);
 
   useEffect(() => {
     if (editing) return;
@@ -3384,7 +3547,7 @@ const heroTiles = useMemo(() => {
       </Tabs>
 
       <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 3 }}>
-        {tab === 0 && (
+        {activeTabKey === "name" && (
           <Box sx={TAB_SECTION_SX}>
             <SectionHeader title="Job Name" />
           <TextField
@@ -3402,7 +3565,7 @@ const heroTiles = useMemo(() => {
         </Box>
         )}
 
-        {tab === 1 && (
+        {activeTabKey === "components" && (
           <Box sx={TAB_SECTION_SX}>
             <SectionHeader
               title="Assemblies"
@@ -3418,6 +3581,11 @@ const heroTiles = useMemo(() => {
                 </Button>
               }
             />
+            {isWorkflowJob ? (
+              <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mb: 1.5 }}>
+                Workflow-backed scheduled jobs run one saved workflow and report the workflow's final status back into job history. Scheduler-level targets and execution context are ignored for this job type.
+              </Typography>
+            ) : null}
             {components.length === 0 && (
               <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, mb: 1 }}>
                 No assemblies added yet.
@@ -3440,7 +3608,7 @@ const heroTiles = useMemo(() => {
           </Box>
         )}
 
-        {tab === 2 && (
+        {activeTabKey === "targets" && (
           <Box sx={{ ...TAB_SECTION_SX, flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 1.5 }}>
             <SectionHeader
               title="Targets"
@@ -3491,7 +3659,7 @@ const heroTiles = useMemo(() => {
           </Box>
         )}
 
-        {tab === 3 && (
+        {activeTabKey === "schedule" && (
           <Box sx={TAB_SECTION_SX}>
             <SectionHeader title="Schedule" />
             <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
@@ -3574,7 +3742,7 @@ const heroTiles = useMemo(() => {
           </Box>
         )}
 
-        {tab === 4 && (
+        {activeTabKey === "context" && (
           <Box sx={TAB_SECTION_SX}>
             <SectionHeader title="Execution Context" />
             <TextField
@@ -3677,7 +3845,7 @@ const heroTiles = useMemo(() => {
           </Box>
         )}
 
-        {editing && tab === historyTabIndex && (
+        {editing && activeTabKey === "history" && (
           <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
             <GlassPanel>
               <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

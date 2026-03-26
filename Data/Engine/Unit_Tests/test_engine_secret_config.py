@@ -66,3 +66,11 @@ def test_runtime_config_ignores_env_secret_and_uses_file(tmp_path: Path, monkeyp
 
     assert settings.secret_key != "legacy-shared-secret"
     assert secret_path.exists()
+
+
+def test_default_api_groups_include_workflow_routes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("BOREALIS_API_GROUPS", raising=False)
+
+    settings = load_runtime_config(_base_config(tmp_path))
+
+    assert "workflows" in settings.api_groups

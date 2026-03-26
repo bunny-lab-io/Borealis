@@ -1,7 +1,7 @@
 # ======================================================
 # Data\Engine\Unit_Tests\test_scheduled_jobs_api.py
-# Description: Covers scheduled job API behavior that differs between
-#              SQLite and PostgreSQL-backed DB-API adapters.
+# Description: Covers scheduled job API behavior across Borealis
+#              DB-API adapter paths.
 # ======================================================
 
 from __future__ import annotations

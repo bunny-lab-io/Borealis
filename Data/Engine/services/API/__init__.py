@@ -48,6 +48,7 @@ from .devices.management import register_management
 from .filters import management as filters_management
 from .notifications import management as notifications_management
 from .scheduled_jobs import management as scheduled_jobs_management
+from .workflows import management as workflows_management
 from .server import info as server_info, log_management
 
 DEFAULT_API_GROUPS: Sequence[str] = (
@@ -59,6 +60,7 @@ DEFAULT_API_GROUPS: Sequence[str] = (
     "filters",
     "server",
     "assemblies",
+    "workflows",
     "scheduled_jobs",
     "notifications",
 )
@@ -340,6 +342,10 @@ def _register_scheduled_jobs(app: Flask, adapters: EngineServiceAdapters) -> Non
     scheduled_jobs_management.register_management(app, adapters)
 
 
+def _register_workflows(app: Flask, adapters: EngineServiceAdapters) -> None:
+    workflows_management.register_management(app, adapters)
+
+
 def _register_notifications(app: Flask, adapters: EngineServiceAdapters) -> None:
     notifications_management.register_notifications(app, adapters)
 
@@ -362,6 +368,7 @@ _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, EngineServiceAdapters], None]] 
     "filters": _register_filters,
     "server": _register_server,
     "assemblies": _register_assemblies,
+    "workflows": _register_workflows,
     "scheduled_jobs": _register_scheduled_jobs,
     "notifications": _register_notifications,
 }

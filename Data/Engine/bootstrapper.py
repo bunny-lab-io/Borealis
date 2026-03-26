@@ -59,15 +59,19 @@ def _build_runtime_config() -> Dict[str, Any]:
     if api_groups_override:
         api_groups: Any = api_groups_override
     else:
+        # Keep this startup default in sync with Data.Engine.config and API.DEFAULT_API_GROUPS.
         api_groups = (
             "core",
             "auth",
             "tokens",
             "enrollment",
             "devices",
+            "filters",
             "server",
             "assemblies",
+            "workflows",
             "scheduled_jobs",
+            "notifications",
         )
 
     return {

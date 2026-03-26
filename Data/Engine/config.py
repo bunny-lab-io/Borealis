@@ -603,9 +603,12 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
             "tokens",
             "enrollment",
             "devices",
+            "filters",
             "server",
             "assemblies",
+            "workflows",
             "scheduled_jobs",
+            "notifications",
         )
 
     settings = EngineSettings(

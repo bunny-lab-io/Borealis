@@ -50,8 +50,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 ## Payload Size Limits
 - Operator target: up to `500 MB` per assembly payload (`payload_json`) under normal resource conditions.
 - Borealis import guardrail: `950,000,000` bytes per document.
-- SQLite per-value hard ceiling in the current runtime build: `1,000,000,000` bytes for a single TEXT/BLOB value.
-- Payloads near the hard ceiling are best-effort and depend on available Engine memory/CPU during JSON parse and DB write.
+- PostgreSQL stores the payload inline, but very large documents are still best-effort and depend on available Engine memory/CPU during JSON parse and DB write.
 
 ## Ansible Status (Current)
 - The Linux Engine packages an Ansible control-node runtime inside the Engine venv.

@@ -49,6 +49,7 @@ _DEFAULT_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS = 5
 RUN_STATUS_PENDING = "Pending"
 RUN_STATUS_RUNNING = "Running"
 RUN_STATUS_SUCCESS = "Success"
+RUN_STATUS_WARNING = "Warning"
 RUN_STATUS_FAILED = "Failed"
 RUN_STATUS_EXPIRED = "Expired"
 RUN_STATUS_TIMED_OUT = "Timed Out"
@@ -57,6 +58,7 @@ SKIP_REASON_NO_TARGETS = "no_devices_targeted"
 SKIP_REASON_NO_ELIGIBLE_TARGETS = "no_eligible_targets"
 TERMINAL_RUN_STATUSES = {
     RUN_STATUS_SUCCESS,
+    RUN_STATUS_WARNING,
     RUN_STATUS_FAILED,
     RUN_STATUS_EXPIRED,
     RUN_STATUS_TIMED_OUT,
@@ -502,6 +504,8 @@ def _status_bucket_for_run(status: Any) -> Optional[str]:
         return "running"
     if normalized == RUN_STATUS_SUCCESS:
         return "success"
+    if normalized == RUN_STATUS_WARNING:
+        return "warning"
     if normalized == RUN_STATUS_FAILED:
         return "failed"
     if normalized == RUN_STATUS_EXPIRED:
@@ -528,6 +532,7 @@ def _host_run_priority(run: Mapping[str, Any]) -> Tuple[int, int, int, int]:
         RUN_STATUS_RUNNING: 70,
         RUN_STATUS_FAILED: 60,
         RUN_STATUS_TIMED_OUT: 50,
+        RUN_STATUS_WARNING: 45,
         RUN_STATUS_EXPIRED: 40,
         RUN_STATUS_SUCCESS: 30,
         RUN_STATUS_PENDING: 20,
@@ -564,6 +569,7 @@ def _aggregate_occurrence_runs(
         "pending": 0,
         "running": 0,
         "success": 0,
+        "warning": 0,
         "failed": 0,
         "expired": 0,
         "timed_out": 0,
@@ -591,6 +597,8 @@ def _aggregate_statuses(statuses: Sequence[Any]) -> str:
         return RUN_STATUS_FAILED
     if RUN_STATUS_TIMED_OUT in normalized:
         return RUN_STATUS_TIMED_OUT
+    if RUN_STATUS_WARNING in normalized:
+        return RUN_STATUS_WARNING
     if RUN_STATUS_EXPIRED in normalized:
         return RUN_STATUS_EXPIRED
     if RUN_STATUS_PENDING in normalized:
@@ -644,6 +652,10 @@ class JobScheduler:
         self._vpn_session_lookup: Optional[Callable[[], Dict[str, Dict[str, Any]]]] = None
         # Optional callback to re-prime existing WireGuard sessions for selected agents.
         self._vpn_session_prepare: Optional[Callable[[Sequence[str]], Dict[str, Dict[str, Any]]]] = None
+        # Optional callback to launch workflow-backed scheduled jobs.
+        self._workflow_run_launcher: Optional[Callable[..., Dict[str, Any]]] = None
+        # Optional callback to validate a saved workflow document before jobs reference it.
+        self._workflow_document_validator: Optional[Callable[..., List[str]]] = None
 
         # Ensure run-history table exists
         self._init_tables()
@@ -1472,6 +1484,9 @@ class JobScheduler:
     def set_vpn_session_prepare(self, fn: Optional[Callable[[Sequence[str]], Dict[str, Dict[str, Any]]]]):
         self._vpn_session_prepare = fn
 
+    def set_workflow_run_launcher(self, fn: Optional[Callable[..., Dict[str, Any]]]):
+        self._workflow_run_launcher = fn
+
     def _init_tables(self):
         conn = self._conn()
         cur = conn.cursor()
@@ -1494,6 +1509,7 @@ class JobScheduler:
                 component_index INTEGER,
                 component_kind TEXT,
                 component_name TEXT,
+                workflow_run_id INTEGER,
                 FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
             )
             """
@@ -1514,6 +1530,8 @@ class JobScheduler:
                 cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN component_kind TEXT")
             if "component_name" not in cols:
                 cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN component_name TEXT")
+            if "workflow_run_id" not in cols:
+                cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN workflow_run_id INTEGER")
         except Exception:
             pass
         # Helpful index for lookups
@@ -2199,6 +2217,7 @@ class JobScheduler:
                 "pending": 0,
                 "running": 0,
                 "success": 0,
+                "warning": 0,
                 "failed": 0,
                 "expired": 0,
                 "timed_out": 0,
@@ -2292,7 +2311,8 @@ class JobScheduler:
                     shared_execution,
                     component_index,
                     component_kind,
-                    component_name
+                    component_name,
+                    workflow_run_id
                   FROM scheduled_job_runs
                  WHERE job_id=? AND scheduled_ts=?
               ORDER BY id ASC
@@ -2313,6 +2333,7 @@ class JobScheduler:
                     "component_index": row[9],
                     "component_kind": row[10] or "",
                     "component_name": row[11] or "",
+                    "workflow_run_id": row[12],
                 }
                 for row in cur.fetchall()
             ]
@@ -2474,6 +2495,210 @@ class JobScheduler:
             conn.commit()
         finally:
             conn.close()
+
+    def _record_workflow_occurrence_snapshot(
+        self,
+        *,
+        job_id: int,
+        scheduled_ts: int,
+        workflow_component: Mapping[str, Any],
+        created_at: int,
+    ) -> None:
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM scheduled_job_runs WHERE job_id=? AND scheduled_ts=?",
+                (int(job_id), int(scheduled_ts)),
+            )
+            existing_count = int(cur.fetchone()[0] or 0)
+            if existing_count > 0:
+                return
+            component_name = self._component_name_for_display(
+                dict(workflow_component or {}),
+                fallback="Workflow",
+            )
+            cur.execute(
+                """
+                INSERT INTO scheduled_job_runs(
+                    job_id,
+                    scheduled_ts,
+                    status,
+                    skip_reason,
+                    created_at,
+                    updated_at,
+                    shared_execution,
+                    component_index,
+                    component_kind,
+                    component_name,
+                    workflow_run_id
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    int(job_id),
+                    int(scheduled_ts),
+                    RUN_STATUS_PENDING,
+                    "",
+                    int(created_at),
+                    int(created_at),
+                    0,
+                    0,
+                    "workflow",
+                    component_name,
+                    None,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _dispatch_workflow_run(
+        self,
+        *,
+        job_id: int,
+        run_row_id: int,
+        scheduled_ts: int,
+        workflow_component: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        workflow_guid = str(
+            workflow_component.get("assembly_guid")
+            or workflow_component.get("assemblyGuid")
+            or workflow_component.get("workflow_guid")
+            or workflow_component.get("workflowGuid")
+            or ""
+        ).strip().lower()
+        ts_now = _now_ts()
+        if not workflow_guid:
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_FAILED,
+                        ts_now,
+                        ts_now,
+                        "Workflow component is missing an assembly GUID.",
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+
+        if not callable(self._workflow_run_launcher):
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (
+                        RUN_STATUS_FAILED,
+                        ts_now,
+                        ts_now,
+                        "Workflow runtime launcher is unavailable.",
+                        int(run_row_id),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return None
+
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE scheduled_job_runs
+                   SET status=?,
+                       started_ts=COALESCE(started_ts, ?),
+                       finished_ts=NULL,
+                       error='',
+                       updated_at=?
+                 WHERE id=?
+                """,
+                (RUN_STATUS_RUNNING, ts_now, ts_now, int(run_row_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        source_metadata = {
+            "scheduled_job_id": int(job_id),
+            "scheduled_job_run_id": int(run_row_id),
+            "scheduled_ts": int(scheduled_ts),
+            "component_name": self._component_name_for_display(dict(workflow_component or {}), fallback="Workflow"),
+        }
+        try:
+            launch_result = self._workflow_run_launcher(
+                workflow_guid=workflow_guid,
+                source_type="scheduled_job",
+                source_metadata=source_metadata,
+                created_by="scheduler",
+                execute_async=True,
+            )
+            run_payload = launch_result.get("run") if isinstance(launch_result, Mapping) else None
+            workflow_run_id = None
+            if isinstance(run_payload, Mapping):
+                try:
+                    workflow_run_id = int(run_payload.get("id"))
+                except Exception:
+                    workflow_run_id = None
+            if workflow_run_id is not None:
+                conn = self._conn()
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "UPDATE scheduled_job_runs SET workflow_run_id=?, updated_at=? WHERE id=?",
+                        (workflow_run_id, _now_ts(), int(run_row_id)),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            return dict(launch_result) if isinstance(launch_result, Mapping) else None
+        except Exception as exc:
+            failure_text = str(exc)[:512]
+            conn = self._conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=?,
+                           updated_at=?,
+                           error=?
+                     WHERE id=?
+                    """,
+                    (RUN_STATUS_FAILED, ts_now, ts_now, failure_text, int(run_row_id)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            self._log_event(
+                "workflow dispatch failed",
+                job_id=int(job_id),
+                run_id=int(run_row_id),
+                level="ERROR",
+                extra={"workflow_guid": workflow_guid, "scheduled_ts": int(scheduled_ts), "error": failure_text},
+            )
+            return None
 
     def _dispatch_shared_ansible(
         self,
@@ -3573,7 +3798,7 @@ class JobScheduler:
         try:
             cur.execute(
                 """
-                SELECT r.id, r.job_id, r.target_hostname, r.started_ts, j.expiration
+                SELECT r.id, r.job_id, r.target_hostname, r.started_ts, j.expiration, r.component_kind
                   FROM scheduled_job_runs r
                   JOIN scheduled_jobs j ON j.id = r.job_id
                  WHERE r.status = ?
@@ -3581,7 +3806,9 @@ class JobScheduler:
                 (RUN_STATUS_RUNNING,),
             )
             rows = cur.fetchall()
-            for rid, row_job_id, row_host, started_ts, expiration in rows:
+            for rid, row_job_id, row_host, started_ts, expiration, component_kind in rows:
+                if str(component_kind or "").strip().lower() == "workflow":
+                    continue
                 if self._should_expire(started_ts, expiration, now):
                     cur.execute(
                         "UPDATE scheduled_job_runs SET status=?, finished_ts=?, updated_at=? WHERE id=?",
@@ -3676,29 +3903,54 @@ class JobScheduler:
                 except Exception:
                     components = []
 
+                workflow_components: List[Dict[str, Any]] = []
                 script_components: List[Dict[str, Any]] = []
                 ansible_components: List[Dict[str, Any]] = []
                 for component in components:
                     if not isinstance(component, dict):
                         continue
-                    component_type = str(component.get("type") or "").strip().lower()
-                    if component_type == "script":
-                        script_components.append(dict(component))
-                    elif component_type == "ansible":
+                    component_type = str(
+                        component.get("type")
+                        or component.get("component_type")
+                        or component.get("assembly_type")
+                        or ""
+                    ).strip().lower()
+                    component_subtype = str(
+                        component.get("assembly_subtype")
+                        or component.get("assemblySubtype")
+                        or component.get("script_type")
+                        or ""
+                    ).strip().lower()
+                    is_workflow = component_type == "workflow" or component_subtype == "workflow"
+                    is_ansible = component_type in {"ansible", "playbook"} or component_subtype in {"ansible", "playbook"}
+                    if is_workflow:
+                        workflow_components.append(dict(component))
+                    elif is_ansible:
                         ansible_components.append(dict(component))
+                    else:
+                        script_components.append(dict(component))
 
-                if not script_components and not ansible_components:
+                if workflow_components and (len(workflow_components) != 1 or script_components or ansible_components):
+                    self._log_event(
+                        "skipping invalid workflow-backed scheduled job configuration",
+                        job_id=int(job_id),
+                        level="ERROR",
+                    )
+                    continue
+                if not workflow_components and not script_components and not ansible_components:
                     continue
 
+                is_workflow_job = bool(workflow_components)
+                workflow_component = workflow_components[0] if workflow_components else None
                 run_mode = (execution_context or "system").strip().lower()
-                shared_ansible_mode = self._should_use_shared_ansible_runs(
+                shared_ansible_mode = (not is_workflow_job) and self._should_use_shared_ansible_runs(
                     run_mode=run_mode,
                     script_components=script_components,
                     ansible_components=ansible_components,
                 )
-                job_use_service_account = bool(use_service_account_flag) if run_mode == "winrm" else False
+                job_use_service_account = bool(use_service_account_flag) if (run_mode == "winrm" and not is_workflow_job) else False
                 try:
-                    job_credential_id = int(credential_id) if credential_id is not None else None
+                    job_credential_id = int(credential_id) if (credential_id is not None and not is_workflow_job) else None
                 except Exception:
                     job_credential_id = None
 
@@ -3714,43 +3966,51 @@ class JobScheduler:
 
                 occurrence_runs = self._load_occurrence_runs(int(job_id), int(occurrence_ts))
                 if not occurrence_runs:
-                    include_filters = self._targets_include_filters(raw_targets)
-                    if include_filters and device_inventory_cache is None:
-                        try:
-                            device_inventory_cache = self._filter_matcher.fetch_devices()
-                        except Exception:
-                            device_inventory_cache = []
-                    try:
-                        targets, resolution_meta = self._filter_matcher.resolve_target_entries(
-                            raw_targets,
-                            devices=device_inventory_cache if include_filters else None,
-                        )
-                    except Exception as exc:
-                        self._log_event(
-                            "failed to resolve job targets",
-                            job_id=int(job_id),
-                            level="ERROR",
-                            extra={"error": str(exc), "scheduled_ts": int(occurrence_ts)},
-                        )
-                        targets = []
-                        resolution_meta = {}
-                    if shared_ansible_mode:
-                        self._record_shared_ansible_occurrence_snapshot(
+                    if is_workflow_job and isinstance(workflow_component, dict):
+                        self._record_workflow_occurrence_snapshot(
                             job_id=int(job_id),
                             scheduled_ts=int(occurrence_ts),
-                            run_mode=run_mode,
-                            ansible_components=ansible_components,
-                            resolved_targets=self._resolved_targets_from_meta(resolution_meta),
+                            workflow_component=workflow_component,
                             created_at=now,
                         )
                     else:
-                        self._record_occurrence_snapshot(
-                            job_id=int(job_id),
-                            scheduled_ts=int(occurrence_ts),
-                            targets=[str(host) for host in targets if str(host).strip()],
-                            resolution_meta=resolution_meta,
-                            created_at=now,
-                        )
+                        include_filters = self._targets_include_filters(raw_targets)
+                        if include_filters and device_inventory_cache is None:
+                            try:
+                                device_inventory_cache = self._filter_matcher.fetch_devices()
+                            except Exception:
+                                device_inventory_cache = []
+                        try:
+                            targets, resolution_meta = self._filter_matcher.resolve_target_entries(
+                                raw_targets,
+                                devices=device_inventory_cache if include_filters else None,
+                            )
+                        except Exception as exc:
+                            self._log_event(
+                                "failed to resolve job targets",
+                                job_id=int(job_id),
+                                level="ERROR",
+                                extra={"error": str(exc), "scheduled_ts": int(occurrence_ts)},
+                            )
+                            targets = []
+                            resolution_meta = {}
+                        if shared_ansible_mode:
+                            self._record_shared_ansible_occurrence_snapshot(
+                                job_id=int(job_id),
+                                scheduled_ts=int(occurrence_ts),
+                                run_mode=run_mode,
+                                ansible_components=ansible_components,
+                                resolved_targets=self._resolved_targets_from_meta(resolution_meta),
+                                created_at=now,
+                            )
+                        else:
+                            self._record_occurrence_snapshot(
+                                job_id=int(job_id),
+                                scheduled_ts=int(occurrence_ts),
+                                targets=[str(host) for host in targets if str(host).strip()],
+                                resolution_meta=resolution_meta,
+                                created_at=now,
+                            )
                     occurrence_runs = self._load_occurrence_runs(int(job_id), int(occurrence_ts))
 
                 exp_seconds = _parse_expiration(expiration)
@@ -3759,6 +4019,14 @@ class JobScheduler:
                     if self._is_terminal_run_status(status):
                         continue
                     if status == RUN_STATUS_RUNNING:
+                        continue
+                    if is_workflow_job and isinstance(workflow_component, dict):
+                        self._dispatch_workflow_run(
+                            job_id=int(job_id),
+                            run_row_id=int(run["id"]),
+                            scheduled_ts=int(occurrence_ts),
+                            workflow_component=workflow_component,
+                        )
                         continue
                     if shared_ansible_mode and bool(run.get("shared_execution")):
                         component_index = run.get("component_index")
@@ -3921,6 +4189,7 @@ class JobScheduler:
                     "pending": 0,
                     "running": 0,
                     "success": 0,
+                    "warning": 0,
                     "failed": 0,
                     "expired": 0,
                     "timed_out": 0,
@@ -3975,35 +4244,68 @@ class JobScheduler:
                         for row in c.fetchall()
                     ]
                     occurrence_target_rows = self._load_occurrence_target_rows(base["id"], int(max_occ))
-                    _aggregated_by_host, aggregated_counts, has_no_targets_skip = self._aggregate_occurrence_targets(
-                        occurrence_rows,
-                        occurrence_target_rows,
+                    workflow_occurrence_rows = [
+                        row for row in occurrence_rows if str(row.get("component_kind") or "").strip().lower() == "workflow"
+                    ]
+                    has_workflow_only_occurrence = bool(workflow_occurrence_rows) and not occurrence_target_rows and not any(
+                        str(row.get("target_hostname") or "").strip() for row in occurrence_rows
                     )
-                    total_targets = int(aggregated_counts.get("total_targets") or total_targets or 0)
-                    result_counts["total_targets"] = total_targets
-                    result_counts["pending"] = int(aggregated_counts.get("pending") or 0)
-                    result_counts["running"] = int(aggregated_counts.get("running") or 0)
-                    result_counts["success"] = int(aggregated_counts.get("success") or 0)
-                    result_counts["failed"] = int(aggregated_counts.get("failed") or 0)
-                    result_counts["expired"] = int(aggregated_counts.get("expired") or 0)
-                    result_counts["timed_out"] = int(aggregated_counts.get("timed_out") or 0)
-                    result_counts["skipped"] = int(aggregated_counts.get("skipped") or 0)
-                    if result_counts["running"]:
-                        summary_status = RUN_STATUS_RUNNING
-                    elif result_counts["failed"]:
-                        summary_status = RUN_STATUS_FAILED
-                    elif result_counts["timed_out"]:
-                        summary_status = RUN_STATUS_TIMED_OUT
-                    elif result_counts["expired"]:
-                        summary_status = RUN_STATUS_EXPIRED
-                    elif result_counts["pending"]:
-                        summary_status = RUN_STATUS_PENDING
-                    elif result_counts["success"]:
-                        summary_status = RUN_STATUS_SUCCESS
-                    elif has_no_targets_skip:
-                        summary_status = "No Devices Targeted"
-                    elif result_counts["skipped"]:
-                        summary_status = RUN_STATUS_SKIPPED
+                    if has_workflow_only_occurrence:
+                        result_counts["total_targets"] = len(workflow_occurrence_rows)
+                        for occurrence_row in workflow_occurrence_rows:
+                            bucket = _status_bucket_for_run(occurrence_row.get("status"))
+                            if bucket and bucket in result_counts:
+                                result_counts[bucket] += 1
+                        if result_counts["running"]:
+                            summary_status = RUN_STATUS_RUNNING
+                        elif result_counts["failed"]:
+                            summary_status = RUN_STATUS_FAILED
+                        elif result_counts["timed_out"]:
+                            summary_status = RUN_STATUS_TIMED_OUT
+                        elif result_counts["warning"]:
+                            summary_status = RUN_STATUS_WARNING
+                        elif result_counts["expired"]:
+                            summary_status = RUN_STATUS_EXPIRED
+                        elif result_counts["pending"]:
+                            summary_status = RUN_STATUS_PENDING
+                        elif result_counts["success"]:
+                            summary_status = RUN_STATUS_SUCCESS
+                        elif result_counts["skipped"]:
+                            summary_status = RUN_STATUS_SKIPPED
+                        has_no_targets_skip = False
+                    else:
+                        _aggregated_by_host, aggregated_counts, has_no_targets_skip = self._aggregate_occurrence_targets(
+                            occurrence_rows,
+                            occurrence_target_rows,
+                        )
+                        total_targets = int(aggregated_counts.get("total_targets") or total_targets or 0)
+                        result_counts["total_targets"] = total_targets
+                        result_counts["pending"] = int(aggregated_counts.get("pending") or 0)
+                        result_counts["running"] = int(aggregated_counts.get("running") or 0)
+                        result_counts["success"] = int(aggregated_counts.get("success") or 0)
+                        result_counts["warning"] = int(aggregated_counts.get("warning") or 0)
+                        result_counts["failed"] = int(aggregated_counts.get("failed") or 0)
+                        result_counts["expired"] = int(aggregated_counts.get("expired") or 0)
+                        result_counts["timed_out"] = int(aggregated_counts.get("timed_out") or 0)
+                        result_counts["skipped"] = int(aggregated_counts.get("skipped") or 0)
+                        if result_counts["running"]:
+                            summary_status = RUN_STATUS_RUNNING
+                        elif result_counts["failed"]:
+                            summary_status = RUN_STATUS_FAILED
+                        elif result_counts["timed_out"]:
+                            summary_status = RUN_STATUS_TIMED_OUT
+                        elif result_counts["warning"]:
+                            summary_status = RUN_STATUS_WARNING
+                        elif result_counts["expired"]:
+                            summary_status = RUN_STATUS_EXPIRED
+                        elif result_counts["pending"]:
+                            summary_status = RUN_STATUS_PENDING
+                        elif result_counts["success"]:
+                            summary_status = RUN_STATUS_SUCCESS
+                        elif has_no_targets_skip:
+                            summary_status = "No Devices Targeted"
+                        elif result_counts["skipped"]:
+                            summary_status = RUN_STATUS_SKIPPED
                     last_run_ts = int(max_occ)
                 conn.close()
             except Exception:
@@ -4013,6 +4315,7 @@ class JobScheduler:
                     "pending": len(base.get("targets") or []),
                     "running": 0,
                     "success": 0,
+                    "warning": 0,
                     "failed": 0,
                     "expired": 0,
                     "timed_out": 0,
@@ -4136,6 +4439,21 @@ class JobScheduler:
                     return f'Filter "{record.get("name") or filter_id}" is archived and cannot be scheduled.'
             return None
 
+        def _is_workflow_component(component: Any) -> bool:
+            if not isinstance(component, dict):
+                return False
+            raw_values = [
+                component.get("type"),
+                component.get("component_type"),
+                component.get("assembly_type"),
+                component.get("assemblyType"),
+                component.get("assembly_subtype"),
+                component.get("assemblySubtype"),
+                component.get("script_type"),
+            ]
+            normalized = {str(value or "").strip().lower() for value in raw_values if str(value or "").strip()}
+            return "workflow" in normalized
+
         def _is_ansible_component(component: Any) -> bool:
             if not isinstance(component, dict):
                 return False
@@ -4151,8 +4469,14 @@ class JobScheduler:
             normalized = {str(value or "").strip().lower() for value in raw_values if str(value or "").strip()}
             return "ansible" in normalized or "playbook" in normalized
 
+        def _workflow_components(components: Sequence[Any]) -> List[Dict[str, Any]]:
+            return [dict(component) for component in (components or []) if _is_workflow_component(component)]
+
         def _validate_components_for_context(components: Sequence[Any], execution_context: str) -> Optional[str]:
             context_value = str(execution_context or "").strip().lower()
+            workflow_components = _workflow_components(components)
+            if workflow_components:
+                return None
             if context_value not in {"local", "ssh", "winrm"}:
                 return None
             if not isinstance(components, (list, tuple)) or not components:
@@ -4162,6 +4486,51 @@ class JobScheduler:
                     "Jobs using local, ssh, or winrm execution contexts must contain only Ansible components "
                     "so Borealis can execute them as one shared Engine-side playbook run."
                 )
+            return None
+
+        def _validate_workflow_job_configuration(
+            components: Sequence[Any],
+            targets: Sequence[Any],
+            execution_context: Any,
+            credential_id: Any,
+            use_service_account: Any,
+        ) -> Optional[str]:
+            workflow_components = _workflow_components(components)
+            if not workflow_components:
+                return None
+            if len(workflow_components) != 1:
+                return "Workflow-backed scheduled jobs must contain exactly one workflow component."
+            if len(workflow_components) != len(list(components or [])):
+                return "Workflow-backed scheduled jobs cannot mix workflow, script, or Ansible components."
+            if targets:
+                return "Workflow-backed scheduled jobs cannot define scheduler-level targets. Configure targets inside workflow nodes instead."
+            execution_context_value = str(execution_context or "system").strip().lower() or "system"
+            if execution_context_value not in {"", "system"}:
+                return "Workflow-backed scheduled jobs do not support scheduler-level execution contexts."
+            if credential_id not in (None, "", "null"):
+                return "Workflow-backed scheduled jobs do not support scheduler-level credentials."
+            if bool(use_service_account):
+                return "Workflow-backed scheduled jobs do not support scheduler-level service account targeting."
+            workflow_component = workflow_components[0]
+            workflow_guid = str(
+                workflow_component.get("assembly_guid")
+                or workflow_component.get("assemblyGuid")
+                or workflow_component.get("workflow_guid")
+                or workflow_component.get("workflowGuid")
+                or ""
+            ).strip()
+            if not workflow_guid:
+                return "Workflow-backed scheduled jobs require a saved workflow assembly selection."
+            if callable(self._workflow_document_validator):
+                try:
+                    workflow_errors = self._workflow_document_validator(
+                        workflow_guid,
+                        source_type="scheduled_job",
+                    ) or []
+                except Exception as exc:
+                    return f"Unable to validate workflow-backed scheduled job: {exc}"
+                if workflow_errors:
+                    return "; ".join(str(item) for item in workflow_errors if str(item).strip())
             return None
 
         @app.route("/api/scheduled_jobs", methods=["GET"])
@@ -4222,15 +4591,28 @@ class JobScheduler:
             use_service_account = 1 if (execution_context == "winrm" and (use_service_account_raw is None or bool(use_service_account_raw))) else 0
             enabled = int(bool(data.get("enabled", True)))
             credential_warning = None
-            if not name or not components or not targets:
-                return json.dumps({"error": "name, components, targets required"}), 400, {"Content-Type": "application/json"}
-            target_error = _validate_targets_for_save(targets)
-            if target_error:
-                return json.dumps({"error": target_error}), 400, {"Content-Type": "application/json"}
+            workflow_job_error = _validate_workflow_job_configuration(
+                components,
+                targets,
+                execution_context,
+                credential_id,
+                bool(use_service_account),
+            )
+            is_workflow_job = workflow_job_error is None and bool(_workflow_components(components))
+            if not name or not components:
+                return json.dumps({"error": "name and components are required"}), 400, {"Content-Type": "application/json"}
+            if not is_workflow_job and not targets:
+                return json.dumps({"error": "targets required"}), 400, {"Content-Type": "application/json"}
+            if workflow_job_error:
+                return json.dumps({"error": workflow_job_error}), 400, {"Content-Type": "application/json"}
+            if not is_workflow_job:
+                target_error = _validate_targets_for_save(targets)
+                if target_error:
+                    return json.dumps({"error": target_error}), 400, {"Content-Type": "application/json"}
             component_error = _validate_components_for_context(components, execution_context)
             if component_error:
                 return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
-            credential_warning = self._credential_reset_warning(credential_id)
+            credential_warning = None if is_workflow_job else self._credential_reset_warning(credential_id)
             if credential_warning and enabled:
                 enabled = 0
             now = _now_ts()
@@ -4382,8 +4764,6 @@ class JobScheduler:
                 fields["components_json"] = json.dumps(next_components)
             if "targets" in data:
                 normalized_targets = _normalize_targets_for_save(data.get("targets") or [])
-                if not normalized_targets:
-                    return json.dumps({"error": "targets required"}), 400, {"Content-Type": "application/json"}
                 scoped_targets, scope_error = self._site_access.scope_job_targets_for_persistence(user, normalized_targets)
                 if scope_error:
                     return (
@@ -4391,9 +4771,10 @@ class JobScheduler:
                         403,
                         {"Content-Type": "application/json"},
                     )
-                target_error = _validate_targets_for_save(normalized_targets)
-                if target_error:
-                    return json.dumps({"error": target_error}), 400, {"Content-Type": "application/json"}
+                if normalized_targets:
+                    target_error = _validate_targets_for_save(normalized_targets)
+                    if target_error:
+                        return json.dumps({"error": target_error}), 400, {"Content-Type": "application/json"}
                 fields["targets_json"] = json.dumps(scoped_targets or [])
             if "schedule" in data or "schedule_type" in data:
                 schedule_type = (data.get("schedule", {}).get("type") or data.get("schedule_type") or "immediately").strip().lower()
@@ -4442,20 +4823,39 @@ class JobScheduler:
                 if not self._job_visible_to_user(user, current_row[4]):
                     conn.close()
                     return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
-                if "execution_context" in fields or next_components is not None:
-                    if next_components is None:
-                        try:
-                            next_components = json.loads(current_row[2] or "[]")
-                        except Exception:
-                            next_components = []
-                    effective_context = fields.get("execution_context") or current_row[3] or "system"
-                    component_error = _validate_components_for_context(next_components or [], str(effective_context))
-                    if component_error:
-                        conn.close()
-                        return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
+                if next_components is None:
+                    try:
+                        next_components = json.loads(current_row[2] or "[]")
+                    except Exception:
+                        next_components = []
+                effective_targets_json = fields.get("targets_json", current_row[4])
+                try:
+                    effective_targets = json.loads(effective_targets_json or "[]")
+                except Exception:
+                    effective_targets = []
+                effective_context = fields.get("execution_context") or current_row[3] or "system"
                 effective_credential_id = fields.get("credential_id", current_row[0])
+                effective_use_service_account = fields.get("use_service_account", 0)
+                workflow_job_error = _validate_workflow_job_configuration(
+                    next_components or [],
+                    effective_targets or [],
+                    effective_context,
+                    effective_credential_id,
+                    bool(effective_use_service_account),
+                )
+                is_workflow_job = workflow_job_error is None and bool(_workflow_components(next_components or []))
+                if workflow_job_error:
+                    conn.close()
+                    return json.dumps({"error": workflow_job_error}), 400, {"Content-Type": "application/json"}
+                if not is_workflow_job and not effective_targets:
+                    conn.close()
+                    return json.dumps({"error": "targets required"}), 400, {"Content-Type": "application/json"}
+                component_error = _validate_components_for_context(next_components or [], str(effective_context))
+                if component_error:
+                    conn.close()
+                    return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
                 effective_enabled = int(fields.get("enabled", current_row[1] or 0))
-                credential_warning = self._credential_reset_warning(effective_credential_id)
+                credential_warning = None if is_workflow_job else self._credential_reset_warning(effective_credential_id)
                 if credential_warning and effective_enabled:
                     fields["enabled"] = 0
                 sets = ", ".join([f"{k}=?" for k in fields.keys()])
@@ -4605,7 +5005,8 @@ class JobScheduler:
                         shared_execution,
                         component_index,
                         component_kind,
-                        component_name
+                        component_name,
+                        workflow_run_id
                     FROM scheduled_job_runs
                     WHERE job_id=? AND COALESCE(finished_ts, started_ts, scheduled_ts, 0) >= ?
                     ORDER BY COALESCE(started_ts, scheduled_ts, 0) DESC, id DESC
@@ -4629,6 +5030,7 @@ class JobScheduler:
                         "component_index": r[9],
                         "component_kind": r[10] or "",
                         "component_name": r[11] or "",
+                        "workflow_run_id": r[12],
                     }
                     for r in rows
                 ]
@@ -4946,3 +5348,11 @@ def set_vpn_session_prepare(
     fn: Callable[[Sequence[str]], Dict[str, Dict[str, Any]]],
 ):
     scheduler._vpn_session_prepare = fn
+
+
+def set_workflow_run_launcher(scheduler: JobScheduler, fn: Callable[..., Dict[str, Any]]):
+    scheduler._workflow_run_launcher = fn
+
+
+def set_workflow_document_validator(scheduler: JobScheduler, fn: Callable[..., List[str]]):
+    scheduler._workflow_document_validator = fn

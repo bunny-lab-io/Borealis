@@ -5,6 +5,7 @@
 # API Endpoints (if applicable):
 # - GET    /api/device_filters
 # - GET    /api/device_filters/metadata
+# - GET    /api/device_filters/search
 # - POST   /api/device_filters/preview
 # - GET    /api/device_filters/<filter_id>
 # - POST   /api/device_filters
@@ -434,6 +435,76 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
             payload, status = requirement
             return jsonify(payload), status
         return jsonify(filter_metadata())
+
+    @blueprint.route("/search", methods=["GET"])
+    def search_filters() -> Any:
+        user, requirement = _require_user()
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
+
+        query = str(request.args.get("query") or request.args.get("name") or "").strip()
+        if len(query) < 3:
+            return jsonify({"filters": [], "query": query, "count": 0})
+
+        ids = _load_ordered_filter_ids(archived=False)
+        records = matcher.load_filters(ids, include_archived=True)
+        all_site_ids = _load_all_site_ids()
+        try:
+            visible_devices = matcher.fetch_devices(allowed_site_ids=site_access.site_ids_for_user(user))
+        except Exception:
+            visible_devices = []
+        query_lc = query.lower()
+        visible_matches: List[Dict[str, Any]] = []
+        for filter_id in ids:
+            record = records.get(int(filter_id))
+            if not record:
+                continue
+            if not _filter_visible_to_user(record, user, all_site_ids=all_site_ids):
+                continue
+            name = str(record.get("name") or "").strip()
+            if not name or query_lc not in name.lower():
+                continue
+            try:
+                matching_device_count = matcher.count_filter_devices(record, devices=visible_devices)
+            except Exception:
+                matching_device_count = 0
+            visible_matches.append(
+                {
+                    "id": int(record.get("id") or filter_id),
+                    "name": name,
+                    "description": str(record.get("description") or "").strip(),
+                    "site_mode": str(record.get("site_mode") or "global"),
+                    "site_ids": list(record.get("site_ids") or []),
+                    "site_names": list(record.get("site_names") or []),
+                    "scope_summary": "",
+                    "matching_device_count": matching_device_count,
+                }
+            )
+
+        def _sort_key(record: Dict[str, Any]) -> tuple[int, int, str]:
+            name_lc = str(record.get("name") or "").lower()
+            return (
+                0 if name_lc == query_lc else 1,
+                0 if name_lc.startswith(query_lc) else 1,
+                name_lc,
+            )
+
+        visible_matches.sort(key=_sort_key)
+        for record in visible_matches:
+            site_names = [str(value).strip() for value in (record.get("site_names") or []) if str(value).strip()]
+            site_mode = str(record.get("site_mode") or "global").strip().lower()
+            if site_mode == "specific_sites":
+                scope_summary = f"Specific Sites: {', '.join(site_names)}" if site_names else "Specific Sites"
+            elif site_mode == "global_exclusions":
+                scope_summary = (
+                    f"Global w/ Exclusions: {', '.join(site_names)}" if site_names else "Global w/ Exclusions"
+                )
+            else:
+                scope_summary = "Global"
+            record["scope_summary"] = scope_summary
+
+        return jsonify({"filters": visible_matches[:25], "query": query, "count": len(visible_matches)})
 
     @blueprint.route("/preview", methods=["POST"])
     def preview_filter() -> Any:

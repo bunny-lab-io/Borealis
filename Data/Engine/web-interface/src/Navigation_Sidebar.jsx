@@ -198,6 +198,9 @@ function NavigationSidebar({ currentPage, onNavigate, isAdmin = false }) {
     <Box
       sx={{
         width: collapsed ? 45 : 260,
+        flexShrink: 0,
+        position: "relative",
+        zIndex: 2,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",

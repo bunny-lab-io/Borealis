@@ -16,7 +16,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple, Union
 from ...assembly_management.models import AssemblyDomain, AssemblyRecord
 
 
-MAX_DOCUMENT_BYTES = 950_000_000  # Practical upper bound under SQLite MAX_LENGTH=1,000,000,000 in this runtime
+MAX_DOCUMENT_BYTES = 950_000_000  # Practical Borealis application guardrail for large assembly documents
 
 
 class AssemblySerializationError(ValueError):

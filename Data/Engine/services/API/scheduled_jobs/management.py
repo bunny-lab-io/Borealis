@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, List
 from ...ansible import EngineAnsibleRunner
 from ...assemblies.service import AssemblyRuntimeService
 from ...aegis_cipher import AegisSecretResetRequiredError, credential_secret_reset_required
+from ..workflows import management as workflows_management
 from . import job_scheduler
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
@@ -356,6 +357,9 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
     if callable(emit_host_service_event):
         job_scheduler.set_host_service_emitter(scheduler, emit_host_service_event)
+    workflow_runtime = workflows_management.ensure_workflow_runtime(app, adapters)
+    job_scheduler.set_workflow_run_launcher(scheduler, workflow_runtime.start_run)
+    job_scheduler.set_workflow_document_validator(scheduler, workflow_runtime.validate_saved_workflow)
     scheduler.start()
     adapters.context.scheduler = scheduler
     adapters.service_log("scheduled_jobs", "engine scheduler initialised", level="INFO")

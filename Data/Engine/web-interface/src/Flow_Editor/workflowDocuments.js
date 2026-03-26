@@ -1,4 +1,5 @@
 import { decodeBase64String } from "../Assemblies/assemblyUtils";
+import { inspectWorkflowRuntimeV1, validateWorkflowRuntimeV1 } from "./runtimeV1";
 
 export function generateWorkflowAssemblyGuid() {
   try {
@@ -132,4 +133,12 @@ export function extractWorkflowCanvasDocument(document) {
     edges: Array.isArray(workflowPayload?.edges) ? workflowPayload.edges : [],
     payload: workflowPayload,
   };
+}
+
+export function validateWorkflowRuntimeDocument({ nodes = [], edges = [], sourceType = "manual" } = {}) {
+  return validateWorkflowRuntimeV1({ nodes, edges, sourceType });
+}
+
+export function inspectWorkflowRuntimeDocument({ nodes = [], edges = [], sourceType = "manual" } = {}) {
+  return inspectWorkflowRuntimeV1({ nodes, edges, sourceType });
 }

@@ -1,11 +1,11 @@
 # ======================================================
 # Data\Engine\db\dbapi.py
-# Description: Minimal sqlite3-shaped compatibility layer backed by SQLAlchemy/psycopg connections.
+# Description: Minimal legacy DB-API compatibility layer backed by SQLAlchemy/psycopg connections.
 #
 # API Endpoints (if applicable): None
 # ======================================================
 
-"""sqlite3-shaped DB-API compatibility backed by PostgreSQL connections."""
+"""Legacy DB-API compatibility backed by PostgreSQL connections."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class IntegrityError(_stdlib_sqlite3.IntegrityError, Error):
 
 
 class Row:
-    """SQLite-like row wrapper providing index and key access."""
+    """Row wrapper providing index and key access."""
 
     def __init__(self, values: Sequence[Any], keys: Sequence[str]) -> None:
         self._values = tuple(values)
@@ -243,7 +243,7 @@ def _split_script(script: str) -> Iterator[str]:
 
 
 class Cursor:
-    """Cursor wrapper exposing a sqlite3-like interface."""
+    """Cursor wrapper exposing the legacy DB-API surface."""
 
     def __init__(self, connection: "Connection", raw_cursor) -> None:
         self.connection = connection
@@ -333,7 +333,7 @@ class Cursor:
 
 
 class Connection:
-    """Connection wrapper exposing a sqlite3-like interface."""
+    """Connection wrapper exposing the legacy DB-API surface."""
 
     def __init__(self, raw_connection, *, dialect: str = "postgresql") -> None:
         self._raw_connection = raw_connection
@@ -404,7 +404,7 @@ class Connection:
 
 
 def connect(database: str, timeout: int = 15, **_kwargs: Any) -> Connection:
-    """Create a sqlite3-shaped connection backed by the shared PostgreSQL engine."""
+    """Create a DB-API compatibility connection backed by the shared PostgreSQL engine."""
 
     database_text = str(database or "").strip()
     if database_text.startswith("sqlite://") or "://" not in database_text:

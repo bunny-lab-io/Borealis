@@ -13,6 +13,9 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 ## Styling and Layout
 - Borealis uses a MagicUI styling language with glass panels, gradients, and Quartz-themed AG Grid tables.
 - The full MagicUI and AG Grid specification is embedded in the Codex Agent section below.
+- Workflow Runtime v1 node-shell and port-row styling rules live in [Flow Editor and Nodes](flow-editor-and-nodes.md) under `Workflow Runtime Node Port Standard V1`. Use that document as the source of truth for workflow node title sizing, status badges, named port rows, and Action-vs-data edge behavior.
+- Workflow Runtime v1 naming and edge-label behavior also live there. In particular, use `Device Filter` and `List of Devices` for the targeting nodes, keep workflow data edges dashed Borealis blue, and let target edges auto-label with device counts when available.
+- Workflow node inspection also follows that document: the node sidebar `Debug Info` tab is available in both authoring mode and run-snapshot mode, with authoring previews clearly treated as pre-runtime estimates rather than executed results.
 
 ## Toast Notifications
 - Backend: `POST /api/notifications/notify`.
@@ -29,6 +32,7 @@ Describe the Borealis WebUI architecture, styling conventions, and the toast not
 - [Technical Debt](technical-debt.md)
 - [Logging and Operations](logging-and-operations.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
+- [Flow Editor and Nodes](flow-editor-and-nodes.md)
 
 ## Codex Agent (Detailed)
 ### Shared Conventions (Full)

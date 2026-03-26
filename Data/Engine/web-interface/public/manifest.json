@@ -1,0 +1,8 @@
+{
+  "name": "Borealis",
+  "short_name": "Borealis",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#040711",
+  "theme_color": "#040711"
+}

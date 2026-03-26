@@ -41,10 +41,10 @@ users (id) -------------------< user_site_assignments (user_id)
 sites (id) -------------------< user_site_assignments (site_id)
 ```
 
-## Important SQLite Behavior
-- The main Engine DB connection factory enables WAL and busy timeout, but does not set `PRAGMA foreign_keys=ON`.
-- Result: foreign keys exist in table definitions, but enforcement can be connection-dependent unless explicitly enabled.
-- This is why some code paths also do explicit cleanup (example: deleting `device_sites` rows before deleting `sites`).
+## Important PostgreSQL Behavior
+- Borealis uses PostgreSQL as the live Engine database, so engine troubleshooting should focus on server-side constraints, indexes, sequences, and transaction boundaries.
+- Constraint enforcement, indexes, and transactions are handled server-side by PostgreSQL.
+- Some Borealis relations remain intentionally soft in schema/API logic, so application code still performs explicit cleanup and validation for tables such as `device_sites` and approval mappings.
 
 ## Engine Runtime Database Tables (`engine.*`)
 ### Enrollment, Identity, and Site Mapping
@@ -383,12 +383,6 @@ sites (id) -------------------< user_site_assignments (site_id)
 - After Aegis setup, `token` stores an ASCII `aegis:v1:` envelope, and a locked Engine treats it as unavailable until unlock.
 - After an Aegis force reset, Borealis can preserve a row with `token = NULL`, `reset_required = 1`, and `reset_at` set so the WebUI can warn that the GitHub token must be re-entered.
 
-### SQLite Internal Table
-#### `sqlite_sequence`
-- Status: Internal.
-- Purpose: Tracks autoincrement counters for tables using `AUTOINCREMENT`.
-- Notes:
-- Managed by SQLite; do not edit directly.
 
 ## Assembly Catalog Tables (`assemblies.*`)
 ### Domains and Tables
@@ -443,11 +437,11 @@ Each table has the same schema:
 ## Codex Agent (Detailed)
 ### Troubleshooting queries
 ```sql
--- 1) Legacy SQLite: list all user tables in a pre-migration Engine DB
-SELECT name
-FROM sqlite_master
-WHERE type='table'
-ORDER BY name;
+-- 1) List user-managed Borealis tables in PostgreSQL
+SELECT schemaname, tablename
+FROM pg_tables
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY schemaname, tablename;
 
 -- 2) Site-to-enrollment code map (current source of truth)
 SELECT id, name, enrollment_code

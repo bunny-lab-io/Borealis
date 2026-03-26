@@ -24,7 +24,7 @@ Document external integrations used by Borealis, primarily the GitHub repository
 - `Data/Engine/integrations/github.py` implements `GitHubIntegration`.
 - The integration uses:
   - Cached results stored in `repo_hash_cache.json` (under the Engine cache directory).
-  - Token storage in the `github_token` SQLite table.
+  - Token storage in the `github_token` PostgreSQL table.
 
 ### Defaults and overrides
 - Default repo: `bunny-lab-io/Borealis`.

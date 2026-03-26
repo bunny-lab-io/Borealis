@@ -35,6 +35,20 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
+ID: TD-20260325-01
+Status: active
+Owner: Engine + WebUI
+Date Added: 2026-03-25
+Summary: Workflow Runtime v1 and workflow-backed Scheduled Jobs ship without retry orchestration.
+Impact: Operators can run workflows manually, on schedules, or via webhooks, but Borealis cannot yet retry failed or warning workflow runs at either the per-node level or the scheduled-job level.
+Root Cause: Workflow Runtime v1 prioritized deterministic left-to-right execution, frozen target snapshots, and final status rollup before retry semantics were designed across child assemblies, subworkflow calls, and scheduled job history.
+Current Mitigation: `Data/Engine/services/workflows/runtime.py` and `Data/Engine/services/API/scheduled_jobs/job_scheduler.py` treat each workflow launch as a single attempt, while the WebUI avoids presenting retry configuration for workflow nodes or workflow-backed scheduled jobs.
+Removal Criteria: Borealis supports explicit retry policy design for workflow nodes and scheduled jobs, including retry counts, retry delay/backoff, and final-status accounting across child executions.
+Files: `Data/Engine/services/workflows/runtime.py`, `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`, `Data/Engine/web-interface/src/Scheduling/Create_Job.jsx`
+Evidence: Workflow Runtime v1 persists terminal statuses and linked child execution summaries, but there is no retry configuration in workflow node configuration, workflow launch APIs, or scheduled job authoring.
+Next Step: Design retry semantics for node timeouts/failures and scheduled workflow reruns, then add schema/API/UI support in one coordinated pass.
+GitHub Issue: not yet
+
 ID: TD-20260321-01
 Status: active
 Owner: Agent + Engine
@@ -123,14 +137,14 @@ ID: TD-20260315-01
 Status: active
 Owner: Engine
 Date Added: 2026-03-15
-Summary: The new Engine DB layer still wraps SQLite for tests and migration-source reads while production is being moved to PostgreSQL.
-Impact: Production and deployment paths are PostgreSQL-only, but some local/unit-test flows can still succeed against SQLite-shaped wrappers and may not catch PostgreSQL-only behavior differences.
-Root Cause: The codebase still has broad sqlite3-shaped cursor usage, and the local test harness has not been fully converted to real PostgreSQL integration coverage yet.
-Current Mitigation: `Data/Engine/db/dbapi.py` routes PostgreSQL runtime connections through SQLAlchemy/psycopg while still allowing SQLite-backed wrappers for unit tests.
-Removal Criteria: Test harnesses run against real PostgreSQL instances end to end and the SQLite compatibility branch is no longer needed.
+Summary: The Engine runtime is PostgreSQL-only, but some tests and legacy call sites still depend on a DB-API compatibility surface that can hide PostgreSQL-specific behavior.
+Impact: Production and deployment paths use PostgreSQL, but some local/unit-test flows can still succeed against non-production adapter paths and may not catch PostgreSQL-only behavior differences.
+Root Cause: The codebase still has broad legacy cursor-style usage, and the local test harness has not been fully converted to real PostgreSQL integration coverage yet.
+Current Mitigation: `Data/Engine/db/dbapi.py` routes production runtime connections through SQLAlchemy/psycopg while preserving the compatibility surface expected by existing tests and services.
+Removal Criteria: Test harnesses run against real PostgreSQL instances end to end and the compatibility branch is no longer needed.
 Files: `Data/Engine/db/core.py`, `Data/Engine/db/dbapi.py`, `Data/Engine/Unit_Tests/conftest.py`
 Evidence: The workspace currently lacks `sqlalchemy`, `psycopg`, `flask`, and `pytest`, and no local `psql`/`postgres` binaries are present, so PostgreSQL runtime verification cannot happen here without extra bootstrap.
-Next Step: Add a real PostgreSQL-backed test harness in CI/local dev and then delete the SQLite runtime/test compatibility path.
+Next Step: Add a real PostgreSQL-backed test harness in CI/local dev and then delete the non-production compatibility path.
 GitHub Issue: not yet
 
 ID: TD-20260218-01

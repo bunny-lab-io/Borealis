@@ -1,6 +1,6 @@
 # ======================================================
 # Data\Engine\Unit_Tests\conftest.py
-# Description: Pytest fixtures that seed the Engine app, SQLite schema, TLS materials, and WebUI assets.
+# Description: Pytest fixtures that seed the Engine app, database schema, TLS materials, and WebUI assets.
 #
 # API Endpoints (if applicable): None
 # ======================================================
@@ -197,7 +197,12 @@ CREATE TABLE IF NOT EXISTS scheduled_job_runs (
     created_at INTEGER,
     updated_at INTEGER,
     target_hostname TEXT,
-    skip_reason TEXT
+    skip_reason TEXT,
+    shared_execution INTEGER NOT NULL DEFAULT 0,
+    component_index INTEGER,
+    component_kind TEXT,
+    component_name TEXT,
+    workflow_run_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS scheduled_job_run_activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,7 +221,84 @@ CREATE TABLE IF NOT EXISTS scheduled_job_run_targets (
     hostname TEXT NOT NULL,
     site_id INTEGER,
     resolved_from_filter_id INTEGER,
+    inventory_hostname TEXT,
+    wireguard_peer_ip TEXT,
+    resolved_connection TEXT,
+    resolution_status TEXT,
+    resolution_reason TEXT,
+    resolved_from_filter_ids_json TEXT,
     created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_guid TEXT NOT NULL,
+    workflow_name TEXT,
+    source_type TEXT NOT NULL,
+    source_metadata_json TEXT,
+    graph_snapshot_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT,
+    skip_reason TEXT,
+    final_payload_json TEXT,
+    final_metadata_json TEXT,
+    parent_workflow_run_id INTEGER,
+    parent_node_id TEXT,
+    scheduled_job_id INTEGER,
+    scheduled_job_run_id INTEGER,
+    webhook_id INTEGER,
+    created_by TEXT,
+    created_at INTEGER NOT NULL,
+    started_ts INTEGER,
+    finished_ts INTEGER,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workflow_node_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_run_id INTEGER NOT NULL,
+    node_id TEXT NOT NULL,
+    node_type TEXT,
+    node_label TEXT,
+    node_snapshot_json TEXT,
+    status TEXT NOT NULL,
+    skip_reason TEXT,
+    error TEXT,
+    timeout_seconds INTEGER,
+    input_envelope_json TEXT,
+    output_envelope_json TEXT,
+    ignored_inputs_json TEXT,
+    linked_child_summary_json TEXT,
+    created_at INTEGER NOT NULL,
+    started_ts INTEGER,
+    finished_ts INTEGER,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workflow_child_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_run_id INTEGER NOT NULL,
+    workflow_node_run_id INTEGER NOT NULL,
+    child_kind TEXT NOT NULL,
+    child_identifier TEXT,
+    activity_id INTEGER,
+    child_workflow_run_id INTEGER,
+    target_hostname TEXT,
+    component_guid TEXT,
+    component_name TEXT,
+    component_kind TEXT,
+    status TEXT,
+    stdout_summary TEXT,
+    stderr_summary TEXT,
+    payload_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workflow_webhooks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_guid TEXT NOT NULL,
+    opaque_token TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    creator_username TEXT,
+    creator_role TEXT,
+    last_used_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS github_token (
     id INTEGER PRIMARY KEY,

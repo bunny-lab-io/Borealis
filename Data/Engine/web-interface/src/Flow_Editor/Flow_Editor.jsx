@@ -2,6 +2,12 @@
 // Import Node Configuration Sidebar and new Context Menu Sidebar
 import NodeConfigurationSidebar from "./Node_Configuration_Sidebar";
 import ContextMenuSidebar from "./Context_Menu_Sidebar";
+import {
+  decorateWorkflowEdge,
+  getWorkflowEdgePortMetadata,
+  getWorkflowRuntimeDisplayLabel,
+  WORKFLOW_RUNTIME_EDGE_ROUTES,
+} from "./runtimeV1";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import ReactFlow, {
@@ -12,11 +18,12 @@ import ReactFlow, {
   useReactFlow
 } from "reactflow";
 
-import { Menu, MenuItem, Box } from "@mui/material";
+import { Menu, MenuItem, Box, ListItemText } from "@mui/material";
 import {
   Polyline as PolylineIcon,
   DeleteForever as DeleteForeverIcon,
-  Edit as EditIcon
+  Edit as EditIcon,
+  NavigateNext as NavigateNextIcon,
 } from "@mui/icons-material";
 
 import "reactflow/dist/style.css";
@@ -28,7 +35,10 @@ export default function FlowEditor({
   setNodes,
   setEdges,
   nodeTypes,
-  categorizedNodes
+  categorizedNodes,
+  readOnly = false,
+  nodeRunLookup = {},
+  onSelectedNodeChange = null,
 }) {
   // Node Configuration Sidebar State
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -41,6 +51,7 @@ export default function FlowEditor({
   // Context Menus
   const [nodeContextMenu, setNodeContextMenu] = useState(null); // { mouseX, mouseY, nodeId }
   const [edgeContextMenu, setEdgeContextMenu] = useState(null); // { mouseX, mouseY, edgeId }
+  const [edgeRouteMenu, setEdgeRouteMenu] = useState(null); // { anchorEl, edgeId }
 
   // Drag/snap helpers (untouched)
   const wrapperRef = useRef(null);
@@ -52,6 +63,24 @@ export default function FlowEditor({
   // ----- Node/Edge Definitions -----
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   const selectedEdge = edges.find((e) => e.id === edgeSidebarEdgeId);
+  const selectedNodeRun = selectedNodeId ? nodeRunLookup?.[selectedNodeId] || null : null;
+  const selectedNodeTitle = selectedNode
+    ? getWorkflowRuntimeDisplayLabel(selectedNode.type, selectedNode.data?.label || selectedNode.id)
+    : "";
+  const nodesById = React.useMemo(
+    () =>
+      (Array.isArray(nodes) ? nodes : []).reduce((acc, node) => {
+        if (node?.id) acc[String(node.id)] = node;
+        return acc;
+      }, {}),
+    [nodes]
+  );
+  const contextMenuEdge = edgeContextMenu?.edgeId
+    ? edges.find((edge) => edge.id === edgeContextMenu.edgeId) || null
+    : null;
+  const contextMenuEdgePorts = contextMenuEdge
+    ? getWorkflowEdgePortMetadata(contextMenuEdge, nodesById)
+    : {};
 
   // --------- Context Menu Handlers ----------
   const handleRightClick = (e, node) => {
@@ -66,11 +95,13 @@ export default function FlowEditor({
 
   // --------- Node Context Menu Actions ---------
   const handleDisconnectAllEdges = (nodeId) => {
+    if (readOnly) return;
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
     setNodeContextMenu(null);
   };
 
   const handleRemoveNode = (nodeId) => {
+    if (readOnly) return;
     setNodes((nds) => nds.filter((n) => n.id !== nodeId));
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
     setNodeContextMenu(null);
@@ -84,6 +115,7 @@ export default function FlowEditor({
 
   // --------- Edge Context Menu Actions ---------
   const handleUnlinkEdge = (edgeId) => {
+    if (readOnly) return;
     setEdges((eds) => eds.filter((e) => e.id !== edgeId));
     setEdgeContextMenu(null);
   };
@@ -91,6 +123,38 @@ export default function FlowEditor({
   const handleEditEdgeProps = (edgeId) => {
     setEdgeSidebarEdgeId(edgeId);
     setEdgeSidebarOpen(true);
+    setEdgeContextMenu(null);
+  };
+
+  const handleOpenEdgeRouteMenu = (event, edgeId) => {
+    if (readOnly) return;
+    event.stopPropagation();
+    setEdgeRouteMenu({ anchorEl: event.currentTarget, edgeId });
+  };
+
+  const handleCloseEdgeRouteMenu = () => {
+    setEdgeRouteMenu(null);
+  };
+
+  const handleQuickSetEdgeRoute = (edgeId, route) => {
+    if (readOnly || !edgeId) return;
+    setEdges((eds) =>
+      eds.map((edge) =>
+        edge.id === edgeId
+          ? decorateWorkflowEdge(
+              {
+                ...edge,
+                data: {
+                  ...(edge.data || {}),
+                  route_on: route,
+                },
+              },
+              { nodesById }
+            )
+          : edge
+      )
+    );
+    setEdgeRouteMenu(null);
     setEdgeContextMenu(null);
   };
 
@@ -108,7 +172,11 @@ export default function FlowEditor({
   // ----- Update Edge Callback for Sidebar -----
   const updateEdge = (updatedEdgeObj) => {
     setEdges((eds) =>
-      eds.map((e) => (e.id === updatedEdgeObj.id ? { ...e, ...updatedEdgeObj } : e))
+      eds.map((e) =>
+        e.id === updatedEdgeObj.id
+          ? decorateWorkflowEdge({ ...e, ...updatedEdgeObj }, { nodesById })
+          : e
+      )
     );
   };
 
@@ -189,6 +257,7 @@ export default function FlowEditor({
   }, [guides, setNodes]);
 
   const onDrop = useCallback((event) => {
+    if (readOnly) return;
     event.preventDefault();
     const type = event.dataTransfer.getData("application/reactflow");
     if (!type) return;
@@ -219,7 +288,7 @@ export default function FlowEditor({
     };
     setNodes((nds) => [...nds, newNode]);
 
-  }, [project, setNodes, categorizedNodes]);
+  }, [project, setNodes, categorizedNodes, readOnly]);
 
   const onDragOver = useCallback((event) => {
     event.preventDefault();
@@ -227,23 +296,31 @@ export default function FlowEditor({
   }, []);
 
   const onConnect = useCallback((params) => {
+    if (readOnly) return;
     setEdges((eds) =>
-      addEdge({
-        ...params,
-        type: "bezier",
-        animated: true,
-        style: { strokeDasharray: "6 3", stroke: "#58a6ff" }
-      }, eds)
+      addEdge(
+        decorateWorkflowEdge(
+          {
+            ...params,
+            type: "bezier",
+            data: { route_on: "always" },
+          },
+          { nodesById }
+        ),
+        eds
+      )
     );
-  }, [setEdges]);
+  }, [setEdges, readOnly, nodesById]);
 
   const onNodesChange = useCallback((changes) => {
+    if (readOnly) return;
     setNodes((nds) => applyNodeChanges(changes, nds));
-  }, [setNodes]);
+  }, [setNodes, readOnly]);
 
   const onEdgesChange = useCallback((changes) => {
+    if (readOnly) return;
     setEdges((eds) => applyEdgeChanges(changes, eds));
-  }, [setEdges]);
+  }, [setEdges, readOnly]);
 
   useEffect(() => {
     const nodeCountEl = document.getElementById("nodeCount");
@@ -253,6 +330,12 @@ export default function FlowEditor({
   const nodeDef = selectedNode
     ? Object.values(categorizedNodes).flat().find((def) => def.type === selectedNode.type)
     : null;
+
+  useEffect(() => {
+    if (typeof onSelectedNodeChange === "function") {
+      onSelectedNodeChange(selectedNodeId, selectedNodeRun);
+    }
+  }, [onSelectedNodeChange, selectedNodeId, selectedNodeRun]);
 
   // --------- MAIN RENDER ----------
   return (
@@ -265,7 +348,7 @@ export default function FlowEditor({
       <NodeConfigurationSidebar
         drawerOpen={drawerOpen}
         setDrawerOpen={setDrawerOpen}
-        title={selectedNode ? selectedNode.data?.label || selectedNode.id : ""}
+        title={selectedNodeTitle}
         nodeData={
           selectedNode && nodeDef
             ? {
@@ -278,6 +361,8 @@ export default function FlowEditor({
         }
         setNodes={setNodes}
         selectedNode={selectedNode}
+        readOnly={readOnly}
+        runNodeRecord={selectedNodeRun}
       />
 
       {/* Edge Properties Sidebar */}
@@ -285,6 +370,7 @@ export default function FlowEditor({
         open={edgeSidebarOpen}
         onClose={handleCloseEdgeSidebar}
         edge={selectedEdge ? { ...selectedEdge } : null}
+        edgePortMetadata={selectedEdge ? getWorkflowEdgePortMetadata(selectedEdge, nodesById) : null}
         updateEdge={edge => {
           // Provide id if missing
           if (!edge.id && edgeSidebarEdgeId) edge.id = edgeSidebarEdgeId;
@@ -296,19 +382,29 @@ export default function FlowEditor({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        onDrop={onDrop}
+        onNodesChange={readOnly ? undefined : onNodesChange}
+        onEdgesChange={readOnly ? undefined : onEdgesChange}
+        onConnect={readOnly ? undefined : onConnect}
+        onDrop={readOnly ? undefined : onDrop}
         onDragOver={onDragOver}
         onNodeContextMenu={handleRightClick}
         onEdgeContextMenu={handleEdgeRightClick}
+        onNodeClick={(_, node) => {
+          setSelectedNodeId(node.id);
+          setDrawerOpen(true);
+        }}
         defaultViewport={{ x: 0, y: 0, zoom: 1.5 }}
         edgeOptions={{ type: "bezier", animated: true, style: { strokeDasharray: "6 3", stroke: "#58a6ff" } }}
         proOptions={{ hideAttribution: true }}
-        onNodeDragStart={(_, node) => computeGuides(node)}
-        onNodeDrag={onNodeDrag}
-        onNodeDragStop={() => { setGuides([]); setActiveGuides([]); }}
+        onNodeDragStart={readOnly ? undefined : (_, node) => computeGuides(node)}
+        onNodeDrag={readOnly ? undefined : onNodeDrag}
+        onNodeDragStop={readOnly ? undefined : () => { setGuides([]); setActiveGuides([]); }}
+        nodesDraggable={!readOnly}
+        nodesConnectable={!readOnly}
+        elementsSelectable
+        zoomOnDoubleClick={!readOnly}
+        panOnDrag
+        deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
       >
         <Background id={flowId} variant="lines" gap={65} size={1} color="rgba(255,255,255,0.2)" />
       </ReactFlow>
@@ -340,34 +436,79 @@ export default function FlowEditor({
       >
         <MenuItem onClick={() => handleEditNodeProps(nodeContextMenu.nodeId)}>
           <EditIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
-          Edit Properties
+          {readOnly ? "View Details" : "Edit Properties"}
         </MenuItem>
-        <MenuItem onClick={() => handleDisconnectAllEdges(nodeContextMenu.nodeId)}>
-          <PolylineIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
-          Disconnect All Edges
-        </MenuItem>
-        <MenuItem onClick={() => handleRemoveNode(nodeContextMenu.nodeId)}>
-          <DeleteForeverIcon sx={{ fontSize: 18, color: "#ff4f4f", mr: 1 }} />
-          Remove Node
-        </MenuItem>
+        {!readOnly ? (
+          <MenuItem onClick={() => handleDisconnectAllEdges(nodeContextMenu.nodeId)}>
+            <PolylineIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
+            Disconnect All Edges
+          </MenuItem>
+        ) : null}
+        {!readOnly ? (
+          <MenuItem onClick={() => handleRemoveNode(nodeContextMenu.nodeId)}>
+            <DeleteForeverIcon sx={{ fontSize: 18, color: "#ff4f4f", mr: 1 }} />
+            Remove Node
+          </MenuItem>
+        ) : null}
       </Menu>
 
       {/* Edge Context Menu */}
       <Menu
         open={Boolean(edgeContextMenu)}
-        onClose={() => setEdgeContextMenu(null)}
+        onClose={() => {
+          setEdgeContextMenu(null);
+          setEdgeRouteMenu(null);
+        }}
         anchorReference="anchorPosition"
         anchorPosition={edgeContextMenu ? { top: edgeContextMenu.mouseY, left: edgeContextMenu.mouseX } : undefined}
         PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
       >
-        <MenuItem onClick={() => handleEditEdgeProps(edgeContextMenu.edgeId)}>
-          <EditIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
-          Edit Properties
-        </MenuItem>
-        <MenuItem onClick={() => handleUnlinkEdge(edgeContextMenu.edgeId)}>
-          <DeleteForeverIcon sx={{ fontSize: 18, color: "#ff4f4f", mr: 1 }} />
-          Unlink Edge
-        </MenuItem>
+        {!readOnly ? (
+          <MenuItem onClick={() => handleEditEdgeProps(edgeContextMenu.edgeId)}>
+            <EditIcon sx={{ fontSize: 18, color: "#58a6ff", mr: 1 }} />
+            Edit Properties
+          </MenuItem>
+        ) : null}
+        {!readOnly && contextMenuEdgePorts?.isActionEdge ? (
+          <MenuItem onClick={(event) => handleOpenEdgeRouteMenu(event, edgeContextMenu.edgeId)}>
+            <ListItemText primary="Flow Control" />
+            <NavigateNextIcon sx={{ fontSize: 18, color: "#7dd3fc", ml: 1 }} />
+          </MenuItem>
+        ) : null}
+        {!readOnly ? (
+          <MenuItem onClick={() => handleUnlinkEdge(edgeContextMenu.edgeId)}>
+            <DeleteForeverIcon sx={{ fontSize: 18, color: "#ff4f4f", mr: 1 }} />
+            Unlink Edge
+          </MenuItem>
+        ) : null}
+      </Menu>
+
+      <Menu
+        open={Boolean(edgeRouteMenu)}
+        anchorEl={edgeRouteMenu?.anchorEl || null}
+        onClose={handleCloseEdgeRouteMenu}
+        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", fontSize: "13px" } }}
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+      >
+        {WORKFLOW_RUNTIME_EDGE_ROUTES.map((route) => (
+          <MenuItem
+            key={route.value}
+            onClick={() => handleQuickSetEdgeRoute(edgeRouteMenu?.edgeId, route.value)}
+          >
+            <Box
+              sx={{
+                width: 10,
+                height: 10,
+                borderRadius: "50%",
+                bgcolor: route.color,
+                mr: 1.15,
+                boxShadow: `0 0 0 1px ${route.color}55`,
+              }}
+            />
+            {route.label}
+          </MenuItem>
+        ))}
       </Menu>
     </div>
   );

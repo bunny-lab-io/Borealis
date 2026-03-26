@@ -46,7 +46,14 @@ import {
   buildWorkflowAuthoringDocument,
   extractWorkflowCanvasDocument,
   generateWorkflowAssemblyGuid,
+  inspectWorkflowRuntimeDocument,
+  validateWorkflowRuntimeDocument,
 } from "./Flow_Editor/workflowDocuments";
+import {
+  decorateWorkflowEdge,
+  getWorkflowRuntimeDisplayLabel,
+  WORKFLOW_RUNTIME_NODE_TYPES,
+} from "./Flow_Editor/runtimeV1.js";
 
 // Borealis Page Imports
 import Login from "./Login.jsx";
@@ -103,6 +110,171 @@ if (!Object.keys(nodeTypes).length) {
     "[Flow Editor] No node modules were loaded from ./nodes/**/*.jsx. " +
       "Check the node source tree and import.meta.glob path casing."
   );
+}
+
+const WORKFLOW_CHILD_STATUS_BADGE_ORDER = [
+  "Success",
+  "Warning",
+  "Failed",
+  "Timed Out",
+  "Skipped",
+  "Running",
+  "Pending",
+];
+
+function parseWorkflowRunEnvelope(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function summarizeWorkflowRunNodePresentation(runRow, nodeType) {
+  const outputEnvelope = parseWorkflowRunEnvelope(runRow?.output_envelope);
+  const outputData = outputEnvelope?.data && typeof outputEnvelope.data === "object" ? outputEnvelope.data : {};
+  const outputMetadata =
+    outputEnvelope?.metadata && typeof outputEnvelope.metadata === "object" ? outputEnvelope.metadata : {};
+  const childResults = Array.isArray(outputData.job_output)
+    ? outputData.job_output
+    : Array.isArray(outputData.results)
+    ? outputData.results
+    : [];
+  const statusCounts = new Map();
+  childResults.forEach((result) => {
+    const key = String(result?.status || "").trim();
+    if (!key) return;
+    statusCounts.set(key, (statusCounts.get(key) || 0) + 1);
+  });
+  const badgeParts = WORKFLOW_CHILD_STATUS_BADGE_ORDER
+    .filter((status) => statusCounts.has(status))
+    .map((status) => `${statusCounts.get(status)} ${status}`);
+  const badgeLabel =
+    String(nodeType || "").trim() === WORKFLOW_RUNTIME_NODE_TYPES.executeAssembly && badgeParts.length > 1
+      ? badgeParts.join(" | ")
+      : String(runRow?.status || "").trim();
+  const runtimeTargetCount =
+    Number.isFinite(Number(outputMetadata?.target_count))
+      ? Number.parseInt(outputMetadata.target_count, 10)
+      : Array.isArray(outputData?.targets)
+      ? outputData.targets.length
+      : null;
+  return {
+    badgeLabel,
+    runtimeTargetCount,
+  };
+}
+
+function normalizeWorkflowCanvasNode(node, runRow = null) {
+  const baseNode = node && typeof node === "object" ? node : {};
+  const presentation = runRow ? summarizeWorkflowRunNodePresentation(runRow, baseNode?.type) : null;
+  const normalizedLabel = getWorkflowRuntimeDisplayLabel(
+    baseNode?.type,
+    baseNode?.data?.label || baseNode?.label || ""
+  );
+  return {
+    ...baseNode,
+    data: {
+      ...(baseNode?.data || {}),
+      label: normalizedLabel,
+      ...(runRow
+        ? {
+            node_execution_status: runRow?.status || "",
+            runtimeStatus: runRow?.status || "",
+            node_status_badge_label: presentation?.badgeLabel || "",
+            runtime_target_count: presentation?.runtimeTargetCount,
+          }
+        : {}),
+    },
+  };
+}
+
+function decorateWorkflowCanvasEdges(edges = [], nodes = []) {
+  const nodesById = (Array.isArray(nodes) ? nodes : []).reduce((acc, node) => {
+    if (node?.id) {
+      acc[String(node.id)] = node;
+    }
+    return acc;
+  }, {});
+  return (Array.isArray(edges) ? edges : []).map((edge) =>
+    decorateWorkflowEdge(edge, { nodesById })
+  );
+}
+
+async function enrichWorkflowCanvasNodesWithFilterCounts(nodes = []) {
+  const normalizedNodes = (Array.isArray(nodes) ? nodes : []).map((node) => normalizeWorkflowCanvasNode(node));
+  const unresolvedFilterIds = [
+    ...new Set(
+      normalizedNodes
+        .filter((node) => String(node?.type || "").trim() === WORKFLOW_RUNTIME_NODE_TYPES.agentFilter)
+        .map((node) => Number.parseInt(node?.data?.filter_id || node?.data?.agent_filter_id || node?.data?.selected_filter_id, 10))
+        .filter((filterId) => Number.isFinite(filterId) && filterId > 0)
+        .filter((filterId) => {
+          const matchNode = normalizedNodes.find(
+            (node) =>
+              String(node?.type || "").trim() === WORKFLOW_RUNTIME_NODE_TYPES.agentFilter &&
+              Number.parseInt(
+                node?.data?.filter_id || node?.data?.agent_filter_id || node?.data?.selected_filter_id,
+                10
+              ) === filterId
+          );
+          return !Number.isFinite(Number(matchNode?.data?.matching_device_count));
+        })
+    ),
+  ];
+
+  if (!unresolvedFilterIds.length) {
+    return normalizedNodes;
+  }
+
+  const countByFilterId = new Map();
+  await Promise.all(
+    unresolvedFilterIds.map(async (filterId) => {
+      try {
+        const response = await fetch(`/api/device_filters/${encodeURIComponent(String(filterId))}`, {
+          cache: "no-store",
+          credentials: "include",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          return;
+        }
+        const count = payload?.filter?.matching_device_count;
+        if (Number.isFinite(Number(count))) {
+          countByFilterId.set(filterId, Number.parseInt(count, 10));
+        }
+      } catch {
+        // Ignore count enrichment failures and keep the node usable.
+      }
+    })
+  );
+
+  return normalizedNodes.map((node) => {
+    if (String(node?.type || "").trim() !== WORKFLOW_RUNTIME_NODE_TYPES.agentFilter) {
+      return node;
+    }
+    const filterId = Number.parseInt(
+      node?.data?.filter_id || node?.data?.agent_filter_id || node?.data?.selected_filter_id,
+      10
+    );
+    if (!Number.isFinite(filterId) || filterId <= 0 || !countByFilterId.has(filterId)) {
+      return node;
+    }
+    return {
+      ...node,
+      data: {
+        ...(node?.data || {}),
+        matching_device_count: countByFilterId.get(filterId),
+      },
+    };
+  });
 }
 
 const darkTheme = createTheme({
@@ -195,12 +367,25 @@ async function sha512(text) {
   const [assemblyEditorState, setAssemblyEditorState] = useState(null); // { mode: 'script'|'ansible', row, nonce }
   const [filterEditorState, setFilterEditorState] = useState(null);
   const [siteAssignmentState, setSiteAssignmentState] = useState(null);
+  const [workflowViewState, setWorkflowViewState] = useState({
+    assemblyGuid: null,
+    runId: null,
+    mode: "editor",
+    runRecord: null,
+    nodeRunDetails: {},
+  });
   const [filtersRefreshToken, setFiltersRefreshToken] = useState(0);
   const [sessionResolved, setSessionResolved] = useState(false);
   const initialPathRef = useRef(window.location.pathname + window.location.search);
   const pendingPathRef = useRef(null);
   const quickJobSeedRef = useRef(0);
       const [notAuthorizedOpen, setNotAuthorizedOpen] = useState(false);
+  const [workflowAccessWarning, setWorkflowAccessWarning] = useState({
+    open: false,
+    message: "",
+    hiddenDevices: [],
+    hiddenFilters: [],
+  });
   const [pageHeader, setPageHeader] = useState(EMPTY_PAGE_HEADER);
   const [aegisStatus, setAegisStatus] = useState(EMPTY_AEGIS_STATUS);
   const [aegisDialog, setAegisDialog] = useState(null);
@@ -409,8 +594,20 @@ async function sha512(text) {
         }
         case "workflows":
           return "/workflows";
-        case "workflow-editor":
+        case "workflow-editor": {
+          const runId = options.runId || workflowViewState?.runId || null;
+          if (runId != null && String(runId).trim() !== "") {
+            return `/workflows/runs/${encodeURIComponent(String(runId).trim())}`;
+          }
+          const assemblyGuid =
+            options.assemblyGuid ||
+            workflowViewState?.assemblyGuid ||
+            "";
+          if (assemblyGuid) {
+            return `/workflows/editor/${encodeURIComponent(String(assemblyGuid).trim())}`;
+          }
           return "/workflows/editor";
+        }
         case "assemblies":
           return "/assemblies";
         case "scripts":
@@ -462,7 +659,7 @@ async function sha512(text) {
         return "/devices";
       }
     },
-    [assemblyEditorState, editingJob?.id, selectedDevice, siteAssignmentState]
+    [assemblyEditorState, editingJob?.id, selectedDevice, siteAssignmentState, workflowViewState]
   );
 
   const interpretPath = useCallback((rawPath) => {
@@ -527,6 +724,21 @@ async function sha512(text) {
       }
       if (path === "/workflows") return { page: "workflows", options: {} };
       if (path === "/workflows/editor") return { page: "workflow-editor", options: {} };
+      if (segments[0] === "workflows" && segments[1] === "editor" && segments[2]) {
+        return {
+          page: "workflow-editor",
+          options: {
+            assemblyGuid: decodeURIComponent(segments[2]).trim() || null,
+          },
+        };
+      }
+      if (segments[0] === "workflows" && segments[1] === "runs" && segments[2]) {
+        const parsedRunId = Number(decodeURIComponent(segments[2]).trim());
+        return {
+          page: "workflow-editor",
+          options: Number.isInteger(parsedRunId) && parsedRunId > 0 ? { runId: parsedRunId } : {},
+        };
+      }
       if (path === "/assemblies") return { page: "assemblies", options: {} };
       if (path === "/assemblies/editor") {
         const mode = params.get("mode");
@@ -608,6 +820,30 @@ async function sha512(text) {
         setSiteAssignmentState(null);
       }
 
+      if (page === "workflow-editor") {
+        setWorkflowViewState((prev) => ({
+          assemblyGuid:
+            options.assemblyGuid !== undefined
+              ? (options.assemblyGuid || null)
+              : prev?.assemblyGuid || null,
+          runId:
+            options.runId !== undefined
+              ? (options.runId || null)
+              : prev?.runId || null,
+          mode: options.runId ? "run" : "editor",
+          runRecord: options.runRecord !== undefined ? options.runRecord : options.runId ? prev?.runRecord || null : null,
+          nodeRunDetails: options.runId ? prev?.nodeRunDetails || {} : {},
+        }));
+      } else if (!options.preserveWorkflowView) {
+        setWorkflowViewState((prev) => ({
+          assemblyGuid: null,
+          runId: null,
+          mode: "editor",
+          runRecord: null,
+          nodeRunDetails: {},
+        }));
+      }
+
       if (page === "create_job") {
         if (options.job && typeof options.job === "object") {
           setEditingJob(options.job);
@@ -638,6 +874,7 @@ async function sha512(text) {
       setFilterEditorState,
       setSiteAssignmentState,
       setSelectedDevice,
+      setWorkflowViewState,
     ]
   );
 
@@ -691,6 +928,44 @@ async function sha512(text) {
       navigateTo(page, { ...(options || {}), replace, allowUnauthenticated });
     },
     [interpretPath, navigateTo]
+  );
+
+  const enforceWorkflowEditorAccess = useCallback(
+    async (workflowGuid) => {
+      const normalizedGuid = String(workflowGuid || "").trim();
+      if (!normalizedGuid) {
+        return { allowed: true };
+      }
+      const response = await fetch(`/api/workflows/${encodeURIComponent(normalizedGuid)}/editor-access`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+      }
+      if (payload?.allowed) {
+        return { allowed: true, payload };
+      }
+      setWorkflowAccessWarning({
+        open: true,
+        message:
+          payload?.message ||
+          "This workflow references targets outside your assigned sites and cannot be opened.",
+        hiddenDevices: Array.isArray(payload?.hidden_devices) ? payload.hidden_devices : [],
+        hiddenFilters: Array.isArray(payload?.hidden_filters) ? payload.hidden_filters : [],
+      });
+      setWorkflowViewState({
+        assemblyGuid: null,
+        runId: null,
+        mode: "editor",
+        runRecord: null,
+        nodeRunDetails: {},
+      });
+      navigateTo("assemblies", { replace: true });
+      return { allowed: false, payload };
+    },
+    [navigateTo]
   );
 
   const navigateToRef = useRef(navigateTo);
@@ -1427,7 +1702,7 @@ async function sha512(text) {
   const handleSaveFlow = useCallback(
     async (name) => {
       const tab = tabs.find((t) => t.id === activeTabId);
-      if (!tab || !name) return;
+      if (!tab || !name) return null;
       const document = buildWorkflowAuthoringDocument({
         assemblyGuid: tab.assemblyGuid || null,
         name,
@@ -1447,6 +1722,7 @@ async function sha512(text) {
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) throw new Error(data?.error || data?.message || `HTTP ${resp.status}`);
+        const savedAssemblyGuid = data?.assembly_guid || tab.assemblyGuid || null;
         setTabs((prev) =>
           prev.map((t) =>
             t.id === activeTabId
@@ -1454,17 +1730,29 @@ async function sha512(text) {
                   ...t,
                   tab_name: name,
                   description: tab.description || tab.exportMetadata?.description || "",
-                  assemblyGuid: data?.assembly_guid || t.assemblyGuid || null,
+                  assemblyGuid: savedAssemblyGuid || t.assemblyGuid || null,
                   domain: (data?.source || data?.domain || t.domain || "user").toLowerCase(),
                 }
               : t
           )
         );
+        if (savedAssemblyGuid && currentPage === "workflow-editor" && !workflowViewState?.runId) {
+          navigateTo("workflow-editor", {
+            assemblyGuid: savedAssemblyGuid,
+            replace: true,
+            preserveWorkflowView: true,
+          });
+        }
+        return {
+          assemblyGuid: savedAssemblyGuid,
+          domain: (data?.source || data?.domain || tab.domain || "user").toLowerCase(),
+        };
       } catch (err) {
         console.error("Failed to save workflow:", err);
+        return null;
       }
     },
-    [tabs, activeTabId]
+    [tabs, activeTabId, currentPage, navigateTo, workflowViewState?.runId]
   );
 
   const handleRenameFlow = useCallback(
@@ -1528,36 +1816,60 @@ async function sha512(text) {
 
   const openWorkflowFromList = useCallback(
     async (row) => {
-      const newId = "flow_" + Date.now();
-      const rawDomain = (row?.domain || "user").toLowerCase();
-      const sourcePath = row?.sourcePath || row?.path || "";
-      const folderPath = sourcePath ? sourcePath.split("/").slice(0, -1).join("/") : "";
-      if (row?.assemblyGuid) {
-        try {
-          const resp = await fetch(`/api/assemblies/${encodeURIComponent(row.assemblyGuid)}/export`);
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          const data = await resp.json();
-          const parsedWorkflow = extractWorkflowCanvasDocument(data);
-          const nodes = parsedWorkflow.nodes;
-          const edges = parsedWorkflow.edges;
-          const tabName = parsedWorkflow.tabName || row?.name || "Workflow";
-          const domain = (data?.domain || rawDomain).toLowerCase();
-          setTabs([
-            {
-              id: newId,
-              tab_name: tabName,
-              description: parsedWorkflow.description || "",
-              nodes,
-              edges,
-              folderPath,
-              assemblyGuid: parsedWorkflow.assemblyGuid || row?.assemblyGuid || null,
-              domain,
-              sourceRow: row,
-              exportMetadata: data,
-            },
-          ]);
-        } catch (err) {
-          console.error("Failed to load workflow:", err);
+      try {
+        if (row?.assemblyGuid) {
+          const access = await enforceWorkflowEditorAccess(row.assemblyGuid);
+          if (!access?.allowed) {
+            return;
+          }
+        }
+        const newId = "flow_" + Date.now();
+        const rawDomain = (row?.domain || "user").toLowerCase();
+        const sourcePath = row?.sourcePath || row?.path || "";
+        const folderPath = sourcePath ? sourcePath.split("/").slice(0, -1).join("/") : "";
+        let targetAssemblyGuid = row?.assemblyGuid || null;
+        if (row?.assemblyGuid) {
+          try {
+            const resp = await fetch(`/api/assemblies/${encodeURIComponent(row.assemblyGuid)}/export`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            const parsedWorkflow = extractWorkflowCanvasDocument(data);
+            const nodes = await enrichWorkflowCanvasNodesWithFilterCounts(parsedWorkflow.nodes);
+            const edges = decorateWorkflowCanvasEdges(parsedWorkflow.edges, nodes);
+            const tabName = parsedWorkflow.tabName || row?.name || "Workflow";
+            const domain = (data?.domain || rawDomain).toLowerCase();
+            targetAssemblyGuid = parsedWorkflow.assemblyGuid || row?.assemblyGuid || null;
+            setTabs([
+              {
+                id: newId,
+                tab_name: tabName,
+                description: parsedWorkflow.description || "",
+                nodes,
+                edges,
+                folderPath,
+                assemblyGuid: parsedWorkflow.assemblyGuid || row?.assemblyGuid || null,
+                domain,
+                sourceRow: row,
+                exportMetadata: data,
+              },
+            ]);
+          } catch (err) {
+            console.error("Failed to load workflow:", err);
+            setTabs([
+              {
+                id: newId,
+                tab_name: row?.name || "Workflow",
+                description: "",
+                nodes: [],
+                edges: [],
+                folderPath,
+                assemblyGuid: row?.assemblyGuid || null,
+                domain: rawDomain,
+                sourceRow: row,
+              },
+            ]);
+          }
+        } else {
           setTabs([
             {
               id: newId,
@@ -1566,35 +1878,221 @@ async function sha512(text) {
               nodes: [],
               edges: [],
               folderPath,
-              assemblyGuid: row?.assemblyGuid || null,
+              assemblyGuid: null,
               domain: rawDomain,
               sourceRow: row,
             },
           ]);
         }
-      } else {
-        setTabs([
-          {
-            id: newId,
-            tab_name: row?.name || "Workflow",
-            description: "",
-            nodes: [],
-            edges: [],
-            folderPath,
-            assemblyGuid: null,
-            domain: rawDomain,
-            sourceRow: row,
-          },
-        ]);
+        setActiveTabId(newId);
+        navigateTo("workflow-editor", {
+          assemblyGuid: targetAssemblyGuid,
+        });
+      } catch (err) {
+        console.error("Failed to open workflow from list:", err);
       }
-      setActiveTabId(newId);
-      navigateTo("workflow-editor");
     },
-    [navigateTo, setTabs, setActiveTabId]
+    [enforceWorkflowEditorAccess, navigateTo, setTabs, setActiveTabId]
   );
 
   const isAdmin = (String(userRole || '').toLowerCase() === 'admin');
   const activeWorkflowTab = tabs.find((tab) => tab.id === activeTabId) || null;
+  const activeWorkflowDiagnostics = React.useMemo(() => {
+    if (!activeWorkflowTab || workflowViewState?.mode === "run") {
+      return { errors: [], warnings: [], hasLegacyPortIssues: false };
+    }
+    return inspectWorkflowRuntimeDocument({
+      nodes: activeWorkflowTab.nodes,
+      edges: activeWorkflowTab.edges,
+      sourceType: "manual",
+    });
+  }, [activeWorkflowTab, workflowViewState?.mode]);
+  const workflowNodeRunLookup = React.useMemo(() => {
+    const baseRows = Array.isArray(workflowViewState?.runRecord?.node_runs) ? workflowViewState.runRecord.node_runs : [];
+    const merged = {};
+    baseRows.forEach((row) => {
+      if (row?.node_id) {
+        merged[row.node_id] = row;
+      }
+    });
+    Object.entries(workflowViewState?.nodeRunDetails || {}).forEach(([nodeId, row]) => {
+      if (nodeId) {
+        merged[nodeId] = { ...(merged[nodeId] || {}), ...(row || {}) };
+      }
+    });
+    return merged;
+  }, [workflowViewState]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (currentPage !== "workflow-editor") return () => { cancelled = true; };
+    if (workflowViewState?.runId) {
+      const loadRunSnapshot = async () => {
+        try {
+          const resp = await fetch(`/api/workflows/runs/${encodeURIComponent(String(workflowViewState.runId))}`);
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
+          if (cancelled) return;
+          const nodeRuns = Array.isArray(data?.node_runs) ? data.node_runs : [];
+          const nodeRunMap = new Map(nodeRuns.map((row) => [row.node_id, row]));
+          const snapshot = data?.graph_snapshot || {};
+          const runTabId = `workflow_run_${data.id}`;
+          const hydratedNodes = (Array.isArray(snapshot?.nodes) ? snapshot.nodes : []).map((node) => ({
+            ...normalizeWorkflowCanvasNode(node, nodeRunMap.get(node?.id)),
+            draggable: false,
+          }));
+          const hydratedEdges = decorateWorkflowCanvasEdges(
+            Array.isArray(snapshot?.edges) ? snapshot.edges : [],
+            hydratedNodes
+          );
+          setTabs([
+            {
+              id: runTabId,
+              tab_name: data?.workflow_name || `Workflow Run ${data?.id || ""}`.trim(),
+              nodes: hydratedNodes,
+              edges: hydratedEdges,
+              assemblyGuid: data?.workflow_guid || null,
+              domain: "user",
+              workflowRunId: data?.id,
+              readOnly: true,
+            },
+          ]);
+          setActiveTabId(runTabId);
+          setWorkflowViewState((prev) => ({
+            ...prev,
+            assemblyGuid: data?.workflow_guid || prev?.assemblyGuid || null,
+            runRecord: data,
+            mode: "run",
+            nodeRunDetails: {},
+          }));
+        } catch (err) {
+          console.error("Failed to load workflow run snapshot:", err);
+        }
+      };
+      loadRunSnapshot();
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (workflowViewState?.assemblyGuid) {
+      const normalizedAssemblyGuid = String(workflowViewState.assemblyGuid || "").trim();
+      const alreadyLoaded =
+        activeWorkflowTab &&
+        !activeWorkflowTab.readOnly &&
+        String(activeWorkflowTab.assemblyGuid || "").trim().toLowerCase() === normalizedAssemblyGuid.toLowerCase();
+      if (alreadyLoaded) {
+        return () => {
+          cancelled = true;
+        };
+      }
+      const loadWorkflowEditorResource = async () => {
+        try {
+          const access = await enforceWorkflowEditorAccess(normalizedAssemblyGuid);
+          if (!access?.allowed || cancelled) {
+            return;
+          }
+          const resp = await fetch(`/api/assemblies/${encodeURIComponent(normalizedAssemblyGuid)}/export`);
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
+          if (cancelled) return;
+          const parsedWorkflow = extractWorkflowCanvasDocument(data);
+          const normalizedNodes = await enrichWorkflowCanvasNodesWithFilterCounts(parsedWorkflow.nodes);
+          if (cancelled) return;
+          const normalizedEdges = decorateWorkflowCanvasEdges(parsedWorkflow.edges, normalizedNodes);
+          const tabId = `workflow_${normalizedAssemblyGuid.toLowerCase()}`;
+          setTabs([
+            {
+              id: tabId,
+              tab_name: parsedWorkflow.tabName || data?.name || "Workflow",
+              description: parsedWorkflow.description || "",
+              nodes: normalizedNodes,
+              edges: normalizedEdges,
+              assemblyGuid: parsedWorkflow.assemblyGuid || normalizedAssemblyGuid,
+              domain: (data?.domain || "user").toLowerCase(),
+              exportMetadata: data,
+              readOnly: false,
+            },
+          ]);
+          setActiveTabId(tabId);
+          setWorkflowViewState((prev) => ({
+            ...prev,
+            runRecord: null,
+            mode: "editor",
+            nodeRunDetails: {},
+          }));
+        } catch (err) {
+          console.error("Failed to load workflow editor resource:", err);
+        }
+      };
+      loadWorkflowEditorResource();
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkflowTab, currentPage, enforceWorkflowEditorAccess, workflowViewState?.assemblyGuid, workflowViewState?.runId]);
+
+  const handleWorkflowRunNodeSelection = useCallback(
+    async (nodeId) => {
+      if (!workflowViewState?.runId || !nodeId) return;
+      if (workflowViewState?.nodeRunDetails?.[nodeId]) return;
+      try {
+        const resp = await fetch(
+          `/api/workflows/runs/${encodeURIComponent(String(workflowViewState.runId))}/nodes/${encodeURIComponent(String(nodeId))}`
+        );
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
+        setWorkflowViewState((prev) => ({
+          ...prev,
+          nodeRunDetails: {
+            ...(prev?.nodeRunDetails || {}),
+            [nodeId]: data,
+          },
+        }));
+      } catch (err) {
+        console.error("Failed to load workflow node run details:", err);
+      }
+    },
+    [workflowViewState?.nodeRunDetails, workflowViewState?.runId]
+  );
+
+  const handleTriggerWorkflow = useCallback(async () => {
+    const tab = tabs.find((item) => item.id === activeTabId);
+    if (!tab) return;
+    const validationErrors = validateWorkflowRuntimeDocument({
+      nodes: tab.nodes,
+      edges: tab.edges,
+      sourceType: "manual",
+    });
+    if (validationErrors.length) {
+      alert(validationErrors.join("\n"));
+      return;
+    }
+    const saved = await handleSaveFlow(tab.tab_name || "workflow");
+    const workflowGuid = saved?.assemblyGuid || tab?.assemblyGuid || null;
+    if (!workflowGuid) {
+      alert("Save this workflow before triggering it.");
+      return;
+    }
+    try {
+      const resp = await fetch("/api/workflows/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workflow_guid: workflowGuid }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
+      }
+      const runId = data?.run?.id;
+      if (!runId) {
+        throw new Error("Workflow runtime did not return a run id.");
+      }
+      navigateTo("workflow-editor", { runId });
+    } catch (err) {
+      console.error("Failed to trigger workflow:", err);
+      alert(String(err?.message || err || "Failed to trigger workflow"));
+    }
+  }, [activeTabId, handleSaveFlow, navigateTo, tabs]);
 
   useEffect(() => {
     const requiresAdmin = currentPage === 'server_info'
@@ -1874,9 +2372,9 @@ async function sha512(text) {
         return (
           <Box
             className="flow-editor-shell"
-            sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}
+            sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden", minWidth: 0 }}
           >
-            <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden" }}>
+            <Box sx={{ display: "flex", flexGrow: 1, overflow: "hidden", minWidth: 0 }}>
               <NodeSidebar
                 categorizedNodes={categorizedNodes}
                 handleExportFlow={handleExportFlow}
@@ -1884,14 +2382,16 @@ async function sha512(text) {
                 handleSaveFlow={handleSaveFlow}
                 handleRenameFlow={handleRenameFlow}
                 handleDeleteFlow={handleDeleteFlow}
-                handleOpenCloseAllDialog={() => setConfirmCloseOpen(true)}
+                handleTriggerWorkflow={handleTriggerWorkflow}
                 fileInputRef={fileInputRef}
                 onFileInputChange={onFileInputChange}
                 currentTabName={activeWorkflowTab?.tab_name}
                 currentAssemblyGuid={activeWorkflowTab?.assemblyGuid}
                 currentDomain={activeWorkflowTab?.domain}
+                readOnly={Boolean(activeWorkflowTab?.readOnly || workflowViewState?.mode === "run")}
+                workflowRun={workflowViewState?.runRecord || null}
               />
-              <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden" }}>
+              <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, overflow: "hidden", minWidth: 0 }}>
                 <FlowTabs
                   tabs={tabs}
                   activeTabId={activeTabId}
@@ -1899,7 +2399,38 @@ async function sha512(text) {
                   onAddTab={() => {}}
                   onTabRightClick={handleTabRightClick}
                 />
-                <Box sx={{ flexGrow: 1, position: "relative" }}>
+                {workflowViewState?.mode !== "run" && activeWorkflowDiagnostics?.hasLegacyPortIssues ? (
+                  <Box
+                    sx={{
+                      mx: 1.5,
+                      mt: 1.2,
+                      mb: 0.8,
+                      px: 1.5,
+                      py: 1.15,
+                      borderRadius: 2,
+                      border: "1px solid rgba(251,191,36,0.28)",
+                      background:
+                        "linear-gradient(135deg, rgba(120,53,15,0.42), rgba(32,18,7,0.72))",
+                      color: "#fef3c7",
+                      boxShadow: "0 10px 24px rgba(2,8,23,0.22)",
+                    }}
+                  >
+                    <Typography sx={{ fontSize: "0.82rem", fontWeight: 700, color: "#fde68a" }}>
+                      Legacy Workflow Wiring Detected
+                    </Typography>
+                    <Typography sx={{ fontSize: "0.76rem", mt: 0.35, color: "#fcd34d", lineHeight: 1.45 }}>
+                      This workflow uses older Borealis workflow edges without the new named ports. You can edit it here,
+                      but Borealis will block manual runs, webhook launches, and Scheduled Job selection until those
+                      edges are reconnected to the new port rows.
+                    </Typography>
+                    {activeWorkflowDiagnostics?.errors?.length ? (
+                      <Typography sx={{ fontSize: "0.73rem", mt: 0.55, color: "#fde68a" }}>
+                        First issue: {activeWorkflowDiagnostics.errors[0]}
+                      </Typography>
+                    ) : null}
+                  </Box>
+                ) : null}
+                <Box sx={{ flexGrow: 1, position: "relative", minWidth: 0 }}>
                   {tabs.map((tab) => (
                     <Box
                       key={tab.id}
@@ -1917,6 +2448,13 @@ async function sha512(text) {
                           setEdges={(val) => handleSetEdges(val, tab.id)}
                           nodeTypes={nodeTypes}
                           categorizedNodes={categorizedNodes}
+                          readOnly={Boolean(tab?.readOnly || workflowViewState?.mode === "run")}
+                          nodeRunLookup={workflowNodeRunLookup}
+                          onSelectedNodeChange={(nodeId) => {
+                            if (workflowViewState?.mode === "run" && nodeId) {
+                              handleWorkflowRunNodeSelection(nodeId);
+                            }
+                          }}
                         />
                       </ReactFlowProvider>
                     </Box>
@@ -1924,7 +2462,11 @@ async function sha512(text) {
                 </Box>
               </Box>
             </Box>
-            <StatusBar />
+            <StatusBar
+              nodeCount={activeWorkflowTab?.nodes?.length || 0}
+              mode={workflowViewState?.mode === "run" ? "run" : "editor"}
+              workflowRun={workflowViewState?.runRecord || null}
+            />
           </Box>
         );
 
@@ -2106,6 +2648,7 @@ async function sha512(text) {
               flexDirection: "column",
               overflow: "auto",
               minHeight: 0,
+              minWidth: 0,
             }}
           >
             {hasPageHeader ? (
@@ -2253,6 +2796,79 @@ async function sha512(text) {
           </Button>
           <Button onClick={handleResetOwnMfa} sx={DIALOG_DANGER_BUTTON_SX} disabled={resetOwnMfaBusy}>
             {resetOwnMfaBusy ? "Resetting..." : "Reset MFA"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={workflowAccessWarning.open}
+        onClose={() =>
+          setWorkflowAccessWarning({
+            open: false,
+            message: "",
+            hiddenDevices: [],
+            hiddenFilters: [],
+          })
+        }
+        fullWidth
+        maxWidth="sm"
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Workflow Target Access Restricted"
+            subtitle="This workflow references targets outside your assigned site scope, so Borealis returned you to the assembly list."
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Typography sx={DIALOG_BODY_TEXT_SX}>
+            {workflowAccessWarning.message ||
+              "This workflow contains device or filter targets that you are not allowed to access."}
+          </Typography>
+          {workflowAccessWarning.hiddenFilters.length ? (
+            <Box sx={{ mt: 1.5 }}>
+              <Typography sx={{ color: "#f8fafc", fontWeight: 700, fontSize: "0.82rem", mb: 0.8 }}>
+                Hidden Filters
+              </Typography>
+              {workflowAccessWarning.hiddenFilters.map((entry, index) => (
+                <Typography
+                  key={`hidden-filter-${index}`}
+                  sx={{ color: "#cbd5e1", fontSize: "0.8rem", mb: 0.45 }}
+                >
+                  {entry.filter_name || `Filter ${entry.filter_id || ""}`.trim()}
+                </Typography>
+              ))}
+            </Box>
+          ) : null}
+          {workflowAccessWarning.hiddenDevices.length ? (
+            <Box sx={{ mt: 1.5 }}>
+              <Typography sx={{ color: "#f8fafc", fontWeight: 700, fontSize: "0.82rem", mb: 0.8 }}>
+                Hidden Devices
+              </Typography>
+              {workflowAccessWarning.hiddenDevices.map((entry, index) => (
+                <Typography
+                  key={`hidden-device-${index}`}
+                  sx={{ color: "#cbd5e1", fontSize: "0.8rem", mb: 0.45 }}
+                >
+                  {entry.hostname}
+                  {entry.site_name ? ` (${entry.site_name})` : ""}
+                </Typography>
+              ))}
+            </Box>
+          ) : null}
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button
+            onClick={() =>
+              setWorkflowAccessWarning({
+                open: false,
+                message: "",
+                hiddenDevices: [],
+                hiddenFilters: [],
+              })
+            }
+            sx={DIALOG_BUTTON_SX}
+          >
+            Close
           </Button>
         </DialogActions>
       </Dialog>

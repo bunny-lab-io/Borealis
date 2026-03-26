@@ -61,6 +61,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_device_software_inventory(conn, logger=logger)
         _ensure_scheduled_jobs(conn, logger=logger)
         _ensure_scheduled_job_support_tables(conn, logger=logger)
+        _ensure_workflow_runtime_tables(conn, logger=logger)
         conn.commit()
     except Exception as exc:  # pragma: no cover - defensive runtime guard
         if logger:
@@ -781,6 +782,7 @@ def _ensure_scheduled_job_support_tables(conn: sqlite3.Connection, *, logger: Op
                 component_index INTEGER,
                 component_kind TEXT,
                 component_name TEXT,
+                workflow_run_id INTEGER,
                 FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
             )
             """
@@ -795,6 +797,8 @@ def _ensure_scheduled_job_support_tables(conn: sqlite3.Connection, *, logger: Op
             cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN component_kind TEXT")
         if "component_name" not in run_columns:
             cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN component_name TEXT")
+        if "workflow_run_id" not in run_columns:
+            cur.execute("ALTER TABLE scheduled_job_runs ADD COLUMN workflow_run_id INTEGER")
         cur.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_runs_job_sched_target
@@ -885,6 +889,121 @@ def _ensure_scheduled_job_support_tables(conn: sqlite3.Connection, *, logger: Op
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure scheduled job support tables: %s", exc, exc_info=True)
+        else:
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_workflow_runtime_tables(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_guid TEXT NOT NULL,
+                workflow_name TEXT,
+                source_type TEXT NOT NULL,
+                source_metadata_json TEXT,
+                graph_snapshot_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error TEXT,
+                skip_reason TEXT,
+                final_payload_json TEXT,
+                final_metadata_json TEXT,
+                parent_workflow_run_id INTEGER,
+                parent_node_id TEXT,
+                scheduled_job_id INTEGER,
+                scheduled_job_run_id INTEGER,
+                webhook_id INTEGER,
+                created_by TEXT,
+                created_at INTEGER NOT NULL,
+                started_ts INTEGER,
+                finished_ts INTEGER,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_workflow_runs_guid ON workflow_runs(workflow_guid)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_workflow_runs_created ON workflow_runs(created_at)")
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_node_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_run_id INTEGER NOT NULL,
+                node_id TEXT NOT NULL,
+                node_type TEXT,
+                node_label TEXT,
+                node_snapshot_json TEXT,
+                status TEXT NOT NULL,
+                skip_reason TEXT,
+                error TEXT,
+                timeout_seconds INTEGER,
+                input_envelope_json TEXT,
+                output_envelope_json TEXT,
+                ignored_inputs_json TEXT,
+                linked_child_summary_json TEXT,
+                created_at INTEGER NOT NULL,
+                started_ts INTEGER,
+                finished_ts INTEGER,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY(workflow_run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_workflow_node_runs_run ON workflow_node_runs(workflow_run_id)")
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_node_runs_identity ON workflow_node_runs(workflow_run_id, node_id)"
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_child_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_run_id INTEGER NOT NULL,
+                workflow_node_run_id INTEGER NOT NULL,
+                child_kind TEXT NOT NULL,
+                child_identifier TEXT,
+                activity_id INTEGER,
+                child_workflow_run_id INTEGER,
+                target_hostname TEXT,
+                component_guid TEXT,
+                component_name TEXT,
+                component_kind TEXT,
+                status TEXT,
+                stdout_summary TEXT,
+                stderr_summary TEXT,
+                payload_json TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY(workflow_run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE,
+                FOREIGN KEY(workflow_node_run_id) REFERENCES workflow_node_runs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_workflow_child_jobs_run ON workflow_child_jobs(workflow_run_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_workflow_child_jobs_node ON workflow_child_jobs(workflow_node_run_id)")
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_webhooks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_guid TEXT NOT NULL,
+                opaque_token TEXT NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL,
+                creator_username TEXT,
+                creator_role TEXT,
+                last_used_at INTEGER
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_workflow_webhooks_guid ON workflow_webhooks(workflow_guid)")
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure workflow runtime tables: %s", exc, exc_info=True)
         else:
             raise
     finally:

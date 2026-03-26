@@ -1,6 +1,6 @@
 # ======================================================
 # Data\Engine\services\assemblies\service.py
-# Description: Provides assembly CRUD helpers backed by the AssemblyCache and SQLite persistence domains.
+# Description: Provides assembly CRUD helpers backed by the AssemblyCache and Borealis assembly persistence domains.
 #
 # API Endpoints (if applicable): None
 # ======================================================

@@ -1,7 +1,7 @@
 # ======================================================
 # Data\Engine\database_migrations.py
-# Description: Provides schema evolution helpers for the Engine sqlite
-#              database without importing the legacy ``Modules`` package.
+# Description: Provides schema evolution helpers for the Engine database
+#              without importing the legacy ``Modules`` package.
 #
 # API Endpoints (if applicable): None
 # ======================================================
@@ -21,7 +21,7 @@ DEVICE_TABLE = "devices"
 
 def apply_all(conn: sqlite3.Connection) -> None:
     """
-    Run all known schema migrations against the provided sqlite3 connection.
+    Run all known schema migrations against the provided DB-API connection.
     """
 
     _ensure_devices_table(conn)

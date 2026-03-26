@@ -101,6 +101,7 @@ function ResultsBar({ counts }) {
   const total = Math.max(1, Number(counts?.total_targets || 0));
   const sections = [
     { key: "success", color: "#00d18c" },
+    { key: "warning", color: "#fbbf24" },
     { key: "running", color: "#58a6ff" },
     { key: "failed", color: "#ff4f4f" },
     { key: "timed_out", color: "#b36ae2" },
@@ -352,6 +353,11 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
             label: comp.name,
             domain: comp.domain
           }));
+          const hasWorkflowComponent = normalizedComponents.some((comp) => {
+            const typeRaw = String(comp?.type || comp?.assembly_type || "").trim().toLowerCase();
+            const subtypeRaw = String(comp?.assembly_subtype || "").trim().toLowerCase();
+            return typeRaw === "workflow" || subtypeRaw === "workflow";
+          });
           const compName =
             componentSummaries.length === 1
               ? componentSummaries[0].label
@@ -359,10 +365,14 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
                 ? `${componentSummaries.length} Assemblies`
                 : "No Assemblies";
           const targetText = Array.isArray(j.targets)
-            ? `${j.targets.length} device${j.targets.length !== 1 ? "s" : ""}`
+            ? hasWorkflowComponent
+              ? "Workflow-defined"
+              : `${j.targets.length} device${j.targets.length !== 1 ? "s" : ""}`
             : "";
           const occurrence = pretty(j.schedule_type || "immediately");
-          const fallbackTargetCount = Array.isArray(j.targets) ? j.targets.length : 0;
+          const fallbackTargetCount = hasWorkflowComponent
+            ? Math.max(1, Array.isArray(j.targets) ? j.targets.length : 0)
+            : Array.isArray(j.targets) ? j.targets.length : 0;
           const resultsCounts = {
             total_targets: fallbackTargetCount,
             pending: fallbackTargetCount,
@@ -379,22 +389,15 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
           const pendingCount = normalizeCount(resultsCounts.pending);
           const runningCount = normalizeCount(resultsCounts.running);
           const successCount = normalizeCount(resultsCounts.success);
+          const warningCount = normalizeCount(resultsCounts.warning);
           const failedCount = normalizeCount(resultsCounts.failed);
           const expiredCount = normalizeCount(resultsCounts.expired);
           const timedOutCount = normalizeCount(resultsCounts.timed_out || resultsCounts.timedOut);
-          const totalFinished = successCount + failedCount + expiredCount + timedOutCount;
+          const totalFinished = successCount + warningCount + failedCount + expiredCount + timedOutCount;
           const allTargetsEvaluated =
             totalTargets > 0
               ? totalFinished >= totalTargets && pendingCount === 0 && runningCount === 0
               : pendingCount === 0 && runningCount === 0;
-          const everyTargetSuccessful =
-            totalTargets > 0
-              ? successCount >= totalTargets && pendingCount === 0 && runningCount === 0
-              : pendingCount === 0 &&
-                runningCount === 0 &&
-                failedCount === 0 &&
-                expiredCount === 0 &&
-                timedOutCount === 0;
           const jobExpiredFlag =
             expiredCount > 0 || String(j.last_status || "").toLowerCase() === "expired";
           const scheduleRaw = String(j.schedule_type || "").toLowerCase();
@@ -403,7 +406,7 @@ export default function ScheduledJobsList({ onCreateJob, onEditJob, refreshToken
           const showImmediate = isImmediateType && !allTargetsEvaluated;
           const showScheduled = isScheduledType && !allTargetsEvaluated;
           const canComplete = isImmediateType || isScheduledType;
-          const showCompleted = canComplete && (jobExpiredFlag || everyTargetSuccessful);
+          const showCompleted = canComplete && (jobExpiredFlag || allTargetsEvaluated);
           const categoryFlags = {
             immediate: showImmediate,
             scheduled: showScheduled,

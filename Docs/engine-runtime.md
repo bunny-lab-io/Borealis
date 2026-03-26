@@ -57,7 +57,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Default groups live in `Data/Engine/services/API/__init__.py` (`DEFAULT_API_GROUPS`).
 - Each group has a registrar in `_GROUP_REGISTRARS`.
 - `EngineServiceAdapters` exposes:
-  - `db_conn_factory` (PostgreSQL-backed sqlite3-shaped compatibility wrapper during the migration period).
+  - `db_conn_factory` (PostgreSQL-backed DB adapter exposed through the shared compatibility layer).
   - `service_log` (per-service log files with rotation).
   - `jwt_service`, `dpop_validator`, rate limiters, signing keys, GitHub integration.
 

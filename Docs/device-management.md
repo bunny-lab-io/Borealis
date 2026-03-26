@@ -6,7 +6,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## Inventory and Status
 - Agents send heartbeats and inventory payloads to the Engine.
-- The Engine stores device summaries and detailed hardware/software data in SQLite.
+- The Engine stores device summaries and detailed hardware/software data in PostgreSQL.
 - Online status is derived from `last_seen` (online if the heartbeat is within ~5 minutes).
 
 ## Sites and Enrollment Codes
@@ -94,7 +94,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ### Inventory ingestion behavior
 - `/api/agent/heartbeat` updates `last_seen` and key metrics (last_user, OS, uptime).
 - `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu.
-- JSON blobs are serialized into SQLite text columns and rehydrated for UI.
+- JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
 
 ### Status computation

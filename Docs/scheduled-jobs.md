@@ -6,7 +6,7 @@ Explain how Borealis schedules recurring jobs, targets devices, and records run 
 
 ## Scheduler Overview
 - Scheduler implementation lives in `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`.
-- It reads job definitions from SQLite and emits quick job payloads over Socket.IO.
+- It reads job definitions from PostgreSQL and emits quick job payloads over Socket.IO.
 - Run history is stored in `scheduled_job_runs`, `scheduled_job_run_targets`, and `scheduled_job_run_activity` tables.
 
 ## Schedule Types
