@@ -6,7 +6,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## Inventory and Status
 - Agents send heartbeats and inventory payloads to the Engine.
-- The Engine stores device summaries and detailed hardware/software data in PostgreSQL.
+- The Engine stores device summaries and detailed hardware, software, and cached service data in PostgreSQL.
 - Online status is derived from `last_seen` (online if the heartbeat is within ~5 minutes).
 
 ## Sites and Enrollment Codes
@@ -39,12 +39,14 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## API Endpoints
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
-- `POST /api/agent/details` (Device Authenticated) - inventory payloads.
+- `POST /api/agent/details` (Device Authenticated) - inventory and cached service payloads.
 - `GET /api/agents` (Token Authenticated) - online collectors grouped by context.
 - `GET /api/devices` (Token Authenticated) - device summary list.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - site-scoped hostname search for the shared header search UI.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
+- `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory.
+- `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
 - `GET /api/device_list_views` (Token Authenticated) - list saved views.
 - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.
@@ -87,15 +89,16 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ## Codex Agent (Detailed)
 ### Key files and services
-- Device APIs: `Data/Engine/services/API/devices/` (management, approval, tunnel, vnc, routes).
+- Device APIs: `Data/Engine/services/API/devices/` (management, approval, services, tunnel, vnc, routes).
 - Filters: `Data/Engine/services/filters/matcher.py` and `Data/Engine/services/API/filters/management.py`.
 - Enrollment approvals: `Data/Engine/services/API/devices/approval.py`.
 
 ### Inventory ingestion behavior
 - `/api/agent/heartbeat` updates `last_seen` and key metrics (last_user, OS, uptime).
-- `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu.
+- `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu, and services.
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
+- Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
 
 ### Status computation
 - Online/offline is computed from `last_seen` (online if within ~300 seconds).
@@ -125,7 +128,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ### WebUI deep links
 - Device Details route: `/device/<agent_guid_or_hostname>`.
-- Tab query keys: `device_summary`, `installed_software`, `activity_history`, `remote_shell`, `remote_desktop`.
+- Tab query keys: `device_summary`, `installed_software`, `services`, `activity_history`, `remote_shell`, `remote_desktop`.
 - Route parsing and URL preservation are implemented in `Data/Engine/web-interface/src/App.jsx`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Devices/Device_Details.jsx`.
 - Shared header hostname search is implemented in `Data/Engine/web-interface/src/GlobalDeviceSearch.jsx` and queries `GET /api/devices/search`.
 

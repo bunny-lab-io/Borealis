@@ -265,6 +265,7 @@ const NAV_TAB_COLORS = {
 - Device Details keys in production:
 - `device_summary`
 - `installed_software`
+- `services`
 - `activity_history`
 - `remote_shell`
 - `remote_desktop`

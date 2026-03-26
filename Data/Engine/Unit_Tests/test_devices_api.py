@@ -6,8 +6,8 @@
 # ======================================================
 
 from __future__ import annotations
-
 import logging
+import time
 from Data.Engine.db import dbapi as sqlite3
 from typing import Any
 from types import SimpleNamespace
@@ -16,6 +16,7 @@ import pytest
 from Data.Engine.auth import jwt_service as jwt_service_module
 from Data.Engine.integrations import github as github_integration
 from Data.Engine.services.API.devices import management as device_management
+from Data.Engine.services.API.devices.service_inventory import serialize_device_services
 from Data.Engine.services.API.devices import tunnel as tunnel_api
 from Data.Engine.services.VPN.vpn_tunnel_service import VpnTunnelService
 
@@ -66,6 +67,19 @@ def _set_test_device_guid(engine_harness: EngineTestHarness, guid: str) -> None:
     try:
         cur = conn.cursor()
         cur.execute("UPDATE devices SET guid = ? WHERE hostname = ?", (guid, "test-device"))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_test_device_services(engine_harness: EngineTestHarness, payload: Any) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE devices SET services = ? WHERE hostname = ?",
+            (serialize_device_services(payload), "test-device"),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -239,6 +253,72 @@ def test_device_details(engine_harness: EngineTestHarness) -> None:
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["summary"]["hostname"] == "test-device"
+
+
+def test_device_services_action_and_refresh(engine_harness: EngineTestHarness) -> None:
+    client = _client_with_admin_session(engine_harness)
+    now_ts = int(time.time())
+    _set_test_device_services(
+        engine_harness,
+        {
+            "reported_at": now_ts - 120,
+            "services": [
+                {
+                    "name": "sshd.service",
+                    "description": "OpenSSH server daemon",
+                    "status": "running",
+                    "captured_at": now_ts - 120,
+                }
+            ],
+        },
+    )
+    engine_harness.context.emit_host_service_event = lambda hostname, mode, event, payload: True
+
+    response = client.get("/api/device/services/test-device")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["count"] == 1
+    assert payload["services"][0]["name"] == "sshd.service"
+
+    action_response = client.post(
+        "/api/device/services/test-device/action",
+        json={"service_name": "sshd.service", "action": "restart"},
+    )
+    assert action_response.status_code == 200
+    action_payload = action_response.get_json()
+    service_entry = action_payload["services"][0]
+    assert service_entry["pending_action"] == "restart"
+    assert service_entry["desired_status"] == "running"
+
+    device_client = engine_harness.app.test_client()
+    refresh_response = device_client.post(
+        "/api/agent/details",
+        headers=_device_headers(),
+        json={
+            "hostname": "test-device",
+            "service_mode": "system",
+            "details": {
+                "summary": {
+                    "hostname": "test-device",
+                },
+                "services": [
+                    {
+                        "name": "sshd.service",
+                        "description": "OpenSSH server daemon",
+                        "status": "running",
+                        "captured_at": int(time.time()) + 2,
+                    }
+                ],
+            },
+        },
+    )
+    assert refresh_response.status_code == 200
+
+    refreshed_payload = client.get("/api/device/services/test-device").get_json()
+    refreshed_entry = refreshed_payload["services"][0]
+    assert refreshed_entry["status_code"] == "running"
+    assert refreshed_entry.get("pending_action", "") == ""
+    assert refreshed_entry.get("desired_status", "") == ""
 
 
 def test_device_description_requires_login(engine_harness: EngineTestHarness) -> None:

@@ -55,6 +55,7 @@ def _ensure_devices_table(conn: sqlite3.Connection) -> None:
         "memory": "TEXT",
         "network": "TEXT",
         "software": "TEXT",
+        "services": "TEXT",
         "storage": "TEXT",
         "cpu": "TEXT",
         "device_type": "TEXT",
@@ -377,6 +378,7 @@ def _create_devices_table(cur: sqlite3.Cursor) -> None:
             memory TEXT,
             network TEXT,
             software TEXT,
+            services TEXT,
             storage TEXT,
             cpu TEXT,
             device_type TEXT,
@@ -456,12 +458,12 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
         """
         INSERT INTO devices (
             guid, hostname, description, created_at, last_enrollment_at, agent_hash, agent_role_health, memory,
-            network, software, storage, cpu, device_type, domain, external_ip,
+            network, software, services, storage, cpu, device_type, domain, external_ip,
             internal_ip, last_reboot, last_seen, last_user, operating_system,
             uptime, agent_id, connection_type, connection_endpoint,
             agent_vnc_password, ssl_key_fingerprint, token_version, status, key_added_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guid) DO UPDATE SET
             hostname = EXCLUDED.hostname,
             description = EXCLUDED.description,
@@ -472,6 +474,7 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             memory = EXCLUDED.memory,
             network = EXCLUDED.network,
             software = EXCLUDED.software,
+            services = EXCLUDED.services,
             storage = EXCLUDED.storage,
             cpu = EXCLUDED.cpu,
             device_type = EXCLUDED.device_type,
@@ -519,6 +522,7 @@ def _rebuild_devices_table(conn: sqlite3.Connection, column_info: Sequence[Tuple
             record.get("memory"),
             record.get("network"),
             record.get("software"),
+            record.get("services"),
             record.get("storage"),
             record.get("cpu"),
             record.get("device_type"),

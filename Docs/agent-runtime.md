@@ -16,6 +16,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `role_Macro.py` (ROLE_NAME: `macro`) - macro automation.
 - `role_VNC.py` (ROLE_NAME: `VNC`) - always-on UltraVNC server lifecycle.
 - `role_RemoteShell.py` (ROLE_NAME: `RemoteShell`) - remote shell server over WireGuard (PowerShell on Windows, Bash on Linux).
+- `role_ServiceControl.py` (ROLE_NAME: `service_control`) - system service inventory and start/stop/restart control.
 - `role_Screenshot.py` (ROLE_NAME: `screenshot`) - screenshot capture.
 - `role_ScriptExec_CURRENTUSER.py` (ROLE_NAME: `script_exec_currentuser`) - interactive device-local script execution (PowerShell, Batch, Bash when available).
 - `role_ScriptExec_SYSTEM.py` (ROLE_NAME: `script_exec_system`) - SYSTEM device-local script execution (PowerShell, Batch, Bash when available).
@@ -31,7 +32,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `POST /api/agent/enroll/poll` (No Authentication) - finalize enrollment after approval.
 - `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
-- `POST /api/agent/details` (Device Authenticated) - hardware/inventory payloads.
+- `POST /api/agent/details` (Device Authenticated) - hardware, inventory, and cached service payloads.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
 - `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure always-on VNC credentials for the agent.
@@ -127,7 +128,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 #### Execution contexts and roles
 - Auto-discovers roles from `Data/Agent/Roles/`; no loader changes needed.
 - Naming: `role_<Purpose>.py` with `ROLE_NAME`, `ROLE_CONTEXTS`, and optional hooks (`register_events`, `on_config`, `stop_all`).
-- Standard roles: `role_DeviceAudit.py`, `role_Screenshot.py`, `role_ScriptExec_CURRENTUSER.py`, `role_ScriptExec_SYSTEM.py`, `role_Macro.py`, `role_RemoteShell.py`, `role_VNC.py`, `role_WireGuardTunnel.py`.
+- Standard roles: `role_DeviceAudit.py`, `role_ServiceControl.py`, `role_Screenshot.py`, `role_ScriptExec_CURRENTUSER.py`, `role_ScriptExec_SYSTEM.py`, `role_Macro.py`, `role_RemoteShell.py`, `role_VNC.py`, `role_WireGuardTunnel.py`.
 - SYSTEM tasks depend on scheduled-task creation rights; failures should surface through Engine logging.
 
 #### Platform parity

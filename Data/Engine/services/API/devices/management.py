@@ -52,6 +52,11 @@ from .agent_role_health import (
     normalize_agent_role_health,
     serialize_agent_role_health,
 )
+from .service_inventory import (
+    merge_device_services,
+    normalize_device_services,
+    serialize_device_services,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
@@ -152,6 +157,7 @@ _DEVICE_JSON_LIST_FIELDS: Dict[str, Any] = {
     "memory": [],
     "network": [],
     "software": [],
+    "services": [],
     "storage": [],
 }
 _DEVICE_JSON_OBJECT_FIELDS: Dict[str, Any] = {"cpu": {}}
@@ -398,6 +404,7 @@ def _device_upsert(
             memory,
             network,
             software,
+            services,
             storage,
             cpu,
             device_type,
@@ -412,7 +419,7 @@ def _device_upsert(
             agent_id,
             connection_type,
             connection_endpoint
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(hostname) DO UPDATE SET
             description=excluded.description,
             created_at=COALESCE({DEVICE_TABLE}.created_at, excluded.created_at),
@@ -422,6 +429,7 @@ def _device_upsert(
             memory=excluded.memory,
             network=excluded.network,
             software=excluded.software,
+            services=excluded.services,
             storage=excluded.storage,
             cpu=excluded.cpu,
             device_type=COALESCE(NULLIF(excluded.device_type, ''), {DEVICE_TABLE}.device_type),
@@ -448,6 +456,7 @@ def _device_upsert(
         column_values.get("memory"),
         column_values.get("network"),
         column_values.get("software"),
+        column_values.get("services"),
         column_values.get("storage"),
         column_values.get("cpu"),
         column_values.get("device_type"),
@@ -480,6 +489,7 @@ class DeviceManagementService:
         "memory",
         "network",
         "software",
+        "services",
         "storage",
         "cpu",
         "device_type",
@@ -504,6 +514,23 @@ class DeviceManagementService:
         self.logger = adapters.context.logger or logging.getLogger(__name__)
         self.repo_cache = adapters.github_integration
         self.site_access = UserSiteAccessManager(self.db_conn_factory, logger=self.logger)
+
+    def _emit_device_services_changed(self, hostname: str, *, change: str) -> None:
+        socketio = getattr(self.adapters.context, "socketio", None)
+        normalized_hostname = _clean_device_str(hostname) or ""
+        normalized_change = _clean_device_str(change) or ""
+        if socketio is None or not normalized_hostname or not normalized_change:
+            return
+        try:
+            socketio.emit(
+                "device_services_changed",
+                {
+                    "hostname": normalized_hostname,
+                    "change": normalized_change,
+                },
+            )
+        except Exception:
+            self.logger.debug("Failed to emit device_services_changed for hostname=%s", normalized_hostname, exc_info=True)
 
     def _target_repo_config(self) -> Tuple[str, str]:
         repo_name = (os.environ.get("BOREALIS_UPDATE_REPO") or "bunny-lab-io/Borealis").strip()
@@ -641,6 +668,7 @@ class DeviceManagementService:
         last_enrollment_at = mapping.get("last_enrollment_at") or created_at or 0
         last_seen = mapping.get("last_seen") or 0
         role_health = normalize_agent_role_health(mapping.get("agent_role_health"))
+        services_payload = normalize_device_services(mapping.get("services"))
         summary = {
             "hostname": mapping.get("hostname") or "",
             "description": mapping.get("description") or "",
@@ -668,6 +696,7 @@ class DeviceManagementService:
             "memory": _safe_json(mapping.get("memory"), []),
             "network": _safe_json(mapping.get("network"), []),
             "software": _normalize_software_inventory(_safe_json(mapping.get("software"), [])),
+            "services": services_payload.get("services") or [],
             "storage": _safe_json(mapping.get("storage"), []),
             "cpu": _safe_json(mapping.get("cpu"), {}),
         }
@@ -689,6 +718,8 @@ class DeviceManagementService:
             "memory": details["memory"],
             "network": details["network"],
             "software": details["software"],
+            "services": details["services"],
+            "services_reported_at": services_payload.get("reported_at") or 0,
             "storage": details["storage"],
             "cpu": details["cpu"],
             "device_type": summary["device_type"],
@@ -972,6 +1003,10 @@ class DeviceManagementService:
             return {"error": "invalid payload"}, 400
         if "software" in details:
             details["software"] = _normalize_software_inventory(details.get("software"))
+        incoming_services_raw = None
+        if "services" in details:
+            incoming_services_raw = normalize_device_services(details.get("services"))
+            details["services"] = incoming_services_raw.get("services") or []
 
         hostname = _clean_device_str(payload.get("hostname"))
         if not hostname:
@@ -1051,6 +1086,7 @@ class DeviceManagementService:
             existing_guid = None
             existing_agent_hash = None
             existing_role_health = None
+            existing_services_raw = None
             db_fp = ""
 
             if row:
@@ -1069,6 +1105,7 @@ class DeviceManagementService:
                     existing_guid = None
                 existing_agent_hash = _clean_device_str(previous.get("agent_hash")) or None
                 existing_role_health = previous.get("agent_role_health")
+                existing_services_raw = previous.get("services")
                 db_fp = (row[-1] or "").strip().lower() if row[-1] else ""
             if db_fp and fingerprint_lower and db_fp != fingerprint_lower:
                 self.service_log(
@@ -1123,6 +1160,12 @@ class DeviceManagementService:
                     incoming_summary["last_user"] = prev_summary.get("last_user")
 
             merged = _deep_merge_preserve(prev_details, details)
+            merged_services_payload = (
+                merge_device_services(existing_services_raw, incoming_services_raw)
+                if incoming_services_raw is not None
+                else normalize_device_services(existing_services_raw)
+            )
+            merged["services"] = merged_services_payload.get("services") or []
             merged_summary = merged.setdefault("summary", {})
             if hostname:
                 merged_summary.setdefault("hostname", hostname)
@@ -1153,6 +1196,9 @@ class DeviceManagementService:
             except Exception:
                 pass
             merged_summary.setdefault("created_at", created_at)
+            services_changed = serialize_device_services(existing_services_raw) != serialize_device_services(
+                merged_services_payload
+            )
 
             _device_upsert(
                 cur,
@@ -1186,6 +1232,8 @@ class DeviceManagementService:
                 )
 
             conn.commit()
+            if services_changed:
+                self._emit_device_services_changed(hostname, change="updated")
             return {"status": "ok"}, 200
         except Exception as exc:
             try:

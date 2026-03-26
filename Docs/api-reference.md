@@ -39,7 +39,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 
 ### Devices and Inventory
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
-- `POST /api/agent/details` (Device Authenticated) - full hardware/inventory payload.
+- `POST /api/agent/details` (Device Authenticated) - full hardware, inventory, and cached service payload.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
 - `GET /api/agents` (Token Authenticated) - list online collectors by hostname/context.
@@ -47,6 +47,8 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - hostname search matches for the shared header search, scoped to the operator's assigned sites unless the operator is an admin.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID, site-scoped for operators.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators.
+- `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory for an in-scope device.
+- `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service on an in-scope device.
 - `POST /api/device/description/<hostname>` (Token Authenticated) - update description for an in-scope device.
 - `GET /api/device_list_views` (Token Authenticated) - list saved device views.
 - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.

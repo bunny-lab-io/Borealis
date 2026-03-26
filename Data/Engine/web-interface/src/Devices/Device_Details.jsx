@@ -21,6 +21,7 @@ import StorageRoundedIcon from "@mui/icons-material/StorageRounded";
 import MemoryRoundedIcon from "@mui/icons-material/MemoryRounded";
 import LanRoundedIcon from "@mui/icons-material/LanRounded";
 import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
+import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import ListAltRoundedIcon from "@mui/icons-material/ListAltRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import DesktopWindowsRoundedIcon from "@mui/icons-material/DesktopWindowsRounded";
@@ -47,6 +48,7 @@ import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import ReverseTunnelRemoteShell from "./ReverseTunnel/RemoteShell.jsx";
 import ReverseTunnelVnc from "./ReverseTunnel/VNC.jsx";
+import ServiceList from "./Services/Service_List.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -117,6 +119,7 @@ const TUNNEL_INFO_IDLE = Object.freeze({
 const TOP_TABS = [
   { key: "summary", label: "Device Summary", icon: InfoOutlinedIcon },
   { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
+  { key: "services", label: "Services", icon: SettingsRoundedIcon },
   { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
   { key: "vnc", label: "Remote Desktop (VNC)", icon: DesktopWindowsRoundedIcon },
@@ -124,6 +127,7 @@ const TOP_TABS = [
 const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
   summary: "device_summary",
   software: "installed_software",
+  services: "services",
   activity: "activity_history",
   shell: "remote_shell",
   vnc: "remote_desktop",
@@ -133,6 +137,7 @@ const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   summary: "summary",
   installed_software: "software",
   software: "software",
+  services: "services",
   activity_history: "activity",
   activity: "activity",
   remote_shell: "shell",
@@ -211,6 +216,7 @@ const AGENT_HEALTH_PRESENTATION_BY_KEY = Object.freeze({
   remoteshell: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
   remoteshellservice: { label: "Remote Shell", kind: AGENT_HEALTH_KIND.role },
   screenshot: { label: "Screenshot Capture", kind: AGENT_HEALTH_KIND.role },
+  servicecontrol: { label: "Service Control", kind: AGENT_HEALTH_KIND.role },
   scriptexeccurrentuser: { label: "Script Execution - CURRENTUSER", kind: AGENT_HEALTH_KIND.role },
   scriptexecsystem: { label: "Script Execution - SYSTEM", kind: AGENT_HEALTH_KIND.role },
   vnc: { label: "UltraVNC", kind: AGENT_HEALTH_KIND.service },
@@ -2551,6 +2557,19 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     </Box>
   );
 
+  const renderServicesTab = () => (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        flexGrow: 1,
+        minHeight: 0,
+      }}
+    >
+      <ServiceList device={tunnelDevice} />
+    </Box>
+  );
+
   const renderRemoteShellTab = () => (
     <Box
       sx={{
@@ -3228,6 +3247,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const topTabRenderers = [
     renderDeviceSummaryTab,
     renderSoftware,
+    renderServicesTab,
     renderHistory,
     renderRemoteShellTab,
     renderRemoteDesktopTab,
