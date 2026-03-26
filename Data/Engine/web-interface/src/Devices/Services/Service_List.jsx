@@ -362,8 +362,8 @@ export default function ServiceList({ device }) {
       {
         field: "status",
         headerName: "Status",
-        minWidth: 230,
-        width: 230,
+        minWidth: 120,
+        width: 120,
         flex: 0,
         sortable: true,
         filter: "agTextColumnFilter",
@@ -373,7 +373,8 @@ export default function ServiceList({ device }) {
       {
         field: "name",
         headerName: "Name",
-        minWidth: 210,
+        minWidth: 250,
+        width: 250,
         sortable: true,
         filter: "agTextColumnFilter",
         cellClass: "auto-col-tight",
@@ -383,7 +384,8 @@ export default function ServiceList({ device }) {
       {
         field: "description",
         headerName: "Description",
-        minWidth: 320,
+        minWidth: 250,
+        width: 250,
         flex: 1,
         sortable: true,
         cellClass: "auto-col-tight",
