@@ -12,7 +12,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Keepalive: `PersistentKeepalive = 30` seconds on the agent.
 - No idle teardown while the agent service is running.
 - Agent recovery: if the Windows agent receives the same `tunnel_id` again and its WireGuard service is stopped or unhealthy, it rerenders the config and attempts an in-place service recovery instead of assuming the tunnel is still healthy.
-- Engine recovery: in persistent mode the Engine runs a listener watchdog that validates WireGuard health every 15 seconds and rate-limits listener refresh attempts to one every 30 seconds while active sessions exist.
+- Engine recovery: in persistent mode the Engine keeps one Linux WireGuard interface online, updates peers live one at a time during normal connect/disconnect activity, and only falls back to full peer reconciliation when the listener is unhealthy. A watchdog validates listener health every 15 seconds and rate-limits full recovery attempts to one every 30 seconds while active sessions exist.
 - Port access: the tunnel is trusted end-to-end, and Engine/Agent firewall rules allow a global port allowlist between the Engine /32 and Agent /32 (defaults to 47002 and 5900, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`).
 
 ## Remote PowerShell
@@ -134,7 +134,7 @@ http:
 - Keepalive is handled by WireGuard (`PersistentKeepalive = 30` seconds).
 - The agent periodically calls `/api/agent/vpn/ensure` to heal the tunnel if it drops.
 - On Windows agents, same-session ensure calls also recover a stopped `WireGuardTunnel$Borealis` service instead of returning early when the `tunnel_id` matches.
-- The Engine listener watchdog keeps shared listener state honest for all sessions and marks status APIs as recovering while auto-restart attempts are underway.
+- The Engine listener watchdog keeps shared listener state honest for all sessions, mutates peers live on the persistent interface during routine changes, and marks status APIs as recovering while full peer reconciliation is underway.
 
 ### Logs to inspect
 - Engine tunnel log: `Engine/Logs/VPN_Tunnel/tunnel.log`.
@@ -152,6 +152,7 @@ http:
 ### Known limitations
 - Legacy WebSocket tunnels are retired; only WireGuard is supported.
 - VNC requires UltraVNC running on the agent.
+- The Engine still uses one shared WireGuard listener/interface, so a true interface-level failure remains a shared outage until the watchdog or operator recovery path restores it.
 
 ### Reverse VPN Tunnels (WireGuard) - Full Reference
 #### 1) High-level model
@@ -166,10 +167,11 @@ http:
 - Orchestrator: `Data/Engine/services/VPN/vpn_tunnel_service.py`
   - Allocates per-agent /32, issues short-lived orchestration tokens, enforces single-session.
   - Keeps the WireGuard listener online, applies firewall rules, and avoids idle teardown in persistent mode.
-  - Runs the persistent-mode listener watchdog, records the last recovery attempt timestamp, and throttles listener refreshes to avoid restart storms.
+  - Mutates peers one at a time during normal session adds/removals and uses full peer reconciliation only for bootstrap or unhealthy-listener recovery.
+  - Runs the persistent-mode listener watchdog, records the last recovery attempt timestamp, and throttles full recovery attempts to avoid restart storms.
   - Emits Socket.IO events: `vpn_tunnel_start`, `vpn_tunnel_stop`, `vpn_tunnel_activity`.
 - WireGuard manager: `Data/Engine/services/VPN/wireguard_server.py`
-  - Generates server keys, renders config, manages platform-specific WireGuard interface/service lifecycle, checks listener health, and applies allowlist-based firewall rules.
+  - Generates server keys, bootstraps the Linux interface, mutates peers live with `wg set`, checks listener health, and applies allowlist-based firewall rules.
 - PowerShell bridge: `Data/Engine/services/WebSocket/vpn_shell.py`
   - Proxies UI shell input/output to the agent's TCP shell server over WireGuard.
 - Logging: `Engine/Logs/VPN_Tunnel/tunnel.log`; persistent WireGuard tunnel lifecycle is intentionally suppressed from Device Activity history, and shell I/O is in `Engine/Logs/VPN_Tunnel/remote_shell.log`.
@@ -226,7 +228,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Agent (Windows): `Borealis.ps1` (or `bootstrap.ps1` -> `Borealis.ps1`) with elevation.
 - Network: Engine on 10.0.0.54; remote agent uses server_url.txt to derive endpoint host.
 - WireGuard tooling:
-  - Engine host: `wg` + `wg-quick`.
+  - Engine host: `wg`, `ip`, and `wg-quick` for first-interface bootstrap only.
   - Windows agent host: `wireguard.exe` + `wg.exe`.
 
 #### Desired behavior
@@ -250,7 +252,7 @@ This section consolidates the troubleshooting context and environment notes for 
 - Data/Engine/services/VPN/wireguard_server.py
   - Engine config path: Engine\WireGuard\borealis-wg.conf (project root only).
   - Removed invalid "SaveConfig = false" line (WireGuard rejected it).
-  - Ensures the listener service is running after install, and raises if it fails.
+  - Keeps one Engine listener interface online and mutates peers live instead of restarting the shared interface for routine session changes.
 
 Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under Agent\.
 
@@ -280,11 +282,10 @@ Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under
 
 #### Suggested verification commands
 - Engine service status:
-  - `sudo systemctl status wg-quick@borealis-wg`
+  - `sudo ip link show dev borealis-wg`
   - `sudo wg show borealis-wg`
   - `sudo ss -lunp | grep :30000`
 - Engine WireGuard log tail:
-  - `sudo journalctl -u wg-quick@borealis-wg -f`
   - `tail -f Engine/Logs/VPN_Tunnel/tunnel.log`
 - Agent tunnel state (remote, via Z:\ logs):
   - Z:\Agent\Logs\VPN_Tunnel\tunnel.log

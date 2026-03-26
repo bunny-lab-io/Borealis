@@ -35,6 +35,20 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
+ID: TD-20260326-01
+Status: active
+Owner: Engine
+Date Added: 2026-03-26
+Summary: Reverse VPN routes now self-heal stale `devices.agent_id` values for guid-bound devices.
+Impact: Shell, VNC, and persistent WireGuard recovery continue working when a device row drifts to an old transport identity, but the Engine still depends on route-time repair and socket-registry fallback instead of authoritative device persistence.
+Root Cause: Device records can keep a prior `agent_id` even after the same hostname and guid rebind to a newer agent identity, so GUID-based VPN lookups can resolve to dead sockets and unreachable tunnel peers.
+Current Mitigation: `Data/Engine/services/API/devices/routes.py` repairs `devices.agent_id` during authenticated `/api/agent/vpn/ensure` and `/api/agent/vnc/ensure`, while `Data/Engine/services/API/devices/tunnel.py` prefers the live system socket for a hostname when the stored binding is stale.
+Removal Criteria: Device persistence always stores the authoritative live `agent_id` for each guid/hostname without needing route-time repair or socket-registry fallbacks.
+Files: `Data/Engine/services/API/devices/routes.py`, `Data/Engine/services/API/devices/tunnel.py`
+Evidence: Engine logs on 2026-03-26 showed `LAB-AIO-01_1B60AFE7-4AA7-4AD8-B18B-23F5F98209EE_SYSTEM` socket registrations while shell, VNC, and VPN lookups still resolved `LAB-AIO-01` to stale `LAB-AIO-01_08FB4B0D-FE6B-4D41-B09B-7947851BFD7A_SYSTEM`.
+Next Step: Audit hostname-based device upserts and merge paths so `guid`, `hostname`, and `agent_id` cannot drift out of sync in the `devices` table.
+GitHub Issue: not yet
+
 ID: TD-20260325-01
 Status: active
 Owner: Engine + WebUI
@@ -154,9 +168,9 @@ Date Added: 2026-02-18
 Summary: Device model and serial are temporarily stored inside the persisted `cpu` JSON payload.
 Impact: System identity fields are available in the UI, but CPU payload semantics now include non-CPU keys.
 Root Cause: The Engine `devices` schema/API persistence path only keeps a subset of summary fields and drops manufacturer/model/serial values from agent details.
-Current Mitigation: `role_DeviceAudit.py` writes system identity fields to summary and mirrors them into `cpu` (`system_model`, `system_serial_number`, etc.); `Device_Details.jsx` reads those keys as fallback.
+Current Mitigation: `role_DeviceAudit.py` writes system identity fields to summary and mirrors them into `cpu` (`system_model`, `system_serial_number`, etc.); `Device_Summary.jsx` reads those keys as fallback.
 Removal Criteria: Engine persistence and APIs store/return dedicated system identity fields (or full summary JSON) without relying on CPU metadata.
-Files: `Data/Agent/Roles/role_DeviceAudit.py`, `Data/Engine/web-interface/src/Devices/Device_Details.jsx`
+Files: `Data/Agent/Roles/role_DeviceAudit.py`, `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`
 Evidence: `Data/Engine/services/API/devices/management.py` `_extract_device_columns` and `get_device_details` only expose selected summary columns.
 Next Step: Add first-class model/serial fields to the Engine device schema and API payload builders, then remove CPU fallback keys from agent/UI.
 GitHub Issue: not yet

@@ -129,7 +129,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ### WebUI deep links
 - Device Details route: `/device/<agent_guid_or_hostname>`.
 - Tab query keys: `device_summary`, `installed_software`, `services`, `activity_history`, `remote_shell`, `remote_desktop`.
-- Route parsing and URL preservation are implemented in `Data/Engine/web-interface/src/App.jsx`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Devices/Device_Details.jsx`.
+- Route parsing and URL preservation are implemented in `Data/Engine/web-interface/src/App.jsx`; component-level tab URL sync is implemented in `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`.
 - Shared header hostname search is implemented in `Data/Engine/web-interface/src/GlobalDeviceSearch.jsx` and queries `GET /api/devices/search`.
 
 ### Debug checklist

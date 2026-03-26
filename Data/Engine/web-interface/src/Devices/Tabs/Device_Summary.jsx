@@ -1,4 +1,4 @@
-////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Devices/Device_Details.jsx
+////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
@@ -28,7 +28,7 @@ import DesktopWindowsRoundedIcon from "@mui/icons-material/DesktopWindowsRounded
 import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
-import { ClearDeviceActivityDialog } from "../Dialogs.jsx";
+import { ClearDeviceActivityDialog } from "../../Dialogs.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BUTTON_SX,
@@ -36,36 +36,14 @@ import {
   DIALOG_PAPER_SX,
   DIALOG_TITLE_SX,
   DialogHeaderBlock,
-} from "../DialogStyles.jsx";
-import Prism from "prismjs";
-import "prismjs/components/prism-yaml";
-import "prismjs/components/prism-bash";
-import "prismjs/components/prism-powershell";
-import "prismjs/components/prism-batch";
-import "prismjs/themes/prism-okaidia.css";
-import Editor from "react-simple-code-editor";
+} from "../../DialogStyles.jsx";
 import { AgGridReact } from "ag-grid-react";
-import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
-import ReverseTunnelRemoteShell from "./ReverseTunnel/RemoteShell.jsx";
-import ReverseTunnelVnc from "./ReverseTunnel/VNC.jsx";
-import ServiceList from "./Services/Service_List.jsx";
-
-ModuleRegistry.registerModules([AllCommunityModule]);
-
-const MAGIC_UI = {
-  shellBg:
-    "radial-gradient(120% 120% at 0% 0%, rgba(76, 186, 255, 0.16), transparent 55%), " +
-    "radial-gradient(120% 120% at 100% 0%, rgba(214, 130, 255, 0.18), transparent 60%), #040711",
-  panelBg: "rgba(7,11,24,0.92)",
-  panelBorder: "rgba(148, 163, 184, 0.35)",
-  glassBorder: "rgba(94, 234, 212, 0.35)",
-  glow: "0 35px 80px rgba(2, 6, 23, 0.65)",
-  textMuted: "#94a3b8",
-  textBright: "#e2e8f0",
-  accentA: "#7dd3fc",
-  accentB: "#c084fc",
-  accentC: "#34d399",
-};
+import ActivityHistoryTab from "./Activity_History.jsx";
+import InstalledSoftwareTab from "./Installed_Software.jsx";
+import RemoteShellTab from "./RemoteShell.jsx";
+import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
+import ServiceList from "../Services/Service_List.jsx";
+import VncTab from "./VNC.jsx";
 
 const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
 const DEVICE_DETAILS_POLL_INTERVAL_MS = 60000;
@@ -94,9 +72,6 @@ const NAV_TAB_COLORS = {
 };
 const SUMMARY_SECTION_ACTIVE_BG =
   "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)";
-
-const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
-const iconFontFamily = '"Quartz Regular"';
 
 const BASE_GRID_HEIGHTS = {
   topLevel: 300,
@@ -336,79 +311,6 @@ function buildAgentHealthDialogContent(entry, tunnelInfo) {
   return lines.join("\n");
 }
 
-const myTheme = themeQuartz.withParams({
-  accentColor: "#8b5cf6",
-  backgroundColor: "#070b1a",
-  browserColorScheme: "dark",
-  chromeBackgroundColor: {
-    ref: "foregroundColor",
-    mix: 0.07,
-    onto: "backgroundColor",
-  },
-  fontFamily: {
-    googleFont: "IBM Plex Sans",
-  },
-  foregroundColor: "#f4f7ff",
-  headerFontSize: 14,
-});
-
-const gridThemeClass = myTheme.themeName || "ag-theme-quartz";
-
-const GRID_SHELL_BASE_SX = {
-  width: "100%",
-  borderRadius: 3,
-  border: `1px solid ${MAGIC_UI.panelBorder}`,
-  background: "rgba(5,8,20,0.9)",
-  boxShadow: "0 18px 45px rgba(2,6,23,0.6)",
-  position: "relative",
-  overflow: "hidden",
-  "& .ag-root-wrapper": {
-    borderRadius: 3,
-    minHeight: "100%",
-    background: "transparent",
-  },
-  "& .ag-root, & .ag-header, & .ag-center-cols-container, & .ag-paging-panel": {
-    fontFamily: gridFontFamily,
-    background: "transparent",
-  },
-  "& .ag-header": {
-    backgroundColor: "rgba(3,7,18,0.85)",
-    borderBottom: "1px solid rgba(148,163,184,0.25)",
-  },
-  "& .ag-header-cell-label": {
-    color: "#e2e8f0",
-    fontWeight: 600,
-    letterSpacing: 0.3,
-  },
-  "& .ag-row": {
-    borderColor: "rgba(255,255,255,0.04)",
-    transition: "background 0.2s ease",
-  },
-  "& .ag-row:nth-of-type(even)": {
-    backgroundColor: "rgba(15,23,42,0.35)",
-  },
-  "& .ag-row-hover": {
-    backgroundColor: "rgba(124,58,237,0.12) !important",
-  },
-  "& .ag-row-selected": {
-    backgroundColor: "rgba(56,189,248,0.16) !important",
-    boxShadow: "inset 0 0 0 1px rgba(56,189,248,0.3)",
-  },
-  "& .ag-icon": {
-    fontFamily: iconFontFamily,
-  },
-  "& .ag-paging-panel": {
-    borderTop: "1px solid rgba(148,163,184,0.2)",
-    backgroundColor: "rgba(3,7,18,0.8)",
-  },
-};
-
-const GridShell = ({ children, sx }) => (
-  <Box className={gridThemeClass} sx={{ ...GRID_SHELL_BASE_SX, ...(sx || {}) }}>
-    {children}
-  </Box>
-);
-
 const SUMMARY_GRID_STYLE = {
   width: "100%",
   height: "100%",
@@ -539,7 +441,7 @@ const isSummaryGridDebugEnabled = () => {
 const summaryGridDebugLog = (...parts) => {
   if (!isSummaryGridDebugEnabled()) return;
   const stamp = new Date().toISOString();
-  console.debug(`[DeviceDetails][SummaryDebug][${stamp}]`, ...parts);
+  console.debug(`[DeviceSummary][SummaryDebug][${stamp}]`, ...parts);
 };
 
 const summarySectionRowId = (params) => params.data?.id ?? params.rowIndex;
@@ -649,7 +551,7 @@ const SummarySectionGrid = React.memo(function SummarySectionGrid({
         onRowDataUpdated={handleRowDataUpdated}
         onModelUpdated={handleModelUpdated}
         getRowId={summarySectionRowId}
-        theme={myTheme}
+        theme={DEVICE_DETAILS_GRID_THEME}
         style={SUMMARY_GRID_STYLE}
       />
     </GridShell>
@@ -810,108 +712,7 @@ const SummarySectionsNav = React.memo(function SummarySectionsNav({ onSelectSect
   );
 });
 
-const HISTORY_STATUS_THEME = {
-  running: {
-    text: "#58a6ff",
-    background: "rgba(88,166,255,0.15)",
-    border: "1px solid rgba(88,166,255,0.4)",
-    dot: "#58a6ff",
-  },
-  success: {
-    text: "#00d18c",
-    background: "rgba(0,209,140,0.16)",
-    border: "1px solid rgba(0,209,140,0.35)",
-    dot: "#00d18c",
-  },
-  failed: {
-    text: "#ff7b89",
-    background: "rgba(255,123,137,0.16)",
-    border: "1px solid rgba(255,123,137,0.35)",
-    dot: "#ff7b89",
-  },
-  default: {
-    text: "#e2e8f0",
-    background: "rgba(226,232,240,0.12)",
-    border: "1px solid rgba(226,232,240,0.25)",
-    dot: "#e2e8f0",
-  },
-};
-
-const StatusPillCell = React.memo(function StatusPillCell(props) {
-  const value = String(props?.value || "");
-  if (!value) return null;
-  const theme = HISTORY_STATUS_THEME[value.toLowerCase()] || HISTORY_STATUS_THEME.default;
-  return (
-    <Box
-      component="span"
-      sx={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: 76,
-        px: 1.5,
-        py: 0.4,
-        borderRadius: 999,
-        backgroundColor: theme.background,
-        border: theme.border,
-        color: theme.text,
-        fontWeight: 600,
-        fontSize: "13px",
-        lineHeight: 1,
-        fontFamily: gridFontFamily,
-        textTransform: "capitalize",
-        gap: 0.75,
-      }}
-    >
-      <Box
-        component="span"
-        sx={{
-          width: 8,
-          height: 8,
-          borderRadius: "50%",
-          backgroundColor: theme.dot,
-          boxShadow: "0 0 0 2px rgba(0, 0, 0, 0.22)",
-        }}
-      />
-      {value}
-    </Box>
-  );
-});
-
-const HistoryActionsCell = React.memo(function HistoryActionsCell(props) {
-  const row = props.data || {};
-  const onViewOutput = props.context?.onViewOutput;
-
-  return (
-    <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-      {row.has_stdout ? (
-        <Button
-          size="small"
-          sx={{ color: MAGIC_UI.accentA, textTransform: "none", minWidth: 0, p: 0 }}
-          onClick={() => onViewOutput && onViewOutput(row, "stdout")}
-        >
-          StdOut
-        </Button>
-      ) : null}
-      {row.has_stderr ? (
-        <Button
-          size="small"
-          sx={{ color: "#ff7b89", textTransform: "none", minWidth: 0, p: 0 }}
-          onClick={() => onViewOutput && onViewOutput(row, "stderr")}
-        >
-          StdErr
-        </Button>
-      ) : null}
-    </Box>
-  );
-});
-
-const GRID_COMPONENTS = {
-  StatusPillCell,
-  HistoryActionsCell,
-};
-
-export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPageMetaChange }) {
+export default function DeviceSummary({ device, onQuickJobLaunch, onPageMetaChange }) {
   const initialTabIndex = useMemo(() => {
     try {
       const params = new URLSearchParams(window.location.search || "");
@@ -929,7 +730,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const [agent, setAgent] = useState(device || {});
   const [details, setDetails] = useState({});
   const [meta, setMeta] = useState({});
-  const [softwareSearch, setSoftwareSearch] = useState("");
   const [description, setDescription] = useState("");
   const [connectionType, setConnectionType] = useState("");
   const [connectionEndpoint, setConnectionEndpoint] = useState("");
@@ -941,15 +741,10 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
   const [summaryScrollOffset, setSummaryScrollOffset] = useState(0);
   const [summaryBottomSpacer, setSummaryBottomSpacer] = useState(0);
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
-  const [historyRows, setHistoryRows] = useState([]);
-  const [outputOpen, setOutputOpen] = useState(false);
-  const [outputTitle, setOutputTitle] = useState("");
-  const [outputContent, setOutputContent] = useState("");
-  const [outputLang, setOutputLang] = useState("powershell");
   const [agentHealthDialogEntry, setAgentHealthDialogEntry] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
-  const [assemblyNameMap, setAssemblyNameMap] = useState({});
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
     // Prefer status provided by the device list row if available
@@ -1137,80 +932,11 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     };
   }, [tunnelAgentId, shouldPollTunnelStatus]);
 
-  useEffect(() => {
-    let canceled = false;
-    const loadAssemblyNames = async () => {
-      const next = {};
-      const storeName = (rawPath, rawName) => {
-        const name = typeof rawName === "string" ? rawName.trim() : "";
-        if (!name) return;
-        const normalizedPath = String(rawPath || "")
-          .replace(/\\/g, "/")
-          .replace(/^\/+/, "")
-          .trim();
-        if (!normalizedPath) return;
-        if (!next[normalizedPath]) next[normalizedPath] = name;
-        const base = normalizedPath.split("/").pop() || "";
-        if (base && !next[base]) next[base] = name;
-        const dot = base.lastIndexOf(".");
-        if (dot > 0) {
-          const baseNoExt = base.slice(0, dot);
-          if (baseNoExt && !next[baseNoExt]) next[baseNoExt] = name;
-        }
-      };
-      try {
-        const resp = await fetch("/api/assemblies");
-        if (!resp.ok) return;
-        const data = await resp.json();
-        const items = Array.isArray(data?.items) ? data.items : [];
-        items.forEach((item) => {
-          if (!item || typeof item !== "object") return;
-          const displayName =
-            (item.display_name || "").trim() ||
-            item.assembly_guid ||
-            "";
-          if (!displayName) return;
-          storeName(item.virtual_path || item.path || "", displayName);
-          if (item.assembly_guid && !next[item.assembly_guid]) {
-            next[item.assembly_guid] = displayName;
-          }
-          if (item.payload_guid && !next[item.payload_guid]) {
-            next[item.payload_guid] = displayName;
-          }
-        });
-      } catch {
-        // ignore failures; map remains partial
-      }
-      if (!canceled) {
-        setAssemblyNameMap(next);
-      }
-    };
-    loadAssemblyNames();
-    return () => {
-      canceled = true;
-    };
-  }, []);
-
   const statusFromHeartbeat = (tsSec, offlineAfter = 300) => {
     if (!tsSec) return "Offline";
     const now = Date.now() / 1000;
     return now - tsSec <= offlineAfter ? "Online" : "Offline";
   };
-
-  const resolveAssemblyName = useCallback((scriptName, scriptPath) => {
-    const normalized = String(scriptPath || "").replace(/\\/g, "/").trim();
-    const base = normalized ? normalized.split("/").pop() || "" : "";
-    const baseNoExt = base && base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : base;
-    return (
-      assemblyNameMap[normalized] ||
-      (base ? assemblyNameMap[base] : "") ||
-      (baseNoExt ? assemblyNameMap[baseNoExt] : "") ||
-      scriptName ||
-      base ||
-      scriptPath ||
-      ""
-    );
-  }, [assemblyNameMap]);
 
   useEffect(() => {
     let canceled = false;
@@ -1566,64 +1292,16 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
     }
   }, [connectionType, connectionDraft, connectionEndpoint, activityHostname]);
 
-  const loadHistory = useCallback(async () => {
-    if (!activityHostname) return;
-    try {
-      const resp = await fetch(`/api/device/activity/${encodeURIComponent(activityHostname)}`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      setHistoryRows(data.history || []);
-    } catch (e) {
-      console.warn("Failed to load activity history", e);
-      setHistoryRows([]);
-    }
-  }, [activityHostname]);
-
-  useEffect(() => { loadHistory(); }, [loadHistory]);
-
-  useEffect(() => {
-    const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
-    if (!socket || !activityHostname) return undefined;
-
-    let refreshTimer = null;
-    const normalizedHost = activityHostname.toLowerCase();
-    const scheduleRefresh = (delay = 200) => {
-      if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => {
-        refreshTimer = null;
-        loadHistory();
-      }, delay);
-    };
-
-    const handleActivityChanged = (payload = {}) => {
-      const payloadHost = String(payload?.hostname || "").trim().toLowerCase();
-      if (!payloadHost) return;
-      if (payloadHost === normalizedHost) {
-        const delay = payload?.change === "updated" ? 150 : 0;
-        scheduleRefresh(delay);
-      }
-    };
-
-    socket.on("device_activity_changed", handleActivityChanged);
-
-    return () => {
-      if (refreshTimer) clearTimeout(refreshTimer);
-      socket.off("device_activity_changed", handleActivityChanged);
-    };
-  }, [activityHostname, loadHistory]);
-
-  // No explicit live recap tab; recaps are recorded into Activity History
-
-  const clearHistory = async () => {
+  const clearHistory = useCallback(async () => {
     if (!activityHostname) return;
     try {
       const resp = await fetch(`/api/device/activity/${encodeURIComponent(activityHostname)}`, { method: "DELETE" });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setHistoryRows([]);
+      setHistoryRefreshToken((current) => current + 1);
     } catch (e) {
       console.warn("Failed to clear activity history", e);
     }
-  };
+  }, [activityHostname]);
 
   const saveDescription = async () => {
     const targetHost = meta.hostname || details.summary?.hostname;
@@ -1769,11 +1447,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
 
   const softwareRows = useMemo(() => details.software || [], [details.software]);
 
-  const getSoftwareRowId = useCallback(
-    (params) => `${params.data?.name || "software"}-${params.data?.version || ""}-${params.rowIndex}`,
-    []
-  );
-
   // Build a best-effort CPU display from summary fields
   const cpuInfo = useMemo(() => {
     const cpu = details.cpu || summary.cpu || {};
@@ -1801,89 +1474,6 @@ export default function DeviceDetails({ device, onBack, onQuickJobLaunch, onPage
       minWidth: 140,
     }),
     []
-  );
-
-  const softwareColumnDefs = useMemo(
-    () => [
-      {
-        field: "name",
-        headerName: "Software Name",
-        flex: 1.2,
-        minWidth: 240,
-        filter: "agTextColumnFilter",
-      },
-      {
-        field: "version",
-        headerName: "Version",
-        width: 180,
-        minWidth: 160,
-        filter: "agTextColumnFilter",
-      },
-      {
-        field: "source",
-        headerName: "Source",
-        width: 180,
-        minWidth: 160,
-        filter: "agTextColumnFilter",
-        valueFormatter: (params) => {
-          const value = String(params.value || "").trim().toLowerCase();
-          if (value === "local_installed") return "Locally Installed";
-          if (value === "windows_store") return "Windows Store";
-          if (value === "dpkg") return "DPKG";
-          if (value === "rpm") return "RPM";
-          return params.value || "—";
-        },
-      },
-    ],
-    []
-  );
-
-  const formatScriptType = useCallback((raw) => {
-    const value = String(raw || "").toLowerCase();
-    if (value === "ansible") return "Ansible Playbook";
-    if (value === "reverse_tunnel" || value === "vpn_tunnel") return "Reverse VPN Tunnel";
-    return "Script";
-  }, []);
-
-  const historyColumnDefs = useMemo(
-    () => [
-      {
-        headerName: "Activity",
-        field: "script_type",
-        minWidth: 180,
-        valueGetter: (params) => formatScriptType(params.data?.script_type),
-      },
-      {
-        headerName: "Task",
-        field: "script_display_name",
-        flex: 1.2,
-        minWidth: 240,
-        filter: "agTextColumnFilter",
-      },
-      {
-        headerName: "Ran On",
-        field: "ran_at",
-        width: 210,
-        valueFormatter: (params) => formatTimestamp(params.value),
-        sort: "desc",
-        comparator: (a, b) => (a || 0) - (b || 0),
-      },
-      {
-        headerName: "Job Status",
-        field: "status",
-        width: 160,
-        cellRenderer: "StatusPillCell",
-      },
-      {
-        headerName: "StdOut / StdErr",
-        colId: "stdout",
-        width: 220,
-        sortable: false,
-        filter: false,
-        cellRenderer: "HistoryActionsCell",
-      },
-    ],
-    [formatScriptType, formatTimestamp]
   );
 
 const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
@@ -2507,55 +2097,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     );
   };
 
-  const renderSoftware = () => (
-    <Box
-      sx={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 1.5,
-        flexGrow: 1,
-        minHeight: 0,
-      }}
-    >
-      <TextField
-        size="small"
-        placeholder="Search software..."
-        value={softwareSearch}
-        onChange={(e) => setSoftwareSearch(e.target.value)}
-        sx={{
-          maxWidth: 320,
-          input: { color: "#fff" },
-          "& .MuiOutlinedInput-root": {
-            backgroundColor: "rgba(4,7,17,0.65)",
-            "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
-            "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-          },
-          "& .MuiInputLabel-root": { color: MAGIC_UI.textMuted },
-        }}
-      />
-      <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
-        <AgGridReact
-          rowData={softwareRows}
-          columnDefs={softwareColumnDefs}
-          defaultColDef={defaultGridColDef}
-          pagination
-          paginationPageSize={20}
-          paginationPageSizeSelector={[20, 50, 100]}
-          animateRows
-          quickFilterText={softwareSearch}
-          getRowId={getSoftwareRowId}
-          components={GRID_COMPONENTS}
-          theme={myTheme}
-          style={{
-            width: "100%",
-            height: "100%",
-            fontFamily: gridFontFamily,
-            "--ag-icon-font-family": iconFontFamily,
-          }}
-        />
-      </GridShell>
-    </Box>
-  );
+  const renderSoftware = () => <InstalledSoftwareTab softwareRows={softwareRows} />;
 
   const renderServicesTab = () => (
     <Box
@@ -2579,7 +2121,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         minHeight: 0,
       }}
     >
-      <ReverseTunnelRemoteShell device={tunnelDevice} />
+      <RemoteShellTab device={tunnelDevice} />
     </Box>
   );
 
@@ -2592,7 +2134,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         minHeight: 0,
       }}
     >
-      <ReverseTunnelVnc device={tunnelDevice} />
+      <VncTab device={tunnelDevice} />
     </Box>
   );
 
@@ -3120,7 +2662,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     if (!isSummaryGridDebugEnabled()) return;
     const topTabKey = TOP_TABS[tab]?.key || "";
     if (topTabKey !== "summary") return;
-    summaryGridDebugLog("deviceDetailsRender", {
+    summaryGridDebugLog("deviceSummaryRender", {
       renderCount: pageRenderCountRef.current,
       topTabKey,
       summaryScrollOffset,
@@ -3142,88 +2684,20 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     networkRows.length,
   ]);
 
-  const highlightCode = (code, lang) => {
-    try {
-      return Prism.highlight(code ?? "", Prism.languages[lang] || Prism.languages.markup, lang);
-    } catch {
-      return String(code || "");
-    }
-  };
-
-  const handleViewOutput = useCallback(async (row, which) => {
-    if (!row || !row.id) return;
-    try {
-      const resp = await fetch(`/api/device/activity/job/${row.id}`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      const lang = ((data.script_path || "").toLowerCase().endsWith(".ps1")) ? "powershell"
-        : ((data.script_path || "").toLowerCase().endsWith(".bat")) ? "batch"
-        : ((data.script_path || "").toLowerCase().endsWith(".sh")) ? "bash"
-        : ((data.script_path || "").toLowerCase().endsWith(".yml")) ? "yaml" : "powershell";
-      setOutputLang(lang);
-      const friendly = resolveAssemblyName(data.script_name, data.script_path);
-      setOutputTitle(`${which === 'stderr' ? 'StdErr' : 'StdOut'} - ${friendly}`);
-      setOutputContent(which === 'stderr' ? (data.stderr || "") : (data.stdout || ""));
-      setOutputOpen(true);
-    } catch (e) {
-      console.warn("Failed to load output", e);
-    }
-  }, [resolveAssemblyName]);
-
-  const historyDisplayRows = useMemo(() => {
-    return (historyRows || []).map((row) => ({
-      ...row,
-      script_display_name: resolveAssemblyName(row.script_name, row.script_path),
-    }));
-  }, [historyRows, resolveAssemblyName]);
-
-  const getHistoryRowId = useCallback((params) => String(params.data?.id || params.rowIndex), []);
-
-  const historyGridContext = useMemo(
-    () => ({
-      onViewOutput: handleViewOutput,
-    }),
-    [handleViewOutput]
-  );
-
-
   const renderHistory = () => (
-    <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
-      <AgGridReact
-        rowData={historyDisplayRows}
-        columnDefs={historyColumnDefs}
-        defaultColDef={defaultGridColDef}
-        pagination
-        paginationPageSize={20}
-        paginationPageSizeSelector={[20, 50, 100]}
-        animateRows
-        components={GRID_COMPONENTS}
-        context={historyGridContext}
-        getRowId={getHistoryRowId}
-        suppressCellFocus
-        theme={myTheme}
-        style={{
-          width: "100%",
-          height: "100%",
-          fontFamily: gridFontFamily,
-          "--ag-icon-font-family": iconFontFamily,
-        }}
-      />
-    </GridShell>
+    <ActivityHistoryTab hostname={activityHostname} refreshToken={historyRefreshToken} />
   );
-
-  
 
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
 
   const rawDisplayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "";
-  const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Details";
+  const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Summary";
   const pageSubtitle = status ? `Status: ${status}` : "";
 
   const pageHeaderActions = useMemo(
     () => [
       {
-        id: "device-details-actions",
+        id: "device-summary-actions",
         label: "Actions",
         icon: <MoreHorizIcon />,
         tone: "primary",
@@ -3423,71 +2897,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}>
           <Button onClick={closeAgentHealthDialog} sx={DIALOG_BUTTON_SX}>
-            Close
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog
-        open={outputOpen}
-        onClose={() => setOutputOpen(false)}
-        fullWidth
-        maxWidth="md"
-        PaperProps={{ sx: DIALOG_PAPER_SX }}
-      >
-        <DialogTitle sx={DIALOG_TITLE_SX}>
-          <DialogHeaderBlock title={outputTitle} subtitle="Review command output and captured response data." />
-        </DialogTitle>
-        <DialogContent sx={DIALOG_CONTENT_SX}>
-          <Box
-            sx={{
-              border: `1px solid ${MAGIC_UI.panelBorder}`,
-              borderRadius: 2,
-              bgcolor: "rgba(4,7,17,0.65)",
-              maxHeight: "56vh",
-              overflowY: "auto",
-              overflowX: "auto",
-              overscrollBehavior: "contain",
-              scrollbarGutter: "stable both-edges",
-              "&::-webkit-scrollbar": {
-                width: 10,
-                height: 10,
-              },
-              "&::-webkit-scrollbar-track": {
-                background: "rgba(15,23,42,0.45)",
-                borderRadius: 999,
-              },
-              "&::-webkit-scrollbar-thumb": {
-                background: "rgba(125,183,255,0.35)",
-                borderRadius: 999,
-                border: "2px solid rgba(15,23,42,0.45)",
-              },
-            }}
-          >
-            <Editor
-              value={outputContent}
-              onValueChange={() => {}}
-              highlight={(code) => highlightCode(code, outputLang)}
-              padding={12}
-              style={{
-                fontFamily:
-                  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                fontSize: 12,
-                color: "#e6edf3",
-                minHeight: 200,
-                whiteSpace: "pre",
-                overflowWrap: "normal",
-                wordBreak: "normal",
-              }}
-              textareaProps={{ readOnly: true, wrap: "off", spellCheck: false }}
-            />
-          </Box>
-        </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button
-            onClick={() => setOutputOpen(false)}
-            sx={DIALOG_BUTTON_SX}
-          >
             Close
           </Button>
         </DialogActions>

@@ -24,7 +24,7 @@ from flask import Blueprint, jsonify, request, g
 from ....auth.device_auth import AGENT_CONTEXT_HEADER, require_device_auth
 from ....auth.guid_utils import normalize_guid
 from .agent_role_health import merge_agent_role_health, serialize_agent_role_health
-from .tunnel import _get_tunnel_service
+from .tunnel import _get_tunnel_service, _guid_from_agent_id, _load_device_agent_binding, _resolve_requested_agent_id
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
     from .. import EngineServiceAdapters
@@ -82,30 +82,46 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             log("agents", f"device auth context missing for {request.path}", _context_hint())
         return ctx
 
-    def _resolve_agent_id_for_guid(guid: str) -> str:
+    def _repair_agent_id_binding(guid: str, agent_id: str) -> None:
         normalized = normalize_guid(guid)
-        if not normalized:
-            return ""
+        repaired_agent_id = str(agent_id or "").strip()
+        if not normalized or not repaired_agent_id:
+            return
         conn = db_conn_factory()
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT agent_id FROM devices WHERE UPPER(guid) = ? ORDER BY last_seen DESC LIMIT 1",
-                (normalized,),
+                "UPDATE devices SET agent_id = ? WHERE UPPER(guid) = ?",
+                (repaired_agent_id, normalized),
             )
-            row = cur.fetchone()
-            if row and row[0]:
-                return str(row[0]).strip()
+            conn.commit()
         except Exception:
             log(
-                "VNC",
-                f"vnc_agent_id_lookup_failed guid={normalized}",
+                "VPN_Tunnel/tunnel",
+                f"vpn_agent_id_repair_failed guid={normalized}",
                 _context_hint(),
                 level="ERROR",
             )
         finally:
             conn.close()
-        return ""
+
+    def _resolve_agent_id_for_guid(guid: str, requested_agent_id: str = "") -> str:
+        normalized = normalize_guid(guid)
+        if not normalized:
+            return ""
+        binding = _load_device_agent_binding(adapters, guid=normalized)
+        if not any(binding.values()):
+            return ""
+        stored_agent_id = str(binding.get("agent_id") or "").strip()
+        requested_agent_value = str(requested_agent_id or "").strip()
+        if requested_agent_value and _guid_from_agent_id(requested_agent_value) == normalized:
+            if requested_agent_value != stored_agent_id:
+                _repair_agent_id_binding(normalized, requested_agent_value)
+            return requested_agent_value
+        resolved_agent_id = _resolve_requested_agent_id(adapters, normalized, expected_guid=normalized)
+        if resolved_agent_id and resolved_agent_id != stored_agent_id:
+            _repair_agent_id_binding(normalized, resolved_agent_id)
+        return resolved_agent_id
 
     def _load_vnc_password(agent_id: str) -> Optional[str]:
         conn = db_conn_factory()
@@ -345,19 +361,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         requested_agent = (body.get("agent_id") or "").strip()
         guid = normalize_guid(ctx.guid)
 
-        conn = db_conn_factory()
-        resolved_agent = ""
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT agent_id FROM devices WHERE UPPER(guid) = ? ORDER BY last_seen DESC LIMIT 1",
-                (guid,),
-            )
-            row = cur.fetchone()
-            if row and row[0]:
-                resolved_agent = str(row[0]).strip()
-        finally:
-            conn.close()
+        resolved_agent = _resolve_agent_id_for_guid(guid, requested_agent)
 
         if not resolved_agent:
             log("VPN_Tunnel/tunnel", f"vpn_agent_ensure_missing_agent guid={guid}", _context_hint(ctx), level="ERROR")
@@ -424,7 +428,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         requested_agent = (body.get("agent_id") or "").strip()
         guid = normalize_guid(ctx.guid)
 
-        resolved_agent = _resolve_agent_id_for_guid(guid)
+        resolved_agent = _resolve_agent_id_for_guid(guid, requested_agent)
         if not resolved_agent:
             log("VNC", f"vnc_agent_ensure_missing_agent guid={guid}", _context_hint(ctx), level="ERROR")
             return jsonify({"error": "agent_id_missing"}), 404

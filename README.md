@@ -183,6 +183,9 @@ Device Filter Editor:
 Device Remote Shell:
 ![Device Remote Shell](Docs/images/repo_screenshots/Device_Remote_Shell.png)
 
+Device Service List:
+![Device Service List](Docs/images/repo_screenshots/Device_Service_List.png)
+
 ---
 
 # Assembly Management

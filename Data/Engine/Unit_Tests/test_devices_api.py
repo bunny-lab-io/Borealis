@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 import logging
+import threading
 import time
 from Data.Engine.db import dbapi as sqlite3
 from typing import Any
@@ -16,6 +17,7 @@ import pytest
 from Data.Engine.auth import jwt_service as jwt_service_module
 from Data.Engine.integrations import github as github_integration
 from Data.Engine.services.API.devices import management as device_management
+from Data.Engine.services.API.devices import routes as device_routes
 from Data.Engine.services.API.devices.service_inventory import serialize_device_services
 from Data.Engine.services.API.devices import tunnel as tunnel_api
 from Data.Engine.services.VPN.vpn_tunnel_service import VpnTunnelService
@@ -32,9 +34,13 @@ def _client_with_admin_session(harness: EngineTestHarness):
 
 
 def _device_headers() -> dict:
+    return _device_headers_for_guid("GUID-TEST-0001")
+
+
+def _device_headers_for_guid(guid: str) -> dict:
     jwt_service = jwt_service_module.load_service()
     token = jwt_service.issue_access_token(
-        "GUID-TEST-0001",
+        guid,
         "ff:ff:ff",
         1,
         expires_in=900,
@@ -67,6 +73,16 @@ def _set_test_device_guid(engine_harness: EngineTestHarness, guid: str) -> None:
     try:
         cur = conn.cursor()
         cur.execute("UPDATE devices SET guid = ? WHERE hostname = ?", (guid, "test-device"))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_test_device_agent_id(engine_harness: EngineTestHarness, agent_id: str) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE devices SET agent_id = ? WHERE hostname = ?", (agent_id, "test-device"))
         conn.commit()
     finally:
         conn.close()
@@ -112,7 +128,12 @@ class _FakeWireGuardManager:
         self.start_calls = 0
         self.stop_calls = 0
         self.apply_calls = 0
+        self.ensure_calls = 0
+        self.reconcile_calls = 0
+        self.upsert_calls = 0
+        self.remove_calls = 0
         self.removed_rules = []
+        self.current_peers: dict[str, dict[str, Any]] = {}
 
     def require_orchestration_token(self, token: Any) -> Any:
         return token
@@ -132,30 +153,130 @@ class _FakeWireGuardManager:
     def remove_firewall_rules(self, rule_names: Any) -> None:
         self.removed_rules.append(list(rule_names))
 
-    def start_listener(self, peers: Any) -> None:
-        self.start_calls += 1
-        if self.fail_start:
-            raise RuntimeError("listener start failed")
+    def _mark_healthy(self) -> None:
         if not self.keep_unhealthy:
             self.health = {
                 "healthy": True,
                 "reason": "listener_running",
                 "service_state": "RUNNING",
+                "peer_count": len(self.current_peers),
             }
+
+    def ensure_listener(self) -> None:
+        self.ensure_calls += 1
+        self._mark_healthy()
+
+    def start_listener(self, peers: Any) -> None:
+        self.start_calls += 1
+        if self.fail_start:
+            raise RuntimeError("listener start failed")
+        self.current_peers = {
+            str(peer.get("agent_id") or ""): dict(peer)
+            for peer in (peers or [])
+            if str(peer.get("agent_id") or "").strip()
+        }
+        self._mark_healthy()
+
+    def reconcile_peers(self, peers: Any) -> None:
+        self.reconcile_calls += 1
+        self.start_listener(peers)
+
+    def upsert_peer(self, peer: Any) -> None:
+        self.upsert_calls += 1
+        self.start_calls += 1
+        if self.fail_start:
+            raise RuntimeError("listener start failed")
+        agent_id = str(peer.get("agent_id") or "").strip()
+        if agent_id:
+            self.current_peers[agent_id] = dict(peer)
+        self._mark_healthy()
+
+    def remove_peer(self, agent_id: str, *, public_key: str = "") -> None:
+        self.remove_calls += 1
+        self.stop_calls += 1
+        self.current_peers.pop(str(agent_id or "").strip(), None)
+        self._mark_healthy()
 
     def stop_listener(self) -> None:
         self.stop_calls += 1
+        self.current_peers = {}
 
     def check_listener_health(self) -> dict:
-        return dict(self.health)
+        payload = dict(self.health)
+        payload.setdefault("peer_count", len(self.current_peers))
+        return payload
+
+
+class _ConcurrentFakeWireGuardManager(_FakeWireGuardManager):
+    def __init__(self) -> None:
+        super().__init__()
+        self._active_starts = 0
+        self._guard = threading.Lock()
+        self.max_concurrent_starts = 0
+
+    def _run_mutation(self, callback) -> None:
+        with self._guard:
+            self.start_calls += 1
+            self._active_starts += 1
+            self.max_concurrent_starts = max(self.max_concurrent_starts, self._active_starts)
+        try:
+            time.sleep(0.05)
+            if self.fail_start:
+                raise RuntimeError("listener start failed")
+            callback()
+            self._mark_healthy()
+        finally:
+            with self._guard:
+                self._active_starts -= 1
+
+    def start_listener(self, peers: Any) -> None:
+        def _apply() -> None:
+            self.current_peers = {
+                str(peer.get("agent_id") or ""): dict(peer)
+                for peer in (peers or [])
+                if str(peer.get("agent_id") or "").strip()
+            }
+
+        self._run_mutation(_apply)
+
+    def reconcile_peers(self, peers: Any) -> None:
+        self.reconcile_calls += 1
+        self.start_listener(peers)
+
+    def upsert_peer(self, peer: Any) -> None:
+        self.upsert_calls += 1
+        def _apply() -> None:
+            agent_id = str(peer.get("agent_id") or "").strip()
+            if agent_id:
+                self.current_peers[agent_id] = dict(peer)
+
+        self._run_mutation(_apply)
+
+
+class _FakeAgentSocketRegistry:
+    def __init__(
+        self,
+        *,
+        registered_agent_ids: set[str] | None = None,
+        host_mode_routes: dict[tuple[str, str], str] | None = None,
+    ) -> None:
+        self._registered_agent_ids = set(registered_agent_ids or set())
+        self._host_mode_routes = dict(host_mode_routes or {})
+
+    def is_registered(self, agent_id: str) -> bool:
+        return agent_id in self._registered_agent_ids
+
+    def get_agent_id_for_host_mode(self, hostname: str, service_mode: str) -> str:
+        return self._host_mode_routes.get((str(hostname or "").strip().lower(), str(service_mode or "").strip().lower()), "")
 
 
 def _build_vpn_service(
     *,
     db_conn_factory: Any = None,
-) -> tuple[VpnTunnelService, _FakeWireGuardManager, _DummySocketIO, list[tuple[str, str, str]]]:
+    wireguard_manager: Any = None,
+) -> tuple[VpnTunnelService, Any, _DummySocketIO, list[tuple[str, str, str]]]:
     socketio = _DummySocketIO()
-    wg = _FakeWireGuardManager()
+    wg = wireguard_manager or _FakeWireGuardManager()
     service_events: list[tuple[str, str, str]] = []
     context = SimpleNamespace(
         logger=logging.getLogger("borealis.test.vpn"),
@@ -570,6 +691,69 @@ def test_vpn_service_watchdog_noops_when_listener_healthy() -> None:
     assert status["recovery_in_progress"] is False
 
 
+def test_vpn_service_live_upserts_additional_peers_without_full_reconcile() -> None:
+    service, wg, _socketio, _service_events = _build_vpn_service()
+
+    service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    assert wg.reconcile_calls == 1
+    assert wg.upsert_calls == 0
+
+    service.connect(agent_id="agent-2", operator_id=None, endpoint_host="engine.local")
+
+    assert wg.reconcile_calls == 1
+    assert wg.upsert_calls == 1
+
+
+def test_vpn_service_watchdog_recovers_when_listener_peer_count_drifts() -> None:
+    service, wg, _socketio, _service_events = _build_vpn_service()
+
+    service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    service.connect(agent_id="agent-2", operator_id=None, endpoint_host="engine.local")
+    start_calls = wg.start_calls
+
+    wg.current_peers.pop("agent-2", None)
+    wg.health = {
+        "healthy": True,
+        "reason": "listener_running",
+        "service_state": "RUNNING",
+    }
+
+    status = service.status("agent-1")
+    assert status is not None
+    assert status["listener_healthy"] is False
+
+    service._watchdog_tick()
+
+    assert wg.start_calls == start_calls + 1
+    recovered = service.status("agent-1")
+    assert recovered is not None
+    assert recovered["listener_healthy"] is True
+
+
+def test_vpn_service_serializes_listener_refreshes() -> None:
+    concurrent_wg = _ConcurrentFakeWireGuardManager()
+    service, _wg, _socketio, _service_events = _build_vpn_service(wireguard_manager=concurrent_wg)
+    failures: list[str] = []
+
+    def _connect(agent_id: str) -> None:
+        try:
+            service.connect(agent_id=agent_id, operator_id=None, endpoint_host="engine.local")
+        except Exception as exc:
+            failures.append(str(exc))
+
+    threads = [
+        threading.Thread(target=_connect, args=("agent-1",)),
+        threading.Thread(target=_connect, args=("agent-2",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert failures == []
+    assert concurrent_wg.max_concurrent_starts == 1
+
+
 def test_vpn_service_suppresses_device_activity_history(engine_harness: EngineTestHarness) -> None:
     service, _wg, socketio, _service_events = _build_vpn_service(
         db_conn_factory=lambda: sqlite3.connect(str(engine_harness.db_path))
@@ -655,6 +839,28 @@ def test_tunnel_status_endpoint_resolves_guid_to_agent_id(
     assert payload["agent_id"] == "test-device-agent"
 
 
+def test_resolve_requested_agent_id_prefers_live_system_socket_for_stale_binding(
+    engine_harness: EngineTestHarness,
+) -> None:
+    valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
+    stale_agent_id = "test-device_08FB4B0D-FE6B-4D41-B09B-7947851BFD7A_SYSTEM"
+    live_agent_id = "test-device_3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9_SYSTEM"
+    _set_test_device_guid(engine_harness, valid_guid)
+    _set_test_device_agent_id(engine_harness, stale_agent_id)
+    adapters = SimpleNamespace(
+        db_conn_factory=lambda: sqlite3.connect(str(engine_harness.db_path)),
+        context=SimpleNamespace(
+            agent_socket_registry=_FakeAgentSocketRegistry(
+                registered_agent_ids={live_agent_id},
+                host_mode_routes={("test-device", "system"): live_agent_id},
+            )
+        ),
+    )
+
+    assert tunnel_api._resolve_requested_agent_id(adapters, valid_guid) == live_agent_id
+    assert tunnel_api._resolve_requested_agent_id(adapters, stale_agent_id) == live_agent_id
+
+
 def test_tunnel_connect_endpoint_resolves_guid_to_agent_id(
     engine_harness: EngineTestHarness,
     monkeypatch: pytest.MonkeyPatch,
@@ -670,6 +876,43 @@ def test_tunnel_connect_endpoint_resolves_guid_to_agent_id(
     payload = response.get_json()
     assert payload["agent_id"] == "test-device-agent"
     assert fake_service.connect_calls == [("test-device-agent", "admin", "localhost")]
+
+
+def test_agent_vpn_ensure_repairs_stale_agent_binding(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
+    stale_agent_id = "test-device_08FB4B0D-FE6B-4D41-B09B-7947851BFD7A_SYSTEM"
+    live_agent_id = "test-device_3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9_SYSTEM"
+    _set_test_device_guid(engine_harness, valid_guid)
+    _set_test_device_agent_id(engine_harness, stale_agent_id)
+
+    fake_service = _FakeTunnelApiService(status_payload=None, active_payloads=[])
+    monkeypatch.setattr(device_routes, "_get_tunnel_service", lambda _adapters: fake_service)
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/vpn/ensure",
+        headers=_device_headers_for_guid(valid_guid),
+        json={"agent_id": live_agent_id},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["agent_id"] == live_agent_id
+    assert fake_service.connect_calls == [(live_agent_id, None, "localhost")]
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT agent_id FROM devices WHERE hostname = ?", ("test-device",))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row[0] == live_agent_id
 
 
 def test_tunnel_status_endpoint_returns_down_health_defaults(

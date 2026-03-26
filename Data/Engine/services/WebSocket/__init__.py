@@ -155,6 +155,16 @@ class AgentSocketRegistry:
             return False
         return bool(self._sid_by_host_mode.get((host_key, mode_key)))
 
+    def get_agent_id_for_host_mode(self, hostname: str, service_mode: str) -> str:
+        host_key = _normalize_host_key(hostname)
+        mode_key = _normalize_service_mode(service_mode)
+        if not host_key or not mode_key:
+            return ""
+        sid = self._sid_by_host_mode.get((host_key, mode_key))
+        if not sid:
+            return ""
+        return str(self._agent_by_sid.get(sid) or "")
+
     def emit(self, agent_id: str, event: str, payload: Any) -> bool:
         sid = self._sid_by_agent.get(agent_id)
         if not sid:

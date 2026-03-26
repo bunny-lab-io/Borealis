@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import re
 from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -142,38 +143,137 @@ def _guid_candidate(value: Any) -> str:
     return normalized if normalized == text.strip().strip("{}").upper() else ""
 
 
-def _resolve_requested_agent_id(adapters: "EngineServiceAdapters", requested_agent_id: Any) -> str:
-    agent_id = _normalize_text(requested_agent_id)
-    if not agent_id:
-        return ""
+_AGENT_ID_HOST_PATTERN = re.compile(
+    r"^(?P<hostname>.+)_(?P<guid>[0-9A-F-]+)_(?P<context>[A-Z0-9_-]+)$",
+    re.IGNORECASE,
+)
 
-    guid = _guid_candidate(agent_id)
-    if not guid:
-        return agent_id
+
+def _guid_from_agent_id(value: Any) -> str:
+    text = _normalize_text(value)
+    if not text:
+        return ""
+    match = _AGENT_ID_HOST_PATTERN.match(text)
+    if match:
+        return _guid_candidate(match.group("guid"))
+    parts = text.rsplit("_", 2)
+    if len(parts) == 3:
+        return _guid_candidate(parts[1])
+    return ""
+
+
+def _infer_hostname_from_agent_id(value: Any) -> str:
+    text = _normalize_text(value)
+    if not text:
+        return ""
+    match = _AGENT_ID_HOST_PATTERN.match(text)
+    if match:
+        return _normalize_text(match.group("hostname"))
+    parts = text.rsplit("_", 2)
+    if len(parts) == 3:
+        return _normalize_text(parts[0])
+    return ""
+
+
+def _load_device_agent_binding(
+    adapters: "EngineServiceAdapters",
+    *,
+    guid: Any = None,
+    agent_id: Any = None,
+) -> Dict[str, str]:
+    guid_value = _guid_candidate(guid)
+    agent_id_value = _normalize_text(agent_id)
+    if not guid_value and not agent_id_value:
+        return {"guid": "", "hostname": "", "agent_id": ""}
 
     conn_factory = getattr(adapters, "db_conn_factory", None)
     if not callable(conn_factory):
-        return agent_id
+        return {"guid": "", "hostname": "", "agent_id": ""}
 
     conn = None
     try:
         conn = conn_factory()
         cur = conn.cursor()
-        cur.execute(
-            "SELECT agent_id FROM devices WHERE UPPER(guid) = ? ORDER BY last_seen DESC LIMIT 1",
-            (guid,),
-        )
+        if guid_value:
+            cur.execute(
+                "SELECT guid, hostname, agent_id FROM devices WHERE UPPER(guid) = ? ORDER BY last_seen DESC LIMIT 1",
+                (guid_value,),
+            )
+        else:
+            cur.execute(
+                "SELECT guid, hostname, agent_id FROM devices WHERE LOWER(agent_id) = LOWER(?) ORDER BY last_seen DESC LIMIT 1",
+                (agent_id_value,),
+            )
         row = cur.fetchone()
-        resolved = _normalize_text(row[0] if row else "")
-        return resolved or agent_id
+        return {
+            "guid": _guid_candidate(row[0] if row else ""),
+            "hostname": _normalize_text(row[1] if row else ""),
+            "agent_id": _normalize_text(row[2] if row else ""),
+        }
     except Exception:
-        return agent_id
+        return {"guid": "", "hostname": "", "agent_id": ""}
     finally:
         if conn is not None:
             try:
                 conn.close()
             except Exception:
                 pass
+
+
+def _resolve_live_host_agent_id(
+    adapters: "EngineServiceAdapters",
+    hostname: str,
+    *,
+    preferred_service_mode: str,
+) -> str:
+    registry = getattr(getattr(adapters, "context", None), "agent_socket_registry", None)
+    if registry is None:
+        return ""
+    getter = getattr(registry, "get_agent_id_for_host_mode", None)
+    if not callable(getter):
+        return ""
+    try:
+        return _normalize_text(getter(hostname, preferred_service_mode))
+    except Exception:
+        return ""
+
+
+def _resolve_requested_agent_id(
+    adapters: "EngineServiceAdapters",
+    requested_agent_id: Any,
+    *,
+    preferred_service_mode: str = "system",
+    expected_guid: Any = None,
+) -> str:
+    agent_id = _normalize_text(requested_agent_id)
+    if not agent_id:
+        return ""
+
+    expected_guid_value = _guid_candidate(expected_guid)
+    if expected_guid_value and _guid_from_agent_id(agent_id) == expected_guid_value:
+        return agent_id
+
+    registry = getattr(getattr(adapters, "context", None), "agent_socket_registry", None)
+    if registry is not None and hasattr(registry, "is_registered"):
+        try:
+            if bool(registry.is_registered(agent_id)):
+                return agent_id
+        except Exception:
+            pass
+
+    guid = _guid_candidate(agent_id)
+    binding = _load_device_agent_binding(adapters, guid=guid) if guid else _load_device_agent_binding(adapters, agent_id=agent_id)
+    hostname = _normalize_text(binding.get("hostname")) or _infer_hostname_from_agent_id(agent_id)
+    live_agent_id = _resolve_live_host_agent_id(
+        adapters,
+        hostname,
+        preferred_service_mode=preferred_service_mode,
+    )
+    if live_agent_id:
+        return live_agent_id
+
+    resolved = _normalize_text(binding.get("agent_id"))
+    return resolved or agent_id
 
 
 def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:

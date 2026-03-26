@@ -3411,6 +3411,7 @@ if __name__=='__main__':
             'send_service_control': send_service_control,
             'get_server_url': get_server_url,
             'http_client': http_client,
+            'get_agent_id': lambda: AGENT_ID,
             'get_agent_build_id': lambda: _current_agent_build_id(sync=True),
             'log_agent': lambda message, **kwargs: _log_agent(message, **kwargs),
             'role_health_registry': ROLE_HEALTH_REGISTRY,

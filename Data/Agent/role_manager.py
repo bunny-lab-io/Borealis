@@ -22,7 +22,7 @@ class RoleManager:
     class Ctx:
         def __init__(self, sio, agent_id, config, loop, hooks: Optional[dict] = None):
             self.sio = sio
-            self.agent_id = agent_id
+            self._agent_id = agent_id
             self.config = config
             self.loop = loop
             self.hooks = hooks or {}
@@ -31,11 +31,27 @@ class RoleManager:
             except Exception:
                 self.service_mode = ''
 
+        @property
+        def agent_id(self):
+            try:
+                resolver = self.hooks.get('get_agent_id')
+                if callable(resolver):
+                    current = str(resolver() or '').strip()
+                    if current:
+                        return current
+            except Exception:
+                pass
+            return self._agent_id
+
+        @agent_id.setter
+        def agent_id(self, value):
+            self._agent_id = value
+
     def __init__(self, base_dir: str, context: str, sio, agent_id: str, config, loop, hooks: Optional[dict] = None):
         self.base_dir = base_dir
         self.context = context  # "interactive" or "system"
         self.sio = sio
-        self.agent_id = agent_id
+        self._agent_id = agent_id
         self.config = config
         self.loop = loop
         self.hooks = hooks or {}
@@ -53,6 +69,22 @@ class RoleManager:
                     sys.path.insert(0, str(candidate))
         except Exception:
             pass
+
+    @property
+    def agent_id(self) -> str:
+        try:
+            resolver = self.hooks.get('get_agent_id')
+            if callable(resolver):
+                current = str(resolver() or '').strip()
+                if current:
+                    return current
+        except Exception:
+            pass
+        return self._agent_id
+
+    @agent_id.setter
+    def agent_id(self, value: str) -> None:
+        self._agent_id = value
 
     def _log(self, message: str, *, error: bool = False) -> None:
         if callable(self._log_hook):

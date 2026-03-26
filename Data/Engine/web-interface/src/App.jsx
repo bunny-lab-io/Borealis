@@ -59,7 +59,7 @@ import Login from "./Login.jsx";
 import SiteList from "./Sites/Site_List";
 import SiteAssignment from "./Sites/Site_Assignment.jsx";
 import DeviceList from "./Devices/Device_List";
-import DeviceDetails from "./Devices/Device_Details";
+import DeviceSummary from "./Devices/Tabs/Device_Summary.jsx";
 import AgentDevices from "./Devices/Agent_Devices.jsx";
 import SSHDevices from "./Devices/SSH_Devices.jsx";
 import WinRMDevices from "./Devices/WinRM_Devices.jsx";
@@ -2217,14 +2217,10 @@ async function sha512(text) {
 
       case "device_details":
         return (
-          <DeviceDetails
+          <DeviceSummary
             onPageMetaChange={handlePageMetaChange}
             device={selectedDevice}
             onQuickJobLaunch={handleQuickJobLaunch}
-            onBack={() => {
-              navigateTo("devices");
-              setSelectedDevice(null);
-            }}
           />
         );
 

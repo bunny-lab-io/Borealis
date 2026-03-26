@@ -1,6 +1,6 @@
 # ======================================================
 # Data\Engine\services\VPN\wireguard_server.py
-# Description: WireGuard server configuration scaffold (UDP/30000, host-only peers, ACL defaults).
+# Description: WireGuard server configuration scaffold (UDP/30000, host-only peers, ACL defaults, live peer reconciliation).
 #
 # API Endpoints (if applicable): None
 # ======================================================
@@ -9,7 +9,8 @@
 
 This module prepares WireGuard server material (keys, config rendering, ACL
 defaults) and applies listener/firewall state. Windows uses WireGuard tunnel
-services while Linux uses wg-quick-managed interfaces.
+services while Linux keeps one persistent interface online and mutates peers
+live with WireGuard tooling.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from logging.handlers import TimedRotatingFileHandler
@@ -85,7 +87,9 @@ class WireGuardServerManager:
         self._firewall_cmd = shutil.which("firewall-cmd") or ""
         self._linux_listener_rule_name = f"Borealis-WG-Listener-{self._interface_name}"
         self._linux_rule_specs: Dict[str, Dict[str, object]] = {}
+        self._managed_peers: Dict[str, Dict[str, object]] = {}
         self._firewall_backend = self._detect_firewall_backend()
+        self._listener_lock = threading.RLock()
         self._log_startup_context()
 
     def _resolve_config_dir(self) -> Path:
@@ -107,6 +111,12 @@ class WireGuardServerManager:
     def _listener_config_path(self) -> Path:
         filename = f"{self._service_name}.conf" if self._is_windows else f"{self._interface_name}.conf"
         return self._config_dir / filename
+
+    def _ensure_config_dir_exists(self) -> None:
+        try:
+            self._config_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self.logger.warning("Failed to create temp dir for WireGuard config", exc_info=True)
 
     def _resolve_wireguard_exe(self) -> str:
         if not self._is_windows:
@@ -342,6 +352,60 @@ class WireGuardServerManager:
             detail = err or out or "unknown error"
             self.logger.warning("Failed to bring down WireGuard listener interface %s: %s", self._interface_name, detail)
 
+    def _linux_delete_interface(self) -> None:
+        if not self._ip or not self._linux_interface_exists():
+            return
+        code, out, err = self._run_command([self._ip, "link", "delete", "dev", self._interface_name])
+        if code != 0 and self._linux_interface_exists():
+            detail = err or out or "unknown error"
+            raise RuntimeError(f"WireGuard Linux interface cleanup failed: {detail}")
+        self.logger.warning("Removed stale WireGuard Linux interface %s before retry.", self._interface_name)
+
+    def _linux_reset_interface(self, config_path: Path) -> None:
+        self._linux_bring_down(config_path)
+        if self._linux_interface_exists():
+            self._linux_delete_interface()
+
+    def _linux_apply_interface_runtime(self) -> None:
+        if not self._wg:
+            raise RuntimeError("WireGuard tools missing on Linux Engine: 'wg' not found")
+        if not self._ip:
+            raise RuntimeError("WireGuard tools missing on Linux Engine: 'ip' not found")
+
+        code, out, err = self._run_command(
+            [
+                self._wg,
+                "set",
+                self._interface_name,
+                "listen-port",
+                str(int(self.config.port)),
+                "private-key",
+                str(self.config.private_key_path),
+            ]
+        )
+        if code != 0:
+            detail = (err or out or "unknown error").strip()
+            raise RuntimeError(f"WireGuard Linux interface configuration failed: {detail}")
+
+        code, out, err = self._run_command(
+            [
+                self._ip,
+                "address",
+                "replace",
+                str(self.config.engine_interface()),
+                "dev",
+                self._interface_name,
+            ]
+        )
+        if code != 0:
+            detail = (err or out or "unknown error").strip()
+            raise RuntimeError(f"WireGuard Linux address configuration failed: {detail}")
+
+        code, out, err = self._run_command([self._ip, "link", "set", "up", "dev", self._interface_name])
+        if code != 0:
+            detail = (err or out or "unknown error").strip()
+            raise RuntimeError(f"WireGuard Linux interface activation failed: {detail}")
+
     def _linux_bring_up(self, config_path: Path) -> None:
         if not self._wg_quick:
             raise RuntimeError("WireGuard tools missing on Linux Engine: 'wg-quick' not found")
@@ -350,12 +414,67 @@ class WireGuardServerManager:
             return
         detail = (err or out or "unknown error").strip()
         self.logger.warning("WireGuard Linux up failed for %s: %s", self._interface_name, detail)
-        self._linux_bring_down(config_path)
+        self._linux_reset_interface(config_path)
         code, out, err = self._run_command([self._wg_quick, "up", str(config_path)])
         if code == 0:
             return
         detail = (err or out or "unknown error").strip()
         raise RuntimeError(f"WireGuard Linux listener failed to start: {detail}")
+
+    def _normalise_peer_spec(self, peer: Mapping[str, object]) -> Dict[str, object]:
+        agent_id = str(peer.get("agent_id") or "").strip()
+        public_key = str(peer.get("public_key") or "").strip()
+        allowed_ips = [str(item).strip() for item in (peer.get("allowed_ips") or []) if str(item).strip()]
+        if not agent_id:
+            raise ValueError("WireGuard peer is missing agent_id")
+        if not public_key:
+            raise ValueError(f"WireGuard peer {agent_id} is missing public_key")
+        if not allowed_ips:
+            raise ValueError(f"WireGuard peer {agent_id} is missing allowed_ips")
+        normalized = dict(peer)
+        normalized["agent_id"] = agent_id
+        normalized["public_key"] = public_key
+        normalized["allowed_ips"] = tuple(allowed_ips)
+        return normalized
+
+    def _allowed_ips_text(self, peer: Mapping[str, object]) -> str:
+        return ",".join(str(item).strip() for item in (peer.get("allowed_ips") or []) if str(item).strip())
+
+    def _linux_list_current_peers(self) -> List[str]:
+        if not self._wg or not self._linux_interface_exists():
+            return []
+        code, out, err = self._run_command([self._wg, "show", self._interface_name, "peers"])
+        if code != 0:
+            detail = (err or out or "unknown error").strip()
+            raise RuntimeError(f"WireGuard Linux peer enumeration failed: {detail}")
+        return [line.strip() for line in str(out or "").splitlines() if line.strip()]
+
+    def _linux_remove_peer_by_public_key(self, public_key: str) -> None:
+        if not public_key or not self._wg or not self._linux_interface_exists():
+            return
+        code, out, err = self._run_command([self._wg, "set", self._interface_name, "peer", public_key, "remove"])
+        if code != 0:
+            detail = (err or out or "unknown error").strip()
+            raise RuntimeError(f"WireGuard Linux peer removal failed: {detail}")
+
+    def _linux_upsert_peer(self, peer: Mapping[str, object]) -> None:
+        normalized = self._normalise_peer_spec(peer)
+        previous = self._managed_peers.get(str(normalized["agent_id"]))
+        previous_public_key = str(previous.get("public_key") or "").strip() if previous else ""
+        public_key = str(normalized["public_key"])
+        if previous_public_key and previous_public_key != public_key:
+            self._linux_remove_peer_by_public_key(previous_public_key)
+
+        allowed_ips = self._allowed_ips_text(normalized)
+        if not allowed_ips:
+            raise ValueError(f"WireGuard peer {normalized['agent_id']} is missing allowed_ips")
+        code, out, err = self._run_command(
+            [self._wg, "set", self._interface_name, "peer", public_key, "allowed-ips", allowed_ips]
+        )
+        if code != 0:
+            detail = (err or out or "unknown error").strip()
+            raise RuntimeError(f"WireGuard Linux peer upsert failed: {detail}")
+        self._managed_peers[str(normalized["agent_id"])] = dict(normalized)
 
     def check_listener_health(self) -> Dict[str, Optional[Union[str, bool]]]:
         """Return the current listener health without mutating listener state."""
@@ -368,17 +487,20 @@ class WireGuardServerManager:
                     "healthy": False,
                     "reason": "service_missing",
                     "service_state": service_state,
+                    "peer_count": len(self._managed_peers),
                 }
             if service_state in ("RUNNING", "START_PENDING"):
                 return {
                     "healthy": True,
                     "reason": "service_running",
                     "service_state": service_state,
+                    "peer_count": len(self._managed_peers),
                 }
             return {
                 "healthy": False,
                 "reason": "service_unhealthy",
                 "service_state": service_state,
+                "peer_count": len(self._managed_peers),
             }
 
         if not self._linux_interface_exists():
@@ -386,12 +508,14 @@ class WireGuardServerManager:
                 "healthy": False,
                 "reason": "interface_down",
                 "service_state": None,
+                "peer_count": 0,
             }
         if not self._wg:
             return {
                 "healthy": False,
                 "reason": "wg_unavailable",
                 "service_state": None,
+                "peer_count": 0,
             }
         code, _out, _err = self._run_command([self._wg, "show", self._interface_name])
         if code != 0:
@@ -399,6 +523,7 @@ class WireGuardServerManager:
                 "healthy": False,
                 "reason": "wg_show_failed",
                 "service_state": None,
+                "peer_count": 0,
             }
         code, peers_out, _err = self._run_command([self._wg, "show", self._interface_name, "peers"])
         if code != 0:
@@ -406,6 +531,7 @@ class WireGuardServerManager:
                 "healthy": False,
                 "reason": "wg_peers_failed",
                 "service_state": None,
+                "peer_count": 0,
             }
         peers = [line.strip() for line in str(peers_out or "").splitlines() if line.strip()]
         if not peers:
@@ -413,11 +539,13 @@ class WireGuardServerManager:
                 "healthy": False,
                 "reason": "no_peers_configured",
                 "service_state": None,
+                "peer_count": 0,
             }
         return {
             "healthy": True,
             "reason": "listener_running",
             "service_state": "RUNNING",
+            "peer_count": len(peers),
         }
 
     def _linux_firewall_ensure_rule(self, chain: str, params: Sequence[str], *, label: str) -> bool:
@@ -687,15 +815,7 @@ class WireGuardServerManager:
     ) -> str:
         """Render a host-only WireGuard server config (without applying it)."""
 
-        iface = self.config.engine_interface()
-        lines = [
-            "[Interface]",
-            f"PrivateKey = {self.server_private_key}",
-            f"ListenPort = {self.config.port}",
-            f"Address = {iface}",
-            "",
-        ]
-
+        lines = self.render_listener_base_config().splitlines()
         for peer in peers:
             allowed_ips = peer.get("allowed_ips") or []
             allowed_ip_text = ", ".join(str(item) for item in allowed_ips)
@@ -715,6 +835,126 @@ class WireGuardServerManager:
             lines.append("")
 
         return "\n".join(lines)
+
+    def render_listener_base_config(self) -> str:
+        """Render the interface-only WireGuard config used to keep the listener online."""
+
+        iface = self.config.engine_interface()
+        return "\n".join(
+            [
+                "[Interface]",
+                f"PrivateKey = {self.server_private_key}",
+                f"ListenPort = {self.config.port}",
+                f"Address = {iface}",
+                "",
+            ]
+        )
+
+    def _write_listener_config(self, text: str) -> Path:
+        self._ensure_config_dir_exists()
+        config_path = self._listener_config_path()
+        config_path.write_text(text, encoding="utf-8")
+        self._secure_path_permissions(config_path, mode=0o600, label="WireGuard listener config")
+        self.logger.info("Rendered WireGuard config to %s", config_path)
+        return config_path
+
+    def _apply_windows_listener(self, config_path: Path, *, restart_existing: bool) -> None:
+        if self._service_exists():
+            if restart_existing:
+                if not self._stop_service(timeout=20):
+                    self.logger.warning("WireGuard tunnel service did not stop cleanly before restart.")
+            self._ensure_service_display_name()
+            self._ensure_service_running(timeout=25)
+            return
+
+        args = [self._wireguard_exe, "/installtunnelservice", str(config_path)]
+        code, out, err = self._run_command(args)
+        if code != 0:
+            self.logger.error("Failed to install WireGuard tunnel service code=%s err=%s", code, err)
+            raise RuntimeError(f"WireGuard installtunnelservice failed: {err}")
+        self.logger.info("WireGuard listener installed (service=%s)", config_path.stem)
+        self._ensure_service_display_name()
+        self._ensure_service_running(timeout=25)
+
+    def ensure_listener(self) -> None:
+        with self._listener_lock:
+            config_path = self._write_listener_config(self.render_listener_base_config())
+
+            if not self._is_windows:
+                if not self._linux_interface_exists():
+                    self._linux_bring_up(config_path)
+                    self._managed_peers.clear()
+                else:
+                    self._linux_apply_interface_runtime()
+                self._ensure_linux_listener_rule()
+                self.logger.info("WireGuard listener ready on Linux interface %s", self._interface_name)
+                return
+
+            if self._service_exists():
+                self._apply_windows_listener(config_path, restart_existing=False)
+                return
+
+            self._apply_windows_listener(config_path, restart_existing=False)
+
+    def upsert_peer(self, peer: Mapping[str, object]) -> None:
+        with self._listener_lock:
+            normalized = self._normalise_peer_spec(peer)
+            if not self._is_windows:
+                self.ensure_listener()
+                self._linux_upsert_peer(normalized)
+                return
+
+            self._managed_peers[str(normalized["agent_id"])] = dict(normalized)
+            self.start_listener(list(self._managed_peers.values()))
+
+    def remove_peer(self, agent_id: str, *, public_key: str = "") -> None:
+        with self._listener_lock:
+            agent_key = str(agent_id or "").strip()
+            managed = self._managed_peers.get(agent_key) or {}
+            peer_public_key = str(public_key or managed.get("public_key") or "").strip()
+
+            if not self._is_windows:
+                if self._linux_interface_exists() and peer_public_key:
+                    self._linux_remove_peer_by_public_key(peer_public_key)
+                self._managed_peers.pop(agent_key, None)
+                return
+
+            if agent_key:
+                self._managed_peers.pop(agent_key, None)
+            remaining = list(self._managed_peers.values())
+            if remaining:
+                self.start_listener(remaining)
+            else:
+                self.stop_listener(ignore_missing=True)
+
+    def reconcile_peers(self, peers: Sequence[Mapping[str, object]]) -> None:
+        with self._listener_lock:
+            desired: Dict[str, Dict[str, object]] = {}
+            for peer in peers:
+                normalized = self._normalise_peer_spec(peer)
+                desired[str(normalized["agent_id"])] = normalized
+
+            if not self._is_windows:
+                self.ensure_listener()
+                current_public_keys = set(self._linux_list_current_peers())
+                desired_public_keys = {
+                    str(peer.get("public_key") or "").strip()
+                    for peer in desired.values()
+                    if str(peer.get("public_key") or "").strip()
+                }
+                for stale_public_key in sorted(current_public_keys - desired_public_keys):
+                    self._linux_remove_peer_by_public_key(stale_public_key)
+                self._managed_peers = {}
+                for peer in desired.values():
+                    self._linux_upsert_peer(peer)
+                self._managed_peers = {agent_id: dict(peer) for agent_id, peer in desired.items()}
+                return
+
+            self._managed_peers = {agent_id: dict(peer) for agent_id, peer in desired.items()}
+            if self._managed_peers:
+                self.start_listener(list(self._managed_peers.values()))
+            else:
+                self.ensure_listener()
 
     def describe_acl_defaults(self) -> Mapping[str, object]:
         return {
@@ -838,72 +1078,52 @@ class WireGuardServerManager:
     def start_listener(self, peers: Sequence[Mapping[str, object]]) -> None:
         """Render a temporary WireGuard config and start the service."""
 
-        try:
-            self._config_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            self.logger.warning("Failed to create temp dir for WireGuard config", exc_info=True)
+        with self._listener_lock:
+            if not self._is_windows:
+                self.reconcile_peers(peers)
+                return
 
-        config_path = self._listener_config_path()
-        rendered = self.render_server_config(peers)
-        config_path.write_text(rendered, encoding="utf-8")
-        self._secure_path_permissions(config_path, mode=0o600, label="WireGuard listener config")
-        self.logger.info("Rendered WireGuard config to %s", config_path)
-
-        if not self._is_windows:
-            self._linux_bring_down(config_path)
-            self._linux_bring_up(config_path)
-            self._ensure_linux_listener_rule()
-            self.logger.info("WireGuard listener active on Linux interface %s", self._interface_name)
-            return
-
-        if self._service_exists():
-            if not self._stop_service(timeout=20):
-                self.logger.warning("WireGuard tunnel service did not stop cleanly before restart.")
-            self._ensure_service_display_name()
-            self._ensure_service_running(timeout=25)
-            return
-
-        args = [self._wireguard_exe, "/installtunnelservice", str(config_path)]
-        code, out, err = self._run_command(args)
-        if code != 0:
-            self.logger.error("Failed to install WireGuard tunnel service code=%s err=%s", code, err)
-            raise RuntimeError(f"WireGuard installtunnelservice failed: {err}")
-        self.logger.info("WireGuard listener installed (service=%s)", config_path.stem)
-        self._ensure_service_display_name()
-        self._ensure_service_running(timeout=25)
+            config_path = self._write_listener_config(self.render_server_config(peers))
+            self._managed_peers = {
+                str(self._normalise_peer_spec(peer)["agent_id"]): dict(self._normalise_peer_spec(peer))
+                for peer in peers
+            }
+            self._apply_windows_listener(config_path, restart_existing=True)
 
     def stop_listener(self, *, ignore_missing: bool = False) -> None:
         """Stop the WireGuard tunnel service (leave installed for reuse)."""
 
-        if not self._is_windows:
-            config_path = self._listener_config_path()
-            interface_exists = self._linux_interface_exists()
-            if not self._wg_quick:
-                if ignore_missing:
-                    self.logger.info("WireGuard tools not available; Linux listener already absent")
+        with self._listener_lock:
+            self._managed_peers = {}
+            if not self._is_windows:
+                config_path = self._listener_config_path()
+                interface_exists = self._linux_interface_exists()
+                if not self._wg_quick:
+                    if ignore_missing:
+                        self.logger.info("WireGuard tools not available; Linux listener already absent")
+                    else:
+                        self.logger.warning("WireGuard tools not available; cannot stop Linux listener.")
+                    self._remove_linux_listener_rule()
+                    return
+                code, out, err = self._run_command([self._wg_quick, "down", str(config_path)])
+                if code != 0 and interface_exists and not ignore_missing:
+                    self.logger.warning("WireGuard Linux listener did not stop cleanly: %s", err or out)
                 else:
-                    self.logger.warning("WireGuard tools not available; cannot stop Linux listener.")
+                    self.logger.info("WireGuard Linux listener stopped")
                 self._remove_linux_listener_rule()
                 return
-            code, out, err = self._run_command([self._wg_quick, "down", str(config_path)])
-            if code != 0 and interface_exists and not ignore_missing:
-                self.logger.warning("WireGuard Linux listener did not stop cleanly: %s", err or out)
-            else:
-                self.logger.info("WireGuard Linux listener stopped")
-            self._remove_linux_listener_rule()
-            return
 
-        if not self._service_exists():
-            if ignore_missing:
-                self.logger.info("WireGuard tunnel service already absent")
+            if not self._service_exists():
+                if ignore_missing:
+                    self.logger.info("WireGuard tunnel service already absent")
+                    return
+                self.logger.warning("WireGuard tunnel service not found during stop.")
                 return
-            self.logger.warning("WireGuard tunnel service not found during stop.")
-            return
 
-        if not self._stop_service(timeout=20):
-            self.logger.warning("WireGuard tunnel service did not stop cleanly.")
-            return
-        self.logger.info("WireGuard tunnel service stopped")
+            if not self._stop_service(timeout=20):
+                self.logger.warning("WireGuard tunnel service did not stop cleanly.")
+                return
+            self.logger.info("WireGuard tunnel service stopped")
 
     def build_firewall_rules(
         self,
