@@ -599,6 +599,82 @@ def _current_agent_build_id(*, sync: bool = False) -> str:
     return ""
 
 
+_MANUAL_UPDATE_PROCESS_LOCK = threading.Lock()
+_MANUAL_UPDATE_PROCESS = None
+
+
+def _manual_update_command(project_root: str) -> Tuple[Optional[List[str]], str]:
+    root = os.path.abspath(project_root or _find_project_root())
+    if os.name == 'nt':
+        update_script = os.path.join(root, 'Update.ps1')
+        if not os.path.isfile(update_script):
+            return None, update_script
+        powershell = os.path.expandvars(r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
+        if not os.path.isfile(powershell):
+            powershell = "powershell.exe"
+        return [powershell, "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", update_script], update_script
+
+    update_script = os.path.join(root, 'Update.sh')
+    if not os.path.isfile(update_script):
+        return None, update_script
+    shell_path = shutil.which("bash") or "/bin/bash"
+    return [shell_path, update_script], update_script
+
+
+def _launch_manual_agent_update(*, requested_by: str = "", requested_at: Any = None) -> Tuple[bool, str]:
+    global _MANUAL_UPDATE_PROCESS
+
+    project_root = _find_project_root()
+    command, script_path = _manual_update_command(project_root)
+    if not command:
+        return False, f"updater_missing:{script_path}"
+
+    with _MANUAL_UPDATE_PROCESS_LOCK:
+        existing = _MANUAL_UPDATE_PROCESS
+        if existing is not None:
+            try:
+                if existing.poll() is None:
+                    return False, "update_already_running"
+            except Exception:
+                return False, "update_already_running"
+            _MANUAL_UPDATE_PROCESS = None
+
+        env = os.environ.copy()
+        env["BOREALIS_PROJECT_ROOT"] = project_root
+        env.setdefault("BOREALIS_ROOT", project_root)
+        popen_kwargs: Dict[str, Any] = {
+            "cwd": project_root,
+            "env": env,
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if os.name == 'nt':
+            creationflags = (
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            )
+            if creationflags:
+                popen_kwargs["creationflags"] = creationflags
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        proc = subprocess.Popen(command, **popen_kwargs)
+        _MANUAL_UPDATE_PROCESS = proc
+
+    _log_agent(
+        "Manual agent update launch queued requested_by={0} requested_at={1} pid={2} script={3}".format(
+            requested_by or "-",
+            requested_at if requested_at is not None else "-",
+            getattr(proc, "pid", "-"),
+            os.path.basename(script_path),
+        ),
+        fname='agent.log',
+    )
+    return True, "queued"
+
+
 def _format_debug_pairs(pairs: Dict[str, Any]) -> str:
     try:
         parts = []
@@ -3061,6 +3137,49 @@ async def on_agent_config(cfg):
         print(f"[WARN] role manager (system) apply config failed: {e}")
 
 ## Script execution and list windows handlers are registered by roles
+
+
+@sio.on('agent_update_request')
+async def on_agent_update_request(payload):
+    try:
+        if not isinstance(payload, dict):
+            return
+        if str(SERVICE_MODE_CANONICAL or "").upper() != "SYSTEM":
+            return
+        target_agent = str(payload.get("agent_id") or "").strip()
+        if target_agent and target_agent != AGENT_ID:
+            return
+        target_hostname = str(payload.get("hostname") or "").strip().lower()
+        if target_hostname and target_hostname != socket.gethostname().strip().lower():
+            return
+
+        requested_by = str(payload.get("requested_by") or "").strip()
+        requested_at = payload.get("requested_at")
+        launched, status = _launch_manual_agent_update(
+            requested_by=requested_by,
+            requested_at=requested_at,
+        )
+        if launched:
+            return
+        if status == "update_already_running":
+            _log_agent(
+                "Manual agent update request ignored because an updater process is already running requested_by={0} requested_at={1}".format(
+                    requested_by or "-",
+                    requested_at if requested_at is not None else "-",
+                ),
+                fname='agent.log',
+            )
+            return
+        _log_agent(
+            "Manual agent update request failed requested_by={0} requested_at={1} detail={2}".format(
+                requested_by or "-",
+                requested_at if requested_at is not None else "-",
+                status,
+            ),
+            fname='agent.error.log',
+        )
+    except Exception as exc:
+        _log_agent(f"Manual agent update request handler failed: {exc}", fname='agent.error.log')
 
 # ---------------- Config Watcher ----------------
 async def config_watcher():

@@ -146,6 +146,7 @@ onPageMetaChange?.({
 - Label treatment: the floating label text should blend directly into the page/header background. Do not add a chip, pill, or opaque backdrop behind the label text.
 - Badges/metadata: do not standardize badges as part of the shared header rail. Page-specific metadata belongs in the page body, usually directly under the subtitle or near the first relevant control group.
 - Secondary action overflow: on narrow widths, if the full rail no longer fits on a single row, the shared rail automatically collapses all secondary actions into a single `Actions` secondary button while keeping primary/warning/danger actions visible. Overflow menu ordering should place the secondary action closest to the primary buttons at the top of the menu.
+- Device Summary uses a page-local `Actions` menu inside `Data/Engine/web-interface/src/Devices/Tabs/Device_Summary.jsx`; it currently exposes `Quick Job`, `Update Agent`, and `Clear Device Activity`.
 - Responsive behavior: tabs remain in normal flow beneath the header band. On narrow widths, the title block and action rail stack vertically. The rail should prefer collapsing secondary actions before wrapping and must never cover the tabs or the first content section.
 - Placement: tabs sit directly below the shared header band (8-16px gap). Tabs span the full width of the content column.
 - Typography: match Navigation Sidebar typography. Inherit the font family (IBM Plex Sans via theme), use `fontSize: "0.8rem"`, mixed case labels (`textTransform: "none"`). Default `fontWeight: 400`; active tabs are `fontWeight: 600`. Standard rail height is `32px` (compact stacks use `28px`).
@@ -351,7 +352,7 @@ Notes:
 #### Implementation steps (recap)
 1) Backend: ensure `/api/notifications/notify` is registered (already in repo). New services should import `register_notifications` if API groups are customized.
 2) Emit: from any authenticated server flow, POST to `/api/notifications/notify` with the payload above.
-3) Frontend: `App.jsx` mounts `Notifications` globally; no per-page wiring needed.
+3) Frontend: `App.jsx` mounts `Notifications` globally; page-local actions can either post to `/api/notifications/notify` directly or reuse the shared `sendNotification` helper passed down from `App.jsx`.
 4) Test: use the Firefox console examples below while logged in to confirm toast rendering.
 
 #### Firefox console examples (run while signed in)

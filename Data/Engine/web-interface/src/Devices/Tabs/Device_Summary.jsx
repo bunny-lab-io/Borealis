@@ -712,7 +712,7 @@ const SummarySectionsNav = React.memo(function SummarySectionsNav({ onSelectSect
   );
 });
 
-export default function DeviceSummary({ device, onQuickJobLaunch, onPageMetaChange }) {
+export default function DeviceSummary({ device, onQuickJobLaunch, onPageMetaChange, onNotify }) {
   const initialTabIndex = useMemo(() => {
     try {
       const params = new URLSearchParams(window.location.search || "");
@@ -744,6 +744,7 @@ export default function DeviceSummary({ device, onQuickJobLaunch, onPageMetaChan
   const [agentHealthDialogEntry, setAgentHealthDialogEntry] = useState(null);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [updateAgentBusy, setUpdateAgentBusy] = useState(false);
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   // Snapshotted status for the lifetime of this page
   const [lockedStatus, setLockedStatus] = useState(() => {
@@ -1251,8 +1252,37 @@ export default function DeviceSummary({ device, onQuickJobLaunch, onPageMetaChan
   }, [device]);
 
   const activityHostname = useMemo(() => {
-    return (meta?.hostname || agent?.hostname || device?.hostname || "").trim();
-  }, [meta?.hostname, agent?.hostname, device?.hostname]);
+    return (meta?.hostname || summary.hostname || agent?.hostname || device?.hostname || "").trim();
+  }, [meta?.hostname, summary.hostname, agent?.hostname, device?.hostname]);
+
+  const notifyOperator = useCallback(
+    async ({ title, message, icon = "notification", variant = "info" }) => {
+      if (typeof onNotify === "function") {
+        try {
+          await onNotify({ title, message, icon, variant });
+          return;
+        } catch {
+          /* fall through to local best-effort notification */
+        }
+      }
+      try {
+        await fetch("/api/notifications/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            title,
+            message,
+            icon,
+            variant,
+          }),
+        });
+      } catch {
+        /* notifications are best-effort */
+      }
+    },
+    [onNotify]
+  );
 
   const saveConnectionEndpoint = useCallback(async () => {
     if (connectionType !== "ssh") return;
@@ -1302,6 +1332,41 @@ export default function DeviceSummary({ device, onQuickJobLaunch, onPageMetaChan
       console.warn("Failed to clear activity history", e);
     }
   }, [activityHostname]);
+
+  const requestAgentUpdate = useCallback(async () => {
+    const targetHost = activityHostname;
+    if (!targetHost || updateAgentBusy) return;
+    setUpdateAgentBusy(true);
+    try {
+      const resp = await fetch(`/api/device/update-agent/${encodeURIComponent(targetHost)}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        let message = String(data?.message || data?.error || `HTTP ${resp.status}`);
+        if (String(data?.error || "").trim() === "agent_unavailable") {
+          message = "The agent SYSTEM socket is not connected, so Borealis could not queue the update request.";
+        }
+        throw new Error(message);
+      }
+      await notifyOperator({
+        title: "Agent Update Requested",
+        message: `Queued an immediate agent update check for ${targetHost}.`,
+        icon: "update",
+        variant: "info",
+      });
+    } catch (err) {
+      await notifyOperator({
+        title: "Agent Update Failed",
+        message: `Could not queue an update for ${targetHost}: ${String(err?.message || err)}`,
+        icon: "error",
+        variant: "error",
+      });
+    } finally {
+      setUpdateAgentBusy(false);
+    }
+  }, [activityHostname, notifyOperator, updateAgentBusy]);
 
   const saveDescription = async () => {
     const targetHost = meta.hostname || details.summary?.hostname;
@@ -2701,11 +2766,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         label: "Actions",
         icon: <MoreHorizIcon />,
         tone: "primary",
-        disabled: !(agent?.hostname || device?.hostname),
+        disabled: !activityHostname,
         onClick: (event) => setMenuAnchor(event.currentTarget),
       },
     ],
-    [agent?.hostname, device?.hostname]
+    [activityHostname]
   );
 
   useEffect(() => {
@@ -2767,6 +2832,15 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           }}
         >
           Quick Job
+        </MenuItem>
+        <MenuItem
+          disabled={!activityHostname || updateAgentBusy}
+          onClick={() => {
+            setMenuAnchor(null);
+            requestAgentUpdate();
+          }}
+        >
+          Update Agent
         </MenuItem>
         <MenuItem
           onClick={() => {

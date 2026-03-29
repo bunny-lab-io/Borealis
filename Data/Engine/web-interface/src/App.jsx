@@ -2221,6 +2221,7 @@ async function sha512(text) {
             onPageMetaChange={handlePageMetaChange}
             device={selectedDevice}
             onQuickJobLaunch={handleQuickJobLaunch}
+            onNotify={sendNotification}
           />
         );
 

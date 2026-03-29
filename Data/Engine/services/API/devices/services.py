@@ -1,13 +1,14 @@
 # ======================================================
 # Data\Engine\services\API\devices\services.py
-# Description: Device service inventory and control endpoints.
+# Description: Device service inventory and operator-triggered control endpoints.
 #
 # API Endpoints (if applicable):
 # - GET /api/device/services/<hostname> (Token Authenticated) - Returns cached service inventory for an in-scope device.
 # - POST /api/device/services/<hostname>/action (Token Authenticated) - Start, stop, or restart a named service on an in-scope device.
+# - POST /api/device/update-agent/<hostname> (Token Authenticated) - Request an immediate agent updater run for an in-scope device.
 # ======================================================
 
-"""Device service inventory and control endpoints for the Borealis Engine."""
+"""Device service inventory and operator-triggered control endpoints for the Borealis Engine."""
 from __future__ import annotations
 
 import time
@@ -51,6 +52,14 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             service_log("device_services", message, level=level)
         except Exception:
             logger.debug("device_services service log write failed", exc_info=True)
+
+    def _agent_update_log_event(message: str, *, level: str = "INFO") -> None:
+        if not callable(service_log):
+            return
+        try:
+            service_log("device_actions", message, level=level)
+        except Exception:
+            logger.debug("device_actions service log write failed", exc_info=True)
 
     def _request_remote() -> str:
         forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
@@ -281,5 +290,90 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             }
         ), 200
 
-    app.register_blueprint(blueprint)
+    @blueprint.route("/api/device/update-agent/<hostname>", methods=["POST"])
+    def update_agent(hostname: str):
+        requirement = _require_login(app)
+        if requirement:
+            payload, status = requirement
+            return jsonify(payload), status
 
+        user = _current_user(app) or {}
+        operator_id = _normalize_text(user.get("username"))
+        if not site_access.user_can_access_hostname(user, hostname):
+            return jsonify({"error": "not found"}), 404
+
+        record = _load_device_record(hostname)
+        if record is None:
+            return jsonify({"error": "not found"}), 404
+
+        requested_at = int(time.time())
+        agent_id = _resolve_requested_agent_id(adapters, record.get("agent_id"))
+        emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
+        emit_agent_event = getattr(adapters.context, "emit_agent_event", None)
+        event_payload = {
+            "hostname": record.get("hostname") or hostname,
+            "agent_id": agent_id,
+            "requested_at": requested_at,
+            "requested_by": operator_id,
+        }
+
+        emitted = False
+        if callable(emit_host_service_event):
+            try:
+                emitted = bool(
+                    emit_host_service_event(
+                        record.get("hostname") or hostname,
+                        "system",
+                        "agent_update_request",
+                        event_payload,
+                    )
+                )
+            except Exception:
+                emitted = False
+        if not emitted and callable(emit_agent_event) and agent_id:
+            try:
+                emitted = bool(emit_agent_event(agent_id, "agent_update_request", event_payload))
+            except Exception:
+                emitted = False
+
+        if not emitted:
+            _agent_update_log_event(
+                "device_agent_update_unavailable hostname={0} agent_id={1} operator={2} remote={3}".format(
+                    record.get("hostname") or hostname,
+                    agent_id or "-",
+                    operator_id or "-",
+                    _request_remote() or "-",
+                ),
+                level="WARNING",
+            )
+            return (
+                jsonify(
+                    {
+                        "error": "agent_unavailable",
+                        "message": "The agent SYSTEM socket is not available for an immediate update request.",
+                    }
+                ),
+                409,
+            )
+
+        _agent_update_log_event(
+            "device_agent_update_request hostname={0} agent_id={1} operator={2} remote={3}".format(
+                record.get("hostname") or hostname,
+                agent_id or "-",
+                operator_id or "-",
+                _request_remote() or "-",
+            )
+        )
+        return (
+            jsonify(
+                {
+                    "status": "queued",
+                    "hostname": record.get("hostname") or hostname,
+                    "agent_id": agent_id,
+                    "requested_at": requested_at,
+                }
+            ),
+            200,
+        )
+
+    app.register_blueprint(blueprint)
