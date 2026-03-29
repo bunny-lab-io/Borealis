@@ -85,6 +85,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Error log: `Agent/Logs/agent.error.log`.
 - VPN logs: `Agent/Logs/VPN_Tunnel/tunnel.log` and `remote_shell.log`.
 - Role-specific logs may write to `Agent/Logs/<service>.log`.
+- Updater diagnostics: `<ProjectRoot>/Updater.log` is appended by both `Update.ps1` and `Update.sh`.
 
 ### Troubleshooting flow
 - If enrollment fails, check:
@@ -109,6 +110,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 - Primary log: `Agent/Logs/agent.log` with daily rotation to `agent.log.YYYY-MM-DD` (never auto-delete rotated files).
 - Subsystems: log to `Agent/Logs/<service>.log` with the same rotation policy.
 - Install/diagnostics: `Agent/Logs/install.log`; keep ad-hoc traces (for example, `system_last.ps1`) under `Agent/Logs/` to keep runtime state self-contained.
+- Updater trace exception: `Update.ps1` and `Update.sh` append centralized diagnostics to `<ProjectRoot>/Updater.log` so update failures can be collected from one file across platforms.
 - Troubleshooting: prefix lines with `<timestamp>-<service-name>-<log-data>`; ask operators whether verbose logging should stay after resolution.
 
 #### Security

@@ -14,16 +14,67 @@ else
 fi
 cd "${SCRIPT_DIR}"
 
-LOG_DIR="${SCRIPT_DIR}/Agent/Logs"
-LOG_FILE="${LOG_DIR}/update.log"
-mkdir -p "${LOG_DIR}"
+LOG_FILE="${SCRIPT_DIR}/Updater.log"
+LOG_FILE_READY="0"
+XTRACE_FD_OPEN="0"
+
+setup_logging() {
+  local timestamp
+  timestamp="$(date +%FT%T)"
+
+  if ! touch "${LOG_FILE}" 2>/dev/null; then
+    printf "[%s] [WARN] Unable to open updater log at %s; continuing without file logging.\n" "${timestamp}" "${LOG_FILE}" >&2
+    return 0
+  fi
+
+  exec 3>>"${LOG_FILE}"
+  XTRACE_FD_OPEN="1"
+  export BASH_XTRACEFD=3
+  export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
+
+  exec > >(tee -a "${LOG_FILE}") 2>&1
+  LOG_FILE_READY="1"
+
+  printf "[%s] [STEP] ===== Starting Update.sh session =====\n" "${timestamp}"
+  # Keep command traces in Updater.log only so console output stays readable.
+  set -x
+}
+
+log_unhandled_error() {
+  local exit_code=$?
+  local line_no="${1:-unknown}"
+  local command="${2:-unknown}"
+  command="${command//$'\n'/ }"
+  printf "[%s] [ERROR] Update.sh failed near line %s while running: %s\n" "$(date +%FT%T)" "${line_no}" "${command}"
+  return "${exit_code}"
+}
+
+finish_logging() {
+  local exit_code="${1:-0}"
+
+  if [[ "${LOG_FILE_READY}" == "1" ]]; then
+    set +x 2>/dev/null || true
+    if [[ "${exit_code}" == "0" ]]; then
+      printf "[%s] [SUCCESS] ===== Update.sh session finished successfully =====\n" "$(date +%FT%T)"
+    else
+      printf "[%s] [ERROR] ===== Update.sh session failed with exit code %s =====\n" "$(date +%FT%T)" "${exit_code}"
+    fi
+  fi
+
+  if [[ "${XTRACE_FD_OPEN}" == "1" ]]; then
+    exec 3>&-
+    XTRACE_FD_OPEN="0"
+  fi
+}
+
+setup_logging
+trap 'log_unhandled_error "${LINENO}" "${BASH_COMMAND}"' ERR
+trap 'finish_logging "$?"' EXIT
 
 log_line() {
   local level="$1"
   local message="$2"
-  local line
-  line="[${level}] ${message}"
-  printf "[%s] %s\n" "$(date +%FT%T)" "${line}" | tee -a "${LOG_FILE}"
+  printf "[%s] [%s] %s\n" "$(date +%FT%T)" "${level}" "${message}"
 }
 
 normalize_hash() {

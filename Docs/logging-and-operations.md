@@ -11,6 +11,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Service logs: `Engine/Logs/<service>.log` (per-domain).
 - VPN logs: `Engine/Logs/VPN_Tunnel/tunnel.log` and `Engine/Logs/VPN_Tunnel/remote_shell.log`.
 - Agent logs: `Agent/Logs/agent.log` and `Agent/Logs/agent.error.log` (daily rotation).
+- Updater diagnostics: `<ProjectRoot>/Updater.log` (shared append-only log written by `Update.ps1` and `Update.sh`).
 
 ## Log Retention
 - Retention is managed via `/api/server/logs` endpoints.
@@ -53,6 +54,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - Logs are scoped by context (SYSTEM vs CURRENTUSER) in prefixes.
 - Role-specific logs live under `Agent/Logs/<service>.log`.
 - VPN logs are kept in `Agent/Logs/VPN_Tunnel/`.
+- Cross-platform updater traces are written to `<ProjectRoot>/Updater.log` so operators can collect one file when troubleshooting update failures.
 
 ### Debug workflow
 - Start with the log file closest to the symptom.
@@ -62,5 +64,5 @@ Describe Borealis operational logging, retention, and core runtime checks.
 
 ### Operational safety
 - Do not delete logs by hand while debugging; use the log API or archive first.
-- Keep runtime artifacts inside `Engine/` and `Agent/` to preserve boundaries.
+- Keep runtime artifacts inside `Engine/` and `Agent/` to preserve boundaries, except for the intentionally shared updater trace at `<ProjectRoot>/Updater.log`.
 - If you change log formats, update this document and `engine-runtime.md`.

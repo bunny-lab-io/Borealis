@@ -9,11 +9,82 @@ $script:BorealisTrustedThumbprints = @()
 $script:BorealisCallbackApplied = $false
 $script:AgentPythonHttpHelper = ''
 $script:UpdateDebugEnabled = $Trace.IsPresent
+$script:UpdaterLogPath = Join-Path $scriptDir 'Updater.log'
+$script:UpdateFileLoggingWarned = $false
+$script:UpdateLoggingInitialized = $false
 $symbols = @{
     Success = [char]0x2705
     Running = [char]0x23F3
     Fail    = [char]0x274C
     Info    = [char]0x2139
+}
+
+function Write-UpdateFileLine {
+    param(
+        [string]$Line
+    )
+
+    if (-not $Line) { return }
+
+    try {
+        Add-Content -Path $script:UpdaterLogPath -Value $Line -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        if (-not $script:UpdateFileLoggingWarned) {
+            $script:UpdateFileLoggingWarned = $true
+            Write-Warning ("Unable to write updater log to {0}: {1}" -f $script:UpdaterLogPath, $_.Exception.Message)
+        }
+    }
+}
+
+function Initialize-UpdateLogging {
+    if ($script:UpdateLoggingInitialized) { return }
+
+    $script:UpdateLoggingInitialized = $true
+    $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    Write-UpdateFileLine ("[{0}] [STEP] ===== Starting Update.ps1 session =====" -f $timestamp)
+}
+
+function Finalize-UpdateLogging {
+    param(
+        [string]$Level = 'SUCCESS',
+        [string]$Message = '===== Update.ps1 session finished successfully ====='
+    )
+
+    $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $normalized = if ($Level) { $Level.ToUpperInvariant() } else { 'INFO' }
+    Write-UpdateFileLine ("[{0}] [{1}] {2}" -f $timestamp, $normalized, $Message)
+}
+
+function Write-UpdateHost {
+    param(
+        [string]$Message,
+        [string]$Color,
+        [switch]$NoNewline,
+        [string]$Level = 'INFO'
+    )
+
+    if (-not $Message) { return }
+
+    $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $normalized = if ($Level) { $Level.ToUpperInvariant() } else { 'INFO' }
+    $sanitized = (($Message -replace "[`r`n]+", ' ').Trim())
+    if ($sanitized) {
+        Write-UpdateFileLine ("[{0}] [{1}] {2}" -f $timestamp, $normalized, $sanitized)
+    }
+
+    if ($Color) {
+        if ($NoNewline) {
+            Write-Host $Message -ForegroundColor $Color -NoNewline
+        } else {
+            Write-Host $Message -ForegroundColor $Color
+        }
+    } else {
+        if ($NoNewline) {
+            Write-Host $Message -NoNewline
+        } else {
+            Write-Host $Message
+        }
+    }
 }
 
 function Write-UpdateLog {
@@ -28,9 +99,9 @@ function Write-UpdateLog {
     $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     $normalized = if ($Level) { $Level } else { 'INFO' }
     $normalized = $normalized.ToUpperInvariant()
-
+    $writeToConsole = $true
     if ($normalized -eq 'DEBUG' -and -not $script:UpdateDebugEnabled) {
-        return
+        $writeToConsole = $false
     }
 
     if (-not $Color) {
@@ -44,6 +115,10 @@ function Write-UpdateLog {
     }
 
     $line = "[{0}] [{1}] {2}" -f $timestamp, $normalized, $Message
+    Write-UpdateFileLine $line
+    if (-not $writeToConsole) {
+        return
+    }
     if ($Color) {
         Write-Host $line -ForegroundColor $Color
     } else {
@@ -68,7 +143,7 @@ function Write-ProgressStep {
         [string]$Message,
         [string]$Status = $symbols["Info"]
     )
-    Write-Host "`r$Status $Message... " -NoNewline
+    Write-UpdateHost -Message "`r$Status $Message... " -NoNewline -Level 'STEP'
 }
 
 function Run-Step {
@@ -80,12 +155,14 @@ function Run-Step {
     try {
         & $Script
         if ($LASTEXITCODE -eq 0 -or $?) {
-            Write-Host "`r$($symbols.Success) $Message                        "
+            Write-UpdateHost -Message "`r$($symbols.Success) $Message                        " -Level 'SUCCESS'
+            Write-UpdateLog ("{0} completed successfully." -f $Message) 'SUCCESS'
         } else {
             throw "Non-zero exit code"
         }
     } catch {
-        Write-Host "`r$($symbols.Fail) $Message - Failed: $_                        " -ForegroundColor Red
+        Write-UpdateHost -Message "`r$($symbols.Fail) $Message - Failed: $_                        " -Color Red -Level 'ERROR'
+        Write-UpdateLog ("{0} failed: {1}" -f $Message, $_.Exception.Message) 'ERROR'
         throw
     }
 }
@@ -180,8 +257,16 @@ function Invoke-GitCommand {
     }
 
     $fullArgs = @('-C', $WorkingDirectory) + $Arguments
+    $joined = ($Arguments | ForEach-Object { [string]$_ }) -join ' '
+    Write-UpdateLog ("Running git command: git {0}" -f $joined) 'DEBUG'
     $output = & $GitExe @fullArgs 2>&1
     $exitCode = $LASTEXITCODE
+    foreach ($line in @($output)) {
+        if ($null -eq $line) { continue }
+        $text = ([string]$line).Trim()
+        if (-not $text) { continue }
+        Write-UpdateLog ("git> {0}" -f $text) 'DEBUG'
+    }
     if ($exitCode -ne 0) {
         $joined = ($Arguments -join ' ')
         $message = "git $joined failed with exit code $exitCode."
@@ -214,7 +299,7 @@ function Stop-AgentScheduledTasks {
 
         if (-not $taskExists) { continue }
 
-        Write-Host "Stopping scheduled task: $name" -ForegroundColor Yellow
+        Write-UpdateHost -Message "Stopping scheduled task: $name" -Color Yellow -Level 'WARN'
         $stopped += $name
         try { Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue } catch {}
         try { schtasks.exe /End /TN "$name" /F 2>$null | Out-Null } catch {}
@@ -236,7 +321,7 @@ function Start-AgentScheduledTasks {
     )
 
     foreach ($name in $TaskNames) {
-        Write-Host "Restarting scheduled task: $name" -ForegroundColor Green
+        Write-UpdateHost -Message "Restarting scheduled task: $name" -Color Green -Level 'INFO'
         try {
             Start-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null
             continue
@@ -316,20 +401,20 @@ function Stop-AgentPythonProcesses {
             } catch {}
 
             if ($SkipEngine -and $isEngineProc) {
-                Write-Host "Skipping Engine python process: PID $procId ($procName)" -ForegroundColor Cyan
+                Write-UpdateHost -Message "Skipping Engine python process: PID $procId ($procName)" -Color Cyan -Level 'INFO'
                 continue
             }
 
             if (-not $procName) { $procName = $name }
 
             $stopped = $false
-            Write-Host "Stopping process: $procName (PID $procId)" -ForegroundColor Yellow
+            Write-UpdateHost -Message "Stopping process: $procName (PID $procId)" -Color Yellow -Level 'WARN'
 
             try {
                 Stop-Process -Id $procId -Force -ErrorAction Stop
                 $stopped = $true
             } catch {
-                Write-Host "Unable to stop process via Stop-Process: $procName (PID $procId). $_" -ForegroundColor DarkYellow
+                Write-UpdateHost -Message "Unable to stop process via Stop-Process: $procName (PID $procId). $_" -Color DarkYellow -Level 'WARN'
             }
 
             if (-not $stopped) {
@@ -339,16 +424,16 @@ function Stop-AgentPythonProcesses {
                         $stopped = $true
                     } else {
                         if ($taskkillOutput) {
-                            Write-Host "taskkill.exe returned exit code ${LASTEXITCODE} for PID ${procId}: $taskkillOutput" -ForegroundColor DarkYellow
+                            Write-UpdateHost -Message "taskkill.exe returned exit code ${LASTEXITCODE} for PID ${procId}: $taskkillOutput" -Color DarkYellow -Level 'WARN'
                         }
                     }
                 } catch {
-                    Write-Host "Unable to stop process via taskkill.exe: $procName (PID $procId). $_" -ForegroundColor DarkYellow
+                    Write-UpdateHost -Message "Unable to stop process via taskkill.exe: $procName (PID $procId). $_" -Color DarkYellow -Level 'WARN'
                 }
             }
 
             if (-not $stopped) {
-                Write-Host "Process still running after termination attempts: $procName (PID $procId)" -ForegroundColor DarkYellow
+                Write-UpdateHost -Message "Process still running after termination attempts: $procName (PID $procId)" -Color DarkYellow -Level 'WARN'
             }
         }
     }
@@ -1901,11 +1986,11 @@ function Sync-AgentHashRecord {
 
     if ([string]::IsNullOrWhiteSpace($ServerBaseUrl)) { return }
 
-    Write-Host ("Submitting agent hash to server: {0}" -f $AgentHash)
+    Write-UpdateHost -Message ("Submitting agent hash to server: {0}" -f $AgentHash) -Level 'STEP'
     Write-UpdateLog ("Submitting agent hash to {0} (AgentId={1}, AgentGuid={2})" -f $ServerBaseUrl, $AgentId, $AgentGuid) 'STEP'
 
     if ([string]::IsNullOrWhiteSpace($AgentId) -and [string]::IsNullOrWhiteSpace($AgentGuid)) {
-        Write-Host "Agent identifier unavailable; skipping agent hash submission." -ForegroundColor DarkYellow
+        Write-UpdateHost -Message "Agent identifier unavailable; skipping agent hash submission." -Color DarkYellow -Level 'WARN'
         Write-UpdateLog "Agent identifier unavailable; cannot submit hash to server." 'WARN'
         return
     }
@@ -1913,13 +1998,13 @@ function Sync-AgentHashRecord {
     try {
         $submitResult = Submit-AgentHash -ServerBaseUrl $ServerBaseUrl -AgentId $AgentId -AgentHash $AgentHash -AgentGuid $AgentGuid -AuthToken $AuthToken -AgentRoot $AgentRoot
         if ($submitResult -and ($submitResult.status -eq 'ok')) {
-            Write-Host "The server-side agent hash database record was updated successfully."
+            Write-UpdateHost -Message "The server-side agent hash database record was updated successfully." -Level 'SUCCESS'
             Write-UpdateLog "Server acknowledged agent hash update." 'SUCCESS'
         } elseif ($submitResult -and ($submitResult.status -eq 'ignored')) {
-            Write-Host "Server ignored the agent hash update (the agent is not enrolled with the server)." -ForegroundColor DarkYellow
+            Write-UpdateHost -Message "Server ignored the agent hash update (the agent is not enrolled with the server)." -Color DarkYellow -Level 'WARN'
             Write-UpdateLog "Server returned 'ignored' for agent hash submission." 'WARN'
         } elseif ($submitResult) {
-            Write-Host "Server agent_hash update response unrecognized.  We don't know what to do here. (Panic)" -ForegroundColor DarkYellow
+            Write-UpdateHost -Message "Server agent_hash update response unrecognized.  We don't know what to do here. (Panic)" -Color DarkYellow -Level 'WARN'
             Write-UpdateLog ("Unexpected server response for agent hash submission: {0}" -f ($submitResult | ConvertTo-Json -Depth 5)) 'WARN'
         }
     } catch {
@@ -2032,14 +2117,14 @@ function Invoke-BorealisUpdate {
     }
 
     if (-not $Silent) {
-        Write-Host "Unattended Borealis update completed." -ForegroundColor Green
+        Write-UpdateHost -Message "Unattended Borealis update completed." -Color Green -Level 'SUCCESS'
     }
 }
 
 function Invoke-BorealisAgentUpdate {
-    Write-Host "==============================================="
-    Write-Host " Borealis - Automation Platform Updater Script "
-    Write-Host "==============================================="
+    Write-UpdateHost -Message "==============================================="
+    Write-UpdateHost -Message " Borealis - Automation Platform Updater Script "
+    Write-UpdateHost -Message "==============================================="
     Write-UpdateLog "Starting Borealis updater execution." 'STEP'
 
     $agentRootCandidate = Join-Path $scriptDir 'Agent\Borealis'
@@ -2055,19 +2140,19 @@ function Invoke-BorealisAgentUpdate {
 
     $agentGuid = Get-AgentGuid -AgentRoot $agentRoot
     if ($agentGuid) {
-        Write-Host ("Agent GUID: {0}" -f $agentGuid)
+        Write-UpdateHost -Message ("Agent GUID: {0}" -f $agentGuid) -Level 'INFO'
         Write-UpdateLog ("Operating on agent GUID {0}" -f $agentGuid) 'INFO'
     } else {
-        Write-Host "Warning: No agent GUID detected - Please deploy the agent, associating it with a Borealis server then try running the updater script again." -ForegroundColor Yellow
-        Write-Host "⚠️ Borealis update aborted."
+        Write-UpdateHost -Message "Warning: No agent GUID detected - Please deploy the agent, associating it with a Borealis server then try running the updater script again." -Color Yellow -Level 'WARN'
+        Write-UpdateHost -Message "⚠️ Borealis update aborted." -Color Yellow -Level 'ERROR'
         Write-UpdateLog "Agent GUID missing; aborting update." 'ERROR'
         return
     }
 
     $gitExe = Get-GitExecutablePath -ProjectRoot $scriptDir
     if (-not $gitExe -or -not (Test-Path $gitExe -PathType Leaf)) {
-        Write-Host "Bundled or system Git was not found. Ensure Git is installed, then rerun the updater." -ForegroundColor Yellow
-        Write-Host "⚠️ Borealis update aborted."
+        Write-UpdateHost -Message "Bundled or system Git was not found. Ensure Git is installed, then rerun the updater." -Color Yellow -Level 'WARN'
+        Write-UpdateHost -Message "⚠️ Borealis update aborted." -Color Yellow -Level 'ERROR'
         Write-UpdateLog "Git executable not found; aborting update." 'ERROR'
         return
     }
@@ -2116,8 +2201,8 @@ function Invoke-BorealisAgentUpdate {
         Initialize-BorealisTlsContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl
         $authContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
         if (-not $authContext -or -not $authContext.AccessToken) {
-            Write-Host "Unable to obtain agent authentication token. Ensure the agent is running and enrolled, then rerun the updater." -ForegroundColor Yellow
-            Write-Host "⚠️ Borealis update aborted."
+            Write-UpdateHost -Message "Unable to obtain agent authentication token. Ensure the agent is running and enrolled, then rerun the updater." -Color Yellow -Level 'WARN'
+            Write-UpdateHost -Message "⚠️ Borealis update aborted." -Color Yellow -Level 'ERROR'
             Write-UpdateLog "Authentication context unavailable; aborting update." 'ERROR'
             return
         }
@@ -2140,21 +2225,21 @@ function Invoke-BorealisAgentUpdate {
     Write-UpdateLog ("Updater mode: {0} (force={1})" -f $updateMode, $forceUpdate) 'INFO'
 
     if ($installedHash) {
-        Write-Host ("Installed Agent Hash: {0}" -f $installedHash)
+        Write-UpdateHost -Message ("Installed Agent Hash: {0}" -f $installedHash) -Level 'INFO'
     } else {
-        Write-Host "Installed Agent Hash: unavailable"
+        Write-UpdateHost -Message "Installed Agent Hash: unavailable" -Level 'INFO'
     }
 
     if ($currentHash) {
-        Write-Host ("Local Repo Hash: {0}" -f $currentHash)
+        Write-UpdateHost -Message ("Local Repo Hash: {0}" -f $currentHash) -Level 'INFO'
     } else {
-        Write-Host "Local Repo Hash: unavailable"
+        Write-UpdateHost -Message "Local Repo Hash: unavailable" -Level 'INFO'
     }
 
     if ($serverHash) {
-        Write-Host ("Borealis Server Hash: {0}" -f $serverHash)
+        Write-UpdateHost -Message ("Borealis Server Hash: {0}" -f $serverHash) -Level 'INFO'
     } else {
-        Write-Host "Borealis Server Hash: unavailable"
+        Write-UpdateHost -Message "Borealis Server Hash: unavailable" -Level 'INFO'
     }
 
     $normalizedInstalledHash = if ($installedHash) { $installedHash.Trim().ToLowerInvariant() } else { '' }
@@ -2165,27 +2250,27 @@ function Invoke-BorealisAgentUpdate {
     $needsUpdate = $forceUpdate -or $runtimeNeedsUpdate -or $repoNeedsSync
 
     if ($forceUpdate) {
-        Write-Host "Force update requested; skipping hash comparison." -ForegroundColor Yellow
+        Write-UpdateHost -Message "Force update requested; skipping hash comparison." -Color Yellow -Level 'WARN'
         Write-UpdateLog "Force update requested; bypassing hash comparison." 'WARN'
     } elseif (-not $serverHash) {
-        Write-Host "Borealis server hash unavailable; cannot continue." -ForegroundColor Yellow
-        Write-Host "⚠️ Borealis update aborted."
+        Write-UpdateHost -Message "Borealis server hash unavailable; cannot continue." -Color Yellow -Level 'WARN'
+        Write-UpdateHost -Message "⚠️ Borealis update aborted." -Color Yellow -Level 'ERROR'
         Write-UpdateLog "Server hash unavailable; aborting." 'ERROR'
         return
     } elseif (-not $needsUpdate) {
-        Write-Host "Local agent runtime already matches the server repository hash." -ForegroundColor Green
+        Write-UpdateHost -Message "Local agent runtime already matches the server repository hash." -Color Green -Level 'SUCCESS'
         Write-UpdateLog "Installed agent build already matches the target hash." 'SUCCESS'
         [void](Sync-AgentInstalledBuildId -AgentRoot $agentRoot)
-        Write-Host "✅ Borealis - Automation Platform Already Up-to-Date"
+        Write-UpdateHost -Message "✅ Borealis - Automation Platform Already Up-to-Date" -Color Green -Level 'SUCCESS'
         return
     } else {
-        Write-Host "Repository hash mismatch detected; update required."
+        Write-UpdateHost -Message "Repository hash mismatch detected; update required." -Level 'WARN'
         Write-UpdateLog ("Repository hash mismatch detected (installed={0}, repo={1}, remote={2})." -f $installedHash, $currentHash, $serverHash) 'WARN'
     }
 
     if ($deviceBusy) {
         $reasonText = if ($busyReasons.Count -gt 0) { $busyReasons -join ', ' } else { 'unspecified activity' }
-        Write-Host ("Agent update deferred because the device is busy: {0}" -f $reasonText) -ForegroundColor Yellow
+        Write-UpdateHost -Message ("Agent update deferred because the device is busy: {0}" -f $reasonText) -Color Yellow -Level 'WARN'
         Write-UpdateLog ("Device busy; deferring update. Reasons: {0}" -f $reasonText) 'WARN'
         return
     }
@@ -2199,7 +2284,7 @@ function Invoke-BorealisAgentUpdate {
         $gotMutex = $mutex.WaitOne(0)
         if (-not $gotMutex) {
             Write-Verbose 'Another update is already running (mutex held). Exiting quietly.'
-            Write-Host "⚠️ Borealis update already in progress on this device."
+            Write-UpdateHost -Message "⚠️ Borealis update already in progress on this device." -Color Yellow -Level 'WARN'
             return
         }
 
@@ -2213,7 +2298,7 @@ function Invoke-BorealisAgentUpdate {
         }
         if ($deviceBusy) {
             $reasonText = if ($busyReasons.Count -gt 0) { $busyReasons -join ', ' } else { 'unspecified activity' }
-            Write-Host ("Agent update deferred because the device became busy: {0}" -f $reasonText) -ForegroundColor Yellow
+            Write-UpdateHost -Message ("Agent update deferred because the device became busy: {0}" -f $reasonText) -Color Yellow -Level 'WARN'
             Write-UpdateLog ("Device busy after mutex acquisition; deferring update. Reasons: {0}" -f $reasonText) 'WARN'
             return
         }
@@ -2261,7 +2346,7 @@ function Invoke-BorealisAgentUpdate {
             }
 
             $refreshSucceeded = $true
-            Write-Host "✅ Borealis - Automation Platform Successfully Updated"
+            Write-UpdateHost -Message "✅ Borealis - Automation Platform Successfully Updated" -Color Green -Level 'SUCCESS'
             Write-UpdateLog "Update workflow completed successfully." 'SUCCESS'
         } finally {
             if (-not $refreshSucceeded -and $managedTasks.Count -gt 0) {
@@ -2277,4 +2362,12 @@ function Invoke-BorealisAgentUpdate {
     }
 }
 
-Invoke-BorealisAgentUpdate
+Initialize-UpdateLogging
+try {
+    Invoke-BorealisAgentUpdate
+    Finalize-UpdateLogging -Level 'SUCCESS' -Message '===== Update.ps1 session finished successfully ====='
+} catch {
+    Write-UpdateLog ("Unhandled updater failure: {0}" -f $_.Exception.Message) 'ERROR'
+    Finalize-UpdateLogging -Level 'ERROR' -Message ("===== Update.ps1 session failed: {0} =====" -f $_.Exception.Message)
+    throw
+}
