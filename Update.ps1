@@ -55,6 +55,20 @@ function Finalize-UpdateLogging {
     Write-UpdateFileLine ("[{0}] [{1}] {2}" -f $timestamp, $normalized, $Message)
 }
 
+function New-UpdateSessionResult {
+    param(
+        [string]$Outcome,
+        [string]$FinalLevel,
+        [string]$FinalMessage
+    )
+
+    [pscustomobject]@{
+        Outcome      = $Outcome
+        FinalLevel   = $FinalLevel
+        FinalMessage = $FinalMessage
+    }
+}
+
 function Write-UpdateHost {
     param(
         [string]$Message,
@@ -2146,7 +2160,7 @@ function Invoke-BorealisAgentUpdate {
         Write-UpdateHost -Message "Warning: No agent GUID detected - Please deploy the agent, associating it with a Borealis server then try running the updater script again." -Color Yellow -Level 'WARN'
         Write-UpdateHost -Message "⚠️ Borealis update aborted." -Color Yellow -Level 'ERROR'
         Write-UpdateLog "Agent GUID missing; aborting update." 'ERROR'
-        return
+        return (New-UpdateSessionResult -Outcome 'aborted' -FinalLevel 'ERROR' -FinalMessage '===== Update.ps1 session aborted: agent GUID missing =====')
     }
 
     $gitExe = Get-GitExecutablePath -ProjectRoot $scriptDir
@@ -2154,7 +2168,7 @@ function Invoke-BorealisAgentUpdate {
         Write-UpdateHost -Message "Bundled or system Git was not found. Ensure Git is installed, then rerun the updater." -Color Yellow -Level 'WARN'
         Write-UpdateHost -Message "⚠️ Borealis update aborted." -Color Yellow -Level 'ERROR'
         Write-UpdateLog "Git executable not found; aborting update." 'ERROR'
-        return
+        return (New-UpdateSessionResult -Outcome 'aborted' -FinalLevel 'ERROR' -FinalMessage '===== Update.ps1 session aborted: Git executable not found =====')
     }
     $resolvedRepositoryUrl = Resolve-BorealisRepositoryUrl -GitExe $gitExe -ProjectRoot $scriptDir
     Write-UpdateLog ("Repository origin resolved to {0}" -f $resolvedRepositoryUrl) 'INFO'
@@ -2204,7 +2218,7 @@ function Invoke-BorealisAgentUpdate {
             Write-UpdateHost -Message "Unable to obtain agent authentication token. Ensure the agent is running and enrolled, then rerun the updater." -Color Yellow -Level 'WARN'
             Write-UpdateHost -Message "⚠️ Borealis update aborted." -Color Yellow -Level 'ERROR'
             Write-UpdateLog "Authentication context unavailable; aborting update." 'ERROR'
-            return
+            return (New-UpdateSessionResult -Outcome 'aborted' -FinalLevel 'ERROR' -FinalMessage '===== Update.ps1 session aborted: authentication context unavailable =====')
         }
         $serverRepoInfo = Get-ServerCurrentRepoHash -ServerBaseUrl $serverBaseUrl -AuthToken $authContext.AccessToken -AgentRoot $agentRoot
     }
@@ -2256,13 +2270,13 @@ function Invoke-BorealisAgentUpdate {
         Write-UpdateHost -Message "Borealis server hash unavailable; cannot continue." -Color Yellow -Level 'WARN'
         Write-UpdateHost -Message "⚠️ Borealis update aborted." -Color Yellow -Level 'ERROR'
         Write-UpdateLog "Server hash unavailable; aborting." 'ERROR'
-        return
+        return (New-UpdateSessionResult -Outcome 'aborted' -FinalLevel 'ERROR' -FinalMessage '===== Update.ps1 session aborted: server hash unavailable =====')
     } elseif (-not $needsUpdate) {
         Write-UpdateHost -Message "Local agent runtime already matches the server repository hash." -Color Green -Level 'SUCCESS'
         Write-UpdateLog "Installed agent build already matches the target hash." 'SUCCESS'
         [void](Sync-AgentInstalledBuildId -AgentRoot $agentRoot)
         Write-UpdateHost -Message "✅ Borealis - Automation Platform Already Up-to-Date" -Color Green -Level 'SUCCESS'
-        return
+        return (New-UpdateSessionResult -Outcome 'up_to_date' -FinalLevel 'SUCCESS' -FinalMessage '===== Update.ps1 session finished: agent already up to date =====')
     } else {
         Write-UpdateHost -Message "Repository hash mismatch detected; update required." -Level 'WARN'
         Write-UpdateLog ("Repository hash mismatch detected (installed={0}, repo={1}, remote={2})." -f $installedHash, $currentHash, $serverHash) 'WARN'
@@ -2272,7 +2286,7 @@ function Invoke-BorealisAgentUpdate {
         $reasonText = if ($busyReasons.Count -gt 0) { $busyReasons -join ', ' } else { 'unspecified activity' }
         Write-UpdateHost -Message ("Agent update deferred because the device is busy: {0}" -f $reasonText) -Color Yellow -Level 'WARN'
         Write-UpdateLog ("Device busy; deferring update. Reasons: {0}" -f $reasonText) 'WARN'
-        return
+        return (New-UpdateSessionResult -Outcome 'deferred' -FinalLevel 'WARN' -FinalMessage ("===== Update.ps1 session deferred: device busy ({0}) =====" -f $reasonText))
     }
 
     $mutex = $null
@@ -2285,7 +2299,7 @@ function Invoke-BorealisAgentUpdate {
         if (-not $gotMutex) {
             Write-Verbose 'Another update is already running (mutex held). Exiting quietly.'
             Write-UpdateHost -Message "⚠️ Borealis update already in progress on this device." -Color Yellow -Level 'WARN'
-            return
+            return (New-UpdateSessionResult -Outcome 'in_progress' -FinalLevel 'WARN' -FinalMessage '===== Update.ps1 session skipped: another update is already running =====')
         }
 
         try {
@@ -2300,7 +2314,7 @@ function Invoke-BorealisAgentUpdate {
             $reasonText = if ($busyReasons.Count -gt 0) { $busyReasons -join ', ' } else { 'unspecified activity' }
             Write-UpdateHost -Message ("Agent update deferred because the device became busy: {0}" -f $reasonText) -Color Yellow -Level 'WARN'
             Write-UpdateLog ("Device busy after mutex acquisition; deferring update. Reasons: {0}" -f $reasonText) 'WARN'
-            return
+            return (New-UpdateSessionResult -Outcome 'deferred' -FinalLevel 'WARN' -FinalMessage ("===== Update.ps1 session deferred after lock: device busy ({0}) =====" -f $reasonText))
         }
 
         $managedTasks = Stop-AgentScheduledTasks -TaskNames @('Borealis Agent','Borealis Agent (UserHelper)')
@@ -2348,6 +2362,7 @@ function Invoke-BorealisAgentUpdate {
             $refreshSucceeded = $true
             Write-UpdateHost -Message "✅ Borealis - Automation Platform Successfully Updated" -Color Green -Level 'SUCCESS'
             Write-UpdateLog "Update workflow completed successfully." 'SUCCESS'
+            return (New-UpdateSessionResult -Outcome 'success' -FinalLevel 'SUCCESS' -FinalMessage '===== Update.ps1 session finished successfully =====')
         } finally {
             if (-not $refreshSucceeded -and $managedTasks.Count -gt 0) {
                 Start-AgentScheduledTasks -TaskNames $managedTasks
@@ -2364,8 +2379,11 @@ function Invoke-BorealisAgentUpdate {
 
 Initialize-UpdateLogging
 try {
-    Invoke-BorealisAgentUpdate
-    Finalize-UpdateLogging -Level 'SUCCESS' -Message '===== Update.ps1 session finished successfully ====='
+    $updateResult = @(Invoke-BorealisAgentUpdate) | Select-Object -Last 1
+    if (-not $updateResult -or -not $updateResult.PSObject.Properties['FinalLevel'] -or -not $updateResult.PSObject.Properties['FinalMessage']) {
+        $updateResult = New-UpdateSessionResult -Outcome 'aborted' -FinalLevel 'ERROR' -FinalMessage '===== Update.ps1 session ended without a final result ====='
+    }
+    Finalize-UpdateLogging -Level $updateResult.FinalLevel -Message $updateResult.FinalMessage
 } catch {
     Write-UpdateLog ("Unhandled updater failure: {0}" -f $_.Exception.Message) 'ERROR'
     Finalize-UpdateLogging -Level 'ERROR' -Message ("===== Update.ps1 session failed: {0} =====" -f $_.Exception.Message)

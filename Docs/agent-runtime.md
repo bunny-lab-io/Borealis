@@ -91,6 +91,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - If enrollment fails, check:
   - `Agent/Logs/agent.log` for enrollment errors.
   - `Engine/Logs/engine.log` for approval or auth failures.
+- The updater helper (`Data/Agent/update_helper.py`) uses the pinned Engine certificate and relaxes hostname matching only for literal IP server URLs, so IP-based deployments still keep certificate trust without requiring `verify=false`.
 - If scripts do not run:
   - Confirm `quick_job_run` events and the correct role context.
   - Verify signatures with `signature_utils` logs.
