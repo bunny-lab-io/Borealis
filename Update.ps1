@@ -58,7 +58,7 @@ function Finalize-UpdateLogging {
 function New-UpdateSessionResult {
     param(
         [string]$Outcome,
-        [string]$FinalLevel,
+        [string]$FinalLevel,bo
         [string]$FinalMessage
     )
 
