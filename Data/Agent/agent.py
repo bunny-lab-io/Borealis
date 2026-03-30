@@ -3002,6 +3002,25 @@ async def send_agent_details_once():
     except Exception as e:
         _log_agent(f'Failed to post agent details once: {e}', fname='agent.error.log')
 
+
+def _request_system_wireguard_ensure(reason: str) -> None:
+    if not SYSTEM_SERVICE_MODE:
+        return
+    manager = ROLE_MANAGER_SYS
+    if manager is None:
+        return
+    try:
+        role = manager.roles.get("WireGuardTunnel")
+    except Exception:
+        return
+    requester = getattr(role, "request_immediate_ensure", None)
+    if not callable(requester):
+        return
+    try:
+        requester(reason=reason)
+    except Exception as exc:
+        _log_agent(f'WireGuard immediate ensure request failed: {exc}', fname='agent.error.log')
+
 @sio.event
 async def connect():
     print(f"[INFO] Successfully Connected to Borealis Server!")
@@ -3016,6 +3035,7 @@ async def connect():
     except Exception:
         pass
     await sio.emit('connect_agent', {"agent_id": AGENT_ID, "service_mode": SERVICE_MODE})
+    _request_system_wireguard_ensure("socket_connect")
 
     # Send an immediate heartbeat via authenticated REST call.
     try:

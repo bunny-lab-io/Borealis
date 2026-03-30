@@ -1288,8 +1288,10 @@ class Role:
         self._get_server_url = hooks.get("get_server_url")
         self._last_tunnel_snapshot: Dict[str, Any] = {}
         self._ensure_stop = threading.Event()
-        self._ensure_thread = threading.Thread(target=self._ensure_loop, daemon=True)
-        self._ensure_thread.start()
+        self._ensure_cycle_lock = threading.Lock()
+        self._ensure_thread_lock = threading.Lock()
+        self._ensure_thread: Optional[threading.Thread] = None
+        self._start_ensure_thread(reason="role_init")
 
     def _log(self, message: str, *, error: bool = False) -> None:
         if callable(self._log_hook):
@@ -1593,14 +1595,14 @@ class Role:
             "details": details,
         }
 
-    def _request_persistent_session(self) -> Optional[Dict[str, Any]]:
+    def _request_persistent_session(self, *, reason: str = "agent_boot") -> Optional[Dict[str, Any]]:
         client = self._http_client()
         if client is None:
             return None
         try:
             payload = client.post_json(
                 "/api/agent/vpn/ensure",
-                {"agent_id": self.ctx.agent_id, "reason": "agent_boot"},
+                {"agent_id": self.ctx.agent_id, "reason": str(reason or "agent_boot")},
                 require_auth=True,
             )
         except Exception as exc:
@@ -1610,45 +1612,89 @@ class Role:
             return None
         return payload
 
+    def _run_ensure_cycle(self, *, reason: str = "agent_boot") -> None:
+        with self._ensure_cycle_lock:
+            payload = self._request_persistent_session(reason=reason)
+            if not payload:
+                return
+            session = self._build_session(payload)
+            if not session:
+                return
+            incoming_tunnel = str(session.tunnel_id or "")
+            current_tunnel = ""
+            if self.client.session is not None:
+                try:
+                    current_tunnel = str(self.client.session.tunnel_id)
+                except Exception:
+                    current_tunnel = ""
+            state = None
+            try:
+                state = self.client._service_state()
+            except Exception:
+                state = None
+            service_ready = state in ("RUNNING", "START_PENDING")
+            if incoming_tunnel and incoming_tunnel == current_tunnel and service_ready:
+                if self._session_config_matches_live(session):
+                    return
+                self._log("WireGuard persistent ensure detected config drift; forcing live session refresh.")
+                try:
+                    self.client.stop_session(reason="ensure_config_refresh", ignore_missing=True)
+                except Exception as exc:
+                    self._log(f"WireGuard config refresh stop failed: {exc}", error=True)
+            self._log("WireGuard persistent session ensure received.")
+            self.client.start_session(session, signing_client=self._http_client())
+
+    def _run_ensure_cycle_safe(self, *, reason: str, source: str) -> None:
+        try:
+            self._run_ensure_cycle(reason=reason)
+        except Exception as exc:
+            self._log(
+                f"WireGuard ensure cycle failed (source={source} reason={reason}): {exc}",
+                error=True,
+            )
+
     def _ensure_loop(self) -> None:
         if ENSURE_INITIAL_DELAY_SECONDS:
-            time.sleep(ENSURE_INITIAL_DELAY_SECONDS)
+            if self._ensure_stop.wait(ENSURE_INITIAL_DELAY_SECONDS):
+                return
         while not self._ensure_stop.is_set():
-            payload = self._request_persistent_session()
-            if payload:
-                session = self._build_session(payload)
-                if session:
-                    incoming_tunnel = str(session.tunnel_id or "")
-                    current_tunnel = ""
-                    if self.client.session is not None:
-                        try:
-                            current_tunnel = str(self.client.session.tunnel_id)
-                        except Exception:
-                            current_tunnel = ""
-                    state = None
-                    try:
-                        state = self.client._service_state()
-                    except Exception:
-                        state = None
-                    service_ready = state in ("RUNNING", "START_PENDING")
-                    if incoming_tunnel and incoming_tunnel == current_tunnel and service_ready:
-                        if self._session_config_matches_live(session):
-                            self._ensure_stop.wait(ENSURE_INTERVAL_SECONDS)
-                            continue
-                        self._log("WireGuard persistent ensure detected config drift; forcing live session refresh.")
-                        try:
-                            self.client.stop_session(reason="ensure_config_refresh", ignore_missing=True)
-                        except Exception as exc:
-                            self._log(f"WireGuard config refresh stop failed: {exc}", error=True)
-                    self._log("WireGuard persistent session ensure received.")
-                    self.client.start_session(session, signing_client=self._http_client())
-            self._ensure_stop.wait(ENSURE_INTERVAL_SECONDS)
+            self._run_ensure_cycle_safe(reason="agent_boot", source="periodic")
+            if self._ensure_stop.wait(ENSURE_INTERVAL_SECONDS):
+                return
+
+    def _start_ensure_thread(self, *, reason: str) -> None:
+        with self._ensure_thread_lock:
+            if self._ensure_stop.is_set():
+                return
+            if self._ensure_thread is not None and self._ensure_thread.is_alive():
+                return
+            self._ensure_thread = threading.Thread(
+                target=self._ensure_loop,
+                name="borealis-wireguard-ensure",
+                daemon=True,
+            )
+            self._ensure_thread.start()
+        self._log(f"WireGuard ensure supervisor started (reason={reason}).")
+
+    def request_immediate_ensure(self, *, reason: str) -> None:
+        request_reason = str(reason or "manual")
+        self._start_ensure_thread(reason=request_reason)
+        if self._ensure_stop.is_set():
+            return
+        self._log(f"WireGuard immediate ensure requested (reason={request_reason}).")
+        threading.Thread(
+            target=self._run_ensure_cycle_safe,
+            kwargs={"reason": request_reason, "source": "immediate"},
+            name=f"borealis-wireguard-ensure-{request_reason}",
+            daemon=True,
+        ).start()
 
     def register_events(self) -> None:
         sio = self.ctx.sio
 
         @sio.on("vpn_tunnel_start")
         async def _vpn_tunnel_start(payload):
+            self._start_ensure_thread(reason="vpn_tunnel_start")
             session = self._build_session(payload)
             if not session:
                 return
@@ -1675,6 +1721,12 @@ class Role:
             self._ensure_stop.set()
         except Exception:
             pass
+        ensure_thread = self._ensure_thread
+        if ensure_thread is not None:
+            try:
+                ensure_thread.join(timeout=1.0)
+            except Exception:
+                pass
         try:
             self.client.stop_session(reason="agent_shutdown")
         except Exception:
