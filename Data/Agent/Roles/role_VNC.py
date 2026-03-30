@@ -16,6 +16,17 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
+
+try:
+    from runtime_paths import agent_borealis_root, agent_logs_root, find_project_root
+except Exception:
+    import sys
+
+    base_dir = Path(__file__).resolve().parents[1]
+    if str(base_dir) not in sys.path:
+        sys.path.insert(0, str(base_dir))
+    from runtime_paths import agent_borealis_root, agent_logs_root, find_project_root
+
 try:
     from update_state import busy_activity
 except Exception:
@@ -63,7 +74,7 @@ VNC_ALWAYS_ON_INTERVAL_SECONDS = 30
 
 
 def _log_path() -> Path:
-    root = Path(__file__).resolve().parents[2] / "Logs" / "VPN_Tunnel"
+    root = agent_logs_root(__file__) / "VPN_Tunnel"
     root.mkdir(parents=True, exist_ok=True)
     return root / "vnc.log"
 
@@ -89,7 +100,7 @@ def _coerce_int(value: Any, default: int, *, min_value: int = 1, max_value: Opti
 
 
 def _vnc_state_path() -> Path:
-    root = Path(__file__).resolve().parents[2] / "Borealis" / "Settings" / "UltraVNC"
+    root = agent_borealis_root(__file__) / "Settings" / "UltraVNC"
     root.mkdir(parents=True, exist_ok=True)
     return root / "vnc_state.json"
 
@@ -123,23 +134,8 @@ def _save_vnc_state(state: dict[str, Any]) -> None:
 
 
 def _find_project_root() -> Optional[Path]:
-    override = os.environ.get("BOREALIS_ROOT") or os.environ.get("BOREALIS_PROJECT_ROOT")
-    if override:
-        try:
-            override_path = Path(override).expanduser().resolve()
-            if override_path.is_dir():
-                return override_path
-        except Exception:
-            pass
-    current = Path(__file__).resolve()
-    for parent in (current, *current.parents):
-        try:
-            if (parent / "Borealis.ps1").is_file() or (parent / "users.json").is_file():
-                return parent
-        except Exception:
-            continue
     try:
-        return current.parents[3]
+        return find_project_root(__file__)
     except Exception:
         return None
 
@@ -223,7 +219,7 @@ def _resolve_vnc_config_dir() -> Optional[Path]:
             return tools_config
         return root / "Agent" / "Borealis" / "Settings" / "UltraVNC"
     try:
-        base = Path(__file__).resolve().parents[2]
+        base = agent_borealis_root(__file__).parent
         tools_config = base / "Borealis" / "Tools" / "UltraVNC" / "Server"
         if tools_config.is_dir():
             return tools_config

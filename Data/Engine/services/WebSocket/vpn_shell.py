@@ -19,10 +19,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
-_CONNECT_WAIT_WINDOW_SECONDS = 30.0
-_CONNECT_TIMEOUT_SECONDS = 2.0
-_RETRY_DELAY_SECONDS = 1.0
-_REEMIT_START_AFTER_SECONDS = (0.0, 10.0, 20.0)
+_CONNECT_WAIT_WINDOW_SECONDS = 20.0
+_CONNECT_TIMEOUT_SECONDS = 1.0
+_RETRY_DELAY_SECONDS = 0.25
+_REEMIT_START_AFTER_SECONDS = (0.0, 2.0, 5.0, 10.0)
 
 
 def _b64encode(data: bytes) -> str:
@@ -31,6 +31,26 @@ def _b64encode(data: bytes) -> str:
 
 def _b64decode(value: str) -> bytes:
     return base64.b64decode(value.encode("ascii"))
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        if value in (None, ""):
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _configure_tcp_socket(sock: socket.socket) -> None:
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception:
+        pass
 
 
 @dataclass
@@ -48,6 +68,8 @@ class ShellSession:
     on_closed: Optional[Callable[[str, "ShellSession"], None]] = None
     _closed: bool = False
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    _message_sequence: int = 0
+    _timed_output_ids: set[str] = field(default_factory=set)
 
     def start_reader(self) -> None:
         starter = getattr(self.socketio, "start_background_task", None)
@@ -115,8 +137,46 @@ class ShellSession:
                             decoded = _b64decode(str(payload)).decode("utf-8", errors="replace")
                         except Exception:
                             decoded = ""
+                        message_id = str(msg.get("message_id") or "").strip()
+                        sent_at_ms = _coerce_int(msg.get("sent_at_ms"))
+                        agent_received_at_ms = _coerce_int(msg.get("agent_received_at_ms"))
+                        agent_stdout_at_ms = _coerce_int(msg.get("agent_stdout_at_ms"))
+                        engine_received_at_ms = _now_ms()
                         self.output_lines += 1
                         self.output_bytes += len(line)
+                        if message_id and message_id not in self._timed_output_ids:
+                            self._timed_output_ids.add(message_id)
+                            engine_to_agent_ms = (
+                                max(0, agent_received_at_ms - sent_at_ms)
+                                if sent_at_ms is not None and agent_received_at_ms is not None
+                                else None
+                            )
+                            agent_exec_ms = (
+                                max(0, agent_stdout_at_ms - agent_received_at_ms)
+                                if agent_received_at_ms is not None and agent_stdout_at_ms is not None
+                                else None
+                            )
+                            agent_to_engine_ms = (
+                                max(0, engine_received_at_ms - agent_stdout_at_ms)
+                                if agent_stdout_at_ms is not None
+                                else None
+                            )
+                            round_trip_ms = (
+                                max(0, engine_received_at_ms - sent_at_ms)
+                                if sent_at_ms is not None
+                                else None
+                            )
+                            self._service_log_event(
+                                "vpn_shell_output_timing agent_id={0} sid={1} message_id={2} round_trip_ms={3} engine_to_agent_ms={4} agent_exec_ms={5} agent_to_engine_ms={6}".format(
+                                    self.agent_id,
+                                    self.sid,
+                                    message_id,
+                                    round_trip_ms if round_trip_ms is not None else "-",
+                                    engine_to_agent_ms if engine_to_agent_ms is not None else "-",
+                                    agent_exec_ms if agent_exec_ms is not None else "-",
+                                    agent_to_engine_ms if agent_to_engine_ms is not None else "-",
+                                )
+                            )
                         self.socketio.emit(
                             "vpn_shell_output",
                             {
@@ -169,9 +229,19 @@ class ShellSession:
                 pass
             self._notify_closed()
 
-    def send(self, payload: str) -> None:
+    def send(self, payload: str) -> Dict[str, Any]:
         payload_bytes = payload.encode("utf-8")
-        data = json.dumps({"type": "stdin", "data": _b64encode(payload_bytes)})
+        self._message_sequence += 1
+        message_id = f"{self.session_id}-{self._message_sequence}"
+        sent_at_ms = _now_ms()
+        data = json.dumps(
+            {
+                "type": "stdin",
+                "data": _b64encode(payload_bytes),
+                "message_id": message_id,
+                "sent_at_ms": sent_at_ms,
+            }
+        )
         self.input_messages += 1
         self.input_bytes += len(payload_bytes)
         try:
@@ -185,6 +255,8 @@ class ShellSession:
                 ),
                 level="WARNING",
             )
+            return {"message_id": message_id, "sent_at_ms": sent_at_ms, "send_failed": True}
+        return {"message_id": message_id, "sent_at_ms": sent_at_ms, "send_failed": False}
 
     def close(self) -> None:
         if self._closed:
@@ -315,6 +387,7 @@ class VpnShellBridge:
             try:
                 timeout = min(_CONNECT_TIMEOUT_SECONDS, max(0.5, remaining))
                 tcp = socket.create_connection((host, port), timeout=timeout)
+                _configure_tcp_socket(tcp)
                 break
             except Exception as exc:
                 last_error = exc
@@ -377,16 +450,19 @@ class VpnShellBridge:
                 level="WARNING",
             )
             return
-        session.send(payload)
+        send_meta = session.send(payload)
         try:
             payload_len = len(str(payload))
         except Exception:
             payload_len = 0
         self._service_log_event(
-            "vpn_shell_send agent_id={0} sid={1} bytes={2}".format(
+            "vpn_shell_send agent_id={0} sid={1} bytes={2} message_id={3} sent_at_ms={4} send_failed={5}".format(
                 session.agent_id,
                 sid,
                 payload_len,
+                send_meta.get("message_id", "-"),
+                send_meta.get("sent_at_ms", "-"),
+                str(bool(send_meta.get("send_failed"))).lower(),
             )
         )
         service = getattr(self.context, "vpn_tunnel_service", None)

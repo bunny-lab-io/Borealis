@@ -20,7 +20,17 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+try:
+    from runtime_paths import agent_logs_root
+except Exception:
+    import sys
+
+    base_dir = Path(__file__).resolve().parents[1]
+    if str(base_dir) not in sys.path:
+        sys.path.insert(0, str(base_dir))
+    from runtime_paths import agent_logs_root
 
 try:
     from update_state import busy_activity
@@ -33,7 +43,7 @@ ROLE_CONTEXTS = ["system"]
 
 def _log_path() -> Path:
     # Keep shell logs alongside other VPN tunnel artifacts.
-    root = Path(__file__).resolve().parents[2] / "Logs" / "VPN_Tunnel"
+    root = agent_logs_root(__file__) / "VPN_Tunnel"
     root.mkdir(parents=True, exist_ok=True)
     return root / "remote_shell.log"
 
@@ -55,6 +65,26 @@ def _b64encode(data: bytes) -> str:
 def _b64decode(value: str) -> bytes:
     # Decode base64-encoded stdin payloads from the engine.
     return base64.b64decode(value.encode("ascii"))
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        if value in (None, ""):
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _configure_tcp_socket(conn: socket.socket) -> None:
+    try:
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception:
+        pass
 
 
 def _resolve_shell_port() -> int:
@@ -127,6 +157,7 @@ class ShellSession:
         self.output_lines = 0
         self.output_bytes = 0
         self._busy_lease = None
+        self._last_input_meta: dict[str, Any] = {}
 
     def start(self) -> None:
         # Spawn an interactive shell process and bridge stdin/stdout.
@@ -210,7 +241,17 @@ class ShellSession:
             return
         self.output_lines += 1
         self.output_bytes += len(chunk)
-        payload = json.dumps({"type": "stdout", "data": _b64encode(chunk)})
+        payload_obj = {"type": "stdout", "data": _b64encode(chunk), "agent_stdout_at_ms": _now_ms()}
+        message_id = str(self._last_input_meta.get("message_id") or "").strip()
+        if message_id:
+            payload_obj["message_id"] = message_id
+        sent_at_ms = _coerce_int(self._last_input_meta.get("sent_at_ms"))
+        if sent_at_ms is not None:
+            payload_obj["sent_at_ms"] = sent_at_ms
+        agent_received_at_ms = _coerce_int(self._last_input_meta.get("agent_received_at_ms"))
+        if agent_received_at_ms is not None:
+            payload_obj["agent_received_at_ms"] = agent_received_at_ms
+        payload = json.dumps(payload_obj)
         try:
             self.conn.sendall(payload.encode("utf-8") + b"\n")
         except Exception as exc:
@@ -291,11 +332,32 @@ class ShellSession:
                         if self.proc and self.proc.stdin:
                             try:
                                 decoded = _b64decode(str(payload))
+                                message_id = str(msg.get("message_id") or "").strip()
+                                sent_at_ms = _coerce_int(msg.get("sent_at_ms"))
+                                agent_received_at_ms = _now_ms()
+                                self._last_input_meta = {
+                                    "message_id": message_id,
+                                    "sent_at_ms": sent_at_ms,
+                                    "agent_received_at_ms": agent_received_at_ms,
+                                }
                                 self.proc.stdin.write(decoded)
                                 self.proc.stdin.flush()
                                 self.input_messages += 1
                                 self.input_bytes += len(decoded)
-                                _write_log(f"Shell stdin received bytes={len(decoded)}")
+                                transit_ms = (
+                                    str(max(0, agent_received_at_ms - sent_at_ms))
+                                    if sent_at_ms is not None
+                                    else "-"
+                                )
+                                _write_log(
+                                    "Shell stdin received bytes={0} message_id={1} sent_at_ms={2} recv_at_ms={3} transit_ms={4}".format(
+                                        len(decoded),
+                                        message_id or "-",
+                                        sent_at_ms if sent_at_ms is not None else "-",
+                                        agent_received_at_ms,
+                                        transit_ms,
+                                    )
+                                )
                             except Exception:
                                 _write_log("Shell stdin write failed.")
                     if msg.get("type") == "close":
@@ -333,11 +395,32 @@ class ShellSession:
                         try:
                             decoded = _b64decode(str(payload))
                             normalized = decoded.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                            message_id = str(msg.get("message_id") or "").strip()
+                            sent_at_ms = _coerce_int(msg.get("sent_at_ms"))
+                            agent_received_at_ms = _now_ms()
+                            self._last_input_meta = {
+                                "message_id": message_id,
+                                "sent_at_ms": sent_at_ms,
+                                "agent_received_at_ms": agent_received_at_ms,
+                            }
                             self.proc.stdin.write(normalized)
                             self.proc.stdin.flush()
                             self.input_messages += 1
                             self.input_bytes += len(normalized)
-                            _write_log(f"Shell stdin received bytes={len(normalized)}")
+                            transit_ms = (
+                                str(max(0, agent_received_at_ms - sent_at_ms))
+                                if sent_at_ms is not None
+                                else "-"
+                            )
+                            _write_log(
+                                "Shell stdin received bytes={0} message_id={1} sent_at_ms={2} recv_at_ms={3} transit_ms={4}".format(
+                                    len(normalized),
+                                    message_id or "-",
+                                    sent_at_ms if sent_at_ms is not None else "-",
+                                    agent_received_at_ms,
+                                    transit_ms,
+                                )
+                            )
                         except Exception:
                             _write_log("Shell stdin write failed.")
                     if msg.get("type") == "close":
@@ -520,6 +603,7 @@ class ShellServer:
                             _write_log(f"Rejected shell connection from {remote_ip}")
                             conn.close()
                             continue
+                        _configure_tcp_socket(conn)
                         _write_log(f"Accepted shell connection from {remote_ip}")
                         session = ShellSession(conn, addr, self.shell_kind, self.shell_bin)
                         threading.Thread(target=session.start, daemon=True).start()

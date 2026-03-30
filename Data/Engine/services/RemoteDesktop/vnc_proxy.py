@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import threading
 import time
 import uuid
@@ -21,6 +22,10 @@ import websockets
 
 VNC_WS_PATH = "/remote-desktop/vnc"
 _MAX_MESSAGE_SIZE = 100_000_000
+_CONNECT_WAIT_WINDOW_SECONDS = 20.0
+_CONNECT_TIMEOUT_SECONDS = 1.0
+_CONNECT_RETRY_DELAY_SECONDS = 0.25
+_RESTART_AFTER_SECONDS = (0.0, 2.0, 5.0, 10.0)
 
 
 @dataclass
@@ -191,6 +196,7 @@ class VncProxyServer:
         try:
             try:
                 reader, writer = await self._connect_vnc(session)
+                self._configure_writer_socket(writer)
             except Exception as exc:
                 logger.warning("VNC connect failed: %s", exc)
                 await websocket.close(code=1011, reason="vnc_unavailable")
@@ -233,14 +239,19 @@ class VncProxyServer:
         finally:
             logger.info("VNC session ended agent_id=%s", agent_id)
 
+    def _configure_writer_socket(self, writer: Any) -> None:
+        try:
+            sock = writer.get_extra_info("socket")
+            if sock is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            self.logger.debug("Failed to configure VNC TCP_NODELAY", exc_info=True)
+
     async def _connect_vnc(self, session: VncSession) -> Tuple[Any, Any]:
         host = session.host
         port = session.port
-        wait_window_seconds = 30.0
-        delay = 0.5
-        reconnect_after_seconds = (0.0, 10.0, 20.0)
         started_at = time.monotonic()
-        deadline = started_at + wait_window_seconds
+        deadline = started_at + _CONNECT_WAIT_WINDOW_SECONDS
         restart_index = 0
         last_exc: Optional[Exception] = None
         while True:
@@ -249,8 +260,8 @@ class VncProxyServer:
             if remaining <= 0:
                 break
             elapsed = max(0.0, now - started_at)
-            while restart_index < len(reconnect_after_seconds):
-                trigger_after = reconnect_after_seconds[restart_index]
+            while restart_index < len(_RESTART_AFTER_SECONDS):
+                trigger_after = _RESTART_AFTER_SECONDS[restart_index]
                 if elapsed + 0.001 < trigger_after:
                     break
                 restart_index += 1
@@ -264,12 +275,13 @@ class VncProxyServer:
                             exc_info=True,
                         )
             try:
-                return await asyncio.wait_for(asyncio.open_connection(host, port), timeout=min(2.0, max(0.5, remaining)))
+                timeout = min(_CONNECT_TIMEOUT_SECONDS, max(0.5, remaining))
+                return await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
             except Exception as exc:
                 last_exc = exc
                 remaining = deadline - time.monotonic()
                 if remaining > 0:
-                    await asyncio.sleep(min(delay, remaining))
+                    await asyncio.sleep(min(_CONNECT_RETRY_DELAY_SECONDS, remaining))
         if last_exc:
             raise last_exc
         raise RuntimeError("vnc_connect_failed")

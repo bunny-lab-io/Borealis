@@ -184,6 +184,16 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function buildRetryableError(message, retryable = true) {
+  const error = message instanceof Error ? message : new Error(String(message || "Request failed."));
+  error.retryable = retryable;
+  return error;
+}
+
+const VNC_AUTO_RETRY_ATTEMPTS = 3;
+const VNC_AUTO_RETRY_DELAY_MS = 1500;
+const VNC_OPEN_TIMEOUT_MS = 12000;
+
 async function writeClipboardText(text) {
   if (!navigator?.clipboard?.writeText) return;
   try {
@@ -214,6 +224,7 @@ export default function ReverseTunnelVnc({ device }) {
   const agentIdRef = useRef("");
   const clipboardSyncRef = useRef(clipboardSync);
   const clipboardLastRef = useRef("");
+  const connectAttemptRef = useRef(0);
 
   const agentId = useMemo(() => {
     return (
@@ -238,6 +249,10 @@ export default function ReverseTunnelVnc({ device }) {
   useEffect(() => {
     clipboardSyncRef.current = clipboardSync;
   }, [clipboardSync]);
+
+  const cancelPendingConnect = useCallback(() => {
+    connectAttemptRef.current += 1;
+  }, []);
 
   const notifyAgentOnboarding = useCallback(async () => {
     try {
@@ -296,6 +311,7 @@ export default function ReverseTunnelVnc({ device }) {
   }, []);
 
   const handleDisconnect = useCallback(async () => {
+    cancelPendingConnect();
     setVncStage("disconnecting");
     setLoading(true);
     setStatusMessage("");
@@ -307,14 +323,15 @@ export default function ReverseTunnelVnc({ device }) {
       clipboardLastRef.current = "";
       setLoading(false);
     }
-  }, [disconnectVnc, teardownDisplay]);
+  }, [cancelPendingConnect, disconnectVnc, teardownDisplay]);
 
   useEffect(() => {
     return () => {
+      cancelPendingConnect();
       teardownDisplay();
       disconnectVnc("component_unmount");
     };
-  }, [disconnectVnc, teardownDisplay]);
+  }, [cancelPendingConnect, disconnectVnc, teardownDisplay]);
 
   useEffect(() => {
     const rfb = rfbRef.current;
@@ -339,15 +356,12 @@ export default function ReverseTunnelVnc({ device }) {
 
   const requestTunnel = useCallback(async () => {
     if (!agentId) {
-      setStatusMessage("Agent ID is required to establish.");
-      setVncStage("error");
-      return null;
+      throw buildRetryableError("Agent ID is required to establish.", false);
     }
-    setLoading(true);
     setStatusMessage("");
     setVncStage("requesting_tunnel");
+    setSessionState("connecting");
     try {
-      setSessionState("connecting");
       const resp = await fetch("/api/vnc/establish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -360,21 +374,26 @@ export default function ReverseTunnelVnc({ device }) {
           return null;
         }
         const detail = data?.detail ? `: ${data.detail}` : "";
-        throw new Error(`${data?.error || `HTTP ${resp.status}`}${detail}`);
+        const status = Number(resp.status || 0);
+        throw buildRetryableError(
+          `${data?.error || `HTTP ${resp.status}`}${detail}`,
+          status >= 500 || status === 429 || status === 408
+        );
       }
       return data;
     } catch (err) {
-      setSessionState("error");
-      setStatusMessage(String(err.message || err));
-      setVncStage("error");
-      return null;
-    } finally {
-      setLoading(false);
+      if (err?.retryable !== false) {
+        throw buildRetryableError(err?.message || err, true);
+      }
+      throw err;
     }
   }, [agentId, handleAgentOnboarding]);
 
   const openVncSession = useCallback(
-    async (data) => {
+    async (data, options = {}) => {
+      const connectToken = Number(options.connectToken || 0);
+      const attempt = Number(options.attempt || 1);
+      const maxAttempts = Number(options.maxAttempts || VNC_AUTO_RETRY_ATTEMPTS);
       const wsUrl = data?.ws_url || buildWsUrl(data?.ws_path, data?.token);
       const vncPassword = data?.vnc_password || "";
       if (!wsUrl) {
@@ -401,46 +420,130 @@ export default function ReverseTunnelVnc({ device }) {
       rfb.qualityLevel = qualityLevel;
       rfb.compressionLevel = compressionLevel;
 
-      rfb.addEventListener("connect", () => {
-        setSessionState("connected");
-        setVncStage("connected");
-        setStatusMessage("");
-      });
-      rfb.addEventListener("disconnect", () => {
-        setSessionState("idle");
-        setVncStage((prev) =>
-          prev === "auth_failed" || prev === "error" ? prev : "disconnected"
-        );
-        rfbRef.current = null;
-      });
-      rfb.addEventListener("securityfailure", (evt) => {
-        const detail = evt?.detail?.reason ? ` (${evt.detail.reason})` : "";
-        setSessionState("error");
-        setVncStage("auth_failed");
-        setStatusMessage(`VNC authentication failed${detail}.`);
-      });
-      rfb.addEventListener("credentialsrequired", () => {
-        setVncStage("handshaking");
-        try {
-          rfb.sendCredentials({ password: vncPassword });
-        } catch {
-          // ignore
-        }
-      });
-      rfb.addEventListener("capabilities", (evt) => {
-        const caps = evt?.detail?.capabilities || rfb.capabilities || {};
-        setCapabilities(caps || {});
-      });
-      rfb.addEventListener("clipboard", (evt) => {
-        const text = evt?.detail?.text || "";
-        clipboardLastRef.current = text;
-        if (clipboardSyncRef.current) {
-          writeClipboardText(text);
-        }
-      });
-
       rfbRef.current = rfb;
-      setStatusMessage("Establishing VNC...");
+      setStatusMessage(
+        attempt > 1 ? `Establishing VNC... attempt ${attempt}/${maxAttempts}` : "Establishing VNC..."
+      );
+
+      return await new Promise((resolve, reject) => {
+        let settled = false;
+        let connected = false;
+
+        const isStaleAttempt = () => connectToken && connectAttemptRef.current !== connectToken;
+
+        const cleanupListeners = () => {
+          try {
+            rfb.removeEventListener("connect", handleConnectEvent);
+            rfb.removeEventListener("disconnect", handleDisconnectEvent);
+            rfb.removeEventListener("securityfailure", handleSecurityFailure);
+            rfb.removeEventListener("credentialsrequired", handleCredentialsRequired);
+            rfb.removeEventListener("capabilities", handleCapabilities);
+            rfb.removeEventListener("clipboard", handleClipboard);
+          } catch {
+            /* ignore */
+          }
+        };
+
+        const finishResolve = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          cleanupListeners();
+          resolve();
+        };
+
+        const finishReject = (error, retryable = true) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          cleanupListeners();
+          const err = error instanceof Error ? error : new Error(String(error || "VNC session unavailable."));
+          err.retryable = retryable;
+          reject(err);
+        };
+
+        const handleConnectEvent = () => {
+          if (isStaleAttempt()) {
+            try {
+              rfb.disconnect();
+            } catch {
+              /* ignore */
+            }
+            return;
+          }
+          connected = true;
+          setSessionState("connected");
+          setVncStage("connected");
+          setStatusMessage("");
+          finishResolve();
+        };
+
+        const handleDisconnectEvent = () => {
+          rfbRef.current = null;
+          if (isStaleAttempt()) return;
+          if (!connected) {
+            setSessionState("connecting");
+            setVncStage("retrying");
+            finishReject("VNC proxy disconnected before the desktop became available.", true);
+            return;
+          }
+          setSessionState("idle");
+          setVncStage((prev) =>
+            prev === "auth_failed" || prev === "error" ? prev : "disconnected"
+          );
+        };
+
+        const handleSecurityFailure = (evt) => {
+          if (isStaleAttempt()) return;
+          const detail = evt?.detail?.reason ? ` (${evt.detail.reason})` : "";
+          setSessionState("error");
+          setVncStage("auth_failed");
+          setStatusMessage(`VNC authentication failed${detail}.`);
+          finishReject(`VNC authentication failed${detail}.`, false);
+        };
+
+        const handleCredentialsRequired = () => {
+          if (isStaleAttempt()) return;
+          setVncStage("handshaking");
+          try {
+            rfb.sendCredentials({ password: vncPassword });
+          } catch {
+            /* ignore */
+          }
+        };
+
+        const handleCapabilities = (evt) => {
+          if (isStaleAttempt()) return;
+          const caps = evt?.detail?.capabilities || rfb.capabilities || {};
+          setCapabilities(caps || {});
+        };
+
+        const handleClipboard = (evt) => {
+          if (isStaleAttempt()) return;
+          const text = evt?.detail?.text || "";
+          clipboardLastRef.current = text;
+          if (clipboardSyncRef.current) {
+            writeClipboardText(text);
+          }
+        };
+
+        const timeoutId = setTimeout(() => {
+          if (connected) return;
+          try {
+            rfb.disconnect();
+          } catch {
+            /* ignore */
+          }
+          finishReject("VNC connection timed out.", true);
+        }, VNC_OPEN_TIMEOUT_MS);
+
+        rfb.addEventListener("connect", handleConnectEvent);
+        rfb.addEventListener("disconnect", handleDisconnectEvent);
+        rfb.addEventListener("securityfailure", handleSecurityFailure);
+        rfb.addEventListener("credentialsrequired", handleCredentialsRequired);
+        rfb.addEventListener("capabilities", handleCapabilities);
+        rfb.addEventListener("clipboard", handleClipboard);
+      });
     },
     [
       clipViewport,
@@ -454,21 +557,52 @@ export default function ReverseTunnelVnc({ device }) {
   );
 
   const handleConnect = useCallback(async () => {
-    if (sessionState === "connected") return;
+    if (sessionState === "connected" || loading) return;
+    const connectToken = connectAttemptRef.current + 1;
+    connectAttemptRef.current = connectToken;
     setStatusMessage("");
+    setLoading(true);
     setSessionState("connecting");
     try {
-      const sessionData = await requestTunnel();
-      if (!sessionData) {
-        return;
+      for (let attempt = 1; attempt <= VNC_AUTO_RETRY_ATTEMPTS; attempt += 1) {
+        if (connectAttemptRef.current !== connectToken) return;
+        if (attempt > 1) {
+          setSessionState("connecting");
+          setVncStage("retrying");
+          setStatusMessage(`Retrying VNC... (${attempt}/${VNC_AUTO_RETRY_ATTEMPTS})`);
+          await sleep(VNC_AUTO_RETRY_DELAY_MS);
+          if (connectAttemptRef.current !== connectToken) return;
+        }
+        try {
+          const sessionData = await requestTunnel();
+          if (!sessionData || connectAttemptRef.current !== connectToken) {
+            return;
+          }
+          await openVncSession(sessionData, {
+            connectToken,
+            attempt,
+            maxAttempts: VNC_AUTO_RETRY_ATTEMPTS,
+          });
+          return;
+        } catch (err) {
+          teardownDisplay();
+          const retryable = err?.retryable !== false;
+          if (!retryable || attempt >= VNC_AUTO_RETRY_ATTEMPTS) {
+            throw err;
+          }
+        }
       }
-      await openVncSession(sessionData);
     } catch (err) {
+      if (connectAttemptRef.current !== connectToken) return;
       setSessionState("error");
       setStatusMessage(String(err.message || err));
       setVncStage("error");
+    } finally {
+      if (connectAttemptRef.current === connectToken) {
+        setLoading(false);
+      }
     }
-  }, [openVncSession, requestTunnel, sessionState]);
+  }, [loading, openVncSession, requestTunnel, sessionState, teardownDisplay]);
 
   const injectClipboardKeystrokes = useCallback(async () => {
     const rfb = rfbRef.current;
@@ -638,6 +772,13 @@ export default function ReverseTunnelVnc({ device }) {
           label: "Disconnected",
           detail: "Session closed. Ready to reconnect.",
           accent: "rgba(148, 163, 184, 0.6)",
+          detailTone: MAGIC_UI.textMuted,
+        };
+      case "retrying":
+        return {
+          label: "Retrying",
+          detail: summarizeStatus(statusMessage) || "Retrying VNC after a transient tunnel or proxy failure.",
+          accent: MAGIC_UI.accentB,
           detailTone: MAGIC_UI.textMuted,
         };
       case "agent_onboarding":

@@ -30,6 +30,16 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
 
 try:
+    from runtime_paths import agent_borealis_root, agent_logs_root, agent_runtime_root
+except Exception:  # pragma: no cover - fallback for runtime path issues
+    import sys
+
+    base_dir = Path(__file__).resolve().parents[1]
+    if str(base_dir) not in sys.path:
+        sys.path.insert(0, str(base_dir))
+    from runtime_paths import agent_borealis_root, agent_logs_root, agent_runtime_root
+
+try:
     import winreg  # type: ignore
 except Exception:  # pragma: no cover - non-Windows guard
     winreg = None
@@ -76,7 +86,7 @@ ENSURE_INTERVAL_SECONDS = _env_int("BOREALIS_WIREGUARD_ENSURE_INTERVAL", 60, min
 
 
 def _log_path() -> Path:
-    root = Path(__file__).resolve().parents[2] / "Logs" / "VPN_Tunnel"
+    root = agent_logs_root(__file__) / "VPN_Tunnel"
     root.mkdir(parents=True, exist_ok=True)
     return root / "tunnel.log"
 
@@ -90,7 +100,7 @@ def _write_log(message: str) -> None:
 
 
 def _firewall_state_path() -> Path:
-    root = Path(__file__).resolve().parents[2] / "Borealis" / "Settings" / "WireGuard"
+    root = agent_borealis_root(__file__) / "Settings" / "WireGuard"
     root.mkdir(parents=True, exist_ok=True)
     return root / "firewall_state.json"
 
@@ -243,7 +253,7 @@ class SessionConfig:
 
 class WireGuardClient:
     def __init__(self) -> None:
-        base = Path(__file__).resolve().parents[2]
+        base = agent_runtime_root(__file__)
         self.cert_root = base / "Borealis" / "Certificates" / "VPN_Client"
         self.temp_root = base / "Borealis" / "Temp"
         self.temp_root.mkdir(parents=True, exist_ok=True)
@@ -803,7 +813,7 @@ class WireGuardClient:
 
 class LinuxWireGuardClient:
     def __init__(self) -> None:
-        base = Path(__file__).resolve().parents[2]
+        base = agent_runtime_root(__file__)
         self.cert_root = base / "Borealis" / "Certificates" / "VPN_Client"
         self.settings_root = base / "Borealis" / "Settings" / "WireGuard"
         self.settings_root.mkdir(parents=True, exist_ok=True)
