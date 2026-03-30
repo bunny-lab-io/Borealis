@@ -169,11 +169,18 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             except Exception:
                 return {"error": "tunnel_down"}, 409
         def _restart_tunnel(reason: str) -> None:
+            tunnel_service.mark_transport_required(agent_id, reason=reason)
             tunnel_service.request_agent_start(
                 agent_id,
                 force_restart=True,
                 reason=reason,
             )
+            if str(reason or "").strip().lower() == "vnc_connect_retry":
+                tunnel_service.recover_transport(
+                    agent_id,
+                    trigger="vnc_connect",
+                    reason=reason,
+                )
 
         try:
             _restart_tunnel("vnc_bootstrap")

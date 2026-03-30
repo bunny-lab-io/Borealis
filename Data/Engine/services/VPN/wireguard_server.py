@@ -25,6 +25,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
@@ -449,6 +450,35 @@ class WireGuardServerManager:
             raise RuntimeError(f"WireGuard Linux peer enumeration failed: {detail}")
         return [line.strip() for line in str(out or "").splitlines() if line.strip()]
 
+    def _linux_latest_handshakes(self) -> Dict[str, int]:
+        if not self._wg or not self._linux_interface_exists():
+            return {}
+        code, out, err = self._run_command([self._wg, "show", self._interface_name, "latest-handshakes"])
+        if code != 0:
+            detail = (err or out or "unknown error").strip()
+            raise RuntimeError(f"WireGuard Linux latest-handshakes query failed: {detail}")
+        handshakes: Dict[str, int] = {}
+        for line in str(out or "").splitlines():
+            parts = [part.strip() for part in line.split("\t")]
+            if len(parts) != 2:
+                continue
+            public_key = parts[0]
+            if not public_key:
+                continue
+            try:
+                handshakes[public_key] = int(parts[1])
+            except Exception:
+                continue
+        return handshakes
+
+    def _ts_to_iso(self, ts: Optional[float]) -> str:
+        if ts in (None, "", 0):
+            return ""
+        try:
+            return datetime.fromtimestamp(float(ts), timezone.utc).isoformat()
+        except Exception:
+            return ""
+
     def _linux_remove_peer_by_public_key(self, public_key: str) -> None:
         if not public_key or not self._wg or not self._linux_interface_exists():
             return
@@ -546,6 +576,160 @@ class WireGuardServerManager:
             "reason": "listener_running",
             "service_state": "RUNNING",
             "peer_count": len(peers),
+        }
+
+    def check_peer_health(self, public_key: str) -> Dict[str, Optional[Union[str, bool, int, float]]]:
+        """Return live transport health for a specific managed peer."""
+
+        normalized_key = str(public_key or "").strip()
+        if not normalized_key:
+            return {
+                "healthy": False,
+                "reason": "peer_missing",
+                "service_state": None,
+                "peer_present": False,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+
+        if self._is_windows:
+            service_exists = self._service_exists()
+            service_state = self._query_service_state()
+            peer_present = any(
+                str(peer.get("public_key") or "").strip() == normalized_key
+                for peer in self._managed_peers.values()
+            )
+            if not service_exists:
+                return {
+                    "healthy": False,
+                    "reason": "service_missing",
+                    "service_state": service_state,
+                    "peer_present": peer_present,
+                    "last_handshake_at": None,
+                    "last_handshake_at_iso": "",
+                    "handshake_age_seconds": None,
+                }
+            if service_state not in ("RUNNING", "START_PENDING"):
+                return {
+                    "healthy": False,
+                    "reason": "service_unhealthy",
+                    "service_state": service_state,
+                    "peer_present": peer_present,
+                    "last_handshake_at": None,
+                    "last_handshake_at_iso": "",
+                    "handshake_age_seconds": None,
+                }
+            if not peer_present:
+                return {
+                    "healthy": False,
+                    "reason": "peer_missing",
+                    "service_state": service_state,
+                    "peer_present": False,
+                    "last_handshake_at": None,
+                    "last_handshake_at_iso": "",
+                    "handshake_age_seconds": None,
+                }
+            return {
+                "healthy": True,
+                "reason": "peer_present",
+                "service_state": service_state,
+                "peer_present": True,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+
+        if not self._linux_interface_exists():
+            return {
+                "healthy": False,
+                "reason": "interface_down",
+                "service_state": None,
+                "peer_present": False,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+        if not self._wg:
+            return {
+                "healthy": False,
+                "reason": "wg_unavailable",
+                "service_state": None,
+                "peer_present": False,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+
+        code, _out, _err = self._run_command([self._wg, "show", self._interface_name])
+        if code != 0:
+            return {
+                "healthy": False,
+                "reason": "wg_show_failed",
+                "service_state": None,
+                "peer_present": False,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+
+        try:
+            peers = set(self._linux_list_current_peers())
+        except Exception:
+            return {
+                "healthy": False,
+                "reason": "wg_peers_failed",
+                "service_state": None,
+                "peer_present": False,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+        if normalized_key not in peers:
+            return {
+                "healthy": False,
+                "reason": "peer_missing",
+                "service_state": "RUNNING",
+                "peer_present": False,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+
+        try:
+            handshakes = self._linux_latest_handshakes()
+        except Exception:
+            return {
+                "healthy": False,
+                "reason": "wg_latest_handshakes_failed",
+                "service_state": "RUNNING",
+                "peer_present": True,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+
+        last_handshake_at = handshakes.get(normalized_key)
+        if not last_handshake_at:
+            return {
+                "healthy": False,
+                "reason": "no_handshake",
+                "service_state": "RUNNING",
+                "peer_present": True,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+
+        handshake_age_seconds = max(0, int(time.time() - int(last_handshake_at)))
+        return {
+            "healthy": True,
+            "reason": "peer_ready",
+            "service_state": "RUNNING",
+            "peer_present": True,
+            "last_handshake_at": int(last_handshake_at),
+            "last_handshake_at_iso": self._ts_to_iso(float(last_handshake_at)),
+            "handshake_age_seconds": handshake_age_seconds,
         }
 
     def _linux_firewall_ensure_rule(self, chain: str, params: Sequence[str], *, label: str) -> bool:

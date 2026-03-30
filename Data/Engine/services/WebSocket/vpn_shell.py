@@ -331,6 +331,10 @@ class VpnShellBridge:
                 status = service.connect(agent_id=agent_id, operator_id=None, endpoint_host=None)
             except Exception:
                 return None
+        try:
+            service.mark_transport_required(agent_id, reason="shell_connect")
+        except Exception:
+            self.logger.debug("Failed to mark shell transport activity for agent=%s", agent_id, exc_info=True)
         host = str(status.get("virtual_ip") or "").split("/")[0]
         port = int(self.context.wireguard_shell_port)
         tcp = None
@@ -372,6 +376,35 @@ class VpnShellBridge:
                         ),
                         level="WARNING",
                     )
+                if trigger_after >= 5.0:
+                    try:
+                        service.recover_transport(
+                            agent_id,
+                            trigger="vpn_shell_connect",
+                            reason="shell_connect_retry",
+                        )
+                        self._service_log_event(
+                            "vpn_shell_transport_recovery agent_id={0} sid={1} trigger_elapsed={2}".format(
+                                agent_id,
+                                sid,
+                                int(math.floor(trigger_after)),
+                            ),
+                            level="WARNING",
+                        )
+                    except Exception:
+                        self.logger.debug(
+                            "Failed to force WireGuard transport recovery for agent=%s",
+                            agent_id,
+                            exc_info=True,
+                        )
+                        self._service_log_event(
+                            "vpn_shell_transport_recovery_failed agent_id={0} sid={1} trigger_elapsed={2}".format(
+                                agent_id,
+                                sid,
+                                int(math.floor(trigger_after)),
+                            ),
+                            level="WARNING",
+                        )
                 reemit_index += 1
 
             attempts += 1

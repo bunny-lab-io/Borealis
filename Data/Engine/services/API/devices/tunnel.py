@@ -124,6 +124,15 @@ def _down_status_payload(agent_id: str, *, agent_socket: bool) -> Dict[str, Any]
     }
 
 
+def _normalize_tunnel_status(payload: Dict[str, Any]) -> str:
+    current = _normalize_text(payload.get("status")).lower()
+    if current in {"up", "down", "recovering"}:
+        return current
+    if bool(payload.get("recovery_in_progress")) or payload.get("listener_healthy") is False:
+        return "recovering"
+    return "up"
+
+
 def _guid_candidate(value: Any) -> str:
     text = _normalize_text(value)
     if not text:
@@ -380,13 +389,14 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
                 "vpn_api_status_response agent_id={0} status=down".format(agent_id)
             )
             return jsonify(_down_status_payload(agent_id, agent_socket=agent_socket)), 200
-        payload["status"] = "up"
+        payload["status"] = _normalize_tunnel_status(payload)
         payload["agent_socket"] = agent_socket
         if bump:
             tunnel_service.bump_activity(agent_id)
         _service_log_event(
-            "vpn_api_status_response agent_id={0} status=up tunnel_id={1}".format(
+            "vpn_api_status_response agent_id={0} status={1} tunnel_id={2}".format(
                 agent_id,
+                payload.get("status", "-"),
                 payload.get("tunnel_id", "-"),
             )
         )
@@ -419,6 +429,7 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
                 except Exception:
                     agent_socket = False
             payload["agent_socket"] = agent_socket
+            payload["status"] = _normalize_tunnel_status(payload)
             enriched_sessions.append(payload)
         sessions = enriched_sessions
         _service_log_event(

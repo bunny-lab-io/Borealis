@@ -134,6 +134,7 @@ class _FakeWireGuardManager:
         self.remove_calls = 0
         self.removed_rules = []
         self.current_peers: dict[str, dict[str, Any]] = {}
+        self.peer_health_overrides: dict[str, dict[str, Any]] = {}
 
     def require_orchestration_token(self, token: Any) -> Any:
         return token
@@ -205,6 +206,46 @@ class _FakeWireGuardManager:
         payload = dict(self.health)
         payload.setdefault("peer_count", len(self.current_peers))
         return payload
+
+    def check_peer_health(self, public_key: str) -> dict:
+        normalized_key = str(public_key or "").strip()
+        override = self.peer_health_overrides.get(normalized_key)
+        if override is not None:
+            return dict(override)
+        peer_present = any(
+            str(peer.get("public_key") or "").strip() == normalized_key
+            for peer in self.current_peers.values()
+        )
+        if not self.health.get("healthy"):
+            return {
+                "healthy": False,
+                "reason": str(self.health.get("reason") or "service_unhealthy"),
+                "service_state": self.health.get("service_state"),
+                "peer_present": peer_present,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+        if not peer_present:
+            return {
+                "healthy": False,
+                "reason": "peer_missing",
+                "service_state": self.health.get("service_state"),
+                "peer_present": False,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+            }
+        handshake_at = int(time.time())
+        return {
+            "healthy": True,
+            "reason": "peer_ready",
+            "service_state": self.health.get("service_state"),
+            "peer_present": True,
+            "last_handshake_at": handshake_at,
+            "last_handshake_at_iso": "",
+            "handshake_age_seconds": 0,
+        }
 
 
 class _ConcurrentFakeWireGuardManager(_FakeWireGuardManager):
@@ -691,6 +732,59 @@ def test_vpn_service_watchdog_noops_when_listener_healthy() -> None:
     assert status["recovery_in_progress"] is False
 
 
+def test_vpn_service_status_marks_peer_transport_recovering_when_handshake_never_arrives() -> None:
+    service, wg, _socketio, _service_events = _build_vpn_service()
+    payload = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    service.mark_transport_required("agent-1", reason="shell_connect")
+    with service._lock:
+        session = service._sessions_by_agent["agent-1"]
+        session.created_at = time.time() - 10
+        session.last_activity = time.time() - 10
+    wg.peer_health_overrides[payload["client_public_key"]] = {
+        "healthy": False,
+        "reason": "no_handshake",
+        "service_state": "RUNNING",
+        "peer_present": True,
+        "last_handshake_at": None,
+        "last_handshake_at_iso": "",
+        "handshake_age_seconds": None,
+    }
+
+    status = service.status("agent-1")
+
+    assert status is not None
+    assert status["status"] == "recovering"
+    assert status["listener_healthy"] is False
+    assert status["recovery_in_progress"] is True
+    assert status["transport_ready"] is False
+    assert status["peer_health_reason"] == "no_recent_handshake"
+
+
+def test_vpn_service_watchdog_recovers_when_peer_transport_is_unhealthy() -> None:
+    service, wg, _socketio, service_events = _build_vpn_service()
+    payload = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    service.mark_transport_required("agent-1", reason="shell_connect")
+    with service._lock:
+        session = service._sessions_by_agent["agent-1"]
+        session.created_at = time.time() - 10
+        session.last_activity = time.time() - 10
+    wg.peer_health_overrides[payload["client_public_key"]] = {
+        "healthy": False,
+        "reason": "no_handshake",
+        "service_state": "RUNNING",
+        "peer_present": True,
+        "last_handshake_at": None,
+        "last_handshake_at_iso": "",
+        "handshake_age_seconds": None,
+    }
+
+    start_calls = wg.start_calls
+    service._watchdog_tick()
+
+    assert wg.start_calls == start_calls + 1
+    assert any("vpn_transport_watchdog_recovery" in message for _name, message, _level in service_events)
+
+
 def test_vpn_service_request_agent_start_can_force_restart() -> None:
     service, _wg, socketio, _service_events = _build_vpn_service()
     service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
@@ -814,7 +908,7 @@ def test_tunnel_status_endpoint_exposes_listener_health(engine_harness: EngineTe
     response = client.get("/api/tunnel/status?agent_id=test-device-agent&bump=1")
     assert response.status_code == 200
     payload = response.get_json()
-    assert payload["status"] == "up"
+    assert payload["status"] == "recovering"
     assert payload["listener_healthy"] is False
     assert payload["recovery_in_progress"] is True
     assert payload["last_recovery_attempt_at"] == 1_700_123_456

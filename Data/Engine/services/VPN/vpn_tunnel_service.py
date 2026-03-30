@@ -30,6 +30,16 @@ def _env_flag(name: str, *, default: bool) -> bool:
     return str(value).strip().lower() not in ("0", "false", "no", "off")
 
 
+def _env_int(name: str, *, default: int, minimum: int = 0) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return max(minimum, int(default))
+    try:
+        return max(minimum, int(str(value).strip()))
+    except Exception:
+        return max(minimum, int(default))
+
+
 def _format_ports(ports: Iterable[int]) -> str:
     items = [str(p) for p in ports]
     if not items:
@@ -39,6 +49,26 @@ def _format_ports(ports: Iterable[int]) -> str:
 
 WATCHDOG_INTERVAL_SECONDS = 15
 LISTENER_RECOVERY_MIN_INTERVAL_SECONDS = 30
+FORCED_LISTENER_RECOVERY_MIN_INTERVAL_SECONDS = _env_int(
+    "BOREALIS_WIREGUARD_FORCED_RECOVERY_MIN_INTERVAL_SECONDS",
+    default=5,
+    minimum=1,
+)
+PEER_ACTIVITY_WINDOW_SECONDS = _env_int(
+    "BOREALIS_WIREGUARD_PEER_ACTIVITY_WINDOW_SECONDS",
+    default=60,
+    minimum=5,
+)
+PEER_PROBE_GRACE_SECONDS = _env_int(
+    "BOREALIS_WIREGUARD_PEER_PROBE_GRACE_SECONDS",
+    default=5,
+    minimum=1,
+)
+PEER_HANDSHAKE_SKEW_SECONDS = _env_int(
+    "BOREALIS_WIREGUARD_PEER_HANDSHAKE_SKEW_SECONDS",
+    default=2,
+    minimum=0,
+)
 
 
 @dataclass
@@ -369,6 +399,116 @@ class VpnTunnelService:
                 "last_recovery_attempt_at_iso": self._last_recovery_attempt_at_iso,
             }
 
+    def _session_transport_health(
+        self,
+        session: VpnSession,
+        *,
+        now: Optional[float] = None,
+    ) -> Mapping[str, Any]:
+        current = now if now is not None else time.time()
+        last_probe_at = max(float(session.created_at or 0.0), float(session.last_activity or 0.0))
+        probe_age_seconds = max(0.0, current - last_probe_at)
+        requires_transport = probe_age_seconds <= float(PEER_ACTIVITY_WINDOW_SECONDS)
+        try:
+            peer_health = dict(self.wg.check_peer_health(session.client_public_key))
+        except Exception as exc:
+            self.logger.debug("WireGuard peer health check failed for agent_id=%s", session.agent_id, exc_info=True)
+            peer_health = {
+                "healthy": False,
+                "reason": "peer_health_failed",
+                "service_state": None,
+                "peer_present": False,
+                "last_handshake_at": None,
+                "last_handshake_at_iso": "",
+                "handshake_age_seconds": None,
+                "error": repr(exc),
+            }
+
+        peer_present = bool(peer_health.get("peer_present"))
+        raw_peer_healthy = bool(peer_health.get("healthy"))
+        raw_reason = str(peer_health.get("reason") or "unknown")
+        last_handshake_at: Optional[float]
+        try:
+            value = peer_health.get("last_handshake_at")
+            last_handshake_at = float(value) if value not in (None, "") else None
+        except Exception:
+            last_handshake_at = None
+        recent_handshake = (
+            last_handshake_at is not None
+            and (last_handshake_at + float(PEER_HANDSHAKE_SKEW_SECONDS)) >= last_probe_at
+        )
+
+        hard_failure_reasons = {
+            "interface_down",
+            "wg_unavailable",
+            "wg_show_failed",
+            "wg_peers_failed",
+            "wg_latest_handshakes_failed",
+            "service_missing",
+            "service_unhealthy",
+            "peer_health_failed",
+        }
+        if raw_reason in hard_failure_reasons:
+            transport_ready = False
+            transport_reason = raw_reason
+        elif not requires_transport:
+            transport_ready = True
+            transport_reason = "idle"
+        elif recent_handshake:
+            transport_ready = True
+            transport_reason = "recent_handshake"
+        elif probe_age_seconds < float(PEER_PROBE_GRACE_SECONDS):
+            transport_ready = True
+            transport_reason = "probe_grace"
+        elif not peer_present:
+            transport_ready = False
+            transport_reason = "peer_missing"
+        elif last_handshake_at is None:
+            transport_ready = False
+            transport_reason = "no_recent_handshake"
+        else:
+            transport_ready = False
+            transport_reason = "stale_handshake"
+
+        return {
+            "transport_ready": bool(transport_ready),
+            "requires_transport": bool(requires_transport),
+            "peer_healthy": bool(raw_peer_healthy),
+            "peer_present": bool(peer_present),
+            "peer_health_reason": transport_reason,
+            "peer_health_source_reason": raw_reason,
+            "last_transport_probe_at": int(last_probe_at) if last_probe_at else None,
+            "last_transport_probe_at_iso": self._ts_to_iso(last_probe_at) if last_probe_at else "",
+            "probe_age_seconds": int(probe_age_seconds),
+            "last_handshake_at": int(last_handshake_at) if last_handshake_at is not None else None,
+            "last_handshake_at_iso": str(peer_health.get("last_handshake_at_iso") or ""),
+            "handshake_age_seconds": peer_health.get("handshake_age_seconds"),
+        }
+
+    def _session_runtime_payload(
+        self,
+        session: VpnSession,
+        *,
+        listener_health: Optional[Mapping[str, Any]] = None,
+        refresh_listener: bool = False,
+        now: Optional[float] = None,
+    ) -> Mapping[str, Any]:
+        listener_payload = dict(listener_health or self._listener_health_payload(refresh=refresh_listener))
+        transport_payload = dict(self._session_transport_health(session, now=now))
+        listener_healthy = bool(listener_payload.get("listener_healthy")) and bool(transport_payload.get("transport_ready"))
+        recovery_in_progress = bool(listener_payload.get("recovery_in_progress")) or not bool(
+            transport_payload.get("transport_ready")
+        )
+        status = "up" if listener_healthy and not recovery_in_progress else "recovering"
+        return {
+            "status": status,
+            "listener_healthy": listener_healthy,
+            "recovery_in_progress": recovery_in_progress,
+            "last_recovery_attempt_at": listener_payload.get("last_recovery_attempt_at"),
+            "last_recovery_attempt_at_iso": listener_payload.get("last_recovery_attempt_at_iso", ""),
+            **transport_payload,
+        }
+
     def _build_listener_peer(self, session: VpnSession) -> Mapping[str, object]:
         peer = self.wg.build_peer_profile(
             session.agent_id,
@@ -447,7 +587,7 @@ class VpnTunnelService:
             with self._lock:
                 self._apply_listener_health_locked(health, active_sessions=True)
 
-    def _recover_listener(self, *, trigger: str, reason: str) -> Mapping[str, Any]:
+    def _recover_listener(self, *, trigger: str, reason: str, force: bool = False) -> Mapping[str, Any]:
         with self._listener_lock:
             active_sessions = self._active_sessions()
             if not active_sessions:
@@ -456,27 +596,33 @@ class VpnTunnelService:
 
             expected_peer_count = len(active_sessions)
             initial_health = self._check_listener_health(expected_peer_count=expected_peer_count)
-            if initial_health.get("healthy"):
+            if initial_health.get("healthy") and not force:
                 with self._lock:
                     self._apply_listener_health_locked(initial_health, active_sessions=True, recovery_in_progress=False)
                 return self._listener_health_payload(refresh=False)
 
             now = time.time()
             throttled = False
+            min_retry_interval = (
+                FORCED_LISTENER_RECOVERY_MIN_INTERVAL_SECONDS
+                if force
+                else LISTENER_RECOVERY_MIN_INTERVAL_SECONDS
+            )
             with self._lock:
                 self._apply_listener_health_locked(initial_health, active_sessions=True, recovery_in_progress=True)
                 last_attempt = self._last_recovery_attempt_at
-                if last_attempt is not None and (now - last_attempt) < LISTENER_RECOVERY_MIN_INTERVAL_SECONDS:
+                if last_attempt is not None and (now - last_attempt) < min_retry_interval:
                     if (
                         self._last_throttle_log_at is None
-                        or (now - self._last_throttle_log_at) >= LISTENER_RECOVERY_MIN_INTERVAL_SECONDS
+                        or (now - self._last_throttle_log_at) >= min_retry_interval
                     ):
                         self._service_log_event(
-                            "vpn_listener_recovery_throttled trigger={0} reason={1} service_reason={2} min_retry_interval={3}".format(
+                            "vpn_listener_recovery_throttled trigger={0} reason={1} force={2} service_reason={3} min_retry_interval={4}".format(
                                 trigger or "-",
                                 reason or "-",
+                                str(bool(force)).lower(),
                                 self._listener_health_reason or "-",
-                                LISTENER_RECOVERY_MIN_INTERVAL_SECONDS,
+                                min_retry_interval,
                             ),
                             level="WARNING",
                         )
@@ -492,9 +638,10 @@ class VpnTunnelService:
             prior_state = initial_health.get("service_state") or "-"
             prior_reason = initial_health.get("reason") or "unhealthy"
             self._service_log_event(
-                "vpn_listener_recovery_attempt trigger={0} reason={1} prior_reason={2} prior_state={3}".format(
+                "vpn_listener_recovery_attempt trigger={0} reason={1} force={2} prior_reason={3} prior_state={4}".format(
                     trigger or "-",
                     reason or "-",
+                    str(bool(force)).lower(),
                     prior_reason,
                     prior_state,
                 ),
@@ -509,9 +656,10 @@ class VpnTunnelService:
                     self._listener_healthy = False
                     self._listener_health_reason = "refresh_failed"
                 self._service_log_event(
-                    "vpn_listener_recovery_failed trigger={0} reason={1} error={2}".format(
+                    "vpn_listener_recovery_failed trigger={0} reason={1} force={2} error={3}".format(
                         trigger or "-",
                         reason or "-",
+                        str(bool(force)).lower(),
                         repr(exc),
                     ),
                     level="ERROR",
@@ -529,10 +677,11 @@ class VpnTunnelService:
             event_name = "vpn_listener_recovery_success" if recovered_health.get("healthy") else "vpn_listener_recovery_failed"
             event_level = "INFO" if recovered_health.get("healthy") else "ERROR"
             self._service_log_event(
-                "{0} trigger={1} reason={2} service_reason={3} service_state={4}".format(
+                "{0} trigger={1} reason={2} force={3} service_reason={4} service_state={5}".format(
                     event_name,
                     trigger or "-",
                     reason or "-",
+                    str(bool(force)).lower(),
                     recovered_health.get("reason") or "-",
                     recovered_health.get("service_state") or "-",
                 ),
@@ -553,6 +702,29 @@ class VpnTunnelService:
             return
         health = self._listener_health_payload(refresh=True)
         if health.get("listener_healthy"):
+            now = time.time()
+            for session in active_sessions:
+                session_runtime = self._session_runtime_payload(
+                    session,
+                    listener_health=health,
+                    now=now,
+                )
+                if bool(session_runtime.get("transport_ready")):
+                    continue
+                self._service_log_event(
+                    "vpn_transport_watchdog_recovery agent_id={0} tunnel_id={1} reason={2}".format(
+                        session.agent_id,
+                        session.tunnel_id,
+                        session_runtime.get("peer_health_reason") or "-",
+                    ),
+                    level="WARNING",
+                )
+                self._recover_listener(
+                    trigger="watchdog",
+                    reason="peer_transport_unhealthy",
+                    force=True,
+                )
+                return
             return
         self._recover_listener(trigger="watchdog", reason="listener_unhealthy")
 
@@ -696,17 +868,18 @@ class VpnTunnelService:
         if not session:
             return None
         payload = dict(self._session_payload(session, include_token=False))
-        payload.update(self._listener_health_payload(refresh=True))
+        payload.update(self._session_runtime_payload(session, refresh_listener=True))
         return payload
 
     def list_sessions(self) -> List[Mapping[str, Any]]:
         with self._lock:
             sessions = sorted(self._sessions_by_agent.values(), key=lambda s: s.agent_id)
         health = self._listener_health_payload(refresh=bool(sessions))
+        now = time.time()
         return [
             {
                 **self._session_summary(session),
-                **health,
+                **self._session_runtime_payload(session, listener_health=health, now=now),
             }
             for session in sessions
         ]
@@ -747,6 +920,56 @@ class VpnTunnelService:
         )
         self._emit_start(emitted_payload)
         return emitted_payload
+
+    def mark_transport_required(self, agent_id: str, *, reason: Optional[str] = None) -> bool:
+        with self._lock:
+            session = self._sessions_by_agent.get(agent_id)
+            if not session:
+                return False
+            now = time.time()
+            idle_for = max(0.0, now - float(session.last_activity or 0.0))
+            session.last_activity = now
+        self._service_log_event(
+            "vpn_transport_probe agent_id={0} tunnel_id={1} reason={2} idle_for={3}".format(
+                session.agent_id,
+                session.tunnel_id,
+                str(reason or "").strip() or "-",
+                int(idle_for),
+            )
+        )
+        return True
+
+    def recover_transport(
+        self,
+        agent_id: str,
+        *,
+        trigger: str,
+        reason: Optional[str] = None,
+    ) -> Optional[Mapping[str, Any]]:
+        marked = self.mark_transport_required(agent_id, reason=reason or trigger)
+        with self._lock:
+            session = self._sessions_by_agent.get(agent_id)
+        if not session:
+            self._service_log_event(
+                "vpn_transport_recovery_missing agent_id={0} trigger={1} reason={2}".format(
+                    agent_id or "-",
+                    trigger or "-",
+                    str(reason or "").strip() or "-",
+                ),
+                level="WARNING",
+            )
+            return None
+        self._service_log_event(
+            "vpn_transport_recovery_request agent_id={0} tunnel_id={1} trigger={2} reason={3} marked={4}".format(
+                session.agent_id,
+                session.tunnel_id,
+                trigger or "-",
+                str(reason or "").strip() or "-",
+                str(bool(marked)).lower(),
+            ),
+            level="WARNING",
+        )
+        return self._recover_listener(trigger=trigger, reason=str(reason or trigger), force=True)
 
     def bump_activity(self, agent_id: str) -> None:
         with self._lock:
