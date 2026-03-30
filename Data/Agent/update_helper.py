@@ -105,6 +105,14 @@ def _is_literal_ip(hostname: str) -> bool:
 
 
 def _verify_bundle_path(store: AgentKeyStore) -> Any:
+    use_pinned_bundle = (os.environ.get("BOREALIS_USE_PINNED_SERVER_CERT") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not use_pinned_bundle:
+        return True
     try:
         candidate = Path(store.server_certificate_path())
         if candidate.is_file():
@@ -124,7 +132,13 @@ def _build_session(server_url: str) -> requests.Session:
     scheme = (parsed.scheme or "https").lower()
     netloc = parsed.netloc or (parsed.hostname or "")
     hostname = parsed.hostname or ""
-    if netloc and _is_literal_ip(hostname):
+    allow_literal_ip = (os.environ.get("BOREALIS_ALLOW_LITERAL_ENGINE_IP") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if netloc and _is_literal_ip(hostname) and allow_literal_ip:
         session.mount(
             f"{scheme}://{netloc}",
             _HostnameFlexibleAdapter(disable_hostname_check=True),
@@ -133,32 +147,9 @@ def _build_session(server_url: str) -> requests.Session:
 
 
 def _refresh_pinned_certificate(store: AgentKeyStore, server_url: str) -> bool:
-    try:
-        parsed = urlparse(server_url)
-    except Exception:
-        return False
-
-    host = (parsed.hostname or "").strip() or "localhost"
-    port = parsed.port
-    if not port:
-        port = 443 if (parsed.scheme or "").lower() == "https" else 80
-
-    try:
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        with socket.create_connection((host, port), timeout=5) as sock:
-            with context.wrap_socket(sock, server_hostname=host) as tls_sock:
-                peer_der = tls_sock.getpeercert(binary_form=True)
-    except Exception:
-        return False
-
-    try:
-        pem_text = ssl.DER_cert_to_PEM_cert(peer_der)
-        store.save_server_certificate(pem_text)
-    except Exception:
-        return False
-    return True
+    _ = store
+    _ = server_url
+    return False
 
 
 def _perform_request(

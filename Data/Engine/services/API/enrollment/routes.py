@@ -44,7 +44,6 @@ def register(
     db_conn_factory: Callable[[], sqlite3.Connection],
     log: Callable[[str, str, Optional[str]], None],
     jwt_service,
-    tls_bundle_path: str,
     ip_rate_limiter: SlidingWindowRateLimiter,
     fp_rate_limiter: SlidingWindowRateLimiter,
     nonce_cache: NonceCache,
@@ -457,7 +456,6 @@ def register(
             "approval_reference": approval_reference,
             "server_nonce": server_nonce_b64,
             "poll_after_ms": 3000,
-            "server_certificate": _load_tls_bundle(tls_bundle_path),
             "signing_key": _signing_key_b64(),
         }
         _enrollment_log(
@@ -659,21 +657,11 @@ def register(
                 "expires_in": 900,
                 "refresh_token": refresh_info["token"],
                 "token_type": "Bearer",
-                "server_certificate": _load_tls_bundle(tls_bundle_path),
                 "signing_key": _signing_key_b64(),
             }
         )
 
     app.register_blueprint(blueprint)
-
-
-def _load_tls_bundle(path: str) -> str:
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            return fh.read()
-    except Exception:
-        return ""
-
 
 def _mask_code(code: str) -> str:
     if not code:

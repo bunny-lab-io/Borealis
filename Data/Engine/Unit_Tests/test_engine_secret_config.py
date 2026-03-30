@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from Data.Engine.config import load_runtime_config
@@ -74,3 +75,48 @@ def test_default_api_groups_include_workflow_routes(tmp_path: Path, monkeypatch)
     settings = load_runtime_config(_base_config(tmp_path))
 
     assert "workflows" in settings.api_groups
+
+
+def test_runtime_config_loads_public_edge_settings(tmp_path: Path, monkeypatch) -> None:
+    settings_path = tmp_path / "Engine" / "LetsEncrypt" / "Settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "fqdn": "borealis.example.com",
+                "acme_email": "ops@example.com",
+                "public_base_url": "https://borealis.example.com",
+                "public_vnc_path": "/remote-desktop/vnc",
+                "public_wireguard_host": "borealis.example.com",
+                "public_wireguard_port": 30000,
+                "http_port": 80,
+                "https_port": 443,
+                "engine_upstream_host": "127.0.0.1",
+                "engine_upstream_port": 5000,
+                "vnc_upstream_host": "127.0.0.1",
+                "vnc_upstream_port": 4823,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BOREALIS_LETSENCRYPT_SETTINGS_PATH", str(settings_path))
+
+    settings = load_runtime_config(
+        {
+            "DATABASE_URL": f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}",
+            "SECRET_KEY": "public-edge-test-secret",
+        }
+    )
+
+    assert settings.public_edge_enabled is True
+    assert settings.disable_engine_tls is True
+    assert settings.public_base_url == "https://borealis.example.com"
+    assert settings.public_hostname == "borealis.example.com"
+    assert settings.public_vnc_path == "/remote-desktop/vnc"
+    assert settings.public_wireguard_host == "borealis.example.com"
+    assert settings.public_wireguard_port == 30000
+    assert settings.tls_cert_path is None
+    assert settings.tls_key_path is None
+    assert settings.tls_bundle_path is None
+    assert settings.vnc_ws_host == "127.0.0.1"

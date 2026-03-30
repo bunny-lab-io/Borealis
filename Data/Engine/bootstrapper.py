@@ -309,6 +309,9 @@ def _ensure_web_ui_build(staging_root: Path, logger: logging.Logger, *, mode: st
 def _ensure_tls_material(context: EngineContext) -> None:
     """Ensure TLS certificate material exists, updating the context if created."""
 
+    if getattr(context, "disable_engine_tls", False):
+        return
+
     try:
         cert_path, key_path, bundle_path = engine_certificates.ensure_certificate()
     except Exception as exc:
@@ -329,6 +332,10 @@ def _ensure_tls_material(context: EngineContext) -> None:
 
 def _prepare_tls_run_kwargs(context: EngineContext) -> Dict[str, Any]:
     """Validate and return TLS arguments for the Socket.IO runner."""
+
+    if getattr(context, "disable_engine_tls", False):
+        context.logger.info("Engine TLS disabled; expecting Borealis public edge termination.")
+        return {}
 
     _ensure_tls_material(context)
 
@@ -398,6 +405,12 @@ def main() -> None:
         if tls_kwargs:
             run_kwargs.update(tls_kwargs)
             context.logger.info("Engine TLS enabled using certificate %s", tls_kwargs["certfile"])
+
+    if getattr(socketio, "async_mode", "") == "threading":
+        run_kwargs["allow_unsafe_werkzeug"] = True
+        context.logger.warning(
+            "Socket.IO is running in threading mode; allowing Werkzeug because the public Borealis edge handles front-end traffic."
+        )
 
     socketio.run(app, **run_kwargs)
 

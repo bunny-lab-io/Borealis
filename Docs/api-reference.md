@@ -140,7 +140,6 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 
 ### Server Info and Logs
 - `GET /api/server/time` (Operator Session) - server clock.
-- `GET /api/server/certificates/root` (Operator Session) - download Borealis root CA certificate.
 - `GET /api/server/logs` (Admin) - list logs and retention.
 - `GET /api/server/logs/<log_name>/entries` (Admin) - tail log lines.
 - `PUT /api/server/logs/retention` (Admin) - update retention policies.

@@ -22,49 +22,57 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Shell port default: 47002 (configurable).
 
 ## VNC via noVNC
-- Engine issues VNC session info via `/api/vnc/establish` (ws_url + password).
-- WebUI connects to `ws(s)://<engine_host>:4823/vnc`.
-- VNC authentication is handled by the UltraVNC password; no extra per-session token is required.
+- Engine issues VNC session info via `/api/vnc/establish` (`ws_url`, `ws_path`, one-time token, and password).
+- WebUI connects through the same public Borealis origin at `/remote-desktop/vnc` behind the Borealis-managed Traefik edge.
+- VNC authentication is handled by the UltraVNC password plus a Borealis one-time session token for the WebSocket proxy.
 - Agent runs UltraVNC as a Windows service; Borealis keeps the VNC firewall rule enabled for the Engine /32 and `/api/vnc/disconnect` only tears down the WebUI session.
 
 ## Reverse Proxy Configuration
-Traefik dynamic config (replace service URL with the actual Borealis Engine URL):
+Borealis now expects the public TLS identity to live on the embedded Traefik instance running on the engine host. If you already have an external Traefik or firewall edge on a different host, keep that outer layer transparent:
+- Forward `80/tcp` to the engine host's Traefik so HTTP-01 challenges can complete.
+- TCP-passthrough `443/tcp` to the engine host's Traefik.
+- Do not terminate Borealis TLS on the outer reverse proxy.
+- Do not configure a separate public VNC service. Borealis VNC now rides the same origin at `/remote-desktop/vnc`.
+
+Example outer Traefik dynamic config:
 ```yml
 http:
   routers:
-    borealis:
+    borealis-web:
       entryPoints:
-        - websecure
-      tls:
-        certResolver: letsencrypt
-      service: borealis
-      rule: "Host(`borealis.example.com`) && PathPrefix(`/`)"
-      middlewares:
-        - cors-headers
-
-  middlewares:
-    cors-headers:
-      headers:
-        accessControlAllowOriginList:
-          - "*"
-        accessControlAllowMethods:
-          - GET
-          - POST
-          - OPTIONS
-        accessControlAllowHeaders:
-          - Content-Type
-          - Upgrade
-          - Connection
-        accessControlMaxAge: 100
-        addVaryHeader: true
+        - web
+      rule: "Host(`borealis.example.com`)"
+      service: borealis-web
+      priority: 100
 
   services:
-    borealis:
+    borealis-web:
       loadBalancer:
         servers:
-          - url: "http://127.0.0.1:5000"
+          - url: "http://192.168.3.252:80"
         passHostHeader: true
+
+tcp:
+  routers:
+    borealis-websecure:
+      entryPoints:
+        - websecure
+      rule: "HostSNI(`borealis.example.com`)"
+      service: borealis-websecure
+      tls:
+        passthrough: true
+
+  services:
+    borealis-websecure:
+      loadBalancer:
+        servers:
+          - address: "192.168.3.252:443"
 ```
+
+Notes:
+- Remove any Borealis-specific `certResolver`, `serversTransport`, or `insecureSkipVerify` settings from the outer Traefik instance.
+- If the outer Traefik has a global `web -> websecure` redirect, make sure the Borealis host-specific `web` router above wins for `borealis.example.com`, otherwise HTTP-01 will fail before the request reaches the engine host.
+- Split-horizon DNS remains supported: public DNS can point `borealis.example.com` at the outer reverse proxy while internal DNS points the same hostname directly at the engine host.
 
 ## API Endpoints
 - `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an agent.
@@ -82,6 +90,7 @@ http:
 - [Agent Runtime](agent-runtime.md)
 - [Security and Trust](security-and-trust.md)
 - [API Reference](api-reference.md)
+- [Reverse Proxy Functionality](features_to_implement/reverse_proxy_functionality.md)
 
 ## Codex Agent (Detailed)
 ### Core Engine files
@@ -194,7 +203,7 @@ http:
 - Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
 
 #### 5) Security and auth
-- TLS pinned for Engine API and Socket.IO.
+- Agent HTTPS trust uses the public CA chain plus hostname validation for the Borealis FQDN.
 - Orchestration tokens signed via Engine Ed25519 key; agent verifies signatures and stores the signing key.
 - WireGuard AllowedIPs /32; no LAN routes; client-to-client blocked.
 - Engine firewall rules allow the configured port allowlist between Engine /32 and Agent /32.

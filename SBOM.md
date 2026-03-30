@@ -60,6 +60,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - PostgreSQL 17 (default engine database target in `Borealis.sh`) - PostgreSQL License - https://www.postgresql.org/about/licence/
 - Tesseract OCR - Apache-2.0 - https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE
 - WireGuard tools - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
+- Traefik (Borealis-managed local HTTPS edge and ACME client) - MIT - https://github.com/traefik/traefik/blob/master/LICENSE.md
 - Node.js 23.11.0 (portable web build/runtime helper in `Borealis.sh`) - MIT - https://github.com/nodejs/node/blob/main/LICENSE
 - @emotion/react - MIT - https://spdx.org/licenses/MIT.html
 - @emotion/styled - MIT - https://spdx.org/licenses/MIT.html

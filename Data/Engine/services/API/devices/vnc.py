@@ -14,14 +14,14 @@ from __future__ import annotations
 import os
 import secrets
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from ....public_endpoints import build_websocket_url, public_vnc_path, wireguard_endpoint
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
-from ...RemoteDesktop.vnc_proxy import VNC_WS_PATH, ensure_vnc_proxy
+from ...RemoteDesktop.vnc_proxy import ensure_vnc_proxy
 from .tunnel import _get_tunnel_service, _resolve_requested_agent_id
 
 if False:  # pragma: no cover - hint for type checkers
@@ -84,27 +84,6 @@ def _normalize_bool(value: Any, default: bool = False) -> bool:
         if cleaned in {"0", "false", "no", "n", "off"}:
             return False
     return default
-
-
-def _infer_endpoint_host(req) -> str:
-    forwarded = (req.headers.get("X-Forwarded-Host") or req.headers.get("X-Original-Host") or "").strip()
-    host = forwarded.split(",")[0].strip() if forwarded else (req.host or "").strip()
-    if not host:
-        return ""
-    try:
-        parsed = urlsplit(f"//{host}")
-        if parsed.hostname:
-            return parsed.hostname
-    except Exception:
-        return host
-    return host
-
-
-def _is_secure(req) -> bool:
-    if req.is_secure:
-        return True
-    forwarded = (req.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
-    return forwarded == "https"
 
 
 def _generate_vnc_password() -> str:
@@ -185,7 +164,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 session_payload = tunnel_service.connect(
                     agent_id=agent_id,
                     operator_id=operator_id,
-                    endpoint_host=_infer_endpoint_host(request),
+                    endpoint_host=wireguard_endpoint(adapters.context, req=request)[0],
                 )
             except Exception:
                 return {"error": "tunnel_down"}, 409
@@ -205,17 +184,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             vnc_password = vnc_password[:8]
             _store_vnc_password(adapters, agent_id, vnc_password)
 
-        def _resolve_agent_target(target_agent_id: str) -> Optional[Tuple[str, int]]:
-            if not target_agent_id:
-                return None
-            payload = tunnel_service.session_payload(target_agent_id, include_token=False) or {}
-            virtual = _normalize_text(payload.get("virtual_ip"))
-            resolved_host = virtual.split("/")[0] if virtual else ""
-            if not resolved_host:
-                return None
-            return resolved_host, vnc_port
-
-        registry = ensure_vnc_proxy(adapters.context, logger=logger, resolver=_resolve_agent_target)
+        registry = ensure_vnc_proxy(adapters.context, logger=logger)
         if registry is None:
             return {"error": "vnc_proxy_unavailable"}, 503
 
@@ -227,16 +196,27 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             )
         )
 
-        ws_scheme = "wss" if _is_secure(request) else "ws"
-        ws_host = _infer_endpoint_host(request)
-        ws_port = int(getattr(adapters.context, "vnc_ws_port", 4823))
-        ws_url = f"{ws_scheme}://{ws_host}:{ws_port}{VNC_WS_PATH}?agent_id={agent_id}"
+        vnc_session = registry.create(
+            agent_id=agent_id,
+            host=host,
+            port=vnc_port,
+            operator_id=operator_id,
+        )
+        ws_path = public_vnc_path(adapters.context)
+        ws_url = build_websocket_url(
+            adapters.context,
+            request,
+            ws_path,
+            query={"token": vnc_session.token},
+        )
 
         _service_log_event("vnc_session_ready agent_id={0}".format(agent_id))
 
         return (
             {
                 "ws_url": ws_url,
+                "ws_path": ws_path,
+                "token": vnc_session.token,
                 "virtual_ip": host,
                 "tunnel_id": session_payload.get("tunnel_id"),
                 "engine_virtual_ip": session_payload.get("engine_virtual_ip"),

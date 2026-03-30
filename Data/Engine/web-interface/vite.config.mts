@@ -32,6 +32,9 @@ const pickFirst = (candidates: readonly (string | undefined)[]) => {
 
 const certPath = pickFirst(certCandidates);
 const keyPath = pickFirst(keyCandidates);
+const engineTlsDisabled = /^(1|true|yes|on)$/i.test(process.env.BOREALIS_DISABLE_ENGINE_TLS || "");
+const engineHttpTarget = `${engineTlsDisabled ? 'http' : 'https'}://127.0.0.1:5000`;
+const engineWsTarget = `${engineTlsDisabled ? 'ws' : 'wss'}://127.0.0.1:5000`;
 
 const httpsOptions = certPath && keyPath
   ? {
@@ -59,14 +62,14 @@ export default defineConfig({
     allowedHosts: true,
     https: httpsOptions,
     proxy: {
-      // Ensure cookies/headers are forwarded correctly to Flask over TLS
+      // Ensure cookies/headers are forwarded correctly to the loopback Engine runtime.
       '/api': {
-        target: 'https://127.0.0.1:5000',
+        target: engineHttpTarget,
         changeOrigin: true,
         secure: false,
       },
       '/socket.io': {
-        target: 'wss://127.0.0.1:5000',
+        target: engineWsTarget,
         ws: true,
         changeOrigin: true,
         secure: false,

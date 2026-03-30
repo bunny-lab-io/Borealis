@@ -313,13 +313,11 @@ def _register_tokens(app: Flask, adapters: EngineServiceAdapters) -> None:
 
 
 def _register_enrollment(app: Flask, adapters: EngineServiceAdapters) -> None:
-    tls_bundle = adapters.context.tls_bundle_path or ""
     enrollment_routes.register(
         app,
         db_conn_factory=adapters.db_conn_factory,
         log=adapters.service_log,
         jwt_service=adapters.jwt_service,
-        tls_bundle_path=tls_bundle,
         ip_rate_limiter=adapters.ip_rate_limiter,
         fp_rate_limiter=adapters.fp_rate_limiter,
         nonce_cache=adapters.nonce_cache,

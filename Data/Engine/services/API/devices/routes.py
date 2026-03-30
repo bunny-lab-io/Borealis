@@ -16,13 +16,13 @@ import json
 import secrets
 from Data.Engine.db import dbapi as sqlite3
 import time
-from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from flask import Blueprint, jsonify, request, g
 
 from ....auth.device_auth import AGENT_CONTEXT_HEADER, require_device_auth
 from ....auth.guid_utils import normalize_guid
+from ....public_endpoints import wireguard_endpoint
 from .agent_role_health import merge_agent_role_health, serialize_agent_role_health
 from .tunnel import _get_tunnel_service, _guid_from_agent_id, _load_device_agent_binding, _resolve_requested_agent_id
 
@@ -48,17 +48,8 @@ def _json_or_none(value: Any) -> Optional[str]:
         return None
 
 
-def _infer_endpoint_host(req) -> str:
-    forwarded = (req.headers.get("X-Forwarded-Host") or req.headers.get("X-Original-Host") or "").strip()
-    host = forwarded.split(",")[0].strip() if forwarded else (req.host or "").strip()
-    if not host:
-        return ""
-    try:
-        parsed = urlsplit(f"//{host}")
-        if parsed.hostname:
-            return parsed.hostname
-    except Exception:
-        return host
+def _infer_endpoint_host(adapters: "EngineServiceAdapters", req) -> str:
+    host, _port = wireguard_endpoint(adapters.context, req=req)
     return host
 
 
@@ -379,7 +370,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
 
         try:
             tunnel_service = _get_tunnel_service(adapters)
-            endpoint_host = _infer_endpoint_host(request)
+            endpoint_host = _infer_endpoint_host(adapters, request)
             log(
                 "VPN_Tunnel/tunnel",
                 "vpn_agent_ensure_request agent_id={0} endpoint_host={1}".format(
@@ -450,7 +441,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 session_payload = tunnel_service.connect(
                     agent_id=resolved_agent,
                     operator_id=None,
-                    endpoint_host=_infer_endpoint_host(request),
+                    endpoint_host=_infer_endpoint_host(adapters, request),
                 )
         except Exception as exc:
             log(

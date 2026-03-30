@@ -57,6 +57,10 @@ defaults that mirror the legacy server runtime.  Key environment variables are
 ``BOREALIS_COOKIE_*``       Session cookie policies (``SAMESITE``, ``SECURE``,
                             ``DOMAIN``).
 ``BOREALIS_TLS_*``          TLS certificate, private key, and bundle paths.
+``BOREALIS_PUBLIC_*``       Public edge settings used when Borealis runs behind
+                            the local Traefik TLS terminator.
+``BOREALIS_DISABLE_ENGINE_TLS`` disable in-process TLS because a local public
+                                edge proxy owns HTTPS termination.
 
 When TLS values are not provided explicitly the Engine provisions certificates
 under ``Engine/Certificates`` (migrating any legacy material) so the runtime
@@ -75,6 +79,7 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
+from . import edge_runtime
 from .security import certificates, session_secret
 
 
@@ -276,7 +281,29 @@ def _parse_port_list(raw: Any, *, default: Tuple[int, ...]) -> Tuple[int, ...]:
     return tuple(dict.fromkeys(ports))
 
 
-def _discover_tls_material(config: Mapping[str, Any]) -> Sequence[Optional[str]]:
+def _load_edge_settings(config: Mapping[str, Any]) -> Optional[edge_runtime.LetsEncryptSettings]:
+    settings_path_value = (
+        config.get("LETSENCRYPT_SETTINGS_PATH")
+        or os.environ.get("BOREALIS_LETSENCRYPT_SETTINGS_PATH")
+        or edge_runtime.DEFAULT_SETTINGS_PATH
+    )
+    settings_path = Path(str(settings_path_value)).expanduser()
+    if not settings_path.is_file():
+        return None
+    try:
+        return edge_runtime.load_settings(settings_path)
+    except Exception:
+        return None
+
+
+def _discover_tls_material(
+    config: Mapping[str, Any],
+    *,
+    disable_tls: bool = False,
+) -> Sequence[Optional[str]]:
+    if disable_tls:
+        return None, None, None
+
     cert_path = config.get("TLS_CERT_PATH") or os.environ.get("BOREALIS_TLS_CERT") or None
     key_path = config.get("TLS_KEY_PATH") or os.environ.get("BOREALIS_TLS_KEY") or None
     bundle_path = config.get("TLS_BUNDLE_PATH") or os.environ.get("BOREALIS_TLS_BUNDLE") or None
@@ -323,6 +350,15 @@ class EngineSettings:
     session_cookie_samesite: str
     session_cookie_secure: bool
     session_cookie_domain: Optional[str]
+    public_edge_enabled: bool
+    public_base_url: Optional[str]
+    public_hostname: Optional[str]
+    public_https_port: int
+    public_vnc_path: str
+    public_wireguard_host: Optional[str]
+    public_wireguard_port: int
+    disable_engine_tls: bool
+    letsencrypt_settings_path: Optional[str]
     tls_cert_path: Optional[str]
     tls_key_path: Optional[str]
     tls_bundle_path: Optional[str]
@@ -350,6 +386,15 @@ class EngineSettings:
             "SESSION_COOKIE_SAMESITE": self.session_cookie_samesite,
             "SESSION_COOKIE_SECURE": self.session_cookie_secure,
             "PREFERRED_URL_SCHEME": "https",
+            "PUBLIC_EDGE_ENABLED": self.public_edge_enabled,
+            "PUBLIC_BASE_URL": self.public_base_url,
+            "PUBLIC_HOSTNAME": self.public_hostname,
+            "PUBLIC_HTTPS_PORT": self.public_https_port,
+            "PUBLIC_VNC_PATH": self.public_vnc_path,
+            "PUBLIC_WIREGUARD_HOST": self.public_wireguard_host,
+            "PUBLIC_WIREGUARD_PORT": self.public_wireguard_port,
+            "DISABLE_ENGINE_TLS": self.disable_engine_tls,
+            "LETSENCRYPT_SETTINGS_PATH": self.letsencrypt_settings_path,
             "DATABASE_URL": self.database_url,
             "TLS_CERT_PATH": self.tls_cert_path,
             "TLS_KEY_PATH": self.tls_key_path,
@@ -486,6 +531,74 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         runtime_config.get("CORS_ORIGINS") or os.environ.get("BOREALIS_CORS_ORIGINS")
     )
 
+    edge_settings = _load_edge_settings(runtime_config)
+
+    public_edge_enabled_default = bool(edge_settings.enabled) if edge_settings is not None else False
+    public_edge_enabled = _parse_bool(
+        runtime_config.get("PUBLIC_EDGE_ENABLED"),
+        default=_parse_bool(
+            os.environ.get("BOREALIS_PUBLIC_EDGE_ENABLED"),
+            default=public_edge_enabled_default,
+        ),
+    )
+
+    disable_engine_tls = _parse_bool(
+        runtime_config.get("DISABLE_ENGINE_TLS"),
+        default=_parse_bool(
+            os.environ.get("BOREALIS_DISABLE_ENGINE_TLS"),
+            default=public_edge_enabled,
+        ),
+    )
+
+    edge_public_base_url = edge_settings.public_base_url if edge_settings is not None else ""
+    edge_public_hostname = edge_settings.public_hostname if edge_settings is not None else ""
+    edge_public_https_port = edge_settings.https_port if edge_settings is not None else 443
+    edge_public_vnc_path = edge_settings.public_vnc_path if edge_settings is not None else "/remote-desktop/vnc"
+    edge_public_wireguard_host = edge_settings.public_wireguard_host if edge_settings is not None else ""
+    edge_public_wireguard_port = edge_settings.public_wireguard_port if edge_settings is not None else WIREGUARD_PORT
+
+    public_base_url_raw = (
+        runtime_config.get("PUBLIC_BASE_URL")
+        or os.environ.get("BOREALIS_PUBLIC_BASE_URL")
+        or edge_public_base_url
+    )
+    public_hostname = str(
+        runtime_config.get("PUBLIC_HOSTNAME")
+        or os.environ.get("BOREALIS_PUBLIC_HOSTNAME")
+        or edge_public_hostname
+        or ""
+    ).strip() or None
+    public_https_port = _parse_int(
+        runtime_config.get("PUBLIC_HTTPS_PORT")
+        or os.environ.get("BOREALIS_PUBLIC_HTTPS_PORT"),
+        default=edge_public_https_port,
+        minimum=1,
+        maximum=65535,
+    )
+    public_vnc_path = str(
+        runtime_config.get("PUBLIC_VNC_PATH")
+        or os.environ.get("BOREALIS_PUBLIC_VNC_PATH")
+        or edge_public_vnc_path
+    ).strip() or "/remote-desktop/vnc"
+    if not public_vnc_path.startswith("/"):
+        public_vnc_path = f"/{public_vnc_path}"
+    if len(public_vnc_path) > 1:
+        public_vnc_path = public_vnc_path.rstrip("/")
+    public_wireguard_host = str(
+        runtime_config.get("PUBLIC_WIREGUARD_HOST")
+        or os.environ.get("BOREALIS_PUBLIC_WIREGUARD_HOST")
+        or edge_public_wireguard_host
+        or ""
+    ).strip() or None
+    public_wireguard_port = _parse_int(
+        runtime_config.get("PUBLIC_WIREGUARD_PORT")
+        or os.environ.get("BOREALIS_PUBLIC_WIREGUARD_PORT"),
+        default=edge_public_wireguard_port,
+        minimum=1,
+        maximum=65535,
+    )
+    public_base_url = str(public_base_url_raw).strip() or None
+
     configured_secret = runtime_config.get("SECRET_KEY")
     if configured_secret and str(configured_secret).strip():
         secret_key = str(configured_secret).strip()
@@ -505,13 +618,16 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
 
     session_cookie_secure = _parse_bool(
         runtime_config.get("SESSION_COOKIE_SECURE"),
-        default=_parse_bool(os.environ.get("BOREALIS_COOKIE_SECURE"), default=False),
+        default=_parse_bool(os.environ.get("BOREALIS_COOKIE_SECURE"), default=public_edge_enabled),
     )
 
     session_cookie_domain = runtime_config.get("SESSION_COOKIE_DOMAIN") or os.environ.get("BOREALIS_COOKIE_DOMAIN")
     session_cookie_domain = str(session_cookie_domain) if session_cookie_domain else None
 
-    tls_cert_path, tls_key_path, tls_bundle_path = _discover_tls_material(runtime_config)
+    tls_cert_path, tls_key_path, tls_bundle_path = _discover_tls_material(
+        runtime_config,
+        disable_tls=disable_engine_tls,
+    )
 
     log_file = str(runtime_config.get("LOG_FILE") or LOG_FILE_PATH)
     _ensure_parent(Path(log_file))
@@ -577,7 +693,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
     vnc_ws_host = str(
         runtime_config.get("VNC_WS_HOST")
         or os.environ.get("BOREALIS_VNC_WS_HOST")
-        or VNC_WS_HOST
+        or (edge_runtime.DEFAULT_VNC_UPSTREAM_HOST if public_edge_enabled else VNC_WS_HOST)
     )
     vnc_ws_port = _parse_int(
         runtime_config.get("VNC_WS_PORT") or os.environ.get("BOREALIS_VNC_WS_PORT"),
@@ -630,6 +746,15 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         session_cookie_samesite=session_cookie_samesite,
         session_cookie_secure=session_cookie_secure,
         session_cookie_domain=session_cookie_domain,
+        public_edge_enabled=public_edge_enabled,
+        public_base_url=public_base_url,
+        public_hostname=public_hostname,
+        public_https_port=public_https_port,
+        public_vnc_path=public_vnc_path,
+        public_wireguard_host=public_wireguard_host,
+        public_wireguard_port=public_wireguard_port,
+        disable_engine_tls=disable_engine_tls,
+        letsencrypt_settings_path=(edge_settings.settings_path if edge_settings is not None else None),
         tls_cert_path=tls_cert_path if tls_cert_path else None,
         tls_key_path=tls_key_path if tls_key_path else None,
         tls_bundle_path=tls_bundle_path if tls_bundle_path else None,

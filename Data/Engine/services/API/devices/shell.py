@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from ....public_endpoints import wireguard_endpoint
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from .tunnel import _get_tunnel_service, _resolve_requested_agent_id
@@ -69,17 +69,8 @@ def _normalize_text(value: Any) -> str:
         return ""
 
 
-def _infer_endpoint_host(req) -> str:
-    forwarded = (req.headers.get("X-Forwarded-Host") or req.headers.get("X-Original-Host") or "").strip()
-    host = forwarded.split(",")[0].strip() if forwarded else (req.host or "").strip()
-    if not host:
-        return ""
-    try:
-        parsed = urlsplit(f"//{host}")
-        if parsed.hostname:
-            return parsed.hostname
-    except Exception:
-        return host
+def _infer_endpoint_host(adapters: "EngineServiceAdapters", req) -> str:
+    host, _port = wireguard_endpoint(adapters.context, req=req)
     return host
 
 
@@ -123,7 +114,7 @@ def register_shell(app, adapters: "EngineServiceAdapters") -> None:
 
         try:
             tunnel_service = _get_tunnel_service(adapters)
-            endpoint_host = _infer_endpoint_host(request)
+            endpoint_host = _infer_endpoint_host(adapters, request)
             _service_log_event(
                 "vpn_shell_establish_request requested_agent_id={0} resolved_agent_id={1} operator={2} endpoint_host={3} remote={4}".format(
                     requested_agent_id,

@@ -1064,16 +1064,16 @@ class AgentHttpClient:
 
     def _configure_verify(self) -> None:
         cert_path = self.key_store.server_certificate_path()
-        if cert_path and os.path.isfile(cert_path):
+        use_pinned_bundle = (os.environ.get("BOREALIS_USE_PINNED_SERVER_CERT") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if use_pinned_bundle and cert_path and os.path.isfile(cert_path):
             self.session.verify = cert_path
         else:
-            self.session.verify = False
-            try:
-                import urllib3  # type: ignore
-
-                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            self.session.verify = True
 
     def _update_base_url_state(self, parsed) -> None:
         try:
@@ -1104,7 +1104,25 @@ class AgentHttpClient:
         if not scheme or not netloc:
             return
         prefix = f"{scheme}://{netloc}"
+        allow_literal_ip = (os.environ.get("BOREALIS_ALLOW_LITERAL_ENGINE_IP") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         if self._base_host_is_ip:
+            if not allow_literal_ip:
+                if self._hostname_adapter_ip_active:
+                    restore_prefix = self._hostname_adapter_prefix or prefix
+                    if restore_prefix:
+                        self.session.mount(restore_prefix, HTTPAdapter())
+                    self._hostname_adapter_prefix = None
+                    self._hostname_adapter_ip_active = False
+                _log_agent(
+                    f"Literal IP engine URL detected for {prefix}; hostname validation remains enabled. Use an FQDN or set BOREALIS_ALLOW_LITERAL_ENGINE_IP=1 for unsupported direct IP mode.",
+                    fname="agent.error.log",
+                )
+                return
             if (not self._hostname_adapter_ip_active) or (self._hostname_adapter_prefix != prefix):
                 adapter = _HostnameFlexibleAdapter(disable_hostname_check=True)
                 self.session.mount(prefix, adapter)
@@ -1421,50 +1439,11 @@ class AgentHttpClient:
         engine.websocket_extra_options = options
 
     def refresh_pinned_certificate(self) -> bool:
-        url = self.base_url or ""
-        parsed = urlparse(url)
-        host = parsed.hostname or "localhost"
-        port = parsed.port
-        if not port:
-            port = 443 if (parsed.scheme or "").lower() == "https" else 80
-
-        try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with socket.create_connection((host, port), timeout=5) as sock:
-                with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-                    der = ssock.getpeercert(binary_form=True)
-        except Exception as exc:
-            _log_agent(
-                f"Server certificate probe failed host={host} port={port} error={exc}",
-                fname="agent.error.log",
-            )
-            return False
-
-        try:
-            pem_text = ssl.DER_cert_to_PEM_cert(der)
-        except Exception as exc:
-            _log_agent(
-                f"Unable to convert probed certificate to PEM: {exc}",
-                fname="agent.error.log",
-            )
-            return False
-
-        try:
-            self.key_store.save_server_certificate(pem_text)
-            self._cached_ssl_context = None
-            _log_agent(
-                "Refreshed pinned server certificate after TLS failure",
-                fname="agent.log",
-            )
-            return True
-        except Exception as exc:
-            _log_agent(
-                f"Failed to persist refreshed server certificate: {exc}",
-                fname="agent.error.log",
-            )
-            return False
+        _log_agent(
+            "TLS failure encountered, but Borealis now relies on public CA validation instead of rotating a pinned engine certificate.",
+            fname="agent.error.log",
+        )
+        return False
 
     # ------------------------------------------------------------------
     # Enrollment & token management
@@ -1586,12 +1565,9 @@ class AgentHttpClient:
                     "Enrollment request accepted "
                     f"status={data.get('status')} approval_ref={data.get('approval_reference')} "
                     f"poll_after_ms={data.get('poll_after_ms')}"
-                    f" server_cert={'yes' if data.get('server_certificate') else 'no'}",
+                    f" signing_key={'yes' if data.get('signing_key') else 'no'}",
                     fname="agent.log",
                 )
-                if data.get("server_certificate"):
-                    self.key_store.save_server_certificate(data["server_certificate"])
-                    self._configure_verify()
                 signing_key = data.get("signing_key")
                 if signing_key:
                     try:
@@ -1684,10 +1660,6 @@ class AgentHttpClient:
             raise
 
     def _finalize_enrollment(self, payload: Dict[str, Any]) -> None:
-        server_cert = payload.get("server_certificate")
-        if server_cert:
-            self.key_store.save_server_certificate(server_cert)
-            self._configure_verify()
         signing_key = payload.get("signing_key")
         if signing_key:
             try:

@@ -971,15 +971,20 @@ class VpnTunnelService:
                     pass
 
     def _session_payload(self, session: VpnSession, *, include_token: bool = True) -> Mapping[str, Any]:
-        endpoint_host = session.endpoint_host or str(self._engine_ip.ip)
+        endpoint_host = (
+            session.endpoint_host
+            or getattr(self.context, "public_wireguard_host", None)
+            or str(self._engine_ip.ip)
+        )
         endpoint_host = self._format_endpoint_host(endpoint_host)
+        endpoint_port = int(getattr(self.context, "public_wireguard_port", None) or self.context.wireguard_port)
         payload: Dict[str, Any] = {
             "tunnel_id": session.tunnel_id,
             "agent_id": session.agent_id,
             "virtual_ip": session.virtual_ip,
             "engine_virtual_ip": str(self._engine_ip.ip),
             "allowed_ips": f"{self._engine_ip.ip}/32",
-            "endpoint": f"{endpoint_host}:{self.context.wireguard_port}",
+            "endpoint": f"{endpoint_host}:{endpoint_port}",
             "server_public_key": self.wg.server_public_key,
             "client_public_key": session.client_public_key,
             "client_private_key": session.client_private_key,
@@ -992,14 +997,19 @@ class VpnTunnelService:
         return payload
 
     def _session_summary(self, session: VpnSession) -> Mapping[str, Any]:
-        endpoint_host = session.endpoint_host or str(self._engine_ip.ip)
+        endpoint_host = (
+            session.endpoint_host
+            or getattr(self.context, "public_wireguard_host", None)
+            or str(self._engine_ip.ip)
+        )
         endpoint_host = self._format_endpoint_host(endpoint_host)
+        endpoint_port = int(getattr(self.context, "public_wireguard_port", None) or self.context.wireguard_port)
         return {
             "tunnel_id": session.tunnel_id,
             "agent_id": session.agent_id,
             "virtual_ip": session.virtual_ip,
             "engine_virtual_ip": str(self._engine_ip.ip),
-            "endpoint": f"{endpoint_host}:{self.context.wireguard_port}",
+            "endpoint": f"{endpoint_host}:{endpoint_port}",
             "allowed_ports": list(session.allowed_ports),
             "connected_operators": len([o for o in session.operator_ids if o]),
             "created_at": int(session.created_at),

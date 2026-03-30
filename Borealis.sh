@@ -815,6 +815,7 @@ install_server_dependencies() {
   run_step "Dependency: PostgreSQL (system)" install_postgresql_best_effort
   run_step "Dependency: Tesseract-OCR (system)" install_tesseract
   run_step "Dependency: WireGuard tools (system)" install_wireguard_tools_best_effort engine
+  run_step "Dependency: Traefik (system)" install_traefik_best_effort
   run_step "Dependency: NodeJS (portable)" install_node_portable
 }
 
@@ -1353,36 +1354,632 @@ PY
   fi
 }
 
-# ---- Engine TLS material (parity with Ensure-EngineTlsMaterial) ----
+# ---- Engine TLS material ----
 ensure_engine_tls_material() {
-  local py="$1" # engine venv python
-  local cert_root_arg="$2" # optional path with pre-provided certs
-  local effective_root=""
+  unset BOREALIS_CERT_DIR
+  unset BOREALIS_TLS_CERT
+  unset BOREALIS_TLS_KEY
+  unset BOREALIS_TLS_BUNDLE
+  return 0
+}
 
-  if [[ -x "$py" ]]; then
-    local code='from Data.Engine.security import certificates; certificates.ensure_certificate(); print(certificates.engine_certificates_root())'
-    set +e
-    effective_root="$("$py" -c "$code" 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
-    set -e
+engine_letsencrypt_settings_path() {
+  echo "${SCRIPT_DIR}/Engine/LetsEncrypt/Settings.json"
+}
+
+engine_letsencrypt_runtime_env_path() {
+  echo "${SCRIPT_DIR}/Engine/LetsEncrypt/runtime.env"
+}
+
+engine_letsencrypt_acme_storage_path() {
+  echo "${SCRIPT_DIR}/Engine/LetsEncrypt/acme.json"
+}
+
+engine_traefik_static_config_path() {
+  echo "${SCRIPT_DIR}/Engine/Traefik/traefik.yml"
+}
+
+engine_traefik_dynamic_config_path() {
+  echo "${SCRIPT_DIR}/Engine/Traefik/dynamic.yml"
+}
+
+parse_url_hostname() {
+  local raw="${1:-}"
+  local py_bin=""
+  py_bin="$(resolve_python_bin)"
+  if [[ -z "${py_bin}" ]]; then
+    printf '%s' "${raw}"
+    return 0
+  fi
+  INPUT_URL="${raw}" "${py_bin}" - <<'PY'
+from urllib.parse import urlsplit
+import os
+
+raw = (os.environ.get("INPUT_URL") or "").strip()
+if not raw:
+    raise SystemExit(0)
+if "://" not in raw:
+    raw = f"https://{raw}"
+try:
+    parsed = urlsplit(raw)
+except Exception:
+    print(raw)
+else:
+    print((parsed.hostname or "").strip())
+PY
+}
+
+resolve_engine_public_fqdn() {
+  local explicit="${BOREALIS_PUBLIC_FQDN:-}"
+  if [[ -n "${explicit}" ]]; then
+    parse_url_hostname "${explicit}"
+    return 0
   fi
 
-  if [[ -z "$effective_root" && -n "${cert_root_arg}" ]]; then
-    if [[ -f "${cert_root_arg}/borealis-server-cert.pem" && -f "${cert_root_arg}/borealis-server-key.pem" ]]; then
-      effective_root="${cert_root_arg}"
-    else
-      write_vite_log "Provided certificate root '${cert_root_arg}' missing expected TLS material; using Engine runtime certificates instead." "tls"
+  local settings_path
+  settings_path="$(engine_letsencrypt_settings_path)"
+  if [[ -f "${settings_path}" ]]; then
+    local py_bin
+    py_bin="$(resolve_python_bin)"
+    if [[ -n "${py_bin}" ]]; then
+      local configured_fqdn
+      configured_fqdn="$(INPUT_SETTINGS_PATH="${settings_path}" "${py_bin}" - <<'PY'
+import json
+import os
+from urllib.parse import urlsplit
+
+path = (os.environ.get("INPUT_SETTINGS_PATH") or "").strip()
+if not path or not os.path.isfile(path):
+    raise SystemExit(0)
+
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        raw = json.load(handle)
+except Exception:
+    raise SystemExit(0)
+
+value = ""
+if isinstance(raw, dict):
+    value = str(raw.get("fqdn") or "").strip()
+if not value:
+    raise SystemExit(0)
+if "://" not in value:
+    value = f"https://{value}"
+try:
+    parsed = urlsplit(value)
+except Exception:
+    raise SystemExit(0)
+host = (parsed.hostname or "").strip()
+if host:
+    print(host)
+PY
+)"
+      if [[ -n "${configured_fqdn}" ]]; then
+        echo "${configured_fqdn}"
+        return 0
+      fi
     fi
   fi
 
-  if [[ -z "$effective_root" ]]; then
-    effective_root="${SCRIPT_DIR}/Engine/Certificates"
-    mkdir -p "$effective_root"
+  if [[ -n "${SERVER_URL:-}" ]]; then
+    local host
+    host="$(parse_url_hostname "${SERVER_URL}")"
+    if [[ -n "${host}" ]]; then
+      echo "${host}"
+      return 0
+    fi
   fi
 
-  export BOREALIS_CERT_DIR="$effective_root"
-  export BOREALIS_TLS_CERT="${effective_root}/borealis-server-cert.pem"
-  export BOREALIS_TLS_KEY="${effective_root}/borealis-server-key.pem"
-  export BOREALIS_TLS_BUNDLE="${effective_root}/borealis-server-bundle.pem"
+  if [[ -n "${BOREALIS_SERVER_URL:-}" ]]; then
+    local host
+    host="$(parse_url_hostname "${BOREALIS_SERVER_URL}")"
+    if [[ -n "${host}" ]]; then
+      echo "${host}"
+      return 0
+    fi
+  fi
+
+  if command_exists hostname; then
+    local fqdn
+    fqdn="$(hostname -f 2>/dev/null || hostname 2>/dev/null || true)"
+    fqdn="${fqdn%%[[:space:]]*}"
+    if [[ -n "${fqdn}" ]]; then
+      echo "${fqdn}"
+      return 0
+    fi
+  fi
+
+  echo "localhost"
+}
+
+looks_like_public_fqdn() {
+  local raw="${1:-}"
+  local host
+  host="$(parse_url_hostname "${raw}")"
+  [[ -n "${host}" ]] || return 1
+  [[ "${host}" == *.* ]] || return 1
+  [[ "${host}" != "localhost" ]] || return 1
+  [[ "${host}" != *:* ]] || return 1
+  [[ ! "${host}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  [[ "${host}" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+  return 0
+}
+
+looks_like_acme_email() {
+  local email="${1:-}"
+  [[ "${email}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]
+}
+
+can_prompt_user() {
+  [[ -r /dev/tty || -t 0 ]]
+}
+
+read_engine_public_edge_status() {
+  local py_bin
+  py_bin="$(resolve_python_bin)"
+  [[ -n "${py_bin}" ]] || return 1
+
+  INPUT_SETTINGS_PATH="$(engine_letsencrypt_settings_path)" "${py_bin}" - <<'PY'
+import json
+import os
+from urllib.parse import urlsplit
+
+path = (os.environ.get("INPUT_SETTINGS_PATH") or "").strip()
+if not path or not os.path.isfile(path):
+    print("0|0||")
+    raise SystemExit(0)
+
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        raw = json.load(handle)
+except Exception:
+    print("1|0||")
+    raise SystemExit(0)
+
+if not isinstance(raw, dict):
+    print("1|0||")
+    raise SystemExit(0)
+
+def normalize_host(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = f"https://{text}"
+    try:
+        parsed = urlsplit(text)
+        return (parsed.hostname or "").strip().lower()
+    except Exception:
+        return ""
+
+def valid_host(value: object) -> bool:
+    host = normalize_host(value)
+    if not host or "." not in host or host == "localhost" or ":" in host:
+        return False
+    parts = host.split(".")
+    if len(parts) == 4 and all(part.isdigit() for part in parts):
+        return False
+    return True
+
+def valid_email(value: object) -> bool:
+    text = str(value or "").strip()
+    if "@" not in text or "." not in text.rsplit("@", 1)[-1]:
+        return False
+    return " " not in text
+
+fqdn = normalize_host(raw.get("fqdn"))
+email = str(raw.get("acme_email") or "").strip()
+configured = bool(raw.get("enabled", True)) and valid_host(fqdn) and valid_email(email)
+print(f"1|{1 if configured else 0}|{fqdn}|{email}")
+PY
+}
+
+reset_engine_public_edge_runtime() {
+  run_privileged rm -f \
+    "$(engine_letsencrypt_settings_path)" \
+    "$(engine_letsencrypt_runtime_env_path)" \
+    "$(engine_letsencrypt_acme_storage_path)" \
+    "$(engine_traefik_static_config_path)" \
+    "$(engine_traefik_dynamic_config_path)"
+}
+
+prompt_engine_public_edge_configuration() {
+  local current_fqdn="${1:-}"
+  local current_email="${2:-}"
+
+  local suggested_fqdn="${BOREALIS_PUBLIC_FQDN:-}"
+  if [[ -z "${suggested_fqdn}" && -n "${SERVER_URL:-}" ]]; then
+    suggested_fqdn="$(parse_url_hostname "${SERVER_URL}")"
+  fi
+  if [[ -z "${suggested_fqdn}" && -n "${BOREALIS_SERVER_URL:-}" ]]; then
+    suggested_fqdn="$(parse_url_hostname "${BOREALIS_SERVER_URL}")"
+  fi
+  if [[ -z "${suggested_fqdn}" && -n "${current_fqdn}" ]]; then
+    suggested_fqdn="${current_fqdn}"
+  fi
+  if [[ -z "${suggested_fqdn}" ]]; then
+    local resolved_fqdn
+    resolved_fqdn="$(resolve_engine_public_fqdn)"
+    if looks_like_public_fqdn "${resolved_fqdn}"; then
+      suggested_fqdn="${resolved_fqdn}"
+    fi
+  fi
+  if ! looks_like_public_fqdn "${suggested_fqdn}"; then
+    suggested_fqdn=""
+  fi
+
+  local suggested_email="${BOREALIS_ACME_EMAIL:-${current_email}}"
+  if ! looks_like_acme_email "${suggested_email}"; then
+    suggested_email=""
+  fi
+
+  if ! can_prompt_user; then
+    if looks_like_public_fqdn "${suggested_fqdn}" && looks_like_acme_email "${suggested_email}"; then
+      printf '%s|%s\n' "${suggested_fqdn}" "${suggested_email}"
+      return 0
+    fi
+    echo -e "${RED}Borealis needs a public FQDN and Let's Encrypt email, but no interactive terminal is available.${RESET}" >&2
+    echo -e "${YELLOW}Set BOREALIS_PUBLIC_FQDN and BOREALIS_ACME_EMAIL, or rerun Borealis.sh interactively.${RESET}" >&2
+    return 1
+  fi
+
+  local fqdn="${suggested_fqdn}"
+  while true; do
+    local prompt="Public Borealis FQDN (example: borealis.bunny-lab.io)"
+    if [[ -n "${fqdn}" ]]; then
+      prompt+=" [${fqdn}]"
+    fi
+    prompt+=": "
+    local input
+    input="$(prompt_input "${prompt}")"
+    if [[ -z "${input}" ]]; then
+      input="${fqdn}"
+    fi
+    input="$(parse_url_hostname "${input}")"
+    if looks_like_public_fqdn "${input}"; then
+      fqdn="${input}"
+      break
+    fi
+    echo -e "${YELLOW}Enter a public FQDN with at least one dot, such as borealis.bunny-lab.io.${RESET}"
+  done
+
+  local email="${suggested_email}"
+  while true; do
+    local prompt="Let's Encrypt notification email"
+    if [[ -n "${email}" ]]; then
+      prompt+=" [${email}]"
+    fi
+    prompt+=": "
+    local input
+    input="$(prompt_input "${prompt}")"
+    if [[ -z "${input}" ]]; then
+      input="${email}"
+    fi
+    input="${input## }"
+    input="${input%% }"
+    if looks_like_acme_email "${input}"; then
+      email="${input}"
+      break
+    fi
+    echo -e "${YELLOW}Enter a valid email address for Let's Encrypt expiration notices.${RESET}"
+  done
+
+  printf '%s|%s\n' "${fqdn}" "${email}"
+}
+
+fetch_url_response_headers() {
+  local url="${1:-}"
+  [[ -n "${url}" ]] || return 0
+
+  if command_exists curl; then
+    curl -sS --max-time 10 -o /dev/null -D - "${url}" 2>/dev/null || true
+    return 0
+  fi
+
+  if command_exists wget; then
+    wget --server-response --spider --timeout=10 "${url}" 2>&1 || true
+    return 0
+  fi
+
+  local py_bin=""
+  py_bin="$(resolve_python_bin)"
+  if [[ -n "${py_bin}" ]]; then
+    INPUT_URL="${url}" "${py_bin}" - <<'PY' || true
+import os
+import urllib.request
+
+url = (os.environ.get("INPUT_URL") or "").strip()
+if not url:
+    raise SystemExit(0)
+
+request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Borealis.sh"})
+try:
+    with urllib.request.urlopen(request, timeout=10) as response:
+        for key, value in response.headers.items():
+            print(f"{key}: {value}")
+except Exception:
+    raise SystemExit(0)
+PY
+  fi
+}
+
+warn_about_unsupported_cloudflare_proxying() {
+  local fqdn="${1:-}"
+  echo -e "${YELLOW}Notice: Borealis embedded Traefik does not support Cloudflare orange-cloud or other CDN-style TLS proxying in front of the engine.${RESET}"
+  echo -e "${YELLOW}Use DNS-only records or a transparent reverse proxy that forwards 80/tcp and TCP-passthrough 443/tcp to the engine host.${RESET}"
+
+  [[ -n "${fqdn}" ]] || return 0
+
+  local headers
+  headers="$(fetch_url_response_headers "http://${fqdn}/.well-known/acme-challenge/borealis-probe")"
+  if [[ -z "${headers}" ]]; then
+    headers="$(fetch_url_response_headers "https://${fqdn}/")"
+  fi
+
+  local lowered
+  lowered="$(printf '%s' "${headers}" | tr '[:upper:]' '[:lower:]')"
+  if printf '%s\n' "${lowered}" | grep -qE '(^server:\s*cloudflare|^cf-ray:|^cf-cache-status:)'; then
+    echo -e "${RED}Detected Cloudflare proxy headers for ${fqdn}.${RESET}"
+    echo -e "${RED}Disable Cloudflare proxying and switch the DNS record to DNS only before using Borealis embedded Traefik + Let's Encrypt.${RESET}"
+  fi
+}
+
+resolve_engine_acme_email() {
+  local fqdn="${1:-localhost}"
+  if [[ -n "${BOREALIS_ACME_EMAIL:-}" ]]; then
+    echo "${BOREALIS_ACME_EMAIL}"
+    return 0
+  fi
+  echo "root@${fqdn}"
+}
+
+ensure_engine_public_edge_runtime() {
+  local venv_py
+  venv_py="$(engine_python_bin)"
+  [[ -n "${venv_py}" ]] || return 1
+
+  local status
+  status="$(read_engine_public_edge_status)" || return 1
+
+  local settings_exist configured current_fqdn current_email
+  IFS='|' read -r settings_exist configured current_fqdn current_email <<<"${status}"
+
+  local fqdn=""
+  local email=""
+  if [[ "${configured}" == "1" ]]; then
+    fqdn="${current_fqdn}"
+    email="${current_email}"
+  else
+    echo -e "${INFO} Configuring Borealis embedded Traefik + Let's Encrypt..."
+    if [[ "${settings_exist}" == "1" ]]; then
+      echo -e "${YELLOW}Existing Let's Encrypt settings are incomplete or invalid and will be regenerated.${RESET}"
+    fi
+    local prompt_result
+    prompt_result="$(prompt_engine_public_edge_configuration "${current_fqdn}" "${current_email}")" || return 1
+    IFS='|' read -r fqdn email <<<"${prompt_result}"
+    reset_engine_public_edge_runtime || return 1
+  fi
+
+  warn_about_unsupported_cloudflare_proxying "${fqdn}"
+
+  BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}" "${venv_py}" -m Data.Engine.edge_runtime ensure-files \
+    --settings-path "$(engine_letsencrypt_settings_path)" \
+    --fqdn "${fqdn}" \
+    --email "${email}" >/dev/null
+}
+
+resolve_traefik_binary() {
+  if [[ -n "${BOREALIS_TRAEFIK_BIN:-}" && -x "${BOREALIS_TRAEFIK_BIN}" ]]; then
+    echo "${BOREALIS_TRAEFIK_BIN}"
+    return 0
+  fi
+  if command_exists traefik; then
+    command -v traefik
+    return 0
+  fi
+  if [[ -x "/usr/local/bin/traefik" ]]; then
+    echo "/usr/local/bin/traefik"
+    return 0
+  fi
+  if [[ -x "/usr/bin/traefik" ]]; then
+    echo "/usr/bin/traefik"
+    return 0
+  fi
+  echo ""
+}
+
+resolve_traefik_release_tag() {
+  if [[ -n "${BOREALIS_TRAEFIK_VERSION:-}" ]]; then
+    echo "${BOREALIS_TRAEFIK_VERSION}"
+    return 0
+  fi
+
+  local py_bin=""
+  py_bin="$(resolve_python_bin)"
+  if [[ -n "${py_bin}" ]]; then
+    local latest_tag=""
+    set +e
+    latest_tag="$("${py_bin}" - <<'PY'
+import json
+import urllib.request
+
+request = urllib.request.Request(
+    "https://api.github.com/repos/traefik/traefik/releases/latest",
+    headers={"Accept": "application/vnd.github+json", "User-Agent": "Borealis.sh"},
+)
+with urllib.request.urlopen(request, timeout=30) as response:
+    payload = json.load(response)
+print((payload.get("tag_name") or "").strip())
+PY
+)"
+    set -e
+    if [[ -n "${latest_tag}" ]]; then
+      echo "${latest_tag}"
+      return 0
+    fi
+  fi
+
+  echo "v3.3.0"
+}
+
+traefik_download_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "linux_amd64" ;;
+    aarch64|arm64) echo "linux_arm64" ;;
+    *)
+      echo ""
+      return 1
+      ;;
+  esac
+}
+
+download_traefik_binary() {
+  local tag
+  tag="$(resolve_traefik_release_tag)"
+  [[ -n "${tag}" ]] || return 1
+
+  local suffix
+  suffix="$(traefik_download_arch)"
+  [[ -n "${suffix}" ]] || return 1
+
+  local archive="traefik_${tag}_${suffix}.tar.gz"
+  local url="https://github.com/traefik/traefik/releases/download/${tag}/${archive}"
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local archive_path="${tmp_dir}/${archive}"
+
+  download_file "${url}" "${archive_path}" || {
+    rm -rf "${tmp_dir}"
+    return 1
+  }
+
+  tar -xzf "${archive_path}" -C "${tmp_dir}" || {
+    rm -rf "${tmp_dir}"
+    return 1
+  }
+
+  [[ -x "${tmp_dir}/traefik" ]] || {
+    rm -rf "${tmp_dir}"
+    return 1
+  }
+
+  run_privileged install -m 0755 "${tmp_dir}/traefik" /usr/local/bin/traefik || {
+    rm -rf "${tmp_dir}"
+    return 1
+  }
+  rm -rf "${tmp_dir}"
+}
+
+install_traefik_best_effort() {
+  if [[ -n "$(resolve_traefik_binary)" ]]; then
+    return 0
+  fi
+
+  detect_distro
+  case "$DISTRO_ID" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt update -qq || true
+      run_privileged apt install -y traefik || true
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged dnf install -y traefik || true
+      else
+        run_privileged yum install -y traefik || true
+      fi
+      ;;
+    arch)
+      run_privileged pacman -Sy --noconfirm traefik || true
+      ;;
+    *)
+      ;;
+  esac
+
+  if [[ -n "$(resolve_traefik_binary)" ]]; then
+    return 0
+  fi
+
+  download_traefik_binary
+}
+
+traefik_service_runner_path() {
+  echo "${SCRIPT_DIR}/Engine/run-traefik-service.sh"
+}
+
+ensure_traefik_service_runner() {
+  local traefik_bin
+  traefik_bin="$(resolve_traefik_binary)"
+  [[ -n "${traefik_bin}" && -x "${traefik_bin}" ]] || return 1
+
+  local runner_path
+  runner_path="$(traefik_service_runner_path)"
+  mkdir -p "$(dirname "${runner_path}")"
+  cat > "${runner_path}" <<EOF
+#!/usr/bin/env bash
+set -o errexit
+set -o nounset
+set -o pipefail
+
+PROJECT_ROOT="${SCRIPT_DIR}"
+EDGE_ENV_FILE="\${PROJECT_ROOT}/Engine/LetsEncrypt/runtime.env"
+STATIC_CONFIG_PATH="\${PROJECT_ROOT}/Engine/Traefik/traefik.yml"
+TRAEFIK_BIN="${traefik_bin}"
+
+if [[ -f "\${EDGE_ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  . "\${EDGE_ENV_FILE}"
+fi
+
+exec "\${TRAEFIK_BIN}" --configFile="\${BOREALIS_TRAEFIK_STATIC_CONFIG_PATH:-\${STATIC_CONFIG_PATH}}"
+EOF
+  chmod +x "${runner_path}"
+  echo "${runner_path}"
+}
+
+ensure_traefik_systemd_service() {
+  local unit_name="borealis-traefik.service"
+  local unit_path="/etc/systemd/system/${unit_name}"
+  local tmp_unit
+  tmp_unit="$(ensure_engine_log_dir)/${unit_name}"
+
+  local runner_path
+  runner_path="$(ensure_traefik_service_runner)"
+  [[ -x "${runner_path}" ]] || return 1
+
+  cat > "${tmp_unit}" <<EOF
+[Unit]
+Description=Borealis Traefik Edge Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${SCRIPT_DIR}/Engine
+ExecStart=/usr/bin/env bash ${runner_path}
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  run_privileged cp "${tmp_unit}" "${unit_path}" || return 1
+  run_privileged systemctl daemon-reload || return 1
+  run_privileged systemctl enable "${unit_name}" || return 1
+  run_privileged systemctl restart "${unit_name}" || return 1
+  write_engine_log "Systemd service '${unit_name}' installed/restarted."
+}
+
+print_traefik_service_status() {
+  local unit_name="borealis-traefik.service"
+  if ! command_exists systemctl; then
+    return 0
+  fi
+
+  echo -e "${GREEN}Traefik edge service status (${unit_name}):${RESET}"
+  run_privileged systemctl --no-pager --full status "${unit_name}" || true
 }
 
 # ---- Engine web interface staging (parity with Ensure-EngineWebInterface) ----
@@ -1427,7 +2024,7 @@ purge_engine_runtime_for_deploy() {
     local base
     base="$(basename "${entry}")"
     case "${base}" in
-      Auth_Tokens|Certificates|Logs|WireGuard|database.env|.postgres-password|engine_secret.txt|Ansible|collections)
+      Auth_Tokens|Certificates|Logs|WireGuard|database.env|.postgres-password|engine_secret.txt|Ansible|collections|LetsEncrypt|Traefik)
         continue
         ;;
       *)
@@ -1437,7 +2034,7 @@ purge_engine_runtime_for_deploy() {
   done
   shopt -u dotglob nullglob
 
-  mkdir -p "${engine_root}/Auth_Tokens" "${engine_root}/Certificates" "${engine_root}/Logs" "${engine_root}/WireGuard" "$(engine_ansible_root_dir)"
+  mkdir -p "${engine_root}/Auth_Tokens" "${engine_root}/Certificates" "${engine_root}/Logs" "${engine_root}/WireGuard" "${engine_root}/LetsEncrypt" "${engine_root}/Traefik" "$(engine_ansible_root_dir)"
 }
 
 engine_service_runner_path() {
@@ -1477,17 +2074,13 @@ NODE_BIN_DIR="${NODE_DIR}/bin"
 VENV_PY="${venv_py}"
 NPM_CMD="${npm_cmd}"
 ENGINE_DB_ENV_FILE="${ENGINE_DB_ENV_FILE}"
+EDGE_ENV_FILE="\${PROJECT_ROOT}/Engine/LetsEncrypt/runtime.env"
 
 mkdir -p "\${ENGINE_LOG_DIR}"
 cd "\${ENGINE_DIR}"
 
 export BOREALIS_PROJECT_ROOT="\${PROJECT_ROOT}"
-export BOREALIS_ENGINE_PORT="5000"
 export BOREALIS_ENGINE_MODE="\${MODE}"
-export BOREALIS_CERT_DIR="\${PROJECT_ROOT}/Engine/Certificates"
-export BOREALIS_TLS_CERT="\${BOREALIS_CERT_DIR}/borealis-server-cert.pem"
-export BOREALIS_TLS_KEY="\${BOREALIS_CERT_DIR}/borealis-server-key.pem"
-export BOREALIS_TLS_BUNDLE="\${BOREALIS_CERT_DIR}/borealis-server-bundle.pem"
 export ANSIBLE_COLLECTIONS_PATH="\${PROJECT_ROOT}/Engine/Ansible/collections"
 export ANSIBLE_COLLECTIONS_PATHS="\${ANSIBLE_COLLECTIONS_PATH}"
 export PATH="\${NODE_BIN_DIR}:\${PATH}"
@@ -1495,6 +2088,18 @@ if [[ -f "\${ENGINE_DB_ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   . "\${ENGINE_DB_ENV_FILE}"
 fi
+if [[ -f "\${EDGE_ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  . "\${EDGE_ENV_FILE}"
+fi
+
+export BOREALIS_ENGINE_HOST="\${BOREALIS_ENGINE_HOST:-127.0.0.1}"
+export BOREALIS_ENGINE_PORT="\${BOREALIS_ENGINE_PORT:-5000}"
+export BOREALIS_DISABLE_ENGINE_TLS="\${BOREALIS_DISABLE_ENGINE_TLS:-1}"
+unset BOREALIS_CERT_DIR
+unset BOREALIS_TLS_CERT
+unset BOREALIS_TLS_KEY
+unset BOREALIS_TLS_BUNDLE
 
 if [[ ! -x "\${VENV_PY}" ]]; then
   echo "Engine python not found at \${VENV_PY}" >&2
@@ -1552,8 +2157,8 @@ ensure_engine_systemd_service() {
   cat > "${tmp_unit}" <<EOF
 [Unit]
 Description=Borealis Engine Service
-After=network-online.target ${pg_service}.service
-Wants=network-online.target ${pg_service}.service
+After=network-online.target ${pg_service}.service borealis-traefik.service
+Wants=network-online.target ${pg_service}.service borealis-traefik.service
 
 [Service]
 Type=simple
@@ -1599,12 +2204,23 @@ print_engine_service_status() {
 configure_engine_supervision() {
   local mode="$1" # production|developer
   if command_exists systemctl; then
+    ensure_traefik_systemd_service
     ensure_engine_systemd_service "${mode}"
+    print_traefik_service_status
     print_engine_service_status
     return 0
   fi
 
   echo -e "${YELLOW}systemctl not available; launching Engine in the current shell instead.${RESET}"
+  local traefik_runner=""
+  local traefik_pid=""
+  traefik_runner="$(ensure_traefik_service_runner 2>/dev/null || true)"
+  if [[ -x "${traefik_runner}" ]]; then
+    local logdir; logdir=$(ensure_engine_log_dir)
+    /usr/bin/env bash "${traefik_runner}" >>"${logdir}/traefik.stdout.log" 2>>"${logdir}/traefik.stderr.log" &
+    traefik_pid=$!
+    trap 'if [[ -n "${traefik_pid}" ]]; then kill "${traefik_pid}" >/dev/null 2>&1 || true; wait "${traefik_pid}" 2>/dev/null || true; fi' RETURN
+  fi
   flask_engine_launch "${mode}"
 }
 
@@ -1676,7 +2292,6 @@ vite_web_frontend_start() {
   local mode="$1" # developer|production
   local engine_ui_dest="${SCRIPT_DIR}/Engine/web-interface"
   ensure_node_bins
-  ensure_engine_tls_material "$(engine_python_bin)" ""
 
   if [[ "$mode" == "developer" ]]; then
     if [[ "${ENGINE_USE_SYSTEMD_SUPERVISION:-0}" -eq 1 ]]; then
@@ -1688,7 +2303,7 @@ vite_web_frontend_start() {
     local stderr_log="${logdir}/vite-dev.stderr.log"
     mv -f "$stdout_log" "${stdout_log}.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
     mv -f "$stderr_log" "${stderr_log}.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-    write_vite_log "Starting Vite dev server using TLS (cert=$BOREALIS_TLS_CERT bundle=$BOREALIS_TLS_BUNDLE)" "vite-dev"
+    write_vite_log "Starting Vite dev server with loopback Engine proxying." "vite-dev"
     (
       cd "$engine_ui_dest"
       PATH="${NODE_DIR}/bin:${PATH}" nohup "$NPM_BIN" run dev >"$stdout_log" 2>"$stderr_log" &
@@ -1720,10 +2335,10 @@ flask_engine_launch() {
     py="$(engine_python_bin)"
   fi
   local prev_mode="${BOREALIS_ENGINE_MODE:-}"
+  local prev_host="${BOREALIS_ENGINE_HOST:-}"
   local prev_port="${BOREALIS_ENGINE_PORT:-}"
   local prev_root="${BOREALIS_PROJECT_ROOT:-}"
   export BOREALIS_ENGINE_MODE="$mode"
-  export BOREALIS_ENGINE_PORT="5000"
   export BOREALIS_PROJECT_ROOT="$SCRIPT_DIR"
   export ANSIBLE_COLLECTIONS_PATH="${SCRIPT_DIR}/Engine/Ansible/collections"
   export ANSIBLE_COLLECTIONS_PATHS="${ANSIBLE_COLLECTIONS_PATH}"
@@ -1731,13 +2346,24 @@ flask_engine_launch() {
     # shellcheck disable=SC1090
     . "${ENGINE_DB_ENV_FILE}"
   fi
+  if [[ -f "$(engine_letsencrypt_runtime_env_path)" ]]; then
+    # shellcheck disable=SC1090
+    . "$(engine_letsencrypt_runtime_env_path)"
+  fi
+  export BOREALIS_ENGINE_HOST="${BOREALIS_ENGINE_HOST:-127.0.0.1}"
+  export BOREALIS_ENGINE_PORT="${BOREALIS_ENGINE_PORT:-5000}"
+  export BOREALIS_DISABLE_ENGINE_TLS="${BOREALIS_DISABLE_ENGINE_TLS:-1}"
+  unset BOREALIS_CERT_DIR
+  unset BOREALIS_TLS_CERT
+  unset BOREALIS_TLS_KEY
+  unset BOREALIS_TLS_BUNDLE
   echo -e "\n${GREEN}Launching Borealis Engine...${RESET}"
   echo "===================================================================================="
   local start_label
   if [[ "$mode" == "developer" ]]; then
-    start_label="(Dev) Engine Started on https://localhost:5173"
+    start_label="(Dev) Engine Started on http://localhost:5173"
   else
-    start_label="(Production) Engine Started on https://localhost:5000"
+    start_label="(Production) Borealis Edge Started on https://$(resolve_engine_public_fqdn)"
   fi
   echo "${HOURGLASS} ${start_label}"
   local logdir; logdir=$(ensure_engine_log_dir)
@@ -1746,6 +2372,7 @@ flask_engine_launch() {
   "$py" -m Data.Engine.bootstrapper >>"$stdout_log" 2>>"$stderr_log" || true
   # restore env
   if [[ -n "$prev_mode" ]]; then export BOREALIS_ENGINE_MODE="$prev_mode"; else unset BOREALIS_ENGINE_MODE; fi
+  if [[ -n "$prev_host" ]]; then export BOREALIS_ENGINE_HOST="$prev_host"; else unset BOREALIS_ENGINE_HOST; fi
   if [[ -n "$prev_port" ]]; then export BOREALIS_ENGINE_PORT="$prev_port"; else unset BOREALIS_ENGINE_PORT; fi
   if [[ -n "$prev_root" ]]; then export BOREALIS_PROJECT_ROOT="$prev_root"; else unset BOREALIS_PROJECT_ROOT; fi
   popd >/dev/null
@@ -1786,9 +2413,9 @@ server_menu() {
 
   if [[ -z "${mode_choice}" ]]; then
     echo -e "\nConfigure Borealis Engine Mode:"
-    echo -e " 1) Build & Launch > Production Flask Server @ https://localhost:5000"
-    echo -e " 2) [Skip Build] & Immediately Launch > Production Flask Server @ https://localhost:5000"
-    echo -e " 3) Launch > [Hotload-Ready] Vite Dev Server @ https://localhost:5173"
+    echo -e " 1) Build & Launch > Borealis Traefik Edge + Engine"
+    echo -e " 2) [Skip Build] & Immediately Launch > Borealis Traefik Edge + Engine"
+    echo -e " 3) Launch > [Hotload-Ready] Vite Dev Server @ http://localhost:5173"
     mode_choice="$(prompt_input "Enter choice [1/2/3]: ")"
   else
     echo -e "${YELLOW}Auto-selecting Borealis Engine mode option ${mode_choice}.${RESET}"
@@ -1822,6 +2449,7 @@ server_menu() {
   if [[ "$engine_immediate_launch" -eq 1 ]]; then
     run_step "Sync Engine runtime code from Data/Engine" sync_engine_runtime
     run_step "Restore Engine database environment" ensure_engine_database_env_file
+    run_step "Render Borealis Let's Encrypt and Traefik runtime files" ensure_engine_public_edge_runtime
     run_step "Verify Engine Ansible Runtime" verify_engine_ansible_runtime
     if [[ "${ENGINE_USE_SYSTEMD_SUPERVISION}" -eq 1 ]]; then
       run_step "Configure Borealis Engine systemd service (${borealis_operation_mode})" configure_engine_supervision "$borealis_operation_mode"
@@ -1834,6 +2462,7 @@ server_menu() {
   run_step "Create Borealis Engine Virtual Python Environment & Stage Data" create_engine_venv_and_stage_data
   run_step "Restore Engine database environment" ensure_engine_database_env_file
   run_step "Install Engine Python Dependencies" install_engine_python_deps
+  run_step "Render Borealis Let's Encrypt and Traefik runtime files" ensure_engine_public_edge_runtime
   run_step "Install Engine Ansible Collections" install_engine_ansible_collections
   run_step "Verify Engine Ansible Runtime" verify_engine_ansible_runtime
   run_step "Copy Engine WebUI Files" ensure_engine_web_interface "$SCRIPT_DIR"

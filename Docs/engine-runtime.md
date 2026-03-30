@@ -38,6 +38,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [Technical Debt](technical-debt.md)
 - [Aegis Cipher](features_to_implement/aegis_cipher.md)
+- [Reverse Proxy Functionality](features_to_implement/reverse_proxy_functionality.md)
 
 ## Codex Agent (Detailed)
 ### Source vs runtime
@@ -112,7 +113,7 @@ Use this section for Engine work (successor to the legacy server). Shared guidan
 - Keep Engine-specific artifacts within `Engine/Logs/` to preserve the runtime boundary.
 
 #### Security and API parity
-- Mirrors legacy mutual trust: Ed25519 device identities, EdDSA-signed access tokens, pinned Borealis root CA, TLS 1.3-only serving, Authorization headers and service-context markers on every device API.
+- Uses Ed25519 device identities, EdDSA-signed access tokens, and a Borealis-managed Traefik edge with Let's Encrypt for the public browser/agent trust chain while the Python Engine stays on loopback HTTP.
 - Implements DPoP validation, short-lived access tokens (about 15 min), SHA-256 hashed refresh tokens (30-day) with explicit reuse errors.
 - Enrollment: operator approvals, conflict detection, auditor recording, pruning of expired codes/refresh tokens.
 - Background jobs and service adapters maintain compatibility with legacy DB schemas while enabling gradual API takeover.

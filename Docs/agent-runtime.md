@@ -9,7 +9,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Service modes: SYSTEM and CURRENTUSER (controlled by `--system-service` or environment).
 - Role system: `Data/Agent/role_manager.py` auto-loads `Data/Agent/Roles/role_*.py`.
 - Networking: REST to Engine APIs + Socket.IO for realtime job dispatch and VPN orchestration.
-- Security: Ed25519 identity keys, pinned TLS, signed script payloads, encrypted token storage.
+- Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, encrypted token storage.
 
 ## Role Catalog (Current)
 - `role_DeviceAudit.py` (ROLE_NAME: `device_audit`) - inventory and audit data capture.

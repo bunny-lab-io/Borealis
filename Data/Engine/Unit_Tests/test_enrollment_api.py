@@ -88,7 +88,6 @@ def test_enrollment_request_creates_pending_approval(engine_harness: EngineTestH
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "pending"
-    assert payload["server_certificate"] == harness.bundle_contents
     approval_reference = payload["approval_reference"]
 
     with sqlite3.connect(str(harness.db_path)) as conn:
@@ -170,7 +169,6 @@ def test_enrollment_poll_finalizes_when_approved(engine_harness: EngineTestHarne
     poll_payload = poll_response.get_json()
     assert poll_payload["status"] == "approved"
     assert poll_payload["token_type"] == "Bearer"
-    assert poll_payload["server_certificate"] == harness.bundle_contents
 
     final_guid = poll_payload["guid"]
     assert isinstance(final_guid, str) and len(final_guid) == 36

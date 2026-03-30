@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import ssl
 import threading
 import time
 import uuid
@@ -20,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import websockets
 
-VNC_WS_PATH = "/vnc"
+VNC_WS_PATH = "/remote-desktop/vnc"
 _MAX_MESSAGE_SIZE = 100_000_000
 
 
@@ -104,7 +103,8 @@ class VncProxyServer:
         logger: logging.Logger,
         emit_agent_event: Optional[Callable[[str, str, Any], bool]] = None,
         resolver: Optional[Callable[[str], Optional[Tuple[str, int]]]] = None,
-        ssl_context: Optional[ssl.SSLContext] = None,
+        path: str = VNC_WS_PATH,
+        ssl_context: Optional[Any] = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -112,6 +112,7 @@ class VncProxyServer:
         self.logger = logger
         self._emit_agent_event = emit_agent_event
         self._resolver = resolver
+        self.path = path or VNC_WS_PATH
         self.ssl_context = ssl_context
         self._thread: Optional[threading.Thread] = None
         self._ready = threading.Event()
@@ -163,30 +164,20 @@ class VncProxyServer:
         normalized_path = parsed.path or ""
         if normalized_path and not normalized_path.startswith("/"):
             normalized_path = f"/{normalized_path}"
-        if normalized_path != VNC_WS_PATH:
+        if normalized_path != self.path:
             self.logger.warning("VNC proxy rejected request with invalid path: %s", raw_path)
             await websocket.close(code=1008, reason="invalid_path")
             return
         query = parse_qs(parsed.query or "")
         token = (query.get("token") or [""])[0]
-        agent_id = (query.get("agent_id") or [""])[0]
-        session = None
-        host = ""
-        port = 0
-        if token:
-            session = self.registry.consume(token)
-            if session:
-                host = session.host
-                port = session.port
-                agent_id = session.agent_id
-        if not host and agent_id and self._resolver:
-            resolved = self._resolver(agent_id)
-            if resolved:
-                host, port = resolved
+        session = self.registry.consume(token)
+        host = session.host if session else ""
+        port = session.port if session else 0
+        agent_id = session.agent_id if session else ""
         if not host or not port or not agent_id:
             token_hint = token[:8] if token else "-"
             self.logger.warning(
-                "VNC proxy rejected session (token=%s agent_id=%s)", token_hint, agent_id or "-"
+                "VNC proxy rejected session (token=%s)", token_hint
             )
             await websocket.close(code=1008, reason="invalid_session")
             return
@@ -264,7 +255,9 @@ class VncProxyServer:
             self.logger.debug("Failed to emit vnc_stop for agent_id=%s", session.agent_id, exc_info=True)
 
 
-def _build_ssl_context(cert_path: Optional[str], key_path: Optional[str]) -> Optional[ssl.SSLContext]:
+def _build_ssl_context(cert_path: Optional[str], key_path: Optional[str]) -> Optional[Any]:
+    import ssl
+
     if not cert_path or not key_path:
         return None
     try:
@@ -292,11 +285,13 @@ def ensure_vnc_proxy(
 
     proxy = getattr(context, "vnc_proxy", None)
     if proxy is None:
-        cert_path = getattr(context, "tls_bundle_path", None) or getattr(context, "tls_cert_path", None)
-        ssl_context = _build_ssl_context(
-            cert_path,
-            getattr(context, "tls_key_path", None),
-        )
+        ssl_context = None
+        if not getattr(context, "disable_engine_tls", False):
+            cert_path = getattr(context, "tls_bundle_path", None) or getattr(context, "tls_cert_path", None)
+            ssl_context = _build_ssl_context(
+                cert_path,
+                getattr(context, "tls_key_path", None),
+            )
         proxy = VncProxyServer(
             host=str(getattr(context, "vnc_ws_host", "0.0.0.0")),
             port=int(getattr(context, "vnc_ws_port", 4823)),
@@ -304,6 +299,7 @@ def ensure_vnc_proxy(
             logger=logger.getChild("vnc_proxy"),
             emit_agent_event=getattr(context, "emit_agent_event", None),
             resolver=resolver,
+            path=str(getattr(context, "public_vnc_path", VNC_WS_PATH)),
             ssl_context=ssl_context,
         )
         setattr(context, "vnc_proxy", proxy)

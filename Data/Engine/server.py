@@ -17,8 +17,10 @@ error log) to align with the project's operational practices.
 from __future__ import annotations
 
 import atexit
+import importlib
 import importlib.util
 import logging
+import os
 import time
 import ssl
 from dataclasses import dataclass
@@ -50,7 +52,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix  # noqa: E402
 eventlet.monkey_patch(thread=False)  # pragma: no cover - aligns with legacy runtime
 
 HttpProtocol = getattr(eventlet_wsgi, "HttpProtocol", None)
-if HttpProtocol is not None:  # pragma: no branch - attribute exists in supported versions
+if HttpProtocol is not None and hasattr(HttpProtocol, "handle_one_request"):
     _original_handle_one_request = HttpProtocol.handle_one_request
 
     def _quiet_tls_http_mismatch(self):  # type: ignore[override]
@@ -96,7 +98,19 @@ if HttpProtocol is not None:  # pragma: no branch - attribute exists in supporte
 
     HttpProtocol.handle_one_request = _quiet_tls_http_mismatch  # type: ignore[assignment]
 
-_SOCKETIO_ASYNC_MODE = "eventlet"
+def _resolve_socketio_async_mode() -> str:
+    requested = (os.environ.get("BOREALIS_SOCKETIO_ASYNC_MODE") or "eventlet").strip().lower() or "eventlet"
+    if requested != "eventlet":
+        return requested
+    try:
+        importlib.util.find_spec("engineio.async_drivers.eventlet")
+        importlib.import_module("engineio.async_drivers.eventlet")
+        return "eventlet"
+    except Exception:
+        return "threading"
+
+
+_SOCKETIO_ASYNC_MODE = _resolve_socketio_async_mode()
 
 _ASSEMBLY_SHUTDOWN_REGISTERED = False
 
@@ -117,6 +131,15 @@ class EngineContext:
     tls_cert_path: Optional[str]
     tls_key_path: Optional[str]
     tls_bundle_path: Optional[str]
+    public_edge_enabled: bool
+    public_base_url: Optional[str]
+    public_hostname: Optional[str]
+    public_https_port: int
+    public_vnc_path: str
+    public_wireguard_host: Optional[str]
+    public_wireguard_port: int
+    disable_engine_tls: bool
+    letsencrypt_settings_path: Optional[str]
     config: Mapping[str, Any]
     api_groups: Sequence[str]
     api_log_path: str
@@ -152,6 +175,15 @@ def _build_engine_context(settings: EngineSettings, logger: logging.Logger) -> E
         tls_cert_path=settings.tls_cert_path,
         tls_key_path=settings.tls_key_path,
         tls_bundle_path=settings.tls_bundle_path,
+        public_edge_enabled=settings.public_edge_enabled,
+        public_base_url=settings.public_base_url,
+        public_hostname=settings.public_hostname,
+        public_https_port=settings.public_https_port,
+        public_vnc_path=settings.public_vnc_path,
+        public_wireguard_host=settings.public_wireguard_host,
+        public_wireguard_port=settings.public_wireguard_port,
+        disable_engine_tls=settings.disable_engine_tls,
+        letsencrypt_settings_path=settings.letsencrypt_settings_path,
         config=settings.as_dict(),
         api_groups=settings.api_groups,
         api_log_path=settings.api_log_file,
