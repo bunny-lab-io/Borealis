@@ -131,6 +131,7 @@ def test_windows_client_repairs_stale_service_binding() -> None:
 
     client._validate_token = lambda token, signing_client=None: None
     client._write_config = lambda text: calls.append("write_config") or True
+    client._write_config_to = lambda path, text: True
     client._service_exists = lambda: True
     client._service_config_path = lambda: Path("D:/Github/Borealis/Agent/Borealis/Settings/WireGuard/Borealis.conf")
     client._reinstall_service = lambda: calls.append("reinstall") or True
