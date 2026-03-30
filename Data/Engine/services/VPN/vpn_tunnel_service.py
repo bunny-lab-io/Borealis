@@ -720,19 +720,33 @@ class VpnTunnelService:
                 self._ensure_token(session)
             return self._session_payload(session, include_token=include_token)
 
-    def request_agent_start(self, agent_id: str) -> Optional[Mapping[str, Any]]:
+    def request_agent_start(
+        self,
+        agent_id: str,
+        *,
+        force_restart: bool = False,
+        reason: Optional[str] = None,
+    ) -> Optional[Mapping[str, Any]]:
         payload = self.session_payload(agent_id, include_token=True)
         if not payload:
             self._service_log_event("vpn_tunnel_agent_start_missing agent_id={0}".format(agent_id or "-"))
             return None
+        emitted_payload: Dict[str, Any] = dict(payload)
+        restart_reason = str(reason or "").strip()
+        if force_restart:
+            emitted_payload["force_restart"] = True
+        if restart_reason:
+            emitted_payload["restart_reason"] = restart_reason
         self._service_log_event(
-            "vpn_tunnel_agent_start_emit agent_id={0} tunnel_id={1}".format(
-                payload.get("agent_id", "-"),
-                payload.get("tunnel_id", "-"),
+            "vpn_tunnel_agent_start_emit agent_id={0} tunnel_id={1} force_restart={2} reason={3}".format(
+                emitted_payload.get("agent_id", "-"),
+                emitted_payload.get("tunnel_id", "-"),
+                str(bool(force_restart)).lower(),
+                restart_reason or "-",
             )
         )
-        self._emit_start(payload)
-        return payload
+        self._emit_start(emitted_payload)
+        return emitted_payload
 
     def bump_activity(self, agent_id: str) -> None:
         with self._lock:

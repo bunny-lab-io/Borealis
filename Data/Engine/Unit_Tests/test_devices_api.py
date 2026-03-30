@@ -691,6 +691,19 @@ def test_vpn_service_watchdog_noops_when_listener_healthy() -> None:
     assert status["recovery_in_progress"] is False
 
 
+def test_vpn_service_request_agent_start_can_force_restart() -> None:
+    service, _wg, socketio, _service_events = _build_vpn_service()
+    service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+
+    payload = service.request_agent_start("agent-1", force_restart=True, reason="shell_connect_retry")
+
+    assert payload is not None
+    assert payload["force_restart"] is True
+    assert payload["restart_reason"] == "shell_connect_retry"
+    assert socketio.emits[-1][0] == "vpn_tunnel_start"
+    assert socketio.emits[-1][1]["force_restart"] is True
+
+
 def test_vpn_service_live_upserts_additional_peers_without_full_reconcile() -> None:
     service, wg, _socketio, _service_events = _build_vpn_service()
 
@@ -875,7 +888,8 @@ def test_tunnel_connect_endpoint_resolves_guid_to_agent_id(
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["agent_id"] == "test-device-agent"
-    assert fake_service.connect_calls == [("test-device-agent", "admin", "localhost")]
+    expected_host = getattr(engine_harness.context, "public_wireguard_host", None) or "localhost"
+    assert fake_service.connect_calls == [("test-device-agent", "admin", expected_host)]
 
 
 def test_agent_vpn_ensure_repairs_stale_agent_binding(
@@ -901,7 +915,8 @@ def test_agent_vpn_ensure_repairs_stale_agent_binding(
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["agent_id"] == live_agent_id
-    assert fake_service.connect_calls == [(live_agent_id, None, "localhost")]
+    expected_host = getattr(engine_harness.context, "public_wireguard_host", None) or "localhost"
+    assert fake_service.connect_calls == [(live_agent_id, None, expected_host)]
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:

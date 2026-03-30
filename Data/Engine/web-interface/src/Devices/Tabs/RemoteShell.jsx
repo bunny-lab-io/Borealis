@@ -16,11 +16,6 @@ import {
   RefreshRounded as RefreshIcon,
 } from "@mui/icons-material";
 import { io } from "socket.io-client";
-import Prism from "prismjs";
-import "prismjs/components/prism-bash";
-import "prismjs/components/prism-powershell";
-import "prismjs/themes/prism-okaidia.css";
-import Editor from "react-simple-code-editor";
 
 const MAGIC_UI = {
   panelBorder: "rgba(148, 163, 184, 0.35)",
@@ -67,8 +62,6 @@ const emitAsync = (socket, event, payload, timeoutMs = 4000) =>
       resolve(resp || {});
     });
   });
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function normalizeText(value) {
   if (value == null) return "";
@@ -132,15 +125,6 @@ function cleanShellOutput(value) {
   }
 }
 
-function highlightShell(code, shellKind) {
-  const language = shellKind === "bash" ? "bash" : "powershell";
-  try {
-    return Prism.highlight(code || "", Prism.languages[language] || Prism.languages.markup, language);
-  } catch {
-    return code || "";
-  }
-}
-
 export default function ReverseTunnelRemoteShell({ device }) {
   const [sessionState, setSessionState] = useState("idle");
   const [shellState, setShellState] = useState("idle");
@@ -161,7 +145,6 @@ export default function ReverseTunnelRemoteShell({ device }) {
   const shellKind = useMemo(() => inferShellKind(device), [device]);
   const promptLabel = shellKind === "bash" ? "#" : "PS>";
   const displayOutput = useMemo(() => cleanShellOutput(output), [output]);
-  const highlightOutput = useCallback((code) => highlightShell(code, shellKind), [shellKind]);
 
   const agentId = useMemo(() => {
     return (
@@ -413,45 +396,28 @@ export default function ReverseTunnelRemoteShell({ device }) {
       setTunnel(data);
 
       const socket = ensureSocket();
-      const openShellWithRetry = async () => {
-        const deadline = Date.now() + 60000;
-        let lastError = "";
-        let attempt = 0;
-        while (Date.now() < deadline) {
-          if (connectAttemptRef.current !== connectAttempt) {
-            return { cancelled: true };
-          }
-          attempt += 1;
-          const openResp = await emitAsync(socket, "vpn_shell_open", { agent_id: resolvedAgentId }, 6000);
-          if (connectAttemptRef.current !== connectAttempt) {
-            return { cancelled: true };
-          }
-          if (!openResp?.error) {
-            activeSessionIdRef.current = String(openResp?.session_id || "").trim();
-            setStatusMessage("");
-            return openResp;
-          }
-          if (openResp.error === "agent_socket_missing") {
-            await handleAgentOnboarding();
-            return null;
-          }
-          lastError = openResp.error;
-          setStatusMessage(`Waiting for shell session (${attempt})...`);
-          await sleep(2000);
-        }
-        if ((lastError || "") === "shell_connect_failed") {
-          throw new Error("Agent shell service did not accept a WireGuard connection within 60 seconds.");
-        }
-        throw new Error(lastError || "shell_connect_failed");
-      };
-
-      const opened = await openShellWithRetry();
+      setStatusMessage("Waiting for shell session...");
+      const opened = await emitAsync(socket, "vpn_shell_open", { agent_id: resolvedAgentId }, 35000);
       if (!opened || opened.cancelled) {
         return;
       }
       if (connectAttemptRef.current !== connectAttempt) {
         return;
       }
+      if (opened.error === "agent_socket_missing") {
+        await handleAgentOnboarding();
+        return;
+      }
+      if (opened.error) {
+        if (opened.error === "shell_connect_failed") {
+          throw new Error("Agent shell service did not accept a WireGuard connection within 30 seconds.");
+        }
+        if (opened.error === "timeout") {
+          throw new Error("Shell open request timed out while waiting for the agent tunnel.");
+        }
+        throw new Error(String(opened.error));
+      }
+      activeSessionIdRef.current = String(opened?.session_id || "").trim();
       setSessionState("connected");
       setShellState("connected");
       setStatusMessage("");
@@ -545,20 +511,23 @@ export default function ReverseTunnelRemoteShell({ device }) {
             },
           }}
         >
-          <Editor
-            value={displayOutput}
-            onValueChange={() => {}}
-            highlight={highlightOutput}
-            padding={12}
-            readOnly
-            style={{
+          <Box
+            component="pre"
+            sx={{
+              margin: 0,
               minHeight: "100%",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
               background: "transparent",
               color: "#e6edf3",
               fontFamily: fontFamilyMono,
               fontSize: 13,
+              lineHeight: 1.5,
+              pr: 4,
             }}
-          />
+          >
+            {displayOutput}
+          </Box>
           <Box sx={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 0.5 }}>
             <Tooltip title="Copy output">
               <IconButton size="small" onClick={handleCopy} sx={{ color: copyFlash ? MAGIC_UI.accentC : MAGIC_UI.textMuted }}>

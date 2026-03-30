@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import socket
 import threading
 import time
@@ -18,10 +19,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
-_CONNECT_ATTEMPTS = 8
+_CONNECT_WAIT_WINDOW_SECONDS = 30.0
 _CONNECT_TIMEOUT_SECONDS = 2.0
 _RETRY_DELAY_SECONDS = 1.0
-_REEMIT_START_ATTEMPTS = {0, 3}
+_REEMIT_START_AFTER_SECONDS = (0.0, 10.0, 20.0)
 
 
 def _b64encode(data: bytes) -> str:
@@ -262,50 +263,74 @@ class VpnShellBridge:
         port = int(self.context.wireguard_shell_port)
         tcp = None
         last_error: Optional[Exception] = None
-        for attempt in range(_CONNECT_ATTEMPTS):
+        attempts = 0
+        connect_started_at = time.monotonic()
+        connect_deadline = connect_started_at + _CONNECT_WAIT_WINDOW_SECONDS
+        reemit_index = 0
+        while True:
+            now = time.monotonic()
+            remaining = connect_deadline - now
+            if remaining <= 0:
+                break
+            elapsed = max(0.0, now - connect_started_at)
+            while reemit_index < len(_REEMIT_START_AFTER_SECONDS):
+                trigger_after = _REEMIT_START_AFTER_SECONDS[reemit_index]
+                if elapsed + 0.001 < trigger_after:
+                    break
+                try:
+                    service.request_agent_start(
+                        agent_id,
+                        force_restart=True,
+                        reason="shell_connect_retry",
+                    )
+                    self._service_log_event(
+                        "vpn_shell_agent_start_emit agent_id={0} sid={1} trigger_elapsed={2}".format(
+                            agent_id,
+                            sid,
+                            int(math.floor(trigger_after)),
+                        )
+                    )
+                except Exception:
+                    self.logger.debug("Failed to re-emit vpn_tunnel_start for agent=%s", agent_id, exc_info=True)
+                    self._service_log_event(
+                        "vpn_shell_agent_start_failed agent_id={0} sid={1} trigger_elapsed={2}".format(
+                            agent_id,
+                            sid,
+                            int(math.floor(trigger_after)),
+                        ),
+                        level="WARNING",
+                    )
+                reemit_index += 1
+
+            attempts += 1
             self._service_log_event(
                 "vpn_shell_connect_attempt agent_id={0} sid={1} host={2} port={3} attempt={4}".format(
                     agent_id,
                     sid,
                     host,
                     port,
-                    attempt + 1,
+                    attempts,
                 )
             )
             try:
-                tcp = socket.create_connection((host, port), timeout=_CONNECT_TIMEOUT_SECONDS)
+                timeout = min(_CONNECT_TIMEOUT_SECONDS, max(0.5, remaining))
+                tcp = socket.create_connection((host, port), timeout=timeout)
                 break
             except Exception as exc:
                 last_error = exc
-                if attempt in _REEMIT_START_ATTEMPTS:
-                    try:
-                        service.request_agent_start(agent_id)
-                        self._service_log_event(
-                            "vpn_shell_agent_start_emit agent_id={0} sid={1} trigger_attempt={2}".format(
-                                agent_id,
-                                sid,
-                                attempt + 1,
-                            )
-                        )
-                    except Exception:
-                        self.logger.debug("Failed to re-emit vpn_tunnel_start for agent=%s", agent_id, exc_info=True)
-                        self._service_log_event(
-                            "vpn_shell_agent_start_failed agent_id={0} sid={1} trigger_attempt={2}".format(
-                                agent_id,
-                                sid,
-                                attempt + 1,
-                            ),
-                            level="WARNING",
-                        )
-                if attempt < (_CONNECT_ATTEMPTS - 1):
-                    time.sleep(_RETRY_DELAY_SECONDS)
+                remaining = connect_deadline - time.monotonic()
+                if remaining > 0:
+                    time.sleep(min(_RETRY_DELAY_SECONDS, remaining))
         if tcp is None:
+            elapsed_seconds = int(math.ceil(max(0.0, time.monotonic() - connect_started_at)))
             self._service_log_event(
-                "vpn_shell_connect_failed agent_id={0} sid={1} host={2} port={3} error={4}".format(
+                "vpn_shell_connect_failed agent_id={0} sid={1} host={2} port={3} attempts={4} waited_seconds={5} error={6}".format(
                     agent_id,
                     sid,
                     host,
                     port,
+                    attempts,
+                    elapsed_seconds,
                     str(last_error) if last_error else "-",
                 ),
                 level="WARNING",

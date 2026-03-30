@@ -26,6 +26,7 @@ def _client_with_admin_session(harness: EngineTestHarness):
 class _FakeTunnelService:
     def __init__(self) -> None:
         self.connect_calls: list[tuple[str, Any, Any]] = []
+        self.start_calls: list[tuple[str, bool, str]] = []
 
     def session_payload(self, agent_id: str, include_token: bool = False) -> Any:
         _ = agent_id
@@ -41,13 +42,25 @@ class _FakeTunnelService:
             "engine_virtual_ip": "10.255.0.1/32",
         }
 
+    def request_agent_start(
+        self,
+        agent_id: str,
+        *,
+        force_restart: bool = False,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        self.start_calls.append((agent_id, bool(force_restart), str(reason or "")))
+        return {"status": "ok"}
+
 
 class _FakeRegistry:
     def __init__(self) -> None:
         self.created: list[tuple[str, str, int, Any]] = []
+        self.restart_callbacks: list[Any] = []
 
-    def create(self, *, agent_id: str, host: str, port: int, operator_id: Any):
+    def create(self, *, agent_id: str, host: str, port: int, operator_id: Any, restart_tunnel: Any = None):
         self.created.append((agent_id, host, port, operator_id))
+        self.restart_callbacks.append(restart_tunnel)
         return SimpleNamespace(token="session-token")
 
 
@@ -74,3 +87,5 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     assert payload["ws_url"] == "wss://borealis.example.com/remote-desktop/vnc?token=session-token"
     assert fake_registry.created == [("test-device-agent", "10.255.0.2", 5900, "admin")]
     assert fake_tunnel.connect_calls == [("test-device-agent", "admin", "borealis.example.com")]
+    assert fake_tunnel.start_calls == [("test-device-agent", True, "vnc_bootstrap")]
+    assert callable(fake_registry.restart_callbacks[0])

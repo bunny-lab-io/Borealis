@@ -168,8 +168,15 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 )
             except Exception:
                 return {"error": "tunnel_down"}, 409
+        def _restart_tunnel(reason: str) -> None:
+            tunnel_service.request_agent_start(
+                agent_id,
+                force_restart=True,
+                reason=reason,
+            )
+
         try:
-            tunnel_service.request_agent_start(agent_id)
+            _restart_tunnel("vnc_bootstrap")
         except Exception:
             logger.debug("Failed to re-emit vpn_tunnel_start before VNC bootstrap", exc_info=True)
 
@@ -205,6 +212,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             host=host,
             port=vnc_port,
             operator_id=operator_id,
+            restart_tunnel=_restart_tunnel,
         )
         ws_path = public_vnc_path(adapters.context)
         ws_url = build_websocket_url(

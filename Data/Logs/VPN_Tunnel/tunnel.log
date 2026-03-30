@@ -1,0 +1,6 @@
+[2026-03-30T03:23:43] [wg-client] WireGuard Linux session force restart requested (reason=shell_connect_retry).
+[2026-03-30T03:23:43] [wg-client] Rendered WireGuard Linux client config to None
+[2026-03-30T03:23:43] [wg-client] WireGuard Linux session started (persistent mode).
+[2026-03-30T03:25:29] [wg-client] WireGuard Linux session force restart requested (reason=shell_connect_retry).
+[2026-03-30T03:25:29] [wg-client] Rendered WireGuard Linux client config to None
+[2026-03-30T03:25:29] [wg-client] WireGuard Linux session started (persistent mode).

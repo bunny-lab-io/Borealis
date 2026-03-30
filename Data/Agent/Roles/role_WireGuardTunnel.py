@@ -223,6 +223,8 @@ class SessionConfig:
         preshared_key: Optional[str] = None,
         client_private_key: Optional[str] = None,
         client_public_key: Optional[str] = None,
+        force_restart: bool = False,
+        restart_reason: Optional[str] = None,
     ) -> None:
         self.token = token
         self.tunnel_id = tunnel_id
@@ -235,6 +237,8 @@ class SessionConfig:
         self.preshared_key = preshared_key
         self.client_private_key = client_private_key
         self.client_public_key = client_public_key
+        self.force_restart = bool(force_restart)
+        self.restart_reason = str(restart_reason or "").strip()
 
 
 class WireGuardClient:
@@ -670,15 +674,24 @@ class WireGuardClient:
             if self.session:
                 if self.session.tunnel_id == session.tunnel_id:
                     prior_service_state = self._service_state()
-                    if prior_service_state in ("RUNNING", "START_PENDING") and _session_config_equivalent(self.session, session):
+                    same_config = _session_config_equivalent(self.session, session)
+                    if session.force_restart and prior_service_state in ("RUNNING", "START_PENDING"):
+                        recovery_reason = session.restart_reason or "force_restart"
+                        _write_log(
+                            "WireGuard session force restart requested (reason={0}).".format(
+                                recovery_reason
+                            )
+                        )
+                    elif prior_service_state in ("RUNNING", "START_PENDING") and same_config:
                         _write_log("WireGuard session already active; reusing existing session.")
                         self.bump_activity()
                         return
-                    recovery_reason = (
-                        "same_tunnel_id_config_drift"
-                        if prior_service_state in ("RUNNING", "START_PENDING")
-                        else "same_tunnel_id_service_unhealthy"
-                    )
+                    if not session.force_restart:
+                        recovery_reason = (
+                            "same_tunnel_id_config_drift"
+                            if prior_service_state in ("RUNNING", "START_PENDING")
+                            else "same_tunnel_id_service_unhealthy"
+                        )
                     self._log_recovery_event(
                         "attempt",
                         reason=recovery_reason,
@@ -934,10 +947,18 @@ class LinuxWireGuardClient:
     def start_session(self, session: SessionConfig, *, signing_client: Optional[Any] = None) -> None:
         with self._session_lock:
             if self.session and self.session.tunnel_id == session.tunnel_id:
-                if self._service_state() == "RUNNING" and _session_config_equivalent(self.session, session):
+                same_config = _session_config_equivalent(self.session, session)
+                if self._service_state() == "RUNNING" and same_config and not session.force_restart:
                     _write_log("WireGuard Linux session already active; reusing existing session.")
                     return
-                _write_log("WireGuard Linux session config drift detected; refreshing existing tunnel.")
+                if session.force_restart:
+                    _write_log(
+                        "WireGuard Linux session force restart requested (reason={0}).".format(
+                            session.restart_reason or "force_restart"
+                        )
+                    )
+                else:
+                    _write_log("WireGuard Linux session config drift detected; refreshing existing tunnel.")
             elif self.session:
                 _write_log(
                     "WireGuard Linux session replace: existing_tunnel_id={0} new_tunnel_id={1}".format(
@@ -1373,6 +1394,8 @@ class Role:
             preshared_key=payload.get("preshared_key"),
             client_private_key=payload.get("client_private_key"),
             client_public_key=payload.get("client_public_key"),
+            force_restart=bool(payload.get("force_restart")),
+            restart_reason=payload.get("restart_reason"),
         )
 
     def health_report(self) -> dict:

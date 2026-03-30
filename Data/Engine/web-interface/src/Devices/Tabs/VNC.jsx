@@ -184,15 +184,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function readClipboardText() {
-  if (!navigator?.clipboard?.readText) return "";
-  try {
-    return await navigator.clipboard.readText();
-  } catch {
-    return "";
-  }
-}
-
 async function writeClipboardText(text) {
   if (!navigator?.clipboard?.writeText) return;
   try {
@@ -208,7 +199,7 @@ export default function ReverseTunnelVnc({ device }) {
   const [statusMessage, setStatusMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [viewOnly, setViewOnly] = useState(false);
-  const [clipboardSync, setClipboardSync] = useState(true);
+  const [clipboardSync, setClipboardSync] = useState(false);
   const performanceLevel = 2;
   const [scaleViewport, setScaleViewport] = useState(true);
   const [clipViewport, setClipViewport] = useState(true);
@@ -246,28 +237,6 @@ export default function ReverseTunnelVnc({ device }) {
 
   useEffect(() => {
     clipboardSyncRef.current = clipboardSync;
-  }, [clipboardSync]);
-
-  useEffect(() => {
-    if (!clipboardSync) return;
-    let active = true;
-    const interval = setInterval(async () => {
-      if (!active) return;
-      const rfb = rfbRef.current;
-      if (!rfb) return;
-      const text = await readClipboardText();
-      if (!text || text === clipboardLastRef.current) return;
-      clipboardLastRef.current = text;
-      try {
-        rfb.clipboardPasteFrom(text);
-      } catch {
-        // ignore clipboard send failures
-      }
-    }, 1500);
-    return () => {
-      active = false;
-      clearInterval(interval);
-    };
   }, [clipboardSync]);
 
   const notifyAgentOnboarding = useCallback(async () => {
@@ -504,7 +473,14 @@ export default function ReverseTunnelVnc({ device }) {
   const injectClipboardKeystrokes = useCallback(async () => {
     const rfb = rfbRef.current;
     if (!rfb) return;
-    const text = await readClipboardText();
+    let text = "";
+    if (navigator?.clipboard?.readText) {
+      try {
+        text = await navigator.clipboard.readText();
+      } catch {
+        text = "";
+      }
+    }
     if (!text) {
       setStatusMessage("Clipboard is empty or unavailable.");
       return;
@@ -836,7 +812,7 @@ export default function ReverseTunnelVnc({ device }) {
                     color="info"
                   />
                 }
-                label={<Typography variant="body2">Sync clipboard</Typography>}
+                label={<Typography variant="body2">Sync remote clipboard to browser</Typography>}
               />
               <Button
                 size="small"
