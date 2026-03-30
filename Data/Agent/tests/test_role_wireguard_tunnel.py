@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 from Data.Agent.Roles.role_WireGuardTunnel import (
     LinuxWireGuardClient,
     Role,
     SessionConfig,
+    WireGuardClient,
     _session_config_equivalent,
 )
 
@@ -104,3 +106,66 @@ def test_linux_client_force_restart_skips_same_session_reuse() -> None:
     client.start_session(forced, signing_client=None)
 
     assert calls == ["write_config", "bring_down", "bring_up"]
+
+
+def _build_windows_client() -> WireGuardClient:
+    client = WireGuardClient.__new__(WireGuardClient)
+    client._session_lock = threading.Lock()
+    client._stop_event = threading.Event()
+    client._client_keys = {"private": "client-private"}
+    client._wg_exe = "wireguard.exe"
+    client._last_install_already_present = False
+    client.service_name = "Borealis"
+    client.display_name = "Borealis"
+    client.service_display_name = "Borealis - WireGuard - Agent"
+    client.conf_path = Path("/tmp/Borealis.conf")
+    client.session = None
+    client.idle_deadline = None
+    return client
+
+
+def test_windows_client_repairs_stale_service_binding() -> None:
+    client = _build_windows_client()
+    calls: list[str] = []
+    states = iter(["RUNNING"])
+
+    client._validate_token = lambda token, signing_client=None: None
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: Path("D:/Github/Borealis/Agent/Borealis/Settings/WireGuard/Borealis.conf")
+    client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._restart_service = lambda: calls.append("restart") or True
+    client._service_state = lambda: next(states)
+    client._ensure_adapter_name = lambda: calls.append("adapter")
+    client._ensure_service_display_name = lambda: calls.append("display")
+    client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
+    client._log_recovery_event = lambda *args, **kwargs: None
+
+    session = _build_session()
+    client.start_session(session, signing_client=None)
+
+    assert calls == ["write_config", "reinstall", "restart", "adapter", "display", "firewall"]
+    assert client.session is session
+
+
+def test_windows_client_requires_healthy_service_before_marking_session_started() -> None:
+    client = _build_windows_client()
+    calls: list[str] = []
+    states = iter(["STOPPED", "STOPPED"])
+
+    client._validate_token = lambda token, signing_client=None: None
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: client.conf_path
+    client._restart_service = lambda: calls.append("restart") or True
+    client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._service_state = lambda: next(states)
+    client._ensure_adapter_name = lambda: calls.append("adapter")
+    client._ensure_service_display_name = lambda: calls.append("display")
+    client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
+    client._log_recovery_event = lambda *args, **kwargs: None
+
+    client.start_session(_build_session(), signing_client=None)
+
+    assert calls == ["write_config", "restart", "reinstall", "restart"]
+    assert client.session is None

@@ -502,8 +502,9 @@ class WireGuardClient:
             return True
         return self._service_reg_exists()
 
-    def _install_service(self) -> bool:
-        code, out, err = self._run([self._wg_exe, "/installtunnelservice", str(self.conf_path)])
+    def _install_service(self, config_path: Optional[Path] = None) -> bool:
+        target_path = config_path or self.conf_path
+        code, out, err = self._run([self._wg_exe, "/installtunnelservice", str(target_path)])
         self._last_install_already_present = False
         if code != 0:
             if "already installed and running" in err.lower():
@@ -514,6 +515,67 @@ class WireGuardClient:
                 _write_log("Failed to install WireGuard tunnel service: access denied; ensure agent runs elevated.")
                 return False
             _write_log(f"Failed to install WireGuard tunnel service: code={code} err={err}")
+            return False
+        return True
+
+    def _path_text(self, path: Optional[Path]) -> str:
+        if path is None:
+            return ""
+        try:
+            return str(path).strip()
+        except Exception:
+            return ""
+
+    def _paths_equivalent(self, left: Optional[Path], right: Optional[Path]) -> bool:
+        left_text = self._path_text(left)
+        right_text = self._path_text(right)
+        if not left_text or not right_text:
+            return False
+        normalized_left = left_text.replace("/", "\\").rstrip("\\").lower()
+        normalized_right = right_text.replace("/", "\\").rstrip("\\").lower()
+        return normalized_left == normalized_right
+
+    def _service_binding_needs_repair(self, service_config_path: Optional[Path]) -> bool:
+        if not self._service_exists():
+            return False
+        if not service_config_path:
+            _write_log("WireGuard tunnel service config path missing; service reinstall required.")
+            return True
+        if self._paths_equivalent(service_config_path, self.conf_path):
+            return False
+        _write_log(
+            "WireGuard tunnel service bound to stale config path {0}; expected {1}.".format(
+                service_config_path,
+                self.conf_path,
+            )
+        )
+        return True
+
+    def _uninstall_service(self) -> bool:
+        code, out, err = self._run([self._wg_exe, "/uninstalltunnelservice", self.service_name])
+        detail = (err or out or "").strip()
+        if code != 0 and "not installed" not in detail.lower():
+            _write_log(f"WireGuard tunnel service uninstall returned code={code} err={detail}")
+        for _ in range(10):
+            if not self._service_exists():
+                return True
+            time.sleep(0.5)
+        return not self._service_exists()
+
+    def _reinstall_service(self) -> bool:
+        _write_log(f"Repairing WireGuard tunnel service binding using config {self.conf_path}.")
+        try:
+            self._run(["sc.exe", "stop", self._service_id()])
+        except Exception:
+            pass
+        time.sleep(1)
+        if not self._uninstall_service():
+            _write_log("Failed to remove existing WireGuard tunnel service during repair.")
+            return False
+        if not self._install_service(config_path=self.conf_path):
+            return False
+        if not self._service_exists() and not self._last_install_already_present:
+            _write_log("WireGuard tunnel service still missing after repair install attempt.")
             return False
         return True
 
@@ -777,7 +839,47 @@ class WireGuardClient:
                     )
                 return
 
-            self._restart_service()
+            service_config_path = self._service_config_path()
+            if self._service_binding_needs_repair(service_config_path):
+                if not self._reinstall_service():
+                    if recovery_reason:
+                        self._log_recovery_event(
+                            "failed",
+                            reason=recovery_reason,
+                            tunnel_id=session.tunnel_id,
+                            prior_state=prior_service_state,
+                            detail="service_reinstall_failed",
+                        )
+                    return
+
+            restart_ok = self._restart_service()
+            current_state = self._service_state()
+            if (not restart_ok) or current_state not in ("RUNNING", "START_PENDING"):
+                _write_log("WireGuard tunnel service unhealthy after restart; attempting service repair.")
+                if not self._reinstall_service():
+                    if recovery_reason:
+                        self._log_recovery_event(
+                            "failed",
+                            reason=recovery_reason,
+                            tunnel_id=session.tunnel_id,
+                            prior_state=prior_service_state,
+                            detail="service_reinstall_failed",
+                        )
+                    return
+                restart_ok = self._restart_service()
+                current_state = self._service_state()
+                if (not restart_ok) or current_state not in ("RUNNING", "START_PENDING"):
+                    _write_log("WireGuard tunnel service failed to reach RUNNING after repair attempt.")
+                    if recovery_reason:
+                        self._log_recovery_event(
+                            "failed",
+                            reason=recovery_reason,
+                            tunnel_id=session.tunnel_id,
+                            prior_state=prior_service_state,
+                            detail="service_not_healthy_after_restart",
+                        )
+                    return
+
             self._ensure_adapter_name()
             self._ensure_service_display_name()
             self._ensure_shell_firewall(session.allowed_ips, session.allowed_ports)
@@ -785,22 +887,12 @@ class WireGuardClient:
             self.session = session
             self.idle_deadline = None
             if recovery_reason:
-                current_state = self._service_state()
-                if current_state in ("RUNNING", "START_PENDING"):
-                    self._log_recovery_event(
-                        "success",
-                        reason=recovery_reason,
-                        tunnel_id=session.tunnel_id,
-                        prior_state=prior_service_state,
-                    )
-                else:
-                    self._log_recovery_event(
-                        "failed",
-                        reason=recovery_reason,
-                        tunnel_id=session.tunnel_id,
-                        prior_state=prior_service_state,
-                        detail="service_not_healthy_after_restart",
-                    )
+                self._log_recovery_event(
+                    "success",
+                    reason=recovery_reason,
+                    tunnel_id=session.tunnel_id,
+                    prior_state=prior_service_state,
+                )
             _write_log("WireGuard client session started (persistent mode).")
 
     def stop_session(self, reason: str = "stop", ignore_missing: bool = False) -> None:
