@@ -32,6 +32,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 Borealis now expects the public TLS identity to live on the embedded Traefik instance running on the engine host. If you already have an external Traefik or firewall edge on a different host, keep that outer layer transparent:
 - Forward `80/tcp` to the engine host's Traefik so HTTP-01 challenges can complete.
 - TCP-passthrough `443/tcp` to the engine host's Traefik.
+- If agents resolve the Borealis FQDN to the outer reverse proxy, also forward `30000/udp` to the engine host's WireGuard listener. WireGuard does not ride the HTTPS proxy path.
 - Do not terminate Borealis TLS on the outer reverse proxy.
 - Do not configure a separate public VNC service. Borealis VNC now rides the same origin at `/remote-desktop/vnc`.
 
@@ -68,12 +69,27 @@ tcp:
       loadBalancer:
         servers:
           - address: "192.168.3.252:443"
+
+udp:
+  routers:
+    borealis-wireguard:
+      entryPoints:
+        - borealis-wireguard
+      service: borealis-wireguard
+
+  services:
+    borealis-wireguard:
+      loadBalancer:
+        servers:
+          - address: "192.168.3.252:30000"
 ```
 
 Notes:
 - Remove any Borealis-specific `certResolver`, `serversTransport`, or `insecureSkipVerify` settings from the outer Traefik instance.
 - If the outer Traefik has a global `web -> websecure` redirect, make sure the Borealis host-specific `web` router above wins for `borealis.example.com`, otherwise HTTP-01 will fail before the request reaches the engine host.
 - Split-horizon DNS remains supported: public DNS can point `borealis.example.com` at the outer reverse proxy while internal DNS points the same hostname directly at the engine host.
+- If you intentionally keep both public and internal DNS pointed at the outer reverse proxy, the outer edge must expose and forward `30000/udp` as well as `80/443`, or WireGuard-backed features like Remote Shell and VNC will fail with `EHOSTUNREACH` even while the Borealis web UI remains healthy.
+- For Traefik, that also means adding a UDP entry point such as `--entrypoints.borealis-wireguard.address=:30000/udp` in static config and publishing `30000:30000/udp` on the container or host.
 
 ## API Endpoints
 - `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an agent.
