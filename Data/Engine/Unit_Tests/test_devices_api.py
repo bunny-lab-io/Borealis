@@ -132,6 +132,8 @@ class _FakeWireGuardManager:
         self.reconcile_calls = 0
         self.upsert_calls = 0
         self.remove_calls = 0
+        self.cleanup_calls = 0
+        self.cleanup_removed: list[str] = []
         self.removed_rules = []
         self.current_peers: dict[str, dict[str, Any]] = {}
         self.peer_health_overrides: dict[str, dict[str, Any]] = {}
@@ -201,6 +203,10 @@ class _FakeWireGuardManager:
     def stop_listener(self) -> None:
         self.stop_calls += 1
         self.current_peers = {}
+
+    def cleanup_stale_runtime(self) -> list[str]:
+        self.cleanup_calls += 1
+        return list(self.cleanup_removed)
 
     def check_listener_health(self) -> dict:
         payload = dict(self.health)
@@ -377,6 +383,22 @@ def test_list_devices(engine_harness: EngineTestHarness) -> None:
     device = devices[0]
     assert device["hostname"] == "test-device"
     assert "summary" in device and isinstance(device["summary"], dict)
+
+
+def test_vpn_service_startup_cleans_up_stale_runtime() -> None:
+    service, wg, _socketio, service_events = _build_vpn_service()
+    assert service is not None
+    assert wg.cleanup_calls == 1
+    assert ("VPN_Tunnel/tunnel", "vpn_listener_cleanup_complete removed=0", "INFO") in service_events
+
+
+def test_vpn_service_startup_logs_removed_stale_interfaces() -> None:
+    wg = _FakeWireGuardManager()
+    wg.cleanup_removed = ["borealis"]
+    service, _wg, _socketio, service_events = _build_vpn_service(wireguard_manager=wg)
+    assert service is not None
+    assert wg.cleanup_calls == 1
+    assert ("VPN_Tunnel/tunnel", "vpn_listener_cleanup_complete removed=1 interfaces=borealis", "INFO") in service_events
 
 
 def test_device_hostname_search_requires_three_characters(engine_harness: EngineTestHarness) -> None:

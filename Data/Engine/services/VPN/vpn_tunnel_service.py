@@ -253,7 +253,27 @@ class VpnTunnelService:
             self.logger.debug("Failed to write vpn_tunnel service log entry", exc_info=True)
 
     def _cleanup_listener(self) -> None:
-        self._service_log_event("vpn_listener_cleanup_skipped reason=startup")
+        try:
+            cleanup = getattr(self.wg, "cleanup_stale_runtime", None)
+            if not callable(cleanup):
+                self._service_log_event("vpn_listener_cleanup_complete removed=0 reason=unsupported")
+                return
+            removed = [str(item).strip() for item in (cleanup() or []) if str(item).strip()]
+            if removed:
+                self._service_log_event(
+                    "vpn_listener_cleanup_complete removed={0} interfaces={1}".format(
+                        len(removed),
+                        ",".join(removed),
+                    )
+                )
+            else:
+                self._service_log_event("vpn_listener_cleanup_complete removed=0")
+        except Exception as exc:
+            self._service_log_event(
+                "vpn_listener_cleanup_failed error={0}".format(repr(exc)),
+                level="WARNING",
+            )
+            self.logger.debug("WireGuard startup cleanup failed.", exc_info=True)
 
     def _sleep(self, seconds: float) -> None:
         try:

@@ -91,6 +91,20 @@ def test_check_listener_health_requires_configured_peers(tmp_path: Path, monkeyp
     assert healthy["peer_count"] == 1
 
 
+def test_check_listener_health_detects_stale_managed_interfaces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wireguard_server.engine_config, "PROJECT_ROOT", tmp_path)
+    manager = WireGuardServerManager(_build_config(tmp_path))
+    manager._wg = "wg"
+    manager._ip = "ip"
+    monkeypatch.setattr(manager, "_linux_interface_exists", lambda name=None: True)
+    monkeypatch.setattr(manager, "_linux_list_wireguard_interfaces", lambda: ["borealis-wg", "borealis"])
+
+    health = manager.check_listener_health()
+    assert health["healthy"] is False
+    assert health["reason"] == "stale_interface_present"
+    assert health["stale_interfaces"] == "borealis"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Linux listener lifecycle checks do not apply on Windows.")
 def test_ensure_listener_bootstraps_interface_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wireguard_server.engine_config, "PROJECT_ROOT", tmp_path)
@@ -107,6 +121,22 @@ def test_ensure_listener_bootstraps_interface_when_absent(tmp_path: Path, monkey
 
     assert up_calls == [manager._listener_config_path()]
     assert apply_runtime_calls == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Linux listener lifecycle checks do not apply on Windows.")
+def test_cleanup_stale_runtime_removes_legacy_interfaces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wireguard_server.engine_config, "PROJECT_ROOT", tmp_path)
+    manager = WireGuardServerManager(_build_config(tmp_path))
+    manager._ip = "ip"
+
+    removed: list[str] = []
+    monkeypatch.setattr(manager, "_linux_list_wireguard_interfaces", lambda: ["borealis-wg", "borealis", "wg0"])
+    monkeypatch.setattr(manager, "_linux_delete_interface", lambda name=None: removed.append(str(name or "")))
+
+    cleanup = manager.cleanup_stale_runtime()
+
+    assert cleanup == ["borealis"]
+    assert removed == ["borealis"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Linux listener lifecycle checks do not apply on Windows.")

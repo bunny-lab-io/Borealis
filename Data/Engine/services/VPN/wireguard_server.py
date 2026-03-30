@@ -109,6 +109,20 @@ class WireGuardServerManager:
             cleaned = "borealis-wg"
         return cleaned[:15]
 
+    def _legacy_interface_names(self) -> Tuple[str, ...]:
+        raw = str(os.environ.get("BOREALIS_WIREGUARD_LEGACY_INTERFACES") or "borealis").strip().lower()
+        names: List[str] = []
+        for item in raw.split(","):
+            cleaned = re.sub(r"[^a-z0-9_.-]", "", str(item or "").strip().lower())
+            if not cleaned:
+                continue
+            cleaned = cleaned[:15]
+            if cleaned == self._interface_name:
+                continue
+            if cleaned not in names:
+                names.append(cleaned)
+        return tuple(names)
+
     def _listener_config_path(self) -> Path:
         filename = f"{self._service_name}.conf" if self._is_windows else f"{self._interface_name}.conf"
         return self._config_dir / filename
@@ -335,15 +349,42 @@ class WireGuardServerManager:
             self._interface_name,
         )
 
-    def _linux_interface_exists(self) -> bool:
+    def _linux_interface_exists(self, name: Optional[str] = None) -> bool:
+        interface_name = str(name or self._interface_name).strip()
+        if not interface_name:
+            return False
         if self._wg:
-            code, out, err = self._run_command([self._wg, "show", self._interface_name])
+            code, out, err = self._run_command([self._wg, "show", interface_name])
             if code == 0:
                 return True
         if self._ip:
-            code, out, err = self._run_command([self._ip, "link", "show", "dev", self._interface_name])
+            code, out, err = self._run_command([self._ip, "link", "show", "dev", interface_name])
             return code == 0
         return False
+
+    def _linux_list_wireguard_interfaces(self) -> List[str]:
+        if not self._ip:
+            return []
+        code, out, err = self._run_command([self._ip, "-d", "link", "show", "type", "wireguard"])
+        if code != 0:
+            return []
+        names: List[str] = []
+        for line in str(out or "").splitlines():
+            match = re.match(r"^\d+:\s+([^:@]+)(?:@[^:]+)?:", str(line or "").strip())
+            if not match:
+                continue
+            name = str(match.group(1) or "").strip()
+            if name and name not in names:
+                names.append(name)
+        return names
+
+    def _is_stale_managed_interface(self, name: str) -> bool:
+        normalized = str(name or "").strip().lower()
+        if not normalized or normalized == self._interface_name:
+            return False
+        if normalized in self._legacy_interface_names():
+            return True
+        return normalized.startswith("borealis")
 
     def _linux_bring_down(self, config_path: Path) -> None:
         if not self._wg_quick:
@@ -353,19 +394,39 @@ class WireGuardServerManager:
             detail = err or out or "unknown error"
             self.logger.warning("Failed to bring down WireGuard listener interface %s: %s", self._interface_name, detail)
 
-    def _linux_delete_interface(self) -> None:
-        if not self._ip or not self._linux_interface_exists():
+    def _linux_delete_interface(self, name: Optional[str] = None) -> None:
+        interface_name = str(name or self._interface_name).strip()
+        if not interface_name or not self._ip or not self._linux_interface_exists(interface_name):
             return
-        code, out, err = self._run_command([self._ip, "link", "delete", "dev", self._interface_name])
-        if code != 0 and self._linux_interface_exists():
+        code, out, err = self._run_command([self._ip, "link", "delete", "dev", interface_name])
+        if code != 0 and self._linux_interface_exists(interface_name):
             detail = err or out or "unknown error"
             raise RuntimeError(f"WireGuard Linux interface cleanup failed: {detail}")
-        self.logger.warning("Removed stale WireGuard Linux interface %s before retry.", self._interface_name)
+        self.logger.warning("Removed stale WireGuard Linux interface %s before retry.", interface_name)
 
     def _linux_reset_interface(self, config_path: Path) -> None:
         self._linux_bring_down(config_path)
         if self._linux_interface_exists():
             self._linux_delete_interface()
+
+    def cleanup_stale_runtime(self) -> List[str]:
+        if self._is_windows:
+            return []
+        removed: List[str] = []
+        for interface_name in self._linux_list_wireguard_interfaces():
+            if not self._is_stale_managed_interface(interface_name):
+                continue
+            try:
+                self._linux_delete_interface(interface_name)
+            except Exception:
+                self.logger.warning(
+                    "Failed to remove stale WireGuard interface %s during startup cleanup.",
+                    interface_name,
+                    exc_info=True,
+                )
+                continue
+            removed.append(interface_name)
+        return removed
 
     def _linux_apply_interface_runtime(self) -> None:
         if not self._wg:
@@ -539,6 +600,15 @@ class WireGuardServerManager:
                 "reason": "interface_down",
                 "service_state": None,
                 "peer_count": 0,
+            }
+        stale_interfaces = [name for name in self._linux_list_wireguard_interfaces() if self._is_stale_managed_interface(name)]
+        if stale_interfaces:
+            return {
+                "healthy": False,
+                "reason": "stale_interface_present",
+                "service_state": "RUNNING",
+                "peer_count": 0,
+                "stale_interfaces": ",".join(stale_interfaces),
             }
         if not self._wg:
             return {
@@ -1065,6 +1135,12 @@ class WireGuardServerManager:
             config_path = self._write_listener_config(self.render_listener_base_config())
 
             if not self._is_windows:
+                stale_interfaces = self.cleanup_stale_runtime()
+                if stale_interfaces:
+                    self.logger.warning(
+                        "Removed stale WireGuard interfaces before ensuring listener: %s",
+                        ",".join(stale_interfaces),
+                    )
                 if not self._linux_interface_exists():
                     self._linux_bring_up(config_path)
                     self._managed_peers.clear()
