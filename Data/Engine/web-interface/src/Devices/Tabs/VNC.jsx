@@ -22,6 +22,7 @@ import {
   AspectRatioRounded as DisplayIcon,
   FolderRounded as FileIcon,
   UploadRounded as UploadIcon,
+  DownloadRounded as DownloadIcon,
 } from "@mui/icons-material";
 import RFB from "@novnc/novnc/lib/rfb";
 

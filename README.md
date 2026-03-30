@@ -257,11 +257,11 @@ curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/ma
 ### Windows
 
 ```powershell
-$env:BOREALIS_SERVER_URL="https://192.168.3.252:5000"; $env:BOREALIS_ENROLLMENT_CODE="044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"; irm https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1 | iex
+$env:BOREALIS_SERVER_URL="https://borealis.bunny-lab.io"; $env:BOREALIS_ENROLLMENT_CODE="044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"; irm https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1 | iex
 ```
 
 ### Linux
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://192.168.3.252:5000" --enrollmentcode "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
+curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.sh | sudo bash -s -- --agent --serverurl "https://borealis.bunny-lab.io" --enrollmentcode "044C-30BA-A742-8D8E-20FB-771A-A94F-E6E4"
 ```

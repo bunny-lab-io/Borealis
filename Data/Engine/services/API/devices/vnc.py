@@ -168,6 +168,10 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 )
             except Exception:
                 return {"error": "tunnel_down"}, 409
+        try:
+            tunnel_service.request_agent_start(agent_id)
+        except Exception:
+            logger.debug("Failed to re-emit vpn_tunnel_start before VNC bootstrap", exc_info=True)
 
         vnc_port = int(getattr(adapters.context, "vnc_port", 5900))
 

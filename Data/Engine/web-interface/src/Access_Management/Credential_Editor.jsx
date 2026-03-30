@@ -528,7 +528,7 @@ export default function CredentialEditor({
               >
                 github.com/settings/tokens
               </Link>{" "}
-              under <Box component="span" sx={{ color: MAGIC_UI.textBright }}>Personal Access Tokens -> Tokens (Classic)</Box>.
+              under <Box component="span" sx={{ color: MAGIC_UI.textBright }}>Personal Access Tokens {"->"} Tokens (Classic)</Box>.
             </Typography>
             <Typography variant="body2" sx={{ color: MAGIC_UI.textMuted, lineHeight: 1.55, mt: 1 }}>
               <Box component="span" sx={{ fontWeight: 600, color: MAGIC_UI.textBright }}>Note:</Box>{" "}

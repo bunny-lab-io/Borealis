@@ -12,6 +12,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Keepalive: `PersistentKeepalive = 30` seconds on the agent.
 - No idle teardown while the agent service is running.
 - Agent recovery: if the Windows agent receives the same `tunnel_id` again and its WireGuard service is stopped or unhealthy, it rerenders the config and attempts an in-place service recovery instead of assuming the tunnel is still healthy.
+- Direct-access affinity: when an agent is intentionally using a direct/internal Engine URL (for example a LAN IP or internal-only hostname), the WireGuard client prefers that same host for tunnel recovery instead of forcing UDP back through the public reverse-proxy path.
 - Engine recovery: in persistent mode the Engine keeps one Linux WireGuard interface online, updates peers live one at a time during normal connect/disconnect activity, and only falls back to full peer reconciliation when the listener is unhealthy. A watchdog validates listener health every 15 seconds and rate-limits full recovery attempts to one every 30 seconds while active sessions exist.
 - Port access: the tunnel is trusted end-to-end, and Engine/Agent firewall rules allow a global port allowlist between the Engine /32 and Agent /32 (defaults to 47002 and 5900, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`).
 

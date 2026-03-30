@@ -670,11 +670,15 @@ class WireGuardClient:
             if self.session:
                 if self.session.tunnel_id == session.tunnel_id:
                     prior_service_state = self._service_state()
-                    if prior_service_state in ("RUNNING", "START_PENDING"):
+                    if prior_service_state in ("RUNNING", "START_PENDING") and _session_config_equivalent(self.session, session):
                         _write_log("WireGuard session already active; reusing existing session.")
                         self.bump_activity()
                         return
-                    recovery_reason = "same_tunnel_id_service_unhealthy"
+                    recovery_reason = (
+                        "same_tunnel_id_config_drift"
+                        if prior_service_state in ("RUNNING", "START_PENDING")
+                        else "same_tunnel_id_service_unhealthy"
+                    )
                     self._log_recovery_event(
                         "attempt",
                         reason=recovery_reason,
@@ -930,9 +934,10 @@ class LinuxWireGuardClient:
     def start_session(self, session: SessionConfig, *, signing_client: Optional[Any] = None) -> None:
         with self._session_lock:
             if self.session and self.session.tunnel_id == session.tunnel_id:
-                if self._service_state() == "RUNNING":
+                if self._service_state() == "RUNNING" and _session_config_equivalent(self.session, session):
                     _write_log("WireGuard Linux session already active; reusing existing session.")
                     return
+                _write_log("WireGuard Linux session config drift detected; refreshing existing tunnel.")
             elif self.session:
                 _write_log(
                     "WireGuard Linux session replace: existing_tunnel_id={0} new_tunnel_id={1}".format(
@@ -1093,6 +1098,62 @@ def _is_loopback_host(host: Optional[str]) -> bool:
         return False
 
 
+def _is_private_ip_host(host: Optional[str]) -> bool:
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(str(host).strip())
+    except Exception:
+        return False
+    return bool(
+        ip.is_private
+        or ip.is_link_local
+        or ip.is_loopback
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _looks_like_internal_host(host: Optional[str]) -> bool:
+    if not host:
+        return False
+    text = str(host).strip().lower().rstrip(".")
+    if not text:
+        return False
+    if _is_private_ip_host(text):
+        return True
+    if "." not in text:
+        return True
+    return text.endswith((".local", ".lan", ".internal", ".home", ".localdomain"))
+
+
+def _should_prefer_server_host(server_host: Optional[str], endpoint_host: Optional[str]) -> bool:
+    normalized_server = (server_host or "").strip().lower()
+    normalized_endpoint = (endpoint_host or "").strip().lower()
+    if not normalized_server or normalized_server == normalized_endpoint:
+        return False
+    if _is_loopback_host(normalized_endpoint):
+        return True
+    return _looks_like_internal_host(normalized_server)
+
+
+def _normalized_session_field(value: Optional[str]) -> str:
+    return str(value or "").strip()
+
+
+def _session_config_equivalent(current: Optional[SessionConfig], desired: Optional[SessionConfig]) -> bool:
+    if current is None or desired is None:
+        return False
+    return (
+        _normalized_session_field(current.tunnel_id) == _normalized_session_field(desired.tunnel_id)
+        and _normalized_session_field(current.virtual_ip) == _normalized_session_field(desired.virtual_ip)
+        and _normalized_session_field(current.allowed_ips) == _normalized_session_field(desired.allowed_ips)
+        and _normalized_session_field(current.endpoint) == _normalized_session_field(desired.endpoint)
+        and _normalized_session_field(current.server_public_key) == _normalized_session_field(desired.server_public_key)
+        and _normalized_session_field(current.allowed_ports) == _normalized_session_field(desired.allowed_ports)
+    )
+
+
 class Role:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
@@ -1138,7 +1199,7 @@ class Role:
             return endpoint
 
         endpoint_host = _parse_endpoint_host(endpoint)
-        if endpoint_host and not _is_loopback_host(endpoint_host):
+        if endpoint_host and not _should_prefer_server_host(server_host, endpoint_host):
             return endpoint
 
         endpoint_port = _parse_endpoint_port(endpoint)
@@ -1151,6 +1212,20 @@ class Role:
         if resolved and endpoint and resolved != endpoint:
             self._log(f"WireGuard endpoint override: {endpoint} -> {resolved}")
         return resolved or endpoint
+
+    def _session_config_matches_live(self, session: SessionConfig) -> bool:
+        snapshot = self._read_live_config_snapshot()
+        if not snapshot.get("active_config"):
+            return False
+        expected_virtual_ip = str(session.virtual_ip or "").strip()
+        expected_endpoint = str(session.endpoint or "").strip()
+        live_virtual_ip = str(snapshot.get("virtual_ip") or "").strip()
+        live_endpoint = str(snapshot.get("endpoint") or "").strip()
+        if expected_virtual_ip and live_virtual_ip != expected_virtual_ip:
+            return False
+        if expected_endpoint and live_endpoint != expected_endpoint:
+            return False
+        return True
 
     def _remember_tunnel_snapshot(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -1416,24 +1491,30 @@ class Role:
         while not self._ensure_stop.is_set():
             payload = self._request_persistent_session()
             if payload:
-                incoming_tunnel = str(payload.get("tunnel_id") or "")
-                current_tunnel = ""
-                if self.client.session is not None:
-                    try:
-                        current_tunnel = str(self.client.session.tunnel_id)
-                    except Exception:
-                        current_tunnel = ""
-                state = None
-                try:
-                    state = self.client._service_state()
-                except Exception:
-                    state = None
-                service_ready = state in ("RUNNING", "START_PENDING")
-                if incoming_tunnel and incoming_tunnel == current_tunnel and service_ready:
-                    self._ensure_stop.wait(ENSURE_INTERVAL_SECONDS)
-                    continue
                 session = self._build_session(payload)
                 if session:
+                    incoming_tunnel = str(session.tunnel_id or "")
+                    current_tunnel = ""
+                    if self.client.session is not None:
+                        try:
+                            current_tunnel = str(self.client.session.tunnel_id)
+                        except Exception:
+                            current_tunnel = ""
+                    state = None
+                    try:
+                        state = self.client._service_state()
+                    except Exception:
+                        state = None
+                    service_ready = state in ("RUNNING", "START_PENDING")
+                    if incoming_tunnel and incoming_tunnel == current_tunnel and service_ready:
+                        if self._session_config_matches_live(session):
+                            self._ensure_stop.wait(ENSURE_INTERVAL_SECONDS)
+                            continue
+                        self._log("WireGuard persistent ensure detected config drift; forcing live session refresh.")
+                        try:
+                            self.client.stop_session(reason="ensure_config_refresh", ignore_missing=True)
+                        except Exception as exc:
+                            self._log(f"WireGuard config refresh stop failed: {exc}", error=True)
                     self._log("WireGuard persistent session ensure received.")
                     self.client.start_session(session, signing_client=self._http_client())
             self._ensure_stop.wait(ENSURE_INTERVAL_SECONDS)
