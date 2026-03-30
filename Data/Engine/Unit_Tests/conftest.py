@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS device_keys (
     added_at TEXT,
     retired_at TEXT
 );
+CREATE TABLE IF NOT EXISTS device_vpn_ip_leases (
+    agent_id TEXT PRIMARY KEY,
+    virtual_ip TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS device_list_views (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE,

@@ -499,6 +499,27 @@ class WireGuardServerManager:
         normalized["allowed_ips"] = tuple(allowed_ips)
         return normalized
 
+    def _normalise_peer_specs(self, peers: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:
+        normalized_peers: List[Dict[str, object]] = []
+        allowed_ip_owners: Dict[str, str] = {}
+        for peer in peers:
+            normalized = self._normalise_peer_spec(peer)
+            agent_id = str(normalized["agent_id"])
+            for allowed_ip in normalized["allowed_ips"]:
+                existing_owner = allowed_ip_owners.get(str(allowed_ip))
+                if existing_owner and existing_owner != agent_id:
+                    raise ValueError(
+                        "WireGuard allowed IP {0} is already assigned to agent {1}; "
+                        "cannot also assign it to agent {2}".format(
+                            allowed_ip,
+                            existing_owner,
+                            agent_id,
+                        )
+                    )
+                allowed_ip_owners[str(allowed_ip)] = agent_id
+            normalized_peers.append(normalized)
+        return normalized_peers
+
     def _allowed_ips_text(self, peer: Mapping[str, object]) -> str:
         return ",".join(str(item).strip() for item in (peer.get("allowed_ips") or []) if str(item).strip())
 
@@ -1159,6 +1180,14 @@ class WireGuardServerManager:
     def upsert_peer(self, peer: Mapping[str, object]) -> None:
         with self._listener_lock:
             normalized = self._normalise_peer_spec(peer)
+            self._normalise_peer_specs(
+                [
+                    existing_peer
+                    for existing_agent_id, existing_peer in self._managed_peers.items()
+                    if str(existing_agent_id) != str(normalized["agent_id"])
+                ]
+                + [normalized]
+            )
             if not self._is_windows:
                 self.ensure_listener()
                 self._linux_upsert_peer(normalized)
@@ -1189,9 +1218,9 @@ class WireGuardServerManager:
 
     def reconcile_peers(self, peers: Sequence[Mapping[str, object]]) -> None:
         with self._listener_lock:
+            normalized_peers = self._normalise_peer_specs(peers)
             desired: Dict[str, Dict[str, object]] = {}
-            for peer in peers:
-                normalized = self._normalise_peer_spec(peer)
+            for normalized in normalized_peers:
                 desired[str(normalized["agent_id"])] = normalized
 
             if not self._is_windows:
@@ -1339,16 +1368,25 @@ class WireGuardServerManager:
         """Render a temporary WireGuard config and start the service."""
 
         with self._listener_lock:
+            normalized_peers = self._normalise_peer_specs(peers)
             if not self._is_windows:
-                self.reconcile_peers(peers)
+                self.reconcile_peers(normalized_peers)
                 return
 
-            config_path = self._write_listener_config(self.render_server_config(peers))
+            config_path = self._write_listener_config(self.render_server_config(normalized_peers))
             self._managed_peers = {
-                str(self._normalise_peer_spec(peer)["agent_id"]): dict(self._normalise_peer_spec(peer))
-                for peer in peers
+                str(peer["agent_id"]): dict(peer)
+                for peer in normalized_peers
             }
             self._apply_windows_listener(config_path, restart_existing=True)
+
+    def managed_peers_snapshot(self) -> Dict[str, Dict[str, object]]:
+        with self._listener_lock:
+            return {
+                str(agent_id): dict(peer)
+                for agent_id, peer in self._managed_peers.items()
+                if str(agent_id).strip()
+            }
 
     def stop_listener(self, *, ignore_missing: bool = False) -> None:
         """Stop the WireGuard tunnel service (leave installed for reuse)."""

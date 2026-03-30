@@ -7,18 +7,22 @@ from pathlib import Path
 from typing import Optional
 
 
-def find_project_root(start: Optional[Path] = None) -> Path:
+def _resolve_override_root() -> Optional[Path]:
     override = os.environ.get("BOREALIS_ROOT") or os.environ.get("BOREALIS_PROJECT_ROOT")
-    if override:
-        try:
-            override_path = Path(override).expanduser().resolve()
-            if override_path.is_dir():
-                return override_path
-        except Exception:
-            pass
+    if not override:
+        return None
+    try:
+        candidate = Path(override).expanduser().resolve()
+    except Exception:
+        return None
+    if candidate.is_dir():
+        return candidate
+    return None
 
-    current = Path(start or __file__).resolve()
-    for parent in (current.parent, *current.parents):
+
+def _discover_project_root(current: Path) -> Optional[Path]:
+    search_root = current if current.is_dir() else current.parent
+    for parent in (search_root, *search_root.parents):
         try:
             if (
                 (parent / "Borealis.ps1").is_file()
@@ -29,6 +33,30 @@ def find_project_root(start: Optional[Path] = None) -> Path:
                 return parent
         except Exception:
             continue
+    return None
+
+
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except Exception:
+        return False
+
+
+def find_project_root(start: Optional[Path] = None) -> Path:
+    current = Path(start or __file__).resolve()
+    discovered_root = _discover_project_root(current)
+    override_root = _resolve_override_root()
+
+    # Prefer the root discovered around the running file tree so stale
+    # environment overrides cannot redirect the agent back to an old checkout.
+    if discovered_root is not None:
+        if override_root is not None and _path_within(current, override_root):
+            return override_root
+        return discovered_root
+    if override_root is not None:
+        return override_root
 
     try:
         return current.parents[2]

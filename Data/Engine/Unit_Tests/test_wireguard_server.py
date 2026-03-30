@@ -105,6 +105,27 @@ def test_check_listener_health_detects_stale_managed_interfaces(tmp_path: Path, 
     assert health["stale_interfaces"] == "borealis"
 
 
+def test_start_listener_rejects_duplicate_allowed_ips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wireguard_server.engine_config, "PROJECT_ROOT", tmp_path)
+    manager = WireGuardServerManager(_build_config(tmp_path))
+
+    with pytest.raises(ValueError, match="already assigned"):
+        manager.start_listener(
+            [
+                {
+                    "agent_id": "agent-1",
+                    "allowed_ips": ["10.255.0.2/32"],
+                    "public_key": "peer-public-key-1",
+                },
+                {
+                    "agent_id": "agent-2",
+                    "allowed_ips": ["10.255.0.2/32"],
+                    "public_key": "peer-public-key-2",
+                },
+            ]
+        )
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Linux listener lifecycle checks do not apply on Windows.")
 def test_ensure_listener_bootstraps_interface_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wireguard_server.engine_config, "PROJECT_ROOT", tmp_path)

@@ -634,6 +634,10 @@ class Role:
         self.ctx = ctx
         self.server = None
         self.role_health_label = "Remote Shell Service"
+        try:
+            _write_log(f"RemoteShell role initialized logs_root={agent_logs_root(__file__)}")
+        except Exception:
+            pass
 
         shell_kind = _detect_shell_kind()
         if shell_kind == "powershell":

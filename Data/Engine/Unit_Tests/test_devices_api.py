@@ -20,7 +20,7 @@ from Data.Engine.services.API.devices import management as device_management
 from Data.Engine.services.API.devices import routes as device_routes
 from Data.Engine.services.API.devices.service_inventory import serialize_device_services
 from Data.Engine.services.API.devices import tunnel as tunnel_api
-from Data.Engine.services.VPN.vpn_tunnel_service import VpnTunnelService
+from Data.Engine.services.VPN.vpn_tunnel_service import PEER_ACTIVITY_WINDOW_SECONDS, VpnTunnelService
 
 from .conftest import EngineTestHarness
 
@@ -208,6 +208,13 @@ class _FakeWireGuardManager:
         self.cleanup_calls += 1
         return list(self.cleanup_removed)
 
+    def managed_peers_snapshot(self) -> dict[str, dict[str, Any]]:
+        return {
+            str(agent_id): dict(peer)
+            for agent_id, peer in self.current_peers.items()
+            if str(agent_id).strip()
+        }
+
     def check_listener_health(self) -> dict:
         payload = dict(self.health)
         payload.setdefault("peer_count", len(self.current_peers))
@@ -349,14 +356,23 @@ class _FakeTunnelApiService:
         self._active_payloads = active_payloads
         self.bumped_agents: list[str] = []
         self.connect_calls: list[tuple[str, Any, Any]] = []
+        self.connect_mark_activity_calls: list[bool] = []
 
     def status(self, agent_id: str) -> Any:
         if callable(self._status_payload):
             return self._status_payload(agent_id)
         return self._status_payload
 
-    def connect(self, *, agent_id: str, operator_id: Any, endpoint_host: Any) -> dict[str, Any]:
+    def connect(
+        self,
+        *,
+        agent_id: str,
+        operator_id: Any,
+        endpoint_host: Any,
+        mark_activity: bool = True,
+    ) -> dict[str, Any]:
         self.connect_calls.append((agent_id, operator_id, endpoint_host))
+        self.connect_mark_activity_calls.append(bool(mark_activity))
         return {
             "tunnel_id": "tun-1",
             "agent_id": agent_id,
@@ -782,6 +798,59 @@ def test_vpn_service_status_marks_peer_transport_recovering_when_handshake_never
     assert status["peer_health_reason"] == "no_recent_handshake"
 
 
+def test_vpn_service_passive_session_stays_idle_without_transport_probe() -> None:
+    service, wg, _socketio, _service_events = _build_vpn_service()
+    payload = service.connect(
+        agent_id="agent-1",
+        operator_id=None,
+        endpoint_host="engine.local",
+        mark_activity=False,
+    )
+    wg.peer_health_overrides[payload["client_public_key"]] = {
+        "healthy": False,
+        "reason": "no_handshake",
+        "service_state": "RUNNING",
+        "peer_present": True,
+        "last_handshake_at": None,
+        "last_handshake_at_iso": "",
+        "handshake_age_seconds": None,
+    }
+
+    status = service.status("agent-1")
+
+    assert status is not None
+    assert status["status"] == "up"
+    assert status["listener_healthy"] is True
+    assert status["recovery_in_progress"] is False
+    assert status["transport_ready"] is True
+    assert status["requires_transport"] is False
+    assert status["peer_health_reason"] == "idle"
+    assert status["last_transport_probe_at"] is None
+
+
+def test_vpn_service_passive_session_reuse_does_not_refresh_transport_probe() -> None:
+    service, _wg, _socketio, _service_events = _build_vpn_service()
+    service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    service.mark_transport_required("agent-1", reason="shell_connect")
+    with service._lock:
+        session = service._sessions_by_agent["agent-1"]
+        session.last_transport_probe_at = time.time() - (PEER_ACTIVITY_WINDOW_SECONDS + 10)
+        prior_probe_at = session.last_transport_probe_at
+    service.connect(
+        agent_id="agent-1",
+        operator_id=None,
+        endpoint_host="engine.local",
+        mark_activity=False,
+    )
+
+    status = service.status("agent-1")
+
+    assert status is not None
+    assert status["requires_transport"] is False
+    assert status["peer_health_reason"] == "idle"
+    assert status["last_transport_probe_at"] == int(prior_probe_at)
+
+
 def test_vpn_service_watchdog_recovers_when_peer_transport_is_unhealthy() -> None:
     service, wg, _socketio, service_events = _build_vpn_service()
     payload = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
@@ -881,6 +950,51 @@ def test_vpn_service_serializes_listener_refreshes() -> None:
 
     assert failures == []
     assert concurrent_wg.max_concurrent_starts == 1
+
+
+def test_vpn_service_reuses_persisted_virtual_ip_leases_across_restarts(
+    engine_harness: EngineTestHarness,
+) -> None:
+    db_factory = lambda: sqlite3.connect(str(engine_harness.db_path))
+    service, _wg, _socketio, _service_events = _build_vpn_service(db_conn_factory=db_factory)
+
+    first = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    service.disconnect("agent-1", reason="operator_stop", force=True)
+
+    restarted_service, _wg2, _socketio2, _service_events2 = _build_vpn_service(db_conn_factory=db_factory)
+    second = restarted_service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+
+    assert second["virtual_ip"] == first["virtual_ip"]
+
+
+def test_vpn_service_does_not_reassign_listener_ip_from_evicted_session() -> None:
+    service, _wg, _socketio, _service_events = _build_vpn_service()
+
+    first = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    second = service.connect(agent_id="agent-2", operator_id=None, endpoint_host="engine.local")
+
+    with service._lock:
+        removed = service._sessions_by_agent.pop("agent-1")
+        service._sessions_by_tunnel.pop(removed.tunnel_id, None)
+
+    third = service.connect(agent_id="agent-3", operator_id=None, endpoint_host="engine.local")
+
+    assert third["virtual_ip"] != first["virtual_ip"]
+    assert third["virtual_ip"] != second["virtual_ip"]
+
+
+def test_vpn_service_reuses_listener_managed_ip_for_same_agent_after_session_loss() -> None:
+    service, _wg, _socketio, _service_events = _build_vpn_service()
+
+    first = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+
+    with service._lock:
+        removed = service._sessions_by_agent.pop("agent-1")
+        service._sessions_by_tunnel.pop(removed.tunnel_id, None)
+
+    second = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+
+    assert second["virtual_ip"] == first["virtual_ip"]
 
 
 def test_vpn_service_suppresses_device_activity_history(engine_harness: EngineTestHarness) -> None:
@@ -1033,6 +1147,7 @@ def test_agent_vpn_ensure_repairs_stale_agent_binding(
     assert payload["agent_id"] == live_agent_id
     expected_host = getattr(engine_harness.context, "public_wireguard_host", None) or "localhost"
     assert fake_service.connect_calls == [(live_agent_id, None, expected_host)]
+    assert fake_service.connect_mark_activity_calls == [False]
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -1044,6 +1159,31 @@ def test_agent_vpn_ensure_repairs_stale_agent_binding(
 
     assert row is not None
     assert row[0] == live_agent_id
+
+
+def test_agent_vnc_ensure_creates_passive_tunnel_when_missing(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
+    live_agent_id = "test-device_3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9_SYSTEM"
+    _set_test_device_guid(engine_harness, valid_guid)
+    _set_test_device_agent_id(engine_harness, live_agent_id)
+
+    fake_service = _FakeTunnelApiService(status_payload=None, active_payloads=[])
+    monkeypatch.setattr(device_routes, "_get_tunnel_service", lambda _adapters: fake_service)
+
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/vnc/ensure",
+        headers=_device_headers_for_guid(valid_guid),
+        json={"agent_id": live_agent_id},
+    )
+
+    assert response.status_code == 200
+    expected_host = getattr(engine_harness.context, "public_wireguard_host", None) or "localhost"
+    assert fake_service.connect_calls == [(live_agent_id, None, expected_host)]
+    assert fake_service.connect_mark_activity_calls == [False]
 
 
 def test_tunnel_status_endpoint_returns_down_health_defaults(

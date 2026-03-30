@@ -523,24 +523,42 @@ def _user_config_default_path():
         return os.path.join(os.path.dirname(__file__), "agent_settings.json")
 
 def _find_project_root():
-    """Attempt to locate the Borealis project root (folder with Borealis.ps1 or users.json)."""
-    # Allow explicit override
-    override_root = os.environ.get("BOREALIS_ROOT") or os.environ.get("BOREALIS_PROJECT_ROOT")
-    if override_root and os.path.isdir(override_root):
-        return os.path.abspath(override_root)
-
-    cur = os.path.abspath(os.path.dirname(__file__))
+    """Locate the Borealis project root for the running agent tree."""
+    current = os.path.abspath(os.path.dirname(__file__))
+    discovered = None
+    cur = current
     for _ in range(8):
         if (
             os.path.exists(os.path.join(cur, "Borealis.ps1"))
             or os.path.exists(os.path.join(cur, "users.json"))
             or os.path.isdir(os.path.join(cur, ".git"))
         ):
-            return cur
+            discovered = cur
+            break
         parent = os.path.dirname(cur)
         if parent == cur:
             break
         cur = parent
+
+    override_root = os.environ.get("BOREALIS_ROOT") or os.environ.get("BOREALIS_PROJECT_ROOT")
+    if override_root and os.path.isdir(override_root):
+        override_abs = os.path.abspath(override_root)
+        # Only honor the override when the running agent is actually inside that
+        # tree; otherwise a stale service environment can redirect runtime paths
+        # back to an older checkout.
+        try:
+            common_path = os.path.commonpath([current, override_abs])
+        except Exception:
+            common_path = ""
+        if common_path and common_path == override_abs:
+            return override_abs
+
+    if discovered:
+        return discovered
+
+    if override_root and os.path.isdir(override_root):
+        return os.path.abspath(override_root)
+
     # Heuristic fallback: two levels up from Agent/Borealis
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 

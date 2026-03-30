@@ -1291,6 +1291,15 @@ class Role:
         self._ensure_cycle_lock = threading.Lock()
         self._ensure_thread_lock = threading.Lock()
         self._ensure_thread: Optional[threading.Thread] = None
+        try:
+            self._log(
+                "WireGuard role initialized runtime_root={0} config_path={1}".format(
+                    agent_runtime_root(__file__),
+                    self.client.conf_path,
+                )
+            )
+        except Exception:
+            pass
         self._start_ensure_thread(reason="role_init")
 
     def _log(self, message: str, *, error: bool = False) -> None:

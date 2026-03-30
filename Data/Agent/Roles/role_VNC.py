@@ -1181,6 +1181,16 @@ class Role:
         self._last_allowed_ips = _parse_allowed_ips(self._state.get("allowed_ips"))
         self._session_busy_lease = None
         self.vnc = VncManager()
+        try:
+            self._log(
+                "VNC role initialized runtime_root={0} config_dir={1} vnc_root={2}".format(
+                    agent_borealis_root(__file__).parent,
+                    _resolve_vnc_config_dir() or "-",
+                    self.vnc._vnc_root or "-",
+                )
+            )
+        except Exception:
+            pass
         if os.name == "nt":
             self.vnc.ensure_standby(reason="startup_policy")
         try:

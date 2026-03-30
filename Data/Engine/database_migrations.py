@@ -27,6 +27,7 @@ def apply_all(conn: sqlite3.Connection) -> None:
     _ensure_devices_table(conn)
     _ensure_device_aux_tables(conn)
     _ensure_device_vpn_config_table(conn)
+    _ensure_device_vpn_ip_lease_table(conn)
     _ensure_refresh_token_table(conn)
     _ensure_device_approval_table(conn)
 
@@ -126,6 +127,25 @@ def _ensure_device_vpn_config_table(conn: sqlite3.Connection) -> None:
             updated_at TEXT,
             updated_by TEXT
         )
+        """
+    )
+
+
+def _ensure_device_vpn_ip_lease_table(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_vpn_ip_leases (
+            agent_id TEXT PRIMARY KEY,
+            virtual_ip TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_device_vpn_ip_leases_virtual_ip
+            ON device_vpn_ip_leases(virtual_ip)
         """
     )
 

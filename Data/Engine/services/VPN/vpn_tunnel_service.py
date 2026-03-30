@@ -13,6 +13,7 @@ import base64
 import ipaddress
 import json
 import os
+import sqlite3
 import threading
 import time
 import uuid
@@ -69,6 +70,7 @@ PEER_HANDSHAKE_SKEW_SECONDS = _env_int(
     default=2,
     minimum=0,
 )
+VPN_IP_LEASE_TABLE = "device_vpn_ip_leases"
 
 
 @dataclass
@@ -83,6 +85,7 @@ class VpnSession:
     created_at: float
     expires_at: float
     last_activity: float
+    last_transport_probe_at: Optional[float] = None
     operator_ids: set[str] = field(default_factory=set)
     firewall_rules: List[str] = field(default_factory=list)
     activity_id: Optional[int] = None
@@ -117,6 +120,7 @@ class VpnTunnelService:
         self._listener_runtime_ready = False
         self._sessions_by_agent: Dict[str, VpnSession] = {}
         self._sessions_by_tunnel: Dict[str, VpnSession] = {}
+        self._virtual_ip_leases: Dict[str, str] = {}
         self._engine_ip = ipaddress.ip_interface(context.wireguard_engine_virtual_ip)
         self._peer_network = ipaddress.ip_network(context.wireguard_peer_network, strict=False)
         self._listener_healthy = False
@@ -126,6 +130,7 @@ class VpnTunnelService:
         self._last_recovery_attempt_at_iso = ""
         self._last_throttle_log_at: Optional[float] = None
         self._watchdog_thread: Optional[Any] = None
+        self._load_virtual_ip_leases()
         self._cleanup_listener()
         self._idle_thread: Optional[threading.Thread] = None
         if self.persistent:
@@ -160,14 +165,204 @@ class VpnTunnelService:
         if existing:
             return existing.virtual_ip
 
-        used = {s.virtual_ip for s in self._sessions_by_agent.values()}
+        reserved_by_other_agents = self._reserved_virtual_ips(agent_id)
+        preferred_candidates = [
+            self._managed_virtual_ip_for_agent(agent_id),
+            self._virtual_ip_leases.get(agent_id),
+        ]
+        seen: set[str] = set()
+        for candidate in preferred_candidates:
+            normalized = self._normalize_virtual_ip(candidate)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            owner = reserved_by_other_agents.get(normalized)
+            if owner:
+                self._service_log_event(
+                    "vpn_tunnel_virtual_ip_conflict agent_id={0} virtual_ip={1} reserved_by={2}".format(
+                        agent_id or "-",
+                        normalized,
+                        owner,
+                    ),
+                    level="WARNING",
+                )
+                continue
+            return normalized
+
         for host in self._peer_network.hosts():
             if host == self._engine_ip.ip:
                 continue
             candidate = f"{host}/32"
-            if candidate not in used:
+            if candidate not in reserved_by_other_agents:
                 return candidate
         raise RuntimeError("vpn_ip_pool_exhausted")
+
+    def _ensure_virtual_ip_lease_table(self, conn: Any) -> None:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {VPN_IP_LEASE_TABLE} (
+                agent_id TEXT PRIMARY KEY,
+                virtual_ip TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_{VPN_IP_LEASE_TABLE}_virtual_ip
+                ON {VPN_IP_LEASE_TABLE}(virtual_ip)
+            """
+        )
+
+    def _load_virtual_ip_leases(self) -> None:
+        if not callable(self.db_conn_factory):
+            return
+        conn = None
+        leases: Dict[str, str] = {}
+        try:
+            conn = self.db_conn_factory()
+            self._ensure_virtual_ip_lease_table(conn)
+            cur = conn.cursor()
+            cur.execute(f"SELECT agent_id, virtual_ip FROM {VPN_IP_LEASE_TABLE}")
+            for row in cur.fetchall():
+                try:
+                    agent_id = str((row or [None, None])[0] or "").strip()
+                    virtual_ip = self._normalize_virtual_ip((row or [None, None])[1])
+                except Exception:
+                    continue
+                if not agent_id or not virtual_ip:
+                    continue
+                leases[agent_id] = virtual_ip
+            conn.commit()
+        except Exception:
+            self.logger.debug("Failed to load persisted VPN IP leases.", exc_info=True)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        self._virtual_ip_leases = leases
+
+    def _persist_virtual_ip_lease(self, agent_id: str, virtual_ip: str) -> None:
+        normalized_agent_id = str(agent_id or "").strip()
+        normalized_virtual_ip = self._normalize_virtual_ip(virtual_ip)
+        if not normalized_agent_id or not normalized_virtual_ip:
+            return
+        if callable(self.db_conn_factory):
+            conn = None
+            try:
+                conn = self.db_conn_factory()
+                self._ensure_virtual_ip_lease_table(conn)
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    INSERT INTO {VPN_IP_LEASE_TABLE} (
+                        agent_id,
+                        virtual_ip,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(agent_id) DO UPDATE SET
+                        virtual_ip=excluded.virtual_ip,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        normalized_agent_id,
+                        normalized_virtual_ip,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                self.logger.debug(
+                    "Failed to persist VPN IP lease for agent_id=%s virtual_ip=%s",
+                    normalized_agent_id,
+                    normalized_virtual_ip,
+                    exc_info=True,
+                )
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        with self._lock:
+            self._virtual_ip_leases[normalized_agent_id] = normalized_virtual_ip
+
+    def _normalize_virtual_ip(self, value: Any) -> Optional[str]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            interface = ipaddress.ip_interface(text if "/" in text else f"{text}/32")
+        except Exception:
+            return None
+        if interface.ip == self._engine_ip.ip or interface.ip not in self._peer_network:
+            return None
+        return f"{interface.ip}/32"
+
+    def _peer_virtual_ip(self, peer: Mapping[str, object]) -> Optional[str]:
+        direct = self._normalize_virtual_ip(peer.get("virtual_ip"))
+        if direct:
+            return direct
+        for candidate in peer.get("allowed_ips") or ():
+            normalized = self._normalize_virtual_ip(candidate)
+            if normalized:
+                return normalized
+        return None
+
+    def _managed_peer_snapshot(self) -> Dict[str, Dict[str, object]]:
+        snapshotter = getattr(self.wg, "managed_peers_snapshot", None)
+        if callable(snapshotter):
+            try:
+                snapshot = snapshotter()
+                if isinstance(snapshot, Mapping):
+                    return {
+                        str(agent_id or "").strip(): dict(peer)
+                        for agent_id, peer in snapshot.items()
+                        if str(agent_id or "").strip()
+                    }
+            except Exception:
+                self.logger.debug("Failed to read managed peer snapshot from WireGuard manager.", exc_info=True)
+        peers = getattr(self.wg, "current_peers", None)
+        if isinstance(peers, Mapping):
+            return {
+                str(agent_id or "").strip(): dict(peer)
+                for agent_id, peer in peers.items()
+                if str(agent_id or "").strip()
+            }
+        return {}
+
+    def _managed_virtual_ip_for_agent(self, agent_id: str) -> Optional[str]:
+        peer = self._managed_peer_snapshot().get(str(agent_id or "").strip())
+        if not isinstance(peer, Mapping):
+            return None
+        return self._peer_virtual_ip(peer)
+
+    def _reserved_virtual_ips(self, agent_id: str) -> Dict[str, str]:
+        reserved: Dict[str, str] = {}
+        normalized_agent_id = str(agent_id or "").strip()
+        for session in self._sessions_by_agent.values():
+            if session.agent_id == normalized_agent_id:
+                continue
+            normalized = self._normalize_virtual_ip(session.virtual_ip)
+            if normalized:
+                reserved.setdefault(normalized, f"session:{session.agent_id}")
+        for leased_agent_id, leased_ip in self._virtual_ip_leases.items():
+            if leased_agent_id == normalized_agent_id:
+                continue
+            normalized = self._normalize_virtual_ip(leased_ip)
+            if normalized:
+                reserved.setdefault(normalized, f"lease:{leased_agent_id}")
+        for managed_agent_id, peer in self._managed_peer_snapshot().items():
+            if managed_agent_id == normalized_agent_id:
+                continue
+            normalized = self._peer_virtual_ip(peer)
+            if normalized:
+                reserved.setdefault(normalized, f"listener:{managed_agent_id}")
+        return reserved
 
     def _load_allowed_ports(self, agent_id: str) -> Tuple[int, ...]:
         return tuple(self.context.wireguard_port_allowlist or ())
@@ -426,9 +621,20 @@ class VpnTunnelService:
         now: Optional[float] = None,
     ) -> Mapping[str, Any]:
         current = now if now is not None else time.time()
-        last_probe_at = max(float(session.created_at or 0.0), float(session.last_activity or 0.0))
-        probe_age_seconds = max(0.0, current - last_probe_at)
-        requires_transport = probe_age_seconds <= float(PEER_ACTIVITY_WINDOW_SECONDS)
+        last_probe_at: Optional[float]
+        try:
+            last_probe_at = (
+                float(session.last_transport_probe_at)
+                if session.last_transport_probe_at not in (None, "")
+                else None
+            )
+        except Exception:
+            last_probe_at = None
+        probe_age_seconds = max(0.0, current - last_probe_at) if last_probe_at is not None else None
+        requires_transport = (
+            probe_age_seconds is not None
+            and probe_age_seconds <= float(PEER_ACTIVITY_WINDOW_SECONDS)
+        )
         try:
             peer_health = dict(self.wg.check_peer_health(session.client_public_key))
         except Exception as exc:
@@ -454,7 +660,8 @@ class VpnTunnelService:
         except Exception:
             last_handshake_at = None
         recent_handshake = (
-            last_handshake_at is not None
+            last_probe_at is not None
+            and last_handshake_at is not None
             and (last_handshake_at + float(PEER_HANDSHAKE_SKEW_SECONDS)) >= last_probe_at
         )
 
@@ -477,7 +684,7 @@ class VpnTunnelService:
         elif recent_handshake:
             transport_ready = True
             transport_reason = "recent_handshake"
-        elif probe_age_seconds < float(PEER_PROBE_GRACE_SECONDS):
+        elif (probe_age_seconds or 0.0) < float(PEER_PROBE_GRACE_SECONDS):
             transport_ready = True
             transport_reason = "probe_grace"
         elif not peer_present:
@@ -497,9 +704,9 @@ class VpnTunnelService:
             "peer_present": bool(peer_present),
             "peer_health_reason": transport_reason,
             "peer_health_source_reason": raw_reason,
-            "last_transport_probe_at": int(last_probe_at) if last_probe_at else None,
-            "last_transport_probe_at_iso": self._ts_to_iso(last_probe_at) if last_probe_at else "",
-            "probe_age_seconds": int(probe_age_seconds),
+            "last_transport_probe_at": int(last_probe_at) if last_probe_at is not None else None,
+            "last_transport_probe_at_iso": self._ts_to_iso(last_probe_at) if last_probe_at is not None else "",
+            "probe_age_seconds": int(probe_age_seconds) if probe_age_seconds is not None else None,
             "last_handshake_at": int(last_handshake_at) if last_handshake_at is not None else None,
             "last_handshake_at_iso": str(peer_health.get("last_handshake_at_iso") or ""),
             "handshake_age_seconds": peer_health.get("handshake_age_seconds"),
@@ -759,15 +966,17 @@ class VpnTunnelService:
         agent_id: str,
         operator_id: Optional[str],
         endpoint_host: Optional[str] = None,
+        mark_activity: bool = True,
     ) -> Mapping[str, Any]:
         now = time.time()
         normalized_host = self._normalize_endpoint_host(endpoint_host)
         operator_text = operator_id or "-"
         self._service_log_event(
-            "vpn_tunnel_connect_request agent_id={0} operator={1} endpoint_host={2}".format(
+            "vpn_tunnel_connect_request agent_id={0} operator={1} endpoint_host={2} mark_activity={3}".format(
                 agent_id or "-",
                 operator_text,
                 normalized_host or "-",
+                str(bool(mark_activity)).lower(),
             )
         )
         with self._lock:
@@ -777,17 +986,20 @@ class VpnTunnelService:
                     existing.operator_ids.add(operator_id)
                 if normalized_host and not existing.endpoint_host:
                     existing.endpoint_host = normalized_host
-                existing.last_activity = now
+                if mark_activity:
+                    existing.last_activity = now
+                    existing.last_transport_probe_at = now
                 previous_expiry = existing.expires_at
                 self._ensure_token(existing, now=now)
                 refreshed = existing.expires_at != previous_expiry
                 operator_list = ",".join(sorted(filter(None, existing.operator_ids))) or "-"
                 self._service_log_event(
-                    "vpn_tunnel_session_reuse agent_id={0} tunnel_id={1} operators={2} token_refreshed={3}".format(
+                    "vpn_tunnel_session_reuse agent_id={0} tunnel_id={1} operators={2} token_refreshed={3} activity_bumped={4}".format(
                         existing.agent_id,
                         existing.tunnel_id,
                         operator_list,
                         str(refreshed).lower(),
+                        str(bool(mark_activity)).lower(),
                     )
                 )
                 payload = dict(self._session_payload(existing))
@@ -818,6 +1030,7 @@ class VpnTunnelService:
                 created_at=now,
                 expires_at=now + 300,
                 last_activity=now,
+                last_transport_probe_at=now if mark_activity else None,
                 endpoint_host=normalized_host,
             )
             if operator_id:
@@ -867,6 +1080,7 @@ class VpnTunnelService:
             raise
 
         payload = self._session_payload(session)
+        self._persist_virtual_ip_lease(session.agent_id, session.virtual_ip)
         operator_text = ",".join(sorted(filter(None, session.operator_ids))) or "-"
         self._service_log_event(
             "vpn_tunnel_start agent_id={0} tunnel_id={1} virtual_ip={2} endpoint={3} allowed_ports={4} operators={5}".format(
@@ -947,8 +1161,10 @@ class VpnTunnelService:
             if not session:
                 return False
             now = time.time()
-            idle_for = max(0.0, now - float(session.last_activity or 0.0))
+            previous_probe_at = session.last_transport_probe_at
+            idle_for = max(0.0, now - float(previous_probe_at or 0.0)) if previous_probe_at else 0.0
             session.last_activity = now
+            session.last_transport_probe_at = now
         self._service_log_event(
             "vpn_transport_probe agent_id={0} tunnel_id={1} reason={2} idle_for={3}".format(
                 session.agent_id,
@@ -994,11 +1210,12 @@ class VpnTunnelService:
     def bump_activity(self, agent_id: str) -> None:
         with self._lock:
             session = self._sessions_by_agent.get(agent_id)
-        if not session:
-            return
-        now = time.time()
-        previous = session.last_activity
-        session.last_activity = now
+            if not session:
+                return
+            now = time.time()
+            previous = session.last_activity
+            session.last_activity = now
+            session.last_transport_probe_at = now
         idle_for = now - previous
         if idle_for >= 60:
             self._service_log_event(

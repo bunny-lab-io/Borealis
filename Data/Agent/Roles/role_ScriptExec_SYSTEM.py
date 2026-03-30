@@ -26,20 +26,32 @@ def _project_root():
 
 
 def _find_borealis_root() -> Optional[str]:
-    override = os.environ.get('BOREALIS_ROOT') or os.environ.get('BOREALIS_PROJECT_ROOT')
-    if override:
-        candidate = os.path.abspath(override)
-        if os.path.isfile(os.path.join(candidate, 'Borealis.ps1')):
-            return candidate
-
     cur = _project_root()
+    discovered = None
     for _ in range(8):
         if os.path.isfile(os.path.join(cur, 'Borealis.ps1')):
-            return cur
+            discovered = cur
+            break
         parent = os.path.dirname(cur)
         if parent == cur:
             break
         cur = parent
+
+    override = os.environ.get('BOREALIS_ROOT') or os.environ.get('BOREALIS_PROJECT_ROOT')
+    if override:
+        candidate = os.path.abspath(override)
+        if os.path.isfile(os.path.join(candidate, 'Borealis.ps1')):
+            try:
+                common_path = os.path.commonpath([_project_root(), candidate])
+            except Exception:
+                common_path = ''
+            if common_path and common_path == candidate:
+                return candidate
+            if discovered is None:
+                return candidate
+
+    if discovered:
+        return discovered
 
     fallback = os.path.abspath(os.path.join(_project_root(), '..'))
     if os.path.isfile(os.path.join(fallback, 'Borealis.ps1')):

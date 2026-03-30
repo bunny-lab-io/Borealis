@@ -382,6 +382,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 agent_id=resolved_agent,
                 operator_id=None,
                 endpoint_host=endpoint_host,
+                mark_activity=False,
             )
         except Exception as exc:
             log(
@@ -442,6 +443,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     agent_id=resolved_agent,
                     operator_id=None,
                     endpoint_host=_infer_endpoint_host(adapters, request),
+                    mark_activity=False,
                 )
         except Exception as exc:
             log(

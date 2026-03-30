@@ -49,3 +49,147 @@ def test_role_manager_ctx_falls_back_to_boot_agent_id_when_hook_empty() -> None:
     )
 
     assert ctx.agent_id == "LAB-AIO-01_1B60AFE7-4AA7-4AD8-B18B-23F5F98209EE_SYSTEM"
+
+
+class _Registry:
+    def __init__(self) -> None:
+        self.entries = {}
+
+    def register_role(self, role_name, *, context, reporter=None, role_label=None):
+        role_id = f"{context}:{role_name}"
+        self.entries[role_id] = {
+            "role_name": role_name,
+            "context": context,
+            "reporter": reporter,
+            "role_label": role_label,
+        }
+        return role_id
+
+    def unregister_role(self, role_name, *, context):
+        self.entries.pop(f"{context}:{role_name}", None)
+
+
+def test_role_manager_registers_init_failure_in_role_health(tmp_path) -> None:
+    RoleManager = _load_role_manager()
+    roles_dir = tmp_path / "Roles"
+    roles_dir.mkdir(parents=True, exist_ok=True)
+    (roles_dir / "role_BrokenSystem.py").write_text(
+        "\n".join(
+            [
+                "ROLE_NAME = 'BrokenSystem'",
+                "ROLE_CONTEXTS = ['system']",
+                "",
+                "class Role:",
+                "    def __init__(self, ctx):",
+                "        raise RuntimeError('boom')",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    registry = _Registry()
+    manager = RoleManager(
+        base_dir=str(tmp_path),
+        context="system",
+        sio=None,
+        agent_id="LAB-TEST-01_SYSTEM",
+        config=None,
+        loop=None,
+        hooks={"role_health_registry": registry},
+    )
+
+    manager.load()
+
+    entry = registry.entries.get("system:BrokenSystem")
+    assert entry is not None
+    payload = entry["reporter"]()
+    assert payload["status"] == "unhealthy"
+    assert payload["details"]["stage"] == "init"
+    assert payload["details"]["path"].endswith("role_BrokenSystem.py")
+
+
+def test_role_manager_registers_import_failure_for_matching_context(tmp_path) -> None:
+    RoleManager = _load_role_manager()
+    roles_dir = tmp_path / "Roles"
+    roles_dir.mkdir(parents=True, exist_ok=True)
+    (roles_dir / "role_BrokenImport.py").write_text(
+        "\n".join(
+            [
+                "ROLE_NAME = 'BrokenImport'",
+                "ROLE_CONTEXTS = ['system']",
+                "",
+                "raise RuntimeError('import boom')",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    registry = _Registry()
+    manager = RoleManager(
+        base_dir=str(tmp_path),
+        context="system",
+        sio=None,
+        agent_id="LAB-TEST-01_SYSTEM",
+        config=None,
+        loop=None,
+        hooks={"role_health_registry": registry},
+    )
+
+    manager.load()
+
+    entry = registry.entries.get("system:BrokenImport")
+    assert entry is not None
+    payload = entry["reporter"]()
+    assert payload["status"] == "unhealthy"
+    assert payload["details"]["stage"] == "import"
+
+
+def test_role_manager_adds_project_data_agent_to_import_path(tmp_path) -> None:
+    RoleManager = _load_role_manager()
+    repo_root = tmp_path / "Borealis"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "Borealis.ps1").write_text("", encoding="utf-8")
+
+    runtime_root = repo_root / "Agent" / "Borealis"
+    roles_dir = runtime_root / "Roles"
+    roles_dir.mkdir(parents=True, exist_ok=True)
+
+    source_agent_dir = repo_root / "Data" / "Agent"
+    source_agent_dir.mkdir(parents=True, exist_ok=True)
+    (source_agent_dir / "runtime_paths.py").write_text(
+        "\n".join(
+            [
+                "def marker():",
+                "    return 'runtime-paths-source'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (roles_dir / "role_RuntimePathProbe.py").write_text(
+        "\n".join(
+            [
+                "from runtime_paths import marker",
+                "",
+                "ROLE_NAME = 'RuntimePathProbe'",
+                "ROLE_CONTEXTS = ['system']",
+                "",
+                "class Role:",
+                "    def __init__(self, ctx):",
+                "        self.value = marker()",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    manager = RoleManager(
+        base_dir=str(runtime_root),
+        context="system",
+        sio=None,
+        agent_id="LAB-TEST-01_SYSTEM",
+        config=None,
+        loop=None,
+    )
+
+    manager.load()
+
+    loaded = manager.roles.get("RuntimePathProbe")
+    assert loaded is not None
+    assert loaded.value == "runtime-paths-source"

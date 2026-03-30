@@ -32,19 +32,29 @@ def _normalize_build_id(value: Any) -> str:
 
 
 def _resolve_project_root() -> Path:
+    current = Path(__file__).resolve().parent
+    discovered_root: Optional[Path] = None
+    for candidate in [current, *current.parents]:
+        if (candidate / "Borealis.ps1").is_file() or (candidate / "Borealis.sh").is_file():
+            discovered_root = candidate
+            break
+
     override = (os.environ.get("BOREALIS_ROOT") or os.environ.get("BOREALIS_PROJECT_ROOT") or "").strip()
     if override:
         candidate = Path(override).expanduser()
         try:
-            return candidate.resolve()
+            resolved_override = candidate.resolve()
         except Exception:
-            return candidate
+            resolved_override = candidate
+        try:
+            current.relative_to(resolved_override)
+            return resolved_override
+        except Exception:
+            pass
+        if discovered_root is None:
+            return resolved_override
 
-    current = Path(__file__).resolve().parent
-    for candidate in [current, *current.parents]:
-        if (candidate / "Borealis.ps1").is_file() or (candidate / "Borealis.sh").is_file():
-            return candidate
-    return current
+    return discovered_root or current
 
 
 def _settings_dir(project_root: Optional[Path] = None) -> Path:

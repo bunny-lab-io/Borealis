@@ -410,7 +410,7 @@ export default function ReverseTunnelRemoteShell({ device }) {
       }
       if (opened.error) {
         if (opened.error === "shell_connect_failed") {
-          throw new Error("Agent shell service did not accept a WireGuard connection within 30 seconds.");
+          throw new Error("Agent shell service did not accept a WireGuard connection.");
         }
         if (opened.error === "timeout") {
           throw new Error("Shell open request timed out while waiting for the agent tunnel.");
