@@ -50,6 +50,17 @@ class _ClosingSocket(_DummySocket):
         return b""
 
 
+class _StdoutSocket(_DummySocket):
+    def __init__(self, payloads: list[dict]) -> None:
+        super().__init__()
+        self._payloads = [json.dumps(payload).encode("utf-8") + b"\n" for payload in payloads]
+
+    def recv(self, _size: int) -> bytes:
+        if self._payloads:
+            return self._payloads.pop(0)
+        return b""
+
+
 class _PongSocket(_DummySocket):
     def __init__(self) -> None:
         super().__init__()
@@ -237,3 +248,34 @@ def test_shell_session_logs_warning_when_inputs_close_without_output() -> None:
     time.sleep(0.05)
 
     assert any("vpn_shell_no_output_after_input" in message for message, _level in logs)
+
+
+def test_shell_output_confirms_transport_success_with_keyword_reason() -> None:
+    tcp = _StdoutSocket(
+        [
+            {
+                "type": "stdout",
+                "data": "bnQgYXV0aG9yaXR5XFxzeXN0ZW0NCg==",
+                "message_id": "msg-1",
+                "sent_at_ms": 1000,
+                "agent_received_at_ms": 1001,
+                "agent_stdout_at_ms": 1002,
+            }
+        ]
+    )
+    tunnel_service = _DummyTunnelService()
+    logs: list[tuple[str, str | None]] = []
+    session = ShellSession(
+        sid="sid-1",
+        agent_id="agent-1",
+        socketio=_DummySocketIO(),
+        tcp=tcp,
+        service_log=lambda _path, message, level=None: logs.append((message, level)),
+        on_transport_confirmed=tunnel_service.confirm_transport_success,
+    )
+
+    session.start_reader()
+    time.sleep(0.05)
+
+    assert ("agent-1", "shell_output") in tunnel_service.confirm_calls
+    assert not any("vpn_shell_transport_confirm_failed" in message for message, _level in logs)

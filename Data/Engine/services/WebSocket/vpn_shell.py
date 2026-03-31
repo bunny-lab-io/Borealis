@@ -203,9 +203,16 @@ class ShellSession:
                             self._ready_event.set()
                         if callable(self.on_transport_confirmed):
                             try:
-                                self.on_transport_confirmed(self.agent_id, "shell_output")
-                            except Exception:
-                                pass
+                                self.on_transport_confirmed(self.agent_id, reason="shell_output")
+                            except Exception as exc:
+                                self._service_log_event(
+                                    "vpn_shell_transport_confirm_failed agent_id={0} sid={1} error={2}".format(
+                                        self.agent_id,
+                                        self.sid,
+                                        f"{type(exc).__name__}:{exc}",
+                                    ),
+                                    level="WARNING",
+                                )
                     elif msg.get("type") == "pong":
                         ping_id = str(msg.get("ping_id") or "").strip()
                         if ping_id and ping_id == self._pending_ping_id:
