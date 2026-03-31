@@ -236,11 +236,20 @@ def _read_windows_pipe_chunk(file_obj: Any, max_bytes: int = 4096) -> Optional[b
 
 
 class ShellSession:
-    def __init__(self, conn: socket.socket, address: tuple[str, int], shell_kind: str, shell_bin: str) -> None:
+    def __init__(
+        self,
+        conn: socket.socket,
+        address: tuple[str, int],
+        shell_kind: str,
+        shell_bin: str,
+        *,
+        on_closed: Optional[Any] = None,
+    ) -> None:
         self.conn = conn
         self.address = address
         self.shell_kind = shell_kind
         self.shell_bin = shell_bin
+        self.on_closed = on_closed
         self.proc: Optional[subprocess.Popen] = None
         self._stop = threading.Event()
         self._closed = threading.Event()
@@ -251,6 +260,7 @@ class ShellSession:
         self._busy_lease = None
         self._last_input_meta: dict[str, Any] = {}
         self.engine_session_id = ""
+        self._last_keepalive_log_at = 0.0
 
     def _log(self, message: str) -> None:
         session_id = str(self.engine_session_id or "").strip()
@@ -283,8 +293,14 @@ class ShellSession:
             return False
         ping_id = str(msg.get("ping_id") or "").strip()
         sent_at_ms = _coerce_int(msg.get("sent_at_ms"))
+        ping_reason = str(msg.get("reason") or "").strip().lower()
         agent_received_at_ms = _now_ms()
         agent_pong_at_ms = _now_ms()
+        pong_log_label = "Shell control pong send"
+        if ping_reason == "ready" or not ping_reason:
+            pong_log_label = "Shell ready pong send"
+        elif ping_reason == "idle_keepalive":
+            pong_log_label = "Shell keepalive pong send"
         payload_obj = {
             "type": "pong",
             "agent_received_at_ms": agent_received_at_ms,
@@ -294,20 +310,43 @@ class ShellSession:
             payload_obj["ping_id"] = ping_id
         if sent_at_ms is not None:
             payload_obj["sent_at_ms"] = sent_at_ms
-        if self._send_control_message(payload_obj, log_label="Shell readiness pong send"):
+        if self._send_control_message(payload_obj, log_label=pong_log_label):
             transit_ms = (
                 str(max(0, agent_received_at_ms - sent_at_ms))
                 if sent_at_ms is not None
                 else "-"
             )
-            self._log(
-                "Shell readiness pong sent ping_id={0} sent_at_ms={1} recv_at_ms={2} transit_ms={3}".format(
-                    ping_id or "-",
-                    sent_at_ms if sent_at_ms is not None else "-",
-                    agent_received_at_ms,
-                    transit_ms,
+            if ping_reason == "idle_keepalive":
+                now = time.monotonic()
+                if (now - self._last_keepalive_log_at) >= 30.0:
+                    self._last_keepalive_log_at = now
+                    self._log(
+                        "Shell keepalive pong sent ping_id={0} sent_at_ms={1} recv_at_ms={2} transit_ms={3}".format(
+                            ping_id or "-",
+                            sent_at_ms if sent_at_ms is not None else "-",
+                            agent_received_at_ms,
+                            transit_ms,
+                        )
+                    )
+            elif ping_reason == "ready" or not ping_reason:
+                self._log(
+                    "Shell ready pong sent ping_id={0} sent_at_ms={1} recv_at_ms={2} transit_ms={3}".format(
+                        ping_id or "-",
+                        sent_at_ms if sent_at_ms is not None else "-",
+                        agent_received_at_ms,
+                        transit_ms,
+                    )
                 )
-            )
+            else:
+                self._log(
+                    "Shell control pong sent ping_id={0} reason={1} sent_at_ms={2} recv_at_ms={3} transit_ms={4}".format(
+                        ping_id or "-",
+                        ping_reason or "-",
+                        sent_at_ms if sent_at_ms is not None else "-",
+                        agent_received_at_ms,
+                        transit_ms,
+                    )
+                )
         return True
 
     def start(self) -> None:
@@ -677,6 +716,11 @@ class ShellSession:
             except Exception:
                 pass
             self._busy_lease = None
+        if callable(self.on_closed):
+            try:
+                self.on_closed(self)
+            except Exception:
+                pass
 
 
 class ShellServer:
@@ -687,6 +731,8 @@ class ShellServer:
         self.shell_bin = shell_bin
         self._stop = threading.Event()
         self._state_lock = threading.Lock()
+        self._session_lock = threading.Lock()
+        self._current_session: Optional[ShellSession] = None
         self._listening = False
         self._last_error = ""
         self._last_checked_at = 0
@@ -698,6 +744,11 @@ class ShellServer:
             self._listening = bool(listening)
             self._last_error = str(last_error or "")
             self._last_checked_at = int(time.time())
+
+    def _on_session_closed(self, session: ShellSession) -> None:
+        with self._session_lock:
+            if self._current_session is session:
+                self._current_session = None
 
     def health_report(self) -> dict:
         with self._state_lock:
@@ -806,7 +857,26 @@ class ShellServer:
                             continue
                         _configure_tcp_socket(conn)
                         _write_log(f"Accepted shell connection from {remote_ip}")
-                        session = ShellSession(conn, addr, self.shell_kind, self.shell_bin)
+                        session = ShellSession(
+                            conn,
+                            addr,
+                            self.shell_kind,
+                            self.shell_bin,
+                            on_closed=self._on_session_closed,
+                        )
+                        prior_session = None
+                        with self._session_lock:
+                            prior_session = self._current_session
+                            self._current_session = session
+                        if prior_session is not None and prior_session is not session and not prior_session._closed.is_set():
+                            _write_log(
+                                "Closing superseded shell session prior_session_id={0} prior_remote={1}:{2}".format(
+                                    prior_session.engine_session_id or "-",
+                                    prior_session.address[0],
+                                    prior_session.address[1],
+                                )
+                            )
+                            prior_session.close()
                         threading.Thread(target=session.start, daemon=True).start()
             except Exception as exc:
                 if self._stop.is_set():
@@ -826,6 +896,15 @@ class ShellServer:
 
     def stop(self) -> None:
         self._stop.set()
+        current_session = None
+        with self._session_lock:
+            current_session = self._current_session
+            self._current_session = None
+        if current_session is not None:
+            try:
+                current_session.close()
+            except Exception:
+                pass
         self._set_state(listening=False, last_error="listener stopped")
 
 

@@ -80,6 +80,11 @@ PEER_CONFIRMED_ACTIVITY_WINDOW_SECONDS = _env_int(
     default=15,
     minimum=1,
 )
+SHELL_KEEPALIVE_LOG_INTERVAL_SECONDS = _env_int(
+    "BOREALIS_WIREGUARD_SHELL_KEEPALIVE_LOG_INTERVAL_SECONDS",
+    default=15,
+    minimum=1,
+)
 VPN_IP_LEASE_TABLE = "device_vpn_ip_leases"
 
 
@@ -111,6 +116,7 @@ class VpnSession:
     last_activity: float
     last_transport_probe_at: Optional[float] = None
     last_transport_confirmed_at: Optional[float] = None
+    last_shell_keepalive_log_at: Optional[float] = None
     operator_ids: set[str] = field(default_factory=set)
     firewall_rules: List[str] = field(default_factory=list)
     activity_id: Optional[int] = None
@@ -1234,6 +1240,8 @@ class VpnTunnelService:
         return True
 
     def confirm_transport_success(self, agent_id: str, *, reason: Optional[str] = None) -> bool:
+        reason_text = str(reason or "").strip() or "-"
+        should_log = True
         with self._lock:
             session = self._sessions_by_agent.get(agent_id)
             if not session:
@@ -1247,14 +1255,23 @@ class VpnTunnelService:
             )
             session.last_activity = now
             session.last_transport_confirmed_at = now
-        self._service_log_event(
-            "vpn_transport_confirmed agent_id={0} tunnel_id={1} reason={2} confirmed_idle_for={3}".format(
-                session.agent_id,
-                session.tunnel_id,
-                str(reason or "").strip() or "-",
-                int(confirmed_idle_for),
+            if reason_text == "shell_keepalive":
+                last_keepalive_log_at = float(session.last_shell_keepalive_log_at or 0.0)
+                if last_keepalive_log_at > 0.0 and (now - last_keepalive_log_at) < float(
+                    SHELL_KEEPALIVE_LOG_INTERVAL_SECONDS
+                ):
+                    should_log = False
+                else:
+                    session.last_shell_keepalive_log_at = now
+        if should_log:
+            self._service_log_event(
+                "vpn_transport_confirmed agent_id={0} tunnel_id={1} reason={2} confirmed_idle_for={3}".format(
+                    session.agent_id,
+                    session.tunnel_id,
+                    reason_text,
+                    int(confirmed_idle_for),
+                )
             )
-        )
         return True
 
     def recover_transport(

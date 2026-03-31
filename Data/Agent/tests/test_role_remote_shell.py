@@ -110,3 +110,48 @@ def test_control_messages_capture_engine_session_id() -> None:
     assert handled is True
     assert session.engine_session_id == "engine-session-1"
     assert sent and b'"session_id": "engine-session-1"' in sent[0]
+
+
+def test_idle_keepalive_control_messages_log_keepalive_label_and_throttle(monkeypatch) -> None:
+    sent: list[bytes] = []
+    logs: list[str] = []
+
+    class _Conn(_FakeConn):
+        def sendall(self, data: bytes) -> None:
+            sent.append(data)
+
+    session = remote_shell_role.ShellSession(
+        conn=_Conn(),
+        address=("10.255.0.1", 47002),
+        shell_kind="powershell",
+        shell_bin="powershell.exe",
+    )
+
+    monotonic_values = iter([100.0, 110.0])
+    monkeypatch.setattr(remote_shell_role, "_write_log", lambda message: logs.append(message))
+    monkeypatch.setattr(remote_shell_role.time, "monotonic", lambda: next(monotonic_values))
+
+    first = session._handle_control_message(
+        {
+            "type": "ping",
+            "ping_id": "keepalive-1",
+            "sent_at_ms": 1000,
+            "session_id": "engine-session-1",
+            "reason": "idle_keepalive",
+        }
+    )
+    second = session._handle_control_message(
+        {
+            "type": "ping",
+            "ping_id": "keepalive-2",
+            "sent_at_ms": 1001,
+            "session_id": "engine-session-1",
+            "reason": "idle_keepalive",
+        }
+    )
+
+    assert first is True
+    assert second is True
+    assert sent and b'"session_id": "engine-session-1"' in sent[0]
+    assert sum(1 for message in logs if "Shell keepalive pong sent" in message) == 1
+    assert not any("Shell readiness pong sent" in message for message in logs)

@@ -233,6 +233,38 @@ def test_open_session_enables_tcp_nodelay(monkeypatch) -> None:
     assert tunnel_service.confirm_calls == [("agent-1", "shell_connect_success")]
 
 
+def test_open_session_replaces_existing_agent_session(monkeypatch) -> None:
+    tcp_first = _PongSocket()
+    tcp_second = _PongSocket()
+    socketio = _DummySocketIO()
+    tunnel_service = _DummyTunnelService()
+    context = type(
+        "Ctx",
+        (),
+        {
+            "logger": logging.getLogger("test.vpn_shell"),
+            "wireguard_shell_port": 47002,
+            "vpn_tunnel_service": tunnel_service,
+        },
+    )()
+    bridge = VpnShellBridge(socketio, context)
+    sockets = [tcp_first, tcp_second]
+
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sockets.pop(0))
+
+    first = bridge.open_session("sid-1", "agent-1")
+    second = bridge.open_session("sid-2", "agent-1")
+
+    assert first is not None
+    assert second is not None
+    assert second is not first
+    assert tcp_first.closed is True
+    assert "sid-1" not in bridge._sessions
+    assert bridge._sessions.get("sid-2") is second
+    assert bridge._sessions_by_agent.get("agent-1") is second
+    second.close()
+
+
 def test_shell_session_logs_warning_when_inputs_close_without_output() -> None:
     tcp = _ClosingSocket()
     logs: list[tuple[str, str | None]] = []

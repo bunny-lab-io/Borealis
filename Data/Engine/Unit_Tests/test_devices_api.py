@@ -904,6 +904,22 @@ def test_vpn_service_recent_confirmed_transport_suppresses_handshake_recovery() 
     assert status["confirmed_age_seconds"] is not None
 
 
+def test_vpn_service_shell_keepalive_confirm_logging_is_throttled() -> None:
+    service, _wg, _socketio, service_events = _build_vpn_service()
+    service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+
+    assert service.confirm_transport_success("agent-1", reason="shell_keepalive") is True
+    assert service.confirm_transport_success("agent-1", reason="shell_keepalive") is True
+
+    keepalive_logs = [
+        message
+        for _name, message, _level in service_events
+        if "vpn_transport_confirmed" in message and "reason=shell_keepalive" in message
+    ]
+
+    assert len(keepalive_logs) == 1
+
+
 def test_vpn_service_recent_confirmed_transport_remains_healthy_for_active_probe_window() -> None:
     service, wg, _socketio, service_events = _build_vpn_service()
     payload = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")

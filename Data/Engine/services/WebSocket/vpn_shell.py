@@ -462,15 +462,30 @@ class VpnShellBridge:
         self.socketio = socketio
         self.context = context
         self._sessions: Dict[str, ShellSession] = {}
+        self._sessions_by_agent: Dict[str, ShellSession] = {}
         self._lock = threading.Lock()
         self.logger = context.logger.getChild("vpn_shell")
         self.service_log = service_log
 
+    def _remove_session_locked(self, session: ShellSession) -> None:
+        current_sid = self._sessions.get(session.sid)
+        if current_sid is session:
+            self._sessions.pop(session.sid, None)
+        current_agent = self._sessions_by_agent.get(session.agent_id)
+        if current_agent is session:
+            self._sessions_by_agent.pop(session.agent_id, None)
+
+    def _drop_inactive_session_locked(self, session: Optional[ShellSession]) -> Optional[ShellSession]:
+        if session is None:
+            return None
+        if session.is_active():
+            return session
+        self._remove_session_locked(session)
+        return None
+
     def _on_session_closed(self, sid: str, session: ShellSession) -> None:
         with self._lock:
-            current = self._sessions.get(sid)
-            if current is session:
-                self._sessions.pop(sid, None)
+            self._remove_session_locked(session)
 
     def _service_log_event(self, message: str, *, level: str = "INFO") -> None:
         if not callable(self.service_log):
@@ -485,8 +500,10 @@ class VpnShellBridge:
         if service is None:
             return None
         existing = None
+        existing_agent_session = None
         with self._lock:
-            existing = self._sessions.get(sid)
+            existing = self._drop_inactive_session_locked(self._sessions.get(sid))
+            existing_agent_session = self._drop_inactive_session_locked(self._sessions_by_agent.get(agent_id))
         if existing:
             if existing.agent_id == agent_id and existing.is_active():
                 self._service_log_event(
@@ -497,9 +514,7 @@ class VpnShellBridge:
                 )
                 return existing
             with self._lock:
-                current = self._sessions.get(sid)
-                if current is existing:
-                    self._sessions.pop(sid, None)
+                self._remove_session_locked(existing)
             self._service_log_event(
                 "vpn_shell_replace_session agent_id={0} sid={1}".format(
                     existing.agent_id,
@@ -508,6 +523,18 @@ class VpnShellBridge:
                 level="WARNING",
             )
             existing.close()
+        if existing_agent_session and existing_agent_session is not existing:
+            with self._lock:
+                self._remove_session_locked(existing_agent_session)
+            self._service_log_event(
+                "vpn_shell_replace_agent_session agent_id={0} prior_sid={1} sid={2}".format(
+                    agent_id,
+                    existing_agent_session.sid,
+                    sid,
+                ),
+                level="WARNING",
+            )
+            existing_agent_session.close()
         status = service.status(agent_id)
         if not status:
             try:
@@ -631,6 +658,7 @@ class VpnShellBridge:
                 pass
             with self._lock:
                 self._sessions[sid] = session
+                self._sessions_by_agent[agent_id] = session
             self._service_log_event(
                 "vpn_shell_connect_success agent_id={0} sid={1} host={2} port={3}".format(
                     agent_id,
@@ -653,9 +681,7 @@ class VpnShellBridge:
                     level="WARNING",
                 )
                 with self._lock:
-                    current = self._sessions.get(sid)
-                    if current is session:
-                        self._sessions.pop(sid, None)
+                    self._remove_session_locked(session)
                 session.close()
                 last_error = RuntimeError("shell_ready_probe_failed")
                 remaining = connect_deadline - time.monotonic()
@@ -695,9 +721,7 @@ class VpnShellBridge:
             session = self._sessions.get(sid)
         if session and not session.is_active():
             with self._lock:
-                current = self._sessions.get(sid)
-                if current is session:
-                    self._sessions.pop(sid, None)
+                self._remove_session_locked(session)
             session = None
         if not session:
             self._service_log_event(
@@ -734,7 +758,9 @@ class VpnShellBridge:
 
     def close(self, sid: str) -> None:
         with self._lock:
-            session = self._sessions.pop(sid, None)
+            session = self._sessions.get(sid)
+            if session is not None:
+                self._remove_session_locked(session)
         if not session:
             return
         self._service_log_event(
