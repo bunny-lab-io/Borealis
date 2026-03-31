@@ -45,6 +45,11 @@ class _DummySocket:
         self.closed = True
 
 
+class _ClosingSocket(_DummySocket):
+    def recv(self, _size: int) -> bytes:
+        return b""
+
+
 class _PongSocket(_DummySocket):
     def __init__(self) -> None:
         super().__init__()
@@ -148,6 +153,7 @@ def test_shell_session_send_includes_message_metadata() -> None:
     assert meta["send_failed"] is False
     payload = json.loads(tcp.sent[0].decode("utf-8").strip())
     assert payload["type"] == "stdin"
+    assert payload["session_id"] == session.session_id
     assert payload["message_id"] == meta["message_id"]
     assert payload["sent_at_ms"] == meta["sent_at_ms"]
     assert isinstance(payload["sent_at_ms"], int)
@@ -213,3 +219,21 @@ def test_open_session_enables_tcp_nodelay(monkeypatch) -> None:
     assert tcp.timeout == 15
     assert tunnel_service.start_calls == [("agent-1", False, "shell_connect_retry")]
     assert tunnel_service.confirm_calls == [("agent-1", "shell_connect_success")]
+
+
+def test_shell_session_logs_warning_when_inputs_close_without_output() -> None:
+    tcp = _ClosingSocket()
+    logs: list[tuple[str, str | None]] = []
+    session = ShellSession(
+        sid="sid-1",
+        agent_id="agent-1",
+        socketio=_DummySocketIO(),
+        tcp=tcp,
+        service_log=lambda _path, message, level=None: logs.append((message, level)),
+    )
+
+    session.send("whoami\r\n")
+    session.start_reader()
+    time.sleep(0.05)
+
+    assert any("vpn_shell_no_output_after_input" in message for message, _level in logs)

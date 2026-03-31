@@ -180,7 +180,7 @@ class ShellSession:
                                 else None
                             )
                             self._service_log_event(
-                                "vpn_shell_output_timing agent_id={0} sid={1} message_id={2} round_trip_ms={3} engine_to_agent_ms={4} agent_exec_ms={5} agent_to_engine_ms={6}".format(
+                                "vpn_shell_output_timing agent_id={0} sid={1} message_id={2} round_trip_ms={3} engine_to_agent_est_ms={4} agent_exec_ms={5} agent_to_engine_est_ms={6}".format(
                                     self.agent_id,
                                     self.sid,
                                     message_id,
@@ -247,6 +247,17 @@ class ShellSession:
                     self.input_bytes,
                 )
             )
+            if self.input_messages > 0 and self.output_lines == 0:
+                self._service_log_event(
+                    "vpn_shell_no_output_after_input agent_id={0} sid={1} session_id={2} inputs={3} input_bytes={4}".format(
+                        self.agent_id,
+                        self.sid,
+                        self.session_id,
+                        self.input_messages,
+                        self.input_bytes,
+                    ),
+                    level="WARNING",
+                )
             self.socketio.emit(
                 "vpn_shell_closed",
                 {
@@ -272,6 +283,7 @@ class ShellSession:
                 "data": _b64encode(payload_bytes),
                 "message_id": message_id,
                 "sent_at_ms": sent_at_ms,
+                "session_id": self.session_id,
             }
         )
         self.input_messages += 1
@@ -301,6 +313,7 @@ class ShellSession:
                     "type": "ping",
                     "ping_id": ping_id,
                     "sent_at_ms": sent_at_ms,
+                    "session_id": self.session_id,
                 }
             )
             self.tcp.sendall(data.encode("utf-8") + b"\n")
@@ -326,7 +339,7 @@ class ShellSession:
             return
         self._closed = True
         try:
-            data = json.dumps({"type": "close"})
+            data = json.dumps({"type": "close", "session_id": self.session_id})
             self.tcp.sendall(data.encode("utf-8") + b"\n")
         except Exception:
             pass

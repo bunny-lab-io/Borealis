@@ -158,16 +158,34 @@ class ShellSession:
         self.output_bytes = 0
         self._busy_lease = None
         self._last_input_meta: dict[str, Any] = {}
+        self.engine_session_id = ""
+
+    def _log(self, message: str) -> None:
+        session_id = str(self.engine_session_id or "").strip()
+        if session_id:
+            _write_log(f"{message} session_id={session_id}")
+            return
+        _write_log(message)
+
+    def _capture_session_id(self, msg: dict[str, Any]) -> str:
+        session_id = str(msg.get("session_id") or "").strip()
+        if session_id and not self.engine_session_id:
+            self.engine_session_id = session_id
+        return self.engine_session_id
 
     def _send_control_message(self, payload_obj: dict[str, Any], *, log_label: str) -> bool:
+        session_id = str(self.engine_session_id or "").strip()
+        if session_id and "session_id" not in payload_obj:
+            payload_obj["session_id"] = session_id
         try:
             self.conn.sendall(json.dumps(payload_obj).encode("utf-8") + b"\n")
             return True
         except Exception as exc:
-            _write_log(f"{log_label} failed: {exc}")
+            self._log(f"{log_label} failed: {exc}")
             return False
 
     def _handle_control_message(self, msg: dict[str, Any]) -> bool:
+        self._capture_session_id(msg)
         msg_type = str(msg.get("type") or "").strip().lower()
         if msg_type != "ping":
             return False
@@ -190,7 +208,7 @@ class ShellSession:
                 if sent_at_ms is not None
                 else "-"
             )
-            _write_log(
+            self._log(
                 "Shell readiness pong sent ping_id={0} sent_at_ms={1} recv_at_ms={2} transit_ms={3}".format(
                     ping_id or "-",
                     sent_at_ms if sent_at_ms is not None else "-",
@@ -202,7 +220,7 @@ class ShellSession:
 
     def start(self) -> None:
         # Spawn an interactive shell process and bridge stdin/stdout.
-        _write_log(f"Shell session starting for {self.address[0]}:{self.address[1]} type={self.shell_kind}")
+        self._log(f"Shell session starting for {self.address[0]}:{self.address[1]} type={self.shell_kind}")
         if callable(busy_activity):
             try:
                 self._busy_lease = busy_activity(
@@ -214,7 +232,7 @@ class ShellSession:
                     },
                 ).acquire()
             except Exception as exc:
-                _write_log(f"Remote shell busy lease acquisition failed: {exc}")
+                self._log(f"Remote shell busy lease acquisition failed: {exc}")
         if self.shell_kind == "powershell":
             self._start_powershell()
             return
@@ -238,6 +256,12 @@ class ShellSession:
             self._send_stdout(f"[borealis] Failed to start PowerShell: {exc}\n".encode("utf-8", errors="replace"))
             self.close()
             return
+        self._log(
+            "PowerShell subprocess started pid={0} shell={1}".format(
+                getattr(self.proc, "pid", "-"),
+                self.shell_bin,
+            )
+        )
         threading.Thread(target=self._reader_loop_powershell, daemon=True).start()
         self._writer_loop_powershell()
 
@@ -283,6 +307,9 @@ class ShellSession:
         self.output_lines += 1
         self.output_bytes += len(chunk)
         payload_obj = {"type": "stdout", "data": _b64encode(chunk), "agent_stdout_at_ms": _now_ms()}
+        session_id = str(self.engine_session_id or "").strip()
+        if session_id:
+            payload_obj["session_id"] = session_id
         message_id = str(self._last_input_meta.get("message_id") or "").strip()
         if message_id:
             payload_obj["message_id"] = message_id
@@ -296,20 +323,38 @@ class ShellSession:
         try:
             self.conn.sendall(payload.encode("utf-8") + b"\n")
         except Exception as exc:
-            _write_log(f"Shell stdout send failed: {exc}")
+            self._log(f"Shell stdout send failed: {exc}")
 
     def _reader_loop_powershell(self) -> None:
         if not self.proc or not self.proc.stdout:
             return
+        stdout_fd = None
+        try:
+            stdout_fd = self.proc.stdout.fileno()
+        except Exception:
+            stdout_fd = None
         try:
             while not self._stop.is_set():
-                chunk = self.proc.stdout.readline()
+                if stdout_fd is not None:
+                    try:
+                        # Read raw pipe bytes so prompt fragments and short command output do not
+                        # wait on newline-oriented buffering before we forward them to the engine.
+                        chunk = os.read(stdout_fd, 4096)
+                    except OSError as exc:
+                        if self.proc and self.proc.poll() is None and not self._stop.is_set():
+                            self._log(f"Shell stdout read error: {exc}")
+                        break
+                else:
+                    chunk = self.proc.stdout.read(4096)
                 if not chunk:
+                    if stdout_fd is None and self.proc and self.proc.poll() is None:
+                        time.sleep(0.05)
+                        continue
                     break
                 self._send_stdout(chunk)
-                _write_log(f"Shell stdout forwarded bytes={len(chunk)}")
+                self._log(f"Shell stdout forwarded bytes={len(chunk)}")
         except Exception as exc:
-            _write_log(f"Shell stdout error: {exc}")
+            self._log(f"Shell stdout error: {exc}")
 
     def _reader_loop_bash(self) -> None:
         if not self.proc or not self.proc.stdout:
@@ -343,9 +388,9 @@ class ShellSession:
                         break
                     continue
                 self._send_stdout(chunk)
-                _write_log(f"Shell stdout forwarded bytes={len(chunk)}")
+                self._log(f"Shell stdout forwarded bytes={len(chunk)}")
         except Exception as exc:
-            _write_log(f"Shell stdout error: {exc}")
+            self._log(f"Shell stdout error: {exc}")
 
     def _writer_loop_powershell(self) -> None:
         # Read JSONL stdin from the engine and feed it into PowerShell.
@@ -355,7 +400,7 @@ class ShellSession:
                 try:
                     data = self.conn.recv(4096)
                 except Exception as exc:
-                    _write_log(f"Shell stdin recv error: {exc}")
+                    self._log(f"Shell stdin recv error: {exc}")
                     break
                 if not data:
                     break
@@ -368,6 +413,7 @@ class ShellSession:
                         msg = json.loads(line.decode("utf-8"))
                     except Exception:
                         continue
+                    self._capture_session_id(msg)
                     if self._handle_control_message(msg):
                         continue
                     if msg.get("type") == "stdin":
@@ -382,6 +428,7 @@ class ShellSession:
                                     "message_id": message_id,
                                     "sent_at_ms": sent_at_ms,
                                     "agent_received_at_ms": agent_received_at_ms,
+                                    "session_id": self.engine_session_id,
                                 }
                                 self.proc.stdin.write(decoded)
                                 self.proc.stdin.flush()
@@ -392,7 +439,7 @@ class ShellSession:
                                     if sent_at_ms is not None
                                     else "-"
                                 )
-                                _write_log(
+                                self._log(
                                     "Shell stdin received bytes={0} message_id={1} sent_at_ms={2} recv_at_ms={3} transit_ms={4}".format(
                                         len(decoded),
                                         message_id or "-",
@@ -402,10 +449,10 @@ class ShellSession:
                                     )
                                 )
                             except Exception:
-                                _write_log("Shell stdin write failed.")
+                                self._log("Shell stdin write failed.")
                     if msg.get("type") == "close":
                         self._stop.set()
-                        _write_log("Shell close requested by engine.")
+                        self._log("Shell close requested by engine.")
                         break
         finally:
             self.close()
@@ -418,7 +465,7 @@ class ShellSession:
                 try:
                     data = self.conn.recv(4096)
                 except Exception as exc:
-                    _write_log(f"Shell stdin recv error: {exc}")
+                    self._log(f"Shell stdin recv error: {exc}")
                     break
                 if not data:
                     break
@@ -431,6 +478,7 @@ class ShellSession:
                         msg = json.loads(line.decode("utf-8"))
                     except Exception:
                         continue
+                    self._capture_session_id(msg)
                     if self._handle_control_message(msg):
                         continue
                     if msg.get("type") == "stdin":
@@ -447,6 +495,7 @@ class ShellSession:
                                 "message_id": message_id,
                                 "sent_at_ms": sent_at_ms,
                                 "agent_received_at_ms": agent_received_at_ms,
+                                "session_id": self.engine_session_id,
                             }
                             self.proc.stdin.write(normalized)
                             self.proc.stdin.flush()
@@ -457,7 +506,7 @@ class ShellSession:
                                 if sent_at_ms is not None
                                 else "-"
                             )
-                            _write_log(
+                            self._log(
                                 "Shell stdin received bytes={0} message_id={1} sent_at_ms={2} recv_at_ms={3} transit_ms={4}".format(
                                     len(normalized),
                                     message_id or "-",
@@ -467,10 +516,10 @@ class ShellSession:
                                 )
                             )
                         except Exception:
-                            _write_log("Shell stdin write failed.")
+                            self._log("Shell stdin write failed.")
                     if msg.get("type") == "close":
                         self._stop.set()
-                        _write_log("Shell close requested by engine.")
+                        self._log("Shell close requested by engine.")
                         break
         finally:
             self.close()
@@ -507,7 +556,7 @@ class ShellSession:
                     self.proc.kill()
                 except Exception:
                     pass
-        _write_log(
+        self._log(
             "Shell session closed inputs={0} input_bytes={1} output_lines={2} output_bytes={3}".format(
                 self.input_messages,
                 self.input_bytes,
@@ -515,6 +564,13 @@ class ShellSession:
                 self.output_bytes,
             )
         )
+        if self.input_messages > 0 and self.output_lines == 0:
+            self._log(
+                "Shell session closed without stdout after input inputs={0} input_bytes={1}".format(
+                    self.input_messages,
+                    self.input_bytes,
+                )
+            )
         if self._busy_lease is not None:
             try:
                 self._busy_lease.close()
