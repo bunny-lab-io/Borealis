@@ -23,6 +23,18 @@ from pathlib import Path
 from typing import Any, Optional
 
 try:
+    import ctypes
+    from ctypes import wintypes
+except Exception:
+    ctypes = None  # type: ignore[assignment]
+    wintypes = None  # type: ignore[assignment]
+
+try:
+    import msvcrt  # type: ignore
+except Exception:
+    msvcrt = None  # type: ignore[assignment]
+
+try:
     from runtime_paths import agent_logs_root
 except Exception:
     import sys
@@ -39,6 +51,8 @@ except Exception:
 
 ROLE_NAME = "RemoteShell"
 ROLE_CONTEXTS = ["system"]
+_WINDOWS_PIPE_BROKEN_ERRORS = {109, 232}
+_WINDOWS_PIPE_SUPPORT = ctypes is not None and wintypes is not None and msvcrt is not None
 
 
 def _log_path() -> Path:
@@ -141,6 +155,84 @@ def _resolve_bash_binary() -> str:
         if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     return ""
+
+
+def _get_windows_pipe_handle(file_obj: Any) -> Optional[int]:
+    if msvcrt is None or file_obj is None:
+        return None
+    try:
+        handle = msvcrt.get_osfhandle(file_obj.fileno())
+    except Exception:
+        return None
+    if handle in (-1, None):
+        return None
+    return int(handle)
+
+
+def _peek_windows_pipe_available(handle: int) -> Optional[int]:
+    if ctypes is None or wintypes is None:
+        return None
+    available = wintypes.DWORD(0)
+    try:
+        ok = ctypes.windll.kernel32.PeekNamedPipe(  # type: ignore[attr-defined]
+            wintypes.HANDLE(handle),
+            None,
+            0,
+            None,
+            ctypes.byref(available),
+            None,
+        )
+    except Exception as exc:
+        raise OSError(f"PeekNamedPipe failed: {exc}") from exc
+    if ok:
+        return int(available.value)
+    error_code = int(ctypes.get_last_error()) if hasattr(ctypes, "get_last_error") else 0
+    if error_code in _WINDOWS_PIPE_BROKEN_ERRORS:
+        return -1
+    if error_code:
+        raise OSError(error_code, "PeekNamedPipe failed")
+    raise OSError("PeekNamedPipe failed")
+
+
+def _read_windows_pipe_handle(handle: int, size: int) -> bytes:
+    if ctypes is None or wintypes is None:
+        raise OSError("Windows pipe APIs unavailable")
+    if size <= 0:
+        return b""
+    buffer = ctypes.create_string_buffer(size)
+    bytes_read = wintypes.DWORD(0)
+    try:
+        ok = ctypes.windll.kernel32.ReadFile(  # type: ignore[attr-defined]
+            wintypes.HANDLE(handle),
+            buffer,
+            size,
+            ctypes.byref(bytes_read),
+            None,
+        )
+    except Exception as exc:
+        raise OSError(f"ReadFile failed: {exc}") from exc
+    if ok:
+        return buffer.raw[: int(bytes_read.value)]
+    error_code = int(ctypes.get_last_error()) if hasattr(ctypes, "get_last_error") else 0
+    if error_code in _WINDOWS_PIPE_BROKEN_ERRORS:
+        return b""
+    if error_code:
+        raise OSError(error_code, "ReadFile failed")
+    raise OSError("ReadFile failed")
+
+
+def _read_windows_pipe_chunk(file_obj: Any, max_bytes: int = 4096) -> Optional[bytes]:
+    handle = _get_windows_pipe_handle(file_obj)
+    if handle is None:
+        return None
+    available = _peek_windows_pipe_available(handle)
+    if available is None:
+        return None
+    if available < 0:
+        return b""
+    if available == 0:
+        return None
+    return _read_windows_pipe_handle(handle, min(max_bytes, available))
 
 
 class ShellSession:
@@ -328,28 +420,36 @@ class ShellSession:
     def _reader_loop_powershell(self) -> None:
         if not self.proc or not self.proc.stdout:
             return
-        stdout_fd = None
-        try:
-            stdout_fd = self.proc.stdout.fileno()
-        except Exception:
-            stdout_fd = None
+        exit_logged = False
         try:
             while not self._stop.is_set():
-                if stdout_fd is not None:
+                if _WINDOWS_PIPE_SUPPORT:
                     try:
-                        # Read raw pipe bytes so prompt fragments and short command output do not
-                        # wait on newline-oriented buffering before we forward them to the engine.
-                        chunk = os.read(stdout_fd, 4096)
+                        # PowerShell on Windows writes to an anonymous pipe. Peek before ReadFile so
+                        # we forward short command output promptly without blocking until a large
+                        # read buffer fills or the shell exits.
+                        chunk = _read_windows_pipe_chunk(self.proc.stdout, 4096)
                     except OSError as exc:
                         if self.proc and self.proc.poll() is None and not self._stop.is_set():
                             self._log(f"Shell stdout read error: {exc}")
                         break
-                else:
-                    chunk = self.proc.stdout.read(4096)
-                if not chunk:
-                    if stdout_fd is None and self.proc and self.proc.poll() is None:
+                    if chunk is None:
+                        if self.proc and self.proc.poll() is not None:
+                            if not exit_logged:
+                                self._log(f"PowerShell subprocess exited code={self.proc.returncode}")
+                                exit_logged = True
+                            break
                         time.sleep(0.05)
                         continue
+                else:
+                    chunk = self.proc.stdout.readline()
+                if not chunk:
+                    if self.proc and self.proc.poll() is None:
+                        time.sleep(0.05)
+                        continue
+                    if self.proc and self.proc.poll() is not None and not exit_logged:
+                        self._log(f"PowerShell subprocess exited code={self.proc.returncode}")
+                        exit_logged = True
                     break
                 self._send_stdout(chunk)
                 self._log(f"Shell stdout forwarded bytes={len(chunk)}")
