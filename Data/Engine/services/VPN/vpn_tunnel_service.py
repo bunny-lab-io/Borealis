@@ -60,9 +60,14 @@ PEER_ACTIVITY_WINDOW_SECONDS = _env_int(
     default=60,
     minimum=5,
 )
+WIREGUARD_KEEPALIVE_SECONDS = _env_int(
+    "BOREALIS_WIREGUARD_KEEPALIVE_SECONDS",
+    default=30,
+    minimum=10,
+)
 PEER_PROBE_GRACE_SECONDS = _env_int(
     "BOREALIS_WIREGUARD_PEER_PROBE_GRACE_SECONDS",
-    default=5,
+    default=35,
     minimum=1,
 )
 PEER_HANDSHAKE_SKEW_SECONDS = _env_int(
@@ -80,6 +85,16 @@ VPN_IP_LEASE_TABLE = "device_vpn_ip_leases"
 
 def _effective_confirmed_transport_window_seconds() -> float:
     return float(max(PEER_CONFIRMED_ACTIVITY_WINDOW_SECONDS, PEER_ACTIVITY_WINDOW_SECONDS))
+
+
+def _effective_probe_grace_seconds() -> float:
+    return float(
+        max(
+            PEER_PROBE_GRACE_SECONDS,
+            WATCHDOG_INTERVAL_SECONDS * 2,
+            WIREGUARD_KEEPALIVE_SECONDS + PEER_HANDSHAKE_SKEW_SECONDS,
+        )
+    )
 
 
 @dataclass
@@ -714,7 +729,7 @@ class VpnTunnelService:
         elif recent_handshake:
             transport_ready = True
             transport_reason = "recent_handshake"
-        elif (probe_age_seconds or 0.0) < float(PEER_PROBE_GRACE_SECONDS):
+        elif (probe_age_seconds or 0.0) < _effective_probe_grace_seconds():
             transport_ready = True
             transport_reason = "probe_grace"
         elif not peer_present:
@@ -972,10 +987,20 @@ class VpnTunnelService:
                 if bool(session_runtime.get("transport_ready")):
                     continue
                 self._service_log_event(
-                    "vpn_transport_watchdog_recovery agent_id={0} tunnel_id={1} reason={2}".format(
+                    "vpn_transport_watchdog_recovery agent_id={0} tunnel_id={1} reason={2} probe_age={3} confirmed_age={4} handshake_age={5} probe_grace={6}".format(
                         session.agent_id,
                         session.tunnel_id,
                         session_runtime.get("peer_health_reason") or "-",
+                        session_runtime.get("probe_age_seconds")
+                        if session_runtime.get("probe_age_seconds") is not None
+                        else "-",
+                        session_runtime.get("confirmed_age_seconds")
+                        if session_runtime.get("confirmed_age_seconds") is not None
+                        else "-",
+                        session_runtime.get("handshake_age_seconds")
+                        if session_runtime.get("handshake_age_seconds") is not None
+                        else "-",
+                        int(_effective_probe_grace_seconds()),
                     ),
                     level="WARNING",
                 )

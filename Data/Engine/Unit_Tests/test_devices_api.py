@@ -23,6 +23,7 @@ from Data.Engine.services.API.devices import tunnel as tunnel_api
 from Data.Engine.services.VPN.vpn_tunnel_service import (
     PEER_ACTIVITY_WINDOW_SECONDS,
     PEER_CONFIRMED_ACTIVITY_WINDOW_SECONDS,
+    WIREGUARD_KEEPALIVE_SECONDS,
     VpnTunnelService,
 )
 
@@ -932,6 +933,39 @@ def test_vpn_service_recent_confirmed_transport_remains_healthy_for_active_probe
     assert status["status"] == "up"
     assert status["transport_ready"] is True
     assert status["peer_health_reason"] == "recent_transport_success"
+    assert wg.start_calls == start_calls
+    assert not any("vpn_transport_watchdog_recovery" in message for _name, message, _level in service_events)
+
+
+def test_vpn_service_probe_grace_respects_wireguard_keepalive_window() -> None:
+    service, wg, _socketio, service_events = _build_vpn_service()
+    payload = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    service.mark_transport_required("agent-1", reason="shell_input")
+    now = time.time()
+    with service._lock:
+        session = service._sessions_by_agent["agent-1"]
+        session.created_at = now - (PEER_ACTIVITY_WINDOW_SECONDS + 30)
+        session.last_activity = now - 1
+        session.last_transport_probe_at = now - max(6.0, float(WIREGUARD_KEEPALIVE_SECONDS) - 10.0)
+        session.last_transport_confirmed_at = now - (PEER_ACTIVITY_WINDOW_SECONDS + 10.0)
+    wg.peer_health_overrides[payload["client_public_key"]] = {
+        "healthy": False,
+        "reason": "no_handshake",
+        "service_state": "RUNNING",
+        "peer_present": True,
+        "last_handshake_at": now - max(1.0, float(WIREGUARD_KEEPALIVE_SECONDS) - 1.0),
+        "last_handshake_at_iso": "",
+        "handshake_age_seconds": int(max(1.0, float(WIREGUARD_KEEPALIVE_SECONDS) - 1.0)),
+    }
+
+    status = service.status("agent-1")
+    start_calls = wg.start_calls
+    service._watchdog_tick()
+
+    assert status is not None
+    assert status["status"] == "up"
+    assert status["transport_ready"] is True
+    assert status["peer_health_reason"] == "probe_grace"
     assert wg.start_calls == start_calls
     assert not any("vpn_transport_watchdog_recovery" in message for _name, message, _level in service_events)
 

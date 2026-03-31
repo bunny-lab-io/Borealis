@@ -15,6 +15,7 @@ import threading
 import time
 import types
 
+import Data.Engine.services.WebSocket.vpn_shell as vpn_shell_module
 from Data.Engine.services.WebSocket.vpn_shell import ShellSession, VpnShellBridge
 
 
@@ -279,3 +280,33 @@ def test_shell_output_confirms_transport_success_with_keyword_reason() -> None:
 
     assert ("agent-1", "shell_output") in tunnel_service.confirm_calls
     assert not any("vpn_shell_transport_confirm_failed" in message for message, _level in logs)
+
+
+def test_shell_session_idle_keepalive_confirms_transport_success(monkeypatch) -> None:
+    tcp = _PongSocket()
+    tunnel_service = _DummyTunnelService()
+    monkeypatch.setattr(vpn_shell_module, "_IDLE_PING_IDLE_SECONDS", 0.01)
+    monkeypatch.setattr(vpn_shell_module, "_IDLE_PING_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(vpn_shell_module, "_IDLE_PING_TIMEOUT_SECONDS", 0.1)
+    session = ShellSession(
+        sid="sid-1",
+        agent_id="agent-1",
+        socketio=_DummySocketIO(),
+        tcp=tcp,
+        on_transport_confirmed=tunnel_service.confirm_transport_success,
+    )
+
+    session.start_reader()
+    deadline = time.time() + 0.5
+    while not tunnel_service.confirm_calls and time.time() < deadline:
+        time.sleep(0.01)
+    session.close()
+
+    ping_payloads = [
+        json.loads(payload.decode("utf-8").strip())
+        for payload in tcp.sent
+        if payload and json.loads(payload.decode("utf-8").strip()).get("type") == "ping"
+    ]
+
+    assert any(call == ("agent-1", "shell_keepalive") for call in tunnel_service.confirm_calls)
+    assert any(payload.get("reason") == "idle_keepalive" for payload in ping_payloads)

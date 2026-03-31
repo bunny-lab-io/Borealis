@@ -24,6 +24,9 @@ _CONNECT_TIMEOUT_SECONDS = 1.0
 _RETRY_DELAY_SECONDS = 0.25
 _REEMIT_START_AFTER_SECONDS = (0.0, 2.0, 5.0, 10.0)
 _FORCE_RESTART_AFTER_SECONDS = 5.0
+_IDLE_PING_IDLE_SECONDS = 2.5
+_IDLE_PING_INTERVAL_SECONDS = 2.5
+_IDLE_PING_TIMEOUT_SECONDS = 5.0
 
 
 def _b64encode(data: bytes) -> str:
@@ -83,15 +86,24 @@ class ShellSession:
     _timed_output_ids: set[str] = field(default_factory=set)
     _ready_event: threading.Event = field(default_factory=threading.Event)
     _pending_ping_id: Optional[str] = None
+    _pending_idle_ping_id: Optional[str] = None
+    _pending_idle_ping_sent_at_ms: Optional[int] = None
+    _heartbeat: Optional[threading.Thread] = None
+    _last_activity_at: float = field(default_factory=time.monotonic)
+    _state_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def start_reader(self) -> None:
         starter = getattr(self.socketio, "start_background_task", None)
         if callable(starter):
             self._reader = starter(self._read_loop)
+            self._heartbeat = starter(self._heartbeat_loop)
         else:
             t = threading.Thread(target=self._read_loop, daemon=True)
             t.start()
             self._reader = t
+            hb = threading.Thread(target=self._heartbeat_loop, daemon=True)
+            hb.start()
+            self._heartbeat = hb
 
     def is_active(self) -> bool:
         if self._closed:
@@ -116,6 +128,69 @@ class ShellSession:
             self.service_log("VPN_Tunnel/remote_shell", message, level=level)
         except Exception:
             pass
+
+    def _record_activity(self) -> None:
+        with self._state_lock:
+            self._last_activity_at = time.monotonic()
+
+    def _send_ping(self, *, ping_id: str, sent_at_ms: int, reason: str) -> bool:
+        try:
+            data = json.dumps(
+                {
+                    "type": "ping",
+                    "ping_id": ping_id,
+                    "sent_at_ms": sent_at_ms,
+                    "session_id": self.session_id,
+                    "reason": reason,
+                }
+            )
+            self.tcp.sendall(data.encode("utf-8") + b"\n")
+            return True
+        except Exception:
+            return False
+
+    def _heartbeat_loop(self) -> None:
+        while True:
+            if not self.is_active():
+                return
+            with self._state_lock:
+                idle_for = time.monotonic() - self._last_activity_at
+                pending_ready = bool(self._pending_ping_id)
+                pending_idle_ping_id = self._pending_idle_ping_id
+                pending_idle_sent_at_ms = self._pending_idle_ping_sent_at_ms
+            if pending_ready:
+                _cooperative_sleep(0.25)
+                continue
+            if pending_idle_ping_id:
+                if (
+                    pending_idle_sent_at_ms is not None
+                    and (_now_ms() - pending_idle_sent_at_ms) >= int(_IDLE_PING_TIMEOUT_SECONDS * 1000)
+                ):
+                    self._service_log_event(
+                        "vpn_shell_keepalive_timeout agent_id={0} sid={1} ping_id={2} timeout_ms={3}".format(
+                            self.agent_id,
+                            self.sid,
+                            pending_idle_ping_id,
+                            int(_IDLE_PING_TIMEOUT_SECONDS * 1000),
+                        ),
+                        level="WARNING",
+                    )
+                    with self._state_lock:
+                        if self._pending_idle_ping_id == pending_idle_ping_id:
+                            self._pending_idle_ping_id = None
+                            self._pending_idle_ping_sent_at_ms = None
+                _cooperative_sleep(0.25)
+                continue
+            if idle_for < _IDLE_PING_IDLE_SECONDS:
+                _cooperative_sleep(min(0.5, max(0.1, _IDLE_PING_IDLE_SECONDS - idle_for)))
+                continue
+            ping_id = uuid.uuid4().hex
+            sent_at_ms = _now_ms()
+            if self._send_ping(ping_id=ping_id, sent_at_ms=sent_at_ms, reason="idle_keepalive"):
+                with self._state_lock:
+                    self._pending_idle_ping_id = ping_id
+                    self._pending_idle_ping_sent_at_ms = sent_at_ms
+            _cooperative_sleep(_IDLE_PING_INTERVAL_SECONDS)
 
     def _read_loop(self) -> None:
         buffer = b""
@@ -157,6 +232,7 @@ class ShellSession:
                         engine_received_at_ms = _now_ms()
                         self.output_lines += 1
                         self.output_bytes += len(line)
+                        self._record_activity()
                         if message_id and message_id not in self._timed_output_ids:
                             self._timed_output_ids.add(message_id)
                             engine_to_agent_ms = (
@@ -216,6 +292,7 @@ class ShellSession:
                     elif msg.get("type") == "pong":
                         ping_id = str(msg.get("ping_id") or "").strip()
                         if ping_id and ping_id == self._pending_ping_id:
+                            self._record_activity()
                             self._service_log_event(
                                 "vpn_shell_ready_pong agent_id={0} sid={1} ping_id={2}".format(
                                     self.agent_id,
@@ -224,6 +301,38 @@ class ShellSession:
                                 )
                             )
                             self._ready_event.set()
+                        elif ping_id and ping_id == self._pending_idle_ping_id:
+                            round_trip_ms = None
+                            sent_at_ms = _coerce_int(msg.get("sent_at_ms"))
+                            if sent_at_ms is not None:
+                                round_trip_ms = max(0, _now_ms() - sent_at_ms)
+                            with self._state_lock:
+                                if self._pending_idle_ping_id == ping_id:
+                                    self._pending_idle_ping_id = None
+                                    self._pending_idle_ping_sent_at_ms = None
+                            self._record_activity()
+                            if round_trip_ms is not None and round_trip_ms >= 500:
+                                self._service_log_event(
+                                    "vpn_shell_keepalive_slow agent_id={0} sid={1} ping_id={2} round_trip_ms={3}".format(
+                                        self.agent_id,
+                                        self.sid,
+                                        ping_id,
+                                        round_trip_ms,
+                                    ),
+                                    level="WARNING",
+                                )
+                            if callable(self.on_transport_confirmed):
+                                try:
+                                    self.on_transport_confirmed(self.agent_id, reason="shell_keepalive")
+                                except Exception as exc:
+                                    self._service_log_event(
+                                        "vpn_shell_transport_confirm_failed agent_id={0} sid={1} error={2}".format(
+                                            self.agent_id,
+                                            self.sid,
+                                            f"{type(exc).__name__}:{exc}",
+                                        ),
+                                        level="WARNING",
+                                    )
         finally:
             self._closed = True
             self._ready_event.set()
@@ -284,6 +393,7 @@ class ShellSession:
         self._message_sequence += 1
         message_id = f"{self.session_id}-{self._message_sequence}"
         sent_at_ms = _now_ms()
+        self._record_activity()
         data = json.dumps(
             {
                 "type": "stdin",
@@ -314,17 +424,7 @@ class ShellSession:
         self._pending_ping_id = ping_id
         self._ready_event.clear()
         sent_at_ms = _now_ms()
-        try:
-            data = json.dumps(
-                {
-                    "type": "ping",
-                    "ping_id": ping_id,
-                    "sent_at_ms": sent_at_ms,
-                    "session_id": self.session_id,
-                }
-            )
-            self.tcp.sendall(data.encode("utf-8") + b"\n")
-        except Exception:
+        if not self._send_ping(ping_id=ping_id, sent_at_ms=sent_at_ms, reason="ready"):
             self._pending_ping_id = None
             return False
         deadline = time.monotonic() + max(0.05, float(timeout or 0.0))
