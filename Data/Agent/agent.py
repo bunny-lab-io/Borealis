@@ -2409,7 +2409,12 @@ def get_server_url() -> str:
 # CORE SECTION: ASYNC TASK / WEBSOCKET
 # //////////////////////////////////////////////////////////////////////////
 
-sio = socketio.AsyncClient(reconnection=True, reconnection_attempts=0, reconnection_delay=5)
+_SOCKETIO_RETRY_SECONDS = 5
+_SOCKETIO_RECONNECT_PAUSE_SECONDS = 1
+
+# We supervise reconnects ourselves so every reconnect attempt re-authenticates,
+# refreshes TLS/socket transport settings, and re-emits `connect_agent`.
+sio = socketio.AsyncClient(reconnection=False)
 role_tasks = {}
 background_tasks = []
 AGENT_LOOP = None
@@ -3392,10 +3397,13 @@ if not SYSTEM_SERVICE_MODE:
 # MAIN & EVENT LOOP
 # //////////////////////////////////////////////////////////////////////////
 async def connect_loop():
-    retry = 5
+    retry = _SOCKETIO_RETRY_SECONDS
     client = http_client()
     attempt = 0
     while True:
+        if getattr(sio, "connected", False):
+            await asyncio.sleep(_SOCKETIO_RECONNECT_PAUSE_SECONDS)
+            continue
         attempt += 1
         try:
             _log_agent(
@@ -3445,7 +3453,15 @@ async def connect_loop():
                 f'connect_loop attempt={attempt} sio.connect completed successfully',
                 fname='agent.log',
             )
-            break
+            attempt = 0
+            try:
+                await sio.wait()
+            finally:
+                _log_agent(
+                    'connect_loop observed websocket session end; re-authenticating before reconnect.',
+                    fname='agent.log',
+                )
+            await asyncio.sleep(_SOCKETIO_RECONNECT_PAUSE_SECONDS)
         except Exception as e:
             detail = _describe_exception(e)
             try:
