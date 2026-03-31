@@ -23,6 +23,7 @@ _CONNECT_WAIT_WINDOW_SECONDS = 20.0
 _CONNECT_TIMEOUT_SECONDS = 1.0
 _RETRY_DELAY_SECONDS = 0.25
 _REEMIT_START_AFTER_SECONDS = (0.0, 2.0, 5.0, 10.0)
+_FORCE_RESTART_AFTER_SECONDS = 5.0
 
 
 def _b64encode(data: bytes) -> str:
@@ -66,10 +67,13 @@ class ShellSession:
     input_bytes: int = 0
     _reader: Optional[threading.Thread] = None
     on_closed: Optional[Callable[[str, "ShellSession"], None]] = None
+    on_transport_confirmed: Optional[Callable[[str, str], None]] = None
     _closed: bool = False
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     _message_sequence: int = 0
     _timed_output_ids: set[str] = field(default_factory=set)
+    _ready_event: threading.Event = field(default_factory=threading.Event)
+    _pending_ping_id: Optional[str] = None
 
     def start_reader(self) -> None:
         starter = getattr(self.socketio, "start_background_task", None)
@@ -186,8 +190,20 @@ class ShellSession:
                             },
                             to=self.sid,
                         )
+                        if self._pending_ping_id:
+                            self._ready_event.set()
+                        if callable(self.on_transport_confirmed):
+                            try:
+                                self.on_transport_confirmed(self.agent_id, "shell_output")
+                            except Exception:
+                                pass
+                    elif msg.get("type") == "pong":
+                        ping_id = str(msg.get("ping_id") or "").strip()
+                        if ping_id and ping_id == self._pending_ping_id:
+                            self._ready_event.set()
         finally:
             self._closed = True
+            self._ready_event.set()
             if reason == "read_error":
                 self._service_log_event(
                     "vpn_shell_read_error agent_id={0} sid={1} reason={2} error={3}".format(
@@ -257,6 +273,27 @@ class ShellSession:
             )
             return {"message_id": message_id, "sent_at_ms": sent_at_ms, "send_failed": True}
         return {"message_id": message_id, "sent_at_ms": sent_at_ms, "send_failed": False}
+
+    def wait_for_ready(self, timeout: float = 1.5) -> bool:
+        ping_id = uuid.uuid4().hex
+        self._pending_ping_id = ping_id
+        self._ready_event.clear()
+        sent_at_ms = _now_ms()
+        try:
+            data = json.dumps(
+                {
+                    "type": "ping",
+                    "ping_id": ping_id,
+                    "sent_at_ms": sent_at_ms,
+                }
+            )
+            self.tcp.sendall(data.encode("utf-8") + b"\n")
+        except Exception:
+            self._pending_ping_id = None
+            return False
+        ready = self._ready_event.wait(timeout)
+        self._pending_ping_id = None
+        return bool(ready and self.is_active())
 
     def close(self) -> None:
         if self._closed:
@@ -353,30 +390,33 @@ class VpnShellBridge:
                 trigger_after = _REEMIT_START_AFTER_SECONDS[reemit_index]
                 if elapsed + 0.001 < trigger_after:
                     break
+                force_restart = trigger_after >= _FORCE_RESTART_AFTER_SECONDS
                 try:
                     service.request_agent_start(
                         agent_id,
-                        force_restart=True,
+                        force_restart=force_restart,
                         reason="shell_connect_retry",
                     )
                     self._service_log_event(
-                        "vpn_shell_agent_start_emit agent_id={0} sid={1} trigger_elapsed={2}".format(
+                        "vpn_shell_agent_start_emit agent_id={0} sid={1} trigger_elapsed={2} force_restart={3}".format(
                             agent_id,
                             sid,
                             int(math.floor(trigger_after)),
+                            str(bool(force_restart)).lower(),
                         )
                     )
                 except Exception:
                     self.logger.debug("Failed to re-emit vpn_tunnel_start for agent=%s", agent_id, exc_info=True)
                     self._service_log_event(
-                        "vpn_shell_agent_start_failed agent_id={0} sid={1} trigger_elapsed={2}".format(
+                        "vpn_shell_agent_start_failed agent_id={0} sid={1} trigger_elapsed={2} force_restart={3}".format(
                             agent_id,
                             sid,
                             int(math.floor(trigger_after)),
+                            str(bool(force_restart)).lower(),
                         ),
                         level="WARNING",
                     )
-                if trigger_after >= 5.0:
+                if force_restart:
                     try:
                         service.recover_transport(
                             agent_id,
@@ -421,52 +461,88 @@ class VpnShellBridge:
                 timeout = min(_CONNECT_TIMEOUT_SECONDS, max(0.5, remaining))
                 tcp = socket.create_connection((host, port), timeout=timeout)
                 _configure_tcp_socket(tcp)
-                break
             except Exception as exc:
                 last_error = exc
                 remaining = connect_deadline - time.monotonic()
                 if remaining > 0:
                     time.sleep(min(_RETRY_DELAY_SECONDS, remaining))
-        if tcp is None:
-            elapsed_seconds = int(math.ceil(max(0.0, time.monotonic() - connect_started_at)))
+                continue
+
+            session = ShellSession(
+                sid=sid,
+                agent_id=agent_id,
+                socketio=self.socketio,
+                tcp=tcp,
+                service_log=self.service_log,
+                on_closed=self._on_session_closed,
+                on_transport_confirmed=(
+                    getattr(service, "confirm_transport_success", None) if service is not None else None
+                ),
+            )
+            try:
+                session.tcp.settimeout(15)
+            except Exception:
+                pass
+            with self._lock:
+                self._sessions[sid] = session
             self._service_log_event(
-                "vpn_shell_connect_failed agent_id={0} sid={1} host={2} port={3} attempts={4} waited_seconds={5} error={6}".format(
+                "vpn_shell_connect_success agent_id={0} sid={1} host={2} port={3}".format(
                     agent_id,
                     sid,
                     host,
                     port,
-                    attempts,
-                    elapsed_seconds,
-                    str(last_error) if last_error else "-",
-                ),
-                level="WARNING",
+                )
             )
-            self.logger.warning("Failed to connect vpn shell to %s:%s", host, port, exc_info=last_error)
-            return None
-        session = ShellSession(
-            sid=sid,
-            agent_id=agent_id,
-            socketio=self.socketio,
-            tcp=tcp,
-            service_log=self.service_log,
-            on_closed=self._on_session_closed,
-        )
-        try:
-            session.tcp.settimeout(15)
-        except Exception:
-            pass
-        with self._lock:
-            self._sessions[sid] = session
+            session.start_reader()
+            ready_timeout = min(2.0, max(0.5, connect_deadline - time.monotonic()))
+            if not session.wait_for_ready(timeout=ready_timeout):
+                self._service_log_event(
+                    "vpn_shell_ready_probe_failed agent_id={0} sid={1} host={2} port={3} attempt={4}".format(
+                        agent_id,
+                        sid,
+                        host,
+                        port,
+                        attempts,
+                    ),
+                    level="WARNING",
+                )
+                with self._lock:
+                    current = self._sessions.get(sid)
+                    if current is session:
+                        self._sessions.pop(sid, None)
+                session.close()
+                last_error = RuntimeError("shell_ready_probe_failed")
+                remaining = connect_deadline - time.monotonic()
+                if remaining > 0:
+                    time.sleep(min(_RETRY_DELAY_SECONDS, remaining))
+                tcp = None
+                continue
+            if service is not None:
+                try:
+                    service.confirm_transport_success(agent_id, reason="shell_connect_success")
+                except Exception:
+                    self.logger.debug(
+                        "Failed to confirm shell transport success for agent=%s",
+                        agent_id,
+                        exc_info=True,
+                    )
+            return session
+
+        elapsed_seconds = int(math.ceil(max(0.0, time.monotonic() - connect_started_at)))
         self._service_log_event(
-            "vpn_shell_connect_success agent_id={0} sid={1} host={2} port={3}".format(
+            "vpn_shell_connect_failed agent_id={0} sid={1} host={2} port={3} attempts={4} waited_seconds={5} error={6}".format(
                 agent_id,
                 sid,
                 host,
                 port,
-            )
+                attempts,
+                elapsed_seconds,
+                str(last_error) if last_error else "-",
+            ),
+            level="WARNING",
         )
-        session.start_reader()
-        return session
+        self.logger.warning("Failed to connect vpn shell to %s:%s", host, port, exc_info=last_error)
+        return None
 
     def send(self, sid: str, payload: str) -> None:
         with self._lock:
@@ -500,6 +576,14 @@ class VpnShellBridge:
         )
         service = getattr(self.context, "vpn_tunnel_service", None)
         if service:
+            try:
+                service.mark_transport_required(session.agent_id, reason="shell_input")
+            except Exception:
+                self.logger.debug(
+                    "Failed to mark shell transport activity from stdin for agent=%s",
+                    session.agent_id,
+                    exc_info=True,
+                )
             service.bump_activity(session.agent_id)
 
     def close(self, sid: str) -> None:

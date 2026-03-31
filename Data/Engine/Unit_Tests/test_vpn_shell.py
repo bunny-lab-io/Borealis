@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import threading
+import time
 
 from Data.Engine.services.WebSocket.vpn_shell import ShellSession, VpnShellBridge
 
@@ -19,9 +21,14 @@ class _DummySocket:
         self.sent: list[bytes] = []
         self.sockopts: list[tuple[int, int, int]] = []
         self.timeout = None
+        self.closed = False
 
     def sendall(self, data: bytes) -> None:
         self.sent.append(data)
+
+    def recv(self, _size: int) -> bytes:
+        time.sleep(0.01)
+        raise socket.timeout()
 
     def setsockopt(self, level: int, option: int, value: int) -> None:
         self.sockopts.append((level, option, value))
@@ -30,10 +37,44 @@ class _DummySocket:
         self.timeout = value
 
     def fileno(self) -> int:
-        return 1
+        return -1 if self.closed else 1
 
     def close(self) -> None:
-        return
+        self.closed = True
+
+
+class _PongSocket(_DummySocket):
+    def __init__(self) -> None:
+        super().__init__()
+        self._recv_queue: list[bytes] = []
+        self._recv_lock = threading.Lock()
+
+    def sendall(self, data: bytes) -> None:
+        super().sendall(data)
+        try:
+            payload = json.loads(data.decode("utf-8").strip())
+        except Exception:
+            return
+        if payload.get("type") != "ping":
+            return
+        pong = {
+            "type": "pong",
+            "ping_id": payload.get("ping_id"),
+            "sent_at_ms": payload.get("sent_at_ms"),
+            "agent_received_at_ms": payload.get("sent_at_ms"),
+            "agent_pong_at_ms": payload.get("sent_at_ms"),
+        }
+        with self._recv_lock:
+            self._recv_queue.append(json.dumps(pong).encode("utf-8") + b"\n")
+
+    def recv(self, _size: int) -> bytes:
+        deadline = time.time() + 0.5
+        while time.time() < deadline:
+            with self._recv_lock:
+                if self._recv_queue:
+                    return self._recv_queue.pop(0)
+            time.sleep(0.01)
+        raise socket.timeout()
 
 
 class _DummySocketIO:
@@ -44,18 +85,34 @@ class _DummySocketIO:
         self.emits.append((args, kwargs))
 
     def start_background_task(self, _target, *_args, **_kwargs):
-        return None
+        thread = threading.Thread(target=_target, args=_args, kwargs=_kwargs, daemon=True)
+        thread.start()
+        return thread
 
 
 class _DummyTunnelService:
+    def __init__(self) -> None:
+        self.start_calls: list[tuple[str, bool, str]] = []
+        self.confirm_calls: list[tuple[str, str]] = []
+
     def status(self, _agent_id: str):
         return {"virtual_ip": "10.255.0.20/32"}
 
-    def request_agent_start(self, *_args, **_kwargs):
+    def request_agent_start(
+        self,
+        agent_id: str,
+        *,
+        force_restart: bool = False,
+        reason: str | None = None,
+    ):
+        self.start_calls.append((agent_id, bool(force_restart), str(reason or "")))
         return {"status": "ok"}
 
     def bump_activity(self, _agent_id: str) -> None:
         return
+
+    def confirm_transport_success(self, agent_id: str, *, reason: str | None = None) -> None:
+        self.confirm_calls.append((agent_id, str(reason or "")))
 
 
 def test_shell_session_send_includes_message_metadata() -> None:
@@ -77,16 +134,34 @@ def test_shell_session_send_includes_message_metadata() -> None:
     assert isinstance(payload["sent_at_ms"], int)
 
 
+def test_shell_session_wait_for_ready_sends_ping_and_accepts_pong() -> None:
+    tcp = _PongSocket()
+    session = ShellSession(
+        sid="sid-1",
+        agent_id="agent-1",
+        socketio=_DummySocketIO(),
+        tcp=tcp,
+    )
+
+    session.start_reader()
+
+    assert session.wait_for_ready(timeout=1.0) is True
+    payload = json.loads(tcp.sent[0].decode("utf-8").strip())
+    assert payload["type"] == "ping"
+    assert payload["ping_id"]
+
+
 def test_open_session_enables_tcp_nodelay(monkeypatch) -> None:
-    tcp = _DummySocket()
+    tcp = _PongSocket()
     socketio = _DummySocketIO()
+    tunnel_service = _DummyTunnelService()
     context = type(
         "Ctx",
         (),
         {
             "logger": logging.getLogger("test.vpn_shell"),
             "wireguard_shell_port": 47002,
-            "vpn_tunnel_service": _DummyTunnelService(),
+            "vpn_tunnel_service": tunnel_service,
         },
     )()
     bridge = VpnShellBridge(socketio, context)
@@ -98,3 +173,5 @@ def test_open_session_enables_tcp_nodelay(monkeypatch) -> None:
     assert session is not None
     assert (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1) in tcp.sockopts
     assert tcp.timeout == 15
+    assert tunnel_service.start_calls == [("agent-1", False, "shell_connect_retry")]
+    assert tunnel_service.confirm_calls == [("agent-1", "shell_connect_success")]

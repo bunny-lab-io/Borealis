@@ -70,6 +70,11 @@ PEER_HANDSHAKE_SKEW_SECONDS = _env_int(
     default=2,
     minimum=0,
 )
+PEER_CONFIRMED_ACTIVITY_WINDOW_SECONDS = _env_int(
+    "BOREALIS_WIREGUARD_CONFIRMED_ACTIVITY_WINDOW_SECONDS",
+    default=15,
+    minimum=1,
+)
 VPN_IP_LEASE_TABLE = "device_vpn_ip_leases"
 
 
@@ -86,6 +91,7 @@ class VpnSession:
     expires_at: float
     last_activity: float
     last_transport_probe_at: Optional[float] = None
+    last_transport_confirmed_at: Optional[float] = None
     operator_ids: set[str] = field(default_factory=set)
     firewall_rules: List[str] = field(default_factory=list)
     activity_id: Optional[int] = None
@@ -635,6 +641,20 @@ class VpnTunnelService:
             probe_age_seconds is not None
             and probe_age_seconds <= float(PEER_ACTIVITY_WINDOW_SECONDS)
         )
+        last_confirmed_at: Optional[float]
+        try:
+            last_confirmed_at = (
+                float(session.last_transport_confirmed_at)
+                if session.last_transport_confirmed_at not in (None, "")
+                else None
+            )
+        except Exception:
+            last_confirmed_at = None
+        confirmed_age_seconds = (
+            max(0.0, current - last_confirmed_at)
+            if last_confirmed_at is not None
+            else None
+        )
         try:
             peer_health = dict(self.wg.check_peer_health(session.client_public_key))
         except Exception as exc:
@@ -681,6 +701,12 @@ class VpnTunnelService:
         elif not requires_transport:
             transport_ready = True
             transport_reason = "idle"
+        elif (
+            confirmed_age_seconds is not None
+            and confirmed_age_seconds <= float(PEER_CONFIRMED_ACTIVITY_WINDOW_SECONDS)
+        ):
+            transport_ready = True
+            transport_reason = "recent_transport_success"
         elif recent_handshake:
             transport_ready = True
             transport_reason = "recent_handshake"
@@ -707,6 +733,9 @@ class VpnTunnelService:
             "last_transport_probe_at": int(last_probe_at) if last_probe_at is not None else None,
             "last_transport_probe_at_iso": self._ts_to_iso(last_probe_at) if last_probe_at is not None else "",
             "probe_age_seconds": int(probe_age_seconds) if probe_age_seconds is not None else None,
+            "last_transport_confirmed_at": int(last_confirmed_at) if last_confirmed_at is not None else None,
+            "last_transport_confirmed_at_iso": self._ts_to_iso(last_confirmed_at) if last_confirmed_at is not None else "",
+            "confirmed_age_seconds": int(confirmed_age_seconds) if confirmed_age_seconds is not None else None,
             "last_handshake_at": int(last_handshake_at) if last_handshake_at is not None else None,
             "last_handshake_at_iso": str(peer_health.get("last_handshake_at_iso") or ""),
             "handshake_age_seconds": peer_health.get("handshake_age_seconds"),
@@ -1171,6 +1200,30 @@ class VpnTunnelService:
                 session.tunnel_id,
                 str(reason or "").strip() or "-",
                 int(idle_for),
+            )
+        )
+        return True
+
+    def confirm_transport_success(self, agent_id: str, *, reason: Optional[str] = None) -> bool:
+        with self._lock:
+            session = self._sessions_by_agent.get(agent_id)
+            if not session:
+                return False
+            now = time.time()
+            previous_confirmed_at = session.last_transport_confirmed_at
+            confirmed_idle_for = (
+                max(0.0, now - float(previous_confirmed_at or 0.0))
+                if previous_confirmed_at
+                else 0.0
+            )
+            session.last_activity = now
+            session.last_transport_confirmed_at = now
+        self._service_log_event(
+            "vpn_transport_confirmed agent_id={0} tunnel_id={1} reason={2} confirmed_idle_for={3}".format(
+                session.agent_id,
+                session.tunnel_id,
+                str(reason or "").strip() or "-",
+                int(confirmed_idle_for),
             )
         )
         return True

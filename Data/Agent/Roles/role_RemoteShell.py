@@ -159,6 +159,47 @@ class ShellSession:
         self._busy_lease = None
         self._last_input_meta: dict[str, Any] = {}
 
+    def _send_control_message(self, payload_obj: dict[str, Any], *, log_label: str) -> bool:
+        try:
+            self.conn.sendall(json.dumps(payload_obj).encode("utf-8") + b"\n")
+            return True
+        except Exception as exc:
+            _write_log(f"{log_label} failed: {exc}")
+            return False
+
+    def _handle_control_message(self, msg: dict[str, Any]) -> bool:
+        msg_type = str(msg.get("type") or "").strip().lower()
+        if msg_type != "ping":
+            return False
+        ping_id = str(msg.get("ping_id") or "").strip()
+        sent_at_ms = _coerce_int(msg.get("sent_at_ms"))
+        agent_received_at_ms = _now_ms()
+        agent_pong_at_ms = _now_ms()
+        payload_obj = {
+            "type": "pong",
+            "agent_received_at_ms": agent_received_at_ms,
+            "agent_pong_at_ms": agent_pong_at_ms,
+        }
+        if ping_id:
+            payload_obj["ping_id"] = ping_id
+        if sent_at_ms is not None:
+            payload_obj["sent_at_ms"] = sent_at_ms
+        if self._send_control_message(payload_obj, log_label="Shell readiness pong send"):
+            transit_ms = (
+                str(max(0, agent_received_at_ms - sent_at_ms))
+                if sent_at_ms is not None
+                else "-"
+            )
+            _write_log(
+                "Shell readiness pong sent ping_id={0} sent_at_ms={1} recv_at_ms={2} transit_ms={3}".format(
+                    ping_id or "-",
+                    sent_at_ms if sent_at_ms is not None else "-",
+                    agent_received_at_ms,
+                    transit_ms,
+                )
+            )
+        return True
+
     def start(self) -> None:
         # Spawn an interactive shell process and bridge stdin/stdout.
         _write_log(f"Shell session starting for {self.address[0]}:{self.address[1]} type={self.shell_kind}")
@@ -327,6 +368,8 @@ class ShellSession:
                         msg = json.loads(line.decode("utf-8"))
                     except Exception:
                         continue
+                    if self._handle_control_message(msg):
+                        continue
                     if msg.get("type") == "stdin":
                         payload = msg.get("data") or ""
                         if self.proc and self.proc.stdin:
@@ -387,6 +430,8 @@ class ShellSession:
                     try:
                         msg = json.loads(line.decode("utf-8"))
                     except Exception:
+                        continue
+                    if self._handle_control_message(msg):
                         continue
                     if msg.get("type") == "stdin":
                         payload = msg.get("data") or ""

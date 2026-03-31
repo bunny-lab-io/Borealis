@@ -798,6 +798,41 @@ def test_vpn_service_status_marks_peer_transport_recovering_when_handshake_never
     assert status["peer_health_reason"] == "no_recent_handshake"
 
 
+def test_vpn_service_recent_confirmed_transport_suppresses_handshake_recovery() -> None:
+    service, wg, _socketio, _service_events = _build_vpn_service()
+    payload = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    service.mark_transport_required("agent-1", reason="shell_connect")
+    with service._lock:
+        session = service._sessions_by_agent["agent-1"]
+        session.created_at = time.time() - 10
+        session.last_activity = time.time() - 10
+    wg.peer_health_overrides[payload["client_public_key"]] = {
+        "healthy": False,
+        "reason": "no_handshake",
+        "service_state": "RUNNING",
+        "peer_present": True,
+        "last_handshake_at": None,
+        "last_handshake_at_iso": "",
+        "handshake_age_seconds": None,
+    }
+
+    assert service.confirm_transport_success("agent-1", reason="shell_output") is True
+
+    start_calls = wg.start_calls
+    service._watchdog_tick()
+    status = service.status("agent-1")
+
+    assert wg.start_calls == start_calls
+    assert status is not None
+    assert status["status"] == "up"
+    assert status["listener_healthy"] is True
+    assert status["recovery_in_progress"] is False
+    assert status["transport_ready"] is True
+    assert status["peer_health_reason"] == "recent_transport_success"
+    assert status["last_transport_confirmed_at"] is not None
+    assert status["confirmed_age_seconds"] is not None
+
+
 def test_vpn_service_passive_session_stays_idle_without_transport_probe() -> None:
     service, wg, _socketio, _service_events = _build_vpn_service()
     payload = service.connect(
