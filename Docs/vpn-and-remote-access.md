@@ -13,13 +13,17 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - No idle teardown while the agent service is running.
 - Agent recovery: if the Windows agent receives the same `tunnel_id` again and its WireGuard service is stopped or unhealthy, it rerenders the config and attempts an in-place service recovery instead of assuming the tunnel is still healthy.
 - Direct-access affinity: when an agent is intentionally using a direct/internal Engine URL (for example a LAN IP or internal-only hostname), the WireGuard client prefers that same host for tunnel recovery instead of forcing UDP back through the public reverse-proxy path.
-- Engine recovery: in persistent mode the Engine keeps one Linux WireGuard interface online, updates peers live one at a time during normal connect/disconnect activity, and only falls back to full peer reconciliation when the listener is unhealthy. A watchdog validates listener health every 15 seconds and rate-limits full recovery attempts to one every 30 seconds while active sessions exist.
+- Engine recovery: in persistent mode the Engine keeps one Linux WireGuard interface online, updates peers live one at a time during normal connect/disconnect activity, and only falls back to full peer reconciliation when the listener is unhealthy. A watchdog validates listener health every 15 seconds, uses an effective probe grace aligned with WireGuard keepalive timing before declaring `stale_handshake`, and rate-limits full recovery attempts to one every 30 seconds while active sessions exist.
+- Session-scoped transport confirmations: shell output and shell idle-keepalive pongs can refresh tunnel health without requiring visible operator traffic, which keeps quiet RemoteShell sessions from being mistaken for a dead tunnel.
 - Port access: the tunnel is trusted end-to-end, and Engine/Agent firewall rules allow a global port allowlist between the Engine /32 and Agent /32 (defaults to 47002 and 5900, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`).
 
 ## Remote PowerShell
 - Uses the WireGuard tunnel and a TCP shell server on the agent.
 - UI establishes sessions via `/api/shell/establish` and disconnects via `/api/shell/disconnect`.
-- Engine bridges UI Socket.IO events to the agent TCP shell.
+- Engine bridges UI Socket.IO events to the agent TCP shell and sends both a readiness ping and idle keepalive pings on quiet sessions.
+- The Windows shell bridge now reads PowerShell output with `PeekNamedPipe`/`ReadFile`-style chunk reads instead of waiting on line-buffered pipe behavior, which improves interactive output on Windows agents.
+- Engine and agent propagate a shared shell `session_id` so `remote_shell.log` can correlate input, output, keepalive, and close events across both runtimes.
+- Engine and agent each keep only one active shell session per browser/session owner and close superseded sessions explicitly.
 - Shell port default: 47002 (configurable).
 
 ## VNC via noVNC
@@ -27,6 +31,9 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - WebUI connects through the same public Borealis origin at `/remote-desktop/vnc` behind the Borealis-managed Traefik edge.
 - VNC authentication is handled by the UltraVNC password plus a Borealis one-time session token for the WebSocket proxy.
 - Agent runs UltraVNC as a Windows service; Borealis keeps the VNC firewall rule enabled for the Engine /32 and `/api/vnc/disconnect` only tears down the WebUI session.
+- Before the proxy connects, the Engine re-emits tunnel startup with `reason=vnc_bootstrap` so the agent refreshes VNC readiness over the existing persistent tunnel.
+- If the proxy still cannot open the backend VNC TCP session in time, it escalates with `reason=vnc_connect_retry`, which can trigger shared transport recovery for that agent.
+- On weaker agents a VNC session can still succeed while `vnc_connect_retry` recovery is logged in the background; treat that as degraded transport health rather than VNC authentication failure.
 
 ## Reverse Proxy Configuration
 Borealis now expects the public TLS identity to live on the embedded Traefik instance running on the engine host. If you already have an external Traefik or firewall edge on a different host, keep that outer layer transparent:
@@ -120,7 +127,7 @@ Notes:
 
 ### Core Agent files
 - WireGuard client role: `Data/Agent/Roles/role_WireGuardTunnel.py`.
-- Remote PowerShell role: `Data/Agent/Roles/role_RemotePowershell.py`.
+- Remote shell role: `Data/Agent/Roles/role_RemoteShell.py`.
 - VNC role: `Data/Agent/Roles/role_VNC.py`.
 
 ### Config paths
@@ -145,9 +152,11 @@ Notes:
 ### Event flow (Remote PowerShell)
 1) UI opens a shell and emits `vpn_shell_open`.
 2) Engine checks tunnel status and agent socket readiness.
-3) Engine opens a TCP connection to agent shell on port 47002.
-4) UI sends `vpn_shell_send`; Engine forwards to agent over TCP.
-5) Agent returns stdout frames; Engine emits `vpn_shell_output`.
+3) Engine opens a TCP connection to agent shell on port 47002 and sends a readiness ping.
+4) Agent starts interactive PowerShell, returns a ready pong, and both sides pin a shared `session_id` for log correlation.
+5) UI sends `vpn_shell_send`; Engine forwards to agent over TCP and records per-message timing.
+6) Agent returns stdout chunks immediately; Engine emits `vpn_shell_output` and uses output plus idle keepalive pongs to refresh tunnel health.
+7) If a new shell replaces an older shell for the same browser SID or agent, Engine and agent close the superseded session explicitly.
 
 ### Firewall rules
 - Engine allows the configured port allowlist from the agent /32 (TCP/UDP) over the WireGuard tunnel.
@@ -160,13 +169,17 @@ Notes:
 - Keepalive is handled by WireGuard (`PersistentKeepalive = 30` seconds).
 - The agent periodically calls `/api/agent/vpn/ensure` to heal the tunnel if it drops.
 - On Windows agents, same-session ensure calls also recover a stopped `WireGuardTunnel$Borealis` service instead of returning early when the `tunnel_id` matches.
-- The Engine listener watchdog keeps shared listener state honest for all sessions, mutates peers live on the persistent interface during routine changes, and marks status APIs as recovering while full peer reconciliation is underway.
+- The Engine listener watchdog keeps shared listener state honest for all sessions, mutates peers live on the persistent interface during routine changes, uses an effective probe grace aligned with the WireGuard keepalive window before declaring `stale_handshake`, and marks status APIs as recovering while full peer reconciliation is underway.
+- Quiet shell sessions no longer depend on operator traffic alone; shell keepalive pongs and shell output can confirm transport health between commands.
+- VNC still shares the same listener recovery path, so repeated `vnc_connect_retry` on one weak host is a sign of residual transport instability rather than a shell-path regression.
 
 ### Logs to inspect
 - Engine tunnel log: `Engine/Logs/VPN_Tunnel/tunnel.log`.
 - Engine shell log: `Engine/Logs/VPN_Tunnel/remote_shell.log`.
 - Agent tunnel log: `Agent/Logs/VPN_Tunnel/tunnel.log`.
 - Agent shell log: `Agent/Logs/VPN_Tunnel/remote_shell.log`.
+- Shell logs now carry a shared `session_id` plus distinct ready/keepalive pong entries, which makes it easier to line up one shell session across Engine and agent logs.
+- Useful recovery keywords include `shell_connect_retry`, `shell_keepalive`, `vnc_bootstrap`, `vnc_connect_retry`, `vpn_transport_watchdog_recovery`, and `vpn_shell_output_timing`.
 
 ### Troubleshooting checklist
 - Confirm WireGuard service is running (Engine and Agent).
@@ -179,6 +192,7 @@ Notes:
 - Legacy WebSocket tunnels are retired; only WireGuard is supported.
 - VNC requires UltraVNC running on the agent.
 - The Engine still uses one shared WireGuard listener/interface, so a true interface-level failure remains a shared outage until the watchdog or operator recovery path restores it.
+- On weaker agents, VNC can still connect successfully while provoking `vnc_connect_retry` and shared-listener recovery churn; see `Docs/technical-debt.md`.
 
 ### Reverse VPN Tunnels (WireGuard) - Full Reference
 #### 1) High-level model
@@ -215,7 +229,7 @@ Notes:
 #### 4) Agent components
 - Tunnel lifecycle: `Data/Agent/Roles/role_WireGuardTunnel.py`
   - Validates orchestration tokens, starts WireGuard client service, keeps the tunnel persistent, and retries same-session service recovery when the watchdog finds the Windows WireGuard service stopped.
-- Shell server: `Data/Agent/Roles/role_RemotePowershell.py`
+- Shell server: `Data/Agent/Roles/role_RemoteShell.py`
 - TCP PowerShell server bound to `0.0.0.0:47002`, restricted to VPN subnet (10.255.x.x).
 - Logging: `Agent/Logs/VPN_Tunnel/tunnel.log` (tunnel lifecycle) and `Agent/Logs/VPN_Tunnel/remote_shell.log` (shell I/O).
 
@@ -279,19 +293,39 @@ This section consolidates the troubleshooting context and environment notes for 
   - Engine config path: Engine\WireGuard\borealis-wg.conf (project root only).
   - Removed invalid "SaveConfig = false" line (WireGuard rejected it).
   - Keeps one Engine listener interface online and mutates peers live instead of restarting the shared interface for routine session changes.
+- Data/Engine/services/VPN/vpn_tunnel_service.py
+  - Uses an effective probe grace aligned with the WireGuard keepalive window before declaring `stale_handshake`.
+  - Logs probe/confirmed/handshake ages during watchdog recovery to make transport failures easier to localize.
+  - Throttles repetitive `shell_keepalive` confirmation logs so healthy quiet shells do not flood `tunnel.log`.
+- Data/Engine/services/WebSocket/vpn_shell.py
+  - Adds readiness probes, idle shell keepalive pings, output timing diagnostics, and transport confirmations on shell output.
+  - Tracks explicit close reasons (`close_request`, `superseded_sid`, `superseded_agent_session`, `ready_probe_failed`) so intentional closes no longer look like transport errors.
+  - Replaces superseded shell sessions for the same browser SID or agent instead of allowing overlapping stale sessions to linger.
+- Data/Agent/Roles/role_RemoteShell.py
+  - Replaces line-buffered Windows pipe reads with `PeekNamedPipe`-based chunk reads for interactive PowerShell output.
+  - Propagates `session_id` into shell control and data frames for Engine/agent log correlation.
+  - Logs readiness pongs and idle keepalive pongs separately and throttles idle keepalive log spam on the agent.
+  - Closes superseded shell TCP sessions when a newer shell for the same agent connects.
+- Data/Engine/services/API/devices/vnc.py and Data/Engine/services/RemoteDesktop/vnc_proxy.py
+  - VNC bootstrap re-emits tunnel startup with `reason=vnc_bootstrap`.
+  - Backend VNC connect retries escalate with `reason=vnc_connect_retry` and can request transport recovery when the proxy cannot open the agent's VNC port quickly enough.
+  - The VNC backend writer socket enables `TCP_NODELAY`.
 
 Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under Agent\.
 
-#### Current symptoms (2026-01-14 00:05)
-- Tunnel handshakes are healthy; TCP shell connectivity succeeds after adding an allowlist firewall rule for the engine /32.
-- The firewall rule is now kept in place by `role_WireGuardTunnel.py` using the engine /32 in the `allowed_ips` payload.
-- Linux Engine diagnostics should rely on `wg show` and `journalctl` for WireGuard interface state.
+#### Current operational notes (2026-03-31)
+- `LAB-OPERATOR-01` shell and VNC are generally interactive in fresh tests, and intentional shell closes now end with `vpn_shell_closed ... reason=close_request` instead of warning-level post-close read errors.
+- `LAB-CAMERA-01` shell and VNC are functional, but VNC can still trigger `vnc_connect_retry` and occasional shared-listener recovery even when the operator sees a successful session.
+- Shell timing investigation should rely on `vpn_shell_output_timing`, `vpn_shell_ready_pong`, `vpn_shell_closed`, agent-side `session_id`, and tunnel-side `shell_keepalive` / watchdog recovery events rather than browser symptoms alone.
 
 #### Key paths
 - Agent WireGuard role: Data/Agent/Roles/role_WireGuardTunnel.py
-- Agent VPN shell role: Data/Agent/Roles/role_RemotePowershell.py
+- Agent VPN shell role: Data/Agent/Roles/role_RemoteShell.py
 - Engine WireGuard manager: Data/Engine/services/VPN/wireguard_server.py
 - Engine tunnel service: Data/Engine/services/VPN/vpn_tunnel_service.py
+- Engine shell bridge: Data/Engine/services/WebSocket/vpn_shell.py
+- Engine VNC API: Data/Engine/services/API/devices/vnc.py
+- Engine VNC proxy: Data/Engine/services/RemoteDesktop/vnc_proxy.py
 - Agent tunnel logs: Z:\Agent\Logs\VPN_Tunnel\tunnel.log
 - Agent shell logs: Z:\Agent\Logs\VPN_Tunnel\remote_shell.log
 - Engine tunnel logs: Engine\Logs\VPN_Tunnel\tunnel.log
@@ -319,7 +353,7 @@ Note: Data/Agent changes only apply after Borealis.ps1 re-stages the agent under
   - Z:\Agent\Borealis\Settings\WireGuard\Borealis.conf
 
 #### Current blockers and next steps
-1) Ensure the agent runtime is re-staged so `role_WireGuardTunnel.py` applies the allowlist firewall rule on tunnel start.
-2) During an active session, run `Test-NetConnection -ComputerName 10.255.0.2 -Port 47002` on the Engine and confirm it reaches the agent.
-3) Confirm `Agent\Borealis\Settings\WireGuard\Borealis.conf` includes a [Peer] with endpoint/AllowedIPs while the agent is running.
-4) Capture engine and agent tunnel/shell logs around a failed shell open attempt and re-check WireGuard service state if issues persist.
+1) Re-stage the agent runtime after `role_RemoteShell.py`, `role_WireGuardTunnel.py`, or `role_VNC.py` changes so the runtime copy matches `Data/Agent/`.
+2) For shell regressions, correlate `Engine/Logs/VPN_Tunnel/remote_shell.log` with `Z:\Agent\Logs\VPN_Tunnel\remote_shell.log` by `session_id` before assuming browser-side buffering.
+3) For VNC regressions on weaker hosts, capture `vnc_connect_retry`, `vpn_transport_recovery_request`, and `vpn_transport_watchdog_recovery` from `Engine/Logs/VPN_Tunnel/tunnel.log` before changing shell code paths.
+4) If issues persist, confirm `Agent\Borealis\Settings\WireGuard\Borealis.conf` still has a valid [Peer], verify `Test-NetConnection -ComputerName <agent_vpn_ip> -Port 47002`, and re-check WireGuard service state on both ends.

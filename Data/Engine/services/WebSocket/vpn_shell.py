@@ -91,6 +91,7 @@ class ShellSession:
     _heartbeat: Optional[threading.Thread] = None
     _last_activity_at: float = field(default_factory=time.monotonic)
     _state_lock: threading.Lock = field(default_factory=threading.Lock)
+    _close_reason: str = ""
 
     def start_reader(self) -> None:
         starter = getattr(self.socketio, "start_background_task", None)
@@ -202,13 +203,16 @@ class ShellSession:
                     data = self.tcp.recv(4096)
                 except (socket.timeout, TimeoutError):
                     # No data ready; keep the session alive.
+                    if self._closed:
+                        reason = self._close_reason or "local_close"
+                        break
                     continue
                 except Exception as exc:
-                    reason = "read_error"
                     error_detail = f"{type(exc).__name__}:{exc}"
+                    reason = self._close_reason or "local_close" if self._closed else "read_error"
                     break
                 if not data:
-                    reason = "remote_closed"
+                    reason = self._close_reason or "local_close" if self._closed else "remote_closed"
                     break
                 buffer += data
                 while b"\n" in buffer:
@@ -442,12 +446,23 @@ class ShellSession:
             self._pending_ping_id = None
 
     def close(self) -> None:
+        self.close_with_reason("local_close")
+
+    def close_with_reason(self, reason: str) -> None:
+        close_reason = str(reason or "").strip() or "local_close"
         if self._closed:
+            if not self._close_reason:
+                self._close_reason = close_reason
             return
+        self._close_reason = close_reason
         self._closed = True
         try:
             data = json.dumps({"type": "close", "session_id": self.session_id})
             self.tcp.sendall(data.encode("utf-8") + b"\n")
+        except Exception:
+            pass
+        try:
+            self.tcp.shutdown(socket.SHUT_RDWR)
         except Exception:
             pass
         try:
@@ -522,7 +537,7 @@ class VpnShellBridge:
                 ),
                 level="WARNING",
             )
-            existing.close()
+            existing.close_with_reason("superseded_sid")
         if existing_agent_session and existing_agent_session is not existing:
             with self._lock:
                 self._remove_session_locked(existing_agent_session)
@@ -534,7 +549,7 @@ class VpnShellBridge:
                 ),
                 level="WARNING",
             )
-            existing_agent_session.close()
+            existing_agent_session.close_with_reason("superseded_agent_session")
         status = service.status(agent_id)
         if not status:
             try:
@@ -682,7 +697,7 @@ class VpnShellBridge:
                 )
                 with self._lock:
                     self._remove_session_locked(session)
-                session.close()
+                session.close_with_reason("ready_probe_failed")
                 last_error = RuntimeError("shell_ready_probe_failed")
                 remaining = connect_deadline - time.monotonic()
                 if remaining > 0:
@@ -769,4 +784,4 @@ class VpnShellBridge:
                 sid,
             )
         )
-        session.close()
+        session.close_with_reason("close_request")

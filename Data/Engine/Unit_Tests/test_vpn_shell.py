@@ -96,6 +96,16 @@ class _PongSocket(_DummySocket):
         raise socket.timeout()
 
 
+class _ErrorOnClosedSocket(_DummySocket):
+    def recv(self, _size: int) -> bytes:
+        deadline = time.time() + 0.5
+        while time.time() < deadline:
+            if self.closed:
+                raise OSError(9, "Bad file descriptor")
+            time.sleep(0.01)
+        raise socket.timeout()
+
+
 class _DummySocketIO:
     def __init__(self) -> None:
         self.emits: list[tuple[tuple, dict]] = []
@@ -342,3 +352,25 @@ def test_shell_session_idle_keepalive_confirms_transport_success(monkeypatch) ->
 
     assert any(call == ("agent-1", "shell_keepalive") for call in tunnel_service.confirm_calls)
     assert any(payload.get("reason") == "idle_keepalive" for payload in ping_payloads)
+
+
+def test_shell_session_suppresses_expected_read_error_after_close_request() -> None:
+    tcp = _ErrorOnClosedSocket()
+    logs: list[tuple[str, str | None]] = []
+    session = ShellSession(
+        sid="sid-1",
+        agent_id="agent-1",
+        socketio=_DummySocketIO(),
+        tcp=tcp,
+        service_log=lambda _path, message, level=None: logs.append((message, level)),
+    )
+
+    session.start_reader()
+    time.sleep(0.02)
+    session.close_with_reason("close_request")
+    deadline = time.time() + 0.5
+    while not any("vpn_shell_closed" in message for message, _level in logs) and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert not any("vpn_shell_read_error" in message for message, _level in logs)
+    assert any("vpn_shell_closed agent_id=agent-1 sid=sid-1 reason=close_request" in message for message, _level in logs)

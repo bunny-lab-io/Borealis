@@ -35,6 +35,20 @@ GitHub Issue: <link or "not yet">
 ```
 
 ## Issues
+ID: TD-20260331-01
+Status: active
+Owner: Engine + Agent
+Date Added: 2026-03-31
+Summary: VNC on weaker WireGuard agents can succeed while still triggering repeated `vnc_connect_retry` transport recovery.
+Impact: Operators can get a usable VNC session, but the Engine may still force repeated listener recovery for the same agent, which adds noisy logs and leaves weaker hosts more likely to disrupt adjacent remote-access activity.
+Root Cause: The VNC bootstrap path retries backend TCP connects aggressively and escalates to forced transport recovery before the shared WireGuard listener has clearly proven healthy for VNC traffic on degraded hosts.
+Current Mitigation: `Data/Engine/services/API/devices/vnc.py` re-emits `vpn_tunnel_start` with `vnc_bootstrap`, `Data/Engine/services/RemoteDesktop/vnc_proxy.py` escalates stalled backend connects with `vnc_connect_retry`, `Data/Engine/services/VPN/vpn_tunnel_service.py` throttles repeated listener recovery, and the shell bridge now keeps quiet shell sessions off the same stale-transport path with idle keepalives.
+Removal Criteria: VNC connects on degraded agents no longer require repeated `vnc_connect_retry` recovery attempts and do not trigger shared-listener watchdog or recovery churn during otherwise successful sessions.
+Files: `Data/Engine/services/API/devices/vnc.py`, `Data/Engine/services/RemoteDesktop/vnc_proxy.py`, `Data/Engine/services/VPN/vpn_tunnel_service.py`, `Data/Agent/Roles/role_VNC.py`
+Evidence: Fresh 2026-03-31 engine logs for `LAB-CAMERA-01` showed successful shell and VNC sessions alongside repeated `vpn_transport_recovery_request ... reason=vnc_connect_retry`, `vpn_listener_recovery_attempt`, and one `vpn_transport_watchdog_recovery ... reason=stale_handshake` for the same tunnel.
+Next Step: Add a VNC-specific transport-ready signal or soften `vnc_connect_retry` escalation so successful noVNC bootstrap stops force-restarting the shared listener on degraded hosts.
+GitHub Issue: not yet
+
 ID: TD-20260326-01
 Status: active
 Owner: Engine
