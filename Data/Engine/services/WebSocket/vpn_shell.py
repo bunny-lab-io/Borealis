@@ -54,6 +54,15 @@ def _configure_tcp_socket(sock: socket.socket) -> None:
         pass
 
 
+def _cooperative_sleep(seconds: float) -> None:
+    try:
+        import eventlet  # type: ignore
+
+        eventlet.sleep(seconds)
+    except Exception:
+        time.sleep(seconds)
+
+
 @dataclass
 class ShellSession:
     sid: str
@@ -200,6 +209,13 @@ class ShellSession:
                     elif msg.get("type") == "pong":
                         ping_id = str(msg.get("ping_id") or "").strip()
                         if ping_id and ping_id == self._pending_ping_id:
+                            self._service_log_event(
+                                "vpn_shell_ready_pong agent_id={0} sid={1} ping_id={2}".format(
+                                    self.agent_id,
+                                    self.sid,
+                                    ping_id,
+                                )
+                            )
                             self._ready_event.set()
         finally:
             self._closed = True
@@ -291,9 +307,19 @@ class ShellSession:
         except Exception:
             self._pending_ping_id = None
             return False
-        ready = self._ready_event.wait(timeout)
-        self._pending_ping_id = None
-        return bool(ready and self.is_active())
+        deadline = time.monotonic() + max(0.05, float(timeout or 0.0))
+        try:
+            while True:
+                if self._ready_event.is_set():
+                    return self.is_active()
+                if not self.is_active():
+                    return False
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                _cooperative_sleep(min(0.05, remaining))
+        finally:
+            self._pending_ping_id = None
 
     def close(self) -> None:
         if self._closed:
@@ -465,7 +491,7 @@ class VpnShellBridge:
                 last_error = exc
                 remaining = connect_deadline - time.monotonic()
                 if remaining > 0:
-                    time.sleep(min(_RETRY_DELAY_SECONDS, remaining))
+                    _cooperative_sleep(min(_RETRY_DELAY_SECONDS, remaining))
                 continue
 
             session = ShellSession(
@@ -514,7 +540,7 @@ class VpnShellBridge:
                 last_error = RuntimeError("shell_ready_probe_failed")
                 remaining = connect_deadline - time.monotonic()
                 if remaining > 0:
-                    time.sleep(min(_RETRY_DELAY_SECONDS, remaining))
+                    _cooperative_sleep(min(_RETRY_DELAY_SECONDS, remaining))
                 tcp = None
                 continue
             if service is not None:

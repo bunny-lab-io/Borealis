@@ -364,23 +364,11 @@ class WireGuardClient:
 
     def _wireguard_config_path(self) -> Path:
         settings_dir = self.temp_root.parent / "Settings" / "WireGuard"
-        candidates = [
-            settings_dir,
-            Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "WireGuard" / "Data" / "Configurations",
-            Path(os.environ.get("ProgramData", "C:\\ProgramData")) / "Borealis" / "WireGuard" / "Configurations",
-            self.temp_root,
-        ]
-        for config_dir in candidates:
-            candidate = config_dir / f"{self.service_name}.conf"
-            if candidate.is_file():
-                return candidate
-        for config_dir in candidates:
-            try:
-                config_dir.mkdir(parents=True, exist_ok=True)
-                return config_dir / f"{self.service_name}.conf"
-            except Exception:
-                continue
-        return self.temp_root / f"{self.service_name}.conf"
+        try:
+            settings_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return settings_dir / f"{self.service_name}.conf"
 
     def _write_config(self, text: str) -> bool:
         return self._write_config_to(self.conf_path, text)
@@ -577,6 +565,10 @@ class WireGuardClient:
         if not self._service_exists() and not self._last_install_already_present:
             _write_log("WireGuard tunnel service still missing after repair install attempt.")
             return False
+        service_config_path = self._service_config_path()
+        if self._service_binding_needs_repair(service_config_path):
+            _write_log("WireGuard tunnel service binding repair did not converge on the runtime config path.")
+            return False
         return True
 
     def _restart_service(self) -> bool:
@@ -725,9 +717,6 @@ class WireGuardClient:
 
         idle_config = self._render_idle_config()
         wrote_idle = self._write_config(idle_config)
-        service_config_path = self._service_config_path()
-        if service_config_path and service_config_path != self.conf_path:
-            wrote_idle = self._write_config_to(service_config_path, idle_config) or wrote_idle
         if wrote_idle:
             self._restart_service()
             self._ensure_adapter_name()
@@ -807,10 +796,7 @@ class WireGuardClient:
             _write_log(f"Rendered WireGuard client config to {self.conf_path}")
 
             service_config_path = self._service_config_path()
-            if service_config_path and service_config_path != self.conf_path:
-                if self._write_config_to(service_config_path, rendered):
-                    _write_log(f"Rendered WireGuard client config to service path {service_config_path}")
-
+            needs_binding_repair = self._service_binding_needs_repair(service_config_path)
             if not self._service_exists():
                 if not self._install_service():
                     if recovery_reason:
@@ -822,6 +808,8 @@ class WireGuardClient:
                             detail="service_install_failed",
                         )
                     return
+                service_config_path = self._service_config_path()
+                needs_binding_repair = self._service_binding_needs_repair(service_config_path)
 
             service_present = self._service_exists()
             if not service_present and self._last_install_already_present:
@@ -839,8 +827,7 @@ class WireGuardClient:
                     )
                 return
 
-            service_config_path = self._service_config_path()
-            if self._service_binding_needs_repair(service_config_path):
+            if needs_binding_repair:
                 if not self._reinstall_service():
                     if recovery_reason:
                         self._log_recovery_event(

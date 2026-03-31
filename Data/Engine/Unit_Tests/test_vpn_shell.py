@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import sys
 import threading
 import time
+import types
 
 from Data.Engine.services.WebSocket.vpn_shell import ShellSession, VpnShellBridge
 
@@ -90,6 +92,23 @@ class _DummySocketIO:
         return thread
 
 
+class _DeferredSocketIO(_DummySocketIO):
+    def __init__(self) -> None:
+        super().__init__()
+        self._pending: list[tuple[object, tuple, dict]] = []
+
+    def start_background_task(self, target, *args, **kwargs):
+        self._pending.append((target, args, kwargs))
+        return object()
+
+    def run_pending(self) -> None:
+        pending = list(self._pending)
+        self._pending.clear()
+        for target, args, kwargs in pending:
+            thread = threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True)
+            thread.start()
+
+
 class _DummyTunnelService:
     def __init__(self) -> None:
         self.start_calls: list[tuple[str, bool, str]] = []
@@ -149,6 +168,25 @@ def test_shell_session_wait_for_ready_sends_ping_and_accepts_pong() -> None:
     payload = json.loads(tcp.sent[0].decode("utf-8").strip())
     assert payload["type"] == "ping"
     assert payload["ping_id"]
+
+
+def test_shell_session_wait_for_ready_yields_to_eventlet_background_tasks(monkeypatch) -> None:
+    tcp = _PongSocket()
+    socketio = _DeferredSocketIO()
+    session = ShellSession(
+        sid="sid-1",
+        agent_id="agent-1",
+        socketio=socketio,
+        tcp=tcp,
+    )
+    session.start_reader()
+
+    fake_eventlet = types.SimpleNamespace(
+        sleep=lambda _seconds: (socketio.run_pending(), time.sleep(0.01)),
+    )
+    monkeypatch.setitem(sys.modules, "eventlet", fake_eventlet)
+
+    assert session.wait_for_ready(timeout=0.5) is True
 
 
 def test_open_session_enables_tcp_nodelay(monkeypatch) -> None:

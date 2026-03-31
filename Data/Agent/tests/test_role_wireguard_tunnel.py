@@ -150,6 +150,41 @@ def test_windows_client_repairs_stale_service_binding() -> None:
     assert client.session is session
 
 
+def test_windows_client_does_not_mirror_config_to_stale_service_path() -> None:
+    client = _build_windows_client()
+    paths = iter(
+        [
+            Path("D:/Github/Borealis/Agent/Borealis/Settings/WireGuard/Borealis.conf"),
+        ]
+    )
+
+    client._validate_token = lambda token, signing_client=None: None
+    client._write_config = lambda text: True
+    client._write_config_to = lambda path, text: (_ for _ in ()).throw(AssertionError("stale path mirror should not run"))
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: next(paths)
+    client._reinstall_service = lambda: True
+    client._restart_service = lambda: True
+    client._service_state = lambda: "RUNNING"
+    client._ensure_adapter_name = lambda: None
+    client._ensure_service_display_name = lambda: None
+    client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: None
+    client._log_recovery_event = lambda *args, **kwargs: None
+
+    client.start_session(_build_session(), signing_client=None)
+
+
+def test_windows_client_runtime_config_path_is_deterministic(tmp_path) -> None:
+    client = WireGuardClient.__new__(WireGuardClient)
+    client.service_name = "Borealis"
+    client.temp_root = tmp_path / "Agent" / "Borealis" / "Temp"
+    client.temp_root.mkdir(parents=True, exist_ok=True)
+
+    config_path = client._wireguard_config_path()
+
+    assert config_path == tmp_path / "Agent" / "Borealis" / "Settings" / "WireGuard" / "Borealis.conf"
+
+
 def test_windows_client_requires_healthy_service_before_marking_session_started() -> None:
     client = _build_windows_client()
     calls: list[str] = []
