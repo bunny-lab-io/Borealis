@@ -20,7 +20,11 @@ from Data.Engine.services.API.devices import management as device_management
 from Data.Engine.services.API.devices import routes as device_routes
 from Data.Engine.services.API.devices.service_inventory import serialize_device_services
 from Data.Engine.services.API.devices import tunnel as tunnel_api
-from Data.Engine.services.VPN.vpn_tunnel_service import PEER_ACTIVITY_WINDOW_SECONDS, VpnTunnelService
+from Data.Engine.services.VPN.vpn_tunnel_service import (
+    PEER_ACTIVITY_WINDOW_SECONDS,
+    PEER_CONFIRMED_ACTIVITY_WINDOW_SECONDS,
+    VpnTunnelService,
+)
 
 from .conftest import EngineTestHarness
 
@@ -99,6 +103,72 @@ def _set_test_device_services(engine_harness: EngineTestHarness, payload: Any) -
         conn.commit()
     finally:
         conn.close()
+
+
+def test_tunnel_service_creation_is_singleton_under_concurrency(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager_calls = {"count": 0}
+    service_calls = {"count": 0}
+
+    class _DummyManager:
+        pass
+
+    class _DummyService:
+        pass
+
+    def _build_manager(_config):
+        manager_calls["count"] += 1
+        time.sleep(0.02)
+        return _DummyManager()
+
+    def _build_service(**_kwargs):
+        service_calls["count"] += 1
+        time.sleep(0.02)
+        return _DummyService()
+
+    monkeypatch.setattr(tunnel_api, "WireGuardServerManager", _build_manager)
+    monkeypatch.setattr(tunnel_api, "VpnTunnelService", _build_service)
+
+    context = SimpleNamespace(
+        logger=logging.getLogger("borealis.test.tunnel.singleton"),
+        vpn_tunnel_service=None,
+        wireguard_server_manager=None,
+        wireguard_port=30000,
+        wireguard_engine_virtual_ip="10.255.0.1/32",
+        wireguard_peer_network="10.255.0.0/24",
+        wireguard_server_private_key_path="/tmp/wg.key",
+        wireguard_server_public_key_path="/tmp/wg.pub",
+        wireguard_port_allowlist=(47002, 5900),
+        vpn_tunnel_log_path="/tmp/vpn_tunnel.log",
+        socketio=None,
+    )
+    adapters = SimpleNamespace(
+        context=context,
+        db_conn_factory=lambda: None,
+        service_log=lambda *_args, **_kwargs: None,
+        script_signer=None,
+    )
+
+    results: list[Any] = []
+    failures: list[str] = []
+
+    def _target() -> None:
+        try:
+            results.append(tunnel_api._get_tunnel_service(adapters))
+        except Exception as exc:
+            failures.append(repr(exc))
+
+    threads = [threading.Thread(target=_target) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert failures == []
+    assert len(results) == 8
+    assert len({id(item) for item in results}) == 1
+    assert manager_calls["count"] == 1
+    assert service_calls["count"] == 1
+    assert adapters.context.vpn_tunnel_service is results[0]
 
 
 class _DummySocketIO:
@@ -831,6 +901,39 @@ def test_vpn_service_recent_confirmed_transport_suppresses_handshake_recovery() 
     assert status["peer_health_reason"] == "recent_transport_success"
     assert status["last_transport_confirmed_at"] is not None
     assert status["confirmed_age_seconds"] is not None
+
+
+def test_vpn_service_recent_confirmed_transport_remains_healthy_for_active_probe_window() -> None:
+    service, wg, _socketio, service_events = _build_vpn_service()
+    payload = service.connect(agent_id="agent-1", operator_id=None, endpoint_host="engine.local")
+    service.mark_transport_required("agent-1", reason="shell_connect")
+    age_seconds = min(float(PEER_ACTIVITY_WINDOW_SECONDS) - 1.0, float(PEER_CONFIRMED_ACTIVITY_WINDOW_SECONDS) + 5.0)
+    with service._lock:
+        session = service._sessions_by_agent["agent-1"]
+        session.created_at = time.time() - age_seconds
+        session.last_activity = time.time() - age_seconds
+        session.last_transport_probe_at = time.time() - age_seconds
+        session.last_transport_confirmed_at = time.time() - age_seconds
+    wg.peer_health_overrides[payload["client_public_key"]] = {
+        "healthy": False,
+        "reason": "no_handshake",
+        "service_state": "RUNNING",
+        "peer_present": True,
+        "last_handshake_at": None,
+        "last_handshake_at_iso": "",
+        "handshake_age_seconds": None,
+    }
+
+    start_calls = wg.start_calls
+    status = service.status("agent-1")
+    service._watchdog_tick()
+
+    assert status is not None
+    assert status["status"] == "up"
+    assert status["transport_ready"] is True
+    assert status["peer_health_reason"] == "recent_transport_success"
+    assert wg.start_calls == start_calls
+    assert not any("vpn_transport_watchdog_recovery" in message for _name, message, _level in service_events)
 
 
 def test_vpn_service_passive_session_stays_idle_without_transport_probe() -> None:

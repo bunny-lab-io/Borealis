@@ -78,6 +78,10 @@ PEER_CONFIRMED_ACTIVITY_WINDOW_SECONDS = _env_int(
 VPN_IP_LEASE_TABLE = "device_vpn_ip_leases"
 
 
+def _effective_confirmed_transport_window_seconds() -> float:
+    return float(max(PEER_CONFIRMED_ACTIVITY_WINDOW_SECONDS, PEER_ACTIVITY_WINDOW_SECONDS))
+
+
 @dataclass
 class VpnSession:
     tunnel_id: str
@@ -703,7 +707,7 @@ class VpnTunnelService:
             transport_reason = "idle"
         elif (
             confirmed_age_seconds is not None
-            and confirmed_age_seconds <= float(PEER_CONFIRMED_ACTIVITY_WINDOW_SECONDS)
+            and confirmed_age_seconds <= _effective_confirmed_transport_window_seconds()
         ):
             transport_ready = True
             transport_reason = "recent_transport_success"

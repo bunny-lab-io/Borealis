@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -70,6 +71,23 @@ def _infer_hostname_from_agent_id(agent_id: Any) -> str:
     if len(parts) == 3:
         return str(parts[0] or "").strip()
     return ""
+
+
+def _get_tunnel_service_init_lock(context: Any) -> threading.Lock:
+    existing = getattr(context, "_vpn_tunnel_service_init_lock", None)
+    if existing is not None:
+        return existing
+    try:
+        from eventlet import semaphore as eventlet_semaphore  # type: ignore
+
+        lock = eventlet_semaphore.Semaphore(1)
+    except Exception:
+        lock = threading.Lock()
+    current = getattr(context, "_vpn_tunnel_service_init_lock", None)
+    if current is not None:
+        return current
+    setattr(context, "_vpn_tunnel_service_init_lock", lock)
+    return lock
 
 
 @dataclass
@@ -219,38 +237,42 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
         service = getattr(context, "vpn_tunnel_service", None)
         if service is not None:
             return service
-        manager = getattr(context, "wireguard_server_manager", None)
-        if manager is None:
-            try:
-                manager = WireGuardServerManager(
-                    WireGuardServerConfig(
-                        port=context.wireguard_port,
-                        engine_virtual_ip=context.wireguard_engine_virtual_ip,
-                        peer_network=context.wireguard_peer_network,
-                        private_key_path=Path(context.wireguard_server_private_key_path),
-                        public_key_path=Path(context.wireguard_server_public_key_path),
-                        acl_allowlist_ports=tuple(context.wireguard_port_allowlist),
-                        log_path=Path(context.vpn_tunnel_log_path),
+        with _get_tunnel_service_init_lock(context):
+            service = getattr(context, "vpn_tunnel_service", None)
+            if service is not None:
+                return service
+            manager = getattr(context, "wireguard_server_manager", None)
+            if manager is None:
+                try:
+                    manager = WireGuardServerManager(
+                        WireGuardServerConfig(
+                            port=context.wireguard_port,
+                            engine_virtual_ip=context.wireguard_engine_virtual_ip,
+                            peer_network=context.wireguard_peer_network,
+                            private_key_path=Path(context.wireguard_server_private_key_path),
+                            public_key_path=Path(context.wireguard_server_public_key_path),
+                            acl_allowlist_ports=tuple(context.wireguard_port_allowlist),
+                            log_path=Path(context.vpn_tunnel_log_path),
+                        )
                     )
-                )
-                setattr(context, "wireguard_server_manager", manager)
+                    setattr(context, "wireguard_server_manager", manager)
+                except Exception:
+                    context.logger.error("Failed to initialize WireGuard server manager on demand.", exc_info=True)
+                    return None
+            try:
+                signer = signing.load_signer()
             except Exception:
-                context.logger.error("Failed to initialize WireGuard server manager on demand.", exc_info=True)
-                return None
-        try:
-            signer = signing.load_signer()
-        except Exception:
-            signer = None
-        service = VpnTunnelService(
-            context=context,
-            wireguard_manager=manager,
-            db_conn_factory=adapters.db_conn_factory,
-            socketio=socket_server,
-            service_log=adapters.service_log,
-            signer=signer,
-        )
-        setattr(context, "vpn_tunnel_service", service)
-        return service
+                signer = None
+            service = VpnTunnelService(
+                context=context,
+                wireguard_manager=manager,
+                db_conn_factory=adapters.db_conn_factory,
+                socketio=socket_server,
+                service_log=adapters.service_log,
+                signer=signer,
+            )
+            setattr(context, "vpn_tunnel_service", service)
+            return service
 
     def _tunnel_log(message: str, *, level: str = "INFO") -> None:
         try:
