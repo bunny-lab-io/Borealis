@@ -147,20 +147,6 @@ Evidence: Remote SSH playbooks against Ubuntu and Rocky Linux devices were skipp
 Next Step: Update the agent/device detail pipeline to send and persist explicit remote transport metadata, then use it for UI/advisory validation instead of hard scheduler gating.
 GitHub Issue: not yet
 
-ID: TD-20260319-01
-Status: resolved
-Owner: Engine
-Date Added: 2026-03-19
-Summary: Aegis Cipher now replaces raw UTF-8 credential storage with encrypted-at-rest secret envelopes.
-Impact: Stored credentials and the GitHub token now use a real Engine-managed secret layer with restart relock, unlock verification, rotation, and decrypt-on-use behavior.
-Root Cause: Borealis previously lacked a dedicated secret-management layer for Engine-side protected values.
-Current Mitigation: `Data/Engine/services/aegis_cipher.py` now derives an Engine-global in-memory key from the operator-entered cipher, migrates legacy plaintext rows during setup, and decrypts credentials only when needed by active services.
-Removal Criteria: Satisfied by the Aegis Cipher implementation in this branch.
-Files: `Data/Engine/services/aegis_cipher.py`, `Data/Engine/services/API/access_management/credentials.py`, `Data/Engine/services/API/scheduled_jobs/job_scheduler.py`, `Docs/db-reference.md`
-Evidence: Protected secret storage now uses `aegis:v1:` envelopes, and the scheduler consumes credentials through the Aegis-backed fetcher instead of direct UTF-8 blob decoding.
-Next Step: Monitor the narrower follow-up debt item for dormant `agent_service_account.password_encrypted` scope.
-GitHub Issue: not yet
-
 ID: TD-20260315-01
 Status: active
 Owner: Engine
@@ -202,10 +188,6 @@ Files: `Data/Engine/web-interface/package.json`, `Data/Engine/web-interface/scri
 Evidence: `Engine/Logs/vite-dev.stderr.log` errors referencing top level await in `@novnc/novnc/lib/util/browser.js`.
 Next Step: Track upstream noVNC packaging changes and remove patch when safe.
 GitHub Issue: not yet
-
-## Related Documentation
-- [Engine Runtime](engine-runtime.md)
-- [UI and Notifications](ui-and-notifications.md)
 
 ## Related Documentation
 - [Engine Runtime](engine-runtime.md)
