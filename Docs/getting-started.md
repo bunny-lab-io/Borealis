@@ -5,9 +5,9 @@
 Help operators install, launch, and verify the Borealis Engine and (optionally) the Agent.
 
 ## Quick Start (Engine)
-- Linux production: `./Borealis.sh --EngineProduction` (Engine UI at `https://localhost:5000`).
-- Linux dev: `./Borealis.sh --EngineDev` (Vite + Flask at `https://localhost:5173`).
-- TLS is auto-provisioned under `Engine/Certificates` on first launch.
+- Linux production: `./Borealis.sh --EngineProduction` (public UI at `https://<your-public-fqdn>` through the embedded Traefik + Let's Encrypt edge).
+- Linux dev: `./Borealis.sh --EngineDev` (Vite on `http://localhost:5173`, Engine on loopback `http://127.0.0.1:5000`).
+- Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
 
 ## Optional: Install the Agent (Windows)
 - Run in elevated PowerShell: `./Borealis.ps1`.
@@ -16,9 +16,9 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 - Automated enrollment example:
   `./Borealis.ps1 -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Non-interactive server URL + enrollment example:
-  `./Borealis.ps1 -ServerUrl "https://localhost:5000" -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+  `./Borealis.ps1 -ServerUrl "https://borealis.example.com" -EnrollmentCode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Bootstrap + server URL + enrollment example:
-  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://localhost:5000" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
+  `& ([ScriptBlock]::Create((Invoke-RestMethod "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/bootstrap.ps1"))) --agent --serverurl "https://borealis.example.com" --enrollmentcode "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
 - Linux agent binaries are not available; `Borealis.sh --Agent` only stages settings.
 
 ## First Run Checklist
@@ -28,8 +28,8 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 
 ## Reverse Proxy Notes
 - Borealis expects HTTPS for production use.
-- If you reverse proxy, preserve `Upgrade` headers for WebSockets and allow `/socket.io` paths.
-- A Traefik example is included in `README.md`.
+- Borealis owns its public TLS edge with the embedded Traefik runtime and Let's Encrypt.
+- Keep WireGuard separate from the HTTPS edge; it remains direct UDP on port `30000`.
 
 ## API Endpoints
 - `GET /health` (No Authentication) - Engine liveness probe.
@@ -51,8 +51,8 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
 ### Launch mechanics
 - `Borealis.sh` handles dependency setup, venv activation, and staging for the Linux Engine runtime.
 - `Borealis.ps1` handles dependency setup and staging for the Windows agent runtime.
-- Dev mode (`--EngineDev`) uses Vite for the WebUI and Flask for APIs.
-- Production (`--EngineProduction`) serves the built SPA through Flask.
+- Dev mode (`--EngineDev`) uses Vite for the WebUI and a loopback Engine for APIs.
+- Production (`--EngineProduction`) runs the Engine on loopback HTTP and publishes the app through the embedded Traefik edge.
 
 ### Configuration precedence
 - Engine config is assembled by `Data/Engine/config.py` in this order:
@@ -66,10 +66,10 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
   - Logs: `Engine/Logs/engine.log`, `Engine/Logs/error.log`, `Engine/Logs/api.log`
   - WireGuard: UDP 30000, engine virtual IP `10.255.0.1/32`, shell port 47002
 
-### TLS and certificates
-- Engine generates an ECDSA root + leaf chain on first boot.
-- TLS bundle lives under `Engine/Certificates` and is pinned by agents.
-- If you override TLS paths, update `BOREALIS_TLS_*` env vars and restart.
+### Public edge and trust
+- Borealis embedded Traefik manages the public HTTPS identity and ACME state under `Engine/LetsEncrypt/` and `Engine/Traefik/`.
+- Agents must use the public HTTPS FQDN and rely on normal CA + hostname validation.
+- The Python Engine is not a direct public TLS endpoint in production.
 
 ### Agent install and enrollment notes
 - The Windows agent must run elevated to create services and scheduled tasks.

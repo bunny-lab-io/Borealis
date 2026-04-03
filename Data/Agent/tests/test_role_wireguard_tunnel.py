@@ -32,19 +32,14 @@ def test_session_config_equivalent_detects_endpoint_drift() -> None:
     assert _session_config_equivalent(current, desired) is False
 
 
-def test_role_resolve_endpoint_prefers_internal_server_url_host() -> None:
+def test_role_resolve_endpoint_preserves_engine_token_endpoint() -> None:
     role = Role.__new__(Role)
-    role._get_server_url = lambda: "https://192.168.3.252:5000"
-    log_messages: list[str] = []
-    role._log = lambda message, *, error=False: log_messages.append(message)
-
     resolved = role._resolve_endpoint(
         "borealis.bunny-lab.io:30000",
         {"port": 30000},
     )
 
-    assert resolved == "192.168.3.252:30000"
-    assert any("WireGuard endpoint override" in message for message in log_messages)
+    assert resolved == "borealis.bunny-lab.io:30000"
 
 
 def test_role_session_config_matches_live_snapshot() -> None:

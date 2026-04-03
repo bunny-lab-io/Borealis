@@ -2,46 +2,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import fs from 'fs';
-
-const runtimeCertDir = process.env.BOREALIS_CERT_DIR;
-
-const certCandidates = [
-  process.env.BOREALIS_TLS_CERT,
-  runtimeCertDir && path.resolve(runtimeCertDir, 'borealis-server-cert.pem'),
-  path.resolve(__dirname, '../certs/borealis-server-cert.pem'),
-  path.resolve(__dirname, '../../../Server/Borealis/certs/borealis-server-cert.pem'),
-] as const;
-
-const keyCandidates = [
-  process.env.BOREALIS_TLS_KEY,
-  runtimeCertDir && path.resolve(runtimeCertDir, 'borealis-server-key.pem'),
-  path.resolve(__dirname, '../certs/borealis-server-key.pem'),
-  path.resolve(__dirname, '../../../Server/Borealis/certs/borealis-server-key.pem'),
-] as const;
-
-const pickFirst = (candidates: readonly (string | undefined)[]) => {
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
-};
-
-const certPath = pickFirst(certCandidates);
-const keyPath = pickFirst(keyCandidates);
-const engineTlsDisabled = /^(1|true|yes|on)$/i.test(process.env.BOREALIS_DISABLE_ENGINE_TLS || "");
-const engineHttpTarget = `${engineTlsDisabled ? 'http' : 'https'}://127.0.0.1:5000`;
-const engineWsTarget = `${engineTlsDisabled ? 'ws' : 'wss'}://127.0.0.1:5000`;
-
-const httpsOptions = certPath && keyPath
-  ? {
-      cert: fs.readFileSync(certPath),
-      key: fs.readFileSync(keyPath),
-    }
-  : undefined;
+const engineHttpTarget = 'http://127.0.0.1:5000';
+const engineWsTarget = 'ws://127.0.0.1:5000';
 
 export default defineConfig({
   plugins: [react()],
@@ -60,7 +22,6 @@ export default defineConfig({
     // Allow LAN/IP access during dev (so other devices can reach Vite)
     // If you want to restrict, replace `true` with an explicit allowlist.
     allowedHosts: true,
-    https: httpsOptions,
     proxy: {
       // Ensure cookies/headers are forwarded correctly to the loopback Engine runtime.
       '/api': {

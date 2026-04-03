@@ -331,10 +331,6 @@ function Clear-AgentEnrollmentState {
         (Join-Path $scriptDir 'Agent\Borealis\Settings'),
         (Join-Path $scriptDir 'Agent\Settings')
     )
-    $certDirs = @(
-        (Join-Path $scriptDir 'Agent\Borealis\Certificates\Trusted_Server_Cert'),
-        (Join-Path $scriptDir 'Agent\Certificates\Trusted_Server_Cert')
-    )
     $filesToRemove = @(
         'Agent_GUID.txt',
         'access.jwt',
@@ -359,17 +355,6 @@ function Clear-AgentEnrollmentState {
         }
     }
 
-    foreach ($certDir in $certDirs) {
-        $targetPath = Join-Path $certDir 'server_certificate.pem'
-        if (Test-Path $targetPath -PathType Leaf) {
-            try {
-                Remove-Item -Path $targetPath -Force -ErrorAction Stop
-                Write-AgentLog -FileName $LogName -Message ("[REENROLL] Removed pinned server certificate '{0}'." -f $targetPath)
-            } catch {
-                Write-AgentLog -FileName $LogName -Message ("[REENROLL] Failed to remove pinned server certificate '{0}': {1}" -f $targetPath, $_.Exception.Message)
-            }
-        }
-    }
 }
 
 function Write-ProgressStep {
@@ -2138,13 +2123,8 @@ function InstallOrUpdate-BorealisAgent {
         if (-not (Test-Path $settingsDir)) { New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null }
         $serverUrlPath = Join-Path $settingsDir 'server_url.txt'
         $configPath = Join-Path $settingsDir 'agent_settings.json'
-        # Migrate any prior interim location file if present
-        $oldServerUrlPath = Join-Path $oldSettingsDir 'server_url.txt'
-        if (-not (Test-Path $serverUrlPath) -and (Test-Path $oldServerUrlPath)) {
-            try { Move-Item -Path $oldServerUrlPath -Destination $serverUrlPath -Force } catch { try { Copy-Item $oldServerUrlPath $serverUrlPath -Force } catch {} }
-        }
-        $defaultUrl = 'https://localhost:5000'
-        $currentUrl = $defaultUrl
+        $defaultUrl = ''
+        $currentUrl = ''
         if ($existingServerUrl -and $existingServerUrl.Trim()) {
             $currentUrl = $existingServerUrl.Trim()
         } elseif (Test-Path $serverUrlPath) {
@@ -2163,11 +2143,13 @@ function InstallOrUpdate-BorealisAgent {
             $inputUrl = $currentUrl
         } else {
             Write-Host ""; Write-Host "Set Borealis Server URL" -ForegroundColor DarkYellow
-            $prompt = "Server URL [$currentUrl]"
+            $prompt = if ($currentUrl) { "Server URL [$currentUrl]" } else { "Server URL" }
             $inputUrl = Read-Host $prompt
             if (-not $inputUrl) { $inputUrl = $currentUrl }
             $inputUrl = $inputUrl.Trim()
-            if (-not $inputUrl) { $inputUrl = $defaultUrl }
+        }
+        if (-not $inputUrl) {
+            throw "Borealis agent runtime requires a configured public HTTPS FQDN in server_url.txt or -ServerUrl."
         }
         
         # Write UTF-8 without BOM to avoid BOM being read into the URL

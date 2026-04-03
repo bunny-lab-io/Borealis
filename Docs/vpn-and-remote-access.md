@@ -12,7 +12,6 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - Keepalive: `PersistentKeepalive = 30` seconds on the agent.
 - No idle teardown while the agent service is running.
 - Agent recovery: if the Windows agent receives the same `tunnel_id` again and its WireGuard service is stopped or unhealthy, it rerenders the config and attempts an in-place service recovery instead of assuming the tunnel is still healthy.
-- Direct-access affinity: when an agent is intentionally using a direct/internal Engine URL (for example a LAN IP or internal-only hostname), the WireGuard client prefers that same host for tunnel recovery instead of forcing UDP back through the public reverse-proxy path.
 - Engine recovery: in persistent mode the Engine keeps one Linux WireGuard interface online, updates peers live one at a time during normal connect/disconnect activity, and only falls back to full peer reconciliation when the listener is unhealthy. A watchdog validates listener health every 15 seconds, uses an effective probe grace aligned with WireGuard keepalive timing before declaring `stale_handshake`, and rate-limits full recovery attempts to one every 30 seconds while active sessions exist.
 - Session-scoped transport confirmations: shell output and shell idle-keepalive pongs can refresh tunnel health without requiring visible operator traffic, which keeps quiet RemoteShell sessions from being mistaken for a dead tunnel.
 - Port access: the tunnel is trusted end-to-end, and Engine/Agent firewall rules allow a global port allowlist between the Engine /32 and Agent /32 (defaults to 47002 and 5900, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`).
@@ -35,68 +34,12 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - If the proxy still cannot open the backend VNC TCP session in time, it escalates with `reason=vnc_connect_retry`, which can trigger shared transport recovery for that agent.
 - On weaker agents a VNC session can still succeed while `vnc_connect_retry` recovery is logged in the background; treat that as degraded transport health rather than VNC authentication failure.
 
-## Reverse Proxy Configuration
-Borealis now expects the public TLS identity to live on the embedded Traefik instance running on the engine host. If you already have an external Traefik or firewall edge on a different host, keep that outer layer transparent:
-- Forward `80/tcp` to the engine host's Traefik so HTTP-01 challenges can complete.
-- TCP-passthrough `443/tcp` to the engine host's Traefik.
-- If agents resolve the Borealis FQDN to the outer reverse proxy, also forward `30000/udp` to the engine host's WireGuard listener. WireGuard does not ride the HTTPS proxy path.
-- Do not terminate Borealis TLS on the outer reverse proxy.
-- Do not configure a separate public VNC service. Borealis VNC now rides the same origin at `/remote-desktop/vnc`.
-
-Example outer Traefik dynamic config:
-```yml
-http:
-  routers:
-    borealis-web:
-      entryPoints:
-        - web
-      rule: "Host(`borealis.example.com`)"
-      service: borealis-web
-      priority: 100
-
-  services:
-    borealis-web:
-      loadBalancer:
-        servers:
-          - url: "http://192.168.3.252:80"
-        passHostHeader: true
-
-tcp:
-  routers:
-    borealis-websecure:
-      entryPoints:
-        - websecure
-      rule: "HostSNI(`borealis.example.com`)"
-      service: borealis-websecure
-      tls:
-        passthrough: true
-
-  services:
-    borealis-websecure:
-      loadBalancer:
-        servers:
-          - address: "192.168.3.252:443"
-
-udp:
-  routers:
-    borealis-wireguard:
-      entryPoints:
-        - borealis-wireguard
-      service: borealis-wireguard
-
-  services:
-    borealis-wireguard:
-      loadBalancer:
-        servers:
-          - address: "192.168.3.252:30000"
-```
-
-Notes:
-- Remove any Borealis-specific `certResolver`, `serversTransport`, or `insecureSkipVerify` settings from the outer Traefik instance.
-- If the outer Traefik has a global `web -> websecure` redirect, make sure the Borealis host-specific `web` router above wins for `borealis.example.com`, otherwise HTTP-01 will fail before the request reaches the engine host.
-- Split-horizon DNS remains supported: public DNS can point `borealis.example.com` at the outer reverse proxy while internal DNS points the same hostname directly at the engine host.
-- If you intentionally keep both public and internal DNS pointed at the outer reverse proxy, the outer edge must expose and forward `30000/udp` as well as `80/443`, or WireGuard-backed features like Remote Shell and VNC will fail with `EHOSTUNREACH` even while the Borealis web UI remains healthy.
-- For Traefik, that also means adding a UDP entry point such as `--entrypoints.borealis-wireguard.address=:30000/udp` in static config and publishing `30000:30000/udp` on the container or host.
+## Public Edge Configuration
+Borealis expects the public HTTPS identity to live on the embedded Traefik instance running on the engine host.
+- The supported public entrypoint is the embedded Borealis Traefik + Let's Encrypt edge.
+- Borealis web traffic, `/api`, `/socket.io`, and browser VNC all stay on that same HTTPS origin.
+- WireGuard remains a separate direct UDP service on port `30000`; it is not terminated or proxied through the HTTPS edge.
+- Do not configure a separate public VNC endpoint. Borealis VNC stays same-origin at `/remote-desktop/vnc`.
 
 ## API Endpoints
 - `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an agent.

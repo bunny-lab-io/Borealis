@@ -7,6 +7,7 @@ from Data.Agent import runtime_paths
 
 def test_runtime_paths_resolve_agent_runtime_root_from_repo_tree(tmp_path) -> None:
     repo_root = tmp_path / "Borealis"
+    repo_root.mkdir(parents=True, exist_ok=True)
     (repo_root / "Borealis.ps1").write_text("", encoding="utf-8")
     script_path = repo_root / "Data" / "Agent" / "Roles" / "role_Test.py"
     script_path.parent.mkdir(parents=True, exist_ok=True)

@@ -4,38 +4,15 @@ import argparse
 import ipaddress
 import json
 import os
-import socket
-import ssl
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlencode, urlparse, urlunparse
 
 import requests
-from requests.adapters import HTTPAdapter
 
 from security import AgentKeyStore
 from update_state import get_busy_snapshot, installed_build_id_path, read_installed_build_id, read_repo_build_id, sync_installed_build_id
-
-
-class _HostnameFlexibleAdapter(HTTPAdapter):
-    """HTTPAdapter that can disable urllib3 hostname verification."""
-
-    def __init__(self, *, disable_hostname_check: bool = False, **kwargs):
-        self._disable_hostname_check = disable_hostname_check
-        super().__init__(**kwargs)
-
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-        if self._disable_hostname_check:
-            pool_kwargs = dict(pool_kwargs or {})
-            pool_kwargs["assert_hostname"] = False
-        super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
-
-    def proxy_manager_for(self, proxy, **proxy_kwargs):
-        if self._disable_hostname_check:
-            proxy_kwargs = dict(proxy_kwargs or {})
-            proxy_kwargs["assert_hostname"] = False
-        return super().proxy_manager_for(proxy, **proxy_kwargs)
 
 
 def _settings_dir() -> Path:
@@ -65,16 +42,15 @@ def _normalize_server_url(raw_value: Any) -> str:
     try:
         parsed = urlparse(text)
     except Exception:
-        return text.rstrip("/")
+        return ""
 
-    scheme = parsed.scheme or "https"
-    hostname = parsed.hostname or ""
+    scheme = (parsed.scheme or "https").lower()
+    hostname = (parsed.hostname or "").strip().lower()
     port = parsed.port
-    allow_plaintext = (os.environ.get("BOREALIS_ALLOW_PLAINTEXT") or "").strip().lower() in {"1", "true", "yes", "on"}
-    if scheme == "http" and not allow_plaintext and hostname.lower() in {"localhost", "127.0.0.1", "::1"}:
-        scheme = "https"
-        if port in {None, 80}:
-            port = 5000
+    if scheme != "https" or not hostname:
+        return ""
+    if hostname == "localhost" or _is_literal_ip(hostname):
+        return ""
 
     netloc = hostname
     if parsed.username:
@@ -84,7 +60,7 @@ def _normalize_server_url(raw_value: Any) -> str:
         netloc += f"@{hostname}"
     if port:
         netloc += f":{port}"
-    normalized = parsed._replace(scheme=scheme, netloc=netloc)
+    normalized = parsed._replace(scheme="https", netloc=netloc, params="", fragment="")
     return urlunparse(normalized).rstrip("/")
 
 
@@ -104,52 +80,9 @@ def _is_literal_ip(hostname: str) -> bool:
     return True
 
 
-def _verify_bundle_path(store: AgentKeyStore) -> Any:
-    use_pinned_bundle = (os.environ.get("BOREALIS_USE_PINNED_SERVER_CERT") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if not use_pinned_bundle:
-        return True
-    try:
-        candidate = Path(store.server_certificate_path())
-        if candidate.is_file():
-            return str(candidate)
-    except Exception:
-        pass
-    return True
-
-
 def _build_session(server_url: str) -> requests.Session:
-    session = requests.Session()
-    try:
-        parsed = urlparse(server_url)
-    except Exception:
-        parsed = urlparse("")
-
-    scheme = (parsed.scheme or "https").lower()
-    netloc = parsed.netloc or (parsed.hostname or "")
-    hostname = parsed.hostname or ""
-    allow_literal_ip = (os.environ.get("BOREALIS_ALLOW_LITERAL_ENGINE_IP") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if netloc and _is_literal_ip(hostname) and allow_literal_ip:
-        session.mount(
-            f"{scheme}://{netloc}",
-            _HostnameFlexibleAdapter(disable_hostname_check=True),
-        )
-    return session
-
-
-def _refresh_pinned_certificate(store: AgentKeyStore, server_url: str) -> bool:
-    _ = store
     _ = server_url
-    return False
+    return requests.Session()
 
 
 def _perform_request(
@@ -157,25 +90,12 @@ def _perform_request(
     method: str,
     url: str,
     *,
-    store: AgentKeyStore,
-    server_url: str,
     verify: Any,
     **kwargs,
 ) -> requests.Response:
     request_kwargs = dict(kwargs)
     request_kwargs["verify"] = verify
-    try:
-        return session.request(method, url, **request_kwargs)
-    except requests.exceptions.SSLError:
-        scheme = ""
-        try:
-            scheme = (urlparse(server_url).scheme or "").lower()
-        except Exception:
-            scheme = ""
-        if scheme != "https" or not _refresh_pinned_certificate(store, server_url):
-            raise
-        request_kwargs["verify"] = _verify_bundle_path(store)
-        return session.request(method, url, **request_kwargs)
+    return session.request(method, url, **request_kwargs)
 
 
 def _refresh_access_token(
@@ -194,8 +114,6 @@ def _refresh_access_token(
             request_session,
             "post",
             f"{server_url.rstrip('/')}/api/agent/token/refresh",
-            store=store,
-            server_url=server_url,
             verify=verify,
             json={"guid": guid, "refresh_token": refresh_token},
             headers={"User-Agent": "borealis-agent-updater"},
@@ -251,9 +169,9 @@ def _fetch_repo_hash(force_refresh: bool = False) -> Dict[str, Any]:
     store = _keystore()
     server_url = _read_server_url()
     if not server_url:
-        raise RuntimeError("server_url.txt missing or empty")
+        raise RuntimeError("server_url.txt missing or invalid; configure a public HTTPS FQDN")
 
-    verify = _verify_bundle_path(store)
+    verify = True
     params = {
         "repo": os.environ.get("BOREALIS_UPDATE_REPO") or "bunny-lab-io/Borealis",
         "branch": os.environ.get("BOREALIS_UPDATE_BRANCH") or "main",
@@ -273,8 +191,6 @@ def _fetch_repo_hash(force_refresh: bool = False) -> Dict[str, Any]:
             session,
             "get",
             url,
-            store=store,
-            server_url=server_url,
             verify=verify,
             headers=headers,
             timeout=45,
@@ -297,9 +213,7 @@ def _fetch_repo_hash(force_refresh: bool = False) -> Dict[str, Any]:
                 session,
                 "get",
                 url,
-                store=store,
-                server_url=server_url,
-                verify=_verify_bundle_path(store),
+                verify=True,
                 headers=headers,
                 timeout=45,
             )

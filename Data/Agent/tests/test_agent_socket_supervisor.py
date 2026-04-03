@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
+
+os.environ.setdefault("BOREALIS_AGENT_MODE", "system")
 
 import Data.Agent.agent as agent_module
 
@@ -86,3 +90,18 @@ def test_connect_loop_waits_for_socket_end_after_successful_connect() -> None:
     assert any("starting authentication phase" in message for message in log_messages)
     assert any("sio.connect completed successfully" in message for message in log_messages)
 
+
+def test_get_server_url_requires_public_https_fqdn(monkeypatch, tmp_path: Path) -> None:
+    settings_dir = tmp_path / "Agent" / "Borealis" / "Settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(agent_module, "_settings_dir", lambda: str(settings_dir))
+    monkeypatch.delenv("BOREALIS_SERVER_URL", raising=False)
+
+    (settings_dir / "server_url.txt").write_text("https://borealis.example.com/\n", encoding="utf-8")
+    assert agent_module.get_server_url() == "https://borealis.example.com"
+
+    (settings_dir / "server_url.txt").write_text("https://192.168.3.252:5000\n", encoding="utf-8")
+    assert agent_module.get_server_url() == ""
+
+    (settings_dir / "server_url.txt").write_text("https://localhost:5000\n", encoding="utf-8")
+    assert agent_module.get_server_url() == ""

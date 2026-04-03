@@ -43,6 +43,8 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - qrcode - BSD - https://github.com/lincolnloop/python-qrcode/blob/main/LICENSE
 - Pillow - MIT-CMU - https://github.com/python-pillow/Pillow/blob/main/LICENSE
 - requests - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
+- aiohttp - Apache-2.0 AND MIT - https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt
+- python-socketio - MIT - https://spdx.org/licenses/MIT.html
 - websockets - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
 - packaging - Apache-2.0 OR BSD-2-Clause - https://github.com/pypa/packaging/blob/main/LICENSE
 - regex - Apache-2.0 AND CNRI-Python - https://github.com/mrabarnett/mrab-regex/blob/hg/LICENSE.txt
@@ -54,6 +56,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - jmespath - MIT - https://spdx.org/licenses/MIT.html
 - pywinrm (`pywinrm[credssp]`) - MIT - https://github.com/diyan/pywinrm/blob/master/LICENSE
 - pypsrp (`pypsrp[credssp]`) - MIT - https://github.com/jborean93/pypsrp/blob/master/LICENSE
+- pytest - MIT - https://github.com/pytest-dev/pytest/blob/main/LICENSE
 - ansible.windows collection - GPL-3.0-or-later - https://github.com/ansible-collections/ansible.windows/blob/main/LICENSE
 - ansible.posix collection - GPL-3.0-or-later - https://github.com/ansible-collections/ansible.posix/blob/main/LICENSE
 - community.general collection - GPL-3.0-or-later - https://github.com/ansible-collections/community.general/blob/main/COPYING

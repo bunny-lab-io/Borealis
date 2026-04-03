@@ -4,9 +4,7 @@ param(
 )
 
 $scriptDir = Split-Path $MyInvocation.MyCommand.Path -Parent
-$script:BorealisTlsInitialized = $false
-$script:BorealisTrustedThumbprints = @()
-$script:BorealisCallbackApplied = $false
+$script:BorealisHttpSecurityInitialized = $false
 $script:AgentPythonHttpHelper = ''
 $script:UpdateDebugEnabled = $Trace.IsPresent
 $script:UpdaterLogPath = Join-Path $scriptDir 'Updater.log'
@@ -471,11 +469,9 @@ function Get-BorealisServerUrl {
         } catch {}
     }
 
-    if (-not $serverBaseUrl) { $serverBaseUrl = 'https://localhost:5000' }
-
     $resolved = Resolve-BorealisServerUrl -Url $serverBaseUrl
     if ([string]::IsNullOrWhiteSpace($resolved)) {
-        return 'https://localhost:5000'
+        return ''
     }
 
     Write-UpdateLog ("Resolved Borealis server URL: {0}" -f $resolved) 'INFO'
@@ -499,28 +495,20 @@ function Resolve-BorealisServerUrl {
     try {
         $builder = New-Object System.UriBuilder($candidate)
     } catch {
-        return $candidate.TrimEnd('/')
+        return ''
     }
 
-    $allowPlaintext = $false
-    try {
-        $allowValue = $env:BOREALIS_ALLOW_PLAINTEXT
-        if ($allowValue) {
-            $normalizedAllow = $allowValue.ToString().Trim().ToLowerInvariant()
-            if ($normalizedAllow -and @('1','true','yes','on') -contains $normalizedAllow) {
-                $allowPlaintext = $true
-            }
-        }
-    } catch {}
+    if ($builder.Scheme -ne 'https') {
+        return ''
+    }
 
-    if ($builder.Scheme -eq 'http' -and -not $allowPlaintext) {
-        $hostName = $builder.Host.ToLowerInvariant()
-        if ($hostName -in @('localhost','127.0.0.1','::1')) {
-            $builder.Scheme = 'https'
-            if ($builder.Port -eq -1 -or $builder.Port -eq 80) {
-                $builder.Port = 5000
-            }
-        }
+    $hostName = $builder.Host.ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($hostName) -or $hostName -eq 'localhost') {
+        return ''
+    }
+    $parsedIp = $null
+    if ([System.Net.IPAddress]::TryParse($hostName, [ref]$parsedIp)) {
+        return ''
     }
 
     return $builder.Uri.AbsoluteUri.TrimEnd('/')
@@ -569,263 +557,17 @@ function Get-AgentServerUrlFromSettings {
     }
 }
 
-function Get-AgentCertificateCachePath {
-    param(
-        [string]$AgentRoot
-    )
-
-    $settingsDir = Get-AgentSettingsDirectory -AgentRoot $AgentRoot
-    if (-not $settingsDir) { return '' }
-    return (Join-Path $settingsDir 'server_certificate.crt')
-}
-
-function Get-ExistingServerCertificatePath {
-    param(
-        [string]$AgentRoot
-    )
-
-    $path = Get-AgentCertificateCachePath -AgentRoot $AgentRoot
-    if ($path -and (Test-Path $path -PathType Leaf)) {
-        return $path
-    }
-    return ''
-}
-
-function Save-ServerCertificateCache {
-    param(
-        [string]$AgentRoot,
-        [string]$CertificatePem
-    )
-
-    if ([string]::IsNullOrWhiteSpace($CertificatePem)) {
-        return ''
-    }
-
-    $targetPath = Get-AgentCertificateCachePath -AgentRoot $AgentRoot
-    if (-not $targetPath) {
-        return ''
-    }
-
-    $targetDir = Split-Path -Path $targetPath -Parent
-    try {
-        if (-not (Test-Path $targetDir -PathType Container)) {
-            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
-        }
-    } catch {
-        Write-UpdateLog ("Failed to create certificate cache directory {0}: {1}" -f $targetDir, $_.Exception.Message) 'WARN'
-        return ''
-    }
-
-    try {
-        Set-Content -Path $targetPath -Value $CertificatePem -Encoding UTF8
-        Write-UpdateLog ("Saved Borealis Engine certificate to {0}" -f $targetPath) 'INFO'
-        return $targetPath
-    } catch {
-        Write-UpdateLog ("Failed to cache server certificate: {0}" -f $_.Exception.Message) 'WARN'
-        return ''
-    }
-}
-
-function Get-CertificatesFromPem {
-    param(
-        [string]$Path
-    )
-
-    if (-not $Path -or -not (Test-Path $Path -PathType Leaf)) {
-        return @()
-    }
-
-    $lines = @()
-    try {
-        $lines = Get-Content -Path $Path -ErrorAction Stop
-    } catch {
-        return @()
-    }
-
-    if (-not $lines -or $lines.Count -eq 0) {
-        Write-Verbose ("PEM content at {0} is empty." -f $Path)
-        return @()
-    }
-
-    $collecting = $false
-    $buffer = ''
-    $certificates = @()
-
-    foreach ($line in $lines) {
-        $lineValue = if ($null -ne $line) { $line } else { '' }
-        $trimmed = $lineValue.ToString().Trim()
-        if ($trimmed -eq '-----BEGIN CERTIFICATE-----') {
-            Write-Verbose ("Detected certificate begin marker in {0}." -f $Path)
-            $collecting = $true
-            $buffer = ''
-            continue
-        }
-        if ($trimmed -eq '-----END CERTIFICATE-----') {
-            Write-Verbose ("Detected certificate end marker in {0}; buffer length = {1} characters." -f $Path, $buffer.Length)
-            if ($collecting -and $buffer) {
-                try {
-                    $raw = [Convert]::FromBase64String($buffer)
-                    $cert = $null
-                    try { $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($raw) } catch {}
-                    if (-not $cert) {
-                        try {
-                            $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-                                $raw,
-                                '',
-                                [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
-                            )
-                        } catch {}
-                    }
-                    if (-not $cert) {
-                        throw "Unable to hydrate X509Certificate2 from PEM fragment."
-                    }
-                    $certificates += $cert
-                    Write-Verbose ("Loaded certificate '{0}' from {1}" -f $cert.Subject, $Path)
-                } catch {
-                    Write-Verbose ("Failed to decode certificate block from {0}: {1}" -f $Path, $_.Exception.Message)
-                }
-            }
-            $collecting = $false
-            $buffer = ''
-            continue
-        }
-        if ($collecting) {
-            $buffer += $trimmed
-        }
-    }
-
-    Write-Verbose ("Discovered {0} certificate(s) in {1}" -f $certificates.Count, $Path)
-    return $certificates
-}
-
-function Ensure-BorealisCertificateValidator {
-    if (-not ('Borealis.Update.CertificateValidator' -as [Type])) {
-        $typeDefinition = @"
-using System;
-using System.Collections.Generic;
-using System.Net;
-using System.Net.Security;
-using System.Security.Cryptography.X509Certificates;
-
-namespace Borealis.Update
-{
-    public static class CertificateValidator
-    {
-        private static readonly HashSet<string> _trusted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        public static bool AllowLoopback { get; set; }
-
-        static CertificateValidator()
-        {
-            AllowLoopback = true;
-        }
-
-        public static void ReplaceTrustedThumbprints(string[] thumbprints)
-        {
-            _trusted.Clear();
-            if (thumbprints == null)
-            {
-                return;
-            }
-
-            foreach (var thumb in thumbprints)
-            {
-                if (string.IsNullOrWhiteSpace(thumb))
-                {
-                    continue;
-                }
-
-                _trusted.Add(thumb);
-            }
-        }
-
-        public static bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors)
-        {
-            if (errors == SslPolicyErrors.None)
-            {
-                return true;
-            }
-
-            X509Certificate2 cert2 = certificate as X509Certificate2;
-            if (cert2 == null && certificate != null)
-            {
-                cert2 = new X509Certificate2(certificate);
-            }
-
-            if (cert2 != null && _trusted.Contains(cert2.Thumbprint))
-            {
-                return true;
-            }
-
-            if (chain != null)
-            {
-                foreach (var element in chain.ChainElements)
-                {
-                    if (element.Certificate != null && _trusted.Contains(element.Certificate.Thumbprint))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            if (AllowLoopback)
-            {
-                var request = sender as HttpWebRequest;
-                if (request != null && request.RequestUri != null)
-                {
-                    var host = request.RequestUri.DnsSafeHost;
-                    if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
-        }
-    }
-}
-"@
-        Add-Type -TypeDefinition $typeDefinition -Language CSharp -ErrorAction Stop
-    }
-}
-
 function Initialize-BorealisTlsContext {
     param(
         [string]$AgentRoot,
         [string]$ServerBaseUrl
     )
 
-    if ($script:BorealisTlsInitialized -and $script:BorealisTrustedThumbprints.Count -gt 0) {
+    $null = $AgentRoot
+    $null = $ServerBaseUrl
+    if ($script:BorealisHttpSecurityInitialized) {
         return
     }
-
-    $trusted = @()
-    $cachedCertPath = Get-ExistingServerCertificatePath -AgentRoot $AgentRoot
-    if ($cachedCertPath) {
-        Write-UpdateLog ("Attempting Borealis Engine connection using cached certificate: {0}" -f $cachedCertPath) 'INFO'
-        try {
-            $trusted += Get-CertificatesFromPem -Path $cachedCertPath
-        } catch {
-            Write-UpdateLog ("Unable to load cached certificate; continuing without it ({0})." -f $_.Exception.Message) 'WARN'
-        }
-    }
-
-    if ($trusted.Count -gt 0) {
-        $script:BorealisTrustedThumbprints = $trusted | ForEach-Object { $_.Thumbprint.ToUpperInvariant() } | Sort-Object -Unique
-        Write-Verbose ("Borealis TLS trust store loaded {0} certificate(s)." -f $script:BorealisTrustedThumbprints.Count)
-        Write-UpdateLog ("TLS trust store initialized with {0} certificate(s)." -f $script:BorealisTrustedThumbprints.Count) 'INFO'
-    } else {
-        $script:BorealisTrustedThumbprints = @()
-        Write-Verbose "No Borealis TLS certificates located; loopback hosts will be allowed without CA verification."
-        Write-UpdateLog "No cached Borealis Engine certificate available yet; limiting TLS checks to loopback hosts." 'WARN'
-    }
-
-    Ensure-BorealisCertificateValidator
-    try {
-        [Borealis.Update.CertificateValidator]::ReplaceTrustedThumbprints($script:BorealisTrustedThumbprints)
-    } catch {}
 
     try {
         $protocolType = [System.Net.SecurityProtocolType]
@@ -845,15 +587,7 @@ function Initialize-BorealisTlsContext {
         }
     } catch {}
 
-    if (-not $script:BorealisCallbackApplied) {
-        try {
-            $callback = New-Object System.Net.Security.RemoteCertificateValidationCallback([Borealis.Update.CertificateValidator]::Validate)
-            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $callback
-            $script:BorealisCallbackApplied = $true
-        } catch {}
-    }
-
-    $script:BorealisTlsInitialized = $true
+    $script:BorealisHttpSecurityInitialized = $true
 }
 
 function Get-AgentPythonExecutable {
@@ -1087,29 +821,14 @@ import urllib.error
 import urllib.request
 
 
-def _build_context(cafile):
-    if cafile:
-        ctx = ssl.create_default_context()
+def _build_context():
+    ctx = ssl.create_default_context()
+    minimum = getattr(ssl, "TLSVersion", None)
+    if minimum is not None:
         try:
-            ctx.load_verify_locations(cafile=cafile)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         except Exception:
             pass
-        minimum = getattr(ssl, "TLSVersion", None)
-        if minimum is not None:
-            try:
-                ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-            except Exception:
-                pass
-        return ctx
-    ctx = ssl._create_unverified_context()
-    try:
-        ctx.check_hostname = False
-    except Exception:
-        pass
-    try:
-        ctx.verify_mode = ssl.CERT_NONE
-    except Exception:
-        pass
     return ctx
 
 
@@ -1122,27 +841,6 @@ def _read_payload():
     except Exception:
         text = data.decode("utf-8", errors="ignore")
     return json.loads(text)
-
-
-def _peer_certificate(handle):
-    try:
-        raw = getattr(handle, "fp", None)
-        if raw is None:
-            raw = getattr(handle, "file", None)
-        if raw is None:
-            return None
-        raw = getattr(raw, "raw", raw)
-        sock = getattr(raw, "_sock", None)
-        if sock is None:
-            sock = getattr(raw, "socket", None)
-        if sock is None:
-            return None
-        der = sock.getpeercert(True)
-        if der:
-            return ssl.DER_cert_to_PEM_cert(der)
-    except Exception:
-        return None
-    return None
 
 
 def main():
@@ -1158,7 +856,6 @@ def main():
     body = payload.get("body")
     content_type = payload.get("content_type")
     timeout = payload.get("timeout") or 30
-    cafile = payload.get("cafile")
 
     if body is not None and not isinstance(body, (bytes, bytearray)):
         body = str(body).encode("utf-8")
@@ -1172,16 +869,16 @@ def main():
     if content_type and all(k.lower() != "content-type" for k in request.headers):
         request.add_header("Content-Type", str(content_type))
 
-    ctx = _build_context(cafile if isinstance(cafile, str) else None)
+    ctx = _build_context()
 
     try:
         with urllib.request.urlopen(request, timeout=float(timeout), context=ctx) as response:
             text = response.read().decode("utf-8", errors="replace")
-            json.dump({"status": response.status, "body": text, "certificate": _peer_certificate(response)}, sys.stdout)
+            json.dump({"status": response.status, "body": text}, sys.stdout)
             return 0
     except urllib.error.HTTPError as exc:
         text = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-        json.dump({"status": exc.code, "body": text, "certificate": _peer_certificate(exc)}, sys.stdout)
+        json.dump({"status": exc.code, "body": text}, sys.stdout)
         return 0
     except Exception as exc:  # pragma: no cover - defensive
         json.dump({"error": str(exc)}, sys.stdout)
@@ -1264,12 +961,6 @@ function Invoke-AgentHttpRequest {
         return $null
     }
 
-    $cafile = Get-ExistingServerCertificatePath -AgentRoot $AgentRoot
-    if ($cafile) {
-        Write-UpdateLog ("Attempting to contact Borealis Engine using cached certificate: {0}" -f $cafile) 'INFO'
-    } else {
-        Write-UpdateLog "No cached Borealis Engine certificate found; establishing connection without validation." 'WARN'
-    }
     $payload = @{
         method       = $Method
         url          = $Uri
@@ -1277,7 +968,6 @@ function Invoke-AgentHttpRequest {
         body         = $Body
         content_type = $ContentType
         timeout      = $TimeoutSeconds
-        cafile       = $cafile
     } | ConvertTo-Json -Depth 6
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -1335,19 +1025,10 @@ function Invoke-AgentHttpRequest {
         return $null
     }
 
-    if ($json.certificate) {
-        $savedPath = Save-ServerCertificateCache -AgentRoot $AgentRoot -CertificatePem $json.certificate
-        if ($savedPath) {
-            $script:BorealisTlsInitialized = $false
-            Initialize-BorealisTlsContext -AgentRoot $AgentRoot -ServerBaseUrl $Uri
-        }
-    }
-
     Write-UpdateLog ("Python helper completed HTTP call with status {0}." -f $json.status) 'DEBUG'
     return [pscustomobject]@{
-        StatusCode  = $json.status
-        Content     = $json.body
-        Certificate = $json.certificate
+        StatusCode = $json.status
+        Content    = $json.body
     }
 }
 
@@ -2212,6 +1893,11 @@ function Invoke-BorealisAgentUpdate {
 
     if (-not $serverRepoInfo) {
         $serverBaseUrl = Get-BorealisServerUrl -AgentRoot $agentRoot
+        if (-not $serverBaseUrl) {
+            Write-UpdateHost -Message "The updater requires a configured public HTTPS FQDN in server_url.txt or BOREALIS_SERVER_URL." -Color Yellow -Level 'WARN'
+            Write-UpdateLog "Server URL missing or invalid; updater cannot continue without a public HTTPS FQDN." 'ERROR'
+            return (New-UpdateSessionResult -Outcome 'aborted' -FinalLevel 'ERROR' -FinalMessage '===== Update.ps1 session aborted: Borealis server URL missing or invalid =====')
+        }
         Initialize-BorealisTlsContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl
         $authContext = Get-AgentAccessTokenContext -AgentRoot $agentRoot -ServerBaseUrl $serverBaseUrl -AgentGuid $agentGuid
         if (-not $authContext -or -not $authContext.AccessToken) {

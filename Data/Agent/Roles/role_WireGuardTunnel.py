@@ -27,7 +27,6 @@ import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import urlsplit
 
 try:
     from runtime_paths import agent_borealis_root, agent_logs_root, agent_runtime_root
@@ -1168,85 +1167,6 @@ def _format_endpoint(host: str, port: Optional[int]) -> Optional[str]:
     return f"{text}:{port}"
 
 
-def _parse_server_url_host(server_url: Optional[str]) -> Optional[str]:
-    if not server_url:
-        return None
-    try:
-        parsed = urlsplit(str(server_url).strip())
-        if parsed.hostname:
-            return parsed.hostname.strip()
-    except Exception:
-        pass
-    text = str(server_url).strip()
-    if not text:
-        return None
-    if "://" in text:
-        text = text.split("://", 1)[1]
-    text = text.split("/", 1)[0].strip()
-    if text.startswith("[") and "]" in text:
-        text = text[1:text.index("]")]
-    if ":" in text:
-        host_part, port_part = text.rsplit(":", 1)
-        if port_part.isdigit():
-            text = host_part
-    text = text.strip()
-    return text or None
-
-
-def _is_loopback_host(host: Optional[str]) -> bool:
-    if not host:
-        return True
-    text = str(host).strip().lower()
-    if not text:
-        return True
-    if text == "localhost":
-        return True
-    try:
-        ip = ipaddress.ip_address(text)
-        return ip.is_loopback or ip.is_unspecified
-    except Exception:
-        return False
-
-
-def _is_private_ip_host(host: Optional[str]) -> bool:
-    if not host:
-        return False
-    try:
-        ip = ipaddress.ip_address(str(host).strip())
-    except Exception:
-        return False
-    return bool(
-        ip.is_private
-        or ip.is_link_local
-        or ip.is_loopback
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
-
-
-def _looks_like_internal_host(host: Optional[str]) -> bool:
-    if not host:
-        return False
-    text = str(host).strip().lower().rstrip(".")
-    if not text:
-        return False
-    if _is_private_ip_host(text):
-        return True
-    if "." not in text:
-        return True
-    return text.endswith((".local", ".lan", ".internal", ".home", ".localdomain"))
-
-
-def _should_prefer_server_host(server_host: Optional[str], endpoint_host: Optional[str]) -> bool:
-    normalized_server = (server_host or "").strip().lower()
-    normalized_endpoint = (endpoint_host or "").strip().lower()
-    if not normalized_server or normalized_server == normalized_endpoint:
-        return False
-    if _is_loopback_host(normalized_endpoint):
-        return True
-    return _looks_like_internal_host(normalized_server)
-
-
 def _normalized_session_field(value: Optional[str]) -> str:
     return str(value or "").strip()
 
@@ -1272,7 +1192,6 @@ class Role:
         hooks = getattr(ctx, "hooks", {}) or {}
         self._log_hook = hooks.get("log_agent")
         self._http_client_factory = hooks.get("http_client")
-        self._get_server_url = hooks.get("get_server_url")
         self._last_tunnel_snapshot: Dict[str, Any] = {}
         self._ensure_stop = threading.Event()
         self._ensure_cycle_lock = threading.Lock()
@@ -1308,31 +1227,8 @@ class Role:
         return None
 
     def _resolve_endpoint(self, endpoint: Optional[str], token: Dict[str, Any]) -> Optional[str]:
-        server_url = None
-        if callable(self._get_server_url):
-            try:
-                server_url = self._get_server_url()
-            except Exception:
-                server_url = None
-
-        server_host = _parse_server_url_host(server_url)
-        if not server_host:
-            return endpoint
-
-        endpoint_host = _parse_endpoint_host(endpoint)
-        if endpoint_host and not _should_prefer_server_host(server_host, endpoint_host):
-            return endpoint
-
-        endpoint_port = _parse_endpoint_port(endpoint)
-        if endpoint_port is None:
-            endpoint_port = _coerce_int(token.get("port"), 0)
-            if endpoint_port <= 0:
-                endpoint_port = None
-
-        resolved = _format_endpoint(server_host, endpoint_port)
-        if resolved and endpoint and resolved != endpoint:
-            self._log(f"WireGuard endpoint override: {endpoint} -> {resolved}")
-        return resolved or endpoint
+        _ = token
+        return endpoint
 
     def _session_config_matches_live(self, session: SessionConfig) -> bool:
         snapshot = self._read_live_config_snapshot()

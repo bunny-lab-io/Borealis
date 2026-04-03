@@ -10,7 +10,7 @@ const APIRequestNode = ({ id, data }) => {
   if (!window.BorealisValueBus) window.BorealisValueBus = {};
 
   // Use config values, but coerce types
-  const url = data?.url || "http://localhost:5000/health";
+  const url = data?.url || "https://borealis.example.com/health";
   // Note: Store useProxy as a string ("true"/"false"), convert to boolean for logic
   const useProxy = (data?.useProxy ?? "true") === "true";
   const body = data?.body || "";
@@ -137,7 +137,7 @@ export default {
       key: "url",
       label: "Request URL",
       type: "text",
-      defaultValue: "http://localhost:5000/health"
+      defaultValue: "https://borealis.example.com/health"
     },
     {
       key: "useProxy",

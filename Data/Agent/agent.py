@@ -25,11 +25,10 @@ import contextlib
 import errno
 import re
 import ipaddress
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from typing import Any, Dict, Optional, List, Callable, Tuple
 
 import requests
-from requests.adapters import HTTPAdapter
 try:
     import psutil
 except Exception:
@@ -1011,26 +1010,6 @@ CONFIG = ConfigManager(CONFIG_PATH)
 CONFIG.load()
 
 
-class _HostnameFlexibleAdapter(HTTPAdapter):
-    """HTTPAdapter that can disable urllib3 hostname verification."""
-
-    def __init__(self, *, disable_hostname_check: bool = False, **kwargs):
-        self._disable_hostname_check = disable_hostname_check
-        super().__init__(**kwargs)
-
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-        if self._disable_hostname_check:
-            pool_kwargs = dict(pool_kwargs or {})
-            pool_kwargs['assert_hostname'] = False
-        super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
-
-    def proxy_manager_for(self, proxy, **proxy_kwargs):
-        if self._disable_hostname_check:
-            proxy_kwargs = dict(proxy_kwargs or {})
-            proxy_kwargs['assert_hostname'] = False
-        return super().proxy_manager_for(proxy, **proxy_kwargs)
-
-
 class AgentHttpClient:
     def __init__(self):
         self.key_store = _key_store()
@@ -1040,19 +1019,12 @@ class AgentHttpClient:
         if context_label:
             self.session.headers.setdefault(_AGENT_CONTEXT_HEADER, context_label)
         self.base_url: Optional[str] = None
-        self._base_scheme: Optional[str] = None
-        self._base_netloc: Optional[str] = None
-        self._base_host: Optional[str] = None
-        self._base_host_is_ip: bool = False
-        self._hostname_adapter_prefix: Optional[str] = None
-        self._hostname_adapter_ip_active: bool = False
         self.guid: Optional[str] = None
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.access_expires_at: Optional[int] = None
         self._auth_lock = threading.RLock()
         self._active_installer_code: Optional[str] = None
-        self._cached_ssl_context: Optional[ssl.SSLContext] = None
         self._socketio_http_session = None
         self._socketio_session_mode: Optional[Tuple[str, Optional[str]]] = None
         self._last_reload_state: Optional[Tuple[Optional[str], bool, bool, Optional[int]]] = None
@@ -1070,97 +1042,16 @@ class AgentHttpClient:
         except Exception:
             url = ""
         if not url:
-            url = "https://localhost:5000"
+            raise RuntimeError(
+                "Borealis public server URL is missing or invalid. Configure an HTTPS FQDN in "
+                "Agent/Borealis/Settings/server_url.txt or set BOREALIS_SERVER_URL."
+            )
         if url.endswith("/"):
             url = url[:-1]
         self.base_url = url
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            parsed = urlparse("https://localhost:5000")
-        self._update_base_url_state(parsed)
 
     def _configure_verify(self) -> None:
-        cert_path = self.key_store.server_certificate_path()
-        use_pinned_bundle = (os.environ.get("BOREALIS_USE_PINNED_SERVER_CERT") or "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        if use_pinned_bundle and cert_path and os.path.isfile(cert_path):
-            self.session.verify = cert_path
-        else:
-            self.session.verify = True
-
-    def _update_base_url_state(self, parsed) -> None:
-        try:
-            host = (parsed.hostname or '').strip()
-            netloc = parsed.netloc or host
-            scheme = (parsed.scheme or 'https').lower()
-        except Exception:
-            host = ''
-            netloc = ''
-            scheme = 'https'
-        host_is_ip = _is_literal_ip(host)
-        state_changed = (
-            scheme != self._base_scheme
-            or netloc != self._base_netloc
-            or host != (self._base_host or '')
-            or host_is_ip != self._base_host_is_ip
-        )
-        self._base_scheme = scheme
-        self._base_netloc = netloc
-        self._base_host = host
-        self._base_host_is_ip = host_is_ip
-        if state_changed:
-            self._configure_hostname_adapter()
-
-    def _configure_hostname_adapter(self) -> None:
-        scheme = self._base_scheme
-        netloc = self._base_netloc
-        if not scheme or not netloc:
-            return
-        prefix = f"{scheme}://{netloc}"
-        allow_literal_ip = (os.environ.get("BOREALIS_ALLOW_LITERAL_ENGINE_IP") or "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        if self._base_host_is_ip:
-            if not allow_literal_ip:
-                if self._hostname_adapter_ip_active:
-                    restore_prefix = self._hostname_adapter_prefix or prefix
-                    if restore_prefix:
-                        self.session.mount(restore_prefix, HTTPAdapter())
-                    self._hostname_adapter_prefix = None
-                    self._hostname_adapter_ip_active = False
-                _log_agent(
-                    f"Literal IP engine URL detected for {prefix}; hostname validation remains enabled. Use an FQDN or set BOREALIS_ALLOW_LITERAL_ENGINE_IP=1 for unsupported direct IP mode.",
-                    fname="agent.error.log",
-                )
-                return
-            if (not self._hostname_adapter_ip_active) or (self._hostname_adapter_prefix != prefix):
-                adapter = _HostnameFlexibleAdapter(disable_hostname_check=True)
-                self.session.mount(prefix, adapter)
-                self._hostname_adapter_prefix = prefix
-                self._hostname_adapter_ip_active = True
-                _log_agent(
-                    f"Hostname verification disabled for literal IP target {prefix}",
-                    fname="agent.log",
-                )
-        else:
-            if self._hostname_adapter_ip_active:
-                restore_prefix = self._hostname_adapter_prefix or prefix
-                if restore_prefix:
-                    self.session.mount(restore_prefix, HTTPAdapter())
-                self._hostname_adapter_prefix = None
-                self._hostname_adapter_ip_active = False
-                _log_agent(
-                    "Hostname verification restored for primary agent HTTP session",
-                    fname="agent.log",
-                )
+        self.session.verify = True
 
     def _reload_tokens_from_disk(self) -> None:
         raw_guid = self.key_store.load_guid()
@@ -1215,7 +1106,7 @@ class AgentHttpClient:
         return headers
 
     def configure_socketio(self, client: "socketio.AsyncClient") -> None:
-        """Align the Socket.IO engine's TLS verification with the REST client."""
+        """Align the Socket.IO engine with standard CA and hostname validation."""
 
         try:
             verify = getattr(self.session, "verify", True)
@@ -1256,80 +1147,6 @@ class AgentHttpClient:
                         setattr(http_iface, "session", None)
                 except Exception:
                     pass
-
-            bundle_summary = {"count": None, "fingerprint": None, "layered_default": None}
-            bundle_fp = None
-            context = None
-            if isinstance(verify, str) and os.path.isfile(verify):
-                bundle_count, bundle_fp, layered_default = self.key_store.summarize_server_certificate()
-                bundle_summary = {
-                    "count": bundle_count,
-                    "fingerprint": bundle_fp,
-                    "layered_default": layered_default,
-                }
-                context = self.key_store.build_ssl_context()
-                if context is not None and self._base_host_is_ip:
-                    try:
-                        context.check_hostname = False
-                    except Exception:
-                        pass
-                if context is not None:
-                    self._cached_ssl_context = context
-                    if bundle_summary["layered_default"] is None:
-                        bundle_summary["layered_default"] = getattr(
-                            context, "_borealis_layered_default", None
-                        )
-                    _log_agent(
-                        "SocketIO TLS alignment created SSLContext from pinned bundle "
-                        f"count={bundle_count} fp={bundle_fp or '<none>'} "
-                        f"layered_default={bundle_summary['layered_default']}",
-                        fname="agent.log",
-                    )
-                else:
-                    _log_agent(
-                        "SocketIO TLS alignment failed to build context from pinned bundle",  # noqa: E501
-                        fname="agent.error.log",
-                    )
-                    if self._base_host_is_ip:
-                        try:
-                            fallback_context = ssl.create_default_context()
-                            fallback_context.load_verify_locations(cafile=verify)
-                            fallback_context.check_hostname = False
-                            context = fallback_context
-                            self._cached_ssl_context = context
-                            _log_agent(
-                                "SocketIO TLS alignment generated hostname-relaxed SSLContext for literal IP target",
-                                fname="agent.log",
-                            )
-                        except Exception as exc:
-                            context = None
-                            _log_agent(
-                                f"SocketIO TLS fallback context creation failed: {exc}",
-                                fname="agent.error.log",
-                            )
-
-            if context is not None:
-                _set_attr(engine, "ssl_context", context)
-                _set_attr(engine, "ssl_verify", True)
-                _set_attr(engine, "verify_ssl", True)
-                _set_attr(http_iface, "ssl_context", context)
-                _set_attr(http_iface, "ssl_verify", True)
-                _set_attr(http_iface, "verify_ssl", True)
-                _reset_cached_session()
-                _log_agent(
-                    "SocketIO TLS alignment applied dedicated SSLContext to engine/http "
-                    f"count={bundle_summary['count']} "
-                    f"fp={bundle_summary['fingerprint'] or '<none>'} "
-                    f"layered_default={bundle_summary['layered_default']}",
-                    fname="agent.log",
-                )
-                self._apply_socketio_transport(client, context, verify=True, fingerprint=bundle_summary["fingerprint"])
-                return
-
-            # Fall back to boolean verification flags when we either do not
-            # have a pinned certificate bundle or failed to build a dedicated
-            # context for it.
-            self._cached_ssl_context = None
             verify_flag = False if verify is False else True
             _set_attr(engine, "ssl_context", None)
             _set_attr(engine, "ssl_verify", verify_flag)
@@ -1338,11 +1155,8 @@ class AgentHttpClient:
             _set_attr(http_iface, "ssl_verify", verify_flag)
             _set_attr(http_iface, "verify_ssl", verify_flag)
             _reset_cached_session()
-            self._apply_socketio_transport(client, None if verify_flag else False, verify=verify_flag, fingerprint=None)
-            _log_agent(
-                f"SocketIO TLS alignment fallback verify_flag={verify_flag}",
-                fname="agent.log",
-            )
+            self._apply_socketio_transport(client, verify=verify_flag)
+            _log_agent(f"SocketIO TLS alignment using standard verify_flag={verify_flag}", fname="agent.log")
         except Exception:
             _log_agent(
                 "SocketIO TLS alignment encountered unexpected error",
@@ -1395,10 +1209,8 @@ class AgentHttpClient:
     def _apply_socketio_transport(
         self,
         client: "socketio.AsyncClient",
-        ssl_context,
         *,
         verify: bool,
-        fingerprint: Optional[str],
     ) -> None:
         engine = getattr(client, "eio", None)
         if engine is None:
@@ -1406,62 +1218,11 @@ class AgentHttpClient:
         options = getattr(engine, "websocket_extra_options", {}) or {}
         options = dict(options)
         options.pop("ssl", None)
-
-        try:
-            import aiohttp  # type: ignore
-        except Exception as exc:
-            _log_agent(
-                f"aiohttp unavailable for socket transport configuration: {exc}",
-                fname="agent.error.log",
-            )
-            self._set_socketio_http_session(client, None, None)
-            engine.ssl_verify = verify
-            engine.websocket_extra_options = options
-            return
-
-        if ssl_context is False or not verify:
+        if not verify:
             options["ssl"] = False
-            engine.ssl_verify = False
-            try:
-                connector = aiohttp.TCPConnector(ssl=False)
-                session = aiohttp.ClientSession(connector=connector)
-            except Exception as exc:
-                _log_agent(
-                    f"SocketIO TLS disabled but failed to create aiohttp session: {exc}",
-                    fname="agent.error.log",
-                )
-                self._set_socketio_http_session(client, None, None)
-            else:
-                self._set_socketio_http_session(client, session, ("noverify", None))
-        elif isinstance(ssl_context, ssl.SSLContext):
-            options.pop("ssl", None)
-            options["ssl"] = ssl_context
-            engine.ssl_verify = True
-            try:
-                connector = aiohttp.TCPConnector(ssl=ssl_context)
-                session = aiohttp.ClientSession(connector=connector)
-            except Exception as exc:
-                _log_agent(
-                    f"SocketIO TLS session creation failed; falling back to default handling: {exc}",
-                    fname="agent.error.log",
-                )
-                self._set_socketio_http_session(client, None, None)
-            else:
-                mode = ("context", fingerprint or "<unknown>")
-                self._set_socketio_http_session(client, session, mode)
-        else:
-            options.pop("ssl", None)
-            engine.ssl_verify = True
-            self._set_socketio_http_session(client, None, None)
-
+        self._set_socketio_http_session(client, None, ("default", None))
+        engine.ssl_verify = verify
         engine.websocket_extra_options = options
-
-    def refresh_pinned_certificate(self) -> bool:
-        _log_agent(
-            "TLS failure encountered, but Borealis now relies on public CA validation instead of rotating a pinned engine certificate.",
-            fname="agent.error.log",
-        )
-        return False
 
     # ------------------------------------------------------------------
     # Enrollment & token management
@@ -1529,7 +1290,7 @@ class AgentHttpClient:
                     return
 
                 self.refresh_base_url()
-                base_url = self.base_url or "https://localhost:5000"
+                base_url = self.base_url
                 code_masked = _mask_sensitive(code)
                 _log_agent(
                     "Enrollment handshake starting "
@@ -1928,7 +1689,9 @@ class AgentHttpClient:
 
     def websocket_base_url(self) -> str:
         self.refresh_base_url()
-        return self.base_url or "https://localhost:5000"
+        if not self.base_url:
+            raise RuntimeError("Borealis public server URL is not configured.")
+        return self.base_url
 
     def store_server_signing_key(self, value: str) -> None:
         try:
@@ -2341,29 +2104,39 @@ def _collect_heartbeat_metrics() -> Dict[str, Any]:
     return metrics
 
 
-SERVER_CERT_PATH = _key_store().server_certificate_path()
-
-
 IDENTITY = _key_store().load_or_create_identity()
 SSL_KEY_FINGERPRINT = IDENTITY.fingerprint
 PUBLIC_KEY_B64 = IDENTITY.public_key_b64
 
 
 def get_server_url() -> str:
-    """Return the Borealis server URL from env or Agent/Borealis/Settings/server_url.txt.
-    - Strips UTF-8 BOM and whitespace
-    - Adds http:// if scheme is missing
-    - Falls back to http://localhost:5000 when missing/invalid
-    """
+    """Return the Borealis public HTTPS FQDN from env or Agent/Borealis/Settings/server_url.txt."""
+
     def _sanitize(val: str) -> str:
         try:
             s = (val or '').strip().replace('\ufeff', '')
             if not s:
                 return ''
-            if not (s.lower().startswith('http://') or s.lower().startswith('https://') or s.lower().startswith('ws://') or s.lower().startswith('wss://')):
-                s = 'http://' + s
-            # Remove trailing slash for consistency
-            return s.rstrip('/')
+            if '://' not in s:
+                s = 'https://' + s
+            parsed = urlparse(s)
+            scheme = (parsed.scheme or '').lower()
+            hostname = (parsed.hostname or '').strip().lower()
+            if scheme != 'https' or not hostname:
+                return ''
+            if hostname == 'localhost' or _is_literal_ip(hostname):
+                return ''
+            netloc = hostname
+            if parsed.port:
+                netloc = f'{netloc}:{parsed.port}'
+            normalized = parsed._replace(
+                scheme='https',
+                netloc=netloc,
+                params='',
+                query=parsed.query,
+                fragment='',
+            )
+            return urlunparse(normalized).rstrip('/')
         except Exception:
             return ''
 
@@ -2371,7 +2144,6 @@ def get_server_url() -> str:
         env_url = os.environ.get('BOREALIS_SERVER_URL')
         if env_url and _sanitize(env_url):
             return _sanitize(env_url)
-        # New location
         path = os.path.join(_settings_dir(), 'server_url.txt')
         if os.path.isfile(path):
             try:
@@ -2382,28 +2154,9 @@ def get_server_url() -> str:
                     return s
             except Exception:
                 pass
-        # Prior interim location (Agent/Settings) migration support
-        try:
-            project_root = _find_project_root()
-            old_path = os.path.join(project_root, 'Agent', 'Settings', 'server_url.txt')
-            if os.path.isfile(old_path):
-                with open(old_path, 'r', encoding='utf-8-sig') as f:
-                    txt = f.read()
-                s = _sanitize(txt)
-                if s:
-                    # Best-effort copy forward to new location so future reads use it
-                    try:
-                        os.makedirs(_settings_dir(), exist_ok=True)
-                        with open(path, 'w', encoding='utf-8') as wf:
-                            wf.write(s)
-                    except Exception:
-                        pass
-                    return s
-        except Exception:
-            pass
     except Exception:
         pass
-    return 'http://localhost:5000'
+    return ''
 
 # //////////////////////////////////////////////////////////////////////////
 # CORE SECTION: ASYNC TASK / WEBSOCKET
@@ -3501,13 +3254,6 @@ async def connect_loop():
                     fname="agent.error.log",
                 )
                 _log_exception_trace(f"connect_loop attempt={attempt} TLS failure")
-                if client.refresh_pinned_certificate():
-                    _log_agent(
-                        f"connect_loop attempt={attempt} refreshed server certificate after TLS failure; retrying immediately",
-                        fname="agent.log",
-                    )
-                    await asyncio.sleep(1)
-                    continue
 
             message = (
                 f"connect_loop attempt={attempt} server unavailable: {detail}. "

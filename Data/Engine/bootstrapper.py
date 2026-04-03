@@ -1,6 +1,6 @@
 # ======================================================
 # Data\Engine\bootstrapper.py
-# Description: Bootstrap utility that resolves runtime config, stages WebUI assets, provisions TLS, and starts the Engine Socket.IO server.
+# Description: Bootstrap utility that resolves runtime config, stages WebUI assets, and starts the loopback Engine Socket.IO server behind the embedded Traefik edge.
 #
 # API Endpoints (if applicable): None
 # ======================================================
@@ -8,9 +8,9 @@
 """Entrypoint helpers for running the Borealis Engine runtime.
 
 The bootstrapper assembles configuration via :func:`Data.Engine.config.load_runtime_config`
-before delegating to :func:`Data.Engine.server.create_app`.  It mirrors the
-legacy server defaults by binding to ``0.0.0.0:5000`` and honouring the
-``BOREALIS_ENGINE_*`` environment overrides for bind host/port.
+before delegating to :func:`Data.Engine.server.create_app`. The shipped Engine
+runtime is fixed to loopback HTTP on ``127.0.0.1:5000`` and expects the
+embedded Borealis Traefik edge to own all public HTTPS traffic.
 """
 
 from __future__ import annotations
@@ -24,11 +24,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .config import initialise_engine_logger, load_runtime_config
-from .security import certificates as engine_certificates
 from .server import EngineContext, create_app
 
 
-DEFAULT_HOST = "0.0.0.0"
+DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5000
 
 
@@ -75,11 +74,8 @@ def _build_runtime_config() -> Dict[str, Any]:
         )
 
     return {
-        "HOST": os.environ.get("BOREALIS_ENGINE_HOST", DEFAULT_HOST),
-        "PORT": int(os.environ.get("BOREALIS_ENGINE_PORT", DEFAULT_PORT)),
-        "TLS_CERT_PATH": os.environ.get("BOREALIS_TLS_CERT"),
-        "TLS_KEY_PATH": os.environ.get("BOREALIS_TLS_KEY"),
-        "TLS_BUNDLE_PATH": os.environ.get("BOREALIS_TLS_BUNDLE"),
+        "HOST": DEFAULT_HOST,
+        "PORT": DEFAULT_PORT,
         "API_GROUPS": api_groups,
     }
 
@@ -306,71 +302,6 @@ def _ensure_web_ui_build(staging_root: Path, logger: logging.Logger, *, mode: st
     return _determine_static_folder(staging_root)
 
 
-def _ensure_tls_material(context: EngineContext) -> None:
-    """Ensure TLS certificate material exists, updating the context if created."""
-
-    if getattr(context, "disable_engine_tls", False):
-        return
-
-    try:
-        cert_path, key_path, bundle_path = engine_certificates.ensure_certificate()
-    except Exception as exc:
-        context.logger.error("Failed to auto-provision Engine TLS certificates: %s", exc)
-        return
-
-    cert_path_str = str(cert_path)
-    key_path_str = str(key_path)
-    bundle_path_str = str(bundle_path)
-
-    if not context.tls_cert_path or not Path(context.tls_cert_path).is_file():
-        context.tls_cert_path = cert_path_str
-    if not context.tls_key_path or not Path(context.tls_key_path).is_file():
-        context.tls_key_path = key_path_str
-    if not context.tls_bundle_path or not Path(context.tls_bundle_path).is_file():
-        context.tls_bundle_path = bundle_path_str
-
-
-def _prepare_tls_run_kwargs(context: EngineContext) -> Dict[str, Any]:
-    """Validate and return TLS arguments for the Socket.IO runner."""
-
-    if getattr(context, "disable_engine_tls", False):
-        context.logger.info("Engine TLS disabled; expecting Borealis public edge termination.")
-        return {}
-
-    _ensure_tls_material(context)
-
-    run_kwargs: Dict[str, Any] = {}
-
-    key_path_value = context.tls_key_path
-    if not key_path_value:
-        return run_kwargs
-
-    key_path = Path(key_path_value)
-    if not key_path.is_file():
-        raise RuntimeError(f"Engine TLS key file not found: {key_path}")
-
-    cert_candidates = []
-    if context.tls_bundle_path:
-        cert_candidates.append(context.tls_bundle_path)
-    if context.tls_cert_path and context.tls_cert_path not in cert_candidates:
-        cert_candidates.append(context.tls_cert_path)
-
-    if not cert_candidates:
-        raise RuntimeError("Engine TLS certificate path not configured; ensure certificates are provisioned.")
-
-    missing_candidates = []
-    for candidate in cert_candidates:
-        candidate_path = Path(candidate)
-        if candidate_path.is_file():
-            run_kwargs["certfile"] = str(candidate_path)
-            run_kwargs["keyfile"] = str(key_path)
-            return run_kwargs
-        missing_candidates.append(str(candidate_path))
-
-    checked = ", ".join(missing_candidates)
-    raise RuntimeError(f"Engine TLS certificate file not found. Checked: {checked}")
-
-
 def main() -> None:
     config = _build_runtime_config()
     bootstrap_logger = _bootstrap_logger()
@@ -396,15 +327,11 @@ def main() -> None:
     port = int(config.get("PORT", DEFAULT_PORT))
 
     run_kwargs: Dict[str, Any] = {"host": host, "port": port}
-    try:
-        tls_kwargs = _prepare_tls_run_kwargs(context)
-    except RuntimeError as exc:
-        context.logger.error("TLS configuration error: %s", exc)
-        raise
-    else:
-        if tls_kwargs:
-            run_kwargs.update(tls_kwargs)
-            context.logger.info("Engine TLS enabled using certificate %s", tls_kwargs["certfile"])
+    context.logger.info(
+        "Engine loopback runtime ready on http://%s:%s behind the embedded Borealis Traefik edge.",
+        host,
+        port,
+    )
 
     if getattr(socketio, "async_mode", "") == "threading":
         run_kwargs["allow_unsafe_werkzeug"] = True

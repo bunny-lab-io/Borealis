@@ -1732,7 +1732,7 @@ class Role:
 
                 # Always post the latest available details (possibly cached)
                 details_to_send = self._last_details or {'summary': collect_summary(self.ctx.config)}
-                get_url = (self.ctx.hooks.get('get_server_url') if isinstance(self.ctx.hooks, dict) else None) or (lambda: 'http://localhost:5000')
+                get_url = (self.ctx.hooks.get('get_server_url') if isinstance(self.ctx.hooks, dict) else None) or (lambda: '')
                 agent_build_id = ''
                 if isinstance(self.ctx.hooks, dict):
                     build_id_getter = self.ctx.hooks.get('get_agent_build_id')
@@ -1768,7 +1768,11 @@ class Role:
                             pass
 
                 if aiohttp is not None:
-                    url = (get_url() or '').rstrip('/') + '/api/agent/details'
+                    base_url = (get_url() or '').rstrip('/')
+                    if not base_url:
+                        await asyncio.sleep(interval_sec)
+                        continue
+                    url = base_url + '/api/agent/details'
                     async with aiohttp.ClientSession() as session:
                         await session.post(url, json=payload, timeout=10)
             except Exception:

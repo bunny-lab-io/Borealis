@@ -57,7 +57,7 @@ while (( "$#" )); do
     -Vite|--vite) VITE_FLAG=1 ;;
     -Flask|--flask) FLASK_FLAG=1 ;;
     -Quick|--quick) QUICK_FLAG=1 ;;
-    -EngineTests|--engine-tests) ENGINE_TESTS_FLAG=1 ;;
+    -EngineTests|--EngineTests|--engine-tests) ENGINE_TESTS_FLAG=1 ;;
     -EngineProduction|--engine-production) ENGINE_PROD_FLAG=1 ;;
     -EngineDev|--engine-dev) ENGINE_DEV_FLAG=1 ;;
     --refresh-agent-runtime) REFRESH_AGENT_RUNTIME_FLAG=1 ;;
@@ -380,10 +380,6 @@ clear_agent_enrollment_state() {
     "${SCRIPT_DIR}/Agent/Borealis/Settings"
     "${SCRIPT_DIR}/Agent/Settings"
   )
-  local cert_dirs=(
-    "${SCRIPT_DIR}/Agent/Borealis/Certificates/Trusted_Server_Cert"
-    "${SCRIPT_DIR}/Agent/Certificates/Trusted_Server_Cert"
-  )
   local files_to_remove=(
     "Agent_GUID.txt"
     "access.jwt"
@@ -407,14 +403,6 @@ clear_agent_enrollment_state() {
     done
   done
 
-  local cert_dir=""
-  for cert_dir in "${cert_dirs[@]}"; do
-    target="${cert_dir}/server_certificate.pem"
-    if [[ -e "${target}" ]]; then
-      rm -f "${target}" 2>/dev/null || true
-      write_agent_log "Removed pinned server certificate '${target}'."
-    fi
-  done
 }
 
 agent_python_bin() {
@@ -486,7 +474,7 @@ configure_agent_settings() {
     cp -f "${legacy_settings_dir}/server_url.txt" "${server_url_path}" 2>/dev/null || true
   fi
 
-  local default_url="https://localhost:5000"
+  local default_url="https://$(resolve_engine_public_fqdn)"
   local current_url="${default_url}"
   if [[ -n "${SERVER_URL:-}" ]]; then
     current_url="${SERVER_URL}"
@@ -1267,8 +1255,29 @@ verify_engine_venv_writable() {
   if [[ -w "${site_packages_dir}" ]]; then
     return 0
   fi
+  local venv_dir="${SCRIPT_DIR}/Engine"
+  local py_bin
+  py_bin="$(resolve_python_bin)"
+  if [[ -n "${py_bin}" && -w "${venv_dir}" ]]; then
+    echo -e "${YELLOW}Repairing stale Engine virtual environment ownership under '${venv_dir}'.${RESET}" >&2
+    local repair_stamp
+    repair_stamp="$(date +%s)"
+    local stale_path=""
+    for stale_path in "${venv_dir}/bin" "${venv_dir}/include" "${venv_dir}/lib" "${venv_dir}/lib64" "${venv_dir}/share"; do
+      if [[ -e "${stale_path}" ]]; then
+        mv "${stale_path}" "${stale_path}.stale.${repair_stamp}" 2>/dev/null || true
+      fi
+    done
+    rm -f "${venv_dir}/pyvenv.cfg" 2>/dev/null || true
+    if "${py_bin}" -m venv "${venv_dir}" >/dev/null 2>&1; then
+      site_packages_dir="$(engine_site_packages_dir)"
+      if [[ -n "${site_packages_dir}" && -w "${site_packages_dir}" ]]; then
+        return 0
+      fi
+    fi
+  fi
   echo -e "${RED}Engine virtual environment is not writable at '${site_packages_dir}'.${RESET}" >&2
-  echo -e "${YELLOW}Re-run Borealis.sh as root or repair ownership of the Engine venv before installing Python packages.${RESET}" >&2
+  echo -e "${YELLOW}Borealis could not repair the Engine venv automatically; recreate '${venv_dir}' with the current user before installing Python packages.${RESET}" >&2
   return 1
 }
 
@@ -1357,9 +1366,6 @@ PY
 # ---- Engine TLS material ----
 ensure_engine_tls_material() {
   unset BOREALIS_CERT_DIR
-  unset BOREALIS_TLS_CERT
-  unset BOREALIS_TLS_KEY
-  unset BOREALIS_TLS_BUNDLE
   return 0
 }
 
@@ -2093,14 +2099,6 @@ if [[ -f "\${EDGE_ENV_FILE}" ]]; then
   . "\${EDGE_ENV_FILE}"
 fi
 
-export BOREALIS_ENGINE_HOST="\${BOREALIS_ENGINE_HOST:-127.0.0.1}"
-export BOREALIS_ENGINE_PORT="\${BOREALIS_ENGINE_PORT:-5000}"
-export BOREALIS_DISABLE_ENGINE_TLS="\${BOREALIS_DISABLE_ENGINE_TLS:-1}"
-unset BOREALIS_CERT_DIR
-unset BOREALIS_TLS_CERT
-unset BOREALIS_TLS_KEY
-unset BOREALIS_TLS_BUNDLE
-
 if [[ ! -x "\${VENV_PY}" ]]; then
   echo "Engine python not found at \${VENV_PY}" >&2
   exit 1
@@ -2248,7 +2246,7 @@ create_engine_venv_and_stage_data() {
   # Copy the Engine source tree into the runtime venv staging area.
   shopt -s dotglob nullglob
   for item in "${engine_src}"/*; do
-    cp -a "$item" "$data_dest/"
+    cp -R "$item" "$data_dest/"
   done
   shopt -u dotglob nullglob
 
@@ -2273,12 +2271,25 @@ install_engine_python_deps() {
   verify_engine_venv_writable || return 1
   local engine_src="${SCRIPT_DIR}/Data/Engine"
   local reqs=( "${engine_src}/engine-requirements.txt" "${engine_src}/requirements.txt" )
+  local site_packages_dir
+  site_packages_dir="$(engine_site_packages_dir)"
+  local pth_paths=(
+    "${SCRIPT_DIR}"
+    "${SCRIPT_DIR}/Data/Agent"
+    "${SCRIPT_DIR}/Data/Engine"
+  )
   for r in "${reqs[@]}"; do
     if [[ -f "$r" && -n "$venv_py" ]]; then
       "$venv_py" -m pip install --disable-pip-version-check -q -r "$r"
+      if [[ -n "${site_packages_dir}" ]]; then
+        printf '%s\n' "${pth_paths[@]}" > "${site_packages_dir}/borealis-project-root.pth"
+      fi
       return 0
     fi
   done
+  if [[ -n "${site_packages_dir}" ]]; then
+    printf '%s\n' "${pth_paths[@]}" > "${site_packages_dir}/borealis-project-root.pth"
+  fi
   return 0
 }
 
@@ -2335,8 +2346,6 @@ flask_engine_launch() {
     py="$(engine_python_bin)"
   fi
   local prev_mode="${BOREALIS_ENGINE_MODE:-}"
-  local prev_host="${BOREALIS_ENGINE_HOST:-}"
-  local prev_port="${BOREALIS_ENGINE_PORT:-}"
   local prev_root="${BOREALIS_PROJECT_ROOT:-}"
   export BOREALIS_ENGINE_MODE="$mode"
   export BOREALIS_PROJECT_ROOT="$SCRIPT_DIR"
@@ -2350,13 +2359,6 @@ flask_engine_launch() {
     # shellcheck disable=SC1090
     . "$(engine_letsencrypt_runtime_env_path)"
   fi
-  export BOREALIS_ENGINE_HOST="${BOREALIS_ENGINE_HOST:-127.0.0.1}"
-  export BOREALIS_ENGINE_PORT="${BOREALIS_ENGINE_PORT:-5000}"
-  export BOREALIS_DISABLE_ENGINE_TLS="${BOREALIS_DISABLE_ENGINE_TLS:-1}"
-  unset BOREALIS_CERT_DIR
-  unset BOREALIS_TLS_CERT
-  unset BOREALIS_TLS_KEY
-  unset BOREALIS_TLS_BUNDLE
   echo -e "\n${GREEN}Launching Borealis Engine...${RESET}"
   echo "===================================================================================="
   local start_label
@@ -2372,8 +2374,6 @@ flask_engine_launch() {
   "$py" -m Data.Engine.bootstrapper >>"$stdout_log" 2>>"$stderr_log" || true
   # restore env
   if [[ -n "$prev_mode" ]]; then export BOREALIS_ENGINE_MODE="$prev_mode"; else unset BOREALIS_ENGINE_MODE; fi
-  if [[ -n "$prev_host" ]]; then export BOREALIS_ENGINE_HOST="$prev_host"; else unset BOREALIS_ENGINE_HOST; fi
-  if [[ -n "$prev_port" ]]; then export BOREALIS_ENGINE_PORT="$prev_port"; else unset BOREALIS_ENGINE_PORT; fi
   if [[ -n "$prev_root" ]]; then export BOREALIS_PROJECT_ROOT="$prev_root"; else unset BOREALIS_PROJECT_ROOT; fi
   popd >/dev/null
 }
@@ -2381,12 +2381,21 @@ flask_engine_launch() {
 # ---- Tests parity ----
 if (( ENGINE_TESTS_FLAG )); then
   export BOREALIS_PROJECT_ROOT="${SCRIPT_DIR}"
-  PYTHON_BIN="$(command -v python3 || command -v python || true)"
+  export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+  PYTHON_BIN="$(resolve_python_bin)"
   if [[ -z "${PYTHON_BIN}" ]]; then
     echo -e "${RED}Python interpreter not found. Install Python 3 to run Engine tests.${RESET}" >&2
     exit 1
   fi
-  "${PYTHON_BIN}" -m pytest 'Data/Engine/Unit_Tests'
+  create_engine_venv_and_stage_data || exit 1
+  install_engine_python_deps || exit 1
+  PYTEST_BIN="${SCRIPT_DIR}/Engine/bin/pytest"
+  if [[ ! -x "${PYTEST_BIN}" ]]; then
+    echo -e "${RED}Engine pytest binary not found at ${PYTEST_BIN}.${RESET}" >&2
+    exit 1
+  fi
+  cd "${SCRIPT_DIR}" || exit 1
+  "${PYTEST_BIN}" 'Data/Engine/Unit_Tests'
   exit $?
 fi
 

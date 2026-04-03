@@ -209,16 +209,13 @@ sequenceDiagram
 
 ## Codex Agent (Detailed)
 ### Key material locations (Engine)
-- TLS certificate: `Engine/Certificates/borealis-server-cert.pem`.
-- TLS private key: `Engine/Certificates/borealis-server-key.pem`.
-- TLS bundle (CA + server): `Engine/Certificates/borealis-server-bundle.pem`.
-- Root CA key: `Engine/Certificates/borealis-root-ca-key.pem`.
+- Embedded edge ACME state: `Engine/LetsEncrypt/acme.json`.
+- Embedded Traefik runtime config: `Engine/Traefik/traefik.yml` and `Engine/Traefik/dynamic.yml`.
 - Operator session secret: `Engine/engine_secret.txt`.
 - Script signing keys: `Engine/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
 
 ### Key material locations (Agent)
 - Identity keys: `Agent/Borealis/Certificates/Identity/agent_identity_private.ed25519` and `agent_identity_public.ed25519`.
-- Trusted server bundle: `Agent/Borealis/Certificates/Trusted_Server_Cert/` (scope-specific).
 - Tokens and GUID: `Agent/Borealis/Settings/` (refresh.token, access.jwt, Agent_GUID.txt).
 
 ### Enrollment sequence (step-by-step)
@@ -257,7 +254,7 @@ sequenceDiagram
 
 ### Agent Refresh Tokens (Full)
 #### What a refresh token is
-- A long-lived credential the agent gets during enrollment; it represents device trust and is bound to the agent's key/certificate fingerprint.
+- A long-lived credential the agent gets during enrollment; it represents device trust and is bound to the agent's identity fingerprint.
 - Stored locally under the agent settings directory as an encrypted blob (`refresh.token`) alongside token metadata (`access.meta.json`) and the agent GUID.
 - Not presented to normal APIs; it is only sent to the Engine to mint new short-lived access tokens.
 
@@ -268,7 +265,7 @@ sequenceDiagram
      - `guid` (device identity)
      - `access_token` (EdDSA JWT, about 15 minutes)
      - `refresh_token` (random urlsafe string)
-     - Engine TLS bundle and signing key
+     - Engine signing key
    - The agent persists the GUID, access token, refresh token, and expiry metadata via `AgentKeyStore` (`Data/Agent/security.py`).
 
 #### How long it lasts (sliding expiry)

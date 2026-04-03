@@ -9,6 +9,8 @@ pyotp
 qrcode
 Pillow
 requests
+aiohttp
+python-socketio
 websockets
 packaging
 regex
@@ -20,3 +22,4 @@ ansible-runner
 jmespath
 pywinrm[credssp]>=0.4.0
 pypsrp[credssp]>=0.4.0,<1.0.0
+pytest

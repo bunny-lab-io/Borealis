@@ -1,6 +1,6 @@
 # ======================================================
 # Data\Engine\config.py
-# Description: Configuration loader aligning the Engine runtime with legacy defaults, logging policy, and TLS discovery.
+# Description: Configuration loader aligning the Engine runtime with embedded Traefik public-edge defaults and logging policy.
 #
 # API Endpoints (if applicable): None
 # ======================================================
@@ -16,12 +16,12 @@ and exposes typed helpers that the application factory consumes.
 Launch overview
 ---------------
 The Engine can be started via :func:`Data.Engine.bootstrapper.main` or by
-invoking :func:`Data.Engine.server.create_app` manually.  Configuration is
-assembled from (in precedence order):
-
-``config`` mapping overrides provided to :func:`load_runtime_config`,
+invoking :func:`Data.Engine.server.create_app` manually. The shipped runtime is
+loopback HTTP only and expects the embedded Traefik + Let's Encrypt edge to own
+all public HTTPS traffic. Configuration is assembled from (in precedence
+order): ``config`` mapping overrides provided to :func:`load_runtime_config`,
 environment variables prefixed with ``BOREALIS_``, and finally built-in
-defaults that mirror the legacy server runtime.  Key environment variables are
+defaults. Key environment variables are
 
 ``BOREALIS_DATABASE_URL``   PostgreSQL connection URL used by the Engine
                             runtime. This is required for production starts.
@@ -56,15 +56,15 @@ defaults that mirror the legacy server runtime.  Key environment variables are
                                 ``<ProjectRoot>/Engine/engine_secret.txt``).
 ``BOREALIS_COOKIE_*``       Session cookie policies (``SAMESITE``, ``SECURE``,
                             ``DOMAIN``).
-``BOREALIS_TLS_*``          TLS certificate, private key, and bundle paths.
 ``BOREALIS_PUBLIC_*``       Public edge settings used when Borealis runs behind
                             the local Traefik TLS terminator.
-``BOREALIS_DISABLE_ENGINE_TLS`` disable in-process TLS because a local public
-                                edge proxy owns HTTPS termination.
+``BOREALIS_LETSENCRYPT_SETTINGS_PATH`` path to the Borealis-managed public edge
+                                      settings JSON rendered by ``Borealis.sh``.
 
-When TLS values are not provided explicitly the Engine provisions certificates
-under ``Engine/Certificates`` (migrating any legacy material) so the runtime
-remains self-contained.
+Direct public Engine TLS is no longer supported. The Python Engine always runs
+on loopback HTTP behind the embedded Traefik edge, while internal Engine
+certificates remain scoped to non-public uses such as WireGuard and code
+signing.
 Logs are written to ``Engine/Logs/engine.log`` with daily rotation and
 errors are additionally duplicated to ``Engine/Logs/error.log`` so the
 runtime integrates with the platform's logging policy.
@@ -80,7 +80,7 @@ from pathlib import Path
 from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from . import edge_runtime
-from .security import certificates, session_secret
+from .security import session_secret
 
 
 ENGINE_DIR = Path(__file__).resolve().parent
@@ -122,7 +122,7 @@ POWERSHELL_PORT = 47002
 
 # VNC (UltraVNC over WireGuard)
 VNC_PORT = 5900
-VNC_WS_HOST = "0.0.0.0"
+VNC_WS_HOST = "127.0.0.1"
 VNC_WS_PORT = 4823
 VNC_SESSION_TTL_SECONDS = 120
 
@@ -304,27 +304,9 @@ def _discover_tls_material(
     if disable_tls:
         return None, None, None
 
-    cert_path = config.get("TLS_CERT_PATH") or os.environ.get("BOREALIS_TLS_CERT") or None
-    key_path = config.get("TLS_KEY_PATH") or os.environ.get("BOREALIS_TLS_KEY") or None
-    bundle_path = config.get("TLS_BUNDLE_PATH") or os.environ.get("BOREALIS_TLS_BUNDLE") or None
-
-    if certificates and not all([cert_path, key_path, bundle_path]):
-        try:
-            auto_cert, auto_key, auto_bundle = certificates.certificate_paths()
-        except Exception:
-            auto_cert = auto_key = auto_bundle = None
-        else:
-            cert_path = cert_path or auto_cert
-            key_path = key_path or auto_key
-            bundle_path = bundle_path or auto_bundle
-
-    if cert_path:
-        os.environ.setdefault("BOREALIS_TLS_CERT", str(cert_path))
-    if key_path:
-        os.environ.setdefault("BOREALIS_TLS_KEY", str(key_path))
-    if bundle_path:
-        os.environ.setdefault("BOREALIS_TLS_BUNDLE", str(bundle_path))
-
+    cert_path = config.get("TLS_CERT_PATH") or None
+    key_path = config.get("TLS_KEY_PATH") or None
+    bundle_path = config.get("TLS_BUNDLE_PATH") or None
     return cert_path, key_path, bundle_path
 
 
@@ -542,13 +524,7 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
         ),
     )
 
-    disable_engine_tls = _parse_bool(
-        runtime_config.get("DISABLE_ENGINE_TLS"),
-        default=_parse_bool(
-            os.environ.get("BOREALIS_DISABLE_ENGINE_TLS"),
-            default=public_edge_enabled,
-        ),
-    )
+    disable_engine_tls = True
 
     edge_public_base_url = edge_settings.public_base_url if edge_settings is not None else ""
     edge_public_hostname = edge_settings.public_hostname if edge_settings is not None else ""

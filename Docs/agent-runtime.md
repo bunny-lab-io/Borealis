@@ -91,7 +91,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - If enrollment fails, check:
   - `Agent/Logs/agent.log` for enrollment errors.
   - `Engine/Logs/engine.log` for approval or auth failures.
-- The updater helper (`Data/Agent/update_helper.py`) uses the pinned Engine certificate and relaxes hostname matching only for literal IP server URLs, so IP-based deployments still keep certificate trust without requiring `verify=false`.
+- The updater helper (`Data/Agent/update_helper.py`) requires a configured public HTTPS FQDN and uses normal CA + hostname validation only.
 - Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and launch the same `Update.ps1` / `Update.sh` flow immediately rather than waiting for the hourly scheduler.
 - If scripts do not run:
   - Confirm `quick_job_run` events and the correct role context.
@@ -117,8 +117,8 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 
 #### Security
 - Generates device-wide Ed25519 keys on first launch (`Agent/Borealis/Certificates/Identity/`; DPAPI on Windows, `chmod 600` elsewhere).
-- Refresh/access tokens are encrypted and pinned to the Engine certificate fingerprint; mismatches force re-enrollment.
-- Uses dedicated `ssl.SSLContext` seeded with the Engine TLS bundle for REST and Socket.IO traffic.
+- Refresh/access tokens are encrypted and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
+- REST and Socket.IO traffic use the public Engine FQDN with normal CA + hostname validation.
 - Validates script payloads with backend-issued Ed25519 signatures before execution.
 - Outbound-only; API/WebSocket calls flow through `AgentHttpClient.ensure_authenticated` for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events in `Agent/Logs/`.
 

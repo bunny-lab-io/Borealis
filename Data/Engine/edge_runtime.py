@@ -152,9 +152,6 @@ class LetsEncryptSettings:
     engine_upstream_port: int
     vnc_upstream_host: str
     vnc_upstream_port: int
-    split_horizon_enabled: bool
-    allow_direct_access: bool
-    external_passthrough_expected: bool
     settings_path: str
     runtime_env_path: str
     acme_storage_path: str
@@ -193,9 +190,6 @@ def _default_settings(
         engine_upstream_port=DEFAULT_ENGINE_UPSTREAM_PORT,
         vnc_upstream_host=DEFAULT_VNC_UPSTREAM_HOST,
         vnc_upstream_port=DEFAULT_VNC_UPSTREAM_PORT,
-        split_horizon_enabled=True,
-        allow_direct_access=True,
-        external_passthrough_expected=True,
         settings_path=str(settings_path),
         runtime_env_path=str(DEFAULT_RUNTIME_ENV_PATH),
         acme_storage_path=str(DEFAULT_ACME_STORAGE_PATH),
@@ -245,9 +239,6 @@ def load_settings(
         engine_upstream_port=_parse_int(raw.get("engine_upstream_port"), default=defaults.engine_upstream_port),
         vnc_upstream_host=_normalize_text(raw.get("vnc_upstream_host")) or defaults.vnc_upstream_host,
         vnc_upstream_port=_parse_int(raw.get("vnc_upstream_port"), default=defaults.vnc_upstream_port),
-        split_horizon_enabled=_parse_bool(raw.get("split_horizon_enabled"), default=defaults.split_horizon_enabled),
-        allow_direct_access=_parse_bool(raw.get("allow_direct_access"), default=defaults.allow_direct_access),
-        external_passthrough_expected=_parse_bool(raw.get("external_passthrough_expected"), default=defaults.external_passthrough_expected),
         settings_path=str(path),
         runtime_env_path=str(Path(_normalize_text(raw.get("runtime_env_path")) or defaults.runtime_env_path).expanduser()),
         acme_storage_path=str(Path(_normalize_text(raw.get("acme_storage_path")) or defaults.acme_storage_path).expanduser()),
@@ -268,9 +259,6 @@ def save_settings(settings: LetsEncryptSettings) -> Path:
 def _render_runtime_env(settings: LetsEncryptSettings) -> str:
     pairs = {
         "BOREALIS_PUBLIC_EDGE_ENABLED": "1" if settings.enabled else "0",
-        "BOREALIS_DISABLE_ENGINE_TLS": "1" if settings.enabled else "0",
-        "BOREALIS_ENGINE_HOST": settings.engine_upstream_host,
-        "BOREALIS_ENGINE_PORT": str(settings.engine_upstream_port),
         "BOREALIS_PUBLIC_BASE_URL": settings.public_base_url,
         "BOREALIS_PUBLIC_HOSTNAME": settings.public_hostname,
         "BOREALIS_PUBLIC_HTTPS_PORT": str(settings.https_port),

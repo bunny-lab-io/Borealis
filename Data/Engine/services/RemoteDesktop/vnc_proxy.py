@@ -295,20 +295,6 @@ class VncProxyServer:
         except Exception:
             self.logger.debug("Failed to emit vnc_stop for agent_id=%s", session.agent_id, exc_info=True)
 
-
-def _build_ssl_context(cert_path: Optional[str], key_path: Optional[str]) -> Optional[Any]:
-    import ssl
-
-    if not cert_path or not key_path:
-        return None
-    try:
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(certfile=cert_path, keyfile=key_path)
-        return context
-    except Exception:
-        return None
-
-
 def ensure_vnc_proxy(
     context: Any,
     *,
@@ -326,13 +312,6 @@ def ensure_vnc_proxy(
 
     proxy = getattr(context, "vnc_proxy", None)
     if proxy is None:
-        ssl_context = None
-        if not getattr(context, "disable_engine_tls", False):
-            cert_path = getattr(context, "tls_bundle_path", None) or getattr(context, "tls_cert_path", None)
-            ssl_context = _build_ssl_context(
-                cert_path,
-                getattr(context, "tls_key_path", None),
-            )
         proxy = VncProxyServer(
             host=str(getattr(context, "vnc_ws_host", "0.0.0.0")),
             port=int(getattr(context, "vnc_ws_port", 4823)),
@@ -341,7 +320,7 @@ def ensure_vnc_proxy(
             emit_agent_event=getattr(context, "emit_agent_event", None),
             resolver=resolver,
             path=str(getattr(context, "public_vnc_path", VNC_WS_PATH)),
-            ssl_context=ssl_context,
+            ssl_context=None,
         )
         setattr(context, "vnc_proxy", proxy)
     elif resolver is not None:
