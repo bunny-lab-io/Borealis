@@ -1043,8 +1043,6 @@ class VncManager:
             )
             if result.returncode != 0:
                 _write_log(f"Failed to ensure VNC firewall rule: {result.stderr.strip()}")
-            else:
-                _write_log(f"Ensured VNC firewall rule for {remote} on port {port}.")
         except Exception as exc:
             _write_log(f"Failed to ensure VNC firewall rule: {exc}")
 
