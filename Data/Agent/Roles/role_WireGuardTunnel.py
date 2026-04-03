@@ -731,7 +731,10 @@ class WireGuardClient:
         with self._session_lock:
             recovery_reason: Optional[str] = None
             prior_service_state: Optional[str] = None
+            metadata_refresh_only = False
+            previous_tunnel_id = ""
             if self.session:
+                previous_tunnel_id = str(self.session.tunnel_id or "")
                 if self.session.tunnel_id == session.tunnel_id:
                     prior_service_state = self._service_state()
                     same_config = _session_config_equivalent(self.session, session)
@@ -759,12 +762,12 @@ class WireGuardClient:
                         prior_state=prior_service_state,
                     )
                 else:
-                    _write_log(
-                        "WireGuard session replace: existing_tunnel_id={0} new_tunnel_id={1}".format(
-                            self.session.tunnel_id, session.tunnel_id
-                        )
+                    prior_service_state = self._service_state()
+                    metadata_refresh_only = (
+                        prior_service_state in ("RUNNING", "START_PENDING")
+                        and _session_transport_equivalent(self.session, session)
+                        and not session.force_restart
                     )
-                    self._stop_session_locked(reason="session_replace", ignore_missing=True)
 
             try:
                 self._validate_token(session.token, signing_client=signing_client)
@@ -779,6 +782,27 @@ class WireGuardClient:
                         detail="token_validation_failed",
                     )
                 return
+
+            if metadata_refresh_only:
+                _write_log(
+                    "WireGuard session metadata refresh: existing_tunnel_id={0} new_tunnel_id={1} service_state={2}".format(
+                        previous_tunnel_id or "-",
+                        session.tunnel_id or "-",
+                        prior_service_state or "-",
+                    )
+                )
+                self.session = session
+                self.idle_deadline = None
+                return
+
+            if self.session and previous_tunnel_id and previous_tunnel_id != str(session.tunnel_id or ""):
+                _write_log(
+                    "WireGuard session replace: existing_tunnel_id={0} new_tunnel_id={1}".format(
+                        previous_tunnel_id,
+                        session.tunnel_id,
+                    )
+                )
+                self._stop_session_locked(reason="session_replace", ignore_missing=True)
 
             rendered = self._render_config(session)
             if not self._write_config(rendered):
@@ -1034,6 +1058,8 @@ class LinuxWireGuardClient:
 
     def start_session(self, session: SessionConfig, *, signing_client: Optional[Any] = None) -> None:
         with self._session_lock:
+            metadata_refresh_only = False
+            previous_tunnel_id = ""
             if self.session and self.session.tunnel_id == session.tunnel_id:
                 same_config = _session_config_equivalent(self.session, session)
                 if self._service_state() == "RUNNING" and same_config and not session.force_restart:
@@ -1048,18 +1074,36 @@ class LinuxWireGuardClient:
                 else:
                     _write_log("WireGuard Linux session config drift detected; refreshing existing tunnel.")
             elif self.session:
-                _write_log(
-                    "WireGuard Linux session replace: existing_tunnel_id={0} new_tunnel_id={1}".format(
-                        self.session.tunnel_id, session.tunnel_id
-                    )
+                previous_tunnel_id = str(self.session.tunnel_id or "")
+                metadata_refresh_only = (
+                    self._service_state() == "RUNNING"
+                    and _session_transport_equivalent(self.session, session)
+                    and not session.force_restart
                 )
-                self._stop_session_locked(reason="session_replace", ignore_missing=True)
 
             try:
                 self._validate_token(session.token, signing_client=signing_client)
             except Exception as exc:
                 _write_log(f"Refusing to start WireGuard Linux session: {exc}")
                 return
+
+            if metadata_refresh_only:
+                _write_log(
+                    "WireGuard Linux session metadata refresh: existing_tunnel_id={0} new_tunnel_id={1}".format(
+                        previous_tunnel_id or "-",
+                        session.tunnel_id or "-",
+                    )
+                )
+                self.session = session
+                return
+
+            if self.session and previous_tunnel_id and previous_tunnel_id != str(session.tunnel_id or ""):
+                _write_log(
+                    "WireGuard Linux session replace: existing_tunnel_id={0} new_tunnel_id={1}".format(
+                        previous_tunnel_id, session.tunnel_id
+                    )
+                )
+                self._stop_session_locked(reason="session_replace", ignore_missing=True)
 
             rendered = self._render_config(session)
             if not self._write_config(rendered):
@@ -1181,6 +1225,21 @@ def _session_config_equivalent(current: Optional[SessionConfig], desired: Option
         and _normalized_session_field(current.endpoint) == _normalized_session_field(desired.endpoint)
         and _normalized_session_field(current.server_public_key) == _normalized_session_field(desired.server_public_key)
         and _normalized_session_field(current.allowed_ports) == _normalized_session_field(desired.allowed_ports)
+    )
+
+
+def _session_transport_equivalent(current: Optional[SessionConfig], desired: Optional[SessionConfig]) -> bool:
+    if current is None or desired is None:
+        return False
+    return (
+        _normalized_session_field(current.virtual_ip) == _normalized_session_field(desired.virtual_ip)
+        and _normalized_session_field(current.allowed_ips) == _normalized_session_field(desired.allowed_ips)
+        and _normalized_session_field(current.endpoint) == _normalized_session_field(desired.endpoint)
+        and _normalized_session_field(current.server_public_key) == _normalized_session_field(desired.server_public_key)
+        and _normalized_session_field(current.allowed_ports) == _normalized_session_field(desired.allowed_ports)
+        and _normalized_session_field(current.preshared_key) == _normalized_session_field(desired.preshared_key)
+        and _normalized_session_field(current.client_private_key) == _normalized_session_field(desired.client_private_key)
+        and _normalized_session_field(current.client_public_key) == _normalized_session_field(desired.client_public_key)
     )
 
 

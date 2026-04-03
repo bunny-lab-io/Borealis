@@ -10,6 +10,7 @@ from Data.Agent.Roles.role_WireGuardTunnel import (
     SessionConfig,
     WireGuardClient,
     _session_config_equivalent,
+    _session_transport_equivalent,
 )
 
 
@@ -30,6 +31,16 @@ def test_session_config_equivalent_detects_endpoint_drift() -> None:
     desired = _build_session(endpoint="192.168.3.252:30000")
     assert _session_config_equivalent(current, current) is True
     assert _session_config_equivalent(current, desired) is False
+
+
+def test_session_transport_equivalent_ignores_tunnel_rotation() -> None:
+    current = _build_session()
+    desired = _build_session()
+    desired.tunnel_id = "tunnel-2"
+    desired.token = dict(desired.token)
+    desired.token["tunnel_id"] = "tunnel-2"
+
+    assert _session_transport_equivalent(current, desired) is True
 
 
 def test_role_resolve_endpoint_preserves_engine_token_endpoint() -> None:
@@ -102,6 +113,31 @@ def test_linux_client_force_restart_skips_same_session_reuse() -> None:
     client.start_session(forced, signing_client=None)
 
     assert calls == ["write_config", "bring_down", "bring_up"]
+
+
+def test_linux_client_refreshes_session_metadata_without_restart_for_tunnel_rotation() -> None:
+    client = LinuxWireGuardClient.__new__(LinuxWireGuardClient)
+    client._session_lock = threading.Lock()
+    client.session = _build_session()
+    client.conf_path = None
+    client._client_keys = {"private": "client-private"}
+    calls: list[str] = []
+
+    client._service_state = lambda: "RUNNING"
+    client._validate_token = lambda token, signing_client=None: calls.append("validate")
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._bring_down = lambda: calls.append("bring_down")
+    client._bring_up = lambda: calls.append("bring_up") or True
+
+    refreshed = _build_session()
+    refreshed.tunnel_id = "tunnel-2"
+    refreshed.token = dict(refreshed.token)
+    refreshed.token["tunnel_id"] = "tunnel-2"
+
+    client.start_session(refreshed, signing_client=None)
+
+    assert calls == ["validate"]
+    assert client.session is refreshed
 
 
 def _build_windows_client() -> WireGuardClient:
@@ -201,6 +237,34 @@ def test_windows_client_requires_healthy_service_before_marking_session_started(
 
     assert calls == ["write_config", "restart", "reinstall", "restart"]
     assert client.session is None
+
+
+def test_windows_client_refreshes_session_metadata_without_restart_for_tunnel_rotation() -> None:
+    client = _build_windows_client()
+    client.session = _build_session()
+    calls: list[str] = []
+
+    client._validate_token = lambda token, signing_client=None: calls.append("validate")
+    client._service_state = lambda: "RUNNING"
+    client._write_config = lambda text: calls.append("write_config") or True
+    client._service_exists = lambda: True
+    client._service_config_path = lambda: client.conf_path
+    client._restart_service = lambda: calls.append("restart") or True
+    client._reinstall_service = lambda: calls.append("reinstall") or True
+    client._ensure_adapter_name = lambda: calls.append("adapter")
+    client._ensure_service_display_name = lambda: calls.append("display")
+    client._ensure_shell_firewall = lambda allowed_ips, allowed_ports: calls.append("firewall")
+    client._log_recovery_event = lambda *args, **kwargs: None
+
+    refreshed = _build_session()
+    refreshed.tunnel_id = "tunnel-2"
+    refreshed.token = dict(refreshed.token)
+    refreshed.token["tunnel_id"] = "tunnel-2"
+
+    client.start_session(refreshed, signing_client=None)
+
+    assert calls == ["validate"]
+    assert client.session is refreshed
 
 
 def test_role_run_ensure_cycle_uses_requested_reason() -> None:
