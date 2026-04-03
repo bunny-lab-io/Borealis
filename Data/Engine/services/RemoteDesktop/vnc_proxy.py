@@ -28,8 +28,9 @@ _CONNECT_RETRY_DELAY_SECONDS = 0.25
 # Delay forced transport recovery until the backend VNC socket has genuinely
 # stalled, and only request it once per browser session to avoid restart churn
 # on the shared WireGuard listener.
-_CONNECT_RECOVERY_AFTER_SECONDS = 5.0
+_CONNECT_RECOVERY_AFTER_SECONDS = 8.0
 _CONNECT_RECOVERY_MAX_ATTEMPTS = 1
+_CONNECT_RECOVERY_COOLDOWN_SECONDS = 20.0
 
 
 @dataclass
@@ -132,6 +133,8 @@ class VncProxyServer:
         self._thread: Optional[threading.Thread] = None
         self._ready = threading.Event()
         self._failed = threading.Event()
+        self._connect_recovery_lock = threading.Lock()
+        self._last_connect_recovery_by_agent: Dict[str, float] = {}
 
     def ensure_started(self, timeout: float = 3.0) -> bool:
         if self._thread and self._thread.is_alive():
@@ -254,6 +257,24 @@ class VncProxyServer:
         except Exception:
             self.logger.debug("Failed to configure VNC TCP_NODELAY", exc_info=True)
 
+    def _reserve_connect_recovery(self, agent_id: str, now: float) -> bool:
+        if not agent_id:
+            return True
+        with self._connect_recovery_lock:
+            stale_before = now - (_CONNECT_RECOVERY_COOLDOWN_SECONDS * 4.0)
+            stale_agents = [
+                existing_agent
+                for existing_agent, seen_at in self._last_connect_recovery_by_agent.items()
+                if seen_at < stale_before
+            ]
+            for stale_agent in stale_agents:
+                self._last_connect_recovery_by_agent.pop(stale_agent, None)
+            last_seen = self._last_connect_recovery_by_agent.get(agent_id)
+            if last_seen is not None and (now - last_seen) < _CONNECT_RECOVERY_COOLDOWN_SECONDS:
+                return False
+            self._last_connect_recovery_by_agent[agent_id] = now
+            return True
+
     async def _connect_vnc(self, session: VncSession) -> Tuple[Any, Any]:
         host = session.host
         port = session.port
@@ -290,13 +311,21 @@ class VncProxyServer:
                     and (time.monotonic() - started_at) >= _CONNECT_RECOVERY_AFTER_SECONDS
                 ):
                     recovery_attempts += 1
-                    try:
-                        session.restart_tunnel("vnc_connect_retry")
-                    except Exception:
+                    recovery_now = time.monotonic()
+                    if self._reserve_connect_recovery(session.agent_id, recovery_now):
+                        try:
+                            session.restart_tunnel("vnc_connect_retry")
+                        except Exception:
+                            self.logger.debug(
+                                "Failed to request tunnel restart during VNC connect agent_id=%s",
+                                session.agent_id,
+                                exc_info=True,
+                            )
+                    else:
                         self.logger.debug(
-                            "Failed to request tunnel restart during VNC connect agent_id=%s",
+                            "Suppressed duplicate VNC connect recovery agent_id=%s cooldown=%s",
                             session.agent_id,
-                            exc_info=True,
+                            _CONNECT_RECOVERY_COOLDOWN_SECONDS,
                         )
                 remaining = deadline - time.monotonic()
                 if remaining > 0:

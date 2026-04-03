@@ -113,3 +113,61 @@ def test_connect_vnc_requests_single_recovery_after_repeated_failures(monkeypatc
     assert attempts["count"] == 4
     assert restart_reasons == ["vnc_connect_retry"]
     assert confirm_reasons == ["vnc_backend_connect"]
+
+
+def test_connect_vnc_suppresses_duplicate_recovery_for_same_agent_within_cooldown(monkeypatch) -> None:
+    proxy = _build_proxy()
+    restart_reasons_one: list[str] = []
+    restart_reasons_two: list[str] = []
+
+    session_one = vnc_proxy.VncSession(
+        token="token-3",
+        agent_id="agent-3",
+        host="10.255.0.5",
+        port=5900,
+        created_at=0.0,
+        expires_at=120.0,
+        restart_tunnel=lambda reason: restart_reasons_one.append(reason),
+        confirm_transport=lambda _reason: None,
+    )
+    session_two = vnc_proxy.VncSession(
+        token="token-4",
+        agent_id="agent-3",
+        host="10.255.0.5",
+        port=5900,
+        created_at=0.0,
+        expires_at=120.0,
+        restart_tunnel=lambda reason: restart_reasons_two.append(reason),
+        confirm_transport=lambda _reason: None,
+    )
+
+    attempts = {"count": 0}
+
+    async def _fake_open_connection(host: str, port: int):
+        assert host == "10.255.0.5"
+        assert port == 5900
+        attempts["count"] += 1
+        if attempts["count"] in {1, 2}:
+            raise ConnectionRefusedError("not ready")
+        return _FakeReader(), _FakeWriter()
+
+    async def _fake_wait_for(awaitable, timeout: float):
+        _ = timeout
+        return await awaitable
+
+    async def _fake_sleep(delay: float):
+        _ = delay
+        return None
+
+    monkeypatch.setattr(vnc_proxy.asyncio, "open_connection", _fake_open_connection)
+    monkeypatch.setattr(vnc_proxy.asyncio, "wait_for", _fake_wait_for)
+    monkeypatch.setattr(vnc_proxy.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(vnc_proxy.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(vnc_proxy, "_CONNECT_RECOVERY_AFTER_SECONDS", 0.0)
+    monkeypatch.setattr(vnc_proxy, "_CONNECT_RECOVERY_COOLDOWN_SECONDS", 60.0)
+
+    asyncio.run(proxy._connect_vnc(session_one))
+    asyncio.run(proxy._connect_vnc(session_two))
+
+    assert restart_reasons_one == ["vnc_connect_retry"]
+    assert restart_reasons_two == []

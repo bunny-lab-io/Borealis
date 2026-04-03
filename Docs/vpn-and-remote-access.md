@@ -31,7 +31,7 @@ Document Borealis remote access features: WireGuard reverse VPN tunnels, remote 
 - VNC authentication is handled by the UltraVNC password plus a Borealis one-time session token for the WebSocket proxy.
 - Agent runs UltraVNC as a Windows service; Borealis keeps the VNC firewall rule enabled for the Engine /32 and `/api/vnc/disconnect` only tears down the WebUI session.
 - Before the proxy connects, the Engine re-emits tunnel startup with `reason=vnc_bootstrap` so the agent refreshes VNC readiness over the existing persistent tunnel.
-- If the proxy still cannot open the backend VNC TCP session after a short delay, it escalates once with `reason=vnc_connect_retry`, which can trigger one shared transport recovery request for that browser session instead of repeatedly restarting the shared listener.
+- If the proxy still cannot open the backend VNC TCP session after a short delay, it escalates once with `reason=vnc_connect_retry`, and Borealis now applies an agent-level cooldown so closely spaced browser retries do not each force another shared transport recovery.
 - When the backend VNC TCP socket finally opens, Borealis confirms transport success with `reason=vnc_backend_connect` so a successful noVNC bootstrap counts as real tunnel health.
 
 ## Public Edge Configuration
@@ -114,7 +114,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - On Windows agents, same-session ensure calls also recover a stopped `WireGuardTunnel$Borealis` service instead of returning early when the `tunnel_id` matches.
 - The Engine listener watchdog keeps shared listener state honest for all sessions, mutates peers live on the persistent interface during routine changes, uses an effective probe grace aligned with the WireGuard keepalive window before declaring `stale_handshake`, and marks status APIs as recovering while full peer reconciliation is underway.
 - Quiet shell sessions no longer depend on operator traffic alone; shell keepalive pongs and shell output can confirm transport health between commands.
-- VNC still shares the same listener recovery path, but `vnc_connect_retry` is now delayed and bounded to one forced recovery request per browser session so a single slow VNC bootstrap is less likely to churn the shared listener.
+- VNC still shares the same listener recovery path, but `vnc_connect_retry` is now delayed, bounded to one forced recovery request per browser session, and rate-limited across closely spaced retries for the same agent so the shared listener is less likely to churn.
 
 ### Logs to inspect
 - Engine tunnel log: `Engine/Logs/VPN_Tunnel/tunnel.log`.
@@ -251,7 +251,7 @@ This section consolidates the troubleshooting context and environment notes for 
   - Closes superseded shell TCP sessions when a newer shell for the same agent connects.
 - Data/Engine/services/API/devices/vnc.py and Data/Engine/services/RemoteDesktop/vnc_proxy.py
   - VNC bootstrap re-emits tunnel startup with `reason=vnc_bootstrap`.
-  - Backend VNC connect retries only escalate with `reason=vnc_connect_retry` after the connect has been stalled for several seconds, and the proxy bounds that forced recovery to one request per browser session.
+  - Backend VNC connect retries only escalate with `reason=vnc_connect_retry` after the connect has been stalled for several seconds, the proxy bounds that forced recovery to one request per browser session, and an agent-level cooldown suppresses stacked recoveries from overlapping browser retries.
   - Successful backend VNC TCP connects confirm transport with `reason=vnc_backend_connect`.
   - The VNC backend writer socket enables `TCP_NODELAY`.
 
