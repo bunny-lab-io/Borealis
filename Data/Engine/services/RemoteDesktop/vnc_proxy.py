@@ -25,7 +25,11 @@ _MAX_MESSAGE_SIZE = 100_000_000
 _CONNECT_WAIT_WINDOW_SECONDS = 20.0
 _CONNECT_TIMEOUT_SECONDS = 1.0
 _CONNECT_RETRY_DELAY_SECONDS = 0.25
-_RESTART_AFTER_SECONDS = (0.0, 2.0, 5.0, 10.0)
+# Delay forced transport recovery until the backend VNC socket has genuinely
+# stalled, and only request it once per browser session to avoid restart churn
+# on the shared WireGuard listener.
+_CONNECT_RECOVERY_AFTER_SECONDS = 5.0
+_CONNECT_RECOVERY_MAX_ATTEMPTS = 1
 
 
 @dataclass
@@ -38,6 +42,7 @@ class VncSession:
     expires_at: float
     operator_id: Optional[str] = None
     restart_tunnel: Optional[Callable[[str], None]] = None
+    confirm_transport: Optional[Callable[[str], None]] = None
 
 
 class VncSessionRegistry:
@@ -61,6 +66,7 @@ class VncSessionRegistry:
         port: int,
         operator_id: Optional[str] = None,
         restart_tunnel: Optional[Callable[[str], None]] = None,
+        confirm_transport: Optional[Callable[[str], None]] = None,
     ) -> VncSession:
         token = uuid.uuid4().hex
         now = time.time()
@@ -74,6 +80,7 @@ class VncSessionRegistry:
             expires_at=expires_at,
             operator_id=operator_id,
             restart_tunnel=restart_tunnel,
+            confirm_transport=confirm_transport,
         )
         with self._lock:
             self._cleanup(now)
@@ -252,20 +259,37 @@ class VncProxyServer:
         port = session.port
         started_at = time.monotonic()
         deadline = started_at + _CONNECT_WAIT_WINDOW_SECONDS
-        restart_index = 0
+        recovery_attempts = 0
         last_exc: Optional[Exception] = None
         while True:
             now = time.monotonic()
             remaining = deadline - now
             if remaining <= 0:
                 break
-            elapsed = max(0.0, now - started_at)
-            while restart_index < len(_RESTART_AFTER_SECONDS):
-                trigger_after = _RESTART_AFTER_SECONDS[restart_index]
-                if elapsed + 0.001 < trigger_after:
-                    break
-                restart_index += 1
-                if callable(session.restart_tunnel):
+            try:
+                timeout = min(_CONNECT_TIMEOUT_SECONDS, max(0.5, remaining))
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, port),
+                    timeout=timeout,
+                )
+                if callable(session.confirm_transport):
+                    try:
+                        session.confirm_transport("vnc_backend_connect")
+                    except Exception:
+                        self.logger.debug(
+                            "Failed to confirm VNC transport success agent_id=%s",
+                            session.agent_id,
+                            exc_info=True,
+                        )
+                return reader, writer
+            except Exception as exc:
+                last_exc = exc
+                if (
+                    recovery_attempts < _CONNECT_RECOVERY_MAX_ATTEMPTS
+                    and callable(session.restart_tunnel)
+                    and (time.monotonic() - started_at) >= _CONNECT_RECOVERY_AFTER_SECONDS
+                ):
+                    recovery_attempts += 1
                     try:
                         session.restart_tunnel("vnc_connect_retry")
                     except Exception:
@@ -274,11 +298,6 @@ class VncProxyServer:
                             session.agent_id,
                             exc_info=True,
                         )
-            try:
-                timeout = min(_CONNECT_TIMEOUT_SECONDS, max(0.5, remaining))
-                return await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
-            except Exception as exc:
-                last_exc = exc
                 remaining = deadline - time.monotonic()
                 if remaining > 0:
                     await asyncio.sleep(min(_CONNECT_RETRY_DELAY_SECONDS, remaining))

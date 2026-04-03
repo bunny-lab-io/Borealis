@@ -183,6 +183,9 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     reason=reason,
                 )
 
+        def _confirm_transport(reason: str) -> None:
+            tunnel_service.confirm_transport_success(agent_id, reason=reason)
+
         try:
             _restart_tunnel("vnc_bootstrap")
         except Exception:
@@ -221,6 +224,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             port=vnc_port,
             operator_id=operator_id,
             restart_tunnel=_restart_tunnel,
+            confirm_transport=_confirm_transport,
         )
         ws_path = public_vnc_path(adapters.context)
         ws_url = build_websocket_url(

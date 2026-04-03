@@ -28,6 +28,7 @@ class _FakeTunnelService:
         self.connect_calls: list[tuple[str, Any, Any]] = []
         self.start_calls: list[tuple[str, bool, str]] = []
         self.transport_marks: list[tuple[str, str]] = []
+        self.transport_confirms: list[tuple[str, str]] = []
         self.transport_recovers: list[tuple[str, str, str]] = []
 
     def session_payload(self, agent_id: str, include_token: bool = False) -> Any:
@@ -68,15 +69,30 @@ class _FakeTunnelService:
         self.transport_recovers.append((agent_id, str(trigger or ""), str(reason or "")))
         return {"status": "ok"}
 
+    def confirm_transport_success(self, agent_id: str, *, reason: str | None = None) -> bool:
+        self.transport_confirms.append((agent_id, str(reason or "")))
+        return True
+
 
 class _FakeRegistry:
     def __init__(self) -> None:
         self.created: list[tuple[str, str, int, Any]] = []
         self.restart_callbacks: list[Any] = []
+        self.confirm_callbacks: list[Any] = []
 
-    def create(self, *, agent_id: str, host: str, port: int, operator_id: Any, restart_tunnel: Any = None):
+    def create(
+        self,
+        *,
+        agent_id: str,
+        host: str,
+        port: int,
+        operator_id: Any,
+        restart_tunnel: Any = None,
+        confirm_transport: Any = None,
+    ):
         self.created.append((agent_id, host, port, operator_id))
         self.restart_callbacks.append(restart_tunnel)
+        self.confirm_callbacks.append(confirm_transport)
         return SimpleNamespace(token="session-token")
 
 
@@ -107,3 +123,8 @@ def test_vnc_establish_returns_same_origin_websocket(engine_harness: EngineTestH
     assert fake_tunnel.start_calls == [("test-device-agent", False, "vnc_bootstrap")]
     assert fake_tunnel.transport_recovers == []
     assert callable(fake_registry.restart_callbacks[0])
+    assert callable(fake_registry.confirm_callbacks[0])
+
+    fake_registry.confirm_callbacks[0]("vnc_backend_connect")
+
+    assert fake_tunnel.transport_confirms == [("test-device-agent", "vnc_backend_connect")]
